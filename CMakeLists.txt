@@ -34,6 +34,17 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 	CIMGUI_USE_VULKAN=1
 )
 
+# --- sanitizer options ---
+option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(ENABLE_SANITIZERS)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${PROJECT_NAME} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${PROJECT_NAME} PRIVATE -fsanitize=address,undefined)
+    else()
+        message(WARNING "Sanitizers are only supported with GCC or Clang compilers")
+    endif()
+endif()
+
 # --- linking ---
 target_link_libraries(${PROJECT_NAME} PRIVATE
 	cimgui

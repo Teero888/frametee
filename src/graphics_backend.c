@@ -3,6 +3,7 @@
 #include "user_interface.h"
 #include <GLFW/glfw3.h>
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <vulkan/vulkan_core.h>
@@ -35,7 +36,7 @@ static void check_vk_result(VkResult err) {
     abort();
 }
 
-static void setup_vulkan(gfx_handler *handler, const char **extensions, uint32_t extensions_count) {
+static void setup_vulkan(gfx_handler *handler, const char ***extensions, uint32_t *extensions_count) {
   VkResult err;
 
   // Create Vulkan Instance
@@ -48,44 +49,64 @@ static void setup_vulkan(gfx_handler *handler, const char **extensions, uint32_t
     vkEnumerateInstanceExtensionProperties(NULL, &properties_count, NULL);
     VkExtensionProperties *properties =
         (VkExtensionProperties *)malloc(properties_count * sizeof(VkExtensionProperties));
+    if (!properties) {
+      fprintf(stderr, "Failed to allocate memory for extension properties\n");
+      abort();
+    }
     err = vkEnumerateInstanceExtensionProperties(NULL, &properties_count, properties);
     check_vk_result_line(err, __LINE__);
 
     // Enable required extensions
+    uint32_t new_extensions_count = *extensions_count;
+    const char **new_extensions = *extensions;
+
     if (is_extension_available(properties, properties_count,
                                VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
-      // instance_extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-      extensions_count++;
-      extensions = realloc(extensions, extensions_count * sizeof(char *));
-      assert(extensions);
-      extensions[extensions_count - 1] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
+      new_extensions_count++;
+      new_extensions = realloc(new_extensions, new_extensions_count * sizeof(char *));
+      if (!new_extensions) {
+        free(properties);
+        fprintf(stderr, "Failed to reallocate extensions array\n");
+        abort();
+      }
+      new_extensions[new_extensions_count - 1] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
     }
 #ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
     if (is_extension_available(properties, properties_count, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
-      // instance_extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-      extensions_count++;
-      extensions = realloc(extensions, extensions_count * sizeof(char *));
-      assert(extensions);
-      extensions[extensions_count - 1] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+      new_extensions_count++;
+      new_extensions = realloc(new_extensions, new_extensions_count * sizeof(char *));
+      if (!new_extensions) {
+        free(properties);
+        fprintf(stderr, "Failed to reallocate extensions array\n");
+        abort();
+      }
+      new_extensions[new_extensions_count - 1] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
       create_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
 #endif
-    free(properties);
-    // Enabling validation layers
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
     create_info.enabledLayerCount = 1;
     create_info.ppEnabledLayerNames = layers;
-    // instance_extensions.push_back("VK_EXT_debug_report");
-    extensions_count++;
-    extensions = realloc(extensions, extensions_count * sizeof(char *));
-    assert(extensions);
-    extensions[extensions_count - 1] = "VK_EXT_debug_report";
+    new_extensions_count++;
+    new_extensions = realloc(new_extensions, new_extensions_count * sizeof(char *));
+    if (!new_extensions) {
+      free(properties);
+      fprintf(stderr, "Failed to reallocate extensions array\n");
+      abort();
+    }
+    new_extensions[new_extensions_count - 1] = "VK_EXT_debug_report";
 #endif
 
+    free(properties);
+
+    // Update extensions array and count
+    *extensions = new_extensions;
+    *extensions_count = new_extensions_count;
+
     // Create Vulkan Instance
-    create_info.enabledExtensionCount = extensions_count; //(uint32_t)instance_extensions.Size;
-    create_info.ppEnabledExtensionNames = extensions;     // instance_extensions.Data;
+    create_info.enabledExtensionCount = *extensions_count;
+    create_info.ppEnabledExtensionNames = *extensions;
     err = vkCreateInstance(&create_info, handler->g_Allocator, &handler->g_Instance);
     check_vk_result_line(err, __LINE__);
 
@@ -102,10 +123,11 @@ static void setup_vulkan(gfx_handler *handler, const char **extensions, uint32_t
     debug_report_ci.pfnCallback = debug_report;
     debug_report_ci.pUserData = NULL;
     err = f_vkCreateDebugReportCallbackEXT(handler->g_Instance, &debug_report_ci, handler->g_Allocator,
-                                           &g_DebugReport);
+                                           &handler->g_DebugReport);
     check_vk_result_line(err, __LINE__);
 #endif
   }
+  // Rest of the function remains unchanged
   // Select Physical Device (GPU)
   handler->g_PhysicalDevice = ImGui_ImplVulkanH_SelectPhysicalDevice(handler->g_Instance);
   assert(handler->g_PhysicalDevice != VK_NULL_HANDLE);
@@ -121,12 +143,11 @@ static void setup_vulkan(gfx_handler *handler, const char **extensions, uint32_t
 
     // Enumerate physical device extension
     uint32_t properties_count;
-    // ImVector<VkExtensionProperties> properties;
     vkEnumerateDeviceExtensionProperties(handler->g_PhysicalDevice, NULL, &properties_count, NULL);
-    // properties.resize(properties_count);
     VkExtensionProperties *properties =
         (VkExtensionProperties *)malloc(properties_count * sizeof(VkExtensionProperties));
     vkEnumerateDeviceExtensionProperties(handler->g_PhysicalDevice, NULL, &properties_count, properties);
+    free(properties);
 #ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
     if (IsExtensionAvailable(properties, properties_count, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
       // device_extensions.push_back(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
@@ -152,6 +173,7 @@ static void setup_vulkan(gfx_handler *handler, const char **extensions, uint32_t
     err = vkCreateDevice(handler->g_PhysicalDevice, &create_info, handler->g_Allocator, &handler->g_Device);
     check_vk_result_line(err, __LINE__);
     vkGetDeviceQueue(handler->g_Device, handler->g_QueueFamily, 0, &handler->g_Queue);
+    free(device_extensions);
   }
   // Create Descriptor Pool
   // If you wish to load e.g. additional textures you may need to alter pools sizes and maxSets.
@@ -205,23 +227,29 @@ static void setup_window(gfx_handler *handler, ImGui_ImplVulkanH_Window *wd, VkS
                                          handler->g_MinImageCount);
 }
 
+static void cleanup_vulkan_window(gfx_handler *handler) {
+  ImGui_ImplVulkanH_DestroyWindow(handler->g_Instance, handler->g_Device, &handler->g_MainWindowData,
+                                  handler->g_Allocator);
+}
+
 static void cleanup_vulkan(gfx_handler *handler) {
   vkDestroyDescriptorPool(handler->g_Device, handler->g_DescriptorPool, handler->g_Allocator);
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
   // Remove the debug report callback
-  auto f_vkDestroyDebugReportCallbackEXT = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(
-      g_Instance, "vkDestroyDebugReportCallbackEXT");
-  f_vkDestroyDebugReportCallbackEXT(g_Instance, g_DebugReport, g_Allocator);
-#endif // APP_USE_VULKAN_DEBUG_REPORT
+  PFN_vkDestroyDebugReportCallbackEXT f_vkDestroyDebugReportCallbackEXT =
+      (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(handler->g_Instance,
+                                                                 "vkDestroyDebugReportCallbackEXT");
+  if (f_vkDestroyDebugReportCallbackEXT && handler->g_DebugReport != VK_NULL_HANDLE) {
+    f_vkDestroyDebugReportCallbackEXT(handler->g_Instance, handler->g_DebugReport, handler->g_Allocator);
+    handler->g_DebugReport = VK_NULL_HANDLE;
+  }
+#endif
 
   vkDestroyDevice(handler->g_Device, handler->g_Allocator);
+  handler->g_Device = VK_NULL_HANDLE;
   vkDestroyInstance(handler->g_Instance, handler->g_Allocator);
-}
-
-static void cleanup_vulkan_window(gfx_handler *handler) {
-  ImGui_ImplVulkanH_DestroyWindow(handler->g_Instance, handler->g_Device, &handler->g_MainWindowData,
-                                  handler->g_Allocator);
+  handler->g_Instance = VK_NULL_HANDLE;
 }
 
 static void frame_render(gfx_handler *handler, ImDrawData *draw_data) {
@@ -363,7 +391,7 @@ int init_gfx_handler(gfx_handler *handler) {
   for (int i = 0; i < extensions_count; i++) {
     extensions[i] = extensions_nude[i];
   }
-  setup_vulkan(handler, extensions, extensions_count);
+  setup_vulkan(handler, &extensions, &extensions_count);
   free(extensions);
 
   // create window surface
@@ -488,13 +516,19 @@ int gfx_next_frame(gfx_handler *handler) {
 }
 
 void gfx_cleanup(gfx_handler *handler) {
-  int err = vkDeviceWaitIdle(handler->g_Device);
+  ui_cleanup(&handler->user_interface);
+
+  VkResult err = vkDeviceWaitIdle(handler->g_Device);
   check_vk_result(err);
+
   ImGui_ImplVulkan_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   igDestroyContext(NULL);
+
   cleanup_vulkan_window(handler);
   cleanup_vulkan(handler);
+
   glfwDestroyWindow(handler->window);
+  handler->window = NULL;
   glfwTerminate();
 }
