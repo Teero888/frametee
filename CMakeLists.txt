@@ -6,7 +6,11 @@ set(CMAKE_C_STANDARD_REQUIRED TRUE)
 
 # --- src files ---
 project(ddnet_frametee)
-set(SRCS "src/main.c")
+set(SRCS 
+	src/main.c
+	src/graphics_backend.c
+	src/user_interface.c
+)
 
 # --- find deps ---
 find_package(Vulkan REQUIRED)
@@ -23,7 +27,6 @@ set(IMGUI_SOURCES
 add_executable(${PROJECT_NAME} ${SRCS} ${IMGUI_SOURCES})
 
 # --- cimgui stuff ---
-
 add_subdirectory(libs/cimgui)
 target_compile_definitions(${PROJECT_NAME} PRIVATE 
 	CIMGUI_DEFINE_ENUMS_AND_STRUCTS=1
