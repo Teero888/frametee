@@ -856,10 +856,13 @@ void render_timeline(ui_handler *ui) {
     igGetCursorScreenPos(&timeline_start_pos); // Cursor after header
     ImVec2 available_space_for_tracks;
     igGetContentRegionAvail(&available_space_for_tracks);
+    // Reserve space for the scrollbar
+    float scrollbar_height = igGetStyle()->ScrollbarSize;
+    available_space_for_tracks.y -= scrollbar_height;
 
-    ImVec2 timeline_end_pos = {timeline_start_pos.x + available_space_for_tracks.x,
-                               timeline_start_pos.y + available_space_for_tracks.y};
-    ImRect timeline_bb = {timeline_start_pos, timeline_end_pos};
+    ImVec2 timeline_end_pos = (ImVec2){timeline_start_pos.x + available_space_for_tracks.x,
+                                       timeline_start_pos.y + available_space_for_tracks.y};
+    ImRect timeline_bb = (ImRect){timeline_start_pos, timeline_end_pos};
 
     // Ensure timeline_bb has positive dimensions
     if (timeline_bb.Max.x > timeline_bb.Min.x && timeline_bb.Max.y > timeline_bb.Min.y) {
@@ -888,6 +891,38 @@ void render_timeline(ui_handler *ui) {
         current_track_y += ts->track_height;
       }
       igPopClipRect();
+
+      // --- Draw Scrollbar ---
+      ImS64 max_tick = 0;
+      for (int i = 0; i < ts->player_track_count; ++i) {
+        player_track *track = &ts->player_tracks[i];
+        for (int j = 0; j < track->snippet_count; ++j) {
+          if (track->snippets[j].end_tick > max_tick) {
+            max_tick = track->snippets[j].end_tick;
+          }
+        }
+      }
+      // Add padding (10% of max_tick) and ensure minimum duration
+      max_tick = (ImS64)(max_tick * 1.1f);
+      if (max_tick < 100)
+        max_tick = 100;
+
+      // Calculate visible ticks based on window width
+      float timeline_width = timeline_bb.Max.x - timeline_bb.Min.x;
+      ImS64 visible_ticks = (ImS64)(timeline_width / ts->zoom);
+
+      // Render scrollbar
+      ImRect scrollbar_bb = {timeline_bb.Min.x, timeline_bb.Max.y, timeline_bb.Max.x,
+                             timeline_bb.Max.y + scrollbar_height};
+      igPushID_Str("TimelineScrollbar");
+      ImS64 scroll_v = (ImS64)ts->view_start_tick;
+      if (igScrollbarEx(scrollbar_bb, igGetID_Str("TimelineScrollbar"), ImGuiAxis_X, &scroll_v, visible_ticks,
+                        max_tick, ImDrawFlags_RoundCornersBottom)) {
+        ts->view_start_tick = (int)scroll_v;
+      }
+      if (ts->view_start_tick < 0)
+        ts->view_start_tick = 0;
+      igPopID();
 
       // --- Handle Mouse Release -> Commit Drag/Drop (for SNIPPETS) ---
       // This only happens if a snippet drag was started and header is not being dragged
