@@ -1,56 +1,119 @@
 cmake_minimum_required(VERSION 3.10)
 
-# --- make sure to be a good programmer ---
+# Set C standard
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED TRUE)
 
-# --- src files ---
+# Source files
 project(ddnet_frametee)
 set(SRCS 
-	src/main.c
-	src/graphics_backend.c
-	src/user_interface.c
+    src/graphics_backend.c
+    src/main.c
+    src/renderer.c
+    src/user_interface.c
 )
 
-# --- find deps ---
+# Find dependencies
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
 
+# Vulkan glslangValidator for shader compilation
+find_program(GLSLANG_VALIDATOR glslangValidator HINTS ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE})
+if(NOT GLSLANG_VALIDATOR)
+    message(FATAL_ERROR "glslangValidator not found. Please ensure Vulkan SDK is installed.")
+endif()
+
+# STB image library
+add_library(stb_image INTERFACE)
+target_include_directories(stb_image INTERFACE ${CMAKE_SOURCE_DIR}/libs/stb_image)
+
+# IMGUI sources
 set(IMGUI_SOURCES 
-	libs/cimgui/imgui/imgui.cpp
-	libs/cimgui/imgui/imgui_draw.cpp
-	libs/cimgui/imgui/imgui_demo.cpp
-	libs/cimgui/imgui/imgui_widgets.cpp
-	libs/cimgui/imgui/backends/imgui_impl_vulkan.cpp
-	libs/cimgui/imgui/backends/imgui_impl_glfw.cpp
+    libs/cimgui/imgui/imgui.cpp
+    libs/cimgui/imgui/imgui_draw.cpp
+    libs/cimgui/imgui/imgui_demo.cpp
+    libs/cimgui/imgui/imgui_widgets.cpp
+    libs/cimgui/imgui/backends/imgui_impl_vulkan.cpp
+    libs/cimgui/imgui/backends/imgui_impl_glfw.cpp
 )
 add_executable(${PROJECT_NAME} ${SRCS} ${IMGUI_SOURCES})
 
-# --- cimgui stuff ---
+# CIMGUI configuration
 add_subdirectory(libs/cimgui)
 target_compile_definitions(${PROJECT_NAME} PRIVATE 
-	CIMGUI_DEFINE_ENUMS_AND_STRUCTS=1
-	CIMGUI_USE_GLFW=1
-	CIMGUI_USE_VULKAN=1
+    CIMGUI_DEFINE_ENUMS_AND_STRUCTS=1
+    CIMGUI_USE_GLFW=1
+    CIMGUI_USE_VULKAN=1
 )
 
-# --- sanitizer options ---
-option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
-if(ENABLE_SANITIZERS)
-    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(${PROJECT_NAME} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-        target_link_options(${PROJECT_NAME} PRIVATE -fsanitize=address,undefined)
-    else()
-        message(WARNING "Sanitizers are only supported with GCC or Clang compilers")
-    endif()
+# Add CGLM for graphics
+add_subdirectory(libs/cglm)
+
+# Linking
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    stb_image
+    cglm
+    cimgui
+    glfw
+    Vulkan::Vulkan
+)
+
+# Compile options
+target_compile_options(${PROJECT_NAME} PRIVATE -Wno-typedef-redefinition)
+
+# Create shaders output directory in build folder
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/data/shaders)
+
+# Shader compilation
+file(GLOB SHADER_SOURCES 
+    "${CMAKE_SOURCE_DIR}/data/shaders/*.vert.glsl" 
+    "${CMAKE_SOURCE_DIR}/data/shaders/*.frag.glsl"
+)
+message(STATUS "Shader sources found: ${SHADER_SOURCES}")
+if(NOT SHADER_SOURCES)
+    message(WARNING "No shader sources found in ${CMAKE_SOURCE_DIR}/data/shaders/. Check the directory and file extensions.")
 endif()
 
-# --- linking ---
-target_link_libraries(${PROJECT_NAME} PRIVATE
-	cimgui
-	glfw
-	Vulkan::Vulkan
+set(SHADER_OUTPUTS "")
+foreach(SHADER ${SHADER_SOURCES})
+    get_filename_component(SHADER_NAME ${SHADER} NAME)
+    string(REPLACE ".glsl" ".spv" SHADER_OUTPUT_NAME ${SHADER_NAME})
+    set(SHADER_OUTPUT "${CMAKE_BINARY_DIR}/data/shaders/${SHADER_OUTPUT_NAME}")
+    list(APPEND SHADER_OUTPUTS ${SHADER_OUTPUT})
+
+    add_custom_command(
+        OUTPUT ${SHADER_OUTPUT}
+        COMMAND ${GLSLANG_VALIDATOR} -V ${SHADER} -o ${SHADER_OUTPUT}
+        DEPENDS ${SHADER}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Compiling shader ${SHADER_NAME} to ${SHADER_OUTPUT}"
+    )
+endforeach()
+
+# Custom target for shaders
+add_custom_target(
+    compile_shaders
+    DEPENDS ${SHADER_OUTPUTS}
+    COMMENT "Compiling all GLSL shaders to SPIR-V"
 )
 
-# --- compile options ---
-target_compile_options(${PROJECT_NAME} PRIVATE -Wno-typedef-redefinition)
+# Ensure shaders are compiled before the main target
+add_dependencies(${PROJECT_NAME} compile_shaders)
+
+# Copy textures folder to build directory
+add_custom_command(
+    TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory 
+        ${CMAKE_SOURCE_DIR}/data/textures 
+        ${CMAKE_BINARY_DIR}/data/textures
+    COMMENT "Copying textures to build directory"
+)
+
+# Copy compiled shaders to build directory
+add_custom_command(
+    TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different 
+        ${SHADER_OUTPUTS} 
+        ${CMAKE_BINARY_DIR}/data/shaders/
+    COMMENT "Copying compiled shaders to build directory"
+)

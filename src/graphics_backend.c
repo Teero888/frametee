@@ -1,5 +1,6 @@
 #include "graphics_backend.h"
 #include "cimgui.h"
+#include "renderer.h"
 #include "user_interface.h"
 #include <GLFW/glfw3.h>
 #include <assert.h>
@@ -21,22 +22,8 @@ static bool is_extension_available(VkExtensionProperties *properties, uint32_t p
   }
   return false;
 }
-static void check_vk_result_line(VkResult err, int line) {
-  if (err == VK_SUCCESS)
-    return;
-  fprintf(stderr, "[vulkan] Error: VkResult = %d in line: (%d)\n", err, line);
-  if (err < 0)
-    abort();
-}
-static void check_vk_result(VkResult err) {
-  if (err == VK_SUCCESS)
-    return;
-  fprintf(stderr, "[vulkan] Error: VkResult = %d\n", err);
-  if (err < 0)
-    abort();
-}
 
-static void setup_vulkan(gfx_handler *handler, const char ***extensions, uint32_t *extensions_count) {
+static void setup_vulkan(gfx_handler_t *handler, const char ***extensions, uint32_t *extensions_count) {
   VkResult err;
 
   // Create Vulkan Instance
@@ -197,8 +184,8 @@ static void setup_vulkan(gfx_handler *handler, const char ***extensions, uint32_
     check_vk_result_line(err, __LINE__);
   }
 }
-static void setup_window(gfx_handler *handler, ImGui_ImplVulkanH_Window *wd, VkSurfaceKHR surface, int width,
-                         int height) {
+static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, VkSurfaceKHR surface,
+                         int width, int height) {
   wd->Surface = surface;
 
   // check for wsi support
@@ -227,12 +214,12 @@ static void setup_window(gfx_handler *handler, ImGui_ImplVulkanH_Window *wd, VkS
                                          handler->g_MinImageCount);
 }
 
-static void cleanup_vulkan_window(gfx_handler *handler) {
+static void cleanup_vulkan_window(gfx_handler_t *handler) {
   ImGui_ImplVulkanH_DestroyWindow(handler->g_Instance, handler->g_Device, &handler->g_MainWindowData,
                                   handler->g_Allocator);
 }
 
-static void cleanup_vulkan(gfx_handler *handler) {
+static void cleanup_vulkan(gfx_handler_t *handler) {
   vkDestroyDescriptorPool(handler->g_Device, handler->g_DescriptorPool, handler->g_Allocator);
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
@@ -252,7 +239,7 @@ static void cleanup_vulkan(gfx_handler *handler) {
   handler->g_Instance = VK_NULL_HANDLE;
 }
 
-static void frame_render(gfx_handler *handler, ImDrawData *draw_data) {
+static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
   ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
   VkSemaphore render_complete_semaphore =
@@ -295,7 +282,7 @@ static void frame_render(gfx_handler *handler, ImDrawData *draw_data) {
     info.pClearValues = &wd->ClearValue;
     vkCmdBeginRenderPass(fd->CommandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);
   }
-
+  renderer_draw(handler, fd->CommandBuffer);
   // Record dear imgui primitives into command buffer
   ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer, VK_NULL_HANDLE);
 
@@ -320,7 +307,7 @@ static void frame_render(gfx_handler *handler, ImDrawData *draw_data) {
   }
 }
 
-static void frame_present(gfx_handler *handler) {
+static void frame_present(gfx_handler_t *handler) {
   if (handler->g_SwapChainRebuild)
     return;
   ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
@@ -344,7 +331,7 @@ static void frame_present(gfx_handler *handler) {
       (wd->SemaphoreIndex + 1) % wd->SemaphoreCount; // Now we can use the next set of semaphores
 }
 
-int init_gfx_handler(gfx_handler *handler) {
+int init_gfx_handler(gfx_handler_t *handler) {
   handler->g_Allocator = NULL;
   handler->g_Instance = VK_NULL_HANDLE;
   handler->g_PhysicalDevice = VK_NULL_HANDLE;
@@ -410,6 +397,16 @@ int init_gfx_handler(gfx_handler *handler) {
 
   setup_window(handler, wd, surface, w, h);
 
+  if (renderer_init(handler) != 0) {
+    fprintf(stderr, "Failed to initialize renderer\n");
+    // Perform partial cleanup if necessary before returning
+    cleanup_vulkan_window(handler);
+    cleanup_vulkan(handler);
+    glfwDestroyWindow(handler->window);
+    glfwTerminate();
+    return 1;
+  }
+
   // setup dear imgui context
   igCreateContext(NULL);
   ImGuiIO *io = igGetIO_Nil();
@@ -465,7 +462,7 @@ int init_gfx_handler(gfx_handler *handler) {
   return 0;
 }
 
-int gfx_next_frame(gfx_handler *handler) {
+int gfx_next_frame(gfx_handler_t *handler) {
   if (glfwWindowShouldClose(handler->window))
     return 1;
 
@@ -497,6 +494,8 @@ int gfx_next_frame(gfx_handler *handler) {
     return 0;
   }
 
+  renderer_update_uniforms(handler);
+
   // Start the Dear ImGui frame
   ImGui_ImplVulkan_NewFrame();
   ImGui_ImplGlfw_NewFrame();
@@ -515,12 +514,13 @@ int gfx_next_frame(gfx_handler *handler) {
   return 0;
 }
 
-void gfx_cleanup(gfx_handler *handler) {
+void gfx_cleanup(gfx_handler_t *handler) {
   ui_cleanup(&handler->user_interface);
 
   VkResult err = vkDeviceWaitIdle(handler->g_Device);
   check_vk_result(err);
 
+  renderer_cleanup(handler);
   ImGui_ImplVulkan_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   igDestroyContext(NULL);
