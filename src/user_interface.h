@@ -40,6 +40,9 @@ typedef struct {
   timeline_drag_state drag_state;
   int next_snippet_id;
   bool is_header_dragging;
+  bool is_playing;
+  int playback_speed;
+  double last_update_time;
 } timeline_state;
 
 typedef struct {

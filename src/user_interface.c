@@ -14,8 +14,6 @@
 #define DEFAULT_TRACK_HEIGHT 40.f
 
 // --- Docking Setup ---
-// Call this once after ImGui context creation and before the main loop if you want a specific layout.
-// Alternatively, call it within ui_render on the first frame.
 void setup_docking(ui_handler *ui) {
   ImGuiID main_dockspace_id = igGetID_Str("MainDockSpace");
 
@@ -301,13 +299,38 @@ bool try_move_snippet(timeline_state *ts, int snippet_id, int source_track_idx, 
   return true; // Move successful
 }
 
-// --- Rendering and Interaction Functions ---
+int get_max_timeline_tick(timeline_state *ts) {
+  int max_tick = 0;
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    player_track *track = &ts->player_tracks[i];
+    for (int j = 0; j < track->snippet_count; ++j) {
+      if (track->snippets[j].end_tick > max_tick) {
+        max_tick = track->snippets[j].end_tick;
+      }
+    }
+  }
+  return max_tick;
+}
 
+// --- Rendering and Interaction Functions ---
 void render_timeline_controls(ui_handler *ui) {
   timeline_state *ts = &ui->timeline;
 
   float controls_height = igGetTextLineHeightWithSpacing() * 2.0f + 20.0f;
-  igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){8, 4});
+  // Push custom styles for controls
+  igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f); // Rounded corners for buttons and sliders
+  igPushStyleVar_Vec2(ImGuiStyleVar_FramePadding, (ImVec2){8.0f, 4.0f}); // Padding inside buttons/sliders
+  igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){6.0f, 4.0f});  // Spacing between items
+
+  // Custom colors for a modern look
+  igPushStyleColor_Vec4(ImGuiCol_SliderGrab, (ImVec4){0.2f, 0.5f, 0.7f, 1.0f}); // Match slider grab to button
+  igPushStyleColor_Vec4(ImGuiCol_SliderGrabActive, (ImVec4){0.1f, 0.4f, 0.6f, 1.0f}); // Darker when active
+  igPushStyleColor_Vec4(ImGuiCol_FrameBg,
+                        (ImVec4){0.15f, 0.15f, 0.15f, 0.8f}); // Dark background for input fields
+  igPushStyleColor_Vec4(ImGuiCol_FrameBgHovered,
+                        (ImVec4){0.2f, 0.2f, 0.2f, 0.8f}); // Slightly lighter on hover
+  igPushStyleColor_Vec4(ImGuiCol_FrameBgActive, (ImVec4){0.25f, 0.25f, 0.25f, 0.8f}); // Active input field
+
   igPushItemWidth(100);
 
   if (igDragInt("Current Tick", &ts->current_tick, 1, 0, 100000, "%d", ImGuiSliderFlags_None)) {
@@ -325,14 +348,22 @@ void render_timeline_controls(ui_handler *ui) {
   if (igArrowButton("<<", ImGuiDir_Left))
     ts->current_tick = (ts->current_tick >= 50) ? ts->current_tick - 50 : 0;
   igSameLine(0, 4);
-  if (igButton("Play", (ImVec2){50, 0})) { /* TODO: Playback logic */
+  if (igButton(ts->is_playing ? "Pause" : "Play", (ImVec2){50, 0}) ||
+      igIsKeyPressed_Bool(ImGuiKey_Space, false)) {
+    ts->is_playing ^= 1;
+    if (ts->current_tick == get_max_timeline_tick(ts))
+      ts->current_tick = 0;
+    if (ts->is_playing) {
+      ts->last_update_time = igGetTime();
+    }
   }
   igSameLine(0, 4);
   if (igArrowButton(">>", ImGuiDir_Right))
     ts->current_tick += 50;
   igSameLine(0, 4);
-  if (igButton(">|", (ImVec2){30, 0})) { /* TODO: Go to end */
-  } // Need to know total duration/end tick
+  if (igButton(">|", (ImVec2){30, 0})) {
+    ts->current_tick = get_max_timeline_tick(ts);
+  }
 
   igSameLine(0, 20);
   igText("Zoom:");
@@ -360,8 +391,15 @@ void render_timeline_controls(ui_handler *ui) {
     if (ts->view_start_tick < 0)
       ts->view_start_tick = 0;
   }
+  igSameLine(0, 20);
+  igText("Playback Speed:");
+  igSameLine(0, 4);
+  igSetNextItemWidth(150);
+  igSliderInt("##Speed", &ts->playback_speed, 1, 100, "%d", ImGuiSliderFlags_None);
+
   igPopItemWidth();
-  igPopStyleVar(1); // Pop ItemSpacing
+  igPopStyleColor(5); // Pop all custom colors
+  igPopStyleVar(3);   // Pop FrameRounding, FramePadding, ItemSpacing
 }
 
 void handle_timeline_interaction(ui_handler *ui, ImRect timeline_bb) {
@@ -644,7 +682,7 @@ void render_player_track(ui_handler *ui, int track_index, player_track *track, I
   ImGuiIO *io = igGetIO_Nil();
 
   // Draw track background
-  ImU32 track_bg_col = (track_index % 2 == 0) ? igGetColorU32_Col(ImGuiCol_FrameBg, 1.0f)
+  ImU32 track_bg_col = (track_index % 2 == 0) ? igGetColorU32_Col(ImGuiCol_TitleBg, 1.0f)
                                               : igGetColorU32_Col(ImGuiCol_WindowBg, 1.0f);
   // Add some alpha to see grid/ticks underneath
   track_bg_col = igGetColorU32_U32(track_bg_col, 0.95f);
@@ -704,7 +742,6 @@ void draw_drag_preview(ui_handler *ui, ImDrawList *overlay_draw_list, ImRect tim
     return;
 
   // Get the snippet being dragged
-  // You need to find the snippet data using ts->drag_state.dragged_snippet_id
   player_track *source_track =
       &ts->player_tracks[ts->drag_state.source_track_index]; // Or find by ID across all? Finding by ID might
                                                              // be safer if indices shift. Let's find by ID.
@@ -784,6 +821,20 @@ void draw_drag_preview(ui_handler *ui, ImDrawList *overlay_draw_list, ImRect tim
 void render_timeline(ui_handler *ui) {
   timeline_state *ts = &ui->timeline;
   ImGuiIO *io = igGetIO_Nil();
+
+  // Advance timeline state
+  if (ts->is_playing && ts->playback_speed > 0.0f) {
+    double current_time = igGetTime();
+    double elapsed_time = current_time - ts->last_update_time;
+    double tick_interval = 1.0 / (double)ts->playback_speed; // Time per tick in seconds
+
+    // Accumulate elapsed time and advance ticks as needed
+    while (elapsed_time >= tick_interval) {
+      ++ts->current_tick;
+      elapsed_time -= tick_interval;
+      ts->last_update_time = current_time - elapsed_time; // Update to reflect consumed time
+    }
+  }
 
   igSetNextWindowClass(&((ImGuiWindowClass){.DockingAllowUnclassed = false}));
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8, 8});
@@ -875,7 +926,7 @@ void render_timeline(ui_handler *ui) {
       }
 
       // --- Draw Timeline Tracks and Snippets ---
-      // ... (clip rect and track drawing loop using timeline_bb) ...
+      // clip rect and track drawing loop using timeline_bb
       igPushClipRect(timeline_bb.Min, timeline_bb.Max, true);
       float current_track_y = timeline_bb.Min.y;
       for (int i = 0; i < ts->player_track_count; ++i) {
@@ -893,23 +944,29 @@ void render_timeline(ui_handler *ui) {
       igPopClipRect();
 
       // --- Draw Scrollbar ---
-      ImS64 max_tick = 0;
-      for (int i = 0; i < ts->player_track_count; ++i) {
-        player_track *track = &ts->player_tracks[i];
-        for (int j = 0; j < track->snippet_count; ++j) {
-          if (track->snippets[j].end_tick > max_tick) {
-            max_tick = track->snippets[j].end_tick;
-          }
-        }
-      }
-      // Add padding (10% of max_tick) and ensure minimum duration
-      max_tick = (ImS64)(max_tick * 1.1f);
-      if (max_tick < 100)
-        max_tick = 100;
+      ImS64 max_tick = get_max_timeline_tick(ts);
 
       // Calculate visible ticks based on window width
       float timeline_width = timeline_bb.Max.x - timeline_bb.Min.x;
       ImS64 visible_ticks = (ImS64)(timeline_width / ts->zoom);
+      if (ts->current_tick >= max_tick)
+        ts->is_playing = false;
+
+      // Adjust view during playback to follow current_tick
+      if (ts->is_playing) {
+        // Define the visible range
+        ImS64 view_end_tick = (ImS64)ts->view_start_tick + visible_ticks;
+        // Check if current_tick is outside the visible range
+        if ((ImS64)ts->current_tick < (ImS64)ts->view_start_tick || (ImS64)ts->current_tick > view_end_tick) {
+          // Center current_tick in the visible range
+          ts->view_start_tick = ts->current_tick - (int)(visible_ticks);
+        }
+      }
+
+      // Add padding (40% of max_tick) and ensure minimum duration
+      max_tick = (ImS64)(max_tick * 1.4f);
+      if (max_tick < 100)
+        max_tick = 100;
 
       // Render scrollbar
       ImRect scrollbar_bb = {timeline_bb.Min.x, timeline_bb.Max.y, timeline_bb.Max.x,
@@ -920,6 +977,8 @@ void render_timeline(ui_handler *ui) {
                         max_tick, ImDrawFlags_RoundCornersBottom)) {
         ts->view_start_tick = (int)scroll_v;
       }
+      if (ts->view_start_tick > max_tick - visible_ticks)
+        ts->view_start_tick = (int)(max_tick - visible_ticks);
       if (ts->view_start_tick < 0)
         ts->view_start_tick = 0;
       igPopID();
@@ -1017,12 +1076,15 @@ void ui_init(ui_handler *ui) {
   timeline_state *ts = &ui->timeline;
   memset(ts, 0, sizeof(timeline_state));
   // Initialize Timeline State variables
+  ts->playback_speed = 50;
+  ts->is_playing = 0;
   ts->current_tick = 0;
   ts->view_start_tick = 0;
   ts->zoom = 1.0f; // 1 pixel per tick initially
   ts->track_height = DEFAULT_TRACK_HEIGHT;
   ts->selected_player_track_index = -1; // Nothing selected initially
   ts->selected_snippet_id = -1;
+  ts->last_update_time = 0.f; // Initialize for playback timing
 
   // Initialize Drag State
   ts->drag_state.active = false;
@@ -1030,47 +1092,79 @@ void ui_init(ui_handler *ui) {
   ts->drag_state.source_snippet_index = -1;
   ts->drag_state.dragged_snippet_id = -1;
   ts->drag_state.drag_offset_ticks = 0;
-  ts->drag_state.initial_mouse_pos = (ImVec2){0, 0}; // Or some invalid value
+  ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
 
   // Initialize unique snippet ID counter
   ts->next_snippet_id = 1; // Start IDs from 1
 
-  // Initialize Players/Tracks (Example: Add two tracks)
-  ts->player_track_count = 0; // Start with 0 tracks
-  ts->player_tracks = NULL;   // Will be allocated by adding tracks
+  // Initialize Players/Tracks
+  ts->player_track_count = 0;
+  ts->player_tracks = NULL;
 
-  // Add Player 0 (Track 0)
+  // Temporary snippet struct
+  input_snippet temp_snippet;
+
+  // Add Track 0 (e.g., Main Video)
   player_track *p0 = add_new_track(ts);
-
-  // Add example snippets to Player 0 (Track 0)
-  input_snippet temp_snippet; // Use a temporary struct
-
-  // Example Snippet 1 (Track 0)
-  temp_snippet.id = ts->next_snippet_id++; // Assign unique ID and increment counter
+  // Snippet 1: 50-150
+  temp_snippet.id = ts->next_snippet_id++;
   temp_snippet.start_tick = 50;
   temp_snippet.end_tick = 150;
-  add_snippet_to_track(p0, &temp_snippet); // Use the helper function
-
-  // Example Snippet 2 (Track 0)
-  temp_snippet.id = ts->next_snippet_id++; // Assign unique ID
+  add_snippet_to_track(p0, &temp_snippet);
+  // Snippet 2: 200-220
+  temp_snippet.id = ts->next_snippet_id++;
   temp_snippet.start_tick = 200;
   temp_snippet.end_tick = 220;
   add_snippet_to_track(p0, &temp_snippet);
+  // Snippet 3: 300-400
+  temp_snippet.id = ts->next_snippet_id++;
+  temp_snippet.start_tick = 300;
+  temp_snippet.end_tick = 400;
+  add_snippet_to_track(p0, &temp_snippet);
 
-  // Add Player 1 (Track 1)
+  // Add Track 1 (e.g., Secondary Video/Overlay)
   player_track *p1 = add_new_track(ts);
-
-  // Add example snippet to Player 1 (Track 1)
-  // Example Snippet 1 (Track 1) - This ID will now be unique
-  temp_snippet.id = ts->next_snippet_id++; // Assign unique ID
+  // Snippet 1: 100-250
+  temp_snippet.id = ts->next_snippet_id++;
   temp_snippet.start_tick = 100;
   temp_snippet.end_tick = 250;
   add_snippet_to_track(p1, &temp_snippet);
+  // Snippet 2: 350-450
+  temp_snippet.id = ts->next_snippet_id++;
+  temp_snippet.start_tick = 350;
+  temp_snippet.end_tick = 450;
+  add_snippet_to_track(p1, &temp_snippet);
 
-  // Add more tracks and snippets as needed...
+  // Add Track 2 (e.g., Audio)
+  player_track *p2 = add_new_track(ts);
+  // Snippet 1: 0-200
+  temp_snippet.id = ts->next_snippet_id++;
+  temp_snippet.start_tick = 0;
+  temp_snippet.end_tick = 200;
+  add_snippet_to_track(p2, &temp_snippet);
+  // Snippet 2: 250-350
+  temp_snippet.id = ts->next_snippet_id++;
+  temp_snippet.start_tick = 250;
+  temp_snippet.end_tick = 350;
+  add_snippet_to_track(p2, &temp_snippet);
+  // Snippet 3: 400-500
+  temp_snippet.id = ts->next_snippet_id++;
+  temp_snippet.start_tick = 400;
+  temp_snippet.end_tick = 500;
+  add_snippet_to_track(p2, &temp_snippet);
 
-  // Note: MAX_SNIPPETS_PER_PLAYER check is no longer needed here if add_snippet_to_track handles realloc.
-  // If you want a hard limit, add the check inside add_snippet_to_track.
+  // Add Track 3 (e.g., Effects/Transitions)
+  player_track *p3 = add_new_track(ts);
+  // Snippet 1: 150-200
+  temp_snippet.id = ts->next_snippet_id++;
+  temp_snippet.start_tick = 150;
+  temp_snippet.end_tick = 200;
+  add_snippet_to_track(p3, &temp_snippet);
+  // Snippet 2: 450-550
+  temp_snippet.id = ts->next_snippet_id++;
+  temp_snippet.start_tick = 450;
+  temp_snippet.end_tick = 550;
+  add_snippet_to_track(p3, &temp_snippet);
 }
 
 void ui_render(ui_handler *ui) {
