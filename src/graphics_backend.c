@@ -412,13 +412,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->g_MinImageCount = 2;
   handler->g_SwapChainRebuild = false;
 
-  handler->g_MainWindowData.ClearValue.color.float32[0] = 0.3f;
-  handler->g_MainWindowData.ClearValue.color.float32[1] = 0.3f;
-  handler->g_MainWindowData.ClearValue.color.float32[2] = 0.3f;
-  handler->g_MainWindowData.ClearValue.color.float32[3] = 1.0f;
-
   memset(&handler->map_data, 0, sizeof(map_data_t));
-
   ui_init(&handler->user_interface, handler);
 
   glfwSetErrorCallback(glfw_error_callback);
@@ -458,6 +452,12 @@ int init_gfx_handler(gfx_handler_t *handler) {
   glfwGetFramebufferSize(handler->window, &w, &h);
   memset((void *)&handler->g_MainWindowData, 0, sizeof(handler->g_MainWindowData));
   ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
+
+  wd->ClearValue.color.float32[0] = 0.8f;
+  wd->ClearValue.color.float32[1] = 0.8f;
+  wd->ClearValue.color.float32[2] = 0.9f;
+  wd->ClearValue.color.float32[3] = 1.0f;
+
   wd->PresentMode = VK_PRESENT_MODE_FIFO_KHR;
   wd->ClearEnable = true;
 
