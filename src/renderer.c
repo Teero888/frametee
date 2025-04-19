@@ -1,14 +1,15 @@
-#define CGLM_FORCE_DEPTH_ZERO_TO_ONE // Important for Vulkan projection matrix
+#include "cglm/cam.h"
+#define CGLM_FORCE_DEPTH_ZERO_TO_ONE
+#include "graphics_backend.h"
 #include "renderer.h"
-#include "graphics_backend.h" // Include your main graphics header
 #include <cglm/cglm.h>
 #include <vulkan/vulkan_core.h>
 
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h" // Include stb_image implementation here
+#include "stb_image.h"
 
 #include <assert.h>
-#include <stddef.h> // For offsetof
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +29,6 @@ void check_vk_result(VkResult err) {
     abort();
 }
 
-// --- Vulkan Helper Functions (Essential - Implement these carefully!) ---
 static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter,
                                  VkMemoryPropertyFlags properties) {
   VkPhysicalDeviceMemoryProperties mem_properties;
@@ -41,7 +41,7 @@ static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type
     }
   }
   fprintf(stderr, "Failed to find suitable memory type!\n");
-  exit(EXIT_FAILURE); // Or handle more gracefully
+  exit(EXIT_FAILURE);
 }
 
 static void create_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsageFlags usage,
@@ -73,10 +73,9 @@ static void create_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsa
   err = vkBindBufferMemory(handler->g_Device, buffer->buffer, buffer->memory, 0);
   check_vk_result_line(err, __LINE__);
 
-  buffer->mapped_memory = NULL; // Initialize mapped memory pointer
+  buffer->mapped_memory = NULL;
 }
 
-// Helper to begin a single-use command buffer
 static VkCommandBuffer begin_single_time_commands(gfx_handler_t *handler, VkCommandPool pool) {
   VkCommandBufferAllocateInfo alloc_info = {};
   alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -95,7 +94,6 @@ static VkCommandBuffer begin_single_time_commands(gfx_handler_t *handler, VkComm
   return command_buffer;
 }
 
-// Helper to end and submit a single-use command buffer
 static void end_single_time_commands(gfx_handler_t *handler, VkCommandPool pool,
                                      VkCommandBuffer command_buffer) {
   vkEndCommandBuffer(command_buffer);
@@ -105,7 +103,6 @@ static void end_single_time_commands(gfx_handler_t *handler, VkCommandPool pool,
   submit_info.commandBufferCount = 1;
   submit_info.pCommandBuffers = &command_buffer;
 
-  // Use a fence to wait for completion
   VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, NULL, 0};
   VkFence fence;
   VkResult err = vkCreateFence(handler->g_Device, &fence_info, handler->g_Allocator, &fence);
@@ -165,7 +162,7 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
     destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
   } else {
     fprintf(stderr, "Unsupported layout transition!\n");
-    exit(EXIT_FAILURE); // Or handle more gracefully
+    exit(EXIT_FAILURE);
   }
 
   vkCmdPipelineBarrier(command_buffer, source_stage, destination_stage, 0, 0, NULL, 0, NULL, 1, &barrier);
@@ -257,8 +254,8 @@ static VkSampler create_texture_sampler(gfx_handler_t *handler) {
   sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
   sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
   sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-  sampler_info.anisotropyEnable = VK_FALSE; // Can enable later if needed
-  // sampler_info.maxAnisotropy = ...;
+  sampler_info.anisotropyEnable = VK_FALSE;
+
   sampler_info.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
   sampler_info.unnormalizedCoordinates = VK_FALSE;
   sampler_info.compareEnable = VK_FALSE;
@@ -273,8 +270,6 @@ static VkSampler create_texture_sampler(gfx_handler_t *handler) {
   check_vk_result_line(err, __LINE__);
   return sampler;
 }
-
-// --- Shader Loading ---
 
 static char *read_file(const char *filename, size_t *length) {
   FILE *file = fopen(filename, "rb");
@@ -310,40 +305,34 @@ static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *c
   VkShaderModuleCreateInfo create_info = {};
   create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
   create_info.codeSize = code_size;
-  // SPIR-V expects code as array of uint32_t
+
   create_info.pCode = (const uint32_t *)code;
 
   VkShaderModule shader_module;
   VkResult err = vkCreateShaderModule(handler->g_Device, &create_info, handler->g_Allocator, &shader_module);
-  check_vk_result_line(err, __LINE__); // Use check_vk_result_line for context
+  check_vk_result_line(err, __LINE__);
 
   return shader_module;
 }
 
-// --- Pipeline Creation ---
-
 static VkPipeline create_graphics_pipeline(gfx_handler_t *handler, shader_t *shader,
-                                           VkPipelineLayout pipeline_layout,
-                                           VkRenderPass render_pass) // Use ImGui's render pass
-{
+                                           VkPipelineLayout pipeline_layout, VkRenderPass render_pass) {
   VkResult err;
 
-  // Shader Stages
   VkPipelineShaderStageCreateInfo vert_shader_stage_info = {};
   vert_shader_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   vert_shader_stage_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
   vert_shader_stage_info.module = shader->vert_shader_module;
-  vert_shader_stage_info.pName = "main"; // Entry point
+  vert_shader_stage_info.pName = "main";
 
   VkPipelineShaderStageCreateInfo frag_shader_stage_info = {};
   frag_shader_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   frag_shader_stage_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
   frag_shader_stage_info.module = shader->frag_shader_module;
-  frag_shader_stage_info.pName = "main"; // Entry point
+  frag_shader_stage_info.pName = "main";
 
   VkPipelineShaderStageCreateInfo shader_stages[] = {vert_shader_stage_info, frag_shader_stage_info};
 
-  // Vertex Input
   VkPipelineVertexInputStateCreateInfo vertex_input_info = {};
   vertex_input_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
   VkVertexInputBindingDescription binding_description = get_vertex_binding_description();
@@ -355,19 +344,16 @@ static VkPipeline create_graphics_pipeline(gfx_handler_t *handler, shader_t *sha
   vertex_input_info.vertexAttributeDescriptionCount = attribute_description_count;
   vertex_input_info.pVertexAttributeDescriptions = attribute_descriptions;
 
-  // Input Assembly
   VkPipelineInputAssemblyStateCreateInfo input_assembly = {};
   input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
   input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   input_assembly.primitiveRestartEnable = VK_FALSE;
 
-  // Viewport and Scissor (dynamic states are easier)
   VkPipelineViewportStateCreateInfo viewport_state = {};
   viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
   viewport_state.viewportCount = 1;
   viewport_state.scissorCount = 1;
 
-  // Rasterizer
   VkPipelineRasterizationStateCreateInfo rasterizer = {};
   rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
   rasterizer.depthClampEnable = VK_FALSE;
@@ -375,25 +361,22 @@ static VkPipeline create_graphics_pipeline(gfx_handler_t *handler, shader_t *sha
   rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
   rasterizer.lineWidth = 1.0f;
   rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-  rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; // Match common convention / CGLM
+  rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
   rasterizer.depthBiasEnable = VK_FALSE;
 
-  // Multisampling (same as ImGui for simplicity)
   VkPipelineMultisampleStateCreateInfo multisampling = {};
   multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
   multisampling.sampleShadingEnable = VK_FALSE;
   multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-  // Depth/Stencil (disabled for simple 2D)
   VkPipelineDepthStencilStateCreateInfo depth_stencil = {};
   depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-  depth_stencil.depthTestEnable = VK_FALSE;                   // Enable if needed
-  depth_stencil.depthWriteEnable = VK_FALSE;                  // Enable if needed
-  depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL; // Common setting
+  depth_stencil.depthTestEnable = VK_FALSE;
+  depth_stencil.depthWriteEnable = VK_FALSE;
+  depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
   depth_stencil.depthBoundsTestEnable = VK_FALSE;
   depth_stencil.stencilTestEnable = VK_FALSE;
 
-  // Color Blending (simple alpha blending)
   VkPipelineColorBlendAttachmentState color_blend_attachment = {};
   color_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -411,14 +394,12 @@ static VkPipeline create_graphics_pipeline(gfx_handler_t *handler, shader_t *sha
   color_blending.attachmentCount = 1;
   color_blending.pAttachments = &color_blend_attachment;
 
-  // Dynamic States (Viewport and Scissor)
   VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
   VkPipelineDynamicStateCreateInfo dynamic_state = {};
   dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
   dynamic_state.dynamicStateCount = sizeof(dynamic_states) / sizeof(dynamic_states[0]);
   dynamic_state.pDynamicStates = dynamic_states;
 
-  // Graphics Pipeline
   VkGraphicsPipelineCreateInfo pipeline_info = {};
   pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
   pipeline_info.stageCount = 2;
@@ -433,7 +414,7 @@ static VkPipeline create_graphics_pipeline(gfx_handler_t *handler, shader_t *sha
   pipeline_info.pDynamicState = &dynamic_state;
   pipeline_info.layout = pipeline_layout;
   pipeline_info.renderPass = render_pass;
-  pipeline_info.subpass = 0; // Use the first subpass
+  pipeline_info.subpass = 0;
   pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
   pipeline_info.basePipelineIndex = -1;
 
@@ -445,11 +426,9 @@ static VkPipeline create_graphics_pipeline(gfx_handler_t *handler, shader_t *sha
   return graphics_pipeline;
 }
 
-// --- Renderer Public API Implementation ---
-
 int renderer_init(gfx_handler_t *handler) {
-  renderer_state_t *renderer = &handler->renderer; // Access via gfx_handler
-  renderer->gfx = handler;                         // Store back-pointer
+  renderer_state_t *renderer = &handler->renderer;
+  renderer->gfx = handler;
   renderer->shader_count = 0;
   renderer->texture_count = 0;
   renderer->mesh_count = 0;
@@ -457,10 +436,9 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->default_texture = NULL;
   VkResult err;
 
-  // 1. Create Transfer Command Pool
   VkCommandPoolCreateInfo pool_info = {};
   pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT; // Good for short-lived buffers
+  pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
   pool_info.queueFamilyIndex = handler->g_QueueFamily;
 
   err = vkCreateCommandPool(handler->g_Device, &pool_info, handler->g_Allocator,
@@ -469,20 +447,18 @@ int renderer_init(gfx_handler_t *handler) {
   if (err != VK_SUCCESS)
     return 1;
 
-  // 2. Create Descriptor Set Layouts
-  // Layout for per-object data: UBO (binding 0) + Texture Sampler (binding 1)
   VkDescriptorSetLayoutBinding ubo_layout_binding = {};
   ubo_layout_binding.binding = 0;
   ubo_layout_binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   ubo_layout_binding.descriptorCount = 1;
-  ubo_layout_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; // UBO used in vertex shader
+  ubo_layout_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
   ubo_layout_binding.pImmutableSamplers = NULL;
 
   VkDescriptorSetLayoutBinding sampler_layout_binding = {};
   sampler_layout_binding.binding = 1;
   sampler_layout_binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   sampler_layout_binding.descriptorCount = 1;
-  sampler_layout_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // Sampler used in fragment shader
+  sampler_layout_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
   sampler_layout_binding.pImmutableSamplers = NULL;
 
   VkDescriptorSetLayoutBinding bindings[] = {ubo_layout_binding, sampler_layout_binding};
@@ -497,18 +473,14 @@ int renderer_init(gfx_handler_t *handler) {
   if (err != VK_SUCCESS)
     return 1;
 
-  // 3. Create Descriptor Pool
-  // Pool needs to be large enough for ImGui *and* our resources
-  // Let's create a separate pool for our resources for clarity.
   VkDescriptorPoolSize pool_sizes[] = {
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_RENDERABLES},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_RENDERABLES * MAX_TEXTURES} // Generous estimate
-  };
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_RENDERABLES * MAX_TEXTURES}};
 
   VkDescriptorPoolCreateInfo pool_info_renderer = {};
   pool_info_renderer.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   pool_info_renderer.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-  pool_info_renderer.maxSets = MAX_RENDERABLES; // One set per renderable
+  pool_info_renderer.maxSets = MAX_RENDERABLES;
   pool_info_renderer.poolSizeCount = sizeof(pool_sizes) / sizeof(pool_sizes[0]);
   pool_info_renderer.pPoolSizes = pool_sizes;
 
@@ -518,7 +490,6 @@ int renderer_init(gfx_handler_t *handler) {
   if (err != VK_SUCCESS)
     return 1;
 
-  // 4. Create a default 1x1 white texture (useful fallback)
   unsigned char white_pixel[] = {255, 255, 255, 255};
   texture_t *default_tex = &renderer->textures[renderer->texture_count];
   default_tex->id = renderer->texture_count++;
@@ -526,7 +497,7 @@ int renderer_init(gfx_handler_t *handler) {
   default_tex->height = 1;
   strncpy(default_tex->path, "default_white", sizeof(default_tex->path) - 1);
 
-  VkDeviceSize image_size = default_tex->width * default_tex->height * 4; // 4 bytes per pixel (RGBA)
+  VkDeviceSize image_size = default_tex->width * default_tex->height * 4;
   buffer_t staging_buffer;
 
   create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -554,11 +525,11 @@ int renderer_init(gfx_handler_t *handler) {
   vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
 
   default_tex->image_view = create_image_view(handler, default_tex->image, VK_FORMAT_R8G8B8A8_UNORM);
-  default_tex->sampler = create_texture_sampler(handler); // Use a default sampler
+  default_tex->sampler = create_texture_sampler(handler);
   renderer->default_texture = default_tex;
 
   printf("Renderer initialized.\n");
-  return 0; // Success
+  return 0;
 }
 
 void renderer_cleanup(gfx_handler_t *handler) {
@@ -566,21 +537,19 @@ void renderer_cleanup(gfx_handler_t *handler) {
   VkDevice device = handler->g_Device;
   VkAllocationCallbacks *allocator = handler->g_Allocator;
 
-  vkDeviceWaitIdle(device); // Ensure GPU is idle before destroying
+  vkDeviceWaitIdle(device);
 
-  // Destroy renderables (pipelines, descriptor sets, uniform buffers)
   for (uint32_t i = 0; i < renderer->renderable_count; ++i) {
     renderable_t *r = &renderer->renderables[i];
     if (!r->active)
       continue;
     vkDestroyPipeline(device, r->pipeline, allocator);
     vkDestroyPipelineLayout(device, r->pipeline_layout, allocator);
-    // Descriptor sets are freed with the pool
+
     vkDestroyBuffer(device, r->uniform_buffer.buffer, allocator);
     vkFreeMemory(device, r->uniform_buffer.memory, allocator);
   }
 
-  // Destroy meshes (vertex/index buffers)
   for (uint32_t i = 0; i < renderer->mesh_count; ++i) {
     mesh_t *m = &renderer->meshes[i];
     vkDestroyBuffer(device, m->vertex_buffer.buffer, allocator);
@@ -591,7 +560,6 @@ void renderer_cleanup(gfx_handler_t *handler) {
     }
   }
 
-  // Destroy textures (image, view, sampler, memory)
   for (uint32_t i = 0; i < renderer->texture_count; ++i) {
     texture_t *t = &renderer->textures[i];
     vkDestroySampler(device, t->sampler, allocator);
@@ -600,18 +568,15 @@ void renderer_cleanup(gfx_handler_t *handler) {
     vkFreeMemory(device, t->memory, allocator);
   }
 
-  // Destroy shaders (modules)
   for (uint32_t i = 0; i < renderer->shader_count; ++i) {
     shader_t *s = &renderer->shaders[i];
     vkDestroyShaderModule(device, s->vert_shader_module, allocator);
     vkDestroyShaderModule(device, s->frag_shader_module, allocator);
   }
 
-  // Destroy descriptor pool and layout
   vkDestroyDescriptorPool(device, renderer->resource_descriptor_pool, allocator);
   vkDestroyDescriptorSetLayout(device, renderer->object_descriptor_set_layout, allocator);
 
-  // Destroy transfer command pool
   vkDestroyCommandPool(device, renderer->transfer_command_pool, allocator);
 
   printf("Renderer cleaned up.\n");
@@ -629,7 +594,7 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
   char *frag_code = read_file(frag_path, &frag_code_size);
 
   if (!vert_code || !frag_code) {
-    free(vert_code); // free if one succeeded but the other failed
+    free(vert_code);
     free(frag_code);
     return NULL;
   }
@@ -657,7 +622,7 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
 
   int tex_width, tex_height, tex_channels;
   stbi_uc *pixels = stbi_load(image_path, &tex_width, &tex_height, &tex_channels, STBI_rgb_alpha);
-  VkDeviceSize image_size = tex_width * tex_height * 4; // 4 bytes per pixel (RGBA)
+  VkDeviceSize image_size = tex_width * tex_height * 4;
 
   if (!pixels) {
     fprintf(stderr, "Failed to load texture image: %s\n", image_path);
@@ -670,7 +635,6 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   texture->height = (uint32_t)tex_height;
   strncpy(texture->path, image_path, sizeof(texture->path) - 1);
 
-  // Use staging buffer to upload to device local memory
   buffer_t staging_buffer;
   create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
@@ -680,14 +644,12 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   memcpy(data, pixels, (size_t)image_size);
   vkUnmapMemory(handler->g_Device, staging_buffer.memory);
 
-  stbi_image_free(pixels); // Free CPU image memory
+  stbi_image_free(pixels);
 
-  // Create Vulkan image (device local)
-  create_image(handler, texture->width, texture->height, VK_FORMAT_R8G8B8A8_UNORM, // Common format
-               VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+  create_image(handler, texture->width, texture->height, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
 
-  // Transition layout, copy, transition layout
   transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
                           VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
   copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image,
@@ -695,13 +657,11 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-  // Cleanup staging buffer
   vkDestroyBuffer(handler->g_Device, staging_buffer.buffer, handler->g_Allocator);
   vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
 
-  // Create image view and sampler
   texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM);
-  texture->sampler = create_texture_sampler(handler); // Create a sampler per texture or reuse
+  texture->sampler = create_texture_sampler(handler);
 
   printf("Loaded texture: %s (%dx%d)\n", image_path, texture->width, texture->height);
   return texture;
@@ -719,17 +679,15 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
   mesh->id = renderer->mesh_count++;
   mesh->vertex_count = vertex_count;
   mesh->index_count = index_count;
-  mesh->index_buffer.buffer = VK_NULL_HANDLE; // Mark index buffer as unused initially
+  mesh->index_buffer.buffer = VK_NULL_HANDLE;
   mesh->index_buffer.memory = VK_NULL_HANDLE;
 
   VkDeviceSize vertex_buffer_size = sizeof(vertex_t) * vertex_count;
   VkDeviceSize index_buffer_size = sizeof(uint32_t) * index_count;
 
-  // Use staging buffers for vertex and index data
   buffer_t vertex_staging_buffer;
   buffer_t index_staging_buffer;
 
-  // Create and fill vertex staging buffer
   create_buffer(handler, vertex_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &vertex_staging_buffer);
@@ -738,20 +696,16 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
   memcpy(data, vertices, (size_t)vertex_buffer_size);
   vkUnmapMemory(handler->g_Device, vertex_staging_buffer.memory);
 
-  // Create vertex buffer (device local)
   create_buffer(handler, vertex_buffer_size,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &mesh->vertex_buffer);
 
-  // Copy vertex data
   copy_buffer(handler, renderer->transfer_command_pool, vertex_staging_buffer.buffer,
               mesh->vertex_buffer.buffer, vertex_buffer_size);
 
-  // Cleanup vertex staging buffer
   vkDestroyBuffer(handler->g_Device, vertex_staging_buffer.buffer, handler->g_Allocator);
   vkFreeMemory(handler->g_Device, vertex_staging_buffer.memory, handler->g_Allocator);
 
-  // Create and fill index staging buffer (if indices exist)
   if (index_count > 0 && indices) {
     create_buffer(handler, index_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -760,20 +714,17 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
     memcpy(data, indices, (size_t)index_buffer_size);
     vkUnmapMemory(handler->g_Device, index_staging_buffer.memory);
 
-    // Create index buffer (device local)
     create_buffer(handler, index_buffer_size,
                   VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &mesh->index_buffer);
 
-    // Copy index data
     copy_buffer(handler, renderer->transfer_command_pool, index_staging_buffer.buffer,
                 mesh->index_buffer.buffer, index_buffer_size);
 
-    // Cleanup index staging buffer
     vkDestroyBuffer(handler->g_Device, index_staging_buffer.buffer, handler->g_Allocator);
     vkFreeMemory(handler->g_Device, index_staging_buffer.memory, handler->g_Allocator);
   } else {
-    mesh->index_count = 0; // Ensure index count is 0 if no indices provided
+    mesh->index_count = 0;
   }
 
   printf("Created mesh: V=%u, I=%u\n", vertex_count, index_count);
@@ -785,7 +736,6 @@ renderable_t *renderer_add_renderable(gfx_handler_t *handler, mesh_t *mesh, shad
   renderer_state_t *renderer = &handler->renderer;
   VkResult err;
 
-  // Find an inactive slot or append
   renderable_t *renderable = NULL;
   uint32_t renderable_index = (uint32_t)-1;
   for (uint32_t i = 0; i < renderer->renderable_count; ++i) {
@@ -808,37 +758,30 @@ renderable_t *renderer_add_renderable(gfx_handler_t *handler, mesh_t *mesh, shad
   renderable->active = true;
   renderable->mesh = mesh;
   renderable->shader = shader;
-  renderable->texture = texture ? texture : renderer->default_texture; // Use default if null
-  glm_mat4_identity(renderable->model_matrix);                         // Initialize model matrix
+  renderable->texture = texture ? texture : renderer->default_texture;
+  glm_mat4_identity(renderable->model_matrix);
 
-  // 1. Create Uniform Buffer
   VkDeviceSize ubo_size = sizeof(uniform_buffer_object_t);
   create_buffer(handler, ubo_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, // Coherent makes updates easier
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &renderable->uniform_buffer);
-  // Keep UBO mapped for easy updates (since it's HOST_COHERENT)
+
   err = vkMapMemory(handler->g_Device, renderable->uniform_buffer.memory, 0, ubo_size, 0,
                     &renderable->uniform_buffer.mapped_memory);
   check_vk_result_line(err, __LINE__);
 
-  // 2. Create Pipeline Layout
   VkPipelineLayoutCreateInfo pipeline_layout_info = {};
   pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   pipeline_layout_info.setLayoutCount = 1;
   pipeline_layout_info.pSetLayouts = &renderer->object_descriptor_set_layout;
-  // pipeline_layout_info.pushConstantRangeCount = 0; // Add push constants later if needed
 
   err = vkCreatePipelineLayout(handler->g_Device, &pipeline_layout_info, handler->g_Allocator,
                                &renderable->pipeline_layout);
   check_vk_result_line(err, __LINE__);
 
-  // 3. Create Graphics Pipeline
-  // Use the main window's render pass (compatible with ImGui)
   renderable->pipeline = create_graphics_pipeline(handler, shader, renderable->pipeline_layout,
                                                   handler->g_MainWindowData.RenderPass);
 
-  // 4. Allocate Descriptor Set
   VkDescriptorSetAllocateInfo alloc_info = {};
   alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
   alloc_info.descriptorPool = renderer->resource_descriptor_pool;
@@ -848,7 +791,6 @@ renderable_t *renderer_add_renderable(gfx_handler_t *handler, mesh_t *mesh, shad
   err = vkAllocateDescriptorSets(handler->g_Device, &alloc_info, &renderable->descriptor_set);
   check_vk_result_line(err, __LINE__);
 
-  // 5. Update Descriptor Set
   VkDescriptorBufferInfo buffer_info = {};
   buffer_info.buffer = renderable->uniform_buffer.buffer;
   buffer_info.offset = 0;
@@ -863,7 +805,7 @@ renderable_t *renderer_add_renderable(gfx_handler_t *handler, mesh_t *mesh, shad
 
   descriptor_writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
   descriptor_writes[0].dstSet = renderable->descriptor_set;
-  descriptor_writes[0].dstBinding = 0; // UBO binding
+  descriptor_writes[0].dstBinding = 0;
   descriptor_writes[0].dstArrayElement = 0;
   descriptor_writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   descriptor_writes[0].descriptorCount = 1;
@@ -871,7 +813,7 @@ renderable_t *renderer_add_renderable(gfx_handler_t *handler, mesh_t *mesh, shad
 
   descriptor_writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
   descriptor_writes[1].dstSet = renderable->descriptor_set;
-  descriptor_writes[1].dstBinding = 1; // Sampler binding
+  descriptor_writes[1].dstBinding = 1;
   descriptor_writes[1].dstArrayElement = 0;
   descriptor_writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   descriptor_writes[1].descriptorCount = 1;
@@ -889,20 +831,7 @@ void renderer_remove_renderable(gfx_handler_t *handler, renderable_t *renderable
 
   renderer_state_t *renderer = &handler->renderer;
 
-  // Instead of complex array shifting, just mark as inactive
-  // The descriptor set will be implicitly freed when the pool is destroyed.
-  // Pipeline, layout, and UBO buffer need explicit destruction *if* you want
-  // immediate cleanup, but delaying until renderer_cleanup is simpler.
-  // For now, just mark inactive. Add immediate cleanup if needed.
   renderable->active = false;
-
-  // Optional: Add immediate cleanup here if required
-  // vkFreeDescriptorSets(handler->g_Device, renderer->resource_descriptor_pool, 1,
-  // &renderable->descriptor_set); vkDestroyPipeline(handler->g_Device, renderable->pipeline,
-  // handler->g_Allocator); vkDestroyPipelineLayout(handler->g_Device, renderable->pipeline_layout,
-  // handler->g_Allocator); vkDestroyBuffer(handler->g_Device, renderable->uniform_buffer.buffer,
-  // handler->g_Allocator); vkFreeMemory(handler->g_Device, renderable->uniform_buffer.memory,
-  // handler->g_Allocator); renderable->pipeline = VK_NULL_HANDLE; // etc.
 
   printf("Marked renderable as inactive.\n");
 }
@@ -910,24 +839,17 @@ void renderer_remove_renderable(gfx_handler_t *handler, renderable_t *renderable
 void renderer_update_uniforms(gfx_handler_t *handler) {
   renderer_state_t *renderer = &handler->renderer;
 
-  // Example: Update MVP matrices for each active renderable
-  // You'll need to get actual view and projection matrices from your camera setup
   mat4 view, proj;
-  // Placeholder: Identity matrices for now
-  // Replace with your actual camera logic!
-  glm_mat4_identity(view);
-  glm_lookat((vec3){2.0f, 2.0f, 2.0f}, (vec3){0.0f, 0.0f, 0.0f}, (vec3){0.0f, 0.0f, 1.0f},
-             view); // Simple lookat
 
-  // Get window dimensions for projection
+  glm_mat4_identity(view);
+  glm_translate(view, (vec3){0.0f, 0.0f, -1.0f});
+
   int width, height;
   glfwGetFramebufferSize(handler->window, &width, &height);
   if (width == 0 || height == 0)
-    return; // Avoid division by zero if minimized
+    return;
 
-  glm_perspective(glm_rad(45.0f), (float)width / (float)height, 0.1f, 100.0f,
-                  proj); // Use CGLM's Vulkan-friendly perspective
-  proj[1][1] *= -1;      // CGLM is OpenGL-style Y-up by default, flip Y for Vulkan
+  glm_ortho(0.0f, 1.0f, 0.0f, 1.0f, -1.0f, 1.0f, proj);
 
   for (uint32_t i = 0; i < renderer->renderable_count; ++i) {
     renderable_t *r = &renderer->renderables[i];
@@ -935,26 +857,22 @@ void renderer_update_uniforms(gfx_handler_t *handler) {
       continue;
 
     uniform_buffer_object_t ubo = {};
-    glm_mat4_copy(r->model_matrix, ubo.model); // Copy per-object model matrix
+    glm_mat4_copy(r->model_matrix, ubo.model);
     glm_mat4_copy(view, ubo.view);
     glm_mat4_copy(proj, ubo.proj);
 
-    // Copy data to the mapped buffer
-    assert(r->uniform_buffer.mapped_memory != NULL); // Should have been mapped
+    assert(r->uniform_buffer.mapped_memory != NULL);
     memcpy(r->uniform_buffer.mapped_memory, &ubo, sizeof(ubo));
-    // No need to flush if memory is HOST_COHERENT
   }
 }
 
 void renderer_draw(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &handler->renderer;
 
-  // Set dynamic viewport and scissor based on framebuffer size
-  // This assumes you want your primitives to fill the whole window. Adjust if needed.
   int width, height;
   glfwGetFramebufferSize(handler->window, &width, &height);
   if (width == 0 || height == 0)
-    return; // Don't draw if minimized
+    return;
 
   VkViewport viewport = {};
   viewport.x = 0.0f;
@@ -970,30 +888,24 @@ void renderer_draw(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   scissor.extent = (VkExtent2D){(uint32_t)width, (uint32_t)height};
   vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
-  // Iterate through active renderables and record draw commands
   for (uint32_t i = 0; i < renderer->renderable_count; ++i) {
     renderable_t *r = &renderer->renderables[i];
     if (!r->active || !r->mesh || !r->pipeline)
       continue;
 
-    // Bind the pipeline for this renderable
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipeline);
 
-    // Bind vertex buffer
     VkBuffer vertex_buffers[] = {r->mesh->vertex_buffer.buffer};
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
 
-    // Bind index buffer (if it exists)
     if (r->mesh->index_count > 0 && r->mesh->index_buffer.buffer != VK_NULL_HANDLE) {
       vkCmdBindIndexBuffer(command_buffer, r->mesh->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
     }
 
-    // Bind descriptor set for uniforms and textures
     vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipeline_layout, 0, 1,
                             &r->descriptor_set, 0, NULL);
 
-    // Issue draw command
     if (r->mesh->index_count > 0) {
       vkCmdDrawIndexed(command_buffer, r->mesh->index_count, 1, 0, 0, 0);
     } else {
@@ -1002,17 +914,14 @@ void renderer_draw(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   }
 }
 
-// --- Vertex Input Descriptions ---
-
 VkVertexInputBindingDescription get_vertex_binding_description() {
   VkVertexInputBindingDescription binding_description = {};
-  binding_description.binding = 0; // Binding index
+  binding_description.binding = 0;
   binding_description.stride = sizeof(vertex_t);
   binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
   return binding_description;
 }
 
-// Needs to be static or global because we return a pointer to its elements
 static VkVertexInputAttributeDescription attribute_descriptions[3];
 
 uint32_t get_vertex_attribute_description_count() {
@@ -1020,22 +929,19 @@ uint32_t get_vertex_attribute_description_count() {
 }
 
 const VkVertexInputAttributeDescription *get_vertex_attribute_descriptions() {
-  // Position
-  attribute_descriptions[0].binding = 0;                         // Matches binding description
-  attribute_descriptions[0].location = 0;                        // layout(location = 0) in shader
-  attribute_descriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT; // vec3
+  attribute_descriptions[0].binding = 0;
+  attribute_descriptions[0].location = 0;
+  attribute_descriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
   attribute_descriptions[0].offset = offsetof(vertex_t, pos);
 
-  // Color
   attribute_descriptions[1].binding = 0;
-  attribute_descriptions[1].location = 1;                        // layout(location = 1) in shader
-  attribute_descriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT; // vec3
+  attribute_descriptions[1].location = 1;
+  attribute_descriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
   attribute_descriptions[1].offset = offsetof(vertex_t, color);
 
-  // Texture Coordinates
   attribute_descriptions[2].binding = 0;
-  attribute_descriptions[2].location = 2;                     // layout(location = 2) in shader
-  attribute_descriptions[2].format = VK_FORMAT_R32G32_SFLOAT; // vec2
+  attribute_descriptions[2].location = 2;
+  attribute_descriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
   attribute_descriptions[2].offset = offsetof(vertex_t, tex_coord);
 
   return attribute_descriptions;

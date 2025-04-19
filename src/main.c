@@ -12,10 +12,10 @@ int main(void) {
     return 1;
 
   vertex_t quad_vertices[] = {
-      {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}}, // Bottom Left - Red
-      {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},  // Bottom Right - Green
-      {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},   // Top Right - Blue
-      {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}   // Top Left - White
+      {{0.0, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},  // Bottom Left - Red
+      {{1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}}, // Bottom Right - Green
+      {{1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}}, // Top Right - Blue
+      {{0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}  // Top Left - White
   };
   uint32_t quad_indices[] = {
       0, 1, 2, // First triangle

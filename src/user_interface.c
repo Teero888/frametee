@@ -600,6 +600,9 @@ void render_input_snippet(ui_handler *ui, int track_index, int snippet_index, in
   ImVec2 snippet_max = {draw_end_x, track_bottom - 2.0f};
   ImRect snippet_bb = {snippet_min, snippet_max};
 
+  if (track_bottom - track_top - 4.0f <= 0)
+    return;
+
   // --- Snippet Interaction ---
   igPushID_Int(snippet->id); // Use snippet ID for unique ImGui ID
   // We use the actual bounds for the invisible button, even if drawing is clamped
