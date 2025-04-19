@@ -6,16 +6,15 @@ int main(void) {
   if (init_gfx_handler(&handler) != 0)
     return 1;
 
-  shader_t *shader =
-      renderer_load_shader(&handler, "data/shaders/simple.vert.spv", "data/shaders/simple.frag.spv");
+  shader_t *shader = renderer_load_shader(&handler, "data/shaders/map.vert.spv", "data/shaders/map.frag.spv");
   if (!shader)
     return 1;
 
   vertex_t quad_vertices[] = {
-      {{0.0, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},  // Bottom Left - Red
-      {{1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}}, // Bottom Right - Green
-      {{1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}}, // Top Right - Blue
-      {{0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}  // Top Left - White
+      {{0.0, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},  // Top Left
+      {{1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}, // Top Right
+      {{1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 0.0f}}, // Bottom Right
+      {{0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f}}  // Bottom Left
   };
   uint32_t quad_indices[] = {
       0, 1, 2, // First triangle
@@ -25,9 +24,13 @@ int main(void) {
   mesh_t *quad_mesh =
       renderer_create_mesh(&handler, quad_vertices, sizeof(quad_vertices) / sizeof(quad_vertices[0]),
                            quad_indices, sizeof(quad_indices) / sizeof(quad_indices[0]));
-  if (!quad_mesh)
+  texture_t *ddnet_texture = renderer_load_texture(&handler, "data/textures/ddnet.png");
+  if (!quad_mesh || !ddnet_texture)
     return 1;
-  renderable_t *quad_renderable = renderer_add_renderable(&handler, quad_mesh, shader, NULL);
+
+  // Set map renderable with ddnet_texture as entities_texture and default_texture as map_texture
+  map_renderable_t *quad_renderable =
+      renderer_set_map_renderable(&handler, quad_mesh, shader, ddnet_texture, NULL);
   if (!quad_renderable)
     return 1;
 

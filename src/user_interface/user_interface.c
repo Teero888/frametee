@@ -9,26 +9,24 @@
 #include <stdlib.h>
 #include <string.h>
 
-// --- Docking Setup ---
-void setup_docking(ui_handler_t *ui) {
-  // main menu bar
+void on_map_load(struct gfx_handler_t *handler, const char *map_path);
+void render_menu_bar(ui_handler_t *ui) {
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
       if (igMenuItem_Bool("Open", NULL, false, true)) {
-        nfdchar_t *out_path = NULL;
-        nfdresult_t result = NFD_OpenDialog("map", NULL, &out_path);
+        nfdu8char_t *out_path;
+        nfdu8filteritem_t filters[] = {{"map files", "map"}};
+        nfdopendialogu8args_t args = {0};
+        args.filterList = filters;
+        args.filterCount = 1;
+        nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
         if (result == NFD_OKAY) {
-          printf("Selected file: %s\n", out_path);
-          free_map_data(&ui->map_data);
-          ui->map_data = load_map(out_path);
-          if (!ui->map_data.game_layer.data)
-            free_map_data(&ui->map_data);
-          free(out_path);
-        } else if (result == NFD_CANCEL) {
-          printf("File dialog canceled.\n");
-        } else {
-          printf("File dialog error: %s\n", NFD_GetError());
-        }
+          on_map_load(ui->gfx_handler, out_path);
+          NFD_FreePathU8(out_path);
+        } else if (result == NFD_CANCEL)
+          puts("Canceled map load.");
+        else
+          printf("Error: %s\n", NFD_GetError());
       }
       if (igMenuItem_Bool("Save", NULL, false, true)) {
         printf("Save selected (not implemented).\n");
@@ -36,7 +34,7 @@ void setup_docking(ui_handler_t *ui) {
       igEndMenu();
     }
 
-    // View menu
+    // view menu
     if (igBeginMenu("View", true)) {
       igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
       igEndMenu();
@@ -44,6 +42,10 @@ void setup_docking(ui_handler_t *ui) {
 
     igEndMainMenuBar();
   }
+}
+
+// --- Docking Setup ---
+void setup_docking(ui_handler_t *ui) {
 
   ImGuiID main_dockspace_id = igGetID_Str("MainDockSpace");
 
@@ -102,13 +104,16 @@ void setup_docking(ui_handler_t *ui) {
   }
 }
 
-void ui_init(ui_handler_t *ui) {
+void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler) {
+  ui->gfx_handler = gfx_handler;
   ui->show_timeline = true;
   memset(&ui->map_data, 0, sizeof(map_data_t));
   timeline_init(&ui->timeline);
+  NFD_Init();
 }
 
 void ui_render(ui_handler_t *ui) {
+  render_menu_bar(ui);
   setup_docking(ui);
   if (ui->show_timeline) {
     render_timeline(&ui->timeline);
@@ -118,4 +123,5 @@ void ui_render(ui_handler_t *ui) {
 void ui_cleanup(ui_handler_t *ui) {
   timeline_cleanup(&ui->timeline);
   free_map_data(&ui->map_data);
+  NFD_Quit();
 }

@@ -29,7 +29,11 @@ struct gfx_handler_t {
   // --- stuff that is relevant ---
   ui_handler_t user_interface;
   renderer_state_t renderer;
+
+  map_data_t map_data;
 };
+
+void on_map_load(gfx_handler_t *handler, const char *map_path);
 
 int init_gfx_handler(gfx_handler_t *handler);
 int gfx_next_frame(gfx_handler_t *handler);

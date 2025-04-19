@@ -67,9 +67,20 @@ typedef struct {
   VkDescriptorSet descriptor_set;
   VkPipeline pipeline;
   VkPipelineLayout pipeline_layout;
-
   mat4 model_matrix;
 } renderable_t;
+
+typedef struct {
+  bool active;
+  mesh_t *mesh;
+  shader_t *shader;
+  texture_t *texture[2];
+  buffer_t uniform_buffer;
+  VkDescriptorSet descriptor_set;
+  VkPipeline pipeline;
+  VkPipelineLayout pipeline_layout;
+  mat4 model_matrix;
+} map_renderable_t;
 
 typedef struct {
 
@@ -84,6 +95,8 @@ typedef struct {
 
   renderable_t renderables[MAX_RENDERABLES];
   uint32_t renderable_count;
+
+  map_renderable_t map_renderable;
 
   VkDescriptorSetLayout global_descriptor_set_layout;
   VkDescriptorSetLayout object_descriptor_set_layout;
@@ -104,9 +117,13 @@ void renderer_cleanup(gfx_handler_t *handler);
 
 shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, const char *frag_path);
 texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path);
+texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_t *pixel_array,
+                                            uint32_t width, uint32_t height);
 mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count,
                              uint32_t *indices, uint32_t index_count);
 
+map_renderable_t *renderer_set_map_renderable(gfx_handler_t *handler, mesh_t *mesh, shader_t *shader,
+                                              texture_t *entities_texture, texture_t *map_texture);
 renderable_t *renderer_add_renderable(gfx_handler_t *handler, mesh_t *mesh, shader_t *shader,
                                       texture_t *texture);
 void renderer_remove_renderable(gfx_handler_t *handler, renderable_t *renderable);

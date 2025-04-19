@@ -1,5 +1,6 @@
 #include "graphics_backend.h"
 #include "cimgui.h"
+#include "ddnet_map_loader.h"
 #include "renderer.h"
 #include "user_interface/user_interface.h"
 #include <GLFW/glfw3.h>
@@ -328,6 +329,76 @@ static void frame_present(gfx_handler_t *handler) {
   wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount;
 }
 
+void on_map_load(gfx_handler_t *handler, const char *map_path) {
+  renderer_state_t *renderer = &handler->renderer;
+  map_renderable_t *map_renderable = &renderer->map_renderable;
+
+  // Free existing map data
+  free_map_data(&handler->map_data);
+
+  // Clean up the previous map texture if it's not the default texture
+  if (map_renderable->texture[1] != renderer->default_texture && map_renderable->texture[1]) {
+    texture_t *old_texture = map_renderable->texture[1];
+
+    // Destroy Vulkan resources
+    vkDestroySampler(handler->g_Device, old_texture->sampler, handler->g_Allocator);
+    vkDestroyImageView(handler->g_Device, old_texture->image_view, handler->g_Allocator);
+    vkDestroyImage(handler->g_Device, old_texture->image, handler->g_Allocator);
+    vkFreeMemory(handler->g_Device, old_texture->memory, handler->g_Allocator);
+
+    // Mark the texture as invalid in renderer->textures
+    old_texture->sampler = VK_NULL_HANDLE;
+    old_texture->image_view = VK_NULL_HANDLE;
+    old_texture->image = VK_NULL_HANDLE;
+    old_texture->memory = VK_NULL_HANDLE;
+    old_texture->width = 0;
+    old_texture->height = 0;
+    old_texture->path[0] = '\0';
+
+    // If this was the last texture, reduce texture_count
+    if (old_texture == &renderer->textures[renderer->texture_count - 1]) {
+      renderer->texture_count--;
+    }
+  }
+
+  // Load new map data
+  handler->map_data = load_map(map_path);
+  if (!handler->map_data.game_layer.data) {
+    free_map_data(&handler->map_data);
+    map_renderable->texture[1] = renderer->default_texture; // Fallback to default texture
+    printf("Failed to load map: '%s', using default texture\n", map_path);
+  } else {
+    printf("Loaded map: '%s'\n", map_path);
+    // Load new texture from map data
+    texture_t *game_texture = renderer_load_texture_from_array(
+        handler, handler->map_data.game_layer.data, handler->map_data.width, handler->map_data.height);
+    if (game_texture) {
+      map_renderable->texture[1] = game_texture;
+
+      // Update descriptor set for the new texture
+      VkDescriptorImageInfo image_info = {.sampler = game_texture->sampler,
+                                          .imageView = game_texture->image_view,
+                                          .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+      VkWriteDescriptorSet descriptor_write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                               .pNext = NULL,
+                                               .dstSet = map_renderable->descriptor_set,
+                                               .dstBinding = 2, // Update binding 2 (second texture)
+                                               .dstArrayElement = 0,
+                                               .descriptorCount = 1,
+                                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                               .pImageInfo = &image_info,
+                                               .pBufferInfo = NULL,
+                                               .pTexelBufferView = NULL};
+
+      vkUpdateDescriptorSets(handler->g_Device, 1, &descriptor_write, 0, NULL);
+    } else {
+      map_renderable->texture[1] = renderer->default_texture; // Fallback to default texture
+      printf("Failed to load texture for map: '%s', using default texture\n", map_path);
+    }
+  }
+}
+
 int init_gfx_handler(gfx_handler_t *handler) {
   handler->g_Allocator = NULL;
   handler->g_Instance = VK_NULL_HANDLE;
@@ -346,7 +417,9 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->g_MainWindowData.ClearValue.color.float32[2] = 0.3f;
   handler->g_MainWindowData.ClearValue.color.float32[3] = 1.0f;
 
-  ui_init(&handler->user_interface);
+  memset(&handler->map_data, 0, sizeof(map_data_t));
+
+  ui_init(&handler->user_interface, handler);
 
   glfwSetErrorCallback(glfw_error_callback);
   if (!glfwInit())
@@ -385,7 +458,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
   glfwGetFramebufferSize(handler->window, &w, &h);
   memset((void *)&handler->g_MainWindowData, 0, sizeof(handler->g_MainWindowData));
   ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
-  wd->PresentMode = (VkPresentModeKHR)~0;
+  wd->PresentMode = VK_PRESENT_MODE_FIFO_KHR;
   wd->ClearEnable = true;
 
   setup_window(handler, wd, surface, w, h);
@@ -477,6 +550,7 @@ void gfx_cleanup(gfx_handler_t *handler) {
   VkResult err = vkDeviceWaitIdle(handler->g_Device);
   check_vk_result(err);
 
+  free_map_data(&handler->map_data);
   renderer_cleanup(handler);
   ImGui_ImplVulkan_Shutdown();
   ImGui_ImplGlfw_Shutdown();
