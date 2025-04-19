@@ -57,11 +57,11 @@ void setup_docking(ui_handler *ui) {
                                                     &dock_id_top); // Timeline takes 30%
 
     // Split the top area: Player list on left, properties on right
-    ImGuiID dock_id_left;
-    ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.80f, NULL,
-                                                   &dock_id_left); // Player list takes 20% (1.0 - 0.8)
-    // The remaining central node of the top split (where dock_id_right was created) will be left empty by
-    // default with PassthruCentralNode
+    // ImGuiID dock_id_left;
+    // ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.80f, NULL,
+    //                                                &dock_id_left); // Player list takes 20% (1.0 - 0.8)
+    //  The remaining central node of the top split (where dock_id_right was created) will be left empty by
+    //  default with PassthruCentralNode
 
     // Assign windows to docks
     igDockBuilderDockWindow("Timeline", dock_id_bottom);
@@ -316,7 +316,6 @@ int get_max_timeline_tick(timeline_state *ts) {
 void render_timeline_controls(ui_handler *ui) {
   timeline_state *ts = &ui->timeline;
 
-  float controls_height = igGetTextLineHeightWithSpacing() * 2.0f + 20.0f;
   // Push custom styles for controls
   igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f); // Rounded corners for buttons and sliders
   igPushStyleVar_Vec2(ImGuiStyleVar_FramePadding, (ImVec2){8.0f, 4.0f}); // Padding inside buttons/sliders
@@ -369,19 +368,10 @@ void render_timeline_controls(ui_handler *ui) {
   igText("Zoom:");
   igSameLine(0, 4);
   igSetNextItemWidth(150);
-  // Store mouse position for zoom center before slider potentially changes layout
-  ImVec2 mouse_pos = igGetIO_Nil()->MousePos;
   ImVec2 window_pos;
   igGetWindowPos(&window_pos);
   ImVec2 window_size;
   igGetWindowSize(&window_size);
-  float controls_height_before_slider =
-      igGetTextLineHeightWithSpacing() * 2.0f + 20.0f; // Approx height before this line
-  float header_height = igGetTextLineHeightWithSpacing();
-  ImVec2 timeline_start_pos = {window_pos.x, window_pos.y + controls_height_before_slider + header_height};
-  float timeline_area_width = window_size.x;
-
-  float old_zoom = ts->zoom;
   if (igSliderFloat("##Zoom", &ts->zoom, MIN_TIMELINE_ZOOM, MAX_TIMELINE_ZOOM, "%.2f",
                     ImGuiSliderFlags_Logarithmic)) {
     ts->zoom = fmaxf(MIN_TIMELINE_ZOOM, fminf(MAX_TIMELINE_ZOOM, ts->zoom)); // Clamp
@@ -413,7 +403,6 @@ void handle_timeline_interaction(ui_handler *ui, ImRect timeline_bb) {
   if (is_timeline_hovered && io->MouseWheel != 0) {
     int mouse_tick_before_zoom = screen_x_to_tick(ts, mouse_pos.x, timeline_bb.Min.x);
     float zoom_delta = io->MouseWheel * 0.1f * ts->zoom; // Scale zoom delta by current zoom
-    float old_zoom = ts->zoom;
     ts->zoom = fmaxf(MIN_TIMELINE_ZOOM, fminf(MAX_TIMELINE_ZOOM, ts->zoom + zoom_delta));
 
     // Adjust view start tick to keep the tick under the mouse cursor stable
@@ -598,7 +587,6 @@ void render_input_snippet(ui_handler *ui, int track_index, int snippet_index, in
 
   ImVec2 snippet_min = {draw_start_x, track_top + 2.0f};
   ImVec2 snippet_max = {draw_end_x, track_bottom - 2.0f};
-  ImRect snippet_bb = {snippet_min, snippet_max};
 
   if (track_bottom - track_top - 4.0f <= 0)
     return;
@@ -682,7 +670,6 @@ void render_input_snippet(ui_handler *ui, int track_index, int snippet_index, in
 void render_player_track(ui_handler *ui, int track_index, player_track *track, ImDrawList *draw_list,
                          ImRect timeline_bb, float track_top, float track_bottom) {
   timeline_state *ts = &ui->timeline;
-  ImGuiIO *io = igGetIO_Nil();
 
   // Draw track background
   ImU32 track_bg_col = (track_index % 2 == 0) ? igGetColorU32_Col(ImGuiCol_TitleBg, 1.0f)
@@ -744,10 +731,6 @@ void draw_drag_preview(ui_handler *ui, ImDrawList *overlay_draw_list, ImRect tim
   if (!ts->drag_state.active)
     return;
 
-  // Get the snippet being dragged
-  player_track *source_track =
-      &ts->player_tracks[ts->drag_state.source_track_index]; // Or find by ID across all? Finding by ID might
-                                                             // be safer if indices shift. Let's find by ID.
   input_snippet *dragged_snippet = NULL;
   // Find the snippet being dragged using its ID from the drag state
   for (int i = 0; i < ts->player_track_count; ++i) {
@@ -972,8 +955,8 @@ void render_timeline(ui_handler *ui) {
         max_tick = 100;
 
       // Render scrollbar
-      ImRect scrollbar_bb = {timeline_bb.Min.x, timeline_bb.Max.y, timeline_bb.Max.x,
-                             timeline_bb.Max.y + scrollbar_height};
+      ImRect scrollbar_bb = {{timeline_bb.Min.x, timeline_bb.Max.y},
+                             {timeline_bb.Max.x, timeline_bb.Max.y + scrollbar_height}};
       igPushID_Str("TimelineScrollbar");
       ImS64 scroll_v = (ImS64)ts->view_start_tick;
       if (igScrollbarEx(scrollbar_bb, igGetID_Str("TimelineScrollbar"), ImGuiAxis_X, &scroll_v, visible_ticks,
@@ -1035,8 +1018,8 @@ void render_timeline(ui_handler *ui) {
 
         // Call try_move_snippet with correct parameters
         // try_move_snippet(ts, snippet_id, source_track_idx, target_track_idx, desired_start_tick);
-        bool move_success =
-            try_move_snippet(ts, snippet_id_to_move, source_track_idx, target_track_idx, final_drop_tick);
+
+        try_move_snippet(ts, snippet_id_to_move, source_track_idx, target_track_idx, final_drop_tick);
 
         // Clear drag state regardless of success
         ts->drag_state.active = false;

@@ -51,7 +51,8 @@ add_subdirectory(libs/cglm)
 # add map loading
 add_subdirectory(libs/ddnet_map_loader)
 
-# linking
+# linking + supress all warnings for the libs i really don't care
+target_compile_options(${PROJECT_NAME} PRIVATE -w)
 target_link_libraries(${PROJECT_NAME} PRIVATE
 	stb_image
 	ddnet_map_loader
@@ -62,7 +63,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 # compile options
-target_compile_options(${PROJECT_NAME} PRIVATE -Wno-typedef-redefinition)
+target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wpedantic)
 
 # create shaders output directory in build folder
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/data/shaders)

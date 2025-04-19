@@ -114,8 +114,8 @@ void renderer_remove_renderable(gfx_handler_t *handler, renderable_t *renderable
 void renderer_update_uniforms(gfx_handler_t *handler);
 void renderer_draw(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
-VkVertexInputBindingDescription get_vertex_binding_description();
-uint32_t get_vertex_attribute_description_count();
-const VkVertexInputAttributeDescription *get_vertex_attribute_descriptions();
+VkVertexInputBindingDescription get_vertex_binding_description(void);
+uint32_t get_vertex_attribute_description_count(void);
+const VkVertexInputAttributeDescription *get_vertex_attribute_descriptions(void);
 
 #endif
