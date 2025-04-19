@@ -1069,3 +1069,43 @@ void timeline_init(timeline_state_t *ts) {
   temp_snippet.end_tick = 550;
   add_snippet_to_track(p3, &temp_snippet);
 }
+
+void timeline_cleanup(timeline_state_t *ts) {
+  // free each track's snippets and reset track data
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    player_track_t *track = &ts->player_tracks[i];
+    if (track->snippets) {
+      free(track->snippets);
+      track->snippets = NULL;
+    }
+    track->snippet_count = 0;
+  }
+
+  // free the tracks array
+  if (ts->player_tracks) {
+    free(ts->player_tracks);
+    ts->player_tracks = NULL;
+  }
+  ts->player_track_count = 0;
+
+  // reset timeline state
+  ts->current_tick = 0;
+  ts->zoom = 1.0f;
+  ts->view_start_tick = 0;
+  ts->track_height = 0.0f;
+  ts->selected_snippet_id = -1;
+  ts->selected_player_track_index = -1;
+  ts->next_snippet_id = 1;
+  ts->is_header_dragging = false;
+  ts->is_playing = false;
+  ts->playback_speed = 0;
+  ts->last_update_time = 0.0;
+
+  // reset drag state
+  ts->drag_state.active = false;
+  ts->drag_state.source_track_index = -1;
+  ts->drag_state.source_snippet_index = -1;
+  ts->drag_state.dragged_snippet_id = -1;
+  ts->drag_state.drag_offset_ticks = 0;
+  ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
+}

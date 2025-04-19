@@ -46,5 +46,6 @@ typedef struct {
 
 void render_timeline(timeline_state_t *ts);
 void timeline_init(timeline_state_t *ts);
+void timeline_cleanup(timeline_state_t *ts);
 
 #endif

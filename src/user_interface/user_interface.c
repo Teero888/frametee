@@ -115,4 +115,7 @@ void ui_render(ui_handler_t *ui) {
   }
 }
 
-void ui_cleanup(ui_handler_t *ui) { free(ui->timeline.player_tracks); }
+void ui_cleanup(ui_handler_t *ui) {
+  timeline_cleanup(&ui->timeline);
+  free_map_data(&ui->map_data);
+}

@@ -46,30 +46,10 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 	CIMGUI_USE_VULKAN=1
 )
 
-# include nativefiledialog library {{{
-add_library(nfd STATIC
-    libs/nfd/src/nfd_common.c
-    $<$<PLATFORM_ID:Windows>:libs/nfd/src/nfd_win.cpp>
-    $<$<PLATFORM_ID:Linux>:libs/nfd/src/nfd_gtk.c>
-    $<$<PLATFORM_ID:Darwin>:libs/nfd/src/nfd_cocoa.m>
-)
-target_include_directories(nfd PUBLIC ${CMAKE_SOURCE_DIR}/libs/nfd/src/include)
-if(UNIX AND NOT APPLE)
-    # Linux requires GTK3
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
-    target_include_directories(nfd PRIVATE ${GTK3_INCLUDE_DIRS})
-    target_link_libraries(nfd PRIVATE ${GTK3_LIBRARIES})
-elseif(APPLE)
-    # macOS requires Cocoa framework
-    target_link_libraries(nfd PRIVATE "-framework AppKit")
-endif()
-target_compile_options(nfd PRIVATE -w)
-# }}}
-
 # add and link libs {{{
 add_subdirectory(libs/cglm)
 add_subdirectory(libs/ddnet_map_loader)
+add_subdirectory(libs/nfd)
 
 # linking + supress all warnings for the libs i really don't care
 target_compile_options(${PROJECT_NAME} PRIVATE -w)
