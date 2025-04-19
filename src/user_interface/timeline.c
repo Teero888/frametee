@@ -1,9 +1,5 @@
-#include "user_interface.h"
-#include "cimgui.h"
-#include <limits.h>
+#include "timeline.h"
 #include <math.h>
-#include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,79 +9,18 @@
 #define SNAP_THRESHOLD_PX 5.0f // Snap threshold in pixels
 #define DEFAULT_TRACK_HEIGHT 40.f
 
-// --- Docking Setup ---
-void setup_docking(ui_handler *ui) {
-  ImGuiID main_dockspace_id = igGetID_Str("MainDockSpace");
-
-  // Ensure the dockspace covers the entire viewport initially
-  ImGuiViewport *viewport = igGetMainViewport();
-  igSetNextWindowPos(viewport->WorkPos, ImGuiCond_Always, (ImVec2){0.0f, 0.0f});
-  igSetNextWindowSize(viewport->WorkSize, ImGuiCond_Always);
-  igSetNextWindowViewport(viewport->ID);
-
-  ImGuiWindowFlags host_window_flags = 0;
-  host_window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                       ImGuiWindowFlags_NoMove;
-  host_window_flags |=
-      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
-
-  igPushStyleVar_Float(ImGuiStyleVar_WindowRounding, 0.0f);
-  igPushStyleVar_Float(ImGuiStyleVar_WindowBorderSize, 0.0f);
-  igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0.0f, 0.0f});
-  igBegin("DockSpace Host Window", NULL,
-          host_window_flags); // pass null for p_open to prevent closing the host window
-  igPopStyleVar(3);
-
-  // create the main dockspace
-  igDockSpace(main_dockspace_id, (ImVec2){0.0f, 0.0f}, ImGuiDockNodeFlags_PassthruCentralNode,
-              NULL); // Passthru allows seeing background
-  igEnd();
-
-  // -- Build the initial layout programmatically (optional, but good for setup) --
-  // This needs to be done *after* the DockSpace call, often on the first frame or after a reset.
-  static bool first_time = true;
-  if (first_time) {
-    first_time = false;
-
-    igDockBuilderRemoveNode(main_dockspace_id); // Clear existing layout
-    igDockBuilderAddNode(main_dockspace_id, ImGuiDockNodeFlags_DockSpace);
-    igDockBuilderSetNodeSize(main_dockspace_id, viewport->WorkSize);
-
-    // Split the main dockspace: Timeline at bottom, rest on top
-    ImGuiID dock_id_top;
-    ImGuiID dock_id_bottom = igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.30f, NULL,
-                                                    &dock_id_top); // Timeline takes 30%
-
-    // Split the top area: Player list on left, properties on right
-    // ImGuiID dock_id_left;
-    // ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.80f, NULL,
-    //                                                &dock_id_left); // Player list takes 20% (1.0 - 0.8)
-    //  The remaining central node of the top split (where dock_id_right was created) will be left empty by
-    //  default with PassthruCentralNode
-
-    // Assign windows to docks
-    igDockBuilderDockWindow("Timeline", dock_id_bottom);
-    // igDockBuilderDockWindow("Player List", dock_id_left);
-    // igDockBuilderDockWindow("Properties", dock_id_right);
-
-    igDockBuilderFinish(main_dockspace_id);
-  }
-}
-
-// --- Timeline Window ---
-
 // Converts screen X position to timeline tick
-int screen_x_to_tick(const timeline_state *ts, float screen_x, float timeline_start_x) {
+int screen_x_to_tick(const timeline_state_t *ts, float screen_x, float timeline_start_x) {
   return ts->view_start_tick + (int)((screen_x - timeline_start_x) / ts->zoom);
 }
 
 // Converts timeline tick to screen X position
-float tick_to_screen_x(const timeline_state *ts, int tick, float timeline_start_x) {
+float tick_to_screen_x(const timeline_state_t *ts, int tick, float timeline_start_x) {
   return timeline_start_x + (tick - ts->view_start_tick) * ts->zoom;
 }
 
 // Finds a snippet by its ID within a track
-input_snippet *find_snippet_by_id(player_track *track, int snippet_id) {
+input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id) {
   for (int i = 0; i < track->snippet_count; ++i) {
     if (track->snippets[i].id == snippet_id) {
       return &track->snippets[i];
@@ -95,7 +30,7 @@ input_snippet *find_snippet_by_id(player_track *track, int snippet_id) {
 }
 
 // Finds a snippet by its ID and track index
-input_snippet *find_snippet_by_id_and_track(timeline_state *ts, int snippet_id, int track_idx) {
+input_snippet_t *find_snippet_by_id_and_track(timeline_state_t *ts, int snippet_id, int track_idx) {
   if (track_idx < 0 || track_idx >= ts->player_track_count)
     return NULL;
   return find_snippet_by_id(&ts->player_tracks[track_idx], snippet_id);
@@ -103,7 +38,7 @@ input_snippet *find_snippet_by_id_and_track(timeline_state *ts, int snippet_id, 
 
 // Calculates a snapped tick position based on nearby snippet edges
 // Considers snapping both the start and end of the dragged snippet.
-int calculate_snapped_tick(const timeline_state *ts, int desired_start_tick, int dragged_snippet_duration,
+int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int dragged_snippet_duration,
                            int exclude_snippet_id) {
   int snapped_start_tick = desired_start_tick; // Default to no snapping
   float snap_threshold_ticks = SNAP_THRESHOLD_PX / ts->zoom;
@@ -114,9 +49,9 @@ int calculate_snapped_tick(const timeline_state *ts, int desired_start_tick, int
 
   // --- Check snapping to other snippet edges ---
   for (int i = 0; i < ts->player_track_count; ++i) {
-    player_track *track = &ts->player_tracks[i];
+    player_track_t *track = &ts->player_tracks[i];
     for (int j = 0; j < track->snippet_count; ++j) {
-      input_snippet *other = &track->snippets[j];
+      input_snippet_t *other = &track->snippets[j];
       if (other->id == exclude_snippet_id)
         continue; // Don't snap to the snippet itself
 
@@ -174,12 +109,12 @@ int calculate_snapped_tick(const timeline_state *ts, int desired_start_tick, int
 }
 
 // Checks if a snippet range overlaps with any snippets in a track (excluding one)
-bool check_for_overlap(const player_track *track, int start_tick, int end_tick, int exclude_snippet_id) {
+bool check_for_overlap(const player_track_t *track, int start_tick, int end_tick, int exclude_snippet_id) {
   if (start_tick >= end_tick)
     return false; // Invalid range
 
   for (int i = 0; i < track->snippet_count; ++i) {
-    input_snippet *other = &track->snippets[i];
+    input_snippet_t *other = &track->snippets[i];
     if (other->id == exclude_snippet_id)
       continue; // Don't check against ourselves
 
@@ -194,7 +129,7 @@ bool check_for_overlap(const player_track *track, int start_tick, int end_tick, 
 
 // Removes a snippet from a track by ID
 // Returns true if removed, false if not found
-bool remove_snippet_from_track(player_track *track, int snippet_id) {
+bool remove_snippet_from_track(player_track_t *track, int snippet_id) {
   int found_idx = -1;
   for (int i = 0; i < track->snippet_count; ++i) {
     if (track->snippets[i].id == snippet_id) {
@@ -206,18 +141,18 @@ bool remove_snippet_from_track(player_track *track, int snippet_id) {
   if (found_idx != -1) {
     // Shift elements to fill the gap
     memmove(&track->snippets[found_idx], &track->snippets[found_idx + 1],
-            (track->snippet_count - found_idx - 1) * sizeof(input_snippet));
+            (track->snippet_count - found_idx - 1) * sizeof(input_snippet_t));
     track->snippet_count--;
     // Reallocate memory (optional, but good practice if removing often)
-    track->snippets = realloc(track->snippets, sizeof(input_snippet) * track->snippet_count);
+    track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * track->snippet_count);
     // Note: realloc could fail, but for simplicity in this example, we omit error handling.
     return true;
   }
   return false; // Snippet not found
 }
 
-void add_snippet_to_track(player_track *track, const input_snippet *snippet) {
-  track->snippets = realloc(track->snippets, sizeof(input_snippet) * (track->snippet_count + 1));
+void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet) {
+  track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * (track->snippet_count + 1));
   if (track->snippets == NULL) {
     return;
   }
@@ -227,19 +162,19 @@ void add_snippet_to_track(player_track *track, const input_snippet *snippet) {
 
 // Attempts to move a snippet to a new position and track, checking for overlaps
 // Returns true if the move was successful, false otherwise.
-bool try_move_snippet(timeline_state *ts, int snippet_id, int source_track_idx, int target_track_idx,
+bool try_move_snippet(timeline_state_t *ts, int snippet_id, int source_track_idx, int target_track_idx,
                       int desired_start_tick) {
   if (source_track_idx < 0 || source_track_idx >= ts->player_track_count || target_track_idx < 0 ||
       target_track_idx >= ts->player_track_count) {
     return false; // Invalid track indices
   }
 
-  player_track *source_track = &ts->player_tracks[source_track_idx];
-  player_track *target_track = &ts->player_tracks[target_track_idx];
+  player_track_t *source_track = &ts->player_tracks[source_track_idx];
+  player_track_t *target_track = &ts->player_tracks[target_track_idx];
 
   // Find the snippet in the source track
   int snippet_idx_in_source = -1;
-  input_snippet snippet_to_move = {0}; // Data to copy if move is valid
+  input_snippet_t snippet_to_move = {0}; // Data to copy if move is valid
   for (int i = 0; i < source_track->snippet_count; ++i) {
     if (source_track->snippets[i].id == snippet_id) {
       snippet_idx_in_source = i;
@@ -299,10 +234,10 @@ bool try_move_snippet(timeline_state *ts, int snippet_id, int source_track_idx, 
   return true; // Move successful
 }
 
-int get_max_timeline_tick(timeline_state *ts) {
+int get_max_timeline_tick(timeline_state_t *ts) {
   int max_tick = 0;
   for (int i = 0; i < ts->player_track_count; ++i) {
-    player_track *track = &ts->player_tracks[i];
+    player_track_t *track = &ts->player_tracks[i];
     for (int j = 0; j < track->snippet_count; ++j) {
       if (track->snippets[j].end_tick > max_tick) {
         max_tick = track->snippets[j].end_tick;
@@ -313,8 +248,7 @@ int get_max_timeline_tick(timeline_state *ts) {
 }
 
 // --- Rendering and Interaction Functions ---
-void render_timeline_controls(ui_handler *ui) {
-  timeline_state *ts = &ui->timeline;
+void render_timeline_controls(timeline_state_t *ts) {
 
   // Push custom styles for controls
   igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f); // Rounded corners for buttons and sliders
@@ -392,8 +326,7 @@ void render_timeline_controls(ui_handler *ui) {
   igPopStyleVar(3);   // Pop FrameRounding, FramePadding, ItemSpacing
 }
 
-void handle_timeline_interaction(ui_handler *ui, ImRect timeline_bb) {
-  timeline_state *ts = &ui->timeline;
+void handle_timeline_interaction(timeline_state_t *ts, ImRect timeline_bb) {
   ImGuiIO *io = igGetIO_Nil();
   ImVec2 mouse_pos = io->MousePos;
 
@@ -426,9 +359,7 @@ void handle_timeline_interaction(ui_handler *ui, ImRect timeline_bb) {
   }
 }
 
-void draw_timeline_header(ui_handler *ui, ImDrawList *draw_list, ImRect timeline_bb, float header_y) {
-  const timeline_state *ts = &ui->timeline;
-
+void draw_timeline_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_bb, float header_y) {
   ImU32 tick_col = igGetColorU32_Col(ImGuiCol_TextDisabled, 0.7f);
   ImU32 tick_sec_col = igGetColorU32_Col(ImGuiCol_Text, 0.9f);
   ImU32 tick_text_col = igGetColorU32_Col(ImGuiCol_Text, 1.0f);
@@ -569,9 +500,8 @@ void draw_timeline_header(ui_handler *ui, ImDrawList *draw_list, ImRect timeline
   }
 }
 
-void render_input_snippet(ui_handler *ui, int track_index, int snippet_index, input_snippet *snippet,
+void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_index, input_snippet_t *snippet,
                           ImDrawList *draw_list, float track_top, float track_bottom, ImRect timeline_bb) {
-  timeline_state *ts = &ui->timeline;
   ImGuiIO *io = igGetIO_Nil();
 
   float snippet_start_x = tick_to_screen_x(ts, snippet->start_tick, timeline_bb.Min.x);
@@ -667,10 +597,8 @@ void render_input_snippet(ui_handler *ui, int track_index, int snippet_index, in
   igPopID();
 }
 
-void render_player_track(ui_handler *ui, int track_index, player_track *track, ImDrawList *draw_list,
+void render_player_track(timeline_state_t *ts, int track_index, player_track_t *track, ImDrawList *draw_list,
                          ImRect timeline_bb, float track_top, float track_bottom) {
-  timeline_state *ts = &ui->timeline;
-
   // Draw track background
   ImU32 track_bg_col = (track_index % 2 == 0) ? igGetColorU32_Col(ImGuiCol_TitleBg, 1.0f)
                                               : igGetColorU32_Col(ImGuiCol_WindowBg, 1.0f);
@@ -688,7 +616,7 @@ void render_player_track(ui_handler *ui, int track_index, player_track *track, I
 
   // Draw Snippets for this track
   for (int j = 0; j < track->snippet_count; ++j) {
-    render_input_snippet(ui, track_index, j, &track->snippets[j], draw_list, track_top, track_bottom,
+    render_input_snippet(ts, track_index, j, &track->snippets[j], draw_list, track_top, track_bottom,
                          timeline_bb);
   }
 
@@ -703,9 +631,7 @@ void render_player_track(ui_handler *ui, int track_index, player_track *track, I
 }
 
 // Renamed parameter for clarity
-void draw_playhead(ui_handler *ui, ImDrawList *draw_list, ImRect timeline_bb, float playhead_start_y) {
-  const timeline_state *ts = &ui->timeline;
-
+void draw_playhead(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_bb, float playhead_start_y) {
   float playhead_x = tick_to_screen_x(ts, ts->current_tick, timeline_bb.Min.x);
 
   // Draw playhead only if it's within the horizontal bounds of the timeline area
@@ -724,14 +650,13 @@ void draw_playhead(ui_handler *ui, ImDrawList *draw_list, ImRect timeline_bb, fl
   }
 }
 
-void draw_drag_preview(ui_handler *ui, ImDrawList *overlay_draw_list, ImRect timeline_bb) {
-  timeline_state *ts = &ui->timeline;
+void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRect timeline_bb) {
   ImGuiIO *io = igGetIO_Nil();
 
   if (!ts->drag_state.active)
     return;
 
-  input_snippet *dragged_snippet = NULL;
+  input_snippet_t *dragged_snippet = NULL;
   // Find the snippet being dragged using its ID from the drag state
   for (int i = 0; i < ts->player_track_count; ++i) {
     dragged_snippet = find_snippet_by_id(&ts->player_tracks[i], ts->drag_state.dragged_snippet_id);
@@ -804,8 +729,7 @@ void draw_drag_preview(ui_handler *ui, ImDrawList *overlay_draw_list, ImRect tim
 } // End draw_drag_preview
 
 // --- Main Render Function ---
-void render_timeline(ui_handler *ui) {
-  timeline_state *ts = &ui->timeline;
+void render_timeline(timeline_state_t *ts) {
   ImGuiIO *io = igGetIO_Nil();
 
   // Advance timeline state
@@ -832,7 +756,7 @@ void render_timeline(ui_handler *ui) {
     igPopStyleVar(2);
 
     // --- Controls ---
-    render_timeline_controls(ui);
+    render_timeline_controls(ts);
 
     // --- Layout Calculations for Header and Timeline Area ---
     float header_height = igGetTextLineHeightWithSpacing();
@@ -883,7 +807,7 @@ void render_timeline(ui_handler *ui) {
 
     // --- Draw Header (Ticks) ---
     // Draw the ticks and labels within the header area
-    draw_timeline_header(ui, draw_list, header_bb, header_bb_min.y);
+    draw_timeline_header(ts, draw_list, header_bb, header_bb_min.y);
 
     // Move the cursor down by the height of the header to position for the tracks
     igDummy((ImVec2){available_space_below_controls.x, header_height});
@@ -908,7 +832,7 @@ void render_timeline(ui_handler *ui) {
       // This interaction should apply to the track area, not the header.
       // Make sure this doesn't conflict with header dragging if both are active
       if (!ts->is_header_dragging) { // Only pan/zoom tracks if not currently dragging header
-        handle_timeline_interaction(ui, timeline_bb);
+        handle_timeline_interaction(ts, timeline_bb);
       }
 
       // --- Draw Timeline Tracks and Snippets ---
@@ -918,12 +842,12 @@ void render_timeline(ui_handler *ui) {
       for (int i = 0; i < ts->player_track_count; ++i) {
         if (current_track_y >= timeline_bb.Max.y)
           break;
-        player_track *track = &ts->player_tracks[i];
+        player_track_t *track = &ts->player_tracks[i];
         float track_top = current_track_y;
         float track_bottom = current_track_y + ts->track_height;
         float clamped_track_bottom = fminf(track_bottom, timeline_bb.Max.y);
         if (clamped_track_bottom > track_top) {
-          render_player_track(ui, i, track, draw_list, timeline_bb, track_top, clamped_track_bottom);
+          render_player_track(ts, i, track, draw_list, timeline_bb, track_top, clamped_track_bottom);
         }
         current_track_y += ts->track_height;
       }
@@ -975,12 +899,13 @@ void render_timeline(ui_handler *ui) {
         ImVec2 mouse_pos = igGetIO_Nil()->MousePos;
 
         // Get the snippet data needed for duration and ID
-        player_track *source_track =
+        player_track_t *source_track =
             &ts->player_tracks[ts->drag_state.source_track_index]; // Get source track using the index stored
                                                                    // at drag start Find the snippet by ID in
                                                                    // the source track to get its duration and
                                                                    // confirm it still exists there
-        input_snippet *snippet_to_move = find_snippet_by_id(source_track, ts->drag_state.dragged_snippet_id);
+        input_snippet_t *snippet_to_move =
+            find_snippet_by_id(source_track, ts->drag_state.dragged_snippet_id);
         if (!snippet_to_move) {
           // Snippet not found in the source track it supposedly started in? This indicates a data
           // inconsistency. Clear drag state and abort.
@@ -1016,9 +941,6 @@ void render_timeline(ui_handler *ui) {
         int snippet_id_to_move = ts->drag_state.dragged_snippet_id; // Get ID from state
         int source_track_idx = ts->drag_state.source_track_index;   // Get source track index from state
 
-        // Call try_move_snippet with correct parameters
-        // try_move_snippet(ts, snippet_id, source_track_idx, target_track_idx, desired_start_tick);
-
         try_move_snippet(ts, snippet_id_to_move, source_track_idx, target_track_idx, final_drop_tick);
 
         // Clear drag state regardless of success
@@ -1031,36 +953,31 @@ void render_timeline(ui_handler *ui) {
 
       // --- Draw Playhead ---
       // Draw the playhead line over the track area, from its top to its bottom
-      draw_playhead(ui, draw_list, timeline_bb,
+      draw_playhead(ts, draw_list, timeline_bb,
                     timeline_bb.Min.y); // Playhead starts at the top Y of the timeline_bb area
 
     } // End if(timeline_bb has positive dimensions)
 
     // --- Draw Drag Preview (on overlay) ---
     // This uses the overlay draw list and needs the timeline_bb for positioning
-    draw_drag_preview(ui, overlay_draw_list, timeline_bb);
+    draw_drag_preview(ts, overlay_draw_list, timeline_bb);
   }
   igEnd(); // End Timeline window
 }
 
 // Helper to add a new empty track
-player_track *add_new_track(timeline_state *timeline) {
+player_track_t *add_new_track(timeline_state_t *timeline) {
   timeline->player_tracks =
-      realloc(timeline->player_tracks, sizeof(player_track) * (timeline->player_track_count + 1));
-  player_track *new_track = &timeline->player_tracks[timeline->player_track_count];
+      realloc(timeline->player_tracks, sizeof(player_track_t) * (timeline->player_track_count + 1));
+  player_track_t *new_track = &timeline->player_tracks[timeline->player_track_count];
   new_track->snippets = NULL; // Initialize as empty dynamic array
   new_track->snippet_count = 0;
   timeline->player_track_count++;
   return new_track;
 }
 
-// --- Timeline Window End ---
-
-void ui_init(ui_handler *ui) {
-  ui->show_timeline = true;
-
-  timeline_state *ts = &ui->timeline;
-  memset(ts, 0, sizeof(timeline_state));
+void timeline_init(timeline_state_t *ts) {
+  memset(ts, 0, sizeof(timeline_state_t));
   // Initialize Timeline State variables
   ts->playback_speed = 50;
   ts->is_playing = 0;
@@ -1088,10 +1005,10 @@ void ui_init(ui_handler *ui) {
   ts->player_tracks = NULL;
 
   // Temporary snippet struct
-  input_snippet temp_snippet;
+  input_snippet_t temp_snippet;
 
-  // Add Track 0 (e.g., Main Video)
-  player_track *p0 = add_new_track(ts);
+  // Add Track 0
+  player_track_t *p0 = add_new_track(ts);
   // Snippet 1: 50-150
   temp_snippet.id = ts->next_snippet_id++;
   temp_snippet.start_tick = 50;
@@ -1108,8 +1025,8 @@ void ui_init(ui_handler *ui) {
   temp_snippet.end_tick = 400;
   add_snippet_to_track(p0, &temp_snippet);
 
-  // Add Track 1 (e.g., Secondary Video/Overlay)
-  player_track *p1 = add_new_track(ts);
+  // Add Track 1
+  player_track_t *p1 = add_new_track(ts);
   // Snippet 1: 100-250
   temp_snippet.id = ts->next_snippet_id++;
   temp_snippet.start_tick = 100;
@@ -1121,8 +1038,8 @@ void ui_init(ui_handler *ui) {
   temp_snippet.end_tick = 450;
   add_snippet_to_track(p1, &temp_snippet);
 
-  // Add Track 2 (e.g., Audio)
-  player_track *p2 = add_new_track(ts);
+  // Add Track 2
+  player_track_t *p2 = add_new_track(ts);
   // Snippet 1: 0-200
   temp_snippet.id = ts->next_snippet_id++;
   temp_snippet.start_tick = 0;
@@ -1139,8 +1056,8 @@ void ui_init(ui_handler *ui) {
   temp_snippet.end_tick = 500;
   add_snippet_to_track(p2, &temp_snippet);
 
-  // Add Track 3 (e.g., Effects/Transitions)
-  player_track *p3 = add_new_track(ts);
+  // Add Track 3
+  player_track_t *p3 = add_new_track(ts);
   // Snippet 1: 150-200
   temp_snippet.id = ts->next_snippet_id++;
   temp_snippet.start_tick = 150;
@@ -1152,10 +1069,3 @@ void ui_init(ui_handler *ui) {
   temp_snippet.end_tick = 550;
   add_snippet_to_track(p3, &temp_snippet);
 }
-
-void ui_render(ui_handler *ui) {
-  setup_docking(ui);
-  render_timeline(ui);
-}
-
-void ui_cleanup(ui_handler *ui) { free(ui->timeline.player_tracks); }

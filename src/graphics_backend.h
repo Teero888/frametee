@@ -5,7 +5,7 @@
 #include <vulkan/vulkan_core.h>
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
-#include "user_interface.h"
+#include "user_interface/user_interface.h"
 #include <GLFW/glfw3.h>
 #include <cimgui.h>
 #include <cimgui_impl.h>
@@ -27,7 +27,7 @@ struct gfx_handler_t {
   uint32_t g_MinImageCount;
   bool g_SwapChainRebuild;
   // --- stuff that is relevant ---
-  ui_handler user_interface;
+  ui_handler_t user_interface;
   renderer_state_t renderer;
 };
 

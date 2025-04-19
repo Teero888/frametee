@@ -9,14 +9,15 @@ set(SRCS
 	src/graphics_backend.c
 	src/main.c
 	src/renderer.c
-	src/user_interface.c
+	src/user_interface/user_interface.c
+	src/user_interface/timeline.c
 )
 
 # find dependencies
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
 
-# vulkan glslangvalidator for shader compilation
+# find vulkan glslangvalidator for shader compilation
 find_program(GLSLANG_VALIDATOR glslangValidator HINTS ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE})
 if(NOT GLSLANG_VALIDATOR)
 	message(FATAL_ERROR "glslangValidator not found. Please ensure Vulkan SDK is installed.")
@@ -45,15 +46,35 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 	CIMGUI_USE_VULKAN=1
 )
 
-# add cglm for graphics
-add_subdirectory(libs/cglm)
+# include nativefiledialog library {{{
+add_library(nfd STATIC
+    libs/nfd/src/nfd_common.c
+    $<$<PLATFORM_ID:Windows>:libs/nfd/src/nfd_win.cpp>
+    $<$<PLATFORM_ID:Linux>:libs/nfd/src/nfd_gtk.c>
+    $<$<PLATFORM_ID:Darwin>:libs/nfd/src/nfd_cocoa.m>
+)
+target_include_directories(nfd PUBLIC ${CMAKE_SOURCE_DIR}/libs/nfd/src/include)
+if(UNIX AND NOT APPLE)
+    # Linux requires GTK3
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+    target_include_directories(nfd PRIVATE ${GTK3_INCLUDE_DIRS})
+    target_link_libraries(nfd PRIVATE ${GTK3_LIBRARIES})
+elseif(APPLE)
+    # macOS requires Cocoa framework
+    target_link_libraries(nfd PRIVATE "-framework AppKit")
+endif()
+target_compile_options(nfd PRIVATE -w)
+# }}}
 
-# add map loading
+# add and link libs {{{
+add_subdirectory(libs/cglm)
 add_subdirectory(libs/ddnet_map_loader)
 
 # linking + supress all warnings for the libs i really don't care
 target_compile_options(${PROJECT_NAME} PRIVATE -w)
 target_link_libraries(${PROJECT_NAME} PRIVATE
+	nfd
 	stb_image
 	ddnet_map_loader
 	cglm
@@ -61,9 +82,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 	glfw
 	Vulkan::Vulkan
 )
+#}}}
 
-# compile options
 target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wpedantic)
+
+# compile and copy shaders {{{
 
 # create shaders output directory in build folder
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/data/shaders)
@@ -121,3 +144,4 @@ add_custom_command(
 		${CMAKE_BINARY_DIR}/data/shaders/
 	COMMENT "Copying compiled shaders to build directory"
 )
+# }}}
