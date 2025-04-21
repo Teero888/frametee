@@ -1,3 +1,4 @@
+#include "cglm/affine.h"
 #include "cglm/cam.h"
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "graphics_backend.h"
@@ -886,9 +887,8 @@ map_renderable_t *renderer_set_map_renderable(gfx_handler_t *handler, mesh_t *me
   renderable->shader = shader;
   renderable->texture[0] = entities_texture;
   renderable->texture[1] = map_texture ? map_texture : renderer->default_texture;
-  glm_mat4_identity(renderable->model_matrix);
 
-  VkDeviceSize ubo_size = sizeof(uniform_buffer_object_t);
+  VkDeviceSize ubo_size = sizeof(map_buffer_object_t);
   create_buffer(handler, ubo_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &renderable->uniform_buffer);
@@ -922,7 +922,7 @@ map_renderable_t *renderer_set_map_renderable(gfx_handler_t *handler, mesh_t *me
   check_vk_result_line(err, __LINE__);
 
   VkDescriptorBufferInfo buffer_info = {
-      .buffer = renderable->uniform_buffer.buffer, .offset = 0, .range = sizeof(uniform_buffer_object_t)};
+      .buffer = renderable->uniform_buffer.buffer, .offset = 0, .range = sizeof(map_buffer_object_t)};
 
   VkDescriptorImageInfo image_info[2] = {{
                                              .sampler = renderable->texture[0]->sampler,
@@ -1006,7 +1006,6 @@ renderable_t *renderer_add_renderable(gfx_handler_t *handler, mesh_t *mesh, shad
   renderable->mesh = mesh;
   renderable->shader = shader;
   renderable->texture = texture ? texture : renderer->default_texture;
-  glm_mat4_identity(renderable->model_matrix);
 
   VkDeviceSize ubo_size = sizeof(uniform_buffer_object_t);
   create_buffer(handler, ubo_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -1085,25 +1084,28 @@ void renderer_remove_renderable(gfx_handler_t *handler, renderable_t *renderable
 void renderer_update_uniforms(gfx_handler_t *handler) {
   renderer_state_t *renderer = &handler->renderer;
 
-  mat4 view, proj;
+  mat4 view, proj, model;
 
+  glm_mat4_identity(model);
   glm_mat4_identity(view);
-  glm_translate(view, (vec3){0.0f, 0.0f, -1.0f});
+
+  glm_scale(view, (vec3){renderer->camera.zoom, renderer->camera.zoom, 1.0f});
+  glm_translate(view, (vec3){-renderer->camera.pos[0], renderer->camera.pos[1], -1.0f});
 
   int width, height;
   glfwGetFramebufferSize(handler->window, &width, &height);
   if (width == 0 || height == 0)
     return;
-
-  glm_ortho(0.0f, 1.0f, 1.0f, 0.0f, -1.0f, 1.0f, proj);
+  glm_ortho(-1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, proj);
+  float window_ratio = (float)width / (float)height;
   {
     map_renderable_t *r = &renderer->map_renderable;
     if (r->active) {
-      uniform_buffer_object_t ubo = {.model = {0}, .view = {0}, .proj = {0}};
-      glm_mat4_copy(r->model_matrix, ubo.model);
-      glm_mat4_copy(view, ubo.view);
-      glm_mat4_copy(proj, ubo.proj);
-
+      float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
+      map_buffer_object_t ubo = {
+          renderer->camera.pos[0], renderer->camera.pos[1],
+          1.0 / (renderer->camera.zoom * fmax(handler->map_data.width, handler->map_data.height) * 0.001),
+          1.0 / (window_ratio / map_ratio)};
       assert(r->uniform_buffer.mapped_memory != NULL);
       memcpy(r->uniform_buffer.mapped_memory, &ubo, sizeof(ubo));
     }
@@ -1113,8 +1115,9 @@ void renderer_update_uniforms(gfx_handler_t *handler) {
     if (!r->active)
       continue;
 
+    glm_scale(model, (vec3){1.0f, window_ratio, 1.0f});
     uniform_buffer_object_t ubo = {.model = {0}, .view = {0}, .proj = {0}};
-    glm_mat4_copy(r->model_matrix, ubo.model);
+    glm_mat4_copy(model, ubo.model);
     glm_mat4_copy(view, ubo.view);
     glm_mat4_copy(proj, ubo.proj);
 
@@ -1122,7 +1125,6 @@ void renderer_update_uniforms(gfx_handler_t *handler) {
     memcpy(r->uniform_buffer.mapped_memory, &ubo, sizeof(ubo));
   }
 }
-
 void renderer_draw(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &handler->renderer;
 

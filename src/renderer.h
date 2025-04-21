@@ -58,6 +58,11 @@ typedef struct {
 } uniform_buffer_object_t;
 
 typedef struct {
+  vec4 transform;
+  float aspect;
+} map_buffer_object_t;
+
+typedef struct {
   bool active;
   mesh_t *mesh;
   shader_t *shader;
@@ -66,7 +71,6 @@ typedef struct {
   VkDescriptorSet descriptor_set;
   VkPipeline pipeline;
   VkPipelineLayout pipeline_layout;
-  mat4 model_matrix;
 } renderable_t;
 
 typedef struct {
@@ -78,8 +82,15 @@ typedef struct {
   VkDescriptorSet descriptor_set;
   VkPipeline pipeline;
   VkPipelineLayout pipeline_layout;
-  mat4 model_matrix;
 } map_renderable_t;
+
+typedef struct {
+  vec2 pos;
+  vec2 drag_start_pos;
+  float zoom;
+  float zoom_wanted;
+  bool is_dragging;
+} camera_t;
 
 typedef struct {
 
@@ -103,8 +114,9 @@ typedef struct {
 
   VkCommandPool transfer_command_pool;
 
-  texture_t *default_texture;
+  camera_t camera;
 
+  texture_t *default_texture;
   gfx_handler_t *gfx;
 } renderer_state_t;
 

@@ -1,4 +1,6 @@
 #include "user_interface.h"
+#include "../graphics_backend.h"
+#include "../renderer.h"
 #include "cimgui.h"
 #include "ddnet_map_loader.h"
 #include "timeline.h"
@@ -9,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-void on_map_load(struct gfx_handler_t *handler, const char *map_path);
+void on_map_load(gfx_handler_t *handler, const char *map_path);
 void render_menu_bar(ui_handler_t *ui) {
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
@@ -104,15 +106,67 @@ void setup_docking(ui_handler_t *ui) {
   }
 }
 
-void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler) {
+void on_camera_update(gfx_handler_t *handler) {
+  camera_t *camera = &handler->renderer.camera;
+  ImGuiIO *io = igGetIO_Nil();
+  int width, height;
+  glfwGetFramebufferSize(handler->window, &width, &height);
+  if (width == 0 || height == 0)
+    return;
+
+  float scroll_y = io->MouseWheel;
+  if (igIsKeyPressed_Bool(ImGuiKey_W, true))
+    scroll_y = 1.0f;
+  if (igIsKeyPressed_Bool(ImGuiKey_S, true))
+    scroll_y = -1.0f;
+  if (scroll_y != 0.0f) {
+    float zoom_factor = 1.0f + scroll_y * 0.1f;
+    camera->zoom_wanted *= zoom_factor;
+    camera->zoom_wanted = glm_clamp(camera->zoom_wanted, 0.005f, 100.0f);
+  }
+  camera->zoom = camera->zoom + (camera->zoom_wanted - camera->zoom) / (3000.f * io->DeltaTime);
+  float window_ratio = (float)width / (float)height;
+  float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
+  float aspect = (float)window_ratio / (float)map_ratio;
+  if (!io->WantCaptureMouse && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+    if (!camera->is_dragging) {
+      camera->is_dragging = true;
+      ImVec2 mouse_pos;
+      igGetMousePos(&mouse_pos);
+      camera->drag_start_pos[0] = mouse_pos.x;
+      camera->drag_start_pos[1] = mouse_pos.y;
+    }
+
+    ImVec2 drag_delta;
+    igGetMouseDragDelta(&drag_delta, ImGuiMouseButton_Right, 0.0f);
+    float dx = drag_delta.x / (width * camera->zoom);
+    float dy = drag_delta.y / (height * camera->zoom * aspect);
+    float max_map_size = fmax(handler->map_data.width, handler->map_data.height) * 0.001;
+    camera->pos[0] -= (dx * 2) / max_map_size;
+    camera->pos[1] -= (dy * 2) / max_map_size;
+    igResetMouseDragDelta(ImGuiMouseButton_Right);
+  } else {
+    camera->is_dragging = false;
+  }
+}
+
+void camera_init(camera_t *camera) {
+  memset(camera, 0, sizeof(camera_t));
+  camera->zoom = 5.0f;
+  camera->zoom_wanted = 5.0f;
+}
+
+void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->gfx_handler = gfx_handler;
-  ui->show_timeline = true;
+  ui->show_timeline = false;
   memset(&ui->map_data, 0, sizeof(map_data_t));
   timeline_init(&ui->timeline);
+  camera_init(&gfx_handler->renderer.camera);
   NFD_Init();
 }
 
 void ui_render(ui_handler_t *ui) {
+  on_camera_update(ui->gfx_handler);
   render_menu_bar(ui);
   setup_docking(ui);
   if (ui->show_timeline) {
