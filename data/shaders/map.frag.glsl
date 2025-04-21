@@ -39,10 +39,15 @@ void main() {
       // im doing * 64 here right now but we could do * 128 to get 1 pixel neighbor
       vec2 off_texcoord = tex_coord + (vec2(dx, dy) / (map_data_size * 128));
       vec2 TileSize = vec2(1.0) / (map_data_size);
-	  // repeating edges of the map
-      off_texcoord =
-          mix(mix(off_texcoord, mod(off_texcoord, TileSize), step(off_texcoord, vec2(0.0))),
-              vec2(1.0) - mod(off_texcoord, TileSize), max(vec2(0.0), sign(off_texcoord - vec2(1.0))));
+
+      if (off_texcoord.x < 0.0)
+        off_texcoord.x = mod(off_texcoord.x, TileSize.x);
+      if (off_texcoord.x > 1.0)
+        off_texcoord.x = 1.0 - mod(off_texcoord.x, TileSize.x);
+      if (off_texcoord.y < 0.0)
+        off_texcoord.y = mod(off_texcoord.y, TileSize.y);
+      if (off_texcoord.y > 1.0)
+        off_texcoord.y = 1.0 - mod(off_texcoord.y, TileSize.y);
 
       off_texcoord = clamp(off_texcoord, 0.0, 1.0);
       uint Tile = uint(texture(texSampler2, off_texcoord).r * 255.0);
