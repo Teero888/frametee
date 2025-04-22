@@ -124,7 +124,9 @@ void on_camera_update(gfx_handler_t *handler) {
     camera->zoom_wanted *= zoom_factor;
     camera->zoom_wanted = glm_clamp(camera->zoom_wanted, 0.005f, 100.0f);
   }
-  camera->zoom = camera->zoom + (camera->zoom_wanted - camera->zoom) / (3000.f * io->DeltaTime);
+  float smoothing_factor = 1.0f - expf(-10.0f * io->DeltaTime); // Adjust 10.0f for speed
+  camera->zoom = camera->zoom + (camera->zoom_wanted - camera->zoom) * smoothing_factor;
+
   float window_ratio = (float)width / (float)height;
   float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
   float aspect = (float)window_ratio / (float)map_ratio;

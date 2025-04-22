@@ -1,13 +1,13 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-layout(binding = 1) uniform sampler2D texSampler1;
-layout(binding = 2) uniform sampler2D texSampler2;
+layout(binding = 1) uniform sampler2D tex_sampler1;
+layout(binding = 2) uniform sampler2D tex_sampler2;
 
-layout(location = 0) in vec3 fragColor;
-layout(location = 1) in vec2 fragTexCoord;
+layout(location = 0) in vec3 frag_color;
+layout(location = 1) in vec2 frag_tex_coord;
 
-layout(location = 0) out vec4 outColor;
+layout(location = 0) out vec4 out_color;
 
 layout(binding = 0) uniform UniformBufferObject {
   vec3 transform;
@@ -16,61 +16,32 @@ layout(binding = 0) uniform UniformBufferObject {
 ubo;
 
 void main() {
-  vec2 map_data_size = vec2(textureSize(texSampler2, 0));
-  vec2 EntitySize = vec2(textureSize(texSampler1, 0));
-  float MaxEntitySize = max(EntitySize.x, EntitySize.y);
+  vec2 map_data_size = vec2(textureSize(tex_sampler2, 0));
+  vec2 entities_size = vec2(textureSize(tex_sampler1, 0));
+  float max_entities_size = max(entities_size.x, entities_size.y);
 
-  vec4 colorSum = vec4(0.0);
-  int sampleCount = 0;
-  vec2 tex_coord = fragTexCoord;
+  vec2 tile_size = vec2(1.0) / map_data_size;
+  vec2 tex_coord = frag_tex_coord;
   tex_coord.y *= ubo.aspect;
   tex_coord *= ubo.transform.z;
   tex_coord += ubo.transform.xy;
-  tex_coord = tex_coord * 0.5 + 0.5;
+  // tex_coord = tex_coord * 0.5 + 0.5;
+  if (tex_coord.x < 0.0)
+    tex_coord.x = mod(tex_coord.x, tile_size.x);
+  if (tex_coord.x > 1.0)
+    tex_coord.x = (1.0 - tile_size.x) + mod(tex_coord.x, tile_size.x);
+  if (tex_coord.y < 0.0)
+    tex_coord.y = mod(tex_coord.y, tile_size.y);
+  if (tex_coord.y > 1.0)
+    tex_coord.y = (1.0 - tile_size.y) + mod(tex_coord.y, tile_size.y);
 
-  // if (uint(texture(texSampler2, tex_coord).r * 255.0) == 0u) {
-  //   outColor.a = 0.0;
-  //   discard;
-  // }
+  uint tile = uint(texture(tex_sampler2, tex_coord).r * 255.0);
+  if (tile == 0u)
+    discard;
 
-  int numDiscards = 0;
-  for (int dy = -1; dy <= 1; ++dy) {
-    for (int dx = -1; dx <= 1; ++dx) {
-      // im doing * 64 here right now but we could do * 128 to get 1 pixel neighbor
-      vec2 off_texcoord = tex_coord + (vec2(dx, dy) / (map_data_size * 128));
-      vec2 TileSize = vec2(1.0) / (map_data_size);
-
-      if (off_texcoord.x < 0.0)
-        off_texcoord.x = mod(off_texcoord.x, TileSize.x);
-      if (off_texcoord.x > 1.0)
-        off_texcoord.x = 1.0 - mod(off_texcoord.x, TileSize.x);
-      if (off_texcoord.y < 0.0)
-        off_texcoord.y = mod(off_texcoord.y, TileSize.y);
-      if (off_texcoord.y > 1.0)
-        off_texcoord.y = 1.0 - mod(off_texcoord.y, TileSize.y);
-
-      off_texcoord = clamp(off_texcoord, 0.0, 1.0);
-      uint Tile = uint(texture(texSampler2, off_texcoord).r * 255.0);
-      if (Tile == 0u) {
-        ++numDiscards;
-        continue;
-      }
-
-      ivec2 TileCoord = ivec2(Tile % 16u, Tile / 16u);
-
-      vec2 Scale = (map_data_size * 64.0) / MaxEntitySize;
-
-      vec2 TileTexOff = mod(off_texcoord, TileSize) * Scale;
-
-      vec2 NewTex = vec2(vec2(TileCoord) / 16.0) + TileTexOff;
-
-      colorSum += texture(texSampler1, NewTex);
-      sampleCount++;
-    }
-  }
-  // if (numDiscards >= 9) {
-  // outColor = vec4(1.0, 0.0, 0.0, 1.0);
-  // } else {
-  outColor = colorSum / float(sampleCount);
-  // }
+  ivec2 tile_coord = ivec2(tile % 16u, tile / 16u);
+  vec2 scale = (map_data_size * 64.0) / max_entities_size;
+  vec2 tile_tex_offset = mod(tex_coord, tile_size) * scale;
+  vec2 new_tex = vec2(vec2(tile_coord) / 16.0) + tile_tex_offset;
+  out_color = texture(tex_sampler1, new_tex);
 }
