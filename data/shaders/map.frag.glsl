@@ -1,7 +1,7 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-layout(binding = 1) uniform sampler2D tex_sampler1;
+layout(binding = 1) uniform sampler2DArray tex_sampler1;
 layout(binding = 2) uniform sampler2D tex_sampler2;
 
 layout(location = 0) in vec3 frag_color;
@@ -17,15 +17,17 @@ ubo;
 
 void main() {
   vec2 map_data_size = vec2(textureSize(tex_sampler2, 0));
-  vec2 entities_size = vec2(textureSize(tex_sampler1, 0));
-  float max_entities_size = max(entities_size.x, entities_size.y);
 
   vec2 tile_size = vec2(1.0) / map_data_size;
+
   vec2 tex_coord = frag_tex_coord;
+
   tex_coord.y *= ubo.aspect;
+
   tex_coord *= ubo.transform.z;
+
   tex_coord += ubo.transform.xy;
-  // tex_coord = tex_coord * 0.5 + 0.5;
+
   if (tex_coord.x < 0.0)
     tex_coord.x = mod(tex_coord.x, tile_size.x);
   if (tex_coord.x > 1.0)
@@ -35,13 +37,19 @@ void main() {
   if (tex_coord.y > 1.0)
     tex_coord.y = (1.0 - tile_size.y) + mod(tex_coord.y, tile_size.y);
 
-  uint tile = uint(texture(tex_sampler2, tex_coord).r * 255.0);
-  if (tile == 0u)
+  uint tile_id = uint(texture(tex_sampler2, tex_coord).r * 255.0);
+
+  if (tile_id == 0u)
     discard;
 
-  ivec2 tile_coord = ivec2(tile % 16u, tile / 16u);
-  vec2 scale = (map_data_size * 64.0) / max_entities_size;
-  vec2 tile_tex_offset = mod(tex_coord, tile_size) * scale;
-  vec2 new_tex = vec2(vec2(tile_coord) / 16.0) + tile_tex_offset;
-  out_color = texture(tex_sampler1, new_tex);
+  ivec2 tile_atlas_coord = ivec2(tile_id % 16u, tile_id / 16u);
+
+  vec2 within_tile_coord_normalized = mod(tex_coord, tile_size) / tile_size;
+
+  if (tile_id > 0u) {
+    const float entity_lod = 0.0;
+    out_color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, tile_id), entity_lod);
+  } else {
+    out_color = vec4(0.0, 0.0, 0.0, 0.0);
+  }
 }
