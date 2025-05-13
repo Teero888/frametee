@@ -250,10 +250,10 @@ static VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFo
   return image_view;
 }
 
-static VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels) {
+static VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, uint32_t filter) {
   VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                                      .magFilter = VK_FILTER_NEAREST,
-                                      .minFilter = VK_FILTER_NEAREST,
+                                      .magFilter = filter,
+                                      .minFilter = filter,
                                       .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
                                       .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
                                       .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -414,6 +414,76 @@ static VkPipeline create_graphics_pipeline(gfx_handler_t *handler, shader_t *sha
   return graphics_pipeline;
 }
 
+// Thx jupstar
+bool build_mipmaps(VkCommandBuffer cmd_buffer, VkImage image, VkFormat image_format, uint32_t width,
+                   uint32_t height, uint32_t depth, uint32_t mip_map_level_count) {
+  VkImageMemoryBarrier Barrier = {};
+  Barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  Barrier.image = image;
+  Barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  Barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  Barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  Barrier.subresourceRange.levelCount = 1;
+  Barrier.subresourceRange.baseArrayLayer = 0;
+  Barrier.subresourceRange.layerCount = depth;
+
+  int32_t TmpMipWidth = (int32_t)width;
+  int32_t TmpMipHeight = (int32_t)height;
+
+  for (uint32_t i = 1; i < mip_map_level_count; ++i) {
+    Barrier.subresourceRange.baseMipLevel = i - 1;
+    Barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    Barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    Barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    Barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                         NULL, 0, NULL, 1, &Barrier);
+
+    VkImageBlit Blit = {};
+    Blit.srcOffsets[0] = (VkOffset3D){0, 0, 0};
+    Blit.srcOffsets[1] = (VkOffset3D){TmpMipWidth, TmpMipHeight, 1};
+    Blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    Blit.srcSubresource.mipLevel = i - 1;
+    Blit.srcSubresource.baseArrayLayer = 0;
+    Blit.srcSubresource.layerCount = depth;
+    Blit.dstOffsets[0] = (VkOffset3D){0, 0, 0};
+    Blit.dstOffsets[1] =
+        (VkOffset3D){TmpMipWidth > 1 ? TmpMipWidth / 2 : 1, TmpMipHeight > 1 ? TmpMipHeight / 2 : 1, 1};
+    Blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    Blit.dstSubresource.mipLevel = i;
+    Blit.dstSubresource.baseArrayLayer = 0;
+    Blit.dstSubresource.layerCount = depth;
+
+    vkCmdBlitImage(cmd_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &Blit, VK_FILTER_LINEAR);
+
+    Barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    Barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    Barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    Barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                         0, NULL, 0, NULL, 1, &Barrier);
+
+    if (TmpMipWidth > 1)
+      TmpMipWidth /= 2;
+    if (TmpMipHeight > 1)
+      TmpMipHeight /= 2;
+  }
+
+  Barrier.subresourceRange.baseMipLevel = mip_map_level_count - 1;
+  Barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  Barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  Barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  Barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+  vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                       0, NULL, 0, NULL, 1, &Barrier);
+
+  return true;
+}
+
 texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas,
                                                     uint32_t tile_width, uint32_t tile_height,
                                                     uint32_t num_tiles_x, uint32_t num_tiles_y) {
@@ -444,6 +514,7 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0,
                           1, 0, 1);
 
+  // Copy atlas tiles to level 0 of each layer
   for (uint32_t layer = 0; layer < layer_count; layer++) {
     uint32_t tile_x = layer % num_tiles_x;
     uint32_t tile_y = layer / num_tiles_x;
@@ -458,7 +529,7 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
                                .dstOffset = {0, 0, 0},
                                .extent = {tile_width, tile_height, 1}};
 
-    // Transition mipmap level 0 to TRANSFER_DST_OPTIMAL
+    // Transition level 0 to TRANSFER_DST_OPTIMAL
     transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
                             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, 1, layer, 1);
@@ -466,53 +537,20 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
     // Copy from atlas to level 0
     vkCmdCopyImage(cmd, atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex_array->image,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+  }
 
-    // Transition mipmap level 0 to TRANSFER_SRC_OPTIMAL
+  // Transition higher levels to TRANSFER_DST_OPTIMAL
+  if (mip_levels > 1) {
     transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
-                            VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, 1, layer, 1);
+                            VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, mip_levels - 1, 0, layer_count);
+  }
 
-    // Generate mipmaps
-    for (uint32_t i = 1; i < mip_levels; i++) {
-      VkImageBlit blit_region = {
-          .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, layer, 1},
-          .srcOffsets = {{0, 0, 0}, {tile_width >> (i - 1), tile_height >> (i - 1), 1}},
-          .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, layer, 1},
-          .dstOffsets = {{0, 0, 0}, {tile_width >> i, tile_height >> i, 1}}};
-
-      // Transition mipmap level i to TRANSFER_DST_OPTIMAL
-      transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
-                              VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
-                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, i, 1, layer, 1);
-
-      // Blit from level i-1 to level i
-      vkCmdBlitImage(cmd, tex_array->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex_array->image,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit_region, VK_FILTER_LINEAR);
-
-      // Transition level i to TRANSFER_SRC_OPTIMAL if not the last level
-      if (i < mip_levels - 1) {
-        transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
-                                VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, i, 1, layer, 1);
-      }
-    }
-
-    // Final transition to SHADER_READ_ONLY_OPTIMAL
-    if (mip_levels > 1) {
-      // Levels 0 to mip_levels-2 are in TRANSFER_SRC_OPTIMAL
-      transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
-                              VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, mip_levels - 1, layer, 1);
-      // Level mip_levels-1 is in TRANSFER_DST_OPTIMAL
-      transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
-                              VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mip_levels - 1, 1, layer, 1);
-    } else {
-      // Only level 0 exists, in TRANSFER_SRC_OPTIMAL
-      transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
-                              VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, 1, layer, 1);
-    }
+  // Generate mipmaps for all layers
+  if (!build_mipmaps(cmd, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM, tile_width, tile_height, layer_count,
+                     mip_levels)) {
+    fprintf(stderr, "Failed to build mipmaps\n");
+    // Handle error (e.g., clean up and return NULL)
   }
 
   // Transition atlas back to SHADER_READ_ONLY_OPTIMAL
@@ -524,7 +562,7 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
 
   tex_array->image_view = create_image_view(handler, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM,
                                             VK_IMAGE_VIEW_TYPE_2D_ARRAY, mip_levels, layer_count);
-  tex_array->sampler = create_texture_sampler(handler, mip_levels);
+  tex_array->sampler = create_texture_sampler(handler, mip_levels, VK_FILTER_LINEAR);
 
   printf("Created texture array from atlas: %dx%d, %d layers\n", tile_width, tile_height, layer_count);
   return tex_array;
@@ -623,14 +661,14 @@ int renderer_init(gfx_handler_t *handler) {
                        default_tex->width, default_tex->height);
   transition_image_layout(handler, renderer->transfer_command_pool, default_tex->image,
                           VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, 1,1,1);
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, 1, 1, 1);
 
   vkDestroyBuffer(handler->g_Device, staging_buffer.buffer, handler->g_Allocator);
   vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
 
   default_tex->image_view =
       create_image_view(handler, default_tex->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
-  default_tex->sampler = create_texture_sampler(handler, 1);
+  default_tex->sampler = create_texture_sampler(handler, 1, VK_FILTER_LINEAR);
   renderer->default_texture = default_tex;
 
   printf("Renderer initialized.\n");
@@ -774,19 +812,19 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
 
   transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 1,1,1);
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 1, 1, 1);
   copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image,
                        texture->width, texture->height);
   transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
-                          1,1,1);
+                          1, 1, 1);
 
   vkDestroyBuffer(handler->g_Device, staging_buffer.buffer, handler->g_Allocator);
   vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
 
   texture->image_view =
       create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
-  texture->sampler = create_texture_sampler(handler, 1);
+  texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_NEAREST);
 
   printf("Loaded texture from array: %dx%d\n", texture->width, texture->height);
   return texture;
@@ -830,19 +868,19 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
 
   transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 1,1,1);
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 1, 1, 1);
   copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image,
                        texture->width, texture->height);
   transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
-                          1,1,1);
+                          1, 1, 1);
 
   vkDestroyBuffer(handler->g_Device, staging_buffer.buffer, handler->g_Allocator);
   vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
 
   texture->image_view =
       create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
-  texture->sampler = create_texture_sampler(handler, 1);
+  texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_LINEAR);
 
   printf("Loaded texture: %s (%dx%d)\n", image_path, texture->width, texture->height);
   return texture;
@@ -1121,12 +1159,15 @@ void renderer_update_uniforms(gfx_handler_t *handler) {
     map_renderable_t *r = &renderer->map_renderable;
     if (r->active) {
       float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
-      map_buffer_object_t ubo = {
-          renderer->camera.pos[0], renderer->camera.pos[1],
-          1.0 / (renderer->camera.zoom * fmax(handler->map_data.width, handler->map_data.height) * 0.001),
-          1.0 / (window_ratio / map_ratio)};
+      float zoom =
+          1.0 / (renderer->camera.zoom * fmax(handler->map_data.width, handler->map_data.height) * 0.001);
+      float aspect = 1.0 / (window_ratio / map_ratio);
+      float lod = fmin(fmax(6.0 - log2((1.0f / handler->map_data.width) / zoom * (width / 2.0f)), 0.0), 6.0);
+      map_buffer_object_t ubo = {renderer->camera.pos[0], renderer->camera.pos[1], zoom, aspect, lod};
       assert(r->uniform_buffer.mapped_memory != NULL);
       memcpy(r->uniform_buffer.mapped_memory, &ubo, sizeof(ubo));
+
+      printf("lodlvl:%f\n", lod);
     }
   }
   for (uint32_t i = 0; i < renderer->renderable_count; ++i) {

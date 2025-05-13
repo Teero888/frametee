@@ -12,6 +12,7 @@ layout(location = 0) out vec4 out_color;
 layout(binding = 0) uniform UniformBufferObject {
   vec3 transform;
   float aspect;
+  float lod;
 }
 ubo;
 
@@ -47,8 +48,7 @@ void main() {
   vec2 within_tile_coord_normalized = mod(tex_coord, tile_size) / tile_size;
 
   if (tile_id > 0u) {
-    const float entity_lod = 0.0;
-    out_color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, tile_id), entity_lod);
+    out_color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, tile_id), ubo.lod);
   } else {
     out_color = vec4(0.0, 0.0, 0.0, 0.0);
   }

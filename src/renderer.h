@@ -60,6 +60,7 @@ typedef struct {
 typedef struct {
   vec4 transform;
   float aspect;
+  float lod;
 } map_buffer_object_t;
 
 typedef struct {
