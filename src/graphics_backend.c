@@ -329,6 +329,36 @@ static void frame_present(gfx_handler_t *handler) {
   wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount;
 }
 
+static int map_upload_texture(gfx_handler_t *handler, texture_t *texture, uint32_t index) {
+  renderer_state_t *renderer = &handler->renderer;
+  map_renderable_t *map_renderable = &renderer->map_renderable;
+  if (!texture || !texture->sampler || !texture->image_view) {
+    fprintf(stderr, "Invalid texture for binding %u, using default texture\n", index);
+    map_renderable->texture[index] = renderer->default_texture;
+    texture = renderer->default_texture;
+  } else {
+    map_renderable->texture[index] = texture;
+  }
+
+  VkDescriptorImageInfo image_info = {.sampler = texture->sampler,
+                                      .imageView = texture->image_view,
+                                      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+  VkWriteDescriptorSet descriptor_write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                           .pNext = NULL,
+                                           .dstSet = map_renderable->descriptor_set,
+                                           .dstBinding = index + 1,
+                                           .dstArrayElement = 0,
+                                           .descriptorCount = 1,
+                                           .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                           .pImageInfo = &image_info,
+                                           .pBufferInfo = NULL,
+                                           .pTexelBufferView = NULL};
+
+  vkUpdateDescriptorSets(handler->g_Device, 1, &descriptor_write, 0, NULL);
+  return texture == renderer->default_texture ? 1 : 0;
+}
+
 void on_map_load(gfx_handler_t *handler, const char *map_path) {
   renderer_state_t *renderer = &handler->renderer;
   map_renderable_t *map_renderable = &renderer->map_renderable;
@@ -336,66 +366,66 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
   // Free existing map data
   free_map_data(&handler->map_data);
 
-  // Clean up the previous map texture if it's not the default texture
-  if (map_renderable->texture[1] != renderer->default_texture && map_renderable->texture[1]) {
-    texture_t *old_texture = map_renderable->texture[1];
-
-    // Destroy Vulkan resources
-    vkDestroySampler(handler->g_Device, old_texture->sampler, handler->g_Allocator);
-    vkDestroyImageView(handler->g_Device, old_texture->image_view, handler->g_Allocator);
-    vkDestroyImage(handler->g_Device, old_texture->image, handler->g_Allocator);
-    vkFreeMemory(handler->g_Device, old_texture->memory, handler->g_Allocator);
-
-    // Mark the texture as invalid in renderer->textures
-    old_texture->sampler = VK_NULL_HANDLE;
-    old_texture->image_view = VK_NULL_HANDLE;
-    old_texture->image = VK_NULL_HANDLE;
-    old_texture->memory = VK_NULL_HANDLE;
-    old_texture->width = 0;
-    old_texture->height = 0;
-    old_texture->path[0] = '\0';
-
-    // If this was the last texture, reduce texture_count
-    if (old_texture == &renderer->textures[renderer->texture_count - 1]) {
-      renderer->texture_count--;
+  // Clean up previous map textures
+  for (uint32_t i = 1; i < 3; ++i) {
+    if (map_renderable->texture[i] && map_renderable->texture[i] != renderer->default_texture) {
+      texture_t *old_texture = map_renderable->texture[i];
+      vkDestroySampler(handler->g_Device, old_texture->sampler, handler->g_Allocator);
+      vkDestroyImageView(handler->g_Device, old_texture->image_view, handler->g_Allocator);
+      vkDestroyImage(handler->g_Device, old_texture->image, handler->g_Allocator);
+      vkFreeMemory(handler->g_Device, old_texture->memory, handler->g_Allocator);
+      old_texture->sampler = VK_NULL_HANDLE;
+      old_texture->image_view = VK_NULL_HANDLE;
+      old_texture->image = VK_NULL_HANDLE;
+      old_texture->memory = VK_NULL_HANDLE;
+      old_texture->width = 0;
+      old_texture->height = 0;
+      old_texture->path[0] = '\0';
     }
+    map_renderable->texture[i] = renderer->default_texture;
   }
 
   // Load new map data
   handler->map_data = load_map(map_path);
   if (!handler->map_data.game_layer.data) {
-    free_map_data(&handler->map_data);
-    map_renderable->texture[1] = renderer->default_texture; // Fallback to default texture
-    printf("Failed to load map: '%s', using default texture\n", map_path);
-  } else {
-    printf("Loaded map: '%s'\n", map_path);
-    // Load new texture from map data
-    texture_t *game_texture = renderer_load_texture_from_array(
-        handler, handler->map_data.game_layer.data, handler->map_data.width, handler->map_data.height);
-    if (game_texture) {
-      map_renderable->texture[1] = game_texture;
+    fprintf(stderr, "Failed to load map data: '%s'\n", map_path);
+    return;
+  }
+  printf("Loaded map: '%s' (%ux%u)\n", map_path, handler->map_data.width, handler->map_data.height);
 
-      // Update descriptor set for the new texture
-      VkDescriptorImageInfo image_info = {.sampler = game_texture->sampler,
-                                          .imageView = game_texture->image_view,
-                                          .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  // Load textures for all layers, using default texture if layer data is unavailable
+  bool error = false;
 
-      VkWriteDescriptorSet descriptor_write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                               .pNext = NULL,
-                                               .dstSet = map_renderable->descriptor_set,
-                                               .dstBinding = 2, // Update binding 2 (second texture)
-                                               .dstArrayElement = 0,
-                                               .descriptorCount = 1,
-                                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                               .pImageInfo = &image_info,
-                                               .pBufferInfo = NULL,
-                                               .pTexelBufferView = NULL};
+  // Binding 1: Entities texture (already set in renderer_set_map_renderable)
+  // Binding 2: Game layer
+  texture_t *game_texture = renderer_load_texture_from_array(
+      handler, handler->map_data.game_layer.data, handler->map_data.width, handler->map_data.height);
+  error |= map_upload_texture(handler, game_texture, 1);
 
-      vkUpdateDescriptorSets(handler->g_Device, 1, &descriptor_write, 0, NULL);
-    } else {
-      map_renderable->texture[1] = renderer->default_texture; // Fallback to default texture
-      printf("Failed to load texture for map: '%s', using default texture\n", map_path);
-    }
+  // Binding 3: Front layer
+  texture_t *front_texture = renderer_load_texture_from_array(
+      handler, handler->map_data.front_layer.data, handler->map_data.width, handler->map_data.height);
+  error |= map_upload_texture(handler, front_texture, 2);
+
+  // Bindings 4-7: Physics layers (tele, tune, speeder, switch)
+  texture_t *tele_texture = renderer_load_texture_from_array(
+      handler, handler->map_data.tele_layer.type, handler->map_data.width, handler->map_data.height);
+  error |= map_upload_texture(handler, tele_texture, 3);
+
+  texture_t *tune_texture = renderer_load_texture_from_array(
+      handler, handler->map_data.tune_layer.type, handler->map_data.width, handler->map_data.height);
+  error |= map_upload_texture(handler, tune_texture, 4);
+
+  texture_t *speeder_texture = renderer_load_texture_from_array(
+      handler, handler->map_data.speedup_layer.type, handler->map_data.width, handler->map_data.height);
+  error |= map_upload_texture(handler, speeder_texture, 5);
+
+  texture_t *switch_texture = renderer_load_texture_from_array(
+      handler, handler->map_data.switch_layer.type, handler->map_data.width, handler->map_data.height);
+  error |= map_upload_texture(handler, switch_texture, 6);
+
+  if (error) {
+    fprintf(stderr, "One or more textures failed to load for map: '%s', using default textures\n", map_path);
   }
 }
 

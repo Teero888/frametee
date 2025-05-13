@@ -74,11 +74,12 @@ typedef struct {
   VkPipelineLayout pipeline_layout;
 } renderable_t;
 
+#define NUM_LAYER_TEXTURES 7
 typedef struct {
   bool active;
   mesh_t *mesh;
   shader_t *shader;
-  texture_t *texture[2];
+  texture_t *texture[NUM_LAYER_TEXTURES]; // entities and 7 physics layers.
   buffer_t uniform_buffer;
   VkDescriptorSet descriptor_set;
   VkPipeline pipeline;
@@ -135,7 +136,7 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
                              uint32_t *indices, uint32_t index_count);
 
 map_renderable_t *renderer_set_map_renderable(gfx_handler_t *handler, mesh_t *mesh, shader_t *shader,
-                                              texture_t *entities_texture, texture_t *map_texture);
+                                              texture_t *entities_texture);
 renderable_t *renderer_add_renderable(gfx_handler_t *handler, mesh_t *mesh, shader_t *shader,
                                       texture_t *texture);
 void renderer_remove_renderable(gfx_handler_t *handler, renderable_t *renderable);

@@ -29,8 +29,7 @@ int main(void) {
     return 1;
 
   // Set map renderable with ddnet_texture as entities_texture and default_texture as map_texture
-  map_renderable_t *quad_renderable =
-      renderer_set_map_renderable(&handler, quad_mesh, shader, ddnet_texture, NULL);
+  map_renderable_t *quad_renderable = renderer_set_map_renderable(&handler, quad_mesh, shader, ddnet_texture);
   if (!quad_renderable)
     return 1;
 

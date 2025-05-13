@@ -2,7 +2,12 @@
 #extension GL_ARB_separate_shader_objects : enable
 
 layout(binding = 1) uniform sampler2DArray tex_sampler1;
-layout(binding = 2) uniform sampler2D tex_sampler2;
+layout(binding = 2) uniform sampler2D game_tex;
+layout(binding = 3) uniform sampler2D front_tex;
+layout(binding = 4) uniform sampler2D tele_tex;
+layout(binding = 5) uniform sampler2D tune_tex;
+layout(binding = 6) uniform sampler2D speedup_tex;
+layout(binding = 7) uniform sampler2D switch_tex;
 
 layout(location = 0) in vec3 frag_color;
 layout(location = 1) in vec2 frag_tex_coord;
@@ -17,18 +22,15 @@ layout(binding = 0) uniform UniformBufferObject {
 ubo;
 
 void main() {
-  vec2 map_data_size = vec2(textureSize(tex_sampler2, 0));
-
+  vec2 map_data_size = vec2(textureSize(game_tex, 0));
   vec2 tile_size = vec2(1.0) / map_data_size;
 
   vec2 tex_coord = frag_tex_coord;
-
   tex_coord.y *= ubo.aspect;
-
   tex_coord *= ubo.transform.z;
-
   tex_coord += ubo.transform.xy;
 
+  // Handle texture coordinate wrapping
   if (tex_coord.x < 0.0)
     tex_coord.x = mod(tex_coord.x, tile_size.x);
   if (tex_coord.x > 1.0)
@@ -38,18 +40,68 @@ void main() {
   if (tex_coord.y > 1.0)
     tex_coord.y = (1.0 - tile_size.y) + mod(tex_coord.y, tile_size.y);
 
-  uint tile_id = uint(texture(tex_sampler2, tex_coord).r * 255.0);
-
-  if (tile_id == 0u)
-    discard;
-
-  ivec2 tile_atlas_coord = ivec2(tile_id % 16u, tile_id / 16u);
+  uint game_tile_id = uint(texture(game_tex, tex_coord).r * 255.0);
+  uint front_tile_id = uint(texture(front_tex, tex_coord).r * 255.0);
+  uint tele_tile_id = uint(texture(tele_tex, tex_coord).r * 255.0);
+  uint tune_tile_id = uint(texture(tune_tex, tex_coord).r * 255.0);
+  uint speedup_tile_id = uint(texture(speedup_tex, tex_coord).r * 255.0);
+  uint switch_tile_id = uint(texture(switch_tex, tex_coord).r * 255.0);
 
   vec2 within_tile_coord_normalized = mod(tex_coord, tile_size) / tile_size;
 
-  if (tile_id > 0u) {
-    out_color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, tile_id), ubo.lod);
+  // Initialize final color and alpha (fully transparent background)
+  vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
+
+  // Blend layers from back to front: game -> front -> tele -> tune -> speedup -> switch
+  if (game_tile_id > 0u) {
+    vec4 color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, game_tile_id), ubo.lod);
+    // Base layer: set directly
+    final_color = vec4(color.rgb * color.a, color.a);
+  }
+
+  if (front_tile_id > 0u) {
+    vec4 color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, front_tile_id), ubo.lod);
+    // Blend: src * src_alpha + dst * (1 - src_alpha)
+    vec3 blended_rgb = color.rgb * color.a + final_color.rgb * (1.0 - color.a);
+    float blended_alpha = color.a + final_color.a * (1.0 - color.a);
+    final_color = vec4(blended_rgb, blended_alpha);
+  }
+
+  if (tele_tile_id > 0u) {
+    vec4 color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, tele_tile_id), ubo.lod);
+    // Blend: src * src_alpha + dst * (1 - src_alpha)
+    vec3 blended_rgb = color.rgb * color.a + final_color.rgb * (1.0 - color.a);
+    float blended_alpha = color.a + final_color.a * (1.0 - color.a);
+    final_color = vec4(blended_rgb, blended_alpha);
+  }
+  if (tune_tile_id > 0u) {
+    vec4 color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, tune_tile_id), ubo.lod);
+    // Blend: src * src_alpha + dst * (1 - src_alpha)
+    vec3 blended_rgb = color.rgb * color.a + final_color.rgb * (1.0 - color.a);
+    float blended_alpha = color.a + final_color.a * (1.0 - color.a);
+    final_color = vec4(blended_rgb, blended_alpha);
+  }
+  if (speedup_tile_id > 0u) {
+    vec4 color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, speedup_tile_id), ubo.lod);
+    // Blend: src * src_alpha + dst * (1 - src_alpha)
+    vec3 blended_rgb = color.rgb * color.a + final_color.rgb * (1.0 - color.a);
+    float blended_alpha = color.a + final_color.a * (1.0 - color.a);
+    final_color = vec4(blended_rgb, blended_alpha);
+  }
+  if (switch_tile_id > 0u) {
+    vec4 color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, switch_tile_id), ubo.lod);
+    // Blend: src * src_alpha + dst * (1 - src_alpha)
+    vec3 blended_rgb = color.rgb * color.a + final_color.rgb * (1.0 - color.a);
+    float blended_alpha = color.a + final_color.a * (1.0 - color.a);
+    final_color = vec4(blended_rgb, blended_alpha);
+  }
+
+  // Ensure final color is not over-bright (normalize if needed)
+  out_color = final_color;
+  if (final_color.a > 0.0) {
+    out_color.rgb /= final_color.a;               // Convert back to straight alpha for output
+    out_color.a = clamp(final_color.a, 0.0, 1.0); // Clamp alpha to [0,1]
   } else {
-    out_color = vec4(0.0, 0.0, 0.0, 0.0);
+    discard;
   }
 }

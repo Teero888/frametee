@@ -593,23 +593,20 @@ int renderer_init(gfx_handler_t *handler) {
                                                      .descriptorCount = 1,
                                                      .stageFlags = VK_SHADER_STAGE_VERTEX_BIT};
 
-  VkDescriptorSetLayoutBinding sampler_layout_binding1 = {.binding = 1,
-                                                          .descriptorType =
-                                                              VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                                          .descriptorCount = 1,
-                                                          .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
+  VkDescriptorSetLayoutBinding bindings[NUM_LAYER_TEXTURES + 1] = {
+      [0] = {.binding = 0,
+             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+             .descriptorCount = 1,
+             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT}};
+  for (int i = 1; i < NUM_LAYER_TEXTURES + 1; ++i)
+    bindings[i] = (VkDescriptorSetLayoutBinding){.binding = i,
+                                                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                                 .descriptorCount = 1,
+                                                 .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
 
-  VkDescriptorSetLayoutBinding sampler_layout_binding2 = {.binding = 2,
-                                                          .descriptorType =
-                                                              VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                                          .descriptorCount = 1,
-                                                          .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
-
-  VkDescriptorSetLayoutBinding bindings[] = {ubo_layout_binding, sampler_layout_binding1,
-                                             sampler_layout_binding2};
-
-  VkDescriptorSetLayoutCreateInfo layout_info = {
-      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 3, .pBindings = bindings};
+  VkDescriptorSetLayoutCreateInfo layout_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                                                 .bindingCount = NUM_LAYER_TEXTURES + 1,
+                                                 .pBindings = bindings};
 
   err = vkCreateDescriptorSetLayout(handler->g_Device, &layout_info, handler->g_Allocator,
                                     &renderer->object_descriptor_set_layout);
@@ -617,8 +614,9 @@ int renderer_init(gfx_handler_t *handler) {
   if (err != VK_SUCCESS)
     return 1;
 
-  VkDescriptorPoolSize pool_sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_RENDERABLES},
-                                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_RENDERABLES * 2}};
+  VkDescriptorPoolSize pool_sizes[] = {
+      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_RENDERABLES},
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_RENDERABLES + NUM_LAYER_TEXTURES}};
 
   VkDescriptorPoolCreateInfo pool_info_renderer = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                                    .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
@@ -769,6 +767,8 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
 
 texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_t *pixel_array,
                                             uint32_t width, uint32_t height) {
+  if (!pixel_array)
+    return NULL;
   renderer_state_t *renderer = &handler->renderer;
   if (renderer->texture_count >= MAX_TEXTURES) {
     fprintf(stderr, "Maximum texture count (%d) reached.\n", MAX_TEXTURES);
@@ -951,7 +951,7 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
 }
 
 map_renderable_t *renderer_set_map_renderable(gfx_handler_t *handler, mesh_t *mesh, shader_t *shader,
-                                              texture_t *entities_texture, texture_t *map_texture) {
+                                              texture_t *entities_texture) {
   renderer_state_t *renderer = &handler->renderer;
   VkResult err;
 
@@ -968,7 +968,8 @@ map_renderable_t *renderer_set_map_renderable(gfx_handler_t *handler, mesh_t *me
   renderable->mesh = mesh;
   renderable->shader = shader;
   renderable->texture[0] = entities_array;
-  renderable->texture[1] = map_texture ? map_texture : renderer->default_texture;
+  for (uint32_t i = 1; i < NUM_LAYER_TEXTURES; ++i)
+    renderable->texture[i] = renderer->default_texture;
 
   VkDeviceSize ubo_size = sizeof(map_buffer_object_t);
   create_buffer(handler, ubo_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -1001,44 +1002,34 @@ map_renderable_t *renderer_set_map_renderable(gfx_handler_t *handler, mesh_t *me
   VkDescriptorBufferInfo buffer_info = {
       .buffer = renderable->uniform_buffer.buffer, .offset = 0, .range = sizeof(map_buffer_object_t)};
 
-  VkDescriptorImageInfo image_info[2] = {{
-                                             .sampler = renderable->texture[0]->sampler,
-                                             .imageView = renderable->texture[0]->image_view,
-                                             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                         },
-                                         {
-                                             .sampler = renderable->texture[1]->sampler,
-                                             .imageView = renderable->texture[1]->image_view,
-                                             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                         }};
-
-  VkWriteDescriptorSet descriptor_writes[3] = {
-      {
+  VkDescriptorImageInfo image_info[NUM_LAYER_TEXTURES];
+  for (uint32_t i = 0; i < NUM_LAYER_TEXTURES; ++i)
+    image_info[i] = (VkDescriptorImageInfo){
+        .sampler = renderable->texture[i]->sampler,
+        .imageView = renderable->texture[i]->image_view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+  // + 1 uniform buffer
+  VkWriteDescriptorSet descriptor_writes[NUM_LAYER_TEXTURES + 1] = {
+      [0] = {
           .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
           .dstSet = renderable->descriptor_set,
           .dstBinding = 0,
           .descriptorCount = 1,
           .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
           .pBufferInfo = &buffer_info,
-      },
-      {
-          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-          .dstSet = renderable->descriptor_set,
-          .dstBinding = 1,
-          .descriptorCount = 1,
-          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-          .pImageInfo = &image_info[0],
-      },
-      {
-          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-          .dstSet = renderable->descriptor_set,
-          .dstBinding = 2,
-          .descriptorCount = 1,
-          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-          .pImageInfo = &image_info[1],
       }};
+  for (int i = 1; i < NUM_LAYER_TEXTURES + 1; ++i)
+    descriptor_writes[i] = (VkWriteDescriptorSet){
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = renderable->descriptor_set,
+        .dstBinding = i,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &image_info[0],
+    };
 
-  vkUpdateDescriptorSets(handler->g_Device, 3, descriptor_writes, 0, NULL);
+  vkUpdateDescriptorSets(handler->g_Device, NUM_LAYER_TEXTURES + 1, descriptor_writes, 0, NULL);
 
   return renderable;
 }
@@ -1162,12 +1153,10 @@ void renderer_update_uniforms(gfx_handler_t *handler) {
       float zoom =
           1.0 / (renderer->camera.zoom * fmax(handler->map_data.width, handler->map_data.height) * 0.001);
       float aspect = 1.0 / (window_ratio / map_ratio);
-      float lod = fmin(fmax(6.0 - log2((1.0f / handler->map_data.width) / zoom * (width / 2.0f)), 0.0), 6.0);
+      float lod = fmin(fmax(5.5 - log2((1.0f / handler->map_data.width) / zoom * (width / 2.0f)), 0.0), 6.0);
       map_buffer_object_t ubo = {renderer->camera.pos[0], renderer->camera.pos[1], zoom, aspect, lod};
       assert(r->uniform_buffer.mapped_memory != NULL);
       memcpy(r->uniform_buffer.mapped_memory, &ubo, sizeof(ubo));
-
-      printf("lodlvl:%f\n", lod);
     }
   }
   for (uint32_t i = 0; i < renderer->renderable_count; ++i) {
