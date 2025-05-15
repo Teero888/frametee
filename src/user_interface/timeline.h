@@ -1,6 +1,7 @@
 #ifndef UI_TIMELINE_H
 #define UI_TIMELINE_H
 
+#include "player_info.h"
 #include <cimgui.h>
 #include <stdbool.h>
 
@@ -15,6 +16,8 @@ typedef struct {
 typedef struct {
   input_snippet_t *snippets; // Dynamic array of snippets
   int snippet_count;
+
+  player_info_t player_info;
 } player_track_t;
 
 // State for managing snippet dragging
@@ -27,7 +30,7 @@ typedef struct {
   ImVec2 initial_mouse_pos; // Mouse position when drag started
 } timeline_drag_state_t;
 
-typedef struct {
+typedef struct timeline_state_t {
   int current_tick;
   float zoom;          // Pixels per tick
   int view_start_tick; // The tick at the left edge of the timeline view

@@ -30,7 +30,7 @@ void main() {
   tex_coord *= ubo.transform.z;
   tex_coord += ubo.transform.xy;
 
-  // Handle texture coordinate wrapping
+  // handle texture coordinate wrapping
   if (tex_coord.x < 0.0)
     tex_coord.x = mod(tex_coord.x, tile_size.x);
   if (tex_coord.x > 1.0)
@@ -49,13 +49,12 @@ void main() {
 
   vec2 within_tile_coord_normalized = mod(tex_coord, tile_size) / tile_size;
 
-  // Initialize final color and alpha (fully transparent background)
+  // initialize final color and alpha
   vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
 
-  // Blend layers from back to front: game -> front -> tele -> tune -> speedup -> switch
+  // blend layers from back to front: game -> front -> tele -> tune -> speedup -> switch
   if (game_tile_id > 0u) {
     vec4 color = textureLod(tex_sampler1, vec3(within_tile_coord_normalized, game_tile_id), ubo.lod);
-    // Base layer: set directly
     final_color = vec4(color.rgb * color.a, color.a);
   }
 
@@ -96,7 +95,6 @@ void main() {
     final_color = vec4(blended_rgb, blended_alpha);
   }
 
-  // Ensure final color is not over-bright (normalize if needed)
   out_color = final_color;
   if (final_color.a > 0.0) {
     out_color.rgb /= final_color.a;               // Convert back to straight alpha for output

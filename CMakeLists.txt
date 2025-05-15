@@ -12,8 +12,9 @@ set(SRCS
     src/graphics_backend.c
     src/main.c
     src/renderer.c
-    src/user_interface/user_interface.c
+    src/user_interface/player_info.c
     src/user_interface/timeline.c
+    src/user_interface/user_interface.c
 )
 
 # find dependencies

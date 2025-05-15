@@ -3,6 +3,7 @@
 #include "../renderer.h"
 #include "cimgui.h"
 #include "ddnet_map_loader.h"
+#include "player_info.h"
 #include "timeline.h"
 #include <limits.h>
 #include <nfd.h>
@@ -75,8 +76,7 @@ void setup_docking(ui_handler_t *ui) {
               NULL); // Passthru allows seeing background
   igEnd();
 
-  // -- Build the initial layout programmatically (optional, but good for setup) --
-  // This needs to be done *after* the DockSpace call, often on the first frame or after a reset.
+  // -- build the initial layout programmatically --
   static bool first_time = true;
   if (first_time) {
     first_time = false;
@@ -85,21 +85,15 @@ void setup_docking(ui_handler_t *ui) {
     igDockBuilderAddNode(main_dockspace_id, ImGuiDockNodeFlags_DockSpace);
     igDockBuilderSetNodeSize(main_dockspace_id, viewport->WorkSize);
 
-    // Split the main dockspace: Timeline at bottom, rest on top
     ImGuiID dock_id_top;
-    ImGuiID dock_id_bottom = igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.30f, NULL,
-                                                    &dock_id_top); // Timeline takes 30%
+    ImGuiID dock_id_bottom =
+        igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.30f, NULL, &dock_id_top);
+    ImGuiID dock_id_right;
+    ImGuiID dock_id_left = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Left, 0.15f, NULL, &dock_id_left);
 
-    // Split the top area: Player list on left, properties on right
-    // ImGuiID dock_id_left;
-    // ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.80f, NULL,
-    //                                                &dock_id_left); // Player list takes 20% (1.0 - 0.8)
-    // The remaining central node of the top split (where dock_id_right was created) will be left empty by
-    // default with PassthruCentralNode
-
-    // Assign windows to docks
+    // assign windows to docks
     igDockBuilderDockWindow("Timeline", dock_id_bottom);
-    // igDockBuilderDockWindow("Player List", dock_id_left);
+    igDockBuilderDockWindow("Player Info", dock_id_left);
     // igDockBuilderDockWindow("Properties", dock_id_right);
 
     igDockBuilderFinish(main_dockspace_id);
@@ -171,9 +165,10 @@ void ui_render(ui_handler_t *ui) {
   on_camera_update(ui->gfx_handler);
   render_menu_bar(ui);
   setup_docking(ui);
-  if (ui->show_timeline) {
+  if (ui->show_timeline)
     render_timeline(&ui->timeline);
-  }
+  if (ui->timeline.selected_player_track_index != -1)
+    render_player_info(&ui->timeline);
 }
 
 void ui_cleanup(ui_handler_t *ui) {

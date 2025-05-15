@@ -1,5 +1,6 @@
 #include "timeline.h"
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -966,13 +967,18 @@ void render_timeline(timeline_state_t *ts) {
 }
 
 // Helper to add a new empty track
-player_track_t *add_new_track(timeline_state_t *timeline) {
-  timeline->player_tracks =
-      realloc(timeline->player_tracks, sizeof(player_track_t) * (timeline->player_track_count + 1));
-  player_track_t *new_track = &timeline->player_tracks[timeline->player_track_count];
+player_track_t *add_new_track(timeline_state_t *ts) {
+  ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * (ts->player_track_count + 1));
+  player_track_t *new_track = &ts->player_tracks[ts->player_track_count];
   new_track->snippets = NULL; // Initialize as empty dynamic array
   new_track->snippet_count = 0;
-  timeline->player_track_count++;
+  ts->player_track_count++;
+  // reset player info
+  memset(new_track->player_info.name, 0, 32);
+  memset(new_track->player_info.clan, 0, 32);
+  snprintf(new_track->player_info.skin, 32, "default.png");
+  memset(new_track->player_info.color, 0, 3 * sizeof(float));
+  new_track->player_info.use_custom_color = 0;
   return new_track;
 }
 
