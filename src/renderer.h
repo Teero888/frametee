@@ -2,12 +2,16 @@
 #define RENDERER_H
 
 #include <cglm/cglm.h>
+#include <stdbool.h>
 #include <vulkan/vulkan_core.h>
 
-#define MAX_RENDERABLES 128
+#define MAX_RENDER_OBJECTS 128
 #define MAX_SHADERS 16
-#define MAX_TEXTURES 32
+#define MAX_TEXTURES 64
 #define MAX_MESHES 64
+#define MAX_MATERIALS 32
+#define MAX_TEXTURES_PER_MATERIAL 8
+#define MAX_UBOS_PER_MATERIAL 2
 
 typedef struct gfx_handler_t gfx_handler_t;
 
@@ -26,6 +30,8 @@ typedef struct {
   VkSampler sampler;
   uint32_t width;
   uint32_t height;
+  uint32_t mip_levels;
+  uint32_t layer_count;
   char path[256];
 } texture_t;
 
@@ -58,33 +64,31 @@ typedef struct {
 } uniform_buffer_object_t;
 
 typedef struct {
-  vec4 transform;
+  vec3 transform; // x, y, zoom
   float aspect;
   float lod;
 } map_buffer_object_t;
 
 typedef struct {
-  bool active;
-  mesh_t *mesh;
+  uint32_t id;
   shader_t *shader;
-  texture_t *texture;
-  buffer_t uniform_buffer;
-  VkDescriptorSet descriptor_set;
+  texture_t *textures[MAX_TEXTURES_PER_MATERIAL];
+  buffer_t uniform_buffers[MAX_UBOS_PER_MATERIAL];
+  uint32_t texture_count;
+  uint32_t ubo_count;
+
+  // Vulkan objects tied to this material
   VkPipeline pipeline;
   VkPipelineLayout pipeline_layout;
-} renderable_t;
+  VkDescriptorSetLayout descriptor_set_layout;
+  VkDescriptorSet descriptor_set;
+} material_t;
 
-#define NUM_LAYER_TEXTURES 7
 typedef struct {
   bool active;
   mesh_t *mesh;
-  shader_t *shader;
-  texture_t *texture[NUM_LAYER_TEXTURES]; // entities and 7 physics layers.
-  buffer_t uniform_buffer;
-  VkDescriptorSet descriptor_set;
-  VkPipeline pipeline;
-  VkPipelineLayout pipeline_layout;
-} map_renderable_t;
+  material_t *material;
+} render_object_t;
 
 typedef struct {
   vec2 pos;
@@ -95,7 +99,6 @@ typedef struct {
 } camera_t;
 
 typedef struct {
-
   shader_t shaders[MAX_SHADERS];
   uint32_t shader_count;
 
@@ -105,15 +108,13 @@ typedef struct {
   mesh_t meshes[MAX_MESHES];
   uint32_t mesh_count;
 
-  renderable_t renderables[MAX_RENDERABLES];
-  uint32_t renderable_count;
+  material_t materials[MAX_MATERIALS];
+  uint32_t material_count;
 
-  map_renderable_t map_renderable;
+  render_object_t render_objects[MAX_RENDER_OBJECTS];
+  uint32_t render_object_count;
 
-  VkDescriptorSetLayout global_descriptor_set_layout;
-  VkDescriptorSetLayout object_descriptor_set_layout;
   VkDescriptorPool resource_descriptor_pool;
-
   VkCommandPool transfer_command_pool;
 
   camera_t camera;
@@ -122,9 +123,7 @@ typedef struct {
   gfx_handler_t *gfx;
 } renderer_state_t;
 
-void check_vk_result_line(VkResult err, int line);
 void check_vk_result(VkResult err);
-
 int renderer_init(gfx_handler_t *handler);
 void renderer_cleanup(gfx_handler_t *handler);
 
@@ -135,17 +134,22 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
 mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count,
                              uint32_t *indices, uint32_t index_count);
 
-map_renderable_t *renderer_set_map_renderable(gfx_handler_t *handler, mesh_t *mesh, shader_t *shader,
-                                              texture_t *entities_texture);
-renderable_t *renderer_add_renderable(gfx_handler_t *handler, mesh_t *mesh, shader_t *shader,
-                                      texture_t *texture);
-void renderer_remove_renderable(gfx_handler_t *handler, renderable_t *renderable);
+material_t *renderer_create_material(gfx_handler_t *handler, shader_t *shader);
+void material_add_texture(material_t *material, texture_t *texture);
+void material_add_ubo(gfx_handler_t *handler, material_t *material, VkDeviceSize ubo_size);
+void material_finalize(gfx_handler_t *handler, material_t *material);
 
-void renderer_update_uniforms(gfx_handler_t *handler);
+render_object_t *renderer_add_render_object(gfx_handler_t *handler, mesh_t *mesh, material_t *material);
+
+void renderer_update(gfx_handler_t *handler);
 void renderer_draw(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
-VkVertexInputBindingDescription get_vertex_binding_description(void);
-uint32_t get_vertex_attribute_description_count(void);
-const VkVertexInputAttributeDescription *get_vertex_attribute_descriptions(void);
+texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas,
+                                                    uint32_t tile_width, uint32_t tile_height,
+                                                    uint32_t num_tiles_x, uint32_t num_tiles_y);
 
-#endif
+VkVertexInputBindingDescription get_vertex_binding_description(void);
+const VkVertexInputAttributeDescription *get_vertex_attribute_descriptions(void);
+uint32_t get_vertex_attribute_description_count(void);
+
+#endif // RENDERER_H
