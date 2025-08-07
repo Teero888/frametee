@@ -1116,9 +1116,7 @@ void renderer_update(gfx_handler_t *handler) {
   // In a real app, you'd loop through render objects and update their materials as needed.
   if (renderer->render_object_count > 0) {
     render_object_t *map_obj = &renderer->render_objects[0]; // Assuming first object is the map
-    printf("before rendering!, ubos: %d\n", map_obj->material->ubo_count);
     if (map_obj->active && map_obj->material->ubo_count > 0) {
-      printf("rendering!\n");
       float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
       if (isnan(map_ratio))
         map_ratio = 1.0f;

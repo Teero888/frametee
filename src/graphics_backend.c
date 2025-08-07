@@ -518,7 +518,7 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
   VkBool32 res;
   vkGetPhysicalDeviceSurfaceSupportKHR(handler->g_PhysicalDevice, handler->g_QueueFamily, wd->Surface, &res);
   if (res != VK_TRUE) {
-    fprintf(stderr, "Error no WSI support on physical device 0\n");
+    fprintf(stderr, "Error: no WSI support on physical device 0\n");
     exit(-1);
   }
 
