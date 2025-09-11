@@ -789,8 +789,6 @@ void material_finalize(gfx_handler_t *handler, material_t *material) {
       .pVertexBindingDescriptions = &binding_description,
       .vertexAttributeDescriptionCount = get_vertex_attribute_description_count(),
       .pVertexAttributeDescriptions = get_vertex_attribute_descriptions()};
-  // ... (rest of pipeline creation structs: input_assembly, viewport_state, etc.)
-  // ... They are identical to the original create_graphics_pipeline function
 
   VkPipelineInputAssemblyStateCreateInfo input_assembly = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -948,7 +946,7 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
   return texture;
 }
 
-// --- Texture, Mesh, Shader Loading (Largely Unchanged, but with minor adjustments) ---
+// Texture, Mesh, Shader Loading
 
 texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path) {
   renderer_state_t *renderer = &handler->renderer;
@@ -1115,7 +1113,7 @@ void renderer_update(gfx_handler_t *handler) {
   // This is just an example for the map UBO.
   // In a real app, you'd loop through render objects and update their materials as needed.
   if (renderer->render_object_count > 0) {
-    render_object_t *map_obj = &renderer->render_objects[0]; // Assuming first object is the map
+    render_object_t *map_obj = &renderer->render_objects[0]; // first object is always the map
     if (map_obj->active && map_obj->material->ubo_count > 0) {
       float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
       if (isnan(map_ratio))

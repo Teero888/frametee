@@ -209,9 +209,12 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
     fprintf(stderr, "Failed to load map data: '%s'\n", map_path);
     return;
   }
+
   texture_t *entities_atlas = renderer_load_texture(handler, ENTITIES_PATH);
   if (!entities_atlas) {
-    fprintf(stderr, "Failed to load entities at: '%s', you might have started the program from the wrong location.\n", ENTITIES_PATH);
+    fprintf(stderr,
+            "Failed to load entities at: '%s', you might have started the program from the wrong location.\n",
+            ENTITIES_PATH);
     return;
   }
   printf("Loaded map: '%s' (%ux%u)\n", map_path, handler->map_data.width, handler->map_data.height);
