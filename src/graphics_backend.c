@@ -388,9 +388,10 @@ static int init_vulkan(gfx_handler_t *handler) {
   memset(&handler->g_MainWindowData, 0, sizeof(handler->g_MainWindowData));
   ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
 
-  wd->ClearValue.color.float32[0] = 0.8f;
-  wd->ClearValue.color.float32[1] = 0.8f;
-  wd->ClearValue.color.float32[2] = 0.9f;
+  // Background color
+  wd->ClearValue.color.float32[0] = 0.24f;
+  wd->ClearValue.color.float32[1] = 0.24f;
+  wd->ClearValue.color.float32[2] = 0.24f;
   wd->ClearValue.color.float32[3] = 1.0f;
   wd->ClearEnable = true;
 
