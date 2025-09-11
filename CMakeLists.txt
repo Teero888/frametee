@@ -9,9 +9,9 @@ option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer
 # source files
 project(ddnet_frametee)
 set(SRCS 
-    src/graphics_backend.c
     src/main.c
-    src/renderer.c
+    src/renderer/renderer.c
+    src/renderer/graphics_backend.c
     src/user_interface/player_info.c
     src/user_interface/timeline.c
     src/user_interface/user_interface.c

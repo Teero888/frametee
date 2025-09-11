@@ -1,5 +1,5 @@
-#include "graphics_backend.h"
-#include "renderer.h"
+#include "renderer/graphics_backend.h"
+#include "renderer/renderer.h"
 
 int main(void) {
   gfx_handler_t handler;

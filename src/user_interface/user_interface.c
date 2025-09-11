@@ -1,6 +1,6 @@
 #include "user_interface.h"
-#include "../graphics_backend.h"
-#include "../renderer.h"
+#include "../renderer/graphics_backend.h"
+#include "../renderer/renderer.h"
 #include "cimgui.h"
 #include "ddnet_map_loader.h"
 #include "player_info.h"
