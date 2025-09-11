@@ -23,8 +23,7 @@ static int init_vulkan(gfx_handler_t *handler);
 static int init_imgui(gfx_handler_t *handler);
 static void cleanup_vulkan(gfx_handler_t *handler);
 static void cleanup_vulkan_window(gfx_handler_t *handler);
-static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data);
-static void frame_present(gfx_handler_t *handler);
+// frame_render and frame_present are now folded into gfx_begin/end_frame
 static void cleanup_map_resources(gfx_handler_t *handler);
 
 // --- Vulkan Initialization Helpers ---
@@ -83,23 +82,23 @@ int init_gfx_handler(gfx_handler_t *handler) {
   return 0;
 }
 
-int gfx_next_frame(gfx_handler_t *handler) {
+int gfx_begin_frame(gfx_handler_t *handler) {
   if (glfwWindowShouldClose(handler->window))
-    return 1;
+    return FRAME_EXIT;
 
   glfwPollEvents();
 
   if (glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
-    // Sleep to avoid busy-looping when minimized
     usleep(10000);
-    return 0;
+    return FRAME_SKIP;
   }
-
+  
   int fb_width, fb_height;
   glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
   if (fb_width > 0 && fb_height > 0 &&
       (handler->g_SwapChainRebuild || handler->g_MainWindowData.Width != fb_width ||
        handler->g_MainWindowData.Height != fb_height)) {
+    vkDeviceWaitIdle(handler->g_Device);
     ImGui_ImplVulkan_SetMinImageCount(handler->g_MinImageCount);
     ImGui_ImplVulkanH_CreateOrResizeWindow(
         handler->g_Instance, handler->g_PhysicalDevice, handler->g_Device, &handler->g_MainWindowData,
@@ -107,23 +106,136 @@ int gfx_next_frame(gfx_handler_t *handler) {
     handler->g_MainWindowData.FrameIndex = 0;
     handler->g_SwapChainRebuild = false;
   }
+  
+  // --- Acquire Image and Begin Command Buffer ---
+  ImGui_ImplVulkanH_Window* wd = &handler->g_MainWindowData;
+  VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
+  
+  VkResult err = vkAcquireNextImageKHR(handler->g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
+  if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
+    handler->g_SwapChainRebuild = true;
+    return FRAME_SKIP; // Still a valid frame, but we'll skip rendering
+  }
+  check_vk_result(err);
 
-  // NOTE: renderer_update() is removed. Its logic is now in frame_render().
+  ImGui_ImplVulkanH_Frame* fd = &wd->Frames.Data[wd->FrameIndex];
+  err = vkWaitForFences(handler->g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
+  check_vk_result(err);
+  err = vkResetFences(handler->g_Device, 1, &fd->Fence);
+  check_vk_result(err);
+  
+  err = vkResetCommandPool(handler->g_Device, fd->CommandPool, 0);
+  check_vk_result(err);
+  VkCommandBufferBeginInfo info = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+  err = vkBeginCommandBuffer(fd->CommandBuffer, &info);
+  check_vk_result(err);
 
+  VkRenderPassBeginInfo rp_info = {
+      .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+      .renderPass = wd->RenderPass,
+      .framebuffer = fd->Framebuffer,
+      .renderArea = {{0, 0}, {(uint32_t)wd->Width, (uint32_t)wd->Height}},
+      .clearValueCount = 1,
+      .pClearValues = &wd->ClearValue
+  };
+  vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+  
+  handler->current_frame_command_buffer = fd->CommandBuffer;
+
+  // --- Start ImGui and Renderer Frames ---
   ImGui_ImplVulkan_NewFrame();
   ImGui_ImplGlfw_NewFrame();
   igNewFrame();
+  renderer_begin_frame(handler, handler->current_frame_command_buffer);
 
-  ui_render(&handler->user_interface);
+  // --- Draw Map ---
+  if (handler->map_shader && handler->quad_mesh && handler->map_texture_count > 0) {
+      float window_ratio = (float)wd->Width / (float)wd->Height;
+      float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
+      if (isnan(map_ratio) || map_ratio == 0) map_ratio = 1.0f;
+
+      float zoom = 1.0 / (handler->renderer.camera.zoom * fmax(handler->map_data.width, handler->map_data.height) * 0.001);
+      if (isnan(zoom)) zoom = 1.0f;
+
+      float aspect = 1.0f / (window_ratio / map_ratio);
+      float lod = fmin(fmax(5.5f - log2f((1.0f / handler->map_data.width) / zoom * (wd->Width / 2.0f)), 0.0f), 6.0f);
+
+      map_buffer_object_t ubo = {
+          .transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom},
+          .aspect = aspect,
+          .lod = lod
+      };
+
+      void *ubos[] = {&ubo};
+      VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
+      renderer_draw_mesh(handler, handler->current_frame_command_buffer, handler->quad_mesh, handler->map_shader,
+                         handler->map_textures, handler->map_texture_count, ubos, ubo_sizes, 1);
+  }
+  
+  return FRAME_OK;
+}
+
+void gfx_end_frame(gfx_handler_t *handler) {
+  if (handler->g_SwapChainRebuild || glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
+      // End the ImGui frame to avoid state issues, but don't render.
+      igEndFrame();
+      // We also need to end the render pass we started.
+      if (handler->current_frame_command_buffer != VK_NULL_HANDLE) {
+          vkCmdEndRenderPass(handler->current_frame_command_buffer);
+          vkEndCommandBuffer(handler->current_frame_command_buffer);
+          handler->current_frame_command_buffer = VK_NULL_HANDLE;
+      }
+      return;
+  }
+
+  renderer_end_frame(handler, handler->current_frame_command_buffer);
 
   igRender();
-  ImDrawData *main_draw_data = igGetDrawData();
-  bool main_is_minimized = main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f;
-  if (!main_is_minimized) {
-    frame_render(handler, main_draw_data);
-    frame_present(handler);
+  ImDrawData *draw_data = igGetDrawData();
+  ImGui_ImplVulkan_RenderDrawData(draw_data, handler->current_frame_command_buffer, VK_NULL_HANDLE);
+
+  vkCmdEndRenderPass(handler->current_frame_command_buffer);
+
+  ImGui_ImplVulkanH_Window* wd = &handler->g_MainWindowData;
+  ImGui_ImplVulkanH_Frame* fd = &wd->Frames.Data[wd->FrameIndex];
+  VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
+  VkSemaphore render_complete_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
+
+  VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  VkSubmitInfo info = {
+      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .waitSemaphoreCount = 1,
+      .pWaitSemaphores = &image_acquired_semaphore,
+      .pWaitDstStageMask = &wait_stage,
+      .commandBufferCount = 1,
+      .pCommandBuffers = &handler->current_frame_command_buffer,
+      .signalSemaphoreCount = 1,
+      .pSignalSemaphores = &render_complete_semaphore
+  };
+  
+  VkResult err = vkEndCommandBuffer(handler->current_frame_command_buffer);
+  check_vk_result(err);
+  err = vkQueueSubmit(handler->g_Queue, 1, &info, fd->Fence);
+  check_vk_result(err);
+  
+  handler->current_frame_command_buffer = VK_NULL_HANDLE;
+
+  // --- Present ---
+  VkPresentInfoKHR present_info = {
+      .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+      .waitSemaphoreCount = 1,
+      .pWaitSemaphores = &render_complete_semaphore,
+      .swapchainCount = 1,
+      .pSwapchains = &wd->Swapchain,
+      .pImageIndices = &wd->FrameIndex
+  };
+  err = vkQueuePresentKHR(handler->g_Queue, &present_info);
+  if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
+    handler->g_SwapChainRebuild = true;
+  } else {
+    check_vk_result(err);
   }
-  return 0;
+  wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->ImageCount;
 }
 
 void gfx_cleanup(gfx_handler_t *handler) {
@@ -169,10 +281,6 @@ static void cleanup_map_resources(gfx_handler_t *handler) {
   }
   handler->map_texture_count = 0;
 
-  // Shaders and meshes are managed by the renderer's asset pools.
-  // We just null our pointers to them. They will be cleaned up
-  // globally on renderer_cleanup. For this application, we don't
-  // need to unload/reload them.
   handler->map_shader = NULL;
   handler->quad_mesh = NULL;
 }
@@ -195,12 +303,9 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
   }
   printf("Loaded map: '%s' (%ux%u)\n", map_path, handler->map_data.width, handler->map_data.height);
 
-  // 1. Load shader and mesh, store pointers to them.
   handler->map_shader =
       renderer_load_shader(handler, "data/shaders/map.vert.spv", "data/shaders/map.frag.spv");
 
-  // This quad mesh can be created once and reused for all maps.
-  // For simplicity, we recreate it, but a real app would check if it exists.
   if (!handler->quad_mesh) {
     vertex_t quad_vertices[] = {
         {{-1.f, -1.f}, {1.0f, 1.0f, 1.0f}, {-1.f, 1.0f}}, // Top Left
@@ -215,12 +320,10 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
     handler->quad_mesh = renderer_create_mesh(handler, quad_vertices, 4, quad_indices, 6);
   }
 
-  // 2. Load all textures and store them in the handler's map_textures array.
   handler->map_texture_count = 0;
   texture_t *entities_array =
       renderer_create_texture_array_from_atlas(handler, entities_atlas, 64, 64, 16, 16);
 
-  // Store textures in the order the shader expects them
   handler->map_textures[handler->map_texture_count++] =
       entities_array ? entities_array : handler->renderer.default_texture;
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(
@@ -235,10 +338,8 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
       handler, handler->map_data.speedup_layer.type, handler->map_data.width, handler->map_data.height);
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(
       handler, handler->map_data.switch_layer.type, handler->map_data.width, handler->map_data.height);
-
-  // Material and Render Object creation is no longer needed.
-  // The drawing information will be submitted to the renderer every frame.
 }
+
 
 // --- Initialization and Cleanup ---
 static int init_window(gfx_handler_t *handler) {
@@ -443,7 +544,6 @@ static void select_physical_device(gfx_handler_t *handler) {
 static void create_logical_device(gfx_handler_t *handler) {
   const char *device_extensions[] = {"VK_KHR_swapchain"};
   uint32_t device_extensions_count = 1;
-  // NOTE: VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME is handled inside ImGui
 
   const float queue_priority[] = {1.0f};
   VkDeviceQueueCreateInfo queue_info[1] = {{
@@ -556,7 +656,6 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
     int width, height;
     glfwGetFramebufferSize(handler->window, &width, &height);
     if (width > 0 && height > 0) {
-      // Calculate UBO data on-the-fly
       float window_ratio = (float)width / (float)height;
       float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
       if (isnan(map_ratio) || map_ratio == 0)
@@ -577,7 +676,6 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
                                  .aspect = aspect,
                                  .lod = lod};
 
-      // Submit the draw call for the map
       void *ubos[] = {&ubo};
       VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
       renderer_draw_mesh(handler, fd->CommandBuffer, handler->quad_mesh, handler->map_shader,
@@ -585,7 +683,8 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
     }
   }
 
-  renderer_end_frame(handler);
+  // Draw primitives on top
+  renderer_end_frame(handler, fd->CommandBuffer);
   // --- End Immediate Mode Drawing ---
 
   ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer, VK_NULL_HANDLE);

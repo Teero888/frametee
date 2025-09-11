@@ -10,6 +10,8 @@
 #define MAX_MESHES 64
 #define MAX_TEXTURES_PER_DRAW 8
 #define MAX_UBOS_PER_DRAW 2
+#define MAX_PRIMITIVE_VERTICES 10000
+#define MAX_PRIMITIVE_INDICES 20000
 
 typedef struct gfx_handler_t gfx_handler_t;
 
@@ -59,6 +61,15 @@ typedef struct {
 } vertex_t;
 
 typedef struct {
+  vec2 pos;
+  vec4 color;
+} primitive_vertex_t;
+
+typedef struct {
+  mat4 proj;
+} primitive_ubo_t;
+
+typedef struct {
   vec3 transform; // x, y, zoom
   float aspect;
   float lod;
@@ -82,6 +93,10 @@ typedef struct {
 } camera_t;
 
 typedef struct {
+  float left, right, bottom, top;
+} render_space_t;
+
+typedef struct {
   shader_t shaders[MAX_SHADERS];
   uint32_t shader_count;
 
@@ -94,9 +109,26 @@ typedef struct {
   VkDescriptorPool frame_descriptor_pool;
   VkCommandPool transfer_command_pool;
 
+  // State for primitive drawing
+  shader_t *primitive_shader;
+  buffer_t dynamic_vertex_buffer;
+  buffer_t dynamic_index_buffer;
+  primitive_vertex_t *vertex_buffer_ptr;
+  uint32_t *index_buffer_ptr;
+  uint32_t primitive_vertex_count;
+  uint32_t primitive_index_count;
+  VkCommandBuffer current_command_buffer;
+
+  // UBO Ring Buffer
+  buffer_t dynamic_ubo_buffer;
+  void *ubo_buffer_ptr;
+  uint32_t ubo_buffer_offset;
+  VkDeviceSize min_ubo_alignment;
+
   camera_t camera;
   texture_t *default_texture;
   gfx_handler_t *gfx;
+  render_space_t primitive_space;
 } renderer_state_t;
 
 void check_vk_result(VkResult err);
@@ -115,14 +147,18 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
 void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh,
                         shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos,
                         VkDeviceSize *ubo_sizes, uint32_t ubo_count);
-void renderer_end_frame(gfx_handler_t *handler);
+void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
+
+// --- Primitive Drawing API ---
+void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4 color);
+void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color,
+                                 uint32_t segments);
+void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness);
 
 texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas,
                                                     uint32_t tile_width, uint32_t tile_height,
                                                     uint32_t num_tiles_x, uint32_t num_tiles_y);
-
-VkVertexInputBindingDescription get_vertex_binding_description(void);
-const VkVertexInputAttributeDescription *get_vertex_attribute_descriptions(void);
-uint32_t get_vertex_attribute_description_count(void);
+void screen_to_world(gfx_handler_t *handler, float screen_x, float screen_y, float *world_x, float *world_y);
+void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy);
 
 #endif // RENDERER_H

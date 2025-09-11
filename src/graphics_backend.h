@@ -17,10 +17,18 @@
 // Forward declaration
 struct gfx_handler_t;
 
+enum 
+{
+  FRAME_OK = 0,
+  FRAME_SKIP,
+  FRAME_EXIT
+};
+
 // --- Public API ---
 void on_map_load(struct gfx_handler_t *handler, const char *map_path);
 int init_gfx_handler(struct gfx_handler_t *handler);
-int gfx_next_frame(struct gfx_handler_t *handler);
+int gfx_begin_frame(struct gfx_handler_t *handler);
+void gfx_end_frame(struct gfx_handler_t *handler);
 void gfx_cleanup(struct gfx_handler_t *handler);
 
 // --- Structures ---
@@ -39,6 +47,9 @@ struct gfx_handler_t {
   struct ImGui_ImplVulkanH_Window g_MainWindowData;
   uint32_t g_MinImageCount;
   bool g_SwapChainRebuild;
+
+  // --- Per-frame data ---
+  VkCommandBuffer current_frame_command_buffer;
 
   // --- App Stuffs ---
   ui_handler_t user_interface;

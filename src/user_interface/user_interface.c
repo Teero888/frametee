@@ -115,7 +115,7 @@ void on_camera_update(gfx_handler_t *handler) {
   if (scroll_y != 0.0f) {
     float zoom_factor = 1.0f + scroll_y * 0.1f;
     camera->zoom_wanted *= zoom_factor;
-    camera->zoom_wanted = glm_clamp(camera->zoom_wanted, 0.005f, 100.0f);
+    camera->zoom_wanted = glm_clamp(camera->zoom_wanted, 0.005f, 1000.0f);
   }
   float smoothing_factor = 1.0f - expf(-10.0f * io->DeltaTime); // Adjust 10.0f for speed
   camera->zoom = camera->zoom + (camera->zoom_wanted - camera->zoom) * smoothing_factor;
