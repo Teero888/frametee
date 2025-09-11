@@ -1145,12 +1145,16 @@ void screen_to_world(gfx_handler_t *h, float sx, float sy, float *wx, float *wy)
 
   *wx = cam->pos[0] + (ndc_x / (cam->zoom * max_map_size));
   *wy = cam->pos[1] + (ndc_y / (cam->zoom * max_map_size * aspect));
+  *wx *= h->map_data.width;
+  *wy *= h->map_data.height;
 }
 
 void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy) {
   camera_t *cam = &h->renderer.camera;
   int fbw, fbh;
   glfwGetFramebufferSize(h->window, &fbw, &fbh);
+  wx /= h->map_data.width;
+  wy /= h->map_data.height;
 
   float window_ratio = (float)fbw / (float)fbh;
   float map_ratio = (float)h->map_data.width / (float)h->map_data.height;
@@ -1270,6 +1274,10 @@ void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4
   glm_vec2_copy((vec2){pos[0], pos[1] + size[1]}, vtx[3].pos);
   glm_vec4_copy(color, vtx[3].color);
 
+  for (int i = 0; i < 4; i++) {
+    world_to_screen(handler, vtx[i].pos[0], vtx[i].pos[1], &vtx[i].pos[0], &vtx[i].pos[1]);
+  }
+
   idx[0] = base_index + 0;
   idx[1] = base_index + 1;
   idx[2] = base_index + 2;
@@ -1296,11 +1304,13 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
   primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
   uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
 
-  world_to_screen(handler, center[0], center[1], &center[0], &center[1]);
+  float sx, sy;
+  world_to_screen(handler, center[0], center[1], &sx, &sy);
+  vec2 screen_center = {sx, sy};
   radius *= handler->renderer.camera.zoom;
 
   // The center vertex
-  glm_vec2_copy(center, vtx[0].pos);
+  glm_vec2_copy(screen_center, vtx[0].pos);
   glm_vec4_copy(color, vtx[0].color);
 
   // The outer vertices
@@ -1308,8 +1318,8 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
   for (uint32_t i = 0; i < segments; i++) {
     float angle = i * angle_step;
     // Calculate vertex position relative to the center and add it
-    vtx[i + 1].pos[0] = center[0] + cosf(angle) * radius;
-    vtx[i + 1].pos[1] = center[1] + sinf(angle) * radius;
+    vtx[i + 1].pos[0] = screen_center[0] + cosf(angle) * radius;
+    vtx[i + 1].pos[1] = screen_center[1] + sinf(angle) * radius;
     glm_vec4_copy(color, vtx[i + 1].color);
   }
 
@@ -1350,6 +1360,10 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   glm_vec4_copy(color, vtx[2].color);
   glm_vec2_copy((vec2){p1[0] + normal[0] * half_thickness, p1[1] + normal[1] * half_thickness}, vtx[3].pos);
   glm_vec4_copy(color, vtx[3].color);
+
+  for (int i = 0; i < 4; i++) {
+    world_to_screen(handler, vtx[i].pos[0], vtx[i].pos[1], &vtx[i].pos[0], &vtx[i].pos[1]);
+  }
 
   idx[0] = base_index + 0;
   idx[1] = base_index + 1;
