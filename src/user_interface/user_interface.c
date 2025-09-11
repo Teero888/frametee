@@ -9,7 +9,6 @@
 #include <nfd.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 void on_map_load(gfx_handler_t *handler, const char *map_path);

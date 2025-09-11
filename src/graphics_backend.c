@@ -5,6 +5,7 @@
 #include "user_interface/user_interface.h"
 #include <GLFW/glfw3.h>
 #include <assert.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +25,7 @@ static void cleanup_vulkan(gfx_handler_t *handler);
 static void cleanup_vulkan_window(gfx_handler_t *handler);
 static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data);
 static void frame_present(gfx_handler_t *handler);
+static void cleanup_map_resources(gfx_handler_t *handler);
 
 // --- Vulkan Initialization Helpers ---
 static VkResult create_instance(gfx_handler_t *handler, const char **extensions, uint32_t extensions_count);
@@ -106,7 +108,7 @@ int gfx_next_frame(gfx_handler_t *handler) {
     handler->g_SwapChainRebuild = false;
   }
 
-  renderer_update(handler);
+  // NOTE: renderer_update() is removed. Its logic is now in frame_render().
 
   ImGui_ImplVulkan_NewFrame();
   ImGui_ImplGlfw_NewFrame();
@@ -129,6 +131,7 @@ void gfx_cleanup(gfx_handler_t *handler) {
   check_vk_result(err);
 
   ui_cleanup(&handler->user_interface);
+  cleanup_map_resources(handler);
   free_map_data(&handler->map_data);
   renderer_cleanup(handler);
   ImGui_ImplVulkan_Shutdown();
@@ -150,55 +153,28 @@ static texture_t *load_layer_texture(gfx_handler_t *handler, uint8_t *data, uint
 }
 
 static void cleanup_map_resources(gfx_handler_t *handler) {
-  // If no material is set, there's nothing to clean up.
-  if (!handler->map_material) {
+  if (handler->map_texture_count == 0) {
     return;
   }
   printf("Cleaning up previous map resources...\n");
 
-  renderer_state_t *renderer = &handler->renderer;
-  VkDevice device = handler->g_Device;
-  VkAllocationCallbacks *allocator = handler->g_Allocator;
+  vkDeviceWaitIdle(handler->g_Device);
 
-  // Wait for the device to be idle before destroying resources
-  vkDeviceWaitIdle(device);
-
-  // 1. Deactivate the render object so it's no longer drawn.
-  //    We don't destroy the mesh, as it can be reused (it's just a quad).
-  if (handler->map_render_object) {
-    handler->map_render_object->active = false;
-    // In a more complex system, this object's slot would be returned to a pool.
-  }
-
-  // 2. Destroy map-specific textures held by the material.
-  //    We must be careful not to destroy the default texture.
-  for (uint32_t i = 0; i < handler->map_material->texture_count; ++i) {
-    texture_t *tex = handler->map_material->textures[i];
-    if (tex && tex != renderer->default_texture) {
-      vkDestroySampler(device, tex->sampler, allocator);
-      vkDestroyImageView(device, tex->image_view, allocator);
-      vkDestroyImage(device, tex->image, allocator);
-      vkFreeMemory(device, tex->memory, allocator);
-      // Mark the texture slot in the main renderer as empty to prevent double-free.
-      memset(&renderer->textures[tex->id], 0, sizeof(texture_t));
+  for (uint32_t i = 0; i < handler->map_texture_count; ++i) {
+    texture_t *tex = handler->map_textures[i];
+    if (tex && tex != handler->renderer.default_texture) {
+      renderer_destroy_texture(handler, tex);
     }
+    handler->map_textures[i] = NULL;
   }
+  handler->map_texture_count = 0;
 
-  // 3. Destroy the material and its associated Vulkan objects.
-  material_t *mat = handler->map_material;
-  vkDestroyPipeline(device, mat->pipeline, allocator);
-  vkDestroyPipelineLayout(device, mat->pipeline_layout, allocator);
-  vkDestroyDescriptorSetLayout(device, mat->descriptor_set_layout, allocator);
-  for (uint32_t j = 0; j < mat->ubo_count; ++j) {
-    vkDestroyBuffer(device, mat->uniform_buffers[j].buffer, allocator);
-    vkFreeMemory(device, mat->uniform_buffers[j].memory, allocator);
-  }
-  // Mark the material slot as empty.
-  memset(mat, 0, sizeof(material_t));
-
-  // 4. Reset the pointers in the handler to NULL.
-  handler->map_material = NULL;
-  handler->map_render_object = NULL;
+  // Shaders and meshes are managed by the renderer's asset pools.
+  // We just null our pointers to them. They will be cleaned up
+  // globally on renderer_cleanup. For this application, we don't
+  // need to unload/reload them.
+  handler->map_shader = NULL;
+  handler->quad_mesh = NULL;
 }
 
 void on_map_load(gfx_handler_t *handler, const char *map_path) {
@@ -219,59 +195,49 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
   }
   printf("Loaded map: '%s' (%ux%u)\n", map_path, handler->map_data.width, handler->map_data.height);
 
-  // 1. Create a shader and mesh (can be done once at init)
-  shader_t *map_shader =
+  // 1. Load shader and mesh, store pointers to them.
+  handler->map_shader =
       renderer_load_shader(handler, "data/shaders/map.vert.spv", "data/shaders/map.frag.spv");
 
-  vertex_t quad_vertices[] = {
-      {{-1.f, -1.f}, {1.0f, 1.0f, 1.0f}, {-1.f, 1.0f}}, // Top Left
-      {{1.0f, -1.f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}, // Top Right
-      {{1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, -1.f}}, // Bottom Right
-      {{-1.f, 1.0f}, {1.0f, 1.0f, 1.0f}, {-1.f, -1.f}}  // Bottom Left
-  };
-  uint32_t quad_indices[] = {
-      0, 1, 2, // First triangle
-      2, 3, 0  // Second triangle
-  };
-  mesh_t *quad_mesh = renderer_create_mesh(handler, quad_vertices, 4, quad_indices, 6);
+  // This quad mesh can be created once and reused for all maps.
+  // For simplicity, we recreate it, but a real app would check if it exists.
+  if (!handler->quad_mesh) {
+    vertex_t quad_vertices[] = {
+        {{-1.f, -1.f}, {1.0f, 1.0f, 1.0f}, {-1.f, 1.0f}}, // Top Left
+        {{1.0f, -1.f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}, // Top Right
+        {{1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, -1.f}}, // Bottom Right
+        {{-1.f, 1.0f}, {1.0f, 1.0f, 1.0f}, {-1.f, -1.f}}  // Bottom Left
+    };
+    uint32_t quad_indices[] = {
+        0, 1, 2, // First triangle
+        2, 3, 0  // Second triangle
+    };
+    handler->quad_mesh = renderer_create_mesh(handler, quad_vertices, 4, quad_indices, 6);
+  }
 
-  // 2. Create the material for the map
-  handler->map_material = renderer_create_material(handler, map_shader);
-
-  // 3. Load all textures and add them to the material
+  // 2. Load all textures and store them in the handler's map_textures array.
+  handler->map_texture_count = 0;
   texture_t *entities_array =
       renderer_create_texture_array_from_atlas(handler, entities_atlas, 64, 64, 16, 16);
 
-  // Bind textures in the order the shader expects them
-  material_add_texture(handler->map_material,
-                       entities_array ? entities_array : handler->renderer.default_texture);
-  material_add_texture(handler->map_material,
-                       load_layer_texture(handler, handler->map_data.game_layer.data, handler->map_data.width,
-                                          handler->map_data.height));
-  material_add_texture(handler->map_material,
-                       load_layer_texture(handler, handler->map_data.front_layer.data,
-                                          handler->map_data.width, handler->map_data.height));
-  material_add_texture(handler->map_material,
-                       load_layer_texture(handler, handler->map_data.tele_layer.type, handler->map_data.width,
-                                          handler->map_data.height));
-  material_add_texture(handler->map_material,
-                       load_layer_texture(handler, handler->map_data.tune_layer.type, handler->map_data.width,
-                                          handler->map_data.height));
-  material_add_texture(handler->map_material,
-                       load_layer_texture(handler, handler->map_data.speedup_layer.type,
-                                          handler->map_data.width, handler->map_data.height));
-  material_add_texture(handler->map_material,
-                       load_layer_texture(handler, handler->map_data.switch_layer.type,
-                                          handler->map_data.width, handler->map_data.height));
+  // Store textures in the order the shader expects them
+  handler->map_textures[handler->map_texture_count++] =
+      entities_array ? entities_array : handler->renderer.default_texture;
+  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
+      handler, handler->map_data.game_layer.data, handler->map_data.width, handler->map_data.height);
+  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
+      handler, handler->map_data.front_layer.data, handler->map_data.width, handler->map_data.height);
+  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
+      handler, handler->map_data.tele_layer.type, handler->map_data.width, handler->map_data.height);
+  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
+      handler, handler->map_data.tune_layer.type, handler->map_data.width, handler->map_data.height);
+  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
+      handler, handler->map_data.speedup_layer.type, handler->map_data.width, handler->map_data.height);
+  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
+      handler, handler->map_data.switch_layer.type, handler->map_data.width, handler->map_data.height);
 
-  // 4. Add the UBO for map transformations
-  material_add_ubo(handler, handler->map_material, sizeof(map_buffer_object_t));
-
-  // 5. Finalize the material (creates pipeline, descriptors, etc.)
-  material_finalize(handler, handler->map_material);
-
-  // 6. Create the render object
-  handler->map_render_object = renderer_add_render_object(handler, quad_mesh, handler->map_material);
+  // Material and Render Object creation is no longer needed.
+  // The drawing information will be submitted to the renderer every frame.
 }
 
 // --- Initialization and Cleanup ---
@@ -500,6 +466,7 @@ static void create_logical_device(gfx_handler_t *handler) {
 }
 
 static void create_descriptor_pool(gfx_handler_t *handler) {
+  // This pool is for Dear ImGui only
   VkDescriptorPoolSize pool_sizes[] = {
       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000},
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000},
@@ -582,7 +549,45 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
     vkCmdBeginRenderPass(fd->CommandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);
   }
 
-  renderer_draw(handler, fd->CommandBuffer);
+  // --- Immediate Mode Drawing Logic ---
+  renderer_begin_frame(handler, fd->CommandBuffer);
+
+  if (handler->map_shader && handler->quad_mesh && handler->map_texture_count > 0) {
+    int width, height;
+    glfwGetFramebufferSize(handler->window, &width, &height);
+    if (width > 0 && height > 0) {
+      // Calculate UBO data on-the-fly
+      float window_ratio = (float)width / (float)height;
+      float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
+      if (isnan(map_ratio) || map_ratio == 0)
+        map_ratio = 1.0f;
+
+      float zoom = 1.0 /
+                   (handler->renderer.camera.zoom * fmax(handler->map_data.width, handler->map_data.height) *
+                    0.001);
+      if (isnan(zoom))
+        zoom = 1.0f;
+
+      float aspect = 1.0f / (window_ratio / map_ratio);
+      float lod =
+          fmin(fmax(5.5f - log2f((1.0f / handler->map_data.width) / zoom * (width / 2.0f)), 0.0f), 6.0f);
+
+      map_buffer_object_t ubo = {.transform = {handler->renderer.camera.pos[0],
+                                               handler->renderer.camera.pos[1], zoom},
+                                 .aspect = aspect,
+                                 .lod = lod};
+
+      // Submit the draw call for the map
+      void *ubos[] = {&ubo};
+      VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
+      renderer_draw_mesh(handler, fd->CommandBuffer, handler->quad_mesh, handler->map_shader,
+                         handler->map_textures, handler->map_texture_count, ubos, ubo_sizes, 1);
+    }
+  }
+
+  renderer_end_frame(handler);
+  // --- End Immediate Mode Drawing ---
+
   ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer, VK_NULL_HANDLE);
 
   vkCmdEndRenderPass(fd->CommandBuffer);

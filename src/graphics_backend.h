@@ -35,7 +35,7 @@ struct gfx_handler_t {
   VkQueue g_Queue;
   VkDebugReportCallbackEXT g_DebugReport;
   VkPipelineCache g_PipelineCache;
-  VkDescriptorPool g_DescriptorPool;
+  VkDescriptorPool g_DescriptorPool; // For ImGui
   struct ImGui_ImplVulkanH_Window g_MainWindowData;
   uint32_t g_MinImageCount;
   bool g_SwapChainRebuild;
@@ -46,8 +46,10 @@ struct gfx_handler_t {
   map_data_t map_data;
 
   // --- Map Specific Render Data ---
-  material_t *map_material;
-  render_object_t *map_render_object;
+  shader_t *map_shader;
+  mesh_t *quad_mesh;
+  texture_t *map_textures[MAX_TEXTURES_PER_DRAW];
+  uint32_t map_texture_count;
 };
 
 #endif // GRAPHICS_H

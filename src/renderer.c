@@ -1,13 +1,15 @@
-#include <vulkan/vulkan_core.h>
-#define CGLM_FORCE_DEPTH_ZERO_TO_ONE
-#include "graphics_backend.h"
 #include "renderer.h"
+#include "graphics_backend.h"
 #include <cglm/cglm.h>
+#include <vulkan/vulkan_core.h>
+
+#define CGLM_FORCE_DEPTH_ZERO_TO_ONE
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +41,8 @@ static char *read_file(const char *filename, size_t *length);
 static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *code, size_t code_size);
 static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height,
                           uint32_t mip_levels, uint32_t layer_count);
+static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader,
+                                                      uint32_t ubo_count, uint32_t texture_count);
 
 void check_vk_result(VkResult err) {
   if (err == VK_SUCCESS)
@@ -219,6 +223,9 @@ static void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height
                                   .usage = usage,
                                   .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                                   .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+  if (array_layers > 1) {
+    image_info.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
+  }
 
   err = vkCreateImage(handler->g_Device, &image_info, handler->g_Allocator, image);
   check_vk_result_line(err, __LINE__);
@@ -257,10 +264,10 @@ static VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFo
   return image_view;
 }
 
-static VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, uint32_t filter) {
+static VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter) {
   VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                                      .magFilter = filter,
-                                      .minFilter = filter,
+                                      .magFilter = (VkFilter)filter,
+                                      .minFilter = (VkFilter)filter,
                                       .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
                                       .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
                                       .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -323,105 +330,6 @@ static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *c
   return shader_module;
 }
 
-static VkPipeline create_graphics_pipeline(gfx_handler_t *handler, shader_t *shader,
-                                           VkPipelineLayout pipeline_layout, VkRenderPass render_pass) {
-  VkResult err;
-
-  VkPipelineShaderStageCreateInfo vert_shader_stage_info = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-      .stage = VK_SHADER_STAGE_VERTEX_BIT,
-      .module = shader->vert_shader_module,
-      .pName = "main"};
-
-  VkPipelineShaderStageCreateInfo frag_shader_stage_info = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-      .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-      .module = shader->frag_shader_module,
-      .pName = "main"};
-
-  VkPipelineShaderStageCreateInfo shader_stages[] = {vert_shader_stage_info, frag_shader_stage_info};
-
-  VkVertexInputBindingDescription binding_description = get_vertex_binding_description();
-  VkPipelineVertexInputStateCreateInfo vertex_input_info = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-      .vertexBindingDescriptionCount = 1,
-      .pVertexBindingDescriptions = &binding_description,
-      .vertexAttributeDescriptionCount = get_vertex_attribute_description_count(),
-      .pVertexAttributeDescriptions = get_vertex_attribute_descriptions()};
-
-  VkPipelineInputAssemblyStateCreateInfo input_assembly = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-      .primitiveRestartEnable = VK_FALSE};
-
-  VkPipelineViewportStateCreateInfo viewport_state = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
-
-  VkPipelineRasterizationStateCreateInfo rasterizer = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-      .depthClampEnable = VK_FALSE,
-      .rasterizerDiscardEnable = VK_FALSE,
-      .polygonMode = VK_POLYGON_MODE_FILL,
-      .cullMode = VK_CULL_MODE_BACK_BIT,
-      .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-      .lineWidth = 1.0f};
-
-  VkPipelineMultisampleStateCreateInfo multisampling = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
-
-  VkPipelineDepthStencilStateCreateInfo depth_stencil = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-      .depthTestEnable = VK_FALSE,
-      .depthWriteEnable = VK_FALSE,
-      .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL};
-
-  VkPipelineColorBlendAttachmentState color_blend_attachment = {
-      .blendEnable = VK_TRUE,
-      .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-      .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-      .colorBlendOp = VK_BLEND_OP_ADD,
-      .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-      .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-      .alphaBlendOp = VK_BLEND_OP_ADD,
-      .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-                        VK_COLOR_COMPONENT_A_BIT};
-
-  VkPipelineColorBlendStateCreateInfo color_blending = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-      .attachmentCount = 1,
-      .pAttachments = &color_blend_attachment};
-
-  VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-  VkPipelineDynamicStateCreateInfo dynamic_state = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-      .dynamicStateCount = sizeof(dynamic_states) / sizeof(dynamic_states[0]),
-      .pDynamicStates = dynamic_states};
-
-  VkGraphicsPipelineCreateInfo pipeline_info = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-                                                .stageCount = 2,
-                                                .pStages = shader_stages,
-                                                .pVertexInputState = &vertex_input_info,
-                                                .pInputAssemblyState = &input_assembly,
-                                                .pViewportState = &viewport_state,
-                                                .pRasterizationState = &rasterizer,
-                                                .pMultisampleState = &multisampling,
-                                                .pDepthStencilState = &depth_stencil,
-                                                .pColorBlendState = &color_blending,
-                                                .pDynamicState = &dynamic_state,
-                                                .layout = pipeline_layout,
-                                                .renderPass = render_pass,
-                                                .subpass = 0};
-
-  VkPipeline graphics_pipeline;
-  err = vkCreateGraphicsPipelines(handler->g_Device, handler->g_PipelineCache, 1, &pipeline_info,
-                                  handler->g_Allocator, &graphics_pipeline);
-  check_vk_result_line(err, __LINE__);
-
-  return graphics_pipeline;
-}
-
-// Thx jupstar
 static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height,
                           uint32_t mip_levels, uint32_t layer_count) {
   if (mip_levels <= 1)
@@ -499,90 +407,6 @@ static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width,
   return true;
 }
 
-texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas,
-                                                    uint32_t tile_width, uint32_t tile_height,
-                                                    uint32_t num_tiles_x, uint32_t num_tiles_y) {
-  renderer_state_t *renderer = &handler->renderer;
-  if (renderer->texture_count >= MAX_TEXTURES)
-    return NULL;
-
-  uint32_t layer_count = num_tiles_x * num_tiles_y;
-  uint32_t mip_levels = (uint32_t)floorf(log2f(fmaxf(tile_width, tile_height))) + 1;
-
-  texture_t *tex_array = &renderer->textures[renderer->texture_count++];
-  memset(tex_array, 0, sizeof(texture_t));
-  tex_array->id = renderer->texture_count - 1;
-  tex_array->width = tile_width;
-  tex_array->height = tile_height;
-  tex_array->mip_levels = mip_levels;
-  tex_array->layer_count = layer_count;
-  strncpy(tex_array->path, "entities_texture_array", sizeof(tex_array->path) - 1);
-
-  create_image(handler, tile_width, tile_height, mip_levels, layer_count, VK_FORMAT_R8G8B8A8_UNORM,
-               VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &tex_array->image, &tex_array->memory);
-  transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
-                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_levels, layer_count);
-
-  VkCommandBuffer cmd = begin_single_time_commands(handler, renderer->transfer_command_pool);
-  // Transition atlas to be a source
-  VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                  .image = atlas->image,
-                                  .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                  .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                  .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                  .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                  .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                                  .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-                                  .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                       .baseMipLevel = 0,
-                                                       .levelCount = atlas->mip_levels,
-                                                       .baseArrayLayer = 0,
-                                                       .layerCount = 1}};
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL,
-                       0, NULL, 1, &barrier);
-
-  for (uint32_t layer = 0; layer < layer_count; layer++) {
-    uint32_t tile_x = layer % num_tiles_x;
-    uint32_t tile_y = layer / num_tiles_x;
-
-    VkImageCopy copy_region = {
-        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                           .mipLevel = 0,
-                           .baseArrayLayer = 0,
-                           .layerCount = 1},
-        .srcOffset = {(int32_t)(tile_x * tile_width), (int32_t)(tile_y * tile_height), 0},
-        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                           .mipLevel = 0,
-                           .baseArrayLayer = layer,
-                           .layerCount = 1},
-        .dstOffset = {0, 0, 0},
-        .extent = {tile_width, tile_height, 1}};
-    vkCmdCopyImage(cmd, atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex_array->image,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
-  }
-
-  // Transition atlas back to shader read
-  barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL,
-                       0, NULL, 1, &barrier);
-
-  end_single_time_commands(handler, renderer->transfer_command_pool, cmd);
-
-  build_mipmaps(handler, tex_array->image, tile_width, tile_height, mip_levels, layer_count);
-
-  tex_array->image_view = create_image_view(handler, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM,
-                                            VK_IMAGE_VIEW_TYPE_2D_ARRAY, mip_levels, layer_count);
-  tex_array->sampler = create_texture_sampler(handler, mip_levels, VK_FILTER_LINEAR);
-
-  return tex_array;
-}
-
 int renderer_init(gfx_handler_t *handler) {
   renderer_state_t *renderer = &handler->renderer;
   memset(renderer, 0, sizeof(renderer_state_t));
@@ -594,16 +418,20 @@ int renderer_init(gfx_handler_t *handler) {
   check_vk_result(vkCreateCommandPool(handler->g_Device, &pool_info, handler->g_Allocator,
                                       &renderer->transfer_command_pool));
 
+  // Create a descriptor pool for the immediate-mode renderer.
+  // This needs to be large enough for all potential draw calls in a single frame.
   VkDescriptorPoolSize pool_sizes[] = {
-      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_MATERIALS * MAX_UBOS_PER_MATERIAL},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_MATERIALS * MAX_TEXTURES_PER_MATERIAL}};
+      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 100}, // 100 draw calls with UBOs
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+       100 * MAX_TEXTURES_PER_DRAW} // 100 draw calls with up to 8 textures
+  };
   VkDescriptorPoolCreateInfo pool_create_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                                  .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
-                                                 .maxSets = MAX_MATERIALS,
+                                                 .maxSets = 100,
                                                  .poolSizeCount = sizeof(pool_sizes) / sizeof(pool_sizes[0]),
                                                  .pPoolSizes = pool_sizes};
   check_vk_result(vkCreateDescriptorPool(handler->g_Device, &pool_create_info, handler->g_Allocator,
-                                         &renderer->resource_descriptor_pool));
+                                         &renderer->frame_descriptor_pool));
 
   // Create a 1x1 white texture to use as a default
   unsigned char white_pixel[] = {255, 255, 255, 255};
@@ -622,163 +450,115 @@ void renderer_cleanup(gfx_handler_t *handler) {
 
   vkDeviceWaitIdle(device);
 
-  for (uint32_t i = 0; i < renderer->material_count; ++i) {
-    material_t *mat = &renderer->materials[i];
-    vkDestroyPipeline(device, mat->pipeline, allocator);
-    vkDestroyPipelineLayout(device, mat->pipeline_layout, allocator);
-    vkDestroyDescriptorSetLayout(device, mat->descriptor_set_layout, allocator);
-    for (uint32_t j = 0; j < mat->ubo_count; ++j) {
-      vkDestroyBuffer(device, mat->uniform_buffers[j].buffer, allocator);
-      vkFreeMemory(device, mat->uniform_buffers[j].memory, allocator);
+  for (uint32_t i = 0; i < MAX_SHADERS; ++i) {
+    pipeline_cache_entry_t *entry = &renderer->pipeline_cache[i];
+    if (entry->initialized) {
+      vkDestroyPipeline(device, entry->pipeline, allocator);
+      vkDestroyPipelineLayout(device, entry->pipeline_layout, allocator);
+      vkDestroyDescriptorSetLayout(device, entry->descriptor_set_layout, allocator);
     }
   }
 
-  for (uint32_t i = 0; i < renderer->mesh_count; ++i) {
+  for (uint32_t i = 0; i < MAX_MESHES; ++i) {
     mesh_t *m = &renderer->meshes[i];
-    vkDestroyBuffer(device, m->vertex_buffer.buffer, allocator);
-    vkFreeMemory(device, m->vertex_buffer.memory, allocator);
-    if (m->index_buffer.buffer != VK_NULL_HANDLE) {
-      vkDestroyBuffer(device, m->index_buffer.buffer, allocator);
-      vkFreeMemory(device, m->index_buffer.memory, allocator);
+    if (m->active) {
+      vkDestroyBuffer(device, m->vertex_buffer.buffer, allocator);
+      vkFreeMemory(device, m->vertex_buffer.memory, allocator);
+      if (m->index_buffer.buffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, m->index_buffer.buffer, allocator);
+        vkFreeMemory(device, m->index_buffer.memory, allocator);
+      }
     }
   }
 
-  for (uint32_t i = 0; i < renderer->texture_count; ++i) {
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
     texture_t *t = &renderer->textures[i];
-    vkDestroySampler(device, t->sampler, allocator);
-    vkDestroyImageView(device, t->image_view, allocator);
-    vkDestroyImage(device, t->image, allocator);
-    vkFreeMemory(device, t->memory, allocator);
+    if (t->active) {
+      vkDestroySampler(device, t->sampler, allocator);
+      vkDestroyImageView(device, t->image_view, allocator);
+      vkDestroyImage(device, t->image, allocator);
+      vkFreeMemory(device, t->memory, allocator);
+    }
   }
 
-  for (uint32_t i = 0; i < renderer->shader_count; ++i) {
+  for (uint32_t i = 0; i < MAX_SHADERS; ++i) {
     shader_t *s = &renderer->shaders[i];
-    vkDestroyShaderModule(device, s->vert_shader_module, allocator);
-    vkDestroyShaderModule(device, s->frag_shader_module, allocator);
+    if (s->active) {
+      vkDestroyShaderModule(device, s->vert_shader_module, allocator);
+      vkDestroyShaderModule(device, s->frag_shader_module, allocator);
+    }
   }
 
-  vkDestroyDescriptorPool(device, renderer->resource_descriptor_pool, allocator);
+  vkDestroyDescriptorPool(device, renderer->frame_descriptor_pool, allocator);
   vkDestroyCommandPool(device, renderer->transfer_command_pool, allocator);
 
   printf("Renderer cleaned up.\n");
 }
 
-material_t *renderer_create_material(gfx_handler_t *handler, shader_t *shader) {
+static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader,
+                                                      uint32_t ubo_count, uint32_t texture_count) {
   renderer_state_t *renderer = &handler->renderer;
-  if (renderer->material_count >= MAX_MATERIALS) {
-    fprintf(stderr, "Maximum material count (%d) reached.\n", MAX_MATERIALS);
-    return NULL;
-  }
-  material_t *material = &renderer->materials[renderer->material_count];
-  memset(material, 0, sizeof(material_t));
-  material->id = renderer->material_count++;
-  material->shader = shader;
-  return material;
-}
+  pipeline_cache_entry_t *entry = &renderer->pipeline_cache[shader->id];
 
-void material_add_texture(material_t *material, texture_t *texture) {
-  if (material->texture_count >= MAX_TEXTURES_PER_MATERIAL) {
-    fprintf(stderr, "Maximum textures per material (%d) reached.\n", MAX_TEXTURES_PER_MATERIAL);
-    return;
+  // For this simple case, we assume the pipeline only depends on the shader.
+  // A more complex system would hash all relevant pipeline state.
+  // We also check if the binding counts match what was previously created.
+  if (entry->initialized && entry->ubo_count == ubo_count && entry->texture_count == texture_count) {
+    return entry;
   }
-  material->textures[material->texture_count++] = texture;
-}
 
-void material_add_ubo(gfx_handler_t *handler, material_t *material, VkDeviceSize ubo_size) {
-  if (material->ubo_count >= MAX_UBOS_PER_MATERIAL) {
-    fprintf(stderr, "Maximum UBOs per material (%d) reached.\n", MAX_UBOS_PER_MATERIAL);
-    return;
+  // If it exists but with wrong binding counts, destroy old one.
+  if (entry->initialized) {
+    vkDestroyPipeline(handler->g_Device, entry->pipeline, handler->g_Allocator);
+    vkDestroyPipelineLayout(handler->g_Device, entry->pipeline_layout, handler->g_Allocator);
+    vkDestroyDescriptorSetLayout(handler->g_Device, entry->descriptor_set_layout, handler->g_Allocator);
   }
-  buffer_t *ubo = &material->uniform_buffers[material->ubo_count++];
-  create_buffer(handler, ubo_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, ubo);
-  check_vk_result(vkMapMemory(handler->g_Device, ubo->memory, 0, ubo_size, 0, &ubo->mapped_memory));
-}
 
-void material_finalize(gfx_handler_t *handler, material_t *material) {
-  renderer_state_t *renderer = &handler->renderer;
-  uint32_t binding_count = material->ubo_count + material->texture_count;
+  entry->ubo_count = ubo_count;
+  entry->texture_count = texture_count;
+
+  // 1. Create Descriptor Set Layout
+  uint32_t binding_count = ubo_count + texture_count;
   VkDescriptorSetLayoutBinding bindings[binding_count];
-
   uint32_t current_binding = 0;
-  for (uint32_t i = 0; i < material->ubo_count; ++i) {
+  for (uint32_t i = 0; i < ubo_count; ++i) {
     bindings[current_binding++] = (VkDescriptorSetLayoutBinding){
         .binding = current_binding - 1,
         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        .pImmutableSamplers = NULL};
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT};
   }
-  for (uint32_t i = 0; i < material->texture_count; ++i) {
-    bindings[current_binding++] =
-        (VkDescriptorSetLayoutBinding){.binding = current_binding - 1,
-                                       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                       .descriptorCount = 1,
-                                       .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-                                       .pImmutableSamplers = NULL};
+  for (uint32_t i = 0; i < texture_count; ++i) {
+    bindings[current_binding++] = (VkDescriptorSetLayoutBinding){
+        .binding = current_binding - 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
   }
 
   VkDescriptorSetLayoutCreateInfo layout_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                                                  .bindingCount = binding_count,
                                                  .pBindings = bindings};
   check_vk_result(vkCreateDescriptorSetLayout(handler->g_Device, &layout_info, handler->g_Allocator,
-                                              &material->descriptor_set_layout));
+                                              &entry->descriptor_set_layout));
 
+  // 2. Create Pipeline Layout
   VkPipelineLayoutCreateInfo pipeline_layout_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                                                      .setLayoutCount = 1,
-                                                     .pSetLayouts = &material->descriptor_set_layout};
+                                                     .pSetLayouts = &entry->descriptor_set_layout};
   check_vk_result(vkCreatePipelineLayout(handler->g_Device, &pipeline_layout_info, handler->g_Allocator,
-                                         &material->pipeline_layout));
+                                         &entry->pipeline_layout));
 
-  VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                            .descriptorPool = renderer->resource_descriptor_pool,
-                                            .descriptorSetCount = 1,
-                                            .pSetLayouts = &material->descriptor_set_layout};
-  check_vk_result(vkAllocateDescriptorSets(handler->g_Device, &alloc_info, &material->descriptor_set));
-
-  VkWriteDescriptorSet descriptor_writes[binding_count];
-  VkDescriptorBufferInfo buffer_infos[material->ubo_count];
-  VkDescriptorImageInfo image_infos[material->texture_count];
-
-  current_binding = 0;
-  for (uint32_t i = 0; i < material->ubo_count; ++i) {
-    buffer_infos[i] = (VkDescriptorBufferInfo){.buffer = material->uniform_buffers[i].buffer,
-                                               .offset = 0,
-                                               .range = material->uniform_buffers[i].size};
-    descriptor_writes[current_binding++] =
-        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                               .dstSet = material->descriptor_set,
-                               .dstBinding = current_binding - 1,
-                               .dstArrayElement = 0,
-                               .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                               .descriptorCount = 1,
-                               .pBufferInfo = &buffer_infos[i]};
-  }
-  for (uint32_t i = 0; i < material->texture_count; ++i) {
-    image_infos[i] = (VkDescriptorImageInfo){.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                             .imageView = material->textures[i]->image_view,
-                                             .sampler = material->textures[i]->sampler};
-    descriptor_writes[current_binding++] =
-        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                               .dstSet = material->descriptor_set,
-                               .dstBinding = current_binding - 1,
-                               .dstArrayElement = 0,
-                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                               .descriptorCount = 1,
-                               .pImageInfo = &image_infos[i]};
-  }
-  vkUpdateDescriptorSets(handler->g_Device, binding_count, descriptor_writes, 0, NULL);
-
-  // Create Pipeline (copied from original code, now uses material's objects)
+  // 3. Create Graphics Pipeline
   VkPipelineShaderStageCreateInfo vert_shader_stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
       .stage = VK_SHADER_STAGE_VERTEX_BIT,
-      .module = material->shader->vert_shader_module,
+      .module = shader->vert_shader_module,
       .pName = "main"};
   VkPipelineShaderStageCreateInfo frag_shader_stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
       .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-      .module = material->shader->frag_shader_module,
+      .module = shader->frag_shader_module,
       .pName = "main"};
   VkPipelineShaderStageCreateInfo shader_stages[] = {vert_shader_stage_info, frag_shader_stage_info};
 
@@ -803,7 +583,7 @@ void material_finalize(gfx_handler_t *handler, material_t *material) {
       .depthClampEnable = VK_FALSE,
       .rasterizerDiscardEnable = VK_FALSE,
       .polygonMode = VK_POLYGON_MODE_FILL,
-      .cullMode = VK_CULL_MODE_NONE, // Changed for 2D quad
+      .cullMode = VK_CULL_MODE_NONE,
       .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
       .lineWidth = 1.0f};
 
@@ -850,18 +630,31 @@ void material_finalize(gfx_handler_t *handler, material_t *material) {
                                                 .pDepthStencilState = &depth_stencil,
                                                 .pColorBlendState = &color_blending,
                                                 .pDynamicState = &dynamic_state,
-                                                .layout = material->pipeline_layout,
+                                                .layout = entry->pipeline_layout,
                                                 .renderPass = handler->g_MainWindowData.RenderPass,
                                                 .subpass = 0};
 
   check_vk_result(vkCreateGraphicsPipelines(handler->g_Device, handler->g_PipelineCache, 1, &pipeline_info,
-                                            handler->g_Allocator, &material->pipeline));
+                                            handler->g_Allocator, &entry->pipeline));
+
+  entry->initialized = true;
+  return entry;
 }
 
 shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, const char *frag_path) {
   renderer_state_t *renderer = &handler->renderer;
-  if (renderer->shader_count >= MAX_SHADERS)
+
+  for (uint32_t i = 0; i < renderer->shader_count; ++i) {
+    if (renderer->shaders[i].active && strcmp(renderer->shaders[i].vert_path, vert_path) == 0 &&
+        strcmp(renderer->shaders[i].frag_path, frag_path) == 0) {
+      return &renderer->shaders[i];
+    }
+  }
+
+  if (renderer->shader_count >= MAX_SHADERS) {
+    fprintf(stderr, "Max shader count reached.\n");
     return NULL;
+  }
 
   size_t vert_size, frag_size;
   char *vert_code = read_file(vert_path, &vert_size);
@@ -872,8 +665,9 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
     return NULL;
   }
 
-  shader_t *shader = &renderer->shaders[renderer->shader_count++];
-  shader->id = renderer->shader_count - 1;
+  shader_t *shader = &renderer->shaders[renderer->shader_count];
+  shader->id = renderer->shader_count++;
+  shader->active = true;
   shader->vert_shader_module = create_shader_module(handler, vert_code, vert_size);
   shader->frag_shader_module = create_shader_module(handler, frag_code, frag_size);
   strncpy(shader->vert_path, vert_path, sizeof(shader->vert_path) - 1);
@@ -887,10 +681,21 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
 texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_t *pixel_array,
                                             uint32_t width, uint32_t height) {
   renderer_state_t *renderer = &handler->renderer;
-  if (renderer->texture_count >= MAX_TEXTURES)
-    return NULL;
   if (!pixel_array)
     return NULL;
+
+  uint32_t free_slot = (uint32_t)-1;
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
+    if (!renderer->textures[i].active) {
+      free_slot = i;
+      break;
+    }
+  }
+
+  if (free_slot == (uint32_t)-1) {
+    fprintf(stderr, "Max texture count reached.\n");
+    return NULL;
+  }
 
   VkDeviceSize image_size = (VkDeviceSize)width * height * 4;
 
@@ -906,9 +711,10 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
     }
   }
 
-  texture_t *texture = &renderer->textures[renderer->texture_count++];
+  texture_t *texture = &renderer->textures[free_slot];
   memset(texture, 0, sizeof(texture_t));
-  texture->id = renderer->texture_count - 1;
+  texture->id = free_slot;
+  texture->active = true;
   texture->width = width;
   texture->height = height;
   texture->mip_levels = 1;
@@ -946,12 +752,27 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
   return texture;
 }
 
-// Texture, Mesh, Shader Loading
-
 texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path) {
   renderer_state_t *renderer = &handler->renderer;
-  if (renderer->texture_count >= MAX_TEXTURES)
+
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
+    if (renderer->textures[i].active && strcmp(renderer->textures[i].path, image_path) == 0) {
+      return &renderer->textures[i];
+    }
+  }
+
+  uint32_t free_slot = (uint32_t)-1;
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
+    if (!renderer->textures[i].active) {
+      free_slot = i;
+      break;
+    }
+  }
+
+  if (free_slot == (uint32_t)-1) {
+    fprintf(stderr, "Max texture count reached.\n");
     return NULL;
+  }
 
   int tex_width, tex_height, tex_channels;
   stbi_uc *pixels = stbi_load(image_path, &tex_width, &tex_height, &tex_channels, STBI_rgb_alpha);
@@ -960,12 +781,13 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
     return NULL;
   }
 
-  VkDeviceSize image_size = tex_width * tex_height * 4;
+  VkDeviceSize image_size = (VkDeviceSize)tex_width * tex_height * 4;
   uint32_t mip_levels = (uint32_t)floor(log2(fmax(tex_width, tex_height))) + 1;
 
-  texture_t *texture = &renderer->textures[renderer->texture_count++];
+  texture_t *texture = &renderer->textures[free_slot];
   memset(texture, 0, sizeof(texture_t));
-  texture->id = renderer->texture_count - 1;
+  texture->id = free_slot;
+  texture->active = true;
   texture->width = tex_width;
   texture->height = tex_height;
   texture->mip_levels = mip_levels;
@@ -996,7 +818,6 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
 
   if (!build_mipmaps(handler, texture->image, tex_width, tex_height, mip_levels, 1)) {
-    // If mipmap generation fails, transition the base level to be shader-ready
     transition_image_layout(handler, renderer->transfer_command_pool, texture->image,
                             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mip_levels, 1);
@@ -1020,6 +841,7 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
 
   mesh_t *mesh = &renderer->meshes[renderer->mesh_count];
   mesh->id = renderer->mesh_count++;
+  mesh->active = true;
   mesh->vertex_count = vertex_count;
   mesh->index_count = index_count;
   mesh->index_buffer.buffer = VK_NULL_HANDLE;
@@ -1074,69 +896,9 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
   return mesh;
 }
 
-render_object_t *renderer_add_render_object(gfx_handler_t *handler, mesh_t *mesh, material_t *material) {
+void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &handler->renderer;
-  if (renderer->render_object_count >= MAX_RENDER_OBJECTS) {
-    fprintf(stderr, "Maximum render object count (%d) reached.\n", MAX_RENDER_OBJECTS);
-    return NULL;
-  }
-
-  renderer->render_object_count = 0;
-  render_object_t *obj = 0;
-  // count all objects and emplace our new one in there
-  for (int i = 0; i < MAX_RENDER_OBJECTS; ++i) {
-    if (renderer->render_objects[i].active && renderer->render_objects[i].material &&
-        renderer->render_objects[i].mesh)
-      ++renderer->render_object_count;
-    else if (!obj) {
-      obj = &renderer->render_objects[renderer->render_object_count];
-      obj->active = true;
-      obj->mesh = mesh;
-      obj->material = material;
-      ++renderer->render_object_count;
-    }
-  }
-  if (!obj)
-    printf("ERROR: could not find space for render object.\n");
-  return obj;
-}
-
-void renderer_update(gfx_handler_t *handler) {
-  renderer_state_t *renderer = &handler->renderer;
-  int width, height;
-  glfwGetFramebufferSize(handler->window, &width, &height);
-  if (width == 0 || height == 0)
-    return;
-
-  float window_ratio = (float)width / (float)height;
-
-  // This is just an example for the map UBO.
-  // In a real app, you'd loop through render objects and update their materials as needed.
-  if (renderer->render_object_count > 0) {
-    render_object_t *map_obj = &renderer->render_objects[0]; // first object is always the map
-    if (map_obj->active && map_obj->material->ubo_count > 0) {
-      float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
-      if (isnan(map_ratio))
-        map_ratio = 1.0f;
-
-      float zoom =
-          1.0 / (renderer->camera.zoom * fmax(handler->map_data.width, handler->map_data.height) * 0.001);
-      if (isnan(zoom))
-        zoom = 1.0f;
-
-      float aspect = 1.0 / (window_ratio / map_ratio);
-      float lod = fmin(fmax(5.5 - log2((1.0f / handler->map_data.width) / zoom * (width / 2.0f)), 0.0), 6.0);
-
-      map_buffer_object_t ubo = {.transform = {renderer->camera.pos[0], renderer->camera.pos[1], zoom},
-                                 .aspect = aspect,
-                                 .lod = lod};
-      memcpy(map_obj->material->uniform_buffers[0].mapped_memory, &ubo, sizeof(ubo));
-    }
-  }
-}
-
-void renderer_draw(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
-  renderer_state_t *renderer = &handler->renderer;
+  check_vk_result(vkResetDescriptorPool(handler->g_Device, renderer->frame_descriptor_pool, 0));
 
   int width, height;
   glfwGetFramebufferSize(handler->window, &width, &height);
@@ -1147,31 +909,106 @@ void renderer_draw(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   vkCmdSetViewport(command_buffer, 0, 1, &viewport);
   VkRect2D scissor = {{0, 0}, {(uint32_t)width, (uint32_t)height}};
   vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+}
 
-  for (uint32_t i = 0; i < renderer->render_object_count; ++i) {
-    render_object_t *obj = &renderer->render_objects[i];
-    if (!obj->active || !obj->mesh || !obj->material)
-      continue;
+void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh,
+                        shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos,
+                        VkDeviceSize *ubo_sizes, uint32_t ubo_count) {
+  if (!mesh || !shader || !mesh->active || !shader->active)
+    return;
+  renderer_state_t *renderer = &handler->renderer;
 
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj->material->pipeline);
+  // 1. Get pipeline (creates it if it doesn't exist)
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, shader, ubo_count, texture_count);
 
-    VkBuffer vertex_buffers[] = {obj->mesh->vertex_buffer.buffer};
-    VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
+  // 2. Allocate and update a descriptor set for this draw call
+  VkDescriptorSet descriptor_set;
+  VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                            .descriptorPool = renderer->frame_descriptor_pool,
+                                            .descriptorSetCount = 1,
+                                            .pSetLayouts = &pso->descriptor_set_layout};
+  check_vk_result(vkAllocateDescriptorSets(handler->g_Device, &alloc_info, &descriptor_set));
 
-    if (obj->mesh->index_count > 0) {
-      vkCmdBindIndexBuffer(command_buffer, obj->mesh->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-    }
+  uint32_t binding_count = ubo_count + texture_count;
+  VkWriteDescriptorSet descriptor_writes[binding_count];
+  VkDescriptorBufferInfo buffer_infos[ubo_count];
+  VkDescriptorImageInfo image_infos[texture_count];
 
-    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, obj->material->pipeline_layout,
-                            0, 1, &obj->material->descriptor_set, 0, NULL);
+  uint32_t current_binding = 0;
+  for (uint32_t i = 0; i < ubo_count; ++i) {
+    // For immediate mode, we create a temporary UBO for this frame
+    buffer_t ubo_buffer;
+    create_buffer(handler, ubo_sizes[i], VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                  &ubo_buffer);
+    void *data;
+    vkMapMemory(handler->g_Device, ubo_buffer.memory, 0, ubo_sizes[i], 0, &data);
+    memcpy(data, ubos[i], ubo_sizes[i]);
+    vkUnmapMemory(handler->g_Device, ubo_buffer.memory);
 
-    if (obj->mesh->index_count > 0) {
-      vkCmdDrawIndexed(command_buffer, obj->mesh->index_count, 1, 0, 0, 0);
-    } else {
-      vkCmdDraw(command_buffer, obj->mesh->vertex_count, 1, 0, 0);
-    }
+    // NOTE: This is inefficient. A real immediate mode renderer would use a single large
+    // mapped ring buffer for all UBOs in a frame to avoid per-draw allocations.
+    // However, this approach works and keeps the example simple. The buffer is not
+    // destroyed here; it will implicitly be cleaned up when the command buffer's pool is reset.
+
+    buffer_infos[i] =
+        (VkDescriptorBufferInfo){.buffer = ubo_buffer.buffer, .offset = 0, .range = ubo_sizes[i]};
+    descriptor_writes[current_binding++] =
+        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                               .dstSet = descriptor_set,
+                               .dstBinding = current_binding - 1,
+                               .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                               .descriptorCount = 1,
+                               .pBufferInfo = &buffer_infos[i]};
   }
+  for (uint32_t i = 0; i < texture_count; ++i) {
+    image_infos[i] = (VkDescriptorImageInfo){.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                             .imageView = textures[i]->image_view,
+                                             .sampler = textures[i]->sampler};
+    descriptor_writes[current_binding++] =
+        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                               .dstSet = descriptor_set,
+                               .dstBinding = current_binding - 1,
+                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                               .descriptorCount = 1,
+                               .pImageInfo = &image_infos[i]};
+  }
+  vkUpdateDescriptorSets(handler->g_Device, binding_count, descriptor_writes, 0, NULL);
+
+  // 3. Bind and draw
+  vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
+
+  VkBuffer vertex_buffers[] = {mesh->vertex_buffer.buffer};
+  VkDeviceSize offsets[] = {0};
+  vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
+
+  if (mesh->index_count > 0) {
+    vkCmdBindIndexBuffer(command_buffer, mesh->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+  }
+
+  vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1,
+                          &descriptor_set, 0, NULL);
+
+  if (mesh->index_count > 0) {
+    vkCmdDrawIndexed(command_buffer, mesh->index_count, 1, 0, 0, 0);
+  } else {
+    vkCmdDraw(command_buffer, mesh->vertex_count, 1, 0, 0);
+  }
+}
+
+void renderer_end_frame(gfx_handler_t *handler) {
+  // Can be used for any per-frame cleanup if needed in the future.
+}
+
+void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex) {
+  if (!tex || !tex->active)
+    return;
+  vkDeviceWaitIdle(handler->g_Device);
+  vkDestroySampler(handler->g_Device, tex->sampler, handler->g_Allocator);
+  vkDestroyImageView(handler->g_Device, tex->image_view, handler->g_Allocator);
+  vkDestroyImage(handler->g_Device, tex->image, handler->g_Allocator);
+  vkFreeMemory(handler->g_Device, tex->memory, handler->g_Allocator);
+  memset(tex, 0, sizeof(texture_t)); // Marks as inactive
 }
 
 VkVertexInputBindingDescription get_vertex_binding_description(void) {
@@ -1203,4 +1040,90 @@ const VkVertexInputAttributeDescription *get_vertex_attribute_descriptions(void)
   attribute_descriptions[2].offset = offsetof(vertex_t, tex_coord);
 
   return attribute_descriptions;
+}
+
+texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas,
+                                                    uint32_t tile_width, uint32_t tile_height,
+                                                    uint32_t num_tiles_x, uint32_t num_tiles_y) {
+  renderer_state_t *renderer = &handler->renderer;
+  uint32_t free_slot = (uint32_t)-1;
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
+    if (!renderer->textures[i].active) {
+      free_slot = i;
+      break;
+    }
+  }
+
+  if (free_slot == (uint32_t)-1) {
+    fprintf(stderr, "Max texture count reached.\n");
+    return NULL;
+  }
+
+  uint32_t layer_count = num_tiles_x * num_tiles_y;
+  uint32_t mip_levels = (uint32_t)floorf(log2f(fmaxf(tile_width, tile_height))) + 1;
+
+  texture_t *tex_array = &renderer->textures[free_slot];
+  memset(tex_array, 0, sizeof(texture_t));
+  tex_array->id = free_slot;
+  tex_array->active = true;
+  tex_array->width = tile_width;
+  tex_array->height = tile_height;
+  tex_array->mip_levels = mip_levels;
+  tex_array->layer_count = layer_count;
+  strncpy(tex_array->path, "entities_texture_array", sizeof(tex_array->path) - 1);
+
+  create_image(handler, tile_width, tile_height, mip_levels, layer_count, VK_FORMAT_R8G8B8A8_UNORM,
+               VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &tex_array->image, &tex_array->memory);
+  transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
+                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_levels, layer_count);
+
+  VkCommandBuffer cmd = begin_single_time_commands(handler, renderer->transfer_command_pool);
+  VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                  .image = atlas->image,
+                                  .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                  .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                  .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                  .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                                  .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                                  .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                       .baseMipLevel = 0,
+                                                       .levelCount = atlas->mip_levels,
+                                                       .baseArrayLayer = 0,
+                                                       .layerCount = 1}};
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL,
+                       0, NULL, 1, &barrier);
+
+  for (uint32_t layer = 0; layer < layer_count; layer++) {
+    uint32_t tile_x = layer % num_tiles_x;
+    uint32_t tile_y = layer / num_tiles_x;
+
+    VkImageCopy copy_region = {
+        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
+        .srcOffset = {(int32_t)(tile_x * tile_width), (int32_t)(tile_y * tile_height), 0},
+        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseArrayLayer = layer, .layerCount = 1},
+        .extent = {tile_width, tile_height, 1}};
+    vkCmdCopyImage(cmd, atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex_array->image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+  }
+
+  barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL,
+                       0, NULL, 1, &barrier);
+
+  end_single_time_commands(handler, renderer->transfer_command_pool, cmd);
+
+  build_mipmaps(handler, tex_array->image, tile_width, tile_height, mip_levels, layer_count);
+
+  tex_array->image_view = create_image_view(handler, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM,
+                                            VK_IMAGE_VIEW_TYPE_2D_ARRAY, mip_levels, layer_count);
+  tex_array->sampler = create_texture_sampler(handler, mip_levels, VK_FILTER_LINEAR);
+
+  return tex_array;
 }
