@@ -1,41 +1,243 @@
---- a/src/renderer/graphics_backend.c
-+++ b/src/renderer/graphics_backend.c
-@@ int gfx_begin_frame(gfx_handler_t *handler) {
--  VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
--
--  VkResult err = vkAcquireNextImageKHR(handler->g_Device, wd->Swapchain, UINT64_MAX,
--                                       image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
-+  VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-+  // Ensure the previous use of this frame's fence is completed, so reuse of semaphores is safe
-+  ImGui_ImplVulkanH_Frame *acquire_fd = &wd->Frames.Data[wd->FrameIndex];
-+  vkWaitForFences(handler->g_Device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
+diff --git a/src/user_interface/timeline.h b/src/user_interface/timeline.h
+index e287e01..84725a6 100644
+--- a/src/user_interface/timeline.h
++++ b/src/user_interface/timeline.h
+@@
+ #define MAX_SNIPPETS_PER_PLAYER 64
+ 
+ typedef struct {
+-  int id;
+-  int start_tick;
+-  int end_tick;
+-} input_snippet_t;
++  int8_t m_Direction;
++  int m_TargetX;
++  int m_TargetY;
++  uint8_t m_Jump;
++  uint8_t m_Fire;
++  uint8_t m_Hook;
++  uint8_t m_WantedWeapon;
++  uint8_t m_TeleOut;
++} SPlayerInput;
 +
-+  VkResult err = vkAcquireNextImageKHR(handler->g_Device, wd->Swapchain, UINT64_MAX,
-+                                       image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
---- a/src/renderer/graphics_backend.c
-+++ b/src/renderer/graphics_backend.c
-@@ static void cleanup_map_resources(gfx_handler_t *handler) {
--  vkDeviceWaitIdle(handler->g_Device);
--  for (uint32_t i = 1; i < handler->map_texture_count; ++i) {
--    texture_t *tex = handler->map_textures[i];
--    if (tex && tex != handler->renderer.default_texture && tex != handler->entities_array) {
--      renderer_destroy_texture(handler, tex);
--    }
--    handler->map_textures[i] = NULL;
--  }
--  handler->map_texture_count = 0;
-+  // Make sure GPU is idle so we can safely destroy descriptors and samplers
-+  vkDeviceWaitIdle(handler->g_Device);
-+  for (uint32_t i = 1; i < handler->map_texture_count; ++i) {
-+    texture_t *tex = handler->map_textures[i];
-+    if (tex && tex != handler->renderer.default_texture && tex != handler->entities_array) {
-+      // Since GPU is idle, destroy immediately
-+      vkDestroySampler(handler->g_Device, tex->sampler, handler->g_Allocator);
-+      vkDestroyImageView(handler->g_Device, tex->image_view, handler->g_Allocator);
-+      vkDestroyImage(handler->g_Device, tex->image, handler->g_Allocator);
-+      vkFreeMemory(handler->g_Device, tex->memory, handler->g_Allocator);
-+      memset(tex, 0, sizeof(texture_t));
-+    }
-+    handler->map_textures[i] = NULL;
++typedef struct {
++  int id;
++  int start_tick;
++  int end_tick;
++
++  SPlayerInput *inputs; // Array of player inputs, one per tick of duration
++  int input_count;      // Duration in ticks
++} input_snippet_t;
+ 
+ typedef struct {
+   input_snippet_t *snippets; // Dynamic array of snippets
+diff --git a/src/user_interface/timeline.c b/src/user_interface/timeline.c
+index 7733327..80ee2c9 100644
+--- a/src/user_interface/timeline.c
++++ b/src/user_interface/timeline.c
+@@
+ #define SNAP_THRESHOLD_PX 5.0f // Snap threshold in pixels
+ #define DEFAULT_TRACK_HEIGHT 40.f
+ 
++// ---------------- Snippet Input Lifecycle Helpers ----------------
++void init_snippet_inputs(input_snippet_t *snippet) {
++  int duration = snippet->end_tick - snippet->start_tick;
++  if (duration <= 0) {
++    snippet->inputs = NULL;
++    snippet->input_count = 0;
++    return;
 +  }
-+  handler->map_texture_count = 0;
++  snippet->inputs = calloc(duration, sizeof(SPlayerInput));
++  snippet->input_count = duration;
++}
++
++void copy_snippet_inputs(input_snippet_t *dest, const input_snippet_t *src) {
++  dest->input_count = src->input_count;
++  if (src->inputs && src->input_count > 0) {
++    dest->inputs = malloc(src->input_count * sizeof(SPlayerInput));
++    memcpy(dest->inputs, src->inputs, src->input_count * sizeof(SPlayerInput));
++  } else {
++    dest->inputs = NULL;
++  }
++}
++
++void free_snippet_inputs(input_snippet_t *snippet) {
++  if (snippet->inputs) {
++    free(snippet->inputs);
++    snippet->inputs = NULL;
++  }
++  snippet->input_count = 0;
++}
++
++void resize_snippet_inputs(input_snippet_t *snippet, int new_duration) {
++  if (new_duration <= 0) {
++    free_snippet_inputs(snippet);
++    snippet->start_tick = snippet->end_tick;
++    return;
++  }
++  if (snippet->input_count == new_duration) return;
++  snippet->inputs = realloc(snippet->inputs, sizeof(SPlayerInput) * new_duration);
++  if (!snippet->inputs) {
++    snippet->input_count = 0;
++    return;
++  }
++  if (new_duration > snippet->input_count) {
++    memset(&snippet->inputs[snippet->input_count], 0,
++           (new_duration - snippet->input_count) * sizeof(SPlayerInput));
++  }
++  snippet->input_count = new_duration;
++}
++
+ // Converts screen X position to timeline tick
+ int screen_x_to_tick(const timeline_state_t *ts, float screen_x, float timeline_start_x) {
+   return ts->view_start_tick + (int)((screen_x - timeline_start_x) / ts->zoom);
+@@
+ // Returns true if removed, false if not found
+ bool remove_snippet_from_track(player_track_t *track, int snippet_id) {
+   int found_idx = -1;
+-  for (int i = 0; i < track->snippet_count; ++i) {
+-    if (track->snippets[i].id == snippet_id) {
+-      found_idx = i;
+-      break;
+-    }
+-  }
+-
+-  if (found_idx != -1) {
+-    // Shift elements to fill the gap
+-    memmove(&track->snippets[found_idx], &track->snippets[found_idx + 1],
+-            (track->snippet_count - found_idx - 1) * sizeof(input_snippet_t));
+-    track->snippet_count--;
+-    // Reallocate memory (optional, but good practice if removing often)
+-    track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * track->snippet_count);
+-    // Note: realloc could fail, but for simplicity in this example, we omit error handling.
+-    return true;
+-  }
+-  return false; // Snippet not found
++  for (int i = 0; i < track->snippet_count; ++i) {
++    if (track->snippets[i].id == snippet_id) {
++      found_idx = i;
++      break;
++    }
++  }
++
++  if (found_idx != -1) {
++    free_snippet_inputs(&track->snippets[found_idx]);
++    memmove(&track->snippets[found_idx], &track->snippets[found_idx + 1],
++            (track->snippet_count - found_idx - 1) * sizeof(input_snippet_t));
++    track->snippet_count--;
++    track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * track->snippet_count);
++    return true;
++  }
++  return false;
+ }
+ 
+ void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet) {
+   track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * (track->snippet_count + 1));
+   if (track->snippets == NULL) {
+     return;
+   }
+-  track->snippets[track->snippet_count] = *snippet; // Copy the snippet data
+-  track->snippet_count++;
++  input_snippet_t *dest = &track->snippets[track->snippet_count];
++  *dest = *snippet; // shallow copy of fields
++  if (snippet->input_count > 0 && snippet->inputs) {
++    dest->inputs = malloc(snippet->input_count * sizeof(SPlayerInput));
++    memcpy(dest->inputs, snippet->inputs, snippet->input_count * sizeof(SPlayerInput));
++  } else {
++    dest->inputs = NULL;
++    dest->input_count = 0;
++  }
++  track->snippet_count++;
+ }
+ 
+ // Attempts to move a snippet to a new position and track, checking for overlaps
+@@
+   if (check_for_overlap(target_track, new_start_tick, new_end_tick, exclude_id)) {
+     // Overlap detected at the desired position, cannot move here
+     return false;
+-  }
+-
+-  // No overlap, the move is valid. Perform the data modification.
+-  if (source_track_idx == target_track_idx) {
+-    // Moving within the same track - just update the position
+-    source_track->snippets[snippet_idx_in_source].start_tick = new_start_tick;
+-    source_track->snippets[snippet_idx_in_source].end_tick = new_end_tick;
+-    // Keep selected state consistent
+-    ts->selected_snippet_id = snippet_id;
+-    ts->selected_player_track_index = source_track_idx;
+-  } else {
+-    // Moving to a different track - remove from source, add to target
+-    if (remove_snippet_from_track(source_track, snippet_id)) {
+-      // Update the snippet data with the new position before adding to the target
+-      snippet_to_move.start_tick = new_start_tick;
+-      snippet_to_move.end_tick = new_end_tick;
+-      add_snippet_to_track(target_track, &snippet_to_move);
+-
+-      // Update selected state
+-      ts->selected_snippet_id = snippet_id;
+-      ts->selected_player_track_index = target_track_idx;
+-    } else {
+-      // Should not happen if remove_snippet_from_track works correctly
+-      return false; // Failed to remove from source
+-    }
+-  }
+-
+-  return true; // Move successful
++  }
++
++  if (source_track_idx == target_track_idx) {
++    // Update in place
++    input_snippet_t *sn = &source_track->snippets[snippet_idx_in_source];
++    sn->start_tick = new_start_tick;
++    sn->end_tick   = new_end_tick;
++    int new_duration = new_end_tick - new_start_tick;
++    resize_snippet_inputs(sn, new_duration);
++    ts->selected_snippet_id = snippet_id;
++    ts->selected_player_track_index = source_track_idx;
++  } else {
++    // Cross track: deep copy
++    if (remove_snippet_from_track(source_track, snippet_id)) {
++      snippet_to_move.start_tick = new_start_tick;
++      snippet_to_move.end_tick   = new_end_tick;
++
++      input_snippet_t new_snip = snippet_to_move;
++      new_snip.inputs = NULL;
++      new_snip.input_count = 0;
++      copy_snippet_inputs(&new_snip, &snippet_to_move);
++      add_snippet_to_track(target_track, &new_snip);
++
++      ts->selected_snippet_id = snippet_id;
++      ts->selected_player_track_index = target_track_idx;
++
++      free_snippet_inputs(&snippet_to_move);
++    } else {
++      return false;
++    }
++  }
++
++  return true;
+ }
+ 
+ int get_max_timeline_tick(timeline_state_t *ts) {
+@@
+ void timeline_cleanup(timeline_state_t *ts) {
+   // free each track's snippets and reset track data
+   for (int i = 0; i < ts->player_track_count; ++i) {
+-    player_track_t *track = &ts->player_tracks[i];
+-    if (track->snippets) {
+-      free(track->snippets);
+-      track->snippets = NULL;
+-    }
+-    track->snippet_count = 0;
++    player_track_t *track = &ts->player_tracks[i];
++    if (track->snippets) {
++      for (int j = 0; j < track->snippet_count; ++j) {
++        free_snippet_inputs(&track->snippets[j]);
++      }
++      free(track->snippets);
++      track->snippets = NULL;
++    }
++    track->snippet_count = 0;
+   }
+ 
+   // free the tracks array
