@@ -10,6 +10,8 @@ option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer
 project(ddnet_frametee)
 set(SRCS 
     src/main.c
+	src/physics/physics.h
+	src/physics/physics.c
     src/renderer/renderer.c
     src/renderer/graphics_backend.c
     src/user_interface/player_info.c
@@ -52,7 +54,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 
 # add and link libs
 add_subdirectory(libs/cglm)
-add_subdirectory(libs/ddnet_map_loader)
+add_subdirectory(libs/ddnet_physics)
 add_subdirectory(libs/nfd)
 
 # linking + suppress all warnings for the libs
@@ -60,7 +62,7 @@ target_compile_options(${PROJECT_NAME} PRIVATE -w)
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nfd
     stb_image
-    ddnet_map_loader
+    ddnet_physics
     cglm
     cimgui
     glfw

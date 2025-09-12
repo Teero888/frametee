@@ -2,7 +2,6 @@
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
 #include "cimgui.h"
-#include "ddnet_map_loader.h"
 #include "player_info.h"
 #include "timeline.h"
 #include <limits.h>
@@ -121,7 +120,7 @@ void on_camera_update(gfx_handler_t *handler) {
   camera->zoom = camera->zoom + (camera->zoom_wanted - camera->zoom) * smoothing_factor;
 
   float window_ratio = (float)width / (float)height;
-  float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
+  float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
   float aspect = (float)window_ratio / (float)map_ratio;
   if (!io->WantCaptureMouse && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
     if (!camera->is_dragging) {
@@ -136,7 +135,7 @@ void on_camera_update(gfx_handler_t *handler) {
     igGetMouseDragDelta(&drag_delta, ImGuiMouseButton_Right, 0.0f);
     float dx = drag_delta.x / (width * camera->zoom);
     float dy = drag_delta.y / (height * camera->zoom * aspect);
-    float max_map_size = fmax(handler->map_data.width, handler->map_data.height) * 0.001;
+    float max_map_size = fmax(handler->map_data->width, handler->map_data->height) * 0.001;
     camera->pos[0] -= (dx * 2) / max_map_size;
     camera->pos[1] -= (dy * 2) / max_map_size;
     igResetMouseDragDelta(ImGuiMouseButton_Right);
@@ -154,7 +153,6 @@ void camera_init(camera_t *camera) {
 void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->gfx_handler = gfx_handler;
   ui->show_timeline = false;
-  memset(&ui->map_data, 0, sizeof(map_data_t));
   timeline_init(&ui->timeline);
   camera_init(&gfx_handler->renderer.camera);
   NFD_Init();
@@ -172,6 +170,5 @@ void ui_render(ui_handler_t *ui) {
 
 void ui_cleanup(ui_handler_t *ui) {
   timeline_cleanup(&ui->timeline);
-  free_map_data(&ui->map_data);
   NFD_Quit();
 }

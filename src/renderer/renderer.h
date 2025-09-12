@@ -106,7 +106,8 @@ typedef struct {
 
   pipeline_cache_entry_t pipeline_cache[MAX_SHADERS];
 
-  VkDescriptorPool frame_descriptor_pool;
+  // Descriptor pool per frame-in-flight (swapchain image) to avoid resetting in-use pools
+  VkDescriptorPool frame_descriptor_pools[3]; // assume triple buffering
   VkCommandPool transfer_command_pool;
 
   // State for primitive drawing

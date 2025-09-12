@@ -1,9 +1,10 @@
 #ifndef GRAPHICS_H
 #define GRAPHICS_H
 
-#include "ddnet_map_loader.h"
-#include "renderer.h"
+#include "../../libs/ddnet_physics/libs/ddnet_map_loader/ddnet_map_loader.h"
+#include "../physics/physics.h"
 #include "../user_interface/user_interface.h"
+#include "renderer.h"
 #include <cimgui.h>
 #include <cimgui_impl.h>
 #include <vulkan/vulkan_core.h>
@@ -17,12 +18,7 @@
 // Forward declaration
 struct gfx_handler_t;
 
-enum 
-{
-  FRAME_OK = 0,
-  FRAME_SKIP,
-  FRAME_EXIT
-};
+enum { FRAME_OK = 0, FRAME_SKIP, FRAME_EXIT };
 
 // --- Public API ---
 void on_map_load(struct gfx_handler_t *handler, const char *map_path);
@@ -54,13 +50,23 @@ struct gfx_handler_t {
   // --- App Stuffs ---
   ui_handler_t user_interface;
   renderer_state_t renderer;
-  map_data_t map_data;
+  physics_handler_t physics_handler;
+  map_data_t *map_data; // ptr to ^ collision data for quick typing
+  texture_t *entities_atlas;
+  texture_t *entities_array;
 
   // --- Map Specific Render Data ---
   shader_t *map_shader;
   mesh_t *quad_mesh;
   texture_t *map_textures[MAX_TEXTURES_PER_DRAW];
   uint32_t map_texture_count;
+
+  // Retirement list for delayed frees
+  struct {
+    texture_t *tex;
+    uint32_t frame_index;
+  } retire_textures[64];
+  uint32_t retire_count;
 };
 
 #endif // GRAPHICS_H

@@ -3,7 +3,6 @@
 
 #include "player_info.h"
 #include "timeline.h"
-#include <ddnet_map_loader.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -11,8 +10,6 @@ typedef struct {
   bool show_timeline;
   timeline_state_t timeline;
   player_info_t player_info;
-  map_data_t map_data;
-
   struct gfx_handler_t *gfx_handler;
 } ui_handler_t;
 

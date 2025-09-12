@@ -1,8 +1,7 @@
 #include "graphics_backend.h"
-#include "cimgui.h"
-#include "ddnet_map_loader.h"
-#include "renderer.h"
 #include "../user_interface/user_interface.h"
+#include "cimgui.h"
+#include "renderer.h"
 #include <GLFW/glfw3.h>
 #include <assert.h>
 #include <math.h>
@@ -79,6 +78,34 @@ int init_gfx_handler(gfx_handler_t *handler) {
 
   ui_init(&handler->user_interface, handler);
 
+  texture_t *entities_atlas = renderer_load_texture(handler, ENTITIES_PATH);
+  if (!entities_atlas) {
+    fprintf(stderr,
+            "Failed to load entities at: '%s', you might have started the program from the wrong location.\n",
+            ENTITIES_PATH);
+    return 1;
+  }
+
+  handler->map_shader =
+      renderer_load_shader(handler, "data/shaders/map.vert.spv", "data/shaders/map.frag.spv");
+
+  if (!handler->quad_mesh) {
+    vertex_t quad_vertices[] = {
+        {{-1.f, -1.f}, {1.0f, 1.0f, 1.0f}, {-1.f, 1.0f}}, // Top Left
+        {{1.0f, -1.f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}, // Top Right
+        {{1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, -1.f}}, // Bottom Right
+        {{-1.f, 1.0f}, {1.0f, 1.0f, 1.0f}, {-1.f, -1.f}}  // Bottom Left
+    };
+    uint32_t quad_indices[] = {
+        0, 1, 2, // First triangle
+        2, 3, 0  // Second triangle
+    };
+    handler->quad_mesh = renderer_create_mesh(handler, quad_vertices, 4, quad_indices, 6);
+  }
+
+  handler->entities_array = renderer_create_texture_array_from_atlas(handler, entities_atlas, 64, 64, 16, 16);
+  handler->entities_atlas = entities_atlas;
+
   return 0;
 }
 
@@ -92,7 +119,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
     usleep(10000);
     return FRAME_SKIP;
   }
-  
+
   int fb_width, fb_height;
   glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
   if (fb_width > 0 && fb_height > 0 &&
@@ -106,40 +133,44 @@ int gfx_begin_frame(gfx_handler_t *handler) {
     handler->g_MainWindowData.FrameIndex = 0;
     handler->g_SwapChainRebuild = false;
   }
-  
+
   // --- Acquire Image and Begin Command Buffer ---
-  ImGui_ImplVulkanH_Window* wd = &handler->g_MainWindowData;
+  ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-  
-  VkResult err = vkAcquireNextImageKHR(handler->g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
+  // Ensure the previous use of this frame's fence is completed, so reuse of semaphores is safe
+  ImGui_ImplVulkanH_Frame *acquire_fd = &wd->Frames.Data[wd->FrameIndex];
+  vkWaitForFences(handler->g_Device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
+
+  VkResult err = vkAcquireNextImageKHR(handler->g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore,
+                                       VK_NULL_HANDLE, &wd->FrameIndex);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
     handler->g_SwapChainRebuild = true;
-    return FRAME_SKIP; // Still a valid frame, but we'll skip rendering
+    // Skip this frame if the swapchain is invalid
+    return FRAME_SKIP;
   }
   check_vk_result(err);
 
-  ImGui_ImplVulkanH_Frame* fd = &wd->Frames.Data[wd->FrameIndex];
+  ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
   err = vkWaitForFences(handler->g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
   check_vk_result(err);
   err = vkResetFences(handler->g_Device, 1, &fd->Fence);
   check_vk_result(err);
-  
+
   err = vkResetCommandPool(handler->g_Device, fd->CommandPool, 0);
   check_vk_result(err);
-  VkCommandBufferBeginInfo info = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+  VkCommandBufferBeginInfo info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                                   .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
   err = vkBeginCommandBuffer(fd->CommandBuffer, &info);
   check_vk_result(err);
 
-  VkRenderPassBeginInfo rp_info = {
-      .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-      .renderPass = wd->RenderPass,
-      .framebuffer = fd->Framebuffer,
-      .renderArea = {{0, 0}, {(uint32_t)wd->Width, (uint32_t)wd->Height}},
-      .clearValueCount = 1,
-      .pClearValues = &wd->ClearValue
-  };
+  VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                   .renderPass = wd->RenderPass,
+                                   .framebuffer = fd->Framebuffer,
+                                   .renderArea = {{0, 0}, {(uint32_t)wd->Width, (uint32_t)wd->Height}},
+                                   .clearValueCount = 1,
+                                   .pClearValues = &wd->ClearValue};
   vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
-  
+
   handler->current_frame_command_buffer = fd->CommandBuffer;
 
   // --- Start ImGui and Renderer Frames ---
@@ -150,45 +181,65 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
   // --- Draw Map ---
   if (handler->map_shader && handler->quad_mesh && handler->map_texture_count > 0) {
-      float window_ratio = (float)wd->Width / (float)wd->Height;
-      float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
-      if (isnan(map_ratio) || map_ratio == 0) map_ratio = 1.0f;
+    float window_ratio = (float)wd->Width / (float)wd->Height;
+    float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
+    if (isnan(map_ratio) || map_ratio == 0)
+      map_ratio = 1.0f;
 
-      float zoom = 1.0 / (handler->renderer.camera.zoom * fmax(handler->map_data.width, handler->map_data.height) * 0.001);
-      if (isnan(zoom)) zoom = 1.0f;
+    float zoom = 1.0 / (handler->renderer.camera.zoom *
+                        fmax(handler->map_data->width, handler->map_data->height) * 0.001);
+    if (isnan(zoom))
+      zoom = 1.0f;
 
-      float aspect = 1.0f / (window_ratio / map_ratio);
-      float lod = fmin(fmax(5.5f - log2f((1.0f / handler->map_data.width) / zoom * (wd->Width / 2.0f)), 0.0f), 6.0f);
+    float aspect = 1.0f / (window_ratio / map_ratio);
+    float lod =
+        fmin(fmax(5.5f - log2f((1.0f / handler->map_data->width) / zoom * (wd->Width / 2.0f)), 0.0f), 6.0f);
 
-      map_buffer_object_t ubo = {
-          .transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom},
-          .aspect = aspect,
-          .lod = lod
-      };
+    map_buffer_object_t ubo = {
+        .transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom},
+        .aspect = aspect,
+        .lod = lod};
 
-      void *ubos[] = {&ubo};
-      VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
-      renderer_draw_mesh(handler, handler->current_frame_command_buffer, handler->quad_mesh, handler->map_shader,
-                         handler->map_textures, handler->map_texture_count, ubos, ubo_sizes, 1);
+    void *ubos[] = {&ubo};
+    VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
+    renderer_draw_mesh(handler, handler->current_frame_command_buffer, handler->quad_mesh,
+                       handler->map_shader, handler->map_textures, handler->map_texture_count, ubos,
+                       ubo_sizes, 1);
   }
-  
+
   return FRAME_OK;
 }
 
 void gfx_end_frame(gfx_handler_t *handler) {
   if (handler->g_SwapChainRebuild || glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
-      // End the ImGui frame to avoid state issues, but don't render.
-      igEndFrame();
-      // We also need to end the render pass we started.
-      if (handler->current_frame_command_buffer != VK_NULL_HANDLE) {
-          vkCmdEndRenderPass(handler->current_frame_command_buffer);
-          vkEndCommandBuffer(handler->current_frame_command_buffer);
-          handler->current_frame_command_buffer = VK_NULL_HANDLE;
-      }
-      return;
+    // End the ImGui frame to avoid state issues, but don't render.
+    igEndFrame();
+    // We also need to end the render pass we started.
+    if (handler->current_frame_command_buffer != VK_NULL_HANDLE) {
+      vkCmdEndRenderPass(handler->current_frame_command_buffer);
+      vkEndCommandBuffer(handler->current_frame_command_buffer);
+      handler->current_frame_command_buffer = VK_NULL_HANDLE;
+    }
+    return;
   }
 
   renderer_end_frame(handler, handler->current_frame_command_buffer);
+
+  // retire textures whose frame fences are now done
+  uint32_t cur_frame = handler->g_MainWindowData.FrameIndex;
+  for (uint32_t i = 0; i < handler->retire_count;) {
+    if ((cur_frame - handler->retire_textures[i].frame_index) > 2) {
+      texture_t *tex = handler->retire_textures[i].tex;
+      vkDestroySampler(handler->g_Device, tex->sampler, handler->g_Allocator);
+      vkDestroyImageView(handler->g_Device, tex->image_view, handler->g_Allocator);
+      vkDestroyImage(handler->g_Device, tex->image, handler->g_Allocator);
+      vkFreeMemory(handler->g_Device, tex->memory, handler->g_Allocator);
+      memset(tex, 0, sizeof(texture_t));
+      handler->retire_textures[i] = handler->retire_textures[--handler->retire_count];
+      continue;
+    }
+    i++;
+  }
 
   igRender();
   ImDrawData *draw_data = igGetDrawData();
@@ -196,39 +247,36 @@ void gfx_end_frame(gfx_handler_t *handler) {
 
   vkCmdEndRenderPass(handler->current_frame_command_buffer);
 
-  ImGui_ImplVulkanH_Window* wd = &handler->g_MainWindowData;
-  ImGui_ImplVulkanH_Frame* fd = &wd->Frames.Data[wd->FrameIndex];
+  ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
+  ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-  VkSemaphore render_complete_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
+  VkSemaphore render_complete_semaphore =
+      wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
 
   VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  VkSubmitInfo info = {
-      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-      .waitSemaphoreCount = 1,
-      .pWaitSemaphores = &image_acquired_semaphore,
-      .pWaitDstStageMask = &wait_stage,
-      .commandBufferCount = 1,
-      .pCommandBuffers = &handler->current_frame_command_buffer,
-      .signalSemaphoreCount = 1,
-      .pSignalSemaphores = &render_complete_semaphore
-  };
-  
+  VkSubmitInfo info = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                       .waitSemaphoreCount = 1,
+                       .pWaitSemaphores = &image_acquired_semaphore,
+                       .pWaitDstStageMask = &wait_stage,
+                       .commandBufferCount = 1,
+                       .pCommandBuffers = &handler->current_frame_command_buffer,
+                       .signalSemaphoreCount = 1,
+                       .pSignalSemaphores = &render_complete_semaphore};
+
   VkResult err = vkEndCommandBuffer(handler->current_frame_command_buffer);
   check_vk_result(err);
   err = vkQueueSubmit(handler->g_Queue, 1, &info, fd->Fence);
   check_vk_result(err);
-  
+
   handler->current_frame_command_buffer = VK_NULL_HANDLE;
 
   // --- Present ---
-  VkPresentInfoKHR present_info = {
-      .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-      .waitSemaphoreCount = 1,
-      .pWaitSemaphores = &render_complete_semaphore,
-      .swapchainCount = 1,
-      .pSwapchains = &wd->Swapchain,
-      .pImageIndices = &wd->FrameIndex
-  };
+  VkPresentInfoKHR present_info = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                                   .waitSemaphoreCount = 1,
+                                   .pWaitSemaphores = &render_complete_semaphore,
+                                   .swapchainCount = 1,
+                                   .pSwapchains = &wd->Swapchain,
+                                   .pImageIndices = &wd->FrameIndex};
   err = vkQueuePresentKHR(handler->g_Queue, &present_info);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
     handler->g_SwapChainRebuild = true;
@@ -243,8 +291,15 @@ void gfx_cleanup(gfx_handler_t *handler) {
   check_vk_result(err);
 
   ui_cleanup(&handler->user_interface);
+
   cleanup_map_resources(handler);
-  free_map_data(&handler->map_data);
+  if (handler->entities_array)
+    renderer_destroy_texture(handler, handler->entities_array);
+  handler->map_textures[0] = NULL;
+
+  physics_free(&handler->physics_handler);
+  handler->map_data = 0x0;
+
   renderer_cleanup(handler);
   ImGui_ImplVulkan_Shutdown();
   ImGui_ImplGlfw_Shutdown();
@@ -271,75 +326,44 @@ static void cleanup_map_resources(gfx_handler_t *handler) {
   printf("Cleaning up previous map resources...\n");
 
   vkDeviceWaitIdle(handler->g_Device);
-
-  for (uint32_t i = 0; i < handler->map_texture_count; ++i) {
+  for (uint32_t i = 1; i < handler->map_texture_count; ++i) {
     texture_t *tex = handler->map_textures[i];
-    if (tex && tex != handler->renderer.default_texture) {
+    if (tex && tex != handler->renderer.default_texture && tex != handler->entities_array) {
       renderer_destroy_texture(handler, tex);
     }
     handler->map_textures[i] = NULL;
   }
   handler->map_texture_count = 0;
-
-  handler->map_shader = NULL;
-  handler->quad_mesh = NULL;
 }
 
 void on_map_load(gfx_handler_t *handler, const char *map_path) {
   cleanup_map_resources(handler);
-  free_map_data(&handler->map_data);
-  handler->map_data = load_map(map_path);
-  if (!handler->map_data.game_layer.data) {
+
+  physics_init(&handler->physics_handler, map_path);
+  handler->map_data = &handler->physics_handler.collision.m_MapData;
+  if (!handler->map_data->game_layer.data) {
     fprintf(stderr, "Failed to load map data: '%s'\n", map_path);
     return;
   }
+  printf("Loaded map: '%s' (%ux%u)\n", map_path, handler->map_data->width, handler->map_data->height);
 
-  texture_t *entities_atlas = renderer_load_texture(handler, ENTITIES_PATH);
-  if (!entities_atlas) {
-    fprintf(stderr,
-            "Failed to load entities at: '%s', you might have started the program from the wrong location.\n",
-            ENTITIES_PATH);
-    return;
-  }
-  printf("Loaded map: '%s' (%ux%u)\n", map_path, handler->map_data.width, handler->map_data.height);
-
-  handler->map_shader =
-      renderer_load_shader(handler, "data/shaders/map.vert.spv", "data/shaders/map.frag.spv");
-
-  if (!handler->quad_mesh) {
-    vertex_t quad_vertices[] = {
-        {{-1.f, -1.f}, {1.0f, 1.0f, 1.0f}, {-1.f, 1.0f}}, // Top Left
-        {{1.0f, -1.f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}, // Top Right
-        {{1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, -1.f}}, // Bottom Right
-        {{-1.f, 1.0f}, {1.0f, 1.0f, 1.0f}, {-1.f, -1.f}}  // Bottom Left
-    };
-    uint32_t quad_indices[] = {
-        0, 1, 2, // First triangle
-        2, 3, 0  // Second triangle
-    };
-    handler->quad_mesh = renderer_create_mesh(handler, quad_vertices, 4, quad_indices, 6);
-  }
-
-  handler->map_texture_count = 0;
-  texture_t *entities_array =
-      renderer_create_texture_array_from_atlas(handler, entities_atlas, 64, 64, 16, 16);
-
+  // entities texture
   handler->map_textures[handler->map_texture_count++] =
-      entities_array ? entities_array : handler->renderer.default_texture;
+      handler->entities_array ? handler->entities_array : handler->renderer.default_texture;
+  // collision textures
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data.game_layer.data, handler->map_data.width, handler->map_data.height);
+      handler, handler->map_data->game_layer.data, handler->map_data->width, handler->map_data->height);
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data.front_layer.data, handler->map_data.width, handler->map_data.height);
+      handler, handler->map_data->front_layer.data, handler->map_data->width, handler->map_data->height);
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data.tele_layer.type, handler->map_data.width, handler->map_data.height);
+      handler, handler->map_data->tele_layer.type, handler->map_data->width, handler->map_data->height);
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data.tune_layer.type, handler->map_data.width, handler->map_data.height);
+      handler, handler->map_data->tune_layer.type, handler->map_data->width, handler->map_data->height);
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data.speedup_layer.type, handler->map_data.width, handler->map_data.height);
+      handler, handler->map_data->speedup_layer.type, handler->map_data->width, handler->map_data->height);
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data.switch_layer.type, handler->map_data.width, handler->map_data.height);
+      handler, handler->map_data->switch_layer.type, handler->map_data->width, handler->map_data->height);
 }
-
 
 // --- Initialization and Cleanup ---
 static int init_window(gfx_handler_t *handler) {
@@ -498,6 +522,9 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
       .enabledExtensionCount = extensions_count,
       .ppEnabledExtensionNames = extensions,
   };
+  const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
+  create_info.enabledLayerCount = 1;
+  create_info.ppEnabledLayerNames = layers;
 
 #ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
   if (is_extension_available(properties, properties_count, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
@@ -658,24 +685,23 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
     glfwGetFramebufferSize(handler->window, &width, &height);
     if (width > 0 && height > 0) {
       float window_ratio = (float)width / (float)height;
-      float map_ratio = (float)handler->map_data.width / (float)handler->map_data.height;
+      float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
       if (isnan(map_ratio) || map_ratio == 0)
         map_ratio = 1.0f;
 
-      float zoom = 1.0 /
-                   (handler->renderer.camera.zoom * fmax(handler->map_data.width, handler->map_data.height) *
-                    0.001);
+      float zoom = 1.0 / (handler->renderer.camera.zoom *
+                          fmax(handler->map_data->width, handler->map_data->height) * 0.001);
       if (isnan(zoom))
         zoom = 1.0f;
 
       float aspect = 1.0f / (window_ratio / map_ratio);
       float lod =
-          fmin(fmax(5.5f - log2f((1.0f / handler->map_data.width) / zoom * (width / 2.0f)), 0.0f), 6.0f);
+          fmin(fmax(5.5f - log2f((1.0f / handler->map_data->width) / zoom * (width / 2.0f)), 0.0f), 6.0f);
 
-      map_buffer_object_t ubo = {.transform = {handler->renderer.camera.pos[0],
-                                               handler->renderer.camera.pos[1], zoom},
-                                 .aspect = aspect,
-                                 .lod = lod};
+      map_buffer_object_t ubo = {
+          .transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom},
+          .aspect = aspect,
+          .lod = lod};
 
       void *ubos[] = {&ubo};
       VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
