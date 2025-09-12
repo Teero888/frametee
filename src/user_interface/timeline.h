@@ -1,6 +1,7 @@
 #ifndef UI_TIMELINE_H
 #define UI_TIMELINE_H
 
+#include "../physics/physics.h"
 #include "player_info.h"
 #include <cimgui.h>
 #include <stdbool.h>
@@ -11,12 +12,14 @@ typedef struct {
   int id;
   int start_tick;
   int end_tick;
+
+  SPlayerInput *inputs; // Array of player inputs, one per tick of duration
+  int input_count;      // Duration in ticks
 } input_snippet_t;
 
 typedef struct {
   input_snippet_t *snippets; // Dynamic array of snippets
   int snippet_count;
-
   player_info_t player_info;
 } player_track_t;
 
@@ -46,6 +49,12 @@ typedef struct timeline_state_t {
   int playback_speed;
   double last_update_time;
 } timeline_state_t;
+
+input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id);
+void free_snippet_inputs(input_snippet_t *snippet);
+player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph);
+SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick);
+input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int duration);
 
 void render_timeline(timeline_state_t *ts);
 void timeline_init(timeline_state_t *ts);

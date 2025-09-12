@@ -1,5 +1,5 @@
 #ifndef PHYSICS_H
-#define PHYISCS_H
+#define PHYSICS_H
 
 #include "../../libs/ddnet_physics/include/gamecore.h"
 

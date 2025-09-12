@@ -16,7 +16,7 @@ int main(void) {
     ui_render(&handler.user_interface);
 
     if (handler.map_data->game_layer.data) {
-      // Head
+/*       // Head
       vec2 head_center = {100.0f, 100.0f};
       float head_radius = 40.0f;
       vec4 pink = {1.0f, 0.6f, 0.8f, 1.0f};
@@ -42,7 +42,7 @@ int main(void) {
 
       vec4 red_color = {1.0f, 0.0f, 0.0f, 1.0f};
       renderer_draw_rect_filled(&handler, (vec2){50 * 32, 50 * 32}, (vec2){0.01, 0.01}, red_color);
-
+ */
       vec4 border_color = {1.0f, 0.0f, 0.0f, 1.0f};
       renderer_draw_line(&handler, (vec2){0, 0}, (vec2){handler.map_data->width, 0.0}, border_color, 1.f);
       renderer_draw_line(&handler, (vec2){0, 0}, (vec2){0.0, handler.map_data->height}, border_color, 1.f);

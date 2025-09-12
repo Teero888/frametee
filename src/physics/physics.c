@@ -14,7 +14,4 @@ void physics_tick(ph_t *h) {
   wc_tick(&h->world);
 }
 
-void physics_free(ph_t *h) {
-  wc_free(&h->world);
-  free_collision(&h->collision);
-}
+void physics_free(ph_t *h) { free_collision(&h->collision); }

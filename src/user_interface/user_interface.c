@@ -47,7 +47,6 @@ void render_menu_bar(ui_handler_t *ui) {
 
 // --- Docking Setup ---
 void setup_docking(ui_handler_t *ui) {
-
   ImGuiID main_dockspace_id = igGetID_Str("MainDockSpace");
 
   // Ensure the dockspace covers the entire viewport initially
@@ -86,18 +85,160 @@ void setup_docking(ui_handler_t *ui) {
     ImGuiID dock_id_top;
     ImGuiID dock_id_bottom =
         igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.30f, NULL, &dock_id_top);
-    ImGuiID dock_id_right;
-    ImGuiID dock_id_left = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Left, 0.15f, NULL, &dock_id_left);
+    ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.25f, NULL, &dock_id_right);
+    ImGuiID dock_id_left = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Left, 0.25f, NULL, &dock_id_left);
 
     // assign windows to docks
     igDockBuilderDockWindow("Timeline", dock_id_bottom);
     igDockBuilderDockWindow("Player Info", dock_id_left);
-    // igDockBuilderDockWindow("Properties", dock_id_right);
+    igDockBuilderDockWindow("Players", dock_id_left);
+    igDockBuilderDockWindow("Snippet Editor", dock_id_right);
 
     igDockBuilderFinish(main_dockspace_id);
   }
 }
 
+// ---------------- Snippet Editor Panel ----------------
+static const char *dir_options[] = {"Left", "Neutral", "Right"};
+static const char *weapon_options[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
+
+void render_snippet_editor_panel(timeline_state_t *ts) {
+  if (igBegin("Snippet Editor", NULL, 0)) {
+    if (ts->selected_snippet_id != -1) {
+      // Find snippet globally, not tied to current selected player
+      input_snippet_t *snippet = NULL;
+      for (int i = 0; i < ts->player_track_count; i++) {
+        snippet = find_snippet_by_id(&ts->player_tracks[i], ts->selected_snippet_id);
+        if (snippet)
+          break;
+      }
+      if (snippet && snippet->input_count > 0) {
+        igText("Editing Snippet %d (%d inputs)", snippet->id, snippet->input_count);
+        igSeparator();
+
+        igBeginChild_Str("InputsScroll", (ImVec2){0, 0}, true, 0);
+        for (int i = 0; i < snippet->input_count; i++) {
+          igPushID_Int(i);
+          SPlayerInput *inp = &snippet->inputs[i];
+          if (igTreeNode_Ptr(inp, "Tick %d", snippet->start_tick + i)) {
+            int dir_idx = inp->m_Direction + 1;
+            if (igCombo_Str_arr("Direction", &dir_idx, dir_options, 3, -1))
+              inp->m_Direction = dir_idx - 1;
+            igInputInt("Target X", &inp->m_TargetX, 1, 10, 0);
+            igInputInt("Target Y", &inp->m_TargetY, 1, 10, 0);
+            igInputInt("TeleOut", &inp->m_TeleOut, 1, 10, 0);
+            bool flag;
+            flag = inp->m_Jump;
+            if (igCheckbox("Jump", &flag))
+              inp->m_Jump = flag;
+            flag = inp->m_Fire;
+            if (igCheckbox("Fire", &flag))
+              inp->m_Fire = flag;
+            flag = inp->m_Hook;
+            if (igCheckbox("Hook", &flag))
+              inp->m_Hook = flag;
+            flag = inp->m_TeleOut;
+            int weapon_idx = inp->m_WantedWeapon;
+            if (igCombo_Str_arr("Weapon", &weapon_idx, weapon_options, 5, -1))
+              inp->m_WantedWeapon = (uint8_t)weapon_idx;
+            igTreePop();
+          }
+          igPopID();
+        }
+        igEndChild();
+      } else {
+        igText("Snippet has no inputs");
+      }
+    } else {
+      igText("No snippet selected");
+    }
+  }
+  igEnd();
+}
+// ---------------- Player Manager Panel ----------------
+static bool g_remove_confirm_needed = true;
+static int g_pending_remove_index = -1;
+
+static void remove_player(timeline_state_t *ts, ph_t *ph, int index) {
+  if (index < 0 || index >= ts->player_track_count)
+    return;
+  player_track_t *track = &ts->player_tracks[index];
+  if (track->snippets) {
+    for (int j = 0; j < track->snippet_count; j++) {
+      free_snippet_inputs(&track->snippets[j]);
+    }
+    free(track->snippets);
+  }
+  // shift array
+  for (int j = index; j < ts->player_track_count - 1; j++) {
+    ts->player_tracks[j] = ts->player_tracks[j + 1];
+  }
+  ts->player_track_count--;
+  ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * ts->player_track_count);
+
+  if (ts->selected_player_track_index == index)
+    ts->selected_player_track_index = -1;
+  else if (ts->selected_player_track_index > index)
+    ts->selected_player_track_index--;
+  wc_remove_character(&ph->world, index);
+}
+
+void render_player_manager(timeline_state_t *ts, ph_t *ph) {
+  if (igBegin("Players", NULL, 0)) {
+    for (int i = 0; i < ts->player_track_count; i++) {
+      igPushID_Int(i);
+      bool sel = (i == ts->selected_player_track_index);
+      const char *label =
+          ts->player_tracks[i].player_info.name[0] ? ts->player_tracks[i].player_info.name : "(Unnamed)";
+
+      // Selectable only
+      igSetNextItemAllowOverlap();
+      if (igSelectable_Bool(label, sel, ImGuiSelectableFlags_AllowDoubleClick, (ImVec2){0, 0})) {
+        ts->selected_player_track_index = i;
+      }
+
+      ImVec2 vMin;
+      igGetContentRegionAvail(&vMin);
+      // Place "X" button at row end
+      igSameLine(vMin.x - 20.f, -1.0f); // shift right
+      if (igSmallButton("X")) {
+        if (g_remove_confirm_needed && ts->player_tracks[i].snippet_count > 0) {
+          g_pending_remove_index = i;
+          igPopID();
+          igOpenPopup_Str("ConfirmRemovePlayer", ImGuiPopupFlags_AnyPopupLevel);
+          igPushID_Int(i);
+        } else {
+          remove_player(ts, ph, i);
+        }
+      }
+      igPopID();
+    }
+    igSeparator();
+    if (ph->world.m_pCollision && igButton("Add Player", (ImVec2){0, 0})) {
+      add_new_track(ts, ph);
+    }
+
+    if (igBeginPopupModal("ConfirmRemovePlayer", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+      igText("This player has inputs. Remove anyway?");
+      static bool dont_ask_again = false;
+      igCheckbox("Do not ask again", &dont_ask_again);
+      if (igButton("Yes", (ImVec2){0, 0})) {
+        remove_player(ts, ph, g_pending_remove_index);
+        if (dont_ask_again)
+          g_remove_confirm_needed = false;
+        g_pending_remove_index = -1;
+        igCloseCurrentPopup();
+      }
+      igSameLine(0, 10);
+      if (igButton("Cancel", (ImVec2){0, 0})) {
+        g_pending_remove_index = -1;
+        igCloseCurrentPopup();
+      }
+      igEndPopup();
+    }
+  }
+  igEnd();
+}
 void on_camera_update(gfx_handler_t *handler) {
   camera_t *camera = &handler->renderer.camera;
   ImGuiIO *io = igGetIO_Nil();
@@ -158,14 +299,43 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   NFD_Init();
 }
 
+void render_players(ui_handler_t *ui) {
+  gfx_handler_t *gfx = ui->gfx_handler;
+  physics_handler_t *ph = &gfx->physics_handler;
+
+  SWorldCore world = wc_empty();
+  wc_copy_world(&world, &ph->world);
+  for (int i = 0; i < ui->timeline.current_tick; ++i) {
+    for (int p = 0; p < world.m_NumCharacters; ++p) {
+      SPlayerInput input = get_input(&ui->timeline, p, i);
+      cc_on_input(&world.m_pCharacters[p], &input);
+    }
+    wc_tick(&world);
+  }
+  for (int i = 0; i < ph->world.m_NumCharacters; ++i) {
+    SCharacterCore *core = &world.m_pCharacters[i];
+    vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+    vec4 color = {[3] = 1.f};
+    memcpy(color, ui->timeline.player_tracks[i].player_info.color, 3 * sizeof(float));
+    renderer_draw_circle_filled(gfx, p, 0.4375f, color, 32);
+    if (core->m_HookState != 0)
+      renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
+                         (vec4){.5f, .5f, .5f, 1.f}, 0.05);
+  }
+}
+
 void ui_render(ui_handler_t *ui) {
   on_camera_update(ui->gfx_handler);
   render_menu_bar(ui);
   setup_docking(ui);
-  if (ui->show_timeline)
+  if (ui->show_timeline) {
     render_timeline(&ui->timeline);
-  if (ui->timeline.selected_player_track_index != -1)
-    render_player_info(&ui->timeline);
+    render_player_manager(&ui->timeline, &ui->gfx_handler->physics_handler);
+    render_snippet_editor_panel(&ui->timeline);
+    if (ui->timeline.selected_player_track_index != -1)
+      render_player_info(&ui->timeline);
+  }
+  render_players(ui);
 }
 
 void ui_cleanup(ui_handler_t *ui) {

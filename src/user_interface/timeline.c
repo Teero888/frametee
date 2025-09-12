@@ -1,4 +1,5 @@
 #include "timeline.h"
+#include "cimgui.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,67 @@
 #define MAX_TIMELINE_ZOOM 20.0f
 #define SNAP_THRESHOLD_PX 5.0f // Snap threshold in pixels
 #define DEFAULT_TRACK_HEIGHT 40.f
+
+// ---------------- Snippet Input Lifecycle Helpers ----------------
+
+SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick) {
+  const player_track_t *track = &ts->player_tracks[track_index];
+  for (int i = 0; i < track->snippet_count; ++i) {
+    const input_snippet_t *snippet = &track->snippets[i];
+    if (tick < snippet->end_tick && tick >= snippet->start_tick)
+      return snippet->inputs[tick - snippet->start_tick];
+  }
+  return (SPlayerInput){.m_TargetX = 1};
+}
+
+void init_snippet_inputs(input_snippet_t *snippet) {
+  int duration = snippet->end_tick - snippet->start_tick;
+  if (duration <= 0) {
+    snippet->inputs = NULL;
+    snippet->input_count = 0;
+    return;
+  }
+  snippet->inputs = calloc(duration, sizeof(SPlayerInput));
+  snippet->input_count = duration;
+}
+
+void copy_snippet_inputs(input_snippet_t *dest, const input_snippet_t *src) {
+  dest->input_count = src->input_count;
+  if (src->inputs && src->input_count > 0) {
+    dest->inputs = malloc(src->input_count * sizeof(SPlayerInput));
+    memcpy(dest->inputs, src->inputs, src->input_count * sizeof(SPlayerInput));
+  } else {
+    dest->inputs = NULL;
+  }
+}
+
+void free_snippet_inputs(input_snippet_t *snippet) {
+  if (snippet->inputs) {
+    free(snippet->inputs);
+    snippet->inputs = NULL;
+  }
+  snippet->input_count = 0;
+}
+
+void resize_snippet_inputs(input_snippet_t *snippet, int new_duration) {
+  if (new_duration <= 0) {
+    free_snippet_inputs(snippet);
+    snippet->start_tick = snippet->end_tick;
+    return;
+  }
+  if (snippet->input_count == new_duration)
+    return;
+  snippet->inputs = realloc(snippet->inputs, sizeof(SPlayerInput) * new_duration);
+  if (!snippet->inputs) {
+    snippet->input_count = 0;
+    return;
+  }
+  if (new_duration > snippet->input_count) {
+    memset(&snippet->inputs[snippet->input_count], 0,
+           (new_duration - snippet->input_count) * sizeof(SPlayerInput));
+  }
+  snippet->input_count = new_duration;
+}
 
 // Converts screen X position to timeline tick
 int screen_x_to_tick(const timeline_state_t *ts, float screen_x, float timeline_start_x) {
@@ -140,16 +202,14 @@ bool remove_snippet_from_track(player_track_t *track, int snippet_id) {
   }
 
   if (found_idx != -1) {
-    // Shift elements to fill the gap
+    free_snippet_inputs(&track->snippets[found_idx]);
     memmove(&track->snippets[found_idx], &track->snippets[found_idx + 1],
             (track->snippet_count - found_idx - 1) * sizeof(input_snippet_t));
     track->snippet_count--;
-    // Reallocate memory (optional, but good practice if removing often)
     track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * track->snippet_count);
-    // Note: realloc could fail, but for simplicity in this example, we omit error handling.
     return true;
   }
-  return false; // Snippet not found
+  return false;
 }
 
 void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet) {
@@ -157,7 +217,15 @@ void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet)
   if (track->snippets == NULL) {
     return;
   }
-  track->snippets[track->snippet_count] = *snippet; // Copy the snippet data
+  input_snippet_t *dest = &track->snippets[track->snippet_count];
+  *dest = *snippet; // shallow copy of fields
+  if (snippet->input_count > 0 && snippet->inputs) {
+    dest->inputs = malloc(snippet->input_count * sizeof(SPlayerInput));
+    memcpy(dest->inputs, snippet->inputs, snippet->input_count * sizeof(SPlayerInput));
+  } else {
+    dest->inputs = NULL;
+    dest->input_count = 0;
+  }
   track->snippet_count++;
 }
 
@@ -207,32 +275,37 @@ bool try_move_snippet(timeline_state_t *ts, int snippet_id, int source_track_idx
     return false;
   }
 
-  // No overlap, the move is valid. Perform the data modification.
   if (source_track_idx == target_track_idx) {
-    // Moving within the same track - just update the position
-    source_track->snippets[snippet_idx_in_source].start_tick = new_start_tick;
-    source_track->snippets[snippet_idx_in_source].end_tick = new_end_tick;
-    // Keep selected state consistent
+    // Update in place
+    input_snippet_t *sn = &source_track->snippets[snippet_idx_in_source];
+    sn->start_tick = new_start_tick;
+    sn->end_tick = new_end_tick;
+    int new_duration = new_end_tick - new_start_tick;
+    resize_snippet_inputs(sn, new_duration);
     ts->selected_snippet_id = snippet_id;
     ts->selected_player_track_index = source_track_idx;
   } else {
-    // Moving to a different track - remove from source, add to target
+    // Cross track: deep copy
     if (remove_snippet_from_track(source_track, snippet_id)) {
-      // Update the snippet data with the new position before adding to the target
       snippet_to_move.start_tick = new_start_tick;
       snippet_to_move.end_tick = new_end_tick;
-      add_snippet_to_track(target_track, &snippet_to_move);
 
-      // Update selected state
+      input_snippet_t new_snip = snippet_to_move;
+      new_snip.inputs = NULL;
+      new_snip.input_count = 0;
+      copy_snippet_inputs(&new_snip, &snippet_to_move);
+      add_snippet_to_track(target_track, &new_snip);
+
       ts->selected_snippet_id = snippet_id;
       ts->selected_player_track_index = target_track_idx;
+
+      free_snippet_inputs(&snippet_to_move);
     } else {
-      // Should not happen if remove_snippet_from_track works correctly
-      return false; // Failed to remove from source
+      return false;
     }
   }
 
-  return true; // Move successful
+  return true;
 }
 
 int get_max_timeline_tick(timeline_state_t *ts) {
@@ -321,6 +394,14 @@ void render_timeline_controls(timeline_state_t *ts) {
   igSameLine(0, 4);
   igSetNextItemWidth(150);
   igSliderInt("##Speed", &ts->playback_speed, 1, 100, "%d", ImGuiSliderFlags_None);
+
+  igSameLine(0, 20);
+  if (igButton("Add Snippet", (ImVec2){0, 0})) {
+    if (ts->selected_player_track_index >= 0) {
+      input_snippet_t new_snip = create_empty_snippet(ts, ts->current_tick, 50);
+      add_snippet_to_track(&ts->player_tracks[ts->selected_player_track_index], &new_snip);
+    }
+  }
 
   igPopItemWidth();
   igPopStyleColor(5); // Pop all custom colors
@@ -621,7 +702,7 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
                          timeline_bb);
   }
 
-  // Optional: Track label
+  // Track label
   // Add text offset from the left edge, vertically centered
   char track_label[64];
   snprintf(track_label, sizeof(track_label), "Track %d", track_index + 1);
@@ -629,6 +710,27 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
   igCalcTextSize(&text_size, track_label, NULL, false, 0);
   ImVec2 text_pos = {timeline_bb.Min.x + 10.0f, track_top + (ts->track_height - text_size.y) * 0.5f};
   ImDrawList_AddText_Vec2(draw_list, text_pos, igGetColorU32_Col(ImGuiCol_Text, 0.7f), track_label, NULL);
+
+  if (igIsMouseClicked_Bool(ImGuiMouseButton_Right, 0) &&
+      igIsMouseHoveringRect((ImVec2){timeline_bb.Min.x, track_top}, (ImVec2){timeline_bb.Max.x, track_bottom},
+                            true)) {
+
+    ImVec2 mouse_pos = igGetIO_Nil()->MousePos;
+    int tick = screen_x_to_tick(ts, mouse_pos.x, timeline_bb.Min.x);
+
+    igOpenPopup_Str("AddSnippetMenu", 0);
+    ts->selected_player_track_index = track_index;
+    ts->current_tick = tick;
+  }
+
+  if (igBeginPopup("AddSnippetMenu", ImGuiPopupFlags_AnyPopupLevel)) {
+    if (igMenuItem_Bool("Add Snippet Here", NULL, false, true)) {
+      int track_idx = ts->selected_player_track_index;
+      input_snippet_t snip = create_empty_snippet(ts, ts->current_tick, 50);
+      add_snippet_to_track(&ts->player_tracks[track_idx], &snip);
+    }
+    igEndPopup();
+  }
 }
 
 // Renamed parameter for clarity
@@ -967,7 +1069,14 @@ void render_timeline(timeline_state_t *ts) {
 }
 
 // Helper to add a new empty track
-player_track_t *add_new_track(timeline_state_t *ts) {
+player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph) {
+  if (ph) {
+    int num_chars = ph->world.m_NumCharacters;
+    wc_add_character(&ph->world);
+    if (num_chars == ph->world.m_NumCharacters)
+      return NULL;
+  }
+
   ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * (ts->player_track_count + 1));
   player_track_t *new_track = &ts->player_tracks[ts->player_track_count];
   new_track->snippets = NULL; // Initialize as empty dynamic array
@@ -983,6 +1092,7 @@ player_track_t *add_new_track(timeline_state_t *ts) {
 }
 
 void timeline_init(timeline_state_t *ts) {
+  timeline_cleanup(ts);
   memset(ts, 0, sizeof(timeline_state_t));
   // Initialize Timeline State variables
   ts->playback_speed = 50;
@@ -1009,71 +1119,6 @@ void timeline_init(timeline_state_t *ts) {
   // Initialize Players/Tracks
   ts->player_track_count = 0;
   ts->player_tracks = NULL;
-
-  // Temporary snippet struct
-  input_snippet_t temp_snippet;
-
-  // Add Track 0
-  player_track_t *p0 = add_new_track(ts);
-  // Snippet 1: 50-150
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 50;
-  temp_snippet.end_tick = 150;
-  add_snippet_to_track(p0, &temp_snippet);
-  // Snippet 2: 200-220
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 200;
-  temp_snippet.end_tick = 220;
-  add_snippet_to_track(p0, &temp_snippet);
-  // Snippet 3: 300-400
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 300;
-  temp_snippet.end_tick = 400;
-  add_snippet_to_track(p0, &temp_snippet);
-
-  // Add Track 1
-  player_track_t *p1 = add_new_track(ts);
-  // Snippet 1: 100-250
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 100;
-  temp_snippet.end_tick = 250;
-  add_snippet_to_track(p1, &temp_snippet);
-  // Snippet 2: 350-450
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 350;
-  temp_snippet.end_tick = 450;
-  add_snippet_to_track(p1, &temp_snippet);
-
-  // Add Track 2
-  player_track_t *p2 = add_new_track(ts);
-  // Snippet 1: 0-200
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 0;
-  temp_snippet.end_tick = 200;
-  add_snippet_to_track(p2, &temp_snippet);
-  // Snippet 2: 250-350
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 250;
-  temp_snippet.end_tick = 350;
-  add_snippet_to_track(p2, &temp_snippet);
-  // Snippet 3: 400-500
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 400;
-  temp_snippet.end_tick = 500;
-  add_snippet_to_track(p2, &temp_snippet);
-
-  // Add Track 3
-  player_track_t *p3 = add_new_track(ts);
-  // Snippet 1: 150-200
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 150;
-  temp_snippet.end_tick = 200;
-  add_snippet_to_track(p3, &temp_snippet);
-  // Snippet 2: 450-550
-  temp_snippet.id = ts->next_snippet_id++;
-  temp_snippet.start_tick = 450;
-  temp_snippet.end_tick = 550;
-  add_snippet_to_track(p3, &temp_snippet);
 }
 
 void timeline_cleanup(timeline_state_t *ts) {
@@ -1081,6 +1126,9 @@ void timeline_cleanup(timeline_state_t *ts) {
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
     if (track->snippets) {
+      for (int j = 0; j < track->snippet_count; ++j) {
+        free_snippet_inputs(&track->snippets[j]);
+      }
       free(track->snippets);
       track->snippets = NULL;
     }
@@ -1114,4 +1162,17 @@ void timeline_cleanup(timeline_state_t *ts) {
   ts->drag_state.dragged_snippet_id = -1;
   ts->drag_state.drag_offset_ticks = 0;
   ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
+}
+
+input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int duration) {
+  if (duration <= 0)
+    duration = 1;
+  input_snippet_t s;
+  s.id = ts->next_snippet_id++;
+  s.start_tick = start_tick;
+  s.end_tick = start_tick + duration;
+  s.inputs = NULL;
+  s.input_count = 0;
+  init_snippet_inputs(&s);
+  return s;
 }

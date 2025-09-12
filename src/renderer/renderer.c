@@ -1318,22 +1318,20 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
   primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
   uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
 
-  float sx, sy;
-  world_to_screen(handler, center[0], center[1], &sx, &sy);
-  vec2 screen_center = {sx, sy};
-  radius *= handler->renderer.camera.zoom;
-
   // The center vertex
-  glm_vec2_copy(screen_center, vtx[0].pos);
+  glm_vec2_copy(center, vtx[0].pos);
   glm_vec4_copy(color, vtx[0].color);
+  world_to_screen(handler, vtx[0].pos[0], vtx[0].pos[1], &vtx[0].pos[0], &vtx[0].pos[1]);
 
   // The outer vertices
   float angle_step = 2.0f * (float)M_PI / segments;
   for (uint32_t i = 0; i < segments; i++) {
     float angle = i * angle_step;
     // Calculate vertex position relative to the center and add it
-    vtx[i + 1].pos[0] = screen_center[0] + cosf(angle) * radius;
-    vtx[i + 1].pos[1] = screen_center[1] + sinf(angle) * radius;
+    vtx[i + 1].pos[0] = center[0] + cosf(angle) * radius;
+    vtx[i + 1].pos[1] = center[1] + sinf(angle) * radius;
+    world_to_screen(handler, vtx[i + 1].pos[0], vtx[i + 1].pos[1], &vtx[i + 1].pos[0], &vtx[i + 1].pos[1]);
+
     glm_vec4_copy(color, vtx[i + 1].color);
   }
 

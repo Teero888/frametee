@@ -3,5 +3,5 @@ compile_commands.json
 .cache
 imgui.ini
 .vscode
-.xml
-.diff
+*.diff
+*.xml
