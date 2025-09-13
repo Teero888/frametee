@@ -125,17 +125,18 @@ void render_snippet_editor_panel(timeline_state_t *ts) {
                                 ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInner;
 
         // Begin table with columns
-        if (igBeginTable("SnippetInputsTable", 8, flags, (ImVec2){0, 0}, 0)) {
+        if (igBeginTable("SnippetInputsTable", 9, flags, (ImVec2){0, 0}, 0)) {
 
           // Setup column headers
-          igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 60.0f, 0);
-          igTableSetupColumn("Direction", ImGuiTableColumnFlags_WidthFixed, 70.0f, 1);
-          igTableSetupColumn("Target X", ImGuiTableColumnFlags_WidthFixed, 70.0f, 2);
-          igTableSetupColumn("Target Y", ImGuiTableColumnFlags_WidthFixed, 70.0f, 3);
-          igTableSetupColumn("TeleOut", ImGuiTableColumnFlags_WidthFixed, 70.0f, 4);
-          igTableSetupColumn("Jump", ImGuiTableColumnFlags_WidthFixed, 50.0f, 5);
-          igTableSetupColumn("Fire", ImGuiTableColumnFlags_WidthFixed, 50.0f, 6);
-          igTableSetupColumn("Hook", ImGuiTableColumnFlags_WidthFixed, 50.0f, 7);
+          igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 0.0f, 0);
+          igTableSetupColumn("Dir", ImGuiTableColumnFlags_WidthFixed, 0.0f, 1);
+          igTableSetupColumn("TargetX", ImGuiTableColumnFlags_WidthFixed, 0.0f, 2);
+          igTableSetupColumn("TargetY", ImGuiTableColumnFlags_WidthFixed, 0.0f, 3);
+          igTableSetupColumn("Tele", ImGuiTableColumnFlags_WidthFixed, 0.0f, 4);
+          igTableSetupColumn("Jump", ImGuiTableColumnFlags_WidthFixed, 0.0f, 5);
+          igTableSetupColumn("Fire", ImGuiTableColumnFlags_WidthFixed, 0.0f, 6);
+          igTableSetupColumn("Hook", ImGuiTableColumnFlags_WidthFixed, 0.0f, 7);
+          igTableSetupColumn("Wpn", ImGuiTableColumnFlags_WidthFixed, 0.0f, 8);
 
           igTableHeadersRow();
 
@@ -148,7 +149,7 @@ void render_snippet_editor_panel(timeline_state_t *ts) {
             igTableSetColumnIndex(0);
             igText("%d", snippet->start_tick + i);
 
-            // Direction: plain int input (-1, 0, 1) — no buttons
+            // Direction: plain int input (-1, 0, 1)
             igTableSetColumnIndex(1);
             igPushID_Int(i * 10 + 1);
             int dir_temp = (int)inp->m_Direction;    // promote to int
@@ -173,7 +174,11 @@ void render_snippet_editor_panel(timeline_state_t *ts) {
             // TeleOut: keep as is, but remove buttons
             igTableSetColumnIndex(4);
             igPushID_Int(i * 10 + 4);
-            igInputInt("##TO", &inp->m_TeleOut, 0, 0, 0);
+            int tele_temp = (int)inp->m_TeleOut;
+            igInputInt("##TO", &tele_temp, 0, 0, 0);
+            tele_temp = iclamp(tele_temp, 0, 4);
+            if (tele_temp != (int)inp->m_TeleOut)
+              inp->m_TeleOut = (uint8_t)tele_temp;
             igPopID();
 
             // Jump (Checkbox)
@@ -198,6 +203,16 @@ void render_snippet_editor_panel(timeline_state_t *ts) {
             bool hook = inp->m_Hook;
             if (igCheckbox("##H", &hook))
               inp->m_Hook = hook;
+            igPopID();
+
+            // weapon
+            igTableSetColumnIndex(8);
+            igPushID_Int(i * 10 + 8);
+            int wpn_temp = (int)inp->m_WantedWeapon;
+            igInputInt("##Wpn", &wpn_temp, 0, 0, 0);
+            wpn_temp = iclamp(wpn_temp, 0, 4);
+            if (wpn_temp != (int)inp->m_WantedWeapon)
+              inp->m_WantedWeapon = (int8_t)wpn_temp;
             igPopID();
           }
 
@@ -448,8 +463,9 @@ void render_players(ui_handler_t *ui) {
   if (ui->timeline.recording) {
     for (int i = 0; i < 100; ++i) {
       for (int p = 0; p < world.m_NumCharacters; ++p) {
-        SPlayerInput input = p == ui->timeline.selected_player_track_index ? ui->timeline.recording_input
-                                                                           : get_input(&ui->timeline, p, i);
+        SPlayerInput input = p == ui->timeline.selected_player_track_index
+                                 ? ui->timeline.recording_input
+                                 : get_input(&ui->timeline, p, world.m_GameTick);
         cc_on_input(&world.m_pCharacters[p], &input);
       }
       wc_tick(&world);
@@ -481,7 +497,6 @@ void ui_render(ui_handler_t *ui) {
     if (ui->timeline.selected_player_track_index != -1)
       render_player_info(&ui->timeline);
   }
-  render_players(ui);
 }
 
 void ui_cleanup(ui_handler_t *ui) {

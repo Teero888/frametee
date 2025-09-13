@@ -962,8 +962,6 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
     return;
   renderer_state_t *renderer = &handler->renderer;
 
-  flush_primitives(handler, command_buffer);
-
   pipeline_cache_entry_t *pso = get_or_create_pipeline(
       handler, shader, ubo_count, texture_count, &mesh_binding_description, mesh_attribute_descriptions, 3);
 
@@ -1332,7 +1330,6 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
   // The center vertex
   glm_vec2_copy(center, vtx[0].pos);
   glm_vec4_copy(color, vtx[0].color);
-  // world_to_screen(handler, vtx[0].pos[0], vtx[0].pos[1], &vtx[0].pos[0], &vtx[0].pos[1]);
 
   // The outer vertices
   float angle_step = 2.0f * (float)M_PI / segments;
@@ -1341,7 +1338,6 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
     // Calculate vertex position relative to the center and add it
     vtx[i + 1].pos[0] = center[0] + cosf(angle) * radius;
     vtx[i + 1].pos[1] = center[1] + sinf(angle) * radius;
-    // world_to_screen(handler, vtx[i + 1].pos[0], vtx[i + 1].pos[1], &vtx[i + 1].pos[0], &vtx[i + 1].pos[1]);
 
     glm_vec4_copy(color, vtx[i + 1].color);
   }
@@ -1383,10 +1379,6 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   glm_vec4_copy(color, vtx[2].color);
   glm_vec2_copy((vec2){p1[0] + normal[0] * half_thickness, p1[1] + normal[1] * half_thickness}, vtx[3].pos);
   glm_vec4_copy(color, vtx[3].color);
-
-  // for (int i = 0; i < 4; i++) {
-  //   world_to_screen(handler, vtx[i].pos[0], vtx[i].pos[1], &vtx[i].pos[0], &vtx[i].pos[1]);
-  // }
 
   idx[0] = base_index + 0;
   idx[1] = base_index + 1;

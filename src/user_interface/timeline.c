@@ -125,7 +125,7 @@ void advance_tick(timeline_state_t *ts, int steps) {
   ts->current_tick = imax(ts->current_tick + steps, 0);
 
   // record new tick
-  if (ts->recording_snippet) {
+  if (ts->recording_snippet && ts->current_tick > ts->recording_snippet->start_tick) {
     resize_snippet_inputs(ts->recording_snippet, ts->current_tick - ts->recording_snippet->start_tick);
     ts->recording_snippet->end_tick = ts->current_tick;
     if (ts->recording_snippet->input_count > 0)
@@ -494,7 +494,7 @@ void handle_timeline_interaction(timeline_state_t *ts, ImRect timeline_bb) {
   ImGuiIO *io = igGetIO_Nil();
   ImVec2 mouse_pos = io->MousePos;
 
-  if (!(io->ConfigFlags & ImGuiConfigFlags_NoMouse))
+  if (io->ConfigFlags & ImGuiConfigFlags_NoMouse)
     return;
 
   bool is_timeline_hovered = igIsMouseHoveringRect(timeline_bb.Min, timeline_bb.Max, true);
@@ -796,8 +796,9 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
   ImDrawList_AddText_Vec2(draw_list, text_pos, igGetColorU32_Col(ImGuiCol_Text, 0.7f), track_label, NULL);
 
   ImGuiIO *io = igGetIO_Nil();
-  if (!(io->ConfigFlags & ImGuiConfigFlags_NoMouse))
+  if (io->ConfigFlags & ImGuiConfigFlags_NoMouse) {
     return;
+  }
 
   if (igIsMouseClicked_Bool(ImGuiMouseButton_Right, 0) &&
       igIsMouseHoveringRect((ImVec2){timeline_bb.Min.x, track_top}, (ImVec2){timeline_bb.Max.x, track_bottom},
