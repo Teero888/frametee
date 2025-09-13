@@ -1,5 +1,6 @@
 #include "timeline.h"
 #include "cimgui.h"
+#include <GLFW/glfw3.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +12,35 @@
 #define SNAP_THRESHOLD_PX 5.0f // Snap threshold in pixels
 #define DEFAULT_TRACK_HEIGHT 40.f
 
-// ---------------- Snippet Input Lifecycle Helpers ----------------
+#include "../renderer/graphics_backend.h"
+
+void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx) {
+  if (!ts->recording || !ts->recording_snippet)
+    return;
+
+  ts->recording_input.m_Direction = igIsKeyDown_Nil(ImGuiKey_D) - igIsKeyDown_Nil(ImGuiKey_A);
+  ts->recording_input.m_Jump = igIsKeyDown_Nil(ImGuiKey_Space);
+  ts->recording_input.m_Hook = igIsMouseDown_Nil(ImGuiMouseButton_Right);
+
+  ts->recording_input.m_TargetX += (int)gfx->raw_mouse.dx;
+  ts->recording_input.m_TargetY += (int)gfx->raw_mouse.dy;
+  gfx->raw_mouse.dx = gfx->raw_mouse.dy = 0.0;
+
+  if (vlength(vec2_init(ts->recording_input.m_TargetX, ts->recording_input.m_TargetY)) > 500.f) {
+    mvec2 n = vnormalize(vec2_init(ts->recording_input.m_TargetX, ts->recording_input.m_TargetY));
+    ts->recording_input.m_TargetX = vgetx(n) * 500.f;
+    ts->recording_input.m_TargetY = vgety(n) * 500.f;
+  }
+  // printf("%d,%d\n", ts->recording_input.m_TargetX, ts->recording_input.m_TargetY);
+
+  ts->recording_input.m_Fire = igIsMouseDown_Nil(ImGuiMouseButton_Left);
+  ts->recording_input.m_WantedWeapon = igIsKeyDown_Nil(ImGuiKey_1)   ? 0
+                                       : igIsKeyDown_Nil(ImGuiKey_2) ? 1
+                                       : igIsKeyDown_Nil(ImGuiKey_3) ? 2
+                                       : igIsKeyDown_Nil(ImGuiKey_4) ? 3
+                                       : igIsKeyDown_Nil(ImGuiKey_5) ? 4
+                                                                     : ts->recording_input.m_WantedWeapon;
+}
 
 SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick) {
   const player_track_t *track = &ts->player_tracks[track_index];
@@ -20,7 +49,7 @@ SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick) {
     if (tick < snippet->end_tick && tick >= snippet->start_tick)
       return snippet->inputs[tick - snippet->start_tick];
   }
-  return (SPlayerInput){.m_TargetX = 1};
+  return (SPlayerInput){.m_TargetY = -1};
 }
 
 void init_snippet_inputs(input_snippet_t *snippet) {
@@ -90,6 +119,18 @@ input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id) {
     }
   }
   return NULL; // Not found
+}
+
+void advance_tick(timeline_state_t *ts, int steps) {
+  ts->current_tick = imax(ts->current_tick + steps, 0);
+
+  // record new tick
+  if (ts->recording_snippet) {
+    resize_snippet_inputs(ts->recording_snippet, ts->current_tick - ts->recording_snippet->start_tick);
+    ts->recording_snippet->end_tick = ts->current_tick;
+    if (ts->recording_snippet->input_count > 0)
+      ts->recording_snippet->inputs[ts->recording_snippet->input_count - 1] = ts->recording_input;
+  }
 }
 
 // Finds a snippet by its ID and track index
@@ -348,6 +389,25 @@ void render_timeline_controls(timeline_state_t *ts) {
     // if (ts->view_start_tick < 0) ts->view_start_tick = 0;
   }
 
+  if ((igShortcut_Nil(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal) ||
+       igShortcut_Nil(ImGuiKey_MouseX1, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) &&
+      ts->current_tick > 0) {
+    ts->is_playing = false;
+    advance_tick(ts, -1);
+  }
+  if (igShortcut_Nil(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal) ||
+      igShortcut_Nil(ImGuiKey_MouseX2, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) {
+    ts->is_playing = false;
+    advance_tick(ts, 1);
+  }
+
+  if (igShortcut_Nil(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) {
+    ts->playback_speed = imax(--ts->playback_speed, 1);
+  }
+  if (igShortcut_Nil(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) {
+    ++ts->playback_speed;
+  }
+
   igSameLine(0, 8);
   if (igButton("|<", (ImVec2){30, 0}))
     ts->current_tick = 0;
@@ -356,10 +416,8 @@ void render_timeline_controls(timeline_state_t *ts) {
     ts->current_tick = (ts->current_tick >= 50) ? ts->current_tick - 50 : 0;
   igSameLine(0, 4);
   if (igButton(ts->is_playing ? "Pause" : "Play", (ImVec2){50, 0}) ||
-      igIsKeyPressed_Bool(ImGuiKey_Space, false)) {
+      (igShortcut_Nil(ImGuiKey_X, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal))) {
     ts->is_playing ^= 1;
-    if (ts->current_tick == get_max_timeline_tick(ts))
-      ts->current_tick = 0;
     if (ts->is_playing) {
       ts->last_update_time = igGetTime();
     }
@@ -396,11 +454,38 @@ void render_timeline_controls(timeline_state_t *ts) {
   igSliderInt("##Speed", &ts->playback_speed, 1, 100, "%d", ImGuiSliderFlags_None);
 
   igSameLine(0, 20);
-  if (igButton("Add Snippet", (ImVec2){0, 0})) {
+  bool was_recording = ts->recording;
+  if (igButton(ts->recording ? "Stop Recording" : "Record", (ImVec2){0, 0})) {
+    bool is_in_way = false;
     if (ts->selected_player_track_index >= 0) {
-      input_snippet_t new_snip = create_empty_snippet(ts, ts->current_tick, 50);
-      add_snippet_to_track(&ts->player_tracks[ts->selected_player_track_index], &new_snip);
+      const player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
+      for (int i = 0; i < track->snippet_count; ++i) {
+        const input_snippet_t *snippet = &track->snippets[i];
+        if (ts->current_tick < snippet->end_tick && ts->current_tick >= snippet->start_tick)
+          is_in_way = true;
+      }
+      if (!is_in_way) {
+        ts->recording = !ts->recording;
+        if (!ts->recording)
+          ts->recording_snippet = NULL;
+      }
     }
+  }
+  if (!was_recording && ts->recording) {
+    input_snippet_t new_snip = create_empty_snippet(ts, ts->current_tick, 1);
+    add_snippet_to_track(&ts->player_tracks[ts->selected_player_track_index], &new_snip);
+    ts->recording_snippet =
+        &ts->player_tracks[ts->selected_player_track_index]
+             .snippets[ts->player_tracks[ts->selected_player_track_index].snippet_count - 1];
+  }
+  if (igIsKeyPressed_Bool(ImGuiKey_Escape, false)) {
+    ts->recording = false;
+    ts->recording_snippet = NULL;
+  }
+
+  if (ts->recording) {
+    igSameLine(0, 10);
+    igTextColored((ImVec4){1.0f, 0.2f, 0.2f, 1.0f}, "REC");
   }
 
   igPopItemWidth();
@@ -716,18 +801,58 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
                             true)) {
 
     ImVec2 mouse_pos = igGetIO_Nil()->MousePos;
-    int tick = screen_x_to_tick(ts, mouse_pos.x, timeline_bb.Min.x);
 
-    igOpenPopup_Str("AddSnippetMenu", 0);
+    igOpenPopup_Str("RightClickMenu", 0);
     ts->selected_player_track_index = track_index;
-    ts->current_tick = tick;
   }
 
-  if (igBeginPopup("AddSnippetMenu", ImGuiPopupFlags_AnyPopupLevel)) {
-    if (igMenuItem_Bool("Add Snippet Here", NULL, false, true)) {
+  if (igBeginPopup("RightClickMenu", ImGuiPopupFlags_AnyPopupLevel)) {
+    if (igMenuItem_Bool("Add Snippet (Ctrl+a)", NULL, false, true) ||
+        igShortcut_Nil(ImGuiMod_Ctrl | ImGuiKey_A, ImGuiInputFlags_RouteGlobal)) {
       int track_idx = ts->selected_player_track_index;
       input_snippet_t snip = create_empty_snippet(ts, ts->current_tick, 50);
       add_snippet_to_track(&ts->player_tracks[track_idx], &snip);
+    }
+
+    if (igMenuItem_Bool("Split Snippet (Ctrl+r)", NULL, false, true) ||
+        igShortcut_Nil(ImGuiMod_Ctrl | ImGuiKey_R, ImGuiInputFlags_RouteGlobal)) {
+      if (ts->selected_player_track_index >= 0 && ts->selected_snippet_id >= 0) {
+        player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
+        input_snippet_t *snippet = find_snippet_by_id(track, ts->selected_snippet_id);
+        if (snippet && ts->current_tick > snippet->start_tick && ts->current_tick < snippet->end_tick) {
+          int old_end = snippet->end_tick;
+          int split_tick = ts->current_tick;
+
+          // Create right-hand snippet
+          input_snippet_t right = create_empty_snippet(ts, split_tick, old_end - split_tick);
+
+          // Copy the inputs after the split point
+          int offset = split_tick - snippet->start_tick;
+          if (offset < snippet->input_count) {
+            int right_count = snippet->input_count - offset;
+            right.inputs = malloc(right_count * sizeof(SPlayerInput));
+            memcpy(right.inputs, snippet->inputs + offset, right_count * sizeof(SPlayerInput));
+            right.input_count = right_count;
+          }
+
+          // Adjust original (left-hand) snippet
+          resize_snippet_inputs(snippet, offset);
+          snippet->end_tick = split_tick;
+
+          // Insert the right-hand snippet into the track
+          add_snippet_to_track(track, &right);
+        }
+      }
+    }
+
+    if (igMenuItem_Bool("Delete Snippet (Ctrl+d)", NULL, false, true) ||
+        igShortcut_Nil(ImGuiMod_Ctrl | ImGuiKey_D, ImGuiInputFlags_RouteGlobal)) {
+      if (ts->selected_player_track_index >= 0 && ts->selected_snippet_id >= 0) {
+        player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
+        if (remove_snippet_from_track(track, ts->selected_snippet_id)) {
+          ts->selected_snippet_id = -1;
+        }
+      }
     }
     igEndPopup();
   }
@@ -836,16 +961,20 @@ void render_timeline(timeline_state_t *ts) {
   ImGuiIO *io = igGetIO_Nil();
 
   // Advance timeline state
-  if (ts->is_playing && ts->playback_speed > 0.0f) {
+  if (igIsKeyPressed_Bool(ImGuiKey_C, false))
+    ts->last_update_time = igGetTime();
+
+  bool reverse = igIsKeyDown_Nil(ImGuiKey_C);
+  if ((ts->is_playing || reverse) && ts->playback_speed > 0.0f) {
     double current_time = igGetTime();
     double elapsed_time = current_time - ts->last_update_time;
     double tick_interval = 1.0 / (double)ts->playback_speed; // Time per tick in seconds
 
     // Accumulate elapsed time and advance ticks as needed
     while (elapsed_time >= tick_interval) {
-      ++ts->current_tick;
+      advance_tick(ts, reverse ? -1 : 1);
       elapsed_time -= tick_interval;
-      ts->last_update_time = current_time - elapsed_time; // Update to reflect consumed time
+      ts->last_update_time = current_time - elapsed_time;
     }
   }
 
@@ -950,7 +1079,9 @@ void render_timeline(timeline_state_t *ts) {
         float track_bottom = current_track_y + ts->track_height;
         float clamped_track_bottom = fminf(track_bottom, timeline_bb.Max.y);
         if (clamped_track_bottom > track_top) {
+          igPushID_Int(i);
           render_player_track(ts, i, track, draw_list, timeline_bb, track_top, clamped_track_bottom);
+          igPopID();
         }
         current_track_y += ts->track_height;
       }
@@ -962,8 +1093,6 @@ void render_timeline(timeline_state_t *ts) {
       // Calculate visible ticks based on window width
       float timeline_width = timeline_bb.Max.x - timeline_bb.Min.x;
       ImS64 visible_ticks = (ImS64)(timeline_width / ts->zoom);
-      if (ts->current_tick >= max_tick)
-        ts->is_playing = false;
 
       // Adjust view during playback to follow current_tick
       if (ts->is_playing) {

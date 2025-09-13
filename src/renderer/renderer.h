@@ -66,7 +66,12 @@ typedef struct {
 } primitive_vertex_t;
 
 typedef struct {
+  vec2 camPos; // normalized [0..1] camera center
+  float zoom;
+  float aspect;
+  float maxMapSize;
   mat4 proj;
+  vec2 mapSize; // width, height
 } primitive_ubo_t;
 
 typedef struct {
@@ -149,6 +154,8 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
                         shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos,
                         VkDeviceSize *ubo_sizes, uint32_t ubo_count);
 void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
+
+void renderer_draw_map(gfx_handler_t *h);
 
 // --- Primitive Drawing API ---
 void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4 color);

@@ -6,6 +6,8 @@
 #include <cimgui.h>
 #include <stdbool.h>
 
+#include "../renderer/renderer.h"
+
 #define MAX_SNIPPETS_PER_PLAYER 64
 
 typedef struct {
@@ -48,6 +50,9 @@ typedef struct timeline_state_t {
   bool is_playing;
   int playback_speed;
   double last_update_time;
+  bool recording;
+  input_snippet_t *recording_snippet;
+  SPlayerInput recording_input;
 } timeline_state_t;
 
 input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id);
@@ -55,6 +60,7 @@ void free_snippet_inputs(input_snippet_t *snippet);
 player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph);
 SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick);
 input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int duration);
+void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx);
 
 void render_timeline(timeline_state_t *ts);
 void timeline_init(timeline_state_t *ts);

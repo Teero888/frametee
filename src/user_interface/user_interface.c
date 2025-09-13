@@ -239,6 +239,7 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
   }
   igEnd();
 }
+
 void on_camera_update(gfx_handler_t *handler) {
   camera_t *camera = &handler->renderer.camera;
   ImGuiIO *io = igGetIO_Nil();
@@ -263,7 +264,8 @@ void on_camera_update(gfx_handler_t *handler) {
   float window_ratio = (float)width / (float)height;
   float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
   float aspect = (float)window_ratio / (float)map_ratio;
-  if (!io->WantCaptureMouse && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+  if (handler->user_interface.timeline.recording) {
+  } else if (!io->WantCaptureMouse && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
     if (!camera->is_dragging) {
       camera->is_dragging = true;
       ImVec2 mouse_pos;
@@ -311,21 +313,62 @@ void render_players(ui_handler_t *ui) {
       cc_on_input(&world.m_pCharacters[p], &input);
     }
     wc_tick(&world);
+
+    for (int p = 0; p < world.m_NumCharacters; ++p) {
+      SCharacterCore *core = &world.m_pCharacters[p];
+      vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+      vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+      vec4 color = {[3] = 1.f};
+      if (core->m_JumpedTotal <= 0)
+        color[2] = 1.0f;
+      else
+        color[0] = 0.75f;
+      if (!core->m_ReloadTimer && core->m_ActiveWeapon > 1)
+        color[0] += 0.5f;
+      color[1] = vlength(core->m_Vel) / 10.f;
+      renderer_draw_line(gfx, pp, p, color, 0.05);
+    }
   }
+
+  // quick fix the camera so it is updated in time for all the transformations
+  if (ui->timeline.recording) {
+    SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
+    vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+    ui->gfx_handler->renderer.camera.pos[0] = (p[0]) / ui->gfx_handler->map_data->width;
+    ui->gfx_handler->renderer.camera.pos[1] = (p[1]) / ui->gfx_handler->map_data->height;
+  }
+
   for (int i = 0; i < ph->world.m_NumCharacters; ++i) {
     SCharacterCore *core = &world.m_pCharacters[i];
     vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
     vec4 color = {[3] = 1.f};
     memcpy(color, ui->timeline.player_tracks[i].player_info.color, 3 * sizeof(float));
     renderer_draw_circle_filled(gfx, p, 0.4375f, color, 32);
-    if (core->m_HookState != 0)
+    mvec2 gun_pos = vnormalize(vec2_init(core->m_Input.m_TargetX, core->m_Input.m_TargetY));
+    // printf("%d,%d\n", core->m_Input.m_TargetX, core->m_Input.m_TargetY);
+    renderer_draw_line(gfx, p,
+                       (vec2){vgetx(core->m_Pos) / 32.f + vgetx(gun_pos) * 0.75f,
+                              vgety(core->m_Pos) / 32.f + vgety(gun_pos) * 0.75f},
+                       (vec4){.5f, .5f, .5f, 1.f}, 0.2);
+    if (core->m_HookState > 0)
       renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
-                         (vec4){.5f, .5f, .5f, 1.f}, 0.05);
+                         (vec4){1.f, 1.f, 1.f, 1.f}, 0.05);
+  }
+
+  // render own cursor
+  if (ui->timeline.recording) {
+    SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
+    vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+    renderer_draw_circle_filled(gfx,
+                                (vec2){p[0] + gfx->user_interface.timeline.recording_input.m_TargetX / 64.f,
+                                       p[1] + gfx->user_interface.timeline.recording_input.m_TargetY / 64.f},
+                                0.25, (vec4){1.f, 0.f, 0.f, 0.4f}, 16);
   }
 }
 
 void ui_render(ui_handler_t *ui) {
-  on_camera_update(ui->gfx_handler);
+  timeline_update_inputs(&ui->timeline, ui->gfx_handler);
+
   render_menu_bar(ui);
   setup_docking(ui);
   if (ui->show_timeline) {

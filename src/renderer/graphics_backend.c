@@ -38,6 +38,24 @@ static void glfw_error_callback(int error, const char *description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
+static void cursor_position_callback(GLFWwindow *window, double xpos, double ypos) {
+  gfx_handler_t *handler = glfwGetWindowUserPointer(window);
+  if (!handler)
+    return;
+
+  if (handler->raw_mouse.skip) {
+    handler->raw_mouse.x = xpos;
+    handler->raw_mouse.y = ypos;
+    handler->raw_mouse.skip = false;
+    return;
+  }
+
+  handler->raw_mouse.dx += xpos - handler->raw_mouse.x;
+  handler->raw_mouse.dy += ypos - handler->raw_mouse.y;
+  handler->raw_mouse.x = xpos;
+  handler->raw_mouse.y = ypos;
+}
+
 // --- Public API Implementation ---
 int init_gfx_handler(gfx_handler_t *handler) {
   memset(handler, 0, sizeof(gfx_handler_t));
@@ -56,6 +74,12 @@ int init_gfx_handler(gfx_handler_t *handler) {
   if (init_window(handler) != 0) {
     return 1;
   }
+
+  glfwSetWindowUserPointer(handler->window, handler);
+  glfwSetCursorPosCallback(handler->window, cursor_position_callback);
+  handler->raw_mouse.x = handler->raw_mouse.y = 0.0;
+  handler->raw_mouse.dx = handler->raw_mouse.dy = 0.0;
+  handler->raw_mouse.skip = true;
 
   if (init_vulkan(handler) != 0) {
     glfwDestroyWindow(handler->window);
@@ -178,34 +202,6 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   ImGui_ImplGlfw_NewFrame();
   igNewFrame();
   renderer_begin_frame(handler, handler->current_frame_command_buffer);
-
-  // --- Draw Map ---
-  if (handler->map_shader && handler->quad_mesh && handler->map_texture_count > 0) {
-    float window_ratio = (float)wd->Width / (float)wd->Height;
-    float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
-    if (isnan(map_ratio) || map_ratio == 0)
-      map_ratio = 1.0f;
-
-    float zoom = 1.0 / (handler->renderer.camera.zoom *
-                        fmax(handler->map_data->width, handler->map_data->height) * 0.001);
-    if (isnan(zoom))
-      zoom = 1.0f;
-
-    float aspect = 1.0f / (window_ratio / map_ratio);
-    float lod =
-        fmin(fmax(5.5f - log2f((1.0f / handler->map_data->width) / zoom * (wd->Width / 2.0f)), 0.0f), 6.0f);
-
-    map_buffer_object_t ubo = {
-        .transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom},
-        .aspect = aspect,
-        .lod = lod};
-
-    void *ubos[] = {&ubo};
-    VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
-    renderer_draw_mesh(handler, handler->current_frame_command_buffer, handler->quad_mesh,
-                       handler->map_shader, handler->map_textures, handler->map_texture_count, ubos,
-                       ubo_sizes, 1);
-  }
 
   return FRAME_OK;
 }

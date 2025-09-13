@@ -27,7 +27,12 @@ int gfx_begin_frame(struct gfx_handler_t *handler);
 void gfx_end_frame(struct gfx_handler_t *handler);
 void gfx_cleanup(struct gfx_handler_t *handler);
 
-// --- Structures ---
+typedef struct {
+  double x, y;   // last cursor pos
+  double dx, dy; // delta since last poll
+  bool skip;     // to ignore crazy first delta
+} raw_mouse_t;
+
 struct gfx_handler_t {
   // --- Backend Stuffs ---
   GLFWwindow *window;
@@ -54,6 +59,8 @@ struct gfx_handler_t {
   map_data_t *map_data; // ptr to ^ collision data for quick typing
   texture_t *entities_atlas;
   texture_t *entities_array;
+
+  raw_mouse_t raw_mouse;
 
   // --- Map Specific Render Data ---
   shader_t *map_shader;

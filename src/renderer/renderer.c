@@ -1219,12 +1219,23 @@ static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buf
       get_or_create_pipeline(handler, renderer->primitive_shader, 1, 0, &primitive_binding_description,
                              primitive_attribute_descriptions, 2);
 
-  int fb_width, fb_height;
-  glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
-  mat4 proj;
-  glm_ortho_rh_no(0.0f, (float)fb_width, 0.0f, (float)fb_height, -1.0f, 1.0f, proj);
+  int fbw, fbh;
+  glfwGetFramebufferSize(handler->window, &fbw, &fbh);
+
   primitive_ubo_t ubo;
-  glm_mat4_copy(proj, ubo.proj);
+  ubo.camPos[0] = handler->renderer.camera.pos[0];
+  ubo.camPos[1] = handler->renderer.camera.pos[1];
+  ubo.zoom = handler->renderer.camera.zoom;
+
+  float window_ratio = (float)fbw / (float)fbh;
+  float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
+  ubo.aspect = window_ratio / map_ratio;
+
+  ubo.maxMapSize = fmaxf(handler->map_data->width, handler->map_data->height) * 0.001f;
+  ubo.mapSize[0] = handler->map_data->width;
+  ubo.mapSize[1] = handler->map_data->height;
+
+  glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
   VkDeviceSize ubo_size = sizeof(ubo);
   VkDeviceSize aligned_size =
@@ -1288,9 +1299,9 @@ void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4
   glm_vec2_copy((vec2){pos[0], pos[1] + size[1]}, vtx[3].pos);
   glm_vec4_copy(color, vtx[3].color);
 
-  for (int i = 0; i < 4; i++) {
-    world_to_screen(handler, vtx[i].pos[0], vtx[i].pos[1], &vtx[i].pos[0], &vtx[i].pos[1]);
-  }
+  // for (int i = 0; i < 4; i++) {
+  //   world_to_screen(handler, vtx[i].pos[0], vtx[i].pos[1], &vtx[i].pos[0], &vtx[i].pos[1]);
+  // }
 
   idx[0] = base_index + 0;
   idx[1] = base_index + 1;
@@ -1321,7 +1332,7 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
   // The center vertex
   glm_vec2_copy(center, vtx[0].pos);
   glm_vec4_copy(color, vtx[0].color);
-  world_to_screen(handler, vtx[0].pos[0], vtx[0].pos[1], &vtx[0].pos[0], &vtx[0].pos[1]);
+  // world_to_screen(handler, vtx[0].pos[0], vtx[0].pos[1], &vtx[0].pos[0], &vtx[0].pos[1]);
 
   // The outer vertices
   float angle_step = 2.0f * (float)M_PI / segments;
@@ -1330,7 +1341,7 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
     // Calculate vertex position relative to the center and add it
     vtx[i + 1].pos[0] = center[0] + cosf(angle) * radius;
     vtx[i + 1].pos[1] = center[1] + sinf(angle) * radius;
-    world_to_screen(handler, vtx[i + 1].pos[0], vtx[i + 1].pos[1], &vtx[i + 1].pos[0], &vtx[i + 1].pos[1]);
+    // world_to_screen(handler, vtx[i + 1].pos[0], vtx[i + 1].pos[1], &vtx[i + 1].pos[0], &vtx[i + 1].pos[1]);
 
     glm_vec4_copy(color, vtx[i + 1].color);
   }
@@ -1373,9 +1384,9 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   glm_vec2_copy((vec2){p1[0] + normal[0] * half_thickness, p1[1] + normal[1] * half_thickness}, vtx[3].pos);
   glm_vec4_copy(color, vtx[3].color);
 
-  for (int i = 0; i < 4; i++) {
-    world_to_screen(handler, vtx[i].pos[0], vtx[i].pos[1], &vtx[i].pos[0], &vtx[i].pos[1]);
-  }
+  // for (int i = 0; i < 4; i++) {
+  //   world_to_screen(handler, vtx[i].pos[0], vtx[i].pos[1], &vtx[i].pos[0], &vtx[i].pos[1]);
+  // }
 
   idx[0] = base_index + 0;
   idx[1] = base_index + 1;
@@ -1386,4 +1397,32 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
 
   renderer->primitive_vertex_count += 4;
   renderer->primitive_index_count += 6;
+}
+
+void renderer_draw_map(gfx_handler_t *h) {
+  if (!h->map_shader || !h->quad_mesh || h->map_texture_count <= 0)
+    return;
+
+  int fbw, fbh;
+  glfwGetFramebufferSize(h->window, &fbw, &fbh);
+  float window_ratio = (float)fbw / (float)fbh;
+  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
+  if (isnan(map_ratio) || map_ratio == 0)
+    map_ratio = 1.0f;
+
+  float zoom = 1.0 / (h->renderer.camera.zoom * fmax(h->map_data->width, h->map_data->height) * 0.001);
+  if (isnan(zoom))
+    zoom = 1.0f;
+
+  float aspect = 1.0f / (window_ratio / map_ratio);
+  float lod = fmin(fmax(5.5f - log2f((1.0f / h->map_data->width) / zoom * (fbw / 2.0f)), 0.0f), 6.0f);
+
+  map_buffer_object_t ubo = {.transform = {h->renderer.camera.pos[0], h->renderer.camera.pos[1], zoom},
+                             .aspect = aspect,
+                             .lod = lod};
+
+  void *ubos[] = {&ubo};
+  VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
+  renderer_draw_mesh(h, h->current_frame_command_buffer, h->quad_mesh, h->map_shader, h->map_textures,
+                     h->map_texture_count, ubos, ubo_sizes, 1);
 }
