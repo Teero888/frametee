@@ -105,47 +105,106 @@ static const char *weapon_options[] = {"Hammer", "Gun", "Shotgun", "Grenade", "L
 void render_snippet_editor_panel(timeline_state_t *ts) {
   if (igBegin("Snippet Editor", NULL, 0)) {
     if (ts->selected_snippet_id != -1) {
-      // Find snippet globally, not tied to current selected player
+      // Find snippet globally
       input_snippet_t *snippet = NULL;
       for (int i = 0; i < ts->player_track_count; i++) {
         snippet = find_snippet_by_id(&ts->player_tracks[i], ts->selected_snippet_id);
         if (snippet)
           break;
       }
+
       if (snippet && snippet->input_count > 0) {
         igText("Editing Snippet %d (%d inputs)", snippet->id, snippet->input_count);
         igSeparator();
 
+        // Begin scrollable child region
         igBeginChild_Str("InputsScroll", (ImVec2){0, 0}, true, 0);
-        for (int i = 0; i < snippet->input_count; i++) {
-          igPushID_Int(i);
-          SPlayerInput *inp = &snippet->inputs[i];
-          if (igTreeNode_Ptr(inp, "Tick %d", snippet->start_tick + i)) {
-            int dir_idx = inp->m_Direction + 1;
-            if (igCombo_Str_arr("Direction", &dir_idx, dir_options, 3, -1))
-              inp->m_Direction = dir_idx - 1;
-            igInputInt("Target X", &inp->m_TargetX, 1, 10, 0);
-            igInputInt("Target Y", &inp->m_TargetY, 1, 10, 0);
-            igInputInt("TeleOut", &inp->m_TeleOut, 1, 10, 0);
-            bool flag;
-            flag = inp->m_Jump;
-            if (igCheckbox("Jump", &flag))
-              inp->m_Jump = flag;
-            flag = inp->m_Fire;
-            if (igCheckbox("Fire", &flag))
-              inp->m_Fire = flag;
-            flag = inp->m_Hook;
-            if (igCheckbox("Hook", &flag))
-              inp->m_Hook = flag;
-            flag = inp->m_TeleOut;
-            int weapon_idx = inp->m_WantedWeapon;
-            if (igCombo_Str_arr("Weapon", &weapon_idx, weapon_options, 5, -1))
-              inp->m_WantedWeapon = (uint8_t)weapon_idx;
-            igTreePop();
+
+        // Define table flags
+        ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInner;
+
+        // Begin table with columns
+        if (igBeginTable("SnippetInputsTable", 8, flags, (ImVec2){0, 0}, 0)) {
+
+          // Setup column headers
+          igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 60.0f, 0);
+          igTableSetupColumn("Direction", ImGuiTableColumnFlags_WidthFixed, 70.0f, 1);
+          igTableSetupColumn("Target X", ImGuiTableColumnFlags_WidthFixed, 70.0f, 2);
+          igTableSetupColumn("Target Y", ImGuiTableColumnFlags_WidthFixed, 70.0f, 3);
+          igTableSetupColumn("TeleOut", ImGuiTableColumnFlags_WidthFixed, 70.0f, 4);
+          igTableSetupColumn("Jump", ImGuiTableColumnFlags_WidthFixed, 50.0f, 5);
+          igTableSetupColumn("Fire", ImGuiTableColumnFlags_WidthFixed, 50.0f, 6);
+          igTableSetupColumn("Hook", ImGuiTableColumnFlags_WidthFixed, 50.0f, 7);
+
+          igTableHeadersRow();
+
+          // Iterate over inputs
+          for (int i = 0; i < snippet->input_count; i++) {
+            SPlayerInput *inp = &snippet->inputs[i];
+            igTableNextRow(ImGuiTableRowFlags_None, 0.0f);
+
+            // Tick (read-only display)
+            igTableSetColumnIndex(0);
+            igText("%d", snippet->start_tick + i);
+
+            // Direction: plain int input (-1, 0, 1) — no buttons
+            igTableSetColumnIndex(1);
+            igPushID_Int(i * 10 + 1);
+            int dir_temp = (int)inp->m_Direction;    // promote to int
+            igInputInt("##Dir", &dir_temp, 0, 0, 0); // edit as int
+            dir_temp = iclamp(dir_temp, -1, 1);
+            if (dir_temp != (int)inp->m_Direction)
+              inp->m_Direction = (int8_t)dir_temp;
+            igPopID();
+
+            // Target X: full int range, no buttons
+            igTableSetColumnIndex(2);
+            igPushID_Int(i * 10 + 2);
+            igInputInt("##TX", &inp->m_TargetX, 0, 0, 0);
+            igPopID();
+
+            // Target Y: full int range, no buttons
+            igTableSetColumnIndex(3);
+            igPushID_Int(i * 10 + 3);
+            igInputInt("##TY", &inp->m_TargetY, 0, 0, 0);
+            igPopID();
+
+            // TeleOut: keep as is, but remove buttons
+            igTableSetColumnIndex(4);
+            igPushID_Int(i * 10 + 4);
+            igInputInt("##TO", &inp->m_TeleOut, 0, 0, 0);
+            igPopID();
+
+            // Jump (Checkbox)
+            igTableSetColumnIndex(5);
+            igPushID_Int(i * 10 + 5);
+            bool jump = inp->m_Jump;
+            if (igCheckbox("##J", &jump))
+              inp->m_Jump = jump;
+            igPopID();
+
+            // Fire (Checkbox)
+            igTableSetColumnIndex(6);
+            igPushID_Int(i * 10 + 6);
+            bool fire = inp->m_Fire;
+            if (igCheckbox("##F", &fire))
+              inp->m_Fire = fire;
+            igPopID();
+
+            // Hook (Checkbox)
+            igTableSetColumnIndex(7);
+            igPushID_Int(i * 10 + 7);
+            bool hook = inp->m_Hook;
+            if (igCheckbox("##H", &hook))
+              inp->m_Hook = hook;
+            igPopID();
           }
-          igPopID();
+
+          igEndTable();
         }
-        igEndChild();
+
+        igEndChild(); // End InputsScroll
       } else {
         igText("Snippet has no inputs");
       }
@@ -248,7 +307,7 @@ void on_camera_update(gfx_handler_t *handler) {
   if (width == 0 || height == 0)
     return;
 
-  float scroll_y = io->MouseWheel;
+  float scroll_y = io->WantCaptureMouse ? 0.0f : io->MouseWheel;
   if (igIsKeyPressed_Bool(ImGuiKey_W, true))
     scroll_y = 1.0f;
   if (igIsKeyPressed_Bool(ImGuiKey_S, true))
@@ -301,12 +360,20 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   NFD_Init();
 }
 
+static float lint2(float a, float b, float f) { return a + f * (b - a); }
+static void lerp(vec2 a, vec2 b, float f, vec2 out) {
+  out[0] = lint2(a[0], b[0], f);
+  out[1] = lint2(a[1], b[1], f);
+}
+
 void render_players(ui_handler_t *ui) {
   gfx_handler_t *gfx = ui->gfx_handler;
   physics_handler_t *ph = &gfx->physics_handler;
 
   SWorldCore world = wc_empty();
   wc_copy_world(&world, &ph->world);
+
+  int max_timeline = imin(get_max_timeline_tick(&ui->timeline), ui->timeline.current_tick);
   for (int i = 0; i < ui->timeline.current_tick; ++i) {
     for (int p = 0; p < world.m_NumCharacters; ++p) {
       SPlayerInput input = get_input(&ui->timeline, p, i);
@@ -325,30 +392,40 @@ void render_players(ui_handler_t *ui) {
         color[0] = 0.75f;
       if (!core->m_ReloadTimer && core->m_ActiveWeapon > 1)
         color[0] += 0.5f;
-      color[1] = vlength(core->m_Vel) / 10.f;
+      color[1] = vlength(core->m_Vel) / 50.f;
       renderer_draw_line(gfx, pp, p, color, 0.05);
     }
   }
 
+  float intra =
+      fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
+  if (igIsKeyDown_Nil(ImGuiKey_C))
+    intra = 1.f - intra;
   // quick fix the camera so it is updated in time for all the transformations
   if (ui->timeline.recording) {
     SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
-    vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+    vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+    vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+    vec2 p;
+    lerp(ppp, pp, intra, p);
     ui->gfx_handler->renderer.camera.pos[0] = (p[0]) / ui->gfx_handler->map_data->width;
     ui->gfx_handler->renderer.camera.pos[1] = (p[1]) / ui->gfx_handler->map_data->height;
   }
 
   for (int i = 0; i < ph->world.m_NumCharacters; ++i) {
     SCharacterCore *core = &world.m_pCharacters[i];
-    vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+
+    vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+    vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+    vec2 p;
+    lerp(ppp, pp, intra, p);
+
     vec4 color = {[3] = 1.f};
     memcpy(color, ui->timeline.player_tracks[i].player_info.color, 3 * sizeof(float));
     renderer_draw_circle_filled(gfx, p, 0.4375f, color, 32);
     mvec2 gun_pos = vnormalize(vec2_init(core->m_Input.m_TargetX, core->m_Input.m_TargetY));
     // printf("%d,%d\n", core->m_Input.m_TargetX, core->m_Input.m_TargetY);
-    renderer_draw_line(gfx, p,
-                       (vec2){vgetx(core->m_Pos) / 32.f + vgetx(gun_pos) * 0.75f,
-                              vgety(core->m_Pos) / 32.f + vgety(gun_pos) * 0.75f},
+    renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(gun_pos) * 0.75f, p[1] + vgety(gun_pos) * 0.75f},
                        (vec4){.5f, .5f, .5f, 1.f}, 0.2);
     if (core->m_HookState > 0)
       renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
@@ -358,11 +435,37 @@ void render_players(ui_handler_t *ui) {
   // render own cursor
   if (ui->timeline.recording) {
     SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
-    vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+    vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+    vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+    vec2 p;
+    lerp(ppp, pp, intra, p);
     renderer_draw_circle_filled(gfx,
                                 (vec2){p[0] + gfx->user_interface.timeline.recording_input.m_TargetX / 64.f,
                                        p[1] + gfx->user_interface.timeline.recording_input.m_TargetY / 64.f},
                                 0.25, (vec4){1.f, 0.f, 0.f, 0.4f}, 16);
+  }
+
+  if (ui->timeline.recording) {
+    for (int i = 0; i < 100; ++i) {
+      for (int p = 0; p < world.m_NumCharacters; ++p) {
+        SPlayerInput input = p == ui->timeline.selected_player_track_index ? ui->timeline.recording_input
+                                                                           : get_input(&ui->timeline, p, i);
+        cc_on_input(&world.m_pCharacters[p], &input);
+      }
+      wc_tick(&world);
+
+      for (int p = 0; p < world.m_NumCharacters; ++p) {
+        SCharacterCore *core = &world.m_pCharacters[ui->timeline.selected_player_track_index];
+        vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+        vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+        vec4 color = {[3] = 0.8f};
+        if (core->m_FreezeTime > 0)
+          color[0] = 1.f;
+        else
+          color[1] = 1.f;
+        renderer_draw_line(gfx, pp, p, color, 0.05);
+      }
+    }
   }
 }
 

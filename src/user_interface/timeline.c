@@ -384,9 +384,6 @@ void render_timeline_controls(timeline_state_t *ts) {
   if (igDragInt("Current Tick", &ts->current_tick, 1, 0, 100000, "%d", ImGuiSliderFlags_None)) {
     if (ts->current_tick < 0)
       ts->current_tick = 0;
-    // Optional: Center view on current tick if dragged
-    // ts->view_start_tick = ts->current_tick - (int)((igGetWindowSize_Nil()->x * 0.5f) / ts->zoom);
-    // if (ts->view_start_tick < 0) ts->view_start_tick = 0;
   }
 
   if ((igShortcut_Nil(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal) ||
@@ -496,6 +493,9 @@ void render_timeline_controls(timeline_state_t *ts) {
 void handle_timeline_interaction(timeline_state_t *ts, ImRect timeline_bb) {
   ImGuiIO *io = igGetIO_Nil();
   ImVec2 mouse_pos = io->MousePos;
+
+  if (!(io->ConfigFlags & ImGuiConfigFlags_NoMouse))
+    return;
 
   bool is_timeline_hovered = igIsMouseHoveringRect(timeline_bb.Min, timeline_bb.Max, true);
 
@@ -742,7 +742,6 @@ void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_ind
   ImDrawList_AddRect(draw_list, snippet_min, snippet_max, snippet_border_col, 4.0f,
                      ImDrawFlags_RoundCornersAll, border_thickness);
 
-  // Optional: Draw snippet name/ID text (ensure it fits and is visible)
   char label[64];
   snprintf(label, sizeof(label), "ID: %d", snippet->id);
   ImVec2 text_size;
@@ -795,6 +794,10 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
   igCalcTextSize(&text_size, track_label, NULL, false, 0);
   ImVec2 text_pos = {timeline_bb.Min.x + 10.0f, track_top + (ts->track_height - text_size.y) * 0.5f};
   ImDrawList_AddText_Vec2(draw_list, text_pos, igGetColorU32_Col(ImGuiCol_Text, 0.7f), track_label, NULL);
+
+  ImGuiIO *io = igGetIO_Nil();
+  if (!(io->ConfigFlags & ImGuiConfigFlags_NoMouse))
+    return;
 
   if (igIsMouseClicked_Bool(ImGuiMouseButton_Right, 0) &&
       igIsMouseHoveringRect((ImVec2){timeline_bb.Min.x, track_top}, (ImVec2){timeline_bb.Max.x, track_bottom},
@@ -858,7 +861,6 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
   }
 }
 
-// Renamed parameter for clarity
 void draw_playhead(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_bb, float playhead_start_y) {
   float playhead_x = tick_to_screen_x(ts, ts->current_tick, timeline_bb.Min.x);
 
@@ -961,8 +963,10 @@ void render_timeline(timeline_state_t *ts) {
   ImGuiIO *io = igGetIO_Nil();
 
   // Advance timeline state
-  if (igIsKeyPressed_Bool(ImGuiKey_C, false))
+  if (igIsKeyPressed_Bool(ImGuiKey_C, false)) {
+    ts->is_playing = 0;
     ts->last_update_time = igGetTime();
+  }
 
   bool reverse = igIsKeyDown_Nil(ImGuiKey_C);
   if ((ts->is_playing || reverse) && ts->playback_speed > 0.0f) {
@@ -982,7 +986,7 @@ void render_timeline(timeline_state_t *ts) {
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8, 8});
   igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 4.0f);
 
-  if (igBegin("Timeline", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+  if (igBegin("Timeline", NULL, ImGuiWindowFlags_NoScrollWithMouse)) {
     ImDrawList *draw_list = igGetWindowDrawList();
     ImDrawList *overlay_draw_list = igGetForegroundDrawList_WindowPtr(igGetCurrentWindow());
     igPopStyleVar(2);

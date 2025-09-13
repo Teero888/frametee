@@ -10,8 +10,8 @@
 #define MAX_MESHES 64
 #define MAX_TEXTURES_PER_DRAW 8
 #define MAX_UBOS_PER_DRAW 2
-#define MAX_PRIMITIVE_VERTICES 10000
-#define MAX_PRIMITIVE_INDICES 20000
+#define MAX_PRIMITIVE_VERTICES 100000
+#define MAX_PRIMITIVE_INDICES 200000
 
 typedef struct gfx_handler_t gfx_handler_t;
 

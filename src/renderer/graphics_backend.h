@@ -30,7 +30,6 @@ void gfx_cleanup(struct gfx_handler_t *handler);
 typedef struct {
   double x, y;   // last cursor pos
   double dx, dy; // delta since last poll
-  bool skip;     // to ignore crazy first delta
 } raw_mouse_t;
 
 struct gfx_handler_t {

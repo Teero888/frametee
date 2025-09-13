@@ -20,14 +20,14 @@ int main(void) {
     renderer_draw_map(&handler);
     ui_render(&handler.user_interface);
 
+    ImGuiIO *io = igGetIO_Nil();
     if (handler.user_interface.timeline.recording) {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-      int fbw, fbh;
-      glfwGetFramebufferSize(handler.window, &fbw, &fbh);
-      glfwSetCursorPos(handler.window, fbw / 2.f, fbh / 2.f);
-      handler.raw_mouse.skip = true;
-    } else
+      io->ConfigFlags |= ImGuiConfigFlags_NoMouse; // completely ignore mouse
+    } else {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+      io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse; // turn mouse back on
+    }
 
     // draw primitives
     if (handler.map_data->game_layer.data) {

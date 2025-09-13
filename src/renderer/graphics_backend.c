@@ -43,13 +43,6 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   if (!handler)
     return;
 
-  if (handler->raw_mouse.skip) {
-    handler->raw_mouse.x = xpos;
-    handler->raw_mouse.y = ypos;
-    handler->raw_mouse.skip = false;
-    return;
-  }
-
   handler->raw_mouse.dx += xpos - handler->raw_mouse.x;
   handler->raw_mouse.dy += ypos - handler->raw_mouse.y;
   handler->raw_mouse.x = xpos;
@@ -79,7 +72,6 @@ int init_gfx_handler(gfx_handler_t *handler) {
   glfwSetCursorPosCallback(handler->window, cursor_position_callback);
   handler->raw_mouse.x = handler->raw_mouse.y = 0.0;
   handler->raw_mouse.dx = handler->raw_mouse.dy = 0.0;
-  handler->raw_mouse.skip = true;
 
   if (init_vulkan(handler) != 0) {
     glfwDestroyWindow(handler->window);

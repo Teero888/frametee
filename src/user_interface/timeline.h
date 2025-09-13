@@ -61,6 +61,7 @@ player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph);
 SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick);
 input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int duration);
 void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx);
+int get_max_timeline_tick(timeline_state_t *ts);
 
 void render_timeline(timeline_state_t *ts);
 void timeline_init(timeline_state_t *ts);
