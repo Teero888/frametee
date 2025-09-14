@@ -98,8 +98,24 @@ typedef struct {
 } camera_t;
 
 typedef struct {
-  float left, right, bottom, top;
-} render_space_t;
+  vec2 pos;
+  float scale;
+  int skin_index;
+  int eye_state;
+} skin_instance_t;
+
+typedef struct {
+  shader_t *skin_shader;
+  buffer_t instance_buffer;
+  skin_instance_t *instance_ptr;
+  uint32_t instance_count;
+} skin_renderer_t;
+#define MAX_SKINS 1024
+
+typedef struct {
+  texture_t *atlas_array; // giant 2D array texture for all skins
+  bool layer_used[MAX_SKINS];
+} skin_atlas_manager_t;
 
 typedef struct {
   shader_t shaders[MAX_SHADERS];
@@ -134,7 +150,8 @@ typedef struct {
   camera_t camera;
   texture_t *default_texture;
   gfx_handler_t *gfx;
-  render_space_t primitive_space;
+  skin_atlas_manager_t skin_manager;
+  skin_renderer_t skin_renderer;
 } renderer_state_t;
 
 void check_vk_result(VkResult err);
@@ -168,5 +185,12 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
                                                     uint32_t num_tiles_x, uint32_t num_tiles_y);
 void screen_to_world(gfx_handler_t *handler, float screen_x, float screen_y, float *world_x, float *world_y);
 void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy);
+
+// -- Skin rendering ---
+void renderer_begin_skins(gfx_handler_t *h);
+void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state);
+void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array);
+int renderer_load_skin_from_file(gfx_handler_t *h, const char *path);
+void renderer_unload_skin(gfx_handler_t *h, int layer);
 
 #endif // RENDERER_H

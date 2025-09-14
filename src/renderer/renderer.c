@@ -36,18 +36,17 @@ static VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFo
 static VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
 static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, VkImage image,
                                     VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout,
-                                    uint32_t mip_levels, uint32_t layer_count);
+                                    uint32_t mip_levels, uint32_t base_layer, uint32_t layer_count);
 static void copy_buffer_to_image(gfx_handler_t *handler, VkCommandPool pool, VkBuffer buffer, VkImage image,
                                  uint32_t width, uint32_t height);
 static char *read_file(const char *filename, size_t *length);
 static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *code, size_t code_size);
 static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height,
                           uint32_t mip_levels, uint32_t layer_count);
-static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader,
-                                                      uint32_t ubo_count, uint32_t texture_count,
-                                                      VkVertexInputBindingDescription *binding_desc,
-                                                      VkVertexInputAttributeDescription *attrib_descs,
-                                                      uint32_t attrib_desc_count);
+static pipeline_cache_entry_t *
+get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count,
+                       const VkVertexInputBindingDescription *binding_descs, uint32_t binding_desc_count,
+                       const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count);
 static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
 // --- Vertex Description Helpers ---
@@ -55,6 +54,10 @@ static VkVertexInputBindingDescription primitive_binding_description;
 static VkVertexInputAttributeDescription primitive_attribute_descriptions[2];
 static VkVertexInputBindingDescription mesh_binding_description;
 static VkVertexInputAttributeDescription mesh_attribute_descriptions[3];
+// skin instancing
+static VkVertexInputBindingDescription skin_binding_desc[2];
+static VkVertexInputAttributeDescription skin_attrib_descs[5];
+
 static void setup_vertex_descriptions();
 
 void check_vk_result(VkResult err) {
@@ -168,7 +171,7 @@ static void copy_buffer(gfx_handler_t *handler, VkCommandPool pool, VkBuffer src
 
 static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, VkImage image,
                                     VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout,
-                                    uint32_t mip_levels, uint32_t layer_count) {
+                                    uint32_t mip_levels, uint32_t base_layer, uint32_t layer_count) {
   VkCommandBuffer command_buffer = begin_single_time_commands(handler, pool);
 
   VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -180,7 +183,7 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
                                   .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                                        .baseMipLevel = 0,
                                                        .levelCount = mip_levels,
-                                                       .baseArrayLayer = 0,
+                                                       .baseArrayLayer = base_layer,
                                                        .layerCount = layer_count}};
 
   VkPipelineStageFlags source_stage;
@@ -190,6 +193,18 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
     barrier.srcAccessMask = 0;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     source_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+             new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  } else if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+             new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    source_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
   } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
              new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
@@ -412,6 +427,59 @@ static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width,
   return true;
 }
 
+texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height,
+                                            uint32_t layer_count, VkFormat format) {
+  renderer_state_t *renderer = &handler->renderer;
+
+  // find free slot
+  uint32_t free_slot = (uint32_t)-1;
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
+    if (!renderer->textures[i].active) {
+      free_slot = i;
+      break;
+    }
+  }
+  if (free_slot == (uint32_t)-1) {
+    fprintf(stderr, "Max texture count reached.\n");
+    return NULL;
+  }
+
+  texture_t *texArray = &renderer->textures[free_slot];
+  memset(texArray, 0, sizeof(texture_t));
+  texArray->id = free_slot;
+  texArray->active = true;
+  texArray->width = width;
+  texArray->height = height;
+  texArray->mip_levels = 1; // can expand to mip chain later
+  texArray->layer_count = layer_count;
+  strncpy(texArray->path, "runtime_skin_array", sizeof(texArray->path) - 1);
+
+  // Create the VkImage (2D array)
+  create_image(handler, width, height, texArray->mip_levels, layer_count, format, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texArray->image, &texArray->memory);
+
+  // Transition all layers once
+  transition_image_layout(handler, renderer->transfer_command_pool, texArray->image, format,
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          texArray->mip_levels, 0, layer_count);
+  // Transition to shader read (empty until uploads)
+  transition_image_layout(handler, renderer->transfer_command_pool, texArray->image, format,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          texArray->mip_levels, 0, layer_count);
+
+  // Create view as 2D array
+  texArray->image_view = create_image_view(handler, texArray->image, format, VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                                           texArray->mip_levels, layer_count);
+
+  // Create sampler
+  texArray->sampler = create_texture_sampler(handler, texArray->mip_levels, VK_FILTER_LINEAR);
+
+  printf("Created 2D texture array (%ux%u x %u layers)\n", width, height, layer_count);
+
+  return texArray;
+}
+
 int renderer_init(gfx_handler_t *handler) {
   renderer_state_t *renderer = &handler->renderer;
   memset(renderer, 0, sizeof(renderer_state_t));
@@ -469,6 +537,23 @@ int renderer_init(gfx_handler_t *handler) {
                 &renderer->dynamic_ubo_buffer);
   vkMapMemory(handler->g_Device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0,
               &renderer->ubo_buffer_ptr);
+
+  // Create a 2D array texture to hold MAX_SKINS atlases (each 256x128, RGBA8)
+  renderer->skin_manager.atlas_array =
+      renderer_create_texture_2d_array(handler, 256, 128, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
+  memset(renderer->skin_manager.layer_used, 0, sizeof(renderer->skin_manager.layer_used));
+  // Skin Renderer
+  renderer->skin_renderer.skin_shader =
+      renderer_load_shader(handler, "data/shaders/skin.vert.spv", "data/shaders/skin.frag.spv");
+
+  // Allocate big instance buffer (enough for thousands)
+  create_buffer(handler, sizeof(skin_instance_t) * 10000, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &renderer->skin_renderer.instance_buffer);
+  vkMapMemory(handler->g_Device, renderer->skin_renderer.instance_buffer.memory, 0, VK_WHOLE_SIZE, 0,
+              (void **)&renderer->skin_renderer.instance_ptr);
+
+  renderer->skin_renderer.instance_count = 0;
 
   printf("Renderer initialized.\n");
   return 0;
@@ -535,14 +620,19 @@ void renderer_cleanup(gfx_handler_t *handler) {
   }
   vkDestroyCommandPool(device, renderer->transfer_command_pool, allocator);
 
+  // free skin instance buffer
+  if (renderer->skin_renderer.instance_buffer.buffer) {
+    vkDestroyBuffer(device, renderer->skin_renderer.instance_buffer.buffer, allocator);
+    vkFreeMemory(device, renderer->skin_renderer.instance_buffer.memory, allocator);
+  }
+
   printf("Renderer cleaned up.\n");
 }
 
-static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader,
-                                                      uint32_t ubo_count, uint32_t texture_count,
-                                                      VkVertexInputBindingDescription *binding_desc,
-                                                      VkVertexInputAttributeDescription *attrib_descs,
-                                                      uint32_t attrib_desc_count) {
+static pipeline_cache_entry_t *
+get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count,
+                       const VkVertexInputBindingDescription *binding_descs, uint32_t binding_desc_count,
+                       const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count) {
   renderer_state_t *renderer = &handler->renderer;
   pipeline_cache_entry_t *entry = &renderer->pipeline_cache[shader->id];
 
@@ -603,8 +693,8 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
 
   VkPipelineVertexInputStateCreateInfo vertex_input_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-      .vertexBindingDescriptionCount = 1,
-      .pVertexBindingDescriptions = binding_desc,
+      .vertexBindingDescriptionCount = binding_desc_count,
+      .pVertexBindingDescriptions = binding_descs,
       .vertexAttributeDescriptionCount = attrib_desc_count,
       .pVertexAttributeDescriptions = attrib_descs};
 
@@ -773,12 +863,12 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
   transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 1);
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 0, 1);
   copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, width,
                        height);
   transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
-                          1);
+                          0, 1);
 
   vkDestroyBuffer(handler->g_Device, staging_buffer.buffer, handler->g_Allocator);
   vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
@@ -848,7 +938,7 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
 
   transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_levels, 1);
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_levels, 0, 1);
   copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image,
                        tex_width, tex_height);
 
@@ -858,7 +948,7 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   if (!build_mipmaps(handler, texture->image, tex_width, tex_height, mip_levels, 1)) {
     transition_image_layout(handler, renderer->transfer_command_pool, texture->image,
                             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mip_levels, 1);
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mip_levels, 0, 1);
   }
 
   texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
@@ -962,8 +1052,9 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
     return;
   renderer_state_t *renderer = &handler->renderer;
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(
-      handler, shader, ubo_count, texture_count, &mesh_binding_description, mesh_attribute_descriptions, 3);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, shader, ubo_count, texture_count,
+                                                       &mesh_binding_description, 1, // one binding
+                                                       mesh_attribute_descriptions, 3);
 
   // Allocate a descriptor set for this pipeline
   VkDescriptorSet descriptor_set;
@@ -1088,7 +1179,7 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &tex_array->image, &tex_array->memory);
   transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
                           VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_levels, layer_count);
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_levels, 0, layer_count);
 
   VkCommandBuffer cmd = begin_single_time_commands(handler, renderer->transfer_command_pool);
   VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -1204,6 +1295,34 @@ static void setup_vertex_descriptions() {
                                           .location = 2,
                                           .format = VK_FORMAT_R32G32_SFLOAT,
                                           .offset = offsetof(vertex_t, tex_coord)};
+
+  // --- skin instanced data ---
+  skin_binding_desc[0] = (VkVertexInputBindingDescription){
+      .binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+  skin_binding_desc[1] = (VkVertexInputBindingDescription){
+      .binding = 1, .stride = sizeof(skin_instance_t), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE};
+
+  int i = 0;
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
+                                                               .location = 1,
+                                                               .format = VK_FORMAT_R32G32_SFLOAT,
+                                                               .offset = offsetof(skin_instance_t, pos)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
+                                                               .location = 2,
+                                                               .format = VK_FORMAT_R32_SFLOAT,
+                                                               .offset = offsetof(skin_instance_t, scale)};
+  skin_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1,
+                                          .location = 3,
+                                          .format = VK_FORMAT_R32_SINT,
+                                          .offset = offsetof(skin_instance_t, skin_index)};
+  skin_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1,
+                                          .location = 4,
+                                          .format = VK_FORMAT_R32_SINT,
+                                          .offset = offsetof(skin_instance_t, eye_state)};
 }
 
 // --- Primitive Drawing Implementation ---
@@ -1213,9 +1332,9 @@ static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buf
     return;
   }
 
-  pipeline_cache_entry_t *pso =
-      get_or_create_pipeline(handler, renderer->primitive_shader, 1, 0, &primitive_binding_description,
-                             primitive_attribute_descriptions, 2);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, renderer->primitive_shader, 1, 0,
+                                                       &primitive_binding_description, 1, // one binding
+                                                       primitive_attribute_descriptions, 2);
 
   int fbw, fbh;
   glfwGetFramebufferSize(handler->window, &fbw, &fbh);
@@ -1417,4 +1536,181 @@ void renderer_draw_map(gfx_handler_t *h) {
   VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
   renderer_draw_mesh(h, h->current_frame_command_buffer, h->quad_mesh, h->map_shader, h->map_textures,
                      h->map_texture_count, ubos, ubo_sizes, 1);
+}
+
+static int skin_manager_alloc_layer(renderer_state_t *r) {
+  for (int i = 0; i < MAX_SKINS; i++) {
+    if (!r->skin_manager.layer_used[i]) {
+      r->skin_manager.layer_used[i] = true;
+      return i;
+    }
+  }
+  return -1; // full
+}
+
+static void skin_manager_free_layer(renderer_state_t *r, int idx) {
+  if (idx >= 0 && idx < MAX_SKINS) {
+    r->skin_manager.layer_used[idx] = false;
+  }
+}
+
+void renderer_begin_skins(gfx_handler_t *h) { h->renderer.skin_renderer.instance_count = 0; }
+
+void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state) {
+  skin_renderer_t *sr = &h->renderer.skin_renderer;
+  uint32_t i = sr->instance_count++;
+  sr->instance_ptr[i].pos[0] = pos[0];
+  sr->instance_ptr[i].pos[1] = pos[1];
+  sr->instance_ptr[i].scale = scale;
+  sr->instance_ptr[i].skin_index = skin_index;
+  sr->instance_ptr[i].eye_state = eye_state + 6;
+}
+
+void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array) {
+  renderer_state_t *renderer = &h->renderer;
+  skin_renderer_t *sr = &renderer->skin_renderer;
+  if (sr->instance_count == 0)
+    return;
+
+  mesh_t *quad = h->quad_mesh;
+
+  // pipeline: 1 UBO + 1 texture
+  pipeline_cache_entry_t *pso =
+      get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 5);
+
+  // --- prepare camera UBO (same as primitives) ---
+  int fbw, fbh;
+  glfwGetFramebufferSize(h->window, &fbw, &fbh);
+  primitive_ubo_t ubo;
+  ubo.camPos[0] = renderer->camera.pos[0];
+  ubo.camPos[1] = renderer->camera.pos[1];
+  ubo.zoom = renderer->camera.zoom;
+  float window_ratio = (float)fbw / (float)fbh;
+  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
+  ubo.aspect = window_ratio / map_ratio;
+  ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
+  ubo.mapSize[0] = h->map_data->width;
+  ubo.mapSize[1] = h->map_data->height;
+  glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
+
+  // copy into dynamic UBO ring
+  VkDeviceSize ubo_size = sizeof(ubo);
+  VkDeviceSize aligned = (ubo_size + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
+  uint32_t dyn_offset = renderer->ubo_buffer_offset;
+  memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, ubo_size);
+  renderer->ubo_buffer_offset += aligned;
+
+  // Allocate descriptor set
+  uint32_t pool_idx = h->g_MainWindowData.FrameIndex % 3;
+  VkDescriptorSet desc;
+  VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                    .descriptorPool = renderer->frame_descriptor_pools[pool_idx],
+                                    .descriptorSetCount = 1,
+                                    .pSetLayouts = &pso->descriptor_set_layout};
+  check_vk_result(vkAllocateDescriptorSets(h->g_Device, &ai, &desc));
+
+  // write UBO
+  VkDescriptorBufferInfo bufInfo = {
+      .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = 0, .range = sizeof(primitive_ubo_t)};
+  VkDescriptorImageInfo img = {.sampler = skin_array->sampler,
+                               .imageView = skin_array->image_view,
+                               .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  VkWriteDescriptorSet writes[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                     .dstSet = desc,
+                                     .dstBinding = 0,
+                                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                                     .descriptorCount = 1,
+                                     .pBufferInfo = &bufInfo},
+                                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                     .dstSet = desc,
+                                     .dstBinding = 1,
+                                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                     .descriptorCount = 1,
+                                     .pImageInfo = &img}};
+  vkUpdateDescriptorSets(h->g_Device, 2, writes, 0, NULL);
+
+  // --- issue draw ---
+  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
+  VkBuffer bufs[2] = {quad->vertex_buffer.buffer, sr->instance_buffer.buffer};
+  VkDeviceSize offs[2] = {0, 0};
+  vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
+  vkCmdBindIndexBuffer(cmd, quad->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 1,
+                          &dyn_offset);
+  vkCmdDrawIndexed(cmd, quad->index_count, sr->instance_count, 0, 0, 0);
+
+  sr->instance_count = 0;
+}
+
+int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
+  int tex_width, tex_height, channels;
+  stbi_uc *pixels = stbi_load(path, &tex_width, &tex_height, &channels, STBI_rgb_alpha);
+  if (!pixels) {
+    fprintf(stderr, "Failed to load skin: %s\n", path);
+    return -1;
+  }
+
+  // Check dimensions (must be multiple of 256x128)
+  if (tex_width % 256 != 0 || tex_height % 128 != 0) {
+    fprintf(stderr, "Skin %s has invalid dimensions (%dx%d)\n", path, tex_width, tex_height);
+    stbi_image_free(pixels);
+    return -1;
+  }
+
+  renderer_state_t *r = &h->renderer;
+  int layer = skin_manager_alloc_layer(r);
+  if (layer < 0) {
+    fprintf(stderr, "No free skin layers available\n");
+    stbi_image_free(pixels);
+    return -1;
+  }
+
+  // Create staging buffer
+  VkDeviceSize image_size = tex_width * tex_height * 4;
+  buffer_t staging;
+  create_buffer(h, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging);
+
+  void *data;
+  vkMapMemory(h->g_Device, staging.memory, 0, image_size, 0, &data);
+  memcpy(data, pixels, image_size);
+  vkUnmapMemory(h->g_Device, staging.memory);
+  stbi_image_free(pixels);
+
+  // Transition -> TRANSFER_DST
+  transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image,
+                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, layer, 1);
+
+  // Copy staging buffer into array slice
+  VkCommandBuffer cmd = begin_single_time_commands(h, r->transfer_command_pool);
+  VkBufferImageCopy region = {
+      .bufferOffset = 0,
+      .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                           .mipLevel = 0,
+                           .baseArrayLayer = layer,
+                           .layerCount = 1},
+      .imageExtent = {(uint32_t)tex_width, (uint32_t)tex_height, 1},
+  };
+  vkCmdCopyBufferToImage(cmd, staging.buffer, r->skin_manager.atlas_array->image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  end_single_time_commands(h, r->transfer_command_pool, cmd);
+
+  // Transition this layer back to shader-read
+  transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image,
+                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, layer, 1);
+
+  // Cleanup staging
+  vkDestroyBuffer(h->g_Device, staging.buffer, h->g_Allocator);
+  vkFreeMemory(h->g_Device, staging.memory, h->g_Allocator);
+
+  printf("Loaded skin %s into layer %d\n", path, layer);
+  return layer; // return usable skin index
+}
+
+void renderer_unload_skin(gfx_handler_t *h, int layer) {
+  renderer_state_t *r = &h->renderer;
+  skin_manager_free_layer(r, layer);
+  printf("Freed skin layer %d\n", layer);
 }

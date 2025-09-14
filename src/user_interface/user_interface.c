@@ -408,7 +408,7 @@ void render_players(ui_handler_t *ui) {
       if (!core->m_ReloadTimer && core->m_ActiveWeapon > 1)
         color[0] += 0.5f;
       color[1] = vlength(core->m_Vel) / 50.f;
-      renderer_draw_line(gfx, pp, p, color, 0.05);
+      // renderer_draw_line(gfx, pp, p, color, 0.05);
     }
   }
 
@@ -435,13 +435,12 @@ void render_players(ui_handler_t *ui) {
     vec2 p;
     lerp(ppp, pp, intra, p);
 
-    vec4 color = {[3] = 1.f};
-    memcpy(color, ui->timeline.player_tracks[i].player_info.color, 3 * sizeof(float));
-    renderer_draw_circle_filled(gfx, p, 0.4375f, color, 32);
-    mvec2 gun_pos = vnormalize(vec2_init(core->m_Input.m_TargetX, core->m_Input.m_TargetY));
-    // printf("%d,%d\n", core->m_Input.m_TargetX, core->m_Input.m_TargetY);
-    renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(gun_pos) * 0.75f, p[1] + vgety(gun_pos) * 0.75f},
-                       (vec4){.5f, .5f, .5f, 1.f}, 0.2);
+    renderer_push_skin_instance(gfx, p, 1.0f, gfx->default_skin, 0); // normal eyes
+
+    // mvec2 gun_pos = vnormalize(vec2_init(core->m_Input.m_TargetX, core->m_Input.m_TargetY));
+    // // printf("%d,%d\n", core->m_Input.m_TargetX, core->m_Input.m_TargetY);
+    // renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(gun_pos) * 0.75f, p[1] + vgety(gun_pos) * 0.75f},
+    //                    (vec4){.5f, .5f, .5f, 1.f}, 0.2);
     if (core->m_HookState > 0)
       renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
                          (vec4){1.f, 1.f, 1.f, 1.f}, 0.05);
@@ -479,7 +478,7 @@ void render_players(ui_handler_t *ui) {
           color[0] = 1.f;
         else
           color[1] = 1.f;
-        renderer_draw_line(gfx, pp, p, color, 0.05);
+        // renderer_draw_line(gfx, pp, p, color, 0.05);
       }
     }
   }

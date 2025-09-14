@@ -122,6 +122,12 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->entities_array = renderer_create_texture_array_from_atlas(handler, entities_atlas, 64, 64, 16, 16);
   handler->entities_atlas = entities_atlas;
 
+  handler->default_skin = renderer_load_skin_from_file(handler, "data/textures/default.png");
+  if (handler->default_skin == -1) {
+    printf("ERROR: Default skin texture not found: \"data/textures/default.png\". Maybe you started the "
+           "program from the wrong path?\n");
+  }
+
   return 0;
 }
 
@@ -287,6 +293,8 @@ void gfx_cleanup(gfx_handler_t *handler) {
 
   physics_free(&handler->physics_handler);
   handler->map_data = 0x0;
+
+  renderer_unload_skin(&handler, handler->default_skin);
 
   renderer_cleanup(handler);
   ImGui_ImplVulkan_Shutdown();

@@ -17,7 +17,12 @@ int main(void) {
       continue;
 
     on_camera_update(&handler);
+
+    renderer_begin_skins(&handler);
     render_players(&handler.user_interface);
+    renderer_flush_skins(&handler, handler.current_frame_command_buffer,
+                         handler.renderer.skin_manager.atlas_array);
+
     renderer_draw_map(&handler);
     ui_render(&handler.user_interface);
 
@@ -29,17 +34,6 @@ int main(void) {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
       io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse; // turn mouse back on
     }
-
-    // draw primitives
-    // if (handler.map_data->game_layer.data) {
-    //   vec4 border_color = {1.0f, 0.0f, 0.0f, 1.0f};
-    //   renderer_draw_line(&handler, (vec2){0, 0}, (vec2){handler.map_data->width, 0.0}, border_color, 0.1f);
-    //   renderer_draw_line(&handler, (vec2){0, 0}, (vec2){0.0, handler.map_data->height}, border_color,
-    //   0.1f); renderer_draw_line(&handler, (vec2){handler.map_data->width, 0},
-    //                      (vec2){handler.map_data->width, handler.map_data->height}, border_color, 0.1f);
-    //   renderer_draw_line(&handler, (vec2){0, handler.map_data->height},
-    //                      (vec2){handler.map_data->width, handler.map_data->height}, border_color, 0.1f);
-    // }
 
     gfx_end_frame(&handler);
   }

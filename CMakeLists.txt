@@ -17,6 +17,8 @@ set(SRCS
     src/user_interface/player_info.c
     src/user_interface/timeline.c
     src/user_interface/user_interface.c
+    src/animation/anim_data.c
+    src/animation/anim.c
 )
 
 # find dependencies
