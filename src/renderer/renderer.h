@@ -1,6 +1,7 @@
 #ifndef RENDERER_H
 #define RENDERER_H
 
+#include "../animation/anim_system.h"
 #include <cglm/cglm.h>
 #include <stdbool.h>
 #include <vulkan/vulkan_core.h>
@@ -102,6 +103,12 @@ typedef struct {
   float scale;
   int skin_index;
   int eye_state;
+
+  // Animation data per-part (x,y offset + angle)
+  vec4 body; // x, y, angle, unused
+  vec4 back_foot;
+  vec4 front_foot;
+  vec4 attach;
 } skin_instance_t;
 
 typedef struct {
@@ -188,7 +195,8 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
 
 // -- Skin rendering ---
 void renderer_begin_skins(gfx_handler_t *h);
-void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state);
+void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state,
+                                 const anim_state_t *anim_state);
 void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array);
 int renderer_load_skin_from_file(gfx_handler_t *h, const char *path);
 void renderer_unload_skin(gfx_handler_t *h, int layer);

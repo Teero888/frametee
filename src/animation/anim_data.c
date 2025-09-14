@@ -1,3 +1,4 @@
+#include "anim_data.h"
 #include "anim_system.h"
 #include <string.h>
 
@@ -63,4 +64,24 @@ static const anim_keyframe_t ninja_attach[] = {{0.00f, 0, 0, -0.25f}, {0.10f, 0,
                                                {0.50f, 0, 0, 0.35f},  {1.00f, 0, 0, -0.25f}};
 const animation_t anim_ninja_swing = {"ninja_swing", {0, NULL}, {0, NULL}, {0, NULL}, {6, ninja_attach}};
 
-/* You’d continue with sit_left, sit_right, inair, etc. in the same way */
+/* ---- Inair ---- */
+static const anim_keyframe_t inair_backfoot[] = {{0.0f, -3.0f, 0.0f, -0.1f}};
+static const anim_keyframe_t inair_frontfoot[] = {{0.0f, 3.0f, 0.0f, -0.1f}};
+
+const animation_t anim_inair = {"inair", {0, NULL}, {1, inair_backfoot}, {1, inair_frontfoot}, {0, NULL}};
+
+/* ---- Sit Left ---- */
+static const anim_keyframe_t sitl_body[] = {{0.0f, 0.0f, 3.0f, 0.0f}};
+static const anim_keyframe_t sitl_backfoot[] = {{0.0f, -12.0f, 0.0f, 0.1f}};
+static const anim_keyframe_t sitl_frontfoot[] = {{0.0f, -8.0f, 0.0f, 0.1f}};
+
+const animation_t anim_sit_left = {
+    "sit_left", {1, sitl_body}, {1, sitl_backfoot}, {1, sitl_frontfoot}, {0, NULL}};
+
+/* ---- Sit Right ---- */
+static const anim_keyframe_t sitr_body[] = {{0.0f, 0.0f, 3.0f, 0.0f}};
+static const anim_keyframe_t sitr_backfoot[] = {{0.0f, 12.0f, 0.0f, -0.1f}};
+static const anim_keyframe_t sitr_frontfoot[] = {{0.0f, 8.0f, 0.0f, -0.1f}};
+
+const animation_t anim_sit_right = {
+    "sit_right", {1, sitr_body}, {1, sitr_backfoot}, {1, sitr_frontfoot}, {0, NULL}};

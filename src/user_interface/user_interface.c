@@ -1,4 +1,5 @@
 #include "user_interface.h"
+#include "../animation/anim_data.h"
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
 #include "cimgui.h"
@@ -435,7 +436,21 @@ void render_players(ui_handler_t *ui) {
     vec2 p;
     lerp(ppp, pp, intra, p);
 
-    renderer_push_skin_instance(gfx, p, 1.0f, gfx->default_skin, 0); // normal eyes
+    anim_state_t anim_state;
+    anim_state_set(&anim_state, &anim_base, 0.0f);
+
+    const bool Grounded =
+        (core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) &&
+        (check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos) + HALFPHYSICALSIZE,
+                                                   vgety(core->m_Pos) + HALFPHYSICALSIZE + 5)) ||
+         check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos) - HALFPHYSICALSIZE,
+                                                   vgety(core->m_Pos) + HALFPHYSICALSIZE + 5)));
+    if (Grounded)
+      anim_state_add(&anim_state, &anim_idle, 0.0f, 1.0f);
+    else
+      anim_state_add(&anim_state, &anim_inair, 0.0f, 1.0f);
+
+    renderer_push_skin_instance(gfx, p, 1.0f, gfx->default_skin, 0, &anim_state); // normal eyes
 
     // mvec2 gun_pos = vnormalize(vec2_init(core->m_Input.m_TargetX, core->m_Input.m_TargetY));
     // // printf("%d,%d\n", core->m_Input.m_TargetX, core->m_Input.m_TargetY);

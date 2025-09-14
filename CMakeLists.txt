@@ -18,7 +18,7 @@ set(SRCS
     src/user_interface/timeline.c
     src/user_interface/user_interface.c
     src/animation/anim_data.c
-    src/animation/anim.c
+    src/animation/anim_system.c
 )
 
 # find dependencies

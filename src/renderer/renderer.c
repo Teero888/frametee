@@ -1323,6 +1323,24 @@ static void setup_vertex_descriptions() {
                                           .location = 4,
                                           .format = VK_FORMAT_R32_SINT,
                                           .offset = offsetof(skin_instance_t, eye_state)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
+                                                               .location = 5,
+                                                               .format = VK_FORMAT_R32G32B32_SFLOAT,
+                                                               .offset = offsetof(skin_instance_t, body)};
+  skin_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1,
+                                          .location = 6,
+                                          .format = VK_FORMAT_R32G32B32_SFLOAT,
+                                          .offset = offsetof(skin_instance_t, back_foot)};
+  skin_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1,
+                                          .location = 7,
+                                          .format = VK_FORMAT_R32G32B32_SFLOAT,
+                                          .offset = offsetof(skin_instance_t, front_foot)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
+                                                               .location = 8,
+                                                               .format = VK_FORMAT_R32G32B32_SFLOAT,
+                                                               .offset = offsetof(skin_instance_t, attach)};
 }
 
 // --- Primitive Drawing Implementation ---
@@ -1556,7 +1574,8 @@ static void skin_manager_free_layer(renderer_state_t *r, int idx) {
 
 void renderer_begin_skins(gfx_handler_t *h) { h->renderer.skin_renderer.instance_count = 0; }
 
-void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state) {
+void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state,
+                                 const anim_state_t *anim_state) {
   skin_renderer_t *sr = &h->renderer.skin_renderer;
   uint32_t i = sr->instance_count++;
   sr->instance_ptr[i].pos[0] = pos[0];
@@ -1564,6 +1583,22 @@ void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int sk
   sr->instance_ptr[i].scale = scale;
   sr->instance_ptr[i].skin_index = skin_index;
   sr->instance_ptr[i].eye_state = eye_state + 6;
+
+  sr->instance_ptr[i].body[0] = anim_state->body.x;
+  sr->instance_ptr[i].body[1] = anim_state->body.y;
+  sr->instance_ptr[i].body[2] = anim_state->body.angle;
+
+  sr->instance_ptr[i].back_foot[0] = anim_state->back_foot.x;
+  sr->instance_ptr[i].back_foot[1] = anim_state->back_foot.y;
+  sr->instance_ptr[i].back_foot[2] = anim_state->back_foot.angle;
+
+  sr->instance_ptr[i].front_foot[0] = anim_state->front_foot.x;
+  sr->instance_ptr[i].front_foot[1] = anim_state->front_foot.y;
+  sr->instance_ptr[i].front_foot[2] = anim_state->front_foot.angle;
+
+  sr->instance_ptr[i].attach[0] = anim_state->attach.x;
+  sr->instance_ptr[i].attach[1] = anim_state->attach.y;
+  sr->instance_ptr[i].attach[2] = anim_state->attach.angle;
 }
 
 void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array) {
@@ -1576,7 +1611,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
 
   // pipeline: 1 UBO + 1 texture
   pipeline_cache_entry_t *pso =
-      get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 5);
+      get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 9);
 
   // --- prepare camera UBO (same as primitives) ---
   int fbw, fbh;
