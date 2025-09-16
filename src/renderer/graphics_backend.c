@@ -304,8 +304,6 @@ void gfx_cleanup(gfx_handler_t *handler) {
   physics_free(&handler->physics_handler);
   handler->map_data = 0x0;
 
-  renderer_unload_skin(&handler, handler->default_skin);
-
   renderer_cleanup(handler);
   ImGui_ImplVulkan_Shutdown();
   ImGui_ImplGlfw_Shutdown();
@@ -317,11 +315,11 @@ void gfx_cleanup(gfx_handler_t *handler) {
   glfwTerminate();
 }
 
-// Helper to load a single map layer texture, returns default if fails
-static texture_t *load_layer_texture(gfx_handler_t *handler, uint8_t *data, uint32_t width, uint32_t height) {
+static texture_t *load_layer_texture(gfx_handler_t *handler, uint8_t **data, uint32_t width,
+                                     uint32_t height) {
   if (!data)
     return handler->renderer.default_texture;
-  texture_t *tex = renderer_load_texture_from_array(handler, data, width, height);
+  texture_t *tex = renderer_load_compact_texture_from_array(handler, data, width, height);
   return tex ? tex : handler->renderer.default_texture;
 }
 
@@ -358,19 +356,18 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
   // entities texture
   handler->map_textures[handler->map_texture_count++] =
       handler->entities_array ? handler->entities_array : handler->renderer.default_texture;
+
+  uint8_t *map[2][3] = {
+      {handler->map_data->game_layer.data, handler->map_data->front_layer.data,
+       handler->map_data->tele_layer.type},
+      {handler->map_data->tune_layer.type, handler->map_data->speedup_layer.type,
+       handler->map_data->switch_layer.type},
+  };
   // collision textures
-  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data->game_layer.data, handler->map_data->width, handler->map_data->height);
-  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data->front_layer.data, handler->map_data->width, handler->map_data->height);
-  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data->tele_layer.type, handler->map_data->width, handler->map_data->height);
-  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data->tune_layer.type, handler->map_data->width, handler->map_data->height);
-  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data->speedup_layer.type, handler->map_data->width, handler->map_data->height);
-  handler->map_textures[handler->map_texture_count++] = load_layer_texture(
-      handler, handler->map_data->switch_layer.type, handler->map_data->width, handler->map_data->height);
+  handler->map_textures[handler->map_texture_count++] =
+      load_layer_texture(handler, map[0], handler->map_data->width, handler->map_data->height);
+  handler->map_textures[handler->map_texture_count++] =
+      load_layer_texture(handler, map[1], handler->map_data->width, handler->map_data->height);
 }
 
 // --- Initialization and Cleanup ---

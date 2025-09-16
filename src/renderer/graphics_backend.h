@@ -68,6 +68,7 @@ struct gfx_handler_t {
   // --- Map Specific Render Data ---
   shader_t *map_shader;
   mesh_t *quad_mesh;
+  // TODO: this should be 2
   texture_t *map_textures[MAX_TEXTURES_PER_DRAW];
   uint32_t map_texture_count;
 

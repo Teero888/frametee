@@ -806,6 +806,83 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
   return shader;
 }
 
+texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, const uint8_t **pixel_array,
+                                                    uint32_t width, uint32_t height) {
+  renderer_state_t *renderer = &handler->renderer;
+  if (!pixel_array)
+    return NULL;
+
+  uint32_t free_slot = (uint32_t)-1;
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
+    if (!renderer->textures[i].active) {
+      free_slot = i;
+      break;
+    }
+  }
+
+  if (free_slot == (uint32_t)-1) {
+    fprintf(stderr, "Max texture count reached.\n");
+    return NULL;
+  }
+
+  VkDeviceSize image_size = (VkDeviceSize)width * height * 4;
+
+  stbi_uc *rgba_pixels = calloc(1, image_size);
+  if (height == 1 && width == 1) { // Special case for default texture
+    memcpy(rgba_pixels, pixel_array, image_size);
+  } else {
+    for (uint32_t i = 0; i < width * height; i++) {
+      if (pixel_array[0])
+        rgba_pixels[i * 4 + 0] = pixel_array[0][i];
+      if (pixel_array[1])
+        rgba_pixels[i * 4 + 1] = pixel_array[1][i];
+      if (pixel_array[2])
+        rgba_pixels[i * 4 + 2] = pixel_array[2][i];
+      rgba_pixels[i * 4 + 3] = 255;
+    }
+  }
+
+  texture_t *texture = &renderer->textures[free_slot];
+  memset(texture, 0, sizeof(texture_t));
+  texture->id = free_slot;
+  texture->active = true;
+  texture->width = width;
+  texture->height = height;
+  texture->mip_levels = 1;
+  texture->layer_count = 1;
+  strncpy(texture->path, "from_array", sizeof(texture->path) - 1);
+
+  buffer_t staging_buffer;
+  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
+
+  void *data;
+  vkMapMemory(handler->g_Device, staging_buffer.memory, 0, image_size, 0, &data);
+  memcpy(data, rgba_pixels, image_size);
+  vkUnmapMemory(handler->g_Device, staging_buffer.memory);
+  free(rgba_pixels);
+
+  create_image(handler, width, height, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 0, 1);
+  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, width,
+                       height);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
+                          0, 1);
+
+  vkDestroyBuffer(handler->g_Device, staging_buffer.buffer, handler->g_Allocator);
+  vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
+
+  texture->image_view =
+      create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
+  texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_NEAREST);
+
+  return texture;
+}
+
 texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_t *pixel_array,
                                             uint32_t width, uint32_t height) {
   renderer_state_t *renderer = &handler->renderer;

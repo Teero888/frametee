@@ -170,6 +170,8 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
 texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path);
 texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_t *pixel_array,
                                             uint32_t width, uint32_t height);
+texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, const uint8_t **pixel_array,
+                                                    uint32_t width, uint32_t height);
 void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex);
 mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count,
                              uint32_t *indices, uint32_t index_count);
