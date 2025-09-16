@@ -443,7 +443,7 @@ void render_players(ui_handler_t *ui) {
     bool running = fabsf(vgetx(core->m_Vel) * 256.f) >= 5000;
     bool want_other_dir = (core->m_Input.m_Direction == -1 && vgetx(core->m_Vel) > 0) ||
                           (core->m_Input.m_Direction == 1 && vgetx(core->m_Vel) < 0);
-    bool inactive = 0;
+    bool inactive = get_flag_sit(&core->m_Input);
     bool in_air = !(core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) ||
                   !(check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16)));
 
