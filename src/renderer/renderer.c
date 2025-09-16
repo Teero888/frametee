@@ -56,7 +56,7 @@ static VkVertexInputBindingDescription mesh_binding_description;
 static VkVertexInputAttributeDescription mesh_attribute_descriptions[3];
 // skin instancing
 static VkVertexInputBindingDescription skin_binding_desc[2];
-static VkVertexInputAttributeDescription skin_attrib_descs[5];
+static VkVertexInputAttributeDescription skin_attrib_descs[9];
 
 static void setup_vertex_descriptions();
 

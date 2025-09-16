@@ -439,16 +439,36 @@ void render_players(ui_handler_t *ui) {
     anim_state_t anim_state;
     anim_state_set(&anim_state, &anim_base, 0.0f);
 
-    const bool Grounded =
-        (core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) &&
-        (check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos) + HALFPHYSICALSIZE,
-                                                   vgety(core->m_Pos) + HALFPHYSICALSIZE + 5)) ||
-         check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos) - HALFPHYSICALSIZE,
-                                                   vgety(core->m_Pos) + HALFPHYSICALSIZE + 5)));
-    if (Grounded)
-      anim_state_add(&anim_state, &anim_idle, 0.0f, 1.0f);
-    else
+    bool stationary = fabsf(vgetx(core->m_Vel)) <= 1;
+    bool running = fabsf(vgetx(core->m_Vel) * 256.f) >= 5000;
+    bool want_other_dir = (core->m_Input.m_Direction == -1 && vgetx(core->m_Vel) > 0) ||
+                          (core->m_Input.m_Direction == 1 && vgetx(core->m_Vel) < 0);
+    bool inactive = 0;
+    bool in_air = !(core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) ||
+                  !(check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16)));
+
+    float walk_time = fmod(p[0] * 32.f, 100.0f) / 100.0f;
+    float run_time = fmod(p[0] * 32.f, 200.0f) / 200.0f;
+    if (walk_time < 0.0f)
+      walk_time += 1.0f;
+    if (run_time < 0.0f)
+      run_time += 1.0f;
+
+    if (in_air)
       anim_state_add(&anim_state, &anim_inair, 0.0f, 1.0f);
+    else if (stationary) {
+      if (inactive)
+        anim_state_add(&anim_state, core->m_Input.m_Direction < 0 ? &anim_sit_left : &anim_sit_right, 0.0f,
+                       1.0f);
+      else
+        anim_state_add(&anim_state, &anim_idle, 0.0f, 1.0f);
+    } else if (!want_other_dir) {
+      if (running)
+        anim_state_add(&anim_state, vgetx(core->m_Vel) < 0.0f ? &anim_run_left : &anim_run_right, run_time,
+                       1.0f);
+      else
+        anim_state_add(&anim_state, &anim_walk, walk_time, 1.0f);
+    }
 
     renderer_push_skin_instance(gfx, p, 1.0f, gfx->default_skin, 0, &anim_state); // normal eyes
 
