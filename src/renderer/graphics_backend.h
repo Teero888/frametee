@@ -58,7 +58,10 @@ struct gfx_handler_t {
   map_data_t *map_data; // ptr to ^ collision data for quick typing
   texture_t *entities_atlas;
   texture_t *entities_array;
+
   int default_skin;
+  int x_ninja_skin;
+  int x_spec_skin;
 
   raw_mouse_t raw_mouse;
 

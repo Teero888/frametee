@@ -2,6 +2,7 @@
 #include "../animation/anim_data.h"
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
+#include "cglm/vec2.h"
 #include "cimgui.h"
 #include "player_info.h"
 #include "timeline.h"
@@ -39,6 +40,7 @@ void render_menu_bar(ui_handler_t *ui) {
     // view menu
     if (igBeginMenu("View", true)) {
       igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
+      igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
       igEndMenu();
     }
 
@@ -397,20 +399,21 @@ void render_players(ui_handler_t *ui) {
     }
     wc_tick(&world);
 
-    for (int p = 0; p < world.m_NumCharacters; ++p) {
-      SCharacterCore *core = &world.m_pCharacters[p];
-      vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
-      vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-      vec4 color = {[3] = 1.f};
-      if (core->m_JumpedTotal <= 0)
-        color[2] = 1.0f;
-      else
-        color[0] = 0.75f;
-      if (!core->m_ReloadTimer && core->m_ActiveWeapon > 1)
-        color[0] += 0.5f;
-      color[1] = vlength(core->m_Vel) / 50.f;
-      // renderer_draw_line(gfx, pp, p, color, 0.05);
-    }
+    if (ui->show_prediction)
+      for (int p = 0; p < world.m_NumCharacters; ++p) {
+        SCharacterCore *core = &world.m_pCharacters[p];
+        vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+        vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+        vec4 color = {[3] = 1.f};
+        if (core->m_JumpedTotal <= 0)
+          color[2] = 1.0f;
+        else
+          color[0] = 0.75f;
+        if (!core->m_ReloadTimer && core->m_ActiveWeapon > 1)
+          color[0] += 0.5f;
+        color[1] = vlength(core->m_Vel) / 50.f;
+        renderer_draw_line(gfx, pp, p, color, 0.05);
+      }
   }
 
   float intra =
@@ -470,7 +473,18 @@ void render_players(ui_handler_t *ui) {
         anim_state_add(&anim_state, &anim_walk, walk_time, 1.0f);
     }
 
-    renderer_push_skin_instance(gfx, p, 1.0f, gfx->default_skin, 0, &anim_state); // normal eyes
+    vec2 dir = (vec2){core->m_Input.m_TargetX, core->m_Input.m_TargetY};
+    glm_vec2_normalize(dir);
+    int skin = gfx->default_skin;
+    int eye = get_flag_eye_state(&core->m_Input);
+    // TODO: implement spec in the physics properly
+    if (core->m_FreezeTime > 0) {
+      skin = gfx->x_ninja_skin;
+      if (eye == 0)
+        eye = EYE_BLINK;
+    }
+    renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir,
+                                &anim_state); // normal eyes
 
     // mvec2 gun_pos = vnormalize(vec2_init(core->m_Input.m_TargetX, core->m_Input.m_TargetY));
     // // printf("%d,%d\n", core->m_Input.m_TargetX, core->m_Input.m_TargetY);
@@ -494,7 +508,7 @@ void render_players(ui_handler_t *ui) {
                                 0.25, (vec4){1.f, 0.f, 0.f, 0.4f}, 16);
   }
 
-  if (ui->timeline.recording) {
+  if (ui->timeline.recording && ui->show_prediction) {
     for (int i = 0; i < 100; ++i) {
       for (int p = 0; p < world.m_NumCharacters; ++p) {
         SPlayerInput input = p == ui->timeline.selected_player_track_index
@@ -513,7 +527,7 @@ void render_players(ui_handler_t *ui) {
           color[0] = 1.f;
         else
           color[1] = 1.f;
-        // renderer_draw_line(gfx, pp, p, color, 0.05);
+        renderer_draw_line(gfx, pp, p, color, 0.05);
       }
     }
   }

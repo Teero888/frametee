@@ -10,6 +10,9 @@ typedef struct {
   bool show_timeline;
   timeline_state_t timeline;
   struct gfx_handler_t *gfx_handler;
+
+  // configs
+  bool show_prediction;
 } ui_handler_t;
 
 void on_camera_update(struct gfx_handler_t *handler);

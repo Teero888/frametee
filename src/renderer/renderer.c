@@ -56,7 +56,7 @@ static VkVertexInputBindingDescription mesh_binding_description;
 static VkVertexInputAttributeDescription mesh_attribute_descriptions[3];
 // skin instancing
 static VkVertexInputBindingDescription skin_binding_desc[2];
-static VkVertexInputAttributeDescription skin_attrib_descs[9];
+static VkVertexInputAttributeDescription skin_attrib_descs[10];
 
 static void setup_vertex_descriptions();
 
@@ -1341,6 +1341,10 @@ static void setup_vertex_descriptions() {
                                                                .location = 8,
                                                                .format = VK_FORMAT_R32G32B32_SFLOAT,
                                                                .offset = offsetof(skin_instance_t, attach)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
+                                                               .location = 9,
+                                                               .format = VK_FORMAT_R32G32_SFLOAT,
+                                                               .offset = offsetof(skin_instance_t, dir)};
 }
 
 // --- Primitive Drawing Implementation ---
@@ -1575,7 +1579,7 @@ static void skin_manager_free_layer(renderer_state_t *r, int idx) {
 void renderer_begin_skins(gfx_handler_t *h) { h->renderer.skin_renderer.instance_count = 0; }
 
 void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state,
-                                 const anim_state_t *anim_state) {
+                                 vec2 dir, const anim_state_t *anim_state) {
   skin_renderer_t *sr = &h->renderer.skin_renderer;
   uint32_t i = sr->instance_count++;
   sr->instance_ptr[i].pos[0] = pos[0];
@@ -1599,6 +1603,9 @@ void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int sk
   sr->instance_ptr[i].attach[0] = anim_state->attach.x;
   sr->instance_ptr[i].attach[1] = anim_state->attach.y;
   sr->instance_ptr[i].attach[2] = anim_state->attach.angle;
+
+  sr->instance_ptr[i].dir[0] = dir[0];
+  sr->instance_ptr[i].dir[1] = dir[1];
 }
 
 void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array) {
@@ -1611,7 +1618,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
 
   // pipeline: 1 UBO + 1 texture
   pipeline_cache_entry_t *pso =
-      get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 9);
+      get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 10);
 
   // --- prepare camera UBO (same as primitives) ---
   int fbw, fbh;

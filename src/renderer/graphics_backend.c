@@ -123,8 +123,18 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->entities_atlas = entities_atlas;
 
   handler->default_skin = renderer_load_skin_from_file(handler, "data/textures/default.png");
+  handler->x_ninja_skin = renderer_load_skin_from_file(handler, "data/textures/x_ninja.png");
+  handler->x_spec_skin = renderer_load_skin_from_file(handler, "data/textures/x_spec.png");
   if (handler->default_skin == -1) {
-    printf("ERROR: Default skin texture not found: \"data/textures/default.png\". Maybe you started the "
+    printf("ERROR: default skin texture not found: \"data/textures/default.png\". Maybe you started the "
+           "program from the wrong path?\n");
+  }
+  if (handler->x_ninja_skin == -1) {
+    printf("ERROR: x_ninja skin texture not found: \"data/textures/x_ninja.png\". Maybe you started the "
+           "program from the wrong path?\n");
+  }
+  if (handler->x_spec_skin == -1) {
+    printf("ERROR: x_spec skin texture not found: \"data/textures/x_spec.png\". Maybe you started the "
            "program from the wrong path?\n");
   }
 
