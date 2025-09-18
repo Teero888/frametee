@@ -27,13 +27,7 @@ static void end_single_time_commands(gfx_handler_t *handler, VkCommandPool pool,
                                      VkCommandBuffer command_buffer);
 static void copy_buffer(gfx_handler_t *handler, VkCommandPool pool, VkBuffer src_buffer, VkBuffer dst_buffer,
                         VkDeviceSize size);
-static void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels,
-                         uint32_t array_layers, VkFormat format, VkImageTiling tiling,
-                         VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image,
-                         VkDeviceMemory *image_memory);
-static VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format,
-                                     VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count);
-static VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
+
 static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, VkImage image,
                                     VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout,
                                     uint32_t mip_levels, uint32_t base_layer, uint32_t layer_count);
@@ -234,10 +228,9 @@ static void copy_buffer_to_image(gfx_handler_t *handler, VkCommandPool pool, VkB
   end_single_time_commands(handler, pool, command_buffer);
 }
 
-static void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels,
-                         uint32_t array_layers, VkFormat format, VkImageTiling tiling,
-                         VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image,
-                         VkDeviceMemory *image_memory) {
+void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels,
+                  uint32_t array_layers, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
+                  VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory) {
   VkResult err;
   VkImageCreateInfo image_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                                   .imageType = VK_IMAGE_TYPE_2D,
@@ -270,8 +263,8 @@ static void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height
   check_vk_result_line(err, __LINE__);
 }
 
-static VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format,
-                                     VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count) {
+VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format,
+                              VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count) {
   VkImageViewCreateInfo view_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                      .image = image,
                                      .viewType = view_type,
@@ -288,7 +281,7 @@ static VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFo
   return image_view;
 }
 
-static VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter) {
+VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter) {
   VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                                       .magFilter = (VkFilter)filter,
                                       .minFilter = (VkFilter)filter,
@@ -1111,11 +1104,9 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
   renderer->ubo_buffer_offset = 0;
   renderer->current_command_buffer = command_buffer;
 
-  VkViewport viewport = {
-      handler->viewport[0], handler->viewport[1], handler->viewport[2], handler->viewport[3], 0.0f, 1.0f};
+  VkViewport viewport = {0.f, 0.f, handler->viewport[0], handler->viewport[1], 0.0f, 1.0f};
   vkCmdSetViewport(command_buffer, 0, 1, &viewport);
-  VkRect2D scissor = {{fmaxf(handler->viewport[0], 0), fmaxf(handler->viewport[1], 0)},
-                      {handler->viewport[2], handler->viewport[3]}};
+  VkRect2D scissor = {{0.0, 0.0}, {handler->viewport[0], handler->viewport[1]}};
   vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 }
 
@@ -1306,13 +1297,13 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
 void screen_to_world(gfx_handler_t *h, float sx, float sy, float *wx, float *wy) {
   camera_t *cam = &h->renderer.camera;
 
-  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
+  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   float aspect = window_ratio / map_ratio;
 
   float max_map_size = fmax(h->map_data->width, h->map_data->height) * 0.001f;
-  float ndc_x = (2.0f * sx / h->viewport[2]) - 1.0f;
-  float ndc_y = (2.0f * sy / h->viewport[3]) - 1.0f;
+  float ndc_x = (2.0f * sx / h->viewport[0]) - 1.0f;
+  float ndc_y = (2.0f * sy / h->viewport[1]) - 1.0f;
 
   *wx = cam->pos[0] + (ndc_x / (cam->zoom * max_map_size));
   *wy = cam->pos[1] + (ndc_y / (cam->zoom * max_map_size * aspect));
@@ -1325,7 +1316,7 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
   wx /= h->map_data->width;
   wy /= h->map_data->height;
 
-  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
+  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   float aspect = window_ratio / map_ratio;
 
@@ -1336,8 +1327,8 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
   float ndc_y = (wy - cam->pos[1]) * (cam->zoom * max_map_size * aspect);
 
   // NDC [-1..1] to screen pixels [0..w],[0..h]
-  *sx = (ndc_x + 1.0f) * 0.5f * h->viewport[2];
-  *sy = (ndc_y + 1.0f) * 0.5f * h->viewport[3];
+  *sx = (ndc_x + 1.0f) * 0.5f * h->viewport[0];
+  *sy = (ndc_y + 1.0f) * 0.5f * h->viewport[1];
 }
 
 static void setup_vertex_descriptions() {
@@ -1433,7 +1424,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   ubo.camPos[1] = h->renderer.camera.pos[1];
   ubo.zoom = h->renderer.camera.zoom;
 
-  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
+  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   ubo.aspect = window_ratio / map_ratio;
 
@@ -1603,7 +1594,7 @@ void renderer_draw_map(gfx_handler_t *h) {
   if (!h->map_shader || !h->quad_mesh || h->map_texture_count <= 0)
     return;
 
-  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
+  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   if (isnan(map_ratio) || map_ratio == 0)
     map_ratio = 1.0f;
@@ -1614,7 +1605,7 @@ void renderer_draw_map(gfx_handler_t *h) {
 
   float aspect = 1.0f / (window_ratio / map_ratio);
   float lod =
-      fmin(fmax(5.5f - log2f((1.0f / h->map_data->width) / zoom * (h->viewport[2] / 2.0f)), 0.0f), 6.0f);
+      fmin(fmax(5.5f - log2f((1.0f / h->map_data->width) / zoom * (h->viewport[0] / 2.0f)), 0.0f), 6.0f);
 
   map_buffer_object_t ubo = {.transform = {h->renderer.camera.pos[0], h->renderer.camera.pos[1], zoom},
                              .aspect = aspect,
@@ -1691,7 +1682,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   ubo.camPos[0] = renderer->camera.pos[0];
   ubo.camPos[1] = renderer->camera.pos[1];
   ubo.zoom = renderer->camera.zoom;
-  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
+  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   ubo.aspect = window_ratio / map_ratio;
   ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;

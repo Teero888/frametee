@@ -24,7 +24,7 @@ enum { FRAME_OK = 0, FRAME_SKIP, FRAME_EXIT };
 void on_map_load(struct gfx_handler_t *handler, const char *map_path);
 int init_gfx_handler(struct gfx_handler_t *handler);
 int gfx_begin_frame(struct gfx_handler_t *handler);
-void gfx_end_frame(struct gfx_handler_t *handler);
+bool gfx_end_frame(struct gfx_handler_t *handler);
 void gfx_cleanup(struct gfx_handler_t *handler);
 
 typedef struct {
@@ -59,7 +59,7 @@ struct gfx_handler_t {
   texture_t *entities_atlas;
   texture_t *entities_array;
 
-  vec4 viewport; // top left, bottom right. 2d
+  vec2 viewport; // width,height
 
   int default_skin;
   int x_ninja_skin;
@@ -80,6 +80,19 @@ struct gfx_handler_t {
     uint32_t frame_index;
   } retire_textures[64];
   uint32_t retire_count;
+
+  // --- Offscreen rendering (for ImGui game view) ---
+  VkImage offscreen_image;
+  VkDeviceMemory offscreen_memory;
+  VkImageView offscreen_image_view;
+  VkSampler offscreen_sampler;
+  VkFramebuffer offscreen_framebuffer;
+  VkRenderPass offscreen_render_pass;
+  // ImGui texture id returned by ImGui_ImplVulkan_AddTexture
+  ImTextureID offscreen_texture_id;
+  uint32_t offscreen_width;
+  uint32_t offscreen_height;
+  bool offscreen_initialized;
 };
 
 #endif // GRAPHICS_H

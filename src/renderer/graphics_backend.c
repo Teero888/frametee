@@ -25,6 +25,11 @@ static void cleanup_vulkan_window(gfx_handler_t *handler);
 // frame_render and frame_present are now folded into gfx_begin/end_frame
 static void cleanup_map_resources(gfx_handler_t *handler);
 
+// Offscreen helpers
+static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint32_t height);
+static void destroy_offscreen_resources(gfx_handler_t *handler);
+static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, uint32_t height);
+
 // --- Vulkan Initialization Helpers ---
 static VkResult create_instance(gfx_handler_t *handler, const char **extensions, uint32_t extensions_count);
 static void select_physical_device(gfx_handler_t *handler);
@@ -63,6 +68,13 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->g_descriptor_pool = VK_NULL_HANDLE;
   handler->g_min_image_count = 2;
   handler->g_swap_chain_rebuild = false;
+  handler->offscreen_initialized = false;
+  handler->offscreen_image = VK_NULL_HANDLE;
+  handler->offscreen_image_view = VK_NULL_HANDLE;
+  handler->offscreen_sampler = VK_NULL_HANDLE;
+  handler->offscreen_framebuffer = VK_NULL_HANDLE;
+  handler->offscreen_render_pass = VK_NULL_HANDLE;
+  handler->offscreen_texture_id = 0;
 
   if (init_window(handler) != 0) {
     return 1;
@@ -140,10 +152,14 @@ int init_gfx_handler(gfx_handler_t *handler) {
 
   int fb_width, fb_height;
   glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
-  handler->viewport[0] = 0.0;
-  handler->viewport[1] = 0.0;
-  handler->viewport[2] = fb_width;
-  handler->viewport[3] = fb_height * 0.5;
+  handler->viewport[0] = fb_width;
+  handler->viewport[1] = fb_height;
+
+  // initialize offscreen target to match the viewport size
+  if (init_offscreen_resources(handler, (uint32_t)handler->viewport[0], (uint32_t)handler->viewport[1]) !=
+      0) {
+    fprintf(stderr, "Warning: failed to create offscreen resources. ImGui game view will be disabled.\n");
+  }
 
   return 0;
 }
@@ -171,6 +187,10 @@ int gfx_begin_frame(gfx_handler_t *handler) {
         handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count);
     handler->g_main_window_data.FrameIndex = 0;
     handler->g_swap_chain_rebuild = false;
+
+    int fb_width, fb_height;
+    glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
+    recreate_offscreen_if_needed(handler, (uint32_t)fb_width, (uint32_t)fb_height);
   }
 
   // --- Acquire Image and Begin Command Buffer ---
@@ -202,15 +222,21 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   err = vkBeginCommandBuffer(fd->CommandBuffer, &info);
   check_vk_result(err);
 
-  VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                                   .renderPass = wd->RenderPass,
-                                   .framebuffer = fd->Framebuffer,
-                                   .renderArea = {{0, 0}, {(uint32_t)wd->Width, (uint32_t)wd->Height}},
-                                   .clearValueCount = 1,
-                                   .pClearValues = &wd->ClearValue};
-  vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
-
   handler->current_frame_command_buffer = fd->CommandBuffer;
+
+  // --- Begin offscreen render pass (for game rendering) ---
+  if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE &&
+      handler->offscreen_framebuffer != VK_NULL_HANDLE) {
+    VkClearValue clear = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 0.0f}}};
+    VkRenderPassBeginInfo rp_info = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = handler->offscreen_render_pass,
+        .framebuffer = handler->offscreen_framebuffer,
+        .renderArea = {{0, 0}, {handler->offscreen_width, handler->offscreen_height}},
+        .clearValueCount = 1,
+        .pClearValues = &clear};
+    vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+  }
 
   // --- Start ImGui and Renderer Frames ---
   ImGui_ImplVulkan_NewFrame();
@@ -221,21 +247,60 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   return FRAME_OK;
 }
 
-void gfx_end_frame(gfx_handler_t *handler) {
+bool gfx_end_frame(gfx_handler_t *handler) {
+  bool hovered = false;
 
   if (handler->g_swap_chain_rebuild || glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
     // End the ImGui frame to avoid state issues, but don't render.
     igEndFrame();
     // We also need to end the render pass we started.
     if (handler->current_frame_command_buffer != VK_NULL_HANDLE) {
-      vkCmdEndRenderPass(handler->current_frame_command_buffer);
+      // End any offscreen pass if open
+      if (handler->offscreen_initialized) {
+        vkCmdEndRenderPass(handler->current_frame_command_buffer);
+      }
       vkEndCommandBuffer(handler->current_frame_command_buffer);
       handler->current_frame_command_buffer = VK_NULL_HANDLE;
     }
-    return;
+    return hovered;
   }
 
-  renderer_end_frame(handler, handler->current_frame_command_buffer);
+  // --- Finish game rendering into offscreen target ---
+  if (handler->offscreen_initialized) {
+    renderer_end_frame(handler, handler->current_frame_command_buffer);
+    vkCmdEndRenderPass(handler->current_frame_command_buffer);
+  } else {
+    renderer_end_frame(handler, handler->current_frame_command_buffer);
+  }
+
+  // --- Begin swapchain render pass for ImGui ---
+  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
+  ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
+  VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                   .renderPass = wd->RenderPass,
+                                   .framebuffer = fd->Framebuffer,
+                                   .renderArea = {{0, 0}, {(uint32_t)wd->Width, (uint32_t)wd->Height}},
+                                   .clearValueCount = 1,
+                                   .pClearValues = &wd->ClearValue};
+  vkCmdBeginRenderPass(handler->current_frame_command_buffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+
+  // --- Build ImGui windows ---
+  if (handler->offscreen_initialized && handler->offscreen_texture_id != NULL) {
+    igBegin("viewport", NULL, ImGuiWindowFlags_NoScrollbar);
+    ImVec2 img_size = {(float)handler->offscreen_width, (float)handler->offscreen_height};
+    igImage(handler->offscreen_texture_id, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
+
+    igGetWindowSize(&handler->viewport[0]);
+    hovered = igIsWindowHovered(0);
+    igEnd();
+  }
+
+  igRender();
+  ImDrawData *draw_data = igGetDrawData();
+  ImGui_ImplVulkan_RenderDrawData(draw_data, handler->current_frame_command_buffer, VK_NULL_HANDLE);
+
+  // End swapchain render pass
+  vkCmdEndRenderPass(handler->current_frame_command_buffer);
 
   // retire textures whose frame fences are now done
   uint32_t cur_frame = handler->g_main_window_data.FrameIndex;
@@ -253,31 +318,24 @@ void gfx_end_frame(gfx_handler_t *handler) {
     i++;
   }
 
-  igRender();
-  ImDrawData *draw_data = igGetDrawData();
-  ImGui_ImplVulkan_RenderDrawData(draw_data, handler->current_frame_command_buffer, VK_NULL_HANDLE);
-
-  vkCmdEndRenderPass(handler->current_frame_command_buffer);
-
-  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
-  ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
+  // End the command buffer and submit like before.
+  VkResult err = vkEndCommandBuffer(handler->current_frame_command_buffer);
+  check_vk_result(err);
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
   VkSemaphore render_complete_semaphore =
       wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
 
   VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  VkSubmitInfo info = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                       .waitSemaphoreCount = 1,
-                       .pWaitSemaphores = &image_acquired_semaphore,
-                       .pWaitDstStageMask = &wait_stage,
-                       .commandBufferCount = 1,
-                       .pCommandBuffers = &handler->current_frame_command_buffer,
-                       .signalSemaphoreCount = 1,
-                       .pSignalSemaphores = &render_complete_semaphore};
+  VkSubmitInfo submit_info = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                              .waitSemaphoreCount = 1,
+                              .pWaitSemaphores = &image_acquired_semaphore,
+                              .pWaitDstStageMask = &wait_stage,
+                              .commandBufferCount = 1,
+                              .pCommandBuffers = &handler->current_frame_command_buffer,
+                              .signalSemaphoreCount = 1,
+                              .pSignalSemaphores = &render_complete_semaphore};
 
-  VkResult err = vkEndCommandBuffer(handler->current_frame_command_buffer);
-  check_vk_result(err);
-  err = vkQueueSubmit(handler->g_queue, 1, &info, fd->Fence);
+  err = vkQueueSubmit(handler->g_queue, 1, &submit_info, fd->Fence);
   check_vk_result(err);
 
   handler->current_frame_command_buffer = VK_NULL_HANDLE;
@@ -296,6 +354,7 @@ void gfx_end_frame(gfx_handler_t *handler) {
     check_vk_result(err);
   }
   wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->ImageCount;
+  return hovered;
 }
 
 void gfx_cleanup(gfx_handler_t *handler) {
@@ -313,6 +372,10 @@ void gfx_cleanup(gfx_handler_t *handler) {
   handler->map_data = 0x0;
 
   renderer_cleanup(handler);
+
+  // destroy offscreen resources before ImGui shutdown (ImGui holds descriptor references)
+  destroy_offscreen_resources(handler);
+
   ImGui_ImplVulkan_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   igDestroyContext(NULL);
@@ -385,7 +448,7 @@ static int init_window(gfx_handler_t *handler) {
     return 1;
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  handler->window = glfwCreateWindow(1280, 720, "Dear ImGui GLFW+Vulkan example", NULL, NULL);
+  handler->window = glfwCreateWindow(1280, 720, "frametee", NULL, NULL);
   if (!handler->window) {
     glfwTerminate();
     return 1;
@@ -491,6 +554,168 @@ static void cleanup_vulkan(gfx_handler_t *handler) {
 static void cleanup_vulkan_window(gfx_handler_t *handler) {
   ImGui_ImplVulkanH_DestroyWindow(handler->g_instance, handler->g_device, &handler->g_main_window_data,
                                   handler->g_allocator);
+}
+
+// --- Offscreen resource helpers ---
+static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint32_t height) {
+  if (width == 0 || height == 0) {
+    return 1;
+  }
+
+  // destroy previous if any
+  destroy_offscreen_resources(handler);
+
+  handler->offscreen_width = width;
+  handler->offscreen_height = height;
+
+  // Match swapchain format to keep pipelines compatible
+  VkFormat format = handler->g_main_window_data.SurfaceFormat.format;
+
+  // create image (color attachment + sampled)
+  create_image(handler, width, height, 1, 1, format, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &handler->offscreen_image, &handler->offscreen_memory);
+
+  // create image view
+  handler->offscreen_image_view =
+      create_image_view(handler, handler->offscreen_image, format, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
+
+  // create sampler
+  handler->offscreen_sampler = create_texture_sampler(handler, 1, VK_FILTER_LINEAR);
+
+  // Create a render pass for the offscreen image. Final layout will be SHADER_READ_ONLY_OPTIMAL
+  VkAttachmentDescription color_attachment = {
+      .flags = 0,
+      .format = format,
+      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+      .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+      .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+  };
+
+  VkAttachmentReference color_attachment_ref = {
+      .attachment = 0,
+      .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+  };
+
+  VkSubpassDescription subpass = {
+      .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+      .colorAttachmentCount = 1,
+      .pColorAttachments = &color_attachment_ref,
+  };
+
+  VkSubpassDependency dependency = {
+      .srcSubpass = VK_SUBPASS_EXTERNAL,
+      .dstSubpass = 0,
+      .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      .srcAccessMask = 0,
+      .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      .dependencyFlags = 0,
+  };
+
+  VkRenderPassCreateInfo rp_info = {
+      .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+      .attachmentCount = 1,
+      .pAttachments = &color_attachment,
+      .subpassCount = 1,
+      .pSubpasses = &subpass,
+      .dependencyCount = 1,
+      .pDependencies = &dependency,
+  };
+
+  VkResult err =
+      vkCreateRenderPass(handler->g_device, &rp_info, handler->g_allocator, &handler->offscreen_render_pass);
+  if (err != VK_SUCCESS) {
+    fprintf(stderr, "Failed to create offscreen render pass (%d)\n", err);
+    return 1;
+  }
+
+  // Create framebuffer
+  VkImageView attachments[1];
+  attachments[0] = handler->offscreen_image_view;
+
+  VkFramebufferCreateInfo fb_info = {
+      .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+      .renderPass = handler->offscreen_render_pass,
+      .attachmentCount = 1,
+      .pAttachments = attachments,
+      .width = width,
+      .height = height,
+      .layers = 1,
+  };
+
+  err =
+      vkCreateFramebuffer(handler->g_device, &fb_info, handler->g_allocator, &handler->offscreen_framebuffer);
+  if (err != VK_SUCCESS) {
+    fprintf(stderr, "Failed to create offscreen framebuffer (%d)\n", err);
+    vkDestroyRenderPass(handler->g_device, handler->offscreen_render_pass, handler->g_allocator);
+    handler->offscreen_render_pass = VK_NULL_HANDLE;
+    return 1;
+  }
+
+  // Add ImGui texture handle from sampler + image view
+  // ImGui_ImplVulkan_AddTexture returns an ImTextureID (void*).
+  handler->offscreen_texture_id = (ImTextureID)ImGui_ImplVulkan_AddTexture(
+      handler->offscreen_sampler, handler->offscreen_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+  handler->offscreen_initialized = true;
+  //printf("Offscreen resources created: %ux%u\n", width, height);
+  return 0;
+}
+
+static void destroy_offscreen_resources(gfx_handler_t *handler) {
+  if (!handler->offscreen_initialized)
+    return;
+
+  // Note: ImGui_ImplVulkan does not provide an explicit remove for a texture id, but the descriptor set
+  // allocated by AddTexture will be freed when the descriptor pool is destroyed / ImGui shuts down.
+  // To avoid leaking descriptors across re-creation, we simply destroy the Vulkan objects here.
+  if (handler->offscreen_framebuffer != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(handler->g_device, handler->offscreen_framebuffer, handler->g_allocator);
+    handler->offscreen_framebuffer = VK_NULL_HANDLE;
+  }
+  if (handler->offscreen_render_pass != VK_NULL_HANDLE) {
+    vkDestroyRenderPass(handler->g_device, handler->offscreen_render_pass, handler->g_allocator);
+    handler->offscreen_render_pass = VK_NULL_HANDLE;
+  }
+  if (handler->offscreen_sampler != VK_NULL_HANDLE) {
+    vkDestroySampler(handler->g_device, handler->offscreen_sampler, handler->g_allocator);
+    handler->offscreen_sampler = VK_NULL_HANDLE;
+  }
+  if (handler->offscreen_image_view != VK_NULL_HANDLE) {
+    vkDestroyImageView(handler->g_device, handler->offscreen_image_view, handler->g_allocator);
+    handler->offscreen_image_view = VK_NULL_HANDLE;
+  }
+  if (handler->offscreen_image != VK_NULL_HANDLE) {
+    vkDestroyImage(handler->g_device, handler->offscreen_image, handler->g_allocator);
+    handler->offscreen_image = VK_NULL_HANDLE;
+  }
+  if (handler->offscreen_memory != VK_NULL_HANDLE) {
+    vkFreeMemory(handler->g_device, handler->offscreen_memory, handler->g_allocator);
+    handler->offscreen_memory = VK_NULL_HANDLE;
+  }
+
+  handler->offscreen_texture_id = 0;
+  handler->offscreen_initialized = false;
+  handler->offscreen_width = 0;
+  handler->offscreen_height = 0;
+  printf("Offscreen resources destroyed\n");
+}
+
+static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, uint32_t height) {
+  if (!handler->offscreen_initialized)
+    return init_offscreen_resources(handler, width, height);
+
+  if (handler->offscreen_width != width || handler->offscreen_height != height) {
+    // recreate
+    destroy_offscreen_resources(handler);
+    return init_offscreen_resources(handler, width, height);
+  }
+  return 0;
 }
 
 // --- Vulkan Setup Helpers ---

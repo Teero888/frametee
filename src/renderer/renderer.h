@@ -204,4 +204,11 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
 int renderer_load_skin_from_file(gfx_handler_t *h, const char *path);
 void renderer_unload_skin(gfx_handler_t *h, int layer);
 
+void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels,
+                  uint32_t array_layers, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
+                  VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory);
+VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format,
+                              VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count);
+VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
+
 #endif // RENDERER_H

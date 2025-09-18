@@ -38,7 +38,7 @@ int main(void) {
     }
 
     renderer_draw_map(&handler);
-    gfx_end_frame(&handler);
+    viewport_hovered = gfx_end_frame(&handler);
   }
 
   gfx_cleanup(&handler);

@@ -334,7 +334,7 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
   float smoothing_factor = 1.0f - expf(-10.0f * io->DeltaTime); // Adjust 10.0f for speed
   camera->zoom = camera->zoom + (camera->zoom_wanted - camera->zoom) * smoothing_factor;
 
-  float viewport_ratio = (float)handler->viewport[2] / (float)handler->viewport[3];
+  float viewport_ratio = (float)handler->viewport[0] / (float)handler->viewport[1];
   float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
   float aspect = (float)viewport_ratio / (float)map_ratio;
   if (handler->user_interface.timeline.recording) {
@@ -349,8 +349,8 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
 
     ImVec2 drag_delta;
     igGetMouseDragDelta(&drag_delta, ImGuiMouseButton_Right, 0.0f);
-    float dx = drag_delta.x / (handler->viewport[2] * camera->zoom);
-    float dy = drag_delta.y / (handler->viewport[3] * camera->zoom * aspect);
+    float dx = drag_delta.x / (handler->viewport[0] * camera->zoom);
+    float dy = drag_delta.y / (handler->viewport[1] * camera->zoom * aspect);
     float max_map_size = fmax(handler->map_data->width, handler->map_data->height) * 0.001;
     camera->pos[0] -= (dx * 2) / max_map_size;
     camera->pos[1] -= (dy * 2) / max_map_size;
@@ -541,19 +541,6 @@ bool ui_render(ui_handler_t *ui) {
     if (ui->timeline.selected_player_track_index != -1)
       render_player_info(&ui->timeline);
   }
-
-  bool hovered = false;
-  igSetNextWindowBgAlpha(0.0);
-  igPushStyleColor_Vec4(ImGuiCol_DockingEmptyBg, (ImVec4){0, 0, 0, 0});
-  igPushStyleColor_Vec4(ImGuiCol_WindowBg, (ImVec4){0, 0, 0, 0});
-  if (igBegin("viewport", NULL, 0)) {
-    igGetWindowPos(&ui->gfx_handler->viewport[0]);
-    igGetWindowSize(&ui->gfx_handler->viewport[2]);
-    hovered = igIsWindowHovered(0);
-  }
-  igPopStyleColor(2);
-  igEnd();
-  return hovered;
 }
 
 void ui_cleanup(ui_handler_t *ui) {
