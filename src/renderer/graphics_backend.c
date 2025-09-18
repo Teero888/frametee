@@ -52,17 +52,17 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
 // --- Public API Implementation ---
 int init_gfx_handler(gfx_handler_t *handler) {
   memset(handler, 0, sizeof(gfx_handler_t));
-  handler->g_Allocator = NULL;
-  handler->g_Instance = VK_NULL_HANDLE;
-  handler->g_PhysicalDevice = VK_NULL_HANDLE;
-  handler->g_Device = VK_NULL_HANDLE;
-  handler->g_QueueFamily = (uint32_t)-1;
-  handler->g_Queue = VK_NULL_HANDLE;
-  handler->g_DebugReport = VK_NULL_HANDLE;
-  handler->g_PipelineCache = VK_NULL_HANDLE;
-  handler->g_DescriptorPool = VK_NULL_HANDLE;
-  handler->g_MinImageCount = 2;
-  handler->g_SwapChainRebuild = false;
+  handler->g_allocator = NULL;
+  handler->g_instance = VK_NULL_HANDLE;
+  handler->g_physical_device = VK_NULL_HANDLE;
+  handler->g_device = VK_NULL_HANDLE;
+  handler->g_queue_family = (uint32_t)-1;
+  handler->g_queue = VK_NULL_HANDLE;
+  handler->g_debug_report = VK_NULL_HANDLE;
+  handler->g_pipeline_cache = VK_NULL_HANDLE;
+  handler->g_descriptor_pool = VK_NULL_HANDLE;
+  handler->g_min_image_count = 2;
+  handler->g_swap_chain_rebuild = false;
 
   if (init_window(handler) != 0) {
     return 1;
@@ -138,6 +138,13 @@ int init_gfx_handler(gfx_handler_t *handler) {
            "program from the wrong path?\n");
   }
 
+  int fb_width, fb_height;
+  glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
+  handler->viewport[0] = 0.0;
+  handler->viewport[1] = 0.0;
+  handler->viewport[2] = fb_width;
+  handler->viewport[3] = fb_height * 0.5;
+
   return 0;
 }
 
@@ -155,40 +162,40 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   int fb_width, fb_height;
   glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
   if (fb_width > 0 && fb_height > 0 &&
-      (handler->g_SwapChainRebuild || handler->g_MainWindowData.Width != fb_width ||
-       handler->g_MainWindowData.Height != fb_height)) {
-    vkDeviceWaitIdle(handler->g_Device);
-    ImGui_ImplVulkan_SetMinImageCount(handler->g_MinImageCount);
+      (handler->g_swap_chain_rebuild || handler->g_main_window_data.Width != fb_width ||
+       handler->g_main_window_data.Height != fb_height)) {
+    vkDeviceWaitIdle(handler->g_device);
+    ImGui_ImplVulkan_SetMinImageCount(handler->g_min_image_count);
     ImGui_ImplVulkanH_CreateOrResizeWindow(
-        handler->g_Instance, handler->g_PhysicalDevice, handler->g_Device, &handler->g_MainWindowData,
-        handler->g_QueueFamily, handler->g_Allocator, fb_width, fb_height, handler->g_MinImageCount);
-    handler->g_MainWindowData.FrameIndex = 0;
-    handler->g_SwapChainRebuild = false;
+        handler->g_instance, handler->g_physical_device, handler->g_device, &handler->g_main_window_data,
+        handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count);
+    handler->g_main_window_data.FrameIndex = 0;
+    handler->g_swap_chain_rebuild = false;
   }
 
   // --- Acquire Image and Begin Command Buffer ---
-  ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
+  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
   // Ensure the previous use of this frame's fence is completed, so reuse of semaphores is safe
   ImGui_ImplVulkanH_Frame *acquire_fd = &wd->Frames.Data[wd->FrameIndex];
-  vkWaitForFences(handler->g_Device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
+  vkWaitForFences(handler->g_device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
 
-  VkResult err = vkAcquireNextImageKHR(handler->g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore,
+  VkResult err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore,
                                        VK_NULL_HANDLE, &wd->FrameIndex);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
-    handler->g_SwapChainRebuild = true;
+    handler->g_swap_chain_rebuild = true;
     // Skip this frame if the swapchain is invalid
     return FRAME_SKIP;
   }
   check_vk_result(err);
 
   ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
-  err = vkWaitForFences(handler->g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
+  err = vkWaitForFences(handler->g_device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
   check_vk_result(err);
-  err = vkResetFences(handler->g_Device, 1, &fd->Fence);
+  err = vkResetFences(handler->g_device, 1, &fd->Fence);
   check_vk_result(err);
 
-  err = vkResetCommandPool(handler->g_Device, fd->CommandPool, 0);
+  err = vkResetCommandPool(handler->g_device, fd->CommandPool, 0);
   check_vk_result(err);
   VkCommandBufferBeginInfo info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
@@ -215,7 +222,8 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 }
 
 void gfx_end_frame(gfx_handler_t *handler) {
-  if (handler->g_SwapChainRebuild || glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
+
+  if (handler->g_swap_chain_rebuild || glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
     // End the ImGui frame to avoid state issues, but don't render.
     igEndFrame();
     // We also need to end the render pass we started.
@@ -230,14 +238,14 @@ void gfx_end_frame(gfx_handler_t *handler) {
   renderer_end_frame(handler, handler->current_frame_command_buffer);
 
   // retire textures whose frame fences are now done
-  uint32_t cur_frame = handler->g_MainWindowData.FrameIndex;
+  uint32_t cur_frame = handler->g_main_window_data.FrameIndex;
   for (uint32_t i = 0; i < handler->retire_count;) {
     if ((cur_frame - handler->retire_textures[i].frame_index) > 2) {
       texture_t *tex = handler->retire_textures[i].tex;
-      vkDestroySampler(handler->g_Device, tex->sampler, handler->g_Allocator);
-      vkDestroyImageView(handler->g_Device, tex->image_view, handler->g_Allocator);
-      vkDestroyImage(handler->g_Device, tex->image, handler->g_Allocator);
-      vkFreeMemory(handler->g_Device, tex->memory, handler->g_Allocator);
+      vkDestroySampler(handler->g_device, tex->sampler, handler->g_allocator);
+      vkDestroyImageView(handler->g_device, tex->image_view, handler->g_allocator);
+      vkDestroyImage(handler->g_device, tex->image, handler->g_allocator);
+      vkFreeMemory(handler->g_device, tex->memory, handler->g_allocator);
       memset(tex, 0, sizeof(texture_t));
       handler->retire_textures[i] = handler->retire_textures[--handler->retire_count];
       continue;
@@ -251,7 +259,7 @@ void gfx_end_frame(gfx_handler_t *handler) {
 
   vkCmdEndRenderPass(handler->current_frame_command_buffer);
 
-  ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
+  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
   VkSemaphore render_complete_semaphore =
@@ -269,7 +277,7 @@ void gfx_end_frame(gfx_handler_t *handler) {
 
   VkResult err = vkEndCommandBuffer(handler->current_frame_command_buffer);
   check_vk_result(err);
-  err = vkQueueSubmit(handler->g_Queue, 1, &info, fd->Fence);
+  err = vkQueueSubmit(handler->g_queue, 1, &info, fd->Fence);
   check_vk_result(err);
 
   handler->current_frame_command_buffer = VK_NULL_HANDLE;
@@ -281,9 +289,9 @@ void gfx_end_frame(gfx_handler_t *handler) {
                                    .swapchainCount = 1,
                                    .pSwapchains = &wd->Swapchain,
                                    .pImageIndices = &wd->FrameIndex};
-  err = vkQueuePresentKHR(handler->g_Queue, &present_info);
+  err = vkQueuePresentKHR(handler->g_queue, &present_info);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
-    handler->g_SwapChainRebuild = true;
+    handler->g_swap_chain_rebuild = true;
   } else {
     check_vk_result(err);
   }
@@ -291,7 +299,7 @@ void gfx_end_frame(gfx_handler_t *handler) {
 }
 
 void gfx_cleanup(gfx_handler_t *handler) {
-  VkResult err = vkDeviceWaitIdle(handler->g_Device);
+  VkResult err = vkDeviceWaitIdle(handler->g_device);
   check_vk_result(err);
 
   ui_cleanup(&handler->user_interface);
@@ -329,7 +337,7 @@ static void cleanup_map_resources(gfx_handler_t *handler) {
   }
   printf("Cleaning up previous map resources...\n");
 
-  vkDeviceWaitIdle(handler->g_Device);
+  vkDeviceWaitIdle(handler->g_device);
   for (uint32_t i = 1; i < handler->map_texture_count; ++i) {
     texture_t *tex = handler->map_textures[i];
     if (tex && tex != handler->renderer.default_texture && tex != handler->entities_array) {
@@ -409,13 +417,13 @@ static int init_vulkan(gfx_handler_t *handler) {
 
   VkSurfaceKHR surface;
   VkResult err =
-      glfwCreateWindowSurface(handler->g_Instance, handler->window, handler->g_Allocator, &surface);
+      glfwCreateWindowSurface(handler->g_instance, handler->window, handler->g_allocator, &surface);
   check_vk_result(err);
 
   int w, h;
   glfwGetFramebufferSize(handler->window, &w, &h);
-  memset(&handler->g_MainWindowData, 0, sizeof(handler->g_MainWindowData));
-  ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
+  memset(&handler->g_main_window_data, 0, sizeof(handler->g_main_window_data));
+  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
 
   // Background color
   wd->ClearValue.color.float32[0] = 0.24f;
@@ -438,28 +446,28 @@ static int init_imgui(gfx_handler_t *handler) {
   igStyleColorsDark(NULL);
 
   ImGui_ImplGlfw_InitForVulkan(handler->window, true);
-  ImGui_ImplVulkan_InitInfo init_info = {.Instance = handler->g_Instance,
-                                         .PhysicalDevice = handler->g_PhysicalDevice,
-                                         .Device = handler->g_Device,
-                                         .QueueFamily = handler->g_QueueFamily,
-                                         .Queue = handler->g_Queue,
-                                         .PipelineCache = handler->g_PipelineCache,
-                                         .DescriptorPool = handler->g_DescriptorPool,
-                                         .RenderPass = handler->g_MainWindowData.RenderPass,
+  ImGui_ImplVulkan_InitInfo init_info = {.Instance = handler->g_instance,
+                                         .PhysicalDevice = handler->g_physical_device,
+                                         .Device = handler->g_device,
+                                         .QueueFamily = handler->g_queue_family,
+                                         .Queue = handler->g_queue,
+                                         .PipelineCache = handler->g_pipeline_cache,
+                                         .DescriptorPool = handler->g_descriptor_pool,
+                                         .RenderPass = handler->g_main_window_data.RenderPass,
                                          .Subpass = 0,
-                                         .MinImageCount = handler->g_MinImageCount,
-                                         .ImageCount = handler->g_MainWindowData.ImageCount,
+                                         .MinImageCount = handler->g_min_image_count,
+                                         .ImageCount = handler->g_main_window_data.ImageCount,
                                          .MSAASamples = VK_SAMPLE_COUNT_1_BIT,
-                                         .Allocator = handler->g_Allocator,
+                                         .Allocator = handler->g_allocator,
                                          .CheckVkResultFn = check_vk_result};
   ImGui_ImplVulkan_Init(&init_info);
   return 0;
 }
 
 static void cleanup_vulkan(gfx_handler_t *handler) {
-  if (handler->g_DescriptorPool != VK_NULL_HANDLE) {
-    vkDestroyDescriptorPool(handler->g_Device, handler->g_DescriptorPool, handler->g_Allocator);
-    handler->g_DescriptorPool = VK_NULL_HANDLE;
+  if (handler->g_descriptor_pool != VK_NULL_HANDLE) {
+    vkDestroyDescriptorPool(handler->g_device, handler->g_descriptor_pool, handler->g_allocator);
+    handler->g_descriptor_pool = VK_NULL_HANDLE;
   }
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
   PFN_vkDestroyDebugReportCallbackEXT f_vkDestroyDebugReportCallbackEXT =
@@ -470,19 +478,19 @@ static void cleanup_vulkan(gfx_handler_t *handler) {
     handler->g_DebugReport = VK_NULL_HANDLE;
   }
 #endif
-  if (handler->g_Device != VK_NULL_HANDLE) {
-    vkDestroyDevice(handler->g_Device, handler->g_Allocator);
-    handler->g_Device = VK_NULL_HANDLE;
+  if (handler->g_device != VK_NULL_HANDLE) {
+    vkDestroyDevice(handler->g_device, handler->g_allocator);
+    handler->g_device = VK_NULL_HANDLE;
   }
-  if (handler->g_Instance != VK_NULL_HANDLE) {
-    vkDestroyInstance(handler->g_Instance, handler->g_Allocator);
-    handler->g_Instance = VK_NULL_HANDLE;
+  if (handler->g_instance != VK_NULL_HANDLE) {
+    vkDestroyInstance(handler->g_instance, handler->g_allocator);
+    handler->g_instance = VK_NULL_HANDLE;
   }
 }
 
 static void cleanup_vulkan_window(gfx_handler_t *handler) {
-  ImGui_ImplVulkanH_DestroyWindow(handler->g_Instance, handler->g_Device, &handler->g_MainWindowData,
-                                  handler->g_Allocator);
+  ImGui_ImplVulkanH_DestroyWindow(handler->g_instance, handler->g_device, &handler->g_main_window_data,
+                                  handler->g_allocator);
 }
 
 // --- Vulkan Setup Helpers ---
@@ -543,7 +551,7 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
   create_info.ppEnabledLayerNames = layers;
 #endif
 
-  err = vkCreateInstance(&create_info, handler->g_Allocator, &handler->g_Instance);
+  err = vkCreateInstance(&create_info, handler->g_allocator, &handler->g_instance);
   check_vk_result(err);
   free(properties);
   free(extensions);
@@ -568,10 +576,10 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
 }
 
 static void select_physical_device(gfx_handler_t *handler) {
-  handler->g_PhysicalDevice = ImGui_ImplVulkanH_SelectPhysicalDevice(handler->g_Instance);
-  assert(handler->g_PhysicalDevice != VK_NULL_HANDLE);
-  handler->g_QueueFamily = ImGui_ImplVulkanH_SelectQueueFamilyIndex(handler->g_PhysicalDevice);
-  assert(handler->g_QueueFamily != (uint32_t)-1);
+  handler->g_physical_device = ImGui_ImplVulkanH_SelectPhysicalDevice(handler->g_instance);
+  assert(handler->g_physical_device != VK_NULL_HANDLE);
+  handler->g_queue_family = ImGui_ImplVulkanH_SelectQueueFamilyIndex(handler->g_physical_device);
+  assert(handler->g_queue_family != (uint32_t)-1);
 }
 
 static void create_logical_device(gfx_handler_t *handler) {
@@ -581,7 +589,7 @@ static void create_logical_device(gfx_handler_t *handler) {
   const float queue_priority[] = {1.0f};
   VkDeviceQueueCreateInfo queue_info[1] = {{
       .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-      .queueFamilyIndex = handler->g_QueueFamily,
+      .queueFamilyIndex = handler->g_queue_family,
       .queueCount = 1,
       .pQueuePriorities = queue_priority,
   }};
@@ -593,9 +601,9 @@ static void create_logical_device(gfx_handler_t *handler) {
       .ppEnabledExtensionNames = device_extensions,
   };
   VkResult err =
-      vkCreateDevice(handler->g_PhysicalDevice, &create_info, handler->g_Allocator, &handler->g_Device);
+      vkCreateDevice(handler->g_physical_device, &create_info, handler->g_allocator, &handler->g_device);
   check_vk_result(err);
-  vkGetDeviceQueue(handler->g_Device, handler->g_QueueFamily, 0, &handler->g_Queue);
+  vkGetDeviceQueue(handler->g_device, handler->g_queue_family, 0, &handler->g_queue);
 }
 
 static void create_descriptor_pool(gfx_handler_t *handler) {
@@ -609,8 +617,8 @@ static void create_descriptor_pool(gfx_handler_t *handler) {
                                           .maxSets = 1000 * ARRAYSIZE(pool_sizes),
                                           .poolSizeCount = (uint32_t)ARRAYSIZE(pool_sizes),
                                           .pPoolSizes = pool_sizes};
-  VkResult err =
-      vkCreateDescriptorPool(handler->g_Device, &pool_info, handler->g_Allocator, &handler->g_DescriptorPool);
+  VkResult err = vkCreateDescriptorPool(handler->g_device, &pool_info, handler->g_allocator,
+                                        &handler->g_descriptor_pool);
   check_vk_result(err);
 }
 
@@ -619,7 +627,8 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
   wd->Surface = surface;
 
   VkBool32 res;
-  vkGetPhysicalDeviceSurfaceSupportKHR(handler->g_PhysicalDevice, handler->g_QueueFamily, wd->Surface, &res);
+  vkGetPhysicalDeviceSurfaceSupportKHR(handler->g_physical_device, handler->g_queue_family, wd->Surface,
+                                       &res);
   if (res != VK_TRUE) {
     fprintf(stderr, "Error: no WSI support on physical device 0\n");
     exit(-1);
@@ -629,43 +638,43 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
                                                 VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM};
   const VkColorSpaceKHR requestSurfaceColorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
   wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(
-      handler->g_PhysicalDevice, wd->Surface, requestSurfaceImageFormat,
+      handler->g_physical_device, wd->Surface, requestSurfaceImageFormat,
       (size_t)ARRAYSIZE(requestSurfaceImageFormat), requestSurfaceColorSpace);
 
   VkPresentModeKHR present_modes[] = {VK_PRESENT_MODE_FIFO_KHR};
-  wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_PhysicalDevice, wd->Surface,
+  wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, wd->Surface,
                                                         &present_modes[0], ARRAYSIZE(present_modes));
 
-  assert(handler->g_MinImageCount >= 2);
-  ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_Instance, handler->g_PhysicalDevice, handler->g_Device,
-                                         wd, handler->g_QueueFamily, handler->g_Allocator, width, height,
-                                         handler->g_MinImageCount);
+  assert(handler->g_min_image_count >= 2);
+  ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device,
+                                         wd, handler->g_queue_family, handler->g_allocator, width, height,
+                                         handler->g_min_image_count);
 }
 
 // --- Frame Rendering and Presentation ---
 static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
-  ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
+  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
   VkSemaphore render_complete_semaphore =
       wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
 
-  VkResult err = vkAcquireNextImageKHR(handler->g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore,
+  VkResult err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore,
                                        VK_NULL_HANDLE, &wd->FrameIndex);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
-    handler->g_SwapChainRebuild = true;
+    handler->g_swap_chain_rebuild = true;
     return;
   }
   check_vk_result(err);
 
   ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
   {
-    err = vkWaitForFences(handler->g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
+    err = vkWaitForFences(handler->g_device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
     check_vk_result(err);
-    err = vkResetFences(handler->g_Device, 1, &fd->Fence);
+    err = vkResetFences(handler->g_device, 1, &fd->Fence);
     check_vk_result(err);
   }
   {
-    err = vkResetCommandPool(handler->g_Device, fd->CommandPool, 0);
+    err = vkResetCommandPool(handler->g_device, fd->CommandPool, 0);
     check_vk_result(err);
     VkCommandBufferBeginInfo info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
@@ -734,15 +743,15 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
                          .pSignalSemaphores = &render_complete_semaphore};
     err = vkEndCommandBuffer(fd->CommandBuffer);
     check_vk_result(err);
-    err = vkQueueSubmit(handler->g_Queue, 1, &info, fd->Fence);
+    err = vkQueueSubmit(handler->g_queue, 1, &info, fd->Fence);
     check_vk_result(err);
   }
 }
 
 static void frame_present(gfx_handler_t *handler) {
-  if (handler->g_SwapChainRebuild)
+  if (handler->g_swap_chain_rebuild)
     return;
-  ImGui_ImplVulkanH_Window *wd = &handler->g_MainWindowData;
+  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   VkSemaphore render_complete_semaphore =
       wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
   VkPresentInfoKHR info = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -751,9 +760,9 @@ static void frame_present(gfx_handler_t *handler) {
                            .swapchainCount = 1,
                            .pSwapchains = &wd->Swapchain,
                            .pImageIndices = &wd->FrameIndex};
-  VkResult err = vkQueuePresentKHR(handler->g_Queue, &info);
+  VkResult err = vkQueuePresentKHR(handler->g_queue, &info);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
-    handler->g_SwapChainRebuild = true;
+    handler->g_swap_chain_rebuild = true;
   } else {
     check_vk_result(err);
   }

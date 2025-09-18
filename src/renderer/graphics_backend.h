@@ -35,18 +35,18 @@ typedef struct {
 struct gfx_handler_t {
   // --- Backend Stuffs ---
   GLFWwindow *window;
-  VkAllocationCallbacks *g_Allocator;
-  VkInstance g_Instance;
-  VkPhysicalDevice g_PhysicalDevice;
-  VkDevice g_Device;
-  uint32_t g_QueueFamily;
-  VkQueue g_Queue;
-  VkDebugReportCallbackEXT g_DebugReport;
-  VkPipelineCache g_PipelineCache;
-  VkDescriptorPool g_DescriptorPool; // For ImGui
-  struct ImGui_ImplVulkanH_Window g_MainWindowData;
-  uint32_t g_MinImageCount;
-  bool g_SwapChainRebuild;
+  VkAllocationCallbacks *g_allocator;
+  VkInstance g_instance;
+  VkPhysicalDevice g_physical_device;
+  VkDevice g_device;
+  uint32_t g_queue_family;
+  VkQueue g_queue;
+  VkDebugReportCallbackEXT g_debug_report;
+  VkPipelineCache g_pipeline_cache;
+  VkDescriptorPool g_descriptor_pool; // For ImGui
+  struct ImGui_ImplVulkanH_Window g_main_window_data;
+  uint32_t g_min_image_count;
+  bool g_swap_chain_rebuild;
 
   // --- Per-frame data ---
   VkCommandBuffer current_frame_command_buffer;
@@ -58,6 +58,8 @@ struct gfx_handler_t {
   map_data_t *map_data; // ptr to ^ collision data for quick typing
   texture_t *entities_atlas;
   texture_t *entities_array;
+
+  vec4 viewport; // top left, bottom right. 2d
 
   int default_skin;
   int x_ninja_skin;
@@ -72,7 +74,7 @@ struct gfx_handler_t {
   texture_t *map_textures[MAX_TEXTURES_PER_DRAW];
   uint32_t map_texture_count;
 
-  // Retirement list for delayed frees
+  // retirement list for delayed frees
   struct {
     texture_t *tex;
     uint32_t frame_index;

@@ -317,15 +317,11 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
   igEnd();
 }
 
-void on_camera_update(gfx_handler_t *handler) {
+void on_camera_update(gfx_handler_t *handler, bool hovered) {
   camera_t *camera = &handler->renderer.camera;
   ImGuiIO *io = igGetIO_Nil();
-  int width, height;
-  glfwGetFramebufferSize(handler->window, &width, &height);
-  if (width == 0 || height == 0)
-    return;
 
-  float scroll_y = io->WantCaptureMouse ? 0.0f : io->MouseWheel;
+  float scroll_y = !hovered ? 0.0f : io->MouseWheel;
   if (igIsKeyPressed_Bool(ImGuiKey_W, true))
     scroll_y = 1.0f;
   if (igIsKeyPressed_Bool(ImGuiKey_S, true))
@@ -338,11 +334,11 @@ void on_camera_update(gfx_handler_t *handler) {
   float smoothing_factor = 1.0f - expf(-10.0f * io->DeltaTime); // Adjust 10.0f for speed
   camera->zoom = camera->zoom + (camera->zoom_wanted - camera->zoom) * smoothing_factor;
 
-  float window_ratio = (float)width / (float)height;
+  float viewport_ratio = (float)handler->viewport[2] / (float)handler->viewport[3];
   float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
-  float aspect = (float)window_ratio / (float)map_ratio;
+  float aspect = (float)viewport_ratio / (float)map_ratio;
   if (handler->user_interface.timeline.recording) {
-  } else if (!io->WantCaptureMouse && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+  } else if (hovered && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
     if (!camera->is_dragging) {
       camera->is_dragging = true;
       ImVec2 mouse_pos;
@@ -353,8 +349,8 @@ void on_camera_update(gfx_handler_t *handler) {
 
     ImVec2 drag_delta;
     igGetMouseDragDelta(&drag_delta, ImGuiMouseButton_Right, 0.0f);
-    float dx = drag_delta.x / (width * camera->zoom);
-    float dy = drag_delta.y / (height * camera->zoom * aspect);
+    float dx = drag_delta.x / (handler->viewport[2] * camera->zoom);
+    float dy = drag_delta.y / (handler->viewport[3] * camera->zoom * aspect);
     float max_map_size = fmax(handler->map_data->width, handler->map_data->height) * 0.001;
     camera->pos[0] -= (dx * 2) / max_map_size;
     camera->pos[1] -= (dy * 2) / max_map_size;
@@ -533,7 +529,7 @@ void render_players(ui_handler_t *ui) {
   }
 }
 
-void ui_render(ui_handler_t *ui) {
+bool ui_render(ui_handler_t *ui) {
   timeline_update_inputs(&ui->timeline, ui->gfx_handler);
 
   render_menu_bar(ui);
@@ -545,6 +541,19 @@ void ui_render(ui_handler_t *ui) {
     if (ui->timeline.selected_player_track_index != -1)
       render_player_info(&ui->timeline);
   }
+
+  bool hovered = false;
+  igSetNextWindowBgAlpha(0.0);
+  igPushStyleColor_Vec4(ImGuiCol_DockingEmptyBg, (ImVec4){0, 0, 0, 0});
+  igPushStyleColor_Vec4(ImGuiCol_WindowBg, (ImVec4){0, 0, 0, 0});
+  if (igBegin("viewport", NULL, 0)) {
+    igGetWindowPos(&ui->gfx_handler->viewport[0]);
+    igGetWindowSize(&ui->gfx_handler->viewport[2]);
+    hovered = igIsWindowHovered(0);
+  }
+  igPopStyleColor(2);
+  igEnd();
+  return hovered;
 }
 
 void ui_cleanup(ui_handler_t *ui) {

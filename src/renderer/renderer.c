@@ -100,22 +100,22 @@ static void create_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsa
                                     .usage = usage,
                                     .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
 
-  err = vkCreateBuffer(handler->g_Device, &buffer_info, handler->g_Allocator, &buffer->buffer);
+  err = vkCreateBuffer(handler->g_device, &buffer_info, handler->g_allocator, &buffer->buffer);
   check_vk_result_line(err, __LINE__);
 
   VkMemoryRequirements mem_requirements;
-  vkGetBufferMemoryRequirements(handler->g_Device, buffer->buffer, &mem_requirements);
+  vkGetBufferMemoryRequirements(handler->g_device, buffer->buffer, &mem_requirements);
 
   VkMemoryAllocateInfo alloc_info = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
       .allocationSize = mem_requirements.size,
       .memoryTypeIndex =
-          find_memory_type(handler->g_PhysicalDevice, mem_requirements.memoryTypeBits, properties)};
+          find_memory_type(handler->g_physical_device, mem_requirements.memoryTypeBits, properties)};
 
-  err = vkAllocateMemory(handler->g_Device, &alloc_info, handler->g_Allocator, &buffer->memory);
+  err = vkAllocateMemory(handler->g_device, &alloc_info, handler->g_allocator, &buffer->memory);
   check_vk_result_line(err, __LINE__);
 
-  err = vkBindBufferMemory(handler->g_Device, buffer->buffer, buffer->memory, 0);
+  err = vkBindBufferMemory(handler->g_device, buffer->buffer, buffer->memory, 0);
   check_vk_result_line(err, __LINE__);
 
   buffer->mapped_memory = NULL;
@@ -128,7 +128,7 @@ static VkCommandBuffer begin_single_time_commands(gfx_handler_t *handler, VkComm
                                             .commandBufferCount = 1};
 
   VkCommandBuffer command_buffer;
-  vkAllocateCommandBuffers(handler->g_Device, &alloc_info, &command_buffer);
+  vkAllocateCommandBuffers(handler->g_device, &alloc_info, &command_buffer);
 
   VkCommandBufferBeginInfo begin_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                          .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
@@ -146,17 +146,17 @@ static void end_single_time_commands(gfx_handler_t *handler, VkCommandPool pool,
 
   VkFenceCreateInfo fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   VkFence fence;
-  VkResult err = vkCreateFence(handler->g_Device, &fence_info, handler->g_Allocator, &fence);
+  VkResult err = vkCreateFence(handler->g_device, &fence_info, handler->g_allocator, &fence);
   check_vk_result_line(err, __LINE__);
 
-  err = vkQueueSubmit(handler->g_Queue, 1, &submit_info, fence);
+  err = vkQueueSubmit(handler->g_queue, 1, &submit_info, fence);
   check_vk_result_line(err, __LINE__);
 
-  err = vkWaitForFences(handler->g_Device, 1, &fence, VK_TRUE, UINT64_MAX);
+  err = vkWaitForFences(handler->g_device, 1, &fence, VK_TRUE, UINT64_MAX);
   check_vk_result_line(err, __LINE__);
 
-  vkDestroyFence(handler->g_Device, fence, handler->g_Allocator);
-  vkFreeCommandBuffers(handler->g_Device, pool, 1, &command_buffer);
+  vkDestroyFence(handler->g_device, fence, handler->g_allocator);
+  vkFreeCommandBuffers(handler->g_device, pool, 1, &command_buffer);
 }
 
 static void copy_buffer(gfx_handler_t *handler, VkCommandPool pool, VkBuffer src_buffer, VkBuffer dst_buffer,
@@ -251,22 +251,22 @@ static void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height
                                   .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                                   .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
 
-  err = vkCreateImage(handler->g_Device, &image_info, handler->g_Allocator, image);
+  err = vkCreateImage(handler->g_device, &image_info, handler->g_allocator, image);
   check_vk_result_line(err, __LINE__);
 
   VkMemoryRequirements mem_requirements;
-  vkGetImageMemoryRequirements(handler->g_Device, *image, &mem_requirements);
+  vkGetImageMemoryRequirements(handler->g_device, *image, &mem_requirements);
 
   VkMemoryAllocateInfo alloc_info = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
       .allocationSize = mem_requirements.size,
       .memoryTypeIndex =
-          find_memory_type(handler->g_PhysicalDevice, mem_requirements.memoryTypeBits, properties)};
+          find_memory_type(handler->g_physical_device, mem_requirements.memoryTypeBits, properties)};
 
-  err = vkAllocateMemory(handler->g_Device, &alloc_info, handler->g_Allocator, image_memory);
+  err = vkAllocateMemory(handler->g_device, &alloc_info, handler->g_allocator, image_memory);
   check_vk_result_line(err, __LINE__);
 
-  err = vkBindImageMemory(handler->g_Device, *image, *image_memory, 0);
+  err = vkBindImageMemory(handler->g_device, *image, *image_memory, 0);
   check_vk_result_line(err, __LINE__);
 }
 
@@ -283,7 +283,7 @@ static VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFo
                                                           .layerCount = layer_count}};
 
   VkImageView image_view;
-  VkResult err = vkCreateImageView(handler->g_Device, &view_info, handler->g_Allocator, &image_view);
+  VkResult err = vkCreateImageView(handler->g_device, &view_info, handler->g_allocator, &image_view);
   check_vk_result_line(err, __LINE__);
   return image_view;
 }
@@ -307,7 +307,7 @@ static VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_lev
                                       .unnormalizedCoordinates = VK_FALSE};
 
   VkSampler sampler;
-  VkResult err = vkCreateSampler(handler->g_Device, &sampler_info, handler->g_Allocator, &sampler);
+  VkResult err = vkCreateSampler(handler->g_device, &sampler_info, handler->g_allocator, &sampler);
   check_vk_result_line(err, __LINE__);
   return sampler;
 }
@@ -348,7 +348,7 @@ static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *c
                                           .pCode = (const uint32_t *)code};
 
   VkShaderModule shader_module;
-  VkResult err = vkCreateShaderModule(handler->g_Device, &create_info, handler->g_Allocator, &shader_module);
+  VkResult err = vkCreateShaderModule(handler->g_device, &create_info, handler->g_allocator, &shader_module);
   check_vk_result_line(err, __LINE__);
 
   return shader_module;
@@ -488,13 +488,13 @@ int renderer_init(gfx_handler_t *handler) {
   setup_vertex_descriptions();
 
   VkPhysicalDeviceProperties properties;
-  vkGetPhysicalDeviceProperties(handler->g_PhysicalDevice, &properties);
+  vkGetPhysicalDeviceProperties(handler->g_physical_device, &properties);
   renderer->min_ubo_alignment = properties.limits.minUniformBufferOffsetAlignment;
 
   VkCommandPoolCreateInfo pool_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
                                        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
-                                       .queueFamilyIndex = handler->g_QueueFamily};
-  check_vk_result(vkCreateCommandPool(handler->g_Device, &pool_info, handler->g_Allocator,
+                                       .queueFamilyIndex = handler->g_queue_family};
+  check_vk_result(vkCreateCommandPool(handler->g_device, &pool_info, handler->g_allocator,
                                       &renderer->transfer_command_pool));
 
   VkDescriptorPoolSize pool_sizes[] = {
@@ -507,7 +507,7 @@ int renderer_init(gfx_handler_t *handler) {
                                                    .poolSizeCount =
                                                        sizeof(pool_sizes) / sizeof(pool_sizes[0]),
                                                    .pPoolSizes = pool_sizes};
-    check_vk_result(vkCreateDescriptorPool(handler->g_Device, &pool_create_info, handler->g_Allocator,
+    check_vk_result(vkCreateDescriptorPool(handler->g_device, &pool_create_info, handler->g_allocator,
                                            &renderer->frame_descriptor_pools[i]));
   }
   unsigned char white_pixel[] = {255, 255, 255, 255};
@@ -523,19 +523,19 @@ int renderer_init(gfx_handler_t *handler) {
                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &renderer->dynamic_vertex_buffer);
-  vkMapMemory(handler->g_Device, renderer->dynamic_vertex_buffer.memory, 0, VK_WHOLE_SIZE, 0,
+  vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer.memory, 0, VK_WHOLE_SIZE, 0,
               (void **)&renderer->vertex_buffer_ptr);
 
   create_buffer(handler, MAX_PRIMITIVE_INDICES * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &renderer->dynamic_index_buffer);
-  vkMapMemory(handler->g_Device, renderer->dynamic_index_buffer.memory, 0, VK_WHOLE_SIZE, 0,
+  vkMapMemory(handler->g_device, renderer->dynamic_index_buffer.memory, 0, VK_WHOLE_SIZE, 0,
               (void **)&renderer->index_buffer_ptr);
 
   create_buffer(handler, DYNAMIC_UBO_BUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &renderer->dynamic_ubo_buffer);
-  vkMapMemory(handler->g_Device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0,
+  vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0,
               &renderer->ubo_buffer_ptr);
 
   // Create a 2D array texture to hold MAX_SKINS atlases (each 256x128, RGBA8)
@@ -550,7 +550,7 @@ int renderer_init(gfx_handler_t *handler) {
   create_buffer(handler, sizeof(skin_instance_t) * 10000, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &renderer->skin_renderer.instance_buffer);
-  vkMapMemory(handler->g_Device, renderer->skin_renderer.instance_buffer.memory, 0, VK_WHOLE_SIZE, 0,
+  vkMapMemory(handler->g_device, renderer->skin_renderer.instance_buffer.memory, 0, VK_WHOLE_SIZE, 0,
               (void **)&renderer->skin_renderer.instance_ptr);
 
   renderer->skin_renderer.instance_count = 0;
@@ -561,8 +561,8 @@ int renderer_init(gfx_handler_t *handler) {
 
 void renderer_cleanup(gfx_handler_t *handler) {
   renderer_state_t *renderer = &handler->renderer;
-  VkDevice device = handler->g_Device;
-  VkAllocationCallbacks *allocator = handler->g_Allocator;
+  VkDevice device = handler->g_device;
+  VkAllocationCallbacks *allocator = handler->g_allocator;
 
   vkDeviceWaitIdle(device);
 
@@ -641,9 +641,9 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   }
 
   if (entry->initialized) {
-    vkDestroyPipeline(handler->g_Device, entry->pipeline, handler->g_Allocator);
-    vkDestroyPipelineLayout(handler->g_Device, entry->pipeline_layout, handler->g_Allocator);
-    vkDestroyDescriptorSetLayout(handler->g_Device, entry->descriptor_set_layout, handler->g_Allocator);
+    vkDestroyPipeline(handler->g_device, entry->pipeline, handler->g_allocator);
+    vkDestroyPipelineLayout(handler->g_device, entry->pipeline_layout, handler->g_allocator);
+    vkDestroyDescriptorSetLayout(handler->g_device, entry->descriptor_set_layout, handler->g_allocator);
   }
 
   entry->ubo_count = ubo_count;
@@ -670,13 +670,13 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   VkDescriptorSetLayoutCreateInfo layout_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                                                  .bindingCount = binding_count,
                                                  .pBindings = bindings};
-  check_vk_result(vkCreateDescriptorSetLayout(handler->g_Device, &layout_info, handler->g_Allocator,
+  check_vk_result(vkCreateDescriptorSetLayout(handler->g_device, &layout_info, handler->g_allocator,
                                               &entry->descriptor_set_layout));
 
   VkPipelineLayoutCreateInfo pipeline_layout_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                                                      .setLayoutCount = 1,
                                                      .pSetLayouts = &entry->descriptor_set_layout};
-  check_vk_result(vkCreatePipelineLayout(handler->g_Device, &pipeline_layout_info, handler->g_Allocator,
+  check_vk_result(vkCreatePipelineLayout(handler->g_device, &pipeline_layout_info, handler->g_allocator,
                                          &entry->pipeline_layout));
 
   VkPipelineShaderStageCreateInfo vert_shader_stage_info = {
@@ -759,11 +759,11 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
                                                 .pColorBlendState = &color_blending,
                                                 .pDynamicState = &dynamic_state,
                                                 .layout = entry->pipeline_layout,
-                                                .renderPass = handler->g_MainWindowData.RenderPass,
+                                                .renderPass = handler->g_main_window_data.RenderPass,
                                                 .subpass = 0};
 
-  check_vk_result(vkCreateGraphicsPipelines(handler->g_Device, handler->g_PipelineCache, 1, &pipeline_info,
-                                            handler->g_Allocator, &entry->pipeline));
+  check_vk_result(vkCreateGraphicsPipelines(handler->g_device, handler->g_pipeline_cache, 1, &pipeline_info,
+                                            handler->g_allocator, &entry->pipeline));
 
   entry->initialized = true;
   return entry;
@@ -857,9 +857,9 @@ texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, cons
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
 
   void *data;
-  vkMapMemory(handler->g_Device, staging_buffer.memory, 0, image_size, 0, &data);
+  vkMapMemory(handler->g_device, staging_buffer.memory, 0, image_size, 0, &data);
   memcpy(data, rgba_pixels, image_size);
-  vkUnmapMemory(handler->g_Device, staging_buffer.memory);
+  vkUnmapMemory(handler->g_device, staging_buffer.memory);
   free(rgba_pixels);
 
   create_image(handler, width, height, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
@@ -873,8 +873,8 @@ texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, cons
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
                           0, 1);
 
-  vkDestroyBuffer(handler->g_Device, staging_buffer.buffer, handler->g_Allocator);
-  vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
+  vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
+  vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
   texture->image_view =
       create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
@@ -931,9 +931,9 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
 
   void *data;
-  vkMapMemory(handler->g_Device, staging_buffer.memory, 0, image_size, 0, &data);
+  vkMapMemory(handler->g_device, staging_buffer.memory, 0, image_size, 0, &data);
   memcpy(data, rgba_pixels, image_size);
-  vkUnmapMemory(handler->g_Device, staging_buffer.memory);
+  vkUnmapMemory(handler->g_device, staging_buffer.memory);
   free(rgba_pixels);
 
   create_image(handler, width, height, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
@@ -947,8 +947,8 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
                           0, 1);
 
-  vkDestroyBuffer(handler->g_Device, staging_buffer.buffer, handler->g_Allocator);
-  vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
+  vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
+  vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
   texture->image_view =
       create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
@@ -1004,9 +1004,9 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
 
   void *data;
-  vkMapMemory(handler->g_Device, staging_buffer.memory, 0, image_size, 0, &data);
+  vkMapMemory(handler->g_device, staging_buffer.memory, 0, image_size, 0, &data);
   memcpy(data, pixels, image_size);
-  vkUnmapMemory(handler->g_Device, staging_buffer.memory);
+  vkUnmapMemory(handler->g_device, staging_buffer.memory);
   stbi_image_free(pixels);
 
   create_image(handler, tex_width, tex_height, mip_levels, 1, VK_FORMAT_R8G8B8A8_UNORM,
@@ -1019,8 +1019,8 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image,
                        tex_width, tex_height);
 
-  vkDestroyBuffer(handler->g_Device, staging_buffer.buffer, handler->g_Allocator);
-  vkFreeMemory(handler->g_Device, staging_buffer.memory, handler->g_Allocator);
+  vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
+  vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
   if (!build_mipmaps(handler, texture->image, tex_width, tex_height, mip_levels, 1)) {
     transition_image_layout(handler, renderer->transfer_command_pool, texture->image,
@@ -1062,9 +1062,9 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &vertex_staging_buffer);
   void *data;
-  vkMapMemory(handler->g_Device, vertex_staging_buffer.memory, 0, vertex_buffer_size, 0, &data);
+  vkMapMemory(handler->g_device, vertex_staging_buffer.memory, 0, vertex_buffer_size, 0, &data);
   memcpy(data, vertices, (size_t)vertex_buffer_size);
-  vkUnmapMemory(handler->g_Device, vertex_staging_buffer.memory);
+  vkUnmapMemory(handler->g_device, vertex_staging_buffer.memory);
 
   create_buffer(handler, vertex_buffer_size,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -1073,16 +1073,16 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
   copy_buffer(handler, renderer->transfer_command_pool, vertex_staging_buffer.buffer,
               mesh->vertex_buffer.buffer, vertex_buffer_size);
 
-  vkDestroyBuffer(handler->g_Device, vertex_staging_buffer.buffer, handler->g_Allocator);
-  vkFreeMemory(handler->g_Device, vertex_staging_buffer.memory, handler->g_Allocator);
+  vkDestroyBuffer(handler->g_device, vertex_staging_buffer.buffer, handler->g_allocator);
+  vkFreeMemory(handler->g_device, vertex_staging_buffer.memory, handler->g_allocator);
 
   if (index_count > 0 && indices) {
     create_buffer(handler, index_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                   &index_staging_buffer);
-    vkMapMemory(handler->g_Device, index_staging_buffer.memory, 0, index_buffer_size, 0, &data);
+    vkMapMemory(handler->g_device, index_staging_buffer.memory, 0, index_buffer_size, 0, &data);
     memcpy(data, indices, (size_t)index_buffer_size);
-    vkUnmapMemory(handler->g_Device, index_staging_buffer.memory);
+    vkUnmapMemory(handler->g_device, index_staging_buffer.memory);
 
     create_buffer(handler, index_buffer_size,
                   VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
@@ -1091,8 +1091,8 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
     copy_buffer(handler, renderer->transfer_command_pool, index_staging_buffer.buffer,
                 mesh->index_buffer.buffer, index_buffer_size);
 
-    vkDestroyBuffer(handler->g_Device, index_staging_buffer.buffer, handler->g_Allocator);
-    vkFreeMemory(handler->g_Device, index_staging_buffer.memory, handler->g_Allocator);
+    vkDestroyBuffer(handler->g_device, index_staging_buffer.buffer, handler->g_allocator);
+    vkFreeMemory(handler->g_device, index_staging_buffer.memory, handler->g_allocator);
   } else {
     mesh->index_count = 0;
   }
@@ -1103,22 +1103,19 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
 
 void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &handler->renderer;
-  uint32_t frame_pool_index = handler->g_MainWindowData.FrameIndex % 3;
+  uint32_t frame_pool_index = handler->g_main_window_data.FrameIndex % 3;
   check_vk_result(
-      vkResetDescriptorPool(handler->g_Device, renderer->frame_descriptor_pools[frame_pool_index], 0));
+      vkResetDescriptorPool(handler->g_device, renderer->frame_descriptor_pools[frame_pool_index], 0));
   renderer->primitive_vertex_count = 0;
   renderer->primitive_index_count = 0;
   renderer->ubo_buffer_offset = 0;
   renderer->current_command_buffer = command_buffer;
 
-  int width, height;
-  glfwGetFramebufferSize(handler->window, &width, &height);
-  if (width == 0 || height == 0)
-    return;
-
-  VkViewport viewport = {0.0f, 0.0f, (float)width, (float)height, 0.0f, 1.0f};
+  VkViewport viewport = {
+      handler->viewport[0], handler->viewport[1], handler->viewport[2], handler->viewport[3], 0.0f, 1.0f};
   vkCmdSetViewport(command_buffer, 0, 1, &viewport);
-  VkRect2D scissor = {{0, 0}, {(uint32_t)width, (uint32_t)height}};
+  VkRect2D scissor = {{fmaxf(handler->viewport[0], 0), fmaxf(handler->viewport[1], 0)},
+                      {handler->viewport[2], handler->viewport[3]}};
   vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 }
 
@@ -1135,13 +1132,13 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
 
   // Allocate a descriptor set for this pipeline
   VkDescriptorSet descriptor_set;
-  uint32_t frame_pool_index = handler->g_MainWindowData.FrameIndex % 3;
+  uint32_t frame_pool_index = handler->g_main_window_data.FrameIndex % 3;
   VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                             .descriptorPool =
                                                 renderer->frame_descriptor_pools[frame_pool_index],
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &pso->descriptor_set_layout};
-  check_vk_result(vkAllocateDescriptorSets(handler->g_Device, &alloc_info, &descriptor_set));
+  check_vk_result(vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set));
 
   uint32_t binding_count = ubo_count + texture_count;
   VkWriteDescriptorSet descriptor_writes[binding_count];
@@ -1182,7 +1179,7 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
                                .descriptorCount = 1,
                                .pImageInfo = &image_infos[i]};
   }
-  vkUpdateDescriptorSets(handler->g_Device, binding_count, descriptor_writes, 0, NULL);
+  vkUpdateDescriptorSets(handler->g_device, binding_count, descriptor_writes, 0, NULL);
 
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
 
@@ -1215,7 +1212,7 @@ void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex) {
   gfx_handler_t *h = handler;
   if (h->retire_count < 64) {
     h->retire_textures[h->retire_count].tex = tex;
-    h->retire_textures[h->retire_count].frame_index = h->g_MainWindowData.FrameIndex;
+    h->retire_textures[h->retire_count].frame_index = h->g_main_window_data.FrameIndex;
     h->retire_count++;
   }
 }
@@ -1308,16 +1305,14 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
 
 void screen_to_world(gfx_handler_t *h, float sx, float sy, float *wx, float *wy) {
   camera_t *cam = &h->renderer.camera;
-  int fbw, fbh;
-  glfwGetFramebufferSize(h->window, &fbw, &fbh);
 
-  float window_ratio = (float)fbw / (float)fbh;
+  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   float aspect = window_ratio / map_ratio;
 
   float max_map_size = fmax(h->map_data->width, h->map_data->height) * 0.001f;
-  float ndc_x = (2.0f * sx / fbw) - 1.0f;
-  float ndc_y = (2.0f * sy / fbh) - 1.0f;
+  float ndc_x = (2.0f * sx / h->viewport[2]) - 1.0f;
+  float ndc_y = (2.0f * sy / h->viewport[3]) - 1.0f;
 
   *wx = cam->pos[0] + (ndc_x / (cam->zoom * max_map_size));
   *wy = cam->pos[1] + (ndc_y / (cam->zoom * max_map_size * aspect));
@@ -1327,12 +1322,10 @@ void screen_to_world(gfx_handler_t *h, float sx, float sy, float *wx, float *wy)
 
 void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy) {
   camera_t *cam = &h->renderer.camera;
-  int fbw, fbh;
-  glfwGetFramebufferSize(h->window, &fbw, &fbh);
   wx /= h->map_data->width;
   wy /= h->map_data->height;
 
-  float window_ratio = (float)fbw / (float)fbh;
+  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   float aspect = window_ratio / map_ratio;
 
@@ -1342,9 +1335,9 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
   float ndc_x = (wx - cam->pos[0]) * (cam->zoom * max_map_size);
   float ndc_y = (wy - cam->pos[1]) * (cam->zoom * max_map_size * aspect);
 
-  // NDC [-1..1] to screen pixels [0..fbw],[0..fbh]
-  *sx = (ndc_x + 1.0f) * 0.5f * fbw;
-  *sy = (ndc_y + 1.0f) * 0.5f * fbh;
+  // NDC [-1..1] to screen pixels [0..w],[0..h]
+  *sx = (ndc_x + 1.0f) * 0.5f * h->viewport[2];
+  *sy = (ndc_y + 1.0f) * 0.5f * h->viewport[3];
 }
 
 static void setup_vertex_descriptions() {
@@ -1425,31 +1418,28 @@ static void setup_vertex_descriptions() {
 }
 
 // --- Primitive Drawing Implementation ---
-static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
-  renderer_state_t *renderer = &handler->renderer;
+static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
+  renderer_state_t *renderer = &h->renderer;
   if (renderer->primitive_index_count == 0) {
     return;
   }
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, renderer->primitive_shader, 1, 0,
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive_shader, 1, 0,
                                                        &primitive_binding_description, 1, // one binding
                                                        primitive_attribute_descriptions, 2);
 
-  int fbw, fbh;
-  glfwGetFramebufferSize(handler->window, &fbw, &fbh);
-
   primitive_ubo_t ubo;
-  ubo.camPos[0] = handler->renderer.camera.pos[0];
-  ubo.camPos[1] = handler->renderer.camera.pos[1];
-  ubo.zoom = handler->renderer.camera.zoom;
+  ubo.camPos[0] = h->renderer.camera.pos[0];
+  ubo.camPos[1] = h->renderer.camera.pos[1];
+  ubo.zoom = h->renderer.camera.zoom;
 
-  float window_ratio = (float)fbw / (float)fbh;
-  float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
+  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
+  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   ubo.aspect = window_ratio / map_ratio;
 
-  ubo.maxMapSize = fmaxf(handler->map_data->width, handler->map_data->height) * 0.001f;
-  ubo.mapSize[0] = handler->map_data->width;
-  ubo.mapSize[1] = handler->map_data->height;
+  ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
+  ubo.mapSize[0] = h->map_data->width;
+  ubo.mapSize[1] = h->map_data->height;
 
   glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
@@ -1464,14 +1454,14 @@ static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buf
 
   VkDescriptorSet descriptor_set;
 
-  uint32_t frame_pool_index = handler->g_MainWindowData.FrameIndex % 3;
+  uint32_t frame_pool_index = h->g_main_window_data.FrameIndex % 3;
   VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                             .descriptorPool =
                                                 renderer->frame_descriptor_pools[frame_pool_index],
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &pso->descriptor_set_layout};
 
-  check_vk_result(vkAllocateDescriptorSets(handler->g_Device, &alloc_info, &descriptor_set));
+  check_vk_result(vkAllocateDescriptorSets(h->g_device, &alloc_info, &descriptor_set));
 
   VkDescriptorBufferInfo buffer_info = {
       .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = 0, .range = sizeof(primitive_ubo_t)};
@@ -1481,7 +1471,7 @@ static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buf
                                            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
                                            .descriptorCount = 1,
                                            .pBufferInfo = &buffer_info};
-  vkUpdateDescriptorSets(handler->g_Device, 1, &descriptor_write, 0, NULL);
+  vkUpdateDescriptorSets(h->g_device, 1, &descriptor_write, 0, NULL);
 
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
   VkDeviceSize offsets[] = {0};
@@ -1613,9 +1603,7 @@ void renderer_draw_map(gfx_handler_t *h) {
   if (!h->map_shader || !h->quad_mesh || h->map_texture_count <= 0)
     return;
 
-  int fbw, fbh;
-  glfwGetFramebufferSize(h->window, &fbw, &fbh);
-  float window_ratio = (float)fbw / (float)fbh;
+  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   if (isnan(map_ratio) || map_ratio == 0)
     map_ratio = 1.0f;
@@ -1625,7 +1613,8 @@ void renderer_draw_map(gfx_handler_t *h) {
     zoom = 1.0f;
 
   float aspect = 1.0f / (window_ratio / map_ratio);
-  float lod = fmin(fmax(5.5f - log2f((1.0f / h->map_data->width) / zoom * (fbw / 2.0f)), 0.0f), 6.0f);
+  float lod =
+      fmin(fmax(5.5f - log2f((1.0f / h->map_data->width) / zoom * (h->viewport[2] / 2.0f)), 0.0f), 6.0f);
 
   map_buffer_object_t ubo = {.transform = {h->renderer.camera.pos[0], h->renderer.camera.pos[1], zoom},
                              .aspect = aspect,
@@ -1698,13 +1687,11 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
       get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 10);
 
   // --- prepare camera UBO (same as primitives) ---
-  int fbw, fbh;
-  glfwGetFramebufferSize(h->window, &fbw, &fbh);
   primitive_ubo_t ubo;
   ubo.camPos[0] = renderer->camera.pos[0];
   ubo.camPos[1] = renderer->camera.pos[1];
   ubo.zoom = renderer->camera.zoom;
-  float window_ratio = (float)fbw / (float)fbh;
+  float window_ratio = (float)h->viewport[2] / (float)h->viewport[3];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   ubo.aspect = window_ratio / map_ratio;
   ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
@@ -1720,13 +1707,13 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   renderer->ubo_buffer_offset += aligned;
 
   // Allocate descriptor set
-  uint32_t pool_idx = h->g_MainWindowData.FrameIndex % 3;
+  uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
   VkDescriptorSet desc;
   VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                     .descriptorPool = renderer->frame_descriptor_pools[pool_idx],
                                     .descriptorSetCount = 1,
                                     .pSetLayouts = &pso->descriptor_set_layout};
-  check_vk_result(vkAllocateDescriptorSets(h->g_Device, &ai, &desc));
+  check_vk_result(vkAllocateDescriptorSets(h->g_device, &ai, &desc));
 
   // write UBO
   VkDescriptorBufferInfo bufInfo = {
@@ -1746,7 +1733,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
                                      .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                      .descriptorCount = 1,
                                      .pImageInfo = &img}};
-  vkUpdateDescriptorSets(h->g_Device, 2, writes, 0, NULL);
+  vkUpdateDescriptorSets(h->g_device, 2, writes, 0, NULL);
 
   // --- issue draw ---
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
@@ -1791,9 +1778,9 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging);
 
   void *data;
-  vkMapMemory(h->g_Device, staging.memory, 0, image_size, 0, &data);
+  vkMapMemory(h->g_device, staging.memory, 0, image_size, 0, &data);
   memcpy(data, pixels, image_size);
-  vkUnmapMemory(h->g_Device, staging.memory);
+  vkUnmapMemory(h->g_device, staging.memory);
   stbi_image_free(pixels);
 
   // Transition -> TRANSFER_DST
@@ -1821,8 +1808,8 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, layer, 1);
 
   // Cleanup staging
-  vkDestroyBuffer(h->g_Device, staging.buffer, h->g_Allocator);
-  vkFreeMemory(h->g_Device, staging.memory, h->g_Allocator);
+  vkDestroyBuffer(h->g_device, staging.buffer, h->g_allocator);
+  vkFreeMemory(h->g_device, staging.memory, h->g_allocator);
 
   printf("Loaded skin %s into layer %d\n", path, layer);
   return layer; // return usable skin index

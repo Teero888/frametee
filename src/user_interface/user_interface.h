@@ -15,11 +15,11 @@ typedef struct {
   bool show_prediction;
 } ui_handler_t;
 
-void on_camera_update(struct gfx_handler_t *handler);
+void on_camera_update(struct gfx_handler_t *handler, bool hovered);
 void render_players(ui_handler_t *ui);
 
 void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);
-void ui_render(ui_handler_t *ui);
+bool ui_render(ui_handler_t *ui);
 void ui_cleanup(ui_handler_t *ui);
 
 #endif

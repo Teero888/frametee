@@ -1,12 +1,16 @@
+#include "cimgui.h"
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
 #include <GLFW/glfw3.h>
+#include <stdio.h>
 
 int main(void) {
   gfx_handler_t handler;
   if (init_gfx_handler(&handler) != 0)
     return 1;
   on_map_load(&handler, "data/maps/Kobra 4.map");
+
+  bool viewport_hovered = false;
 
   int err = FRAME_SKIP;
   while (1) {
@@ -16,15 +20,13 @@ int main(void) {
     if (frame_result == FRAME_SKIP)
       continue;
 
-    on_camera_update(&handler);
+    on_camera_update(&handler, viewport_hovered);
 
     renderer_begin_skins(&handler);
     render_players(&handler.user_interface);
     renderer_flush_skins(&handler, handler.current_frame_command_buffer,
                          handler.renderer.skin_manager.atlas_array);
-
-    renderer_draw_map(&handler);
-    ui_render(&handler.user_interface);
+    viewport_hovered = ui_render(&handler.user_interface);
 
     ImGuiIO *io = igGetIO_Nil();
     if (handler.user_interface.timeline.recording) {
@@ -35,6 +37,7 @@ int main(void) {
       io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse; // turn mouse back on
     }
 
+    renderer_draw_map(&handler);
     gfx_end_frame(&handler);
   }
 
