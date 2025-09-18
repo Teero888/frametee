@@ -40,7 +40,8 @@ void main() {
 
     gl_Position = ubo.proj * vec4(rel,0.0,1.0);
 
-    frag_uv = in_pos*0.5+0.5;
+	// 0.625 because we do *1.25 for the instance scale so there is enough room for animation
+    frag_uv = in_pos * 0.625+0.5;
     frag_skin_index = instance_skin;
     frag_eye = instance_eye;
     frag_body = anim_body;

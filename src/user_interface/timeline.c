@@ -364,21 +364,6 @@ int get_max_timeline_tick(timeline_state_t *ts) {
 
 // --- Rendering and Interaction Functions ---
 void render_timeline_controls(timeline_state_t *ts) {
-
-  // Push custom styles for controls
-  igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f); // Rounded corners for buttons and sliders
-  igPushStyleVar_Vec2(ImGuiStyleVar_FramePadding, (ImVec2){8.0f, 4.0f}); // Padding inside buttons/sliders
-  igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){6.0f, 4.0f});  // Spacing between items
-
-  // Custom colors for a modern look
-  igPushStyleColor_Vec4(ImGuiCol_SliderGrab, (ImVec4){0.2f, 0.5f, 0.7f, 1.0f}); // Match slider grab to button
-  igPushStyleColor_Vec4(ImGuiCol_SliderGrabActive, (ImVec4){0.1f, 0.4f, 0.6f, 1.0f}); // Darker when active
-  igPushStyleColor_Vec4(ImGuiCol_FrameBg,
-                        (ImVec4){0.15f, 0.15f, 0.15f, 0.8f}); // Dark background for input fields
-  igPushStyleColor_Vec4(ImGuiCol_FrameBgHovered,
-                        (ImVec4){0.2f, 0.2f, 0.2f, 0.8f}); // Slightly lighter on hover
-  igPushStyleColor_Vec4(ImGuiCol_FrameBgActive, (ImVec4){0.25f, 0.25f, 0.25f, 0.8f}); // Active input field
-
   igPushItemWidth(100);
 
   if (igDragInt("Current Tick", &ts->current_tick, 1, 0, 100000, "%d", ImGuiSliderFlags_None)) {
@@ -412,8 +397,7 @@ void render_timeline_controls(timeline_state_t *ts) {
   if (igArrowButton("<<", ImGuiDir_Left))
     ts->current_tick = (ts->current_tick >= 50) ? ts->current_tick - 50 : 0;
   igSameLine(0, 4);
-  if (igButton(ts->is_playing ? "Pause" : "Play", (ImVec2){50, 0}) ||
-      (igShortcut_Nil(ImGuiKey_X, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal))) {
+  if (igButton(ts->is_playing ? "Pause" : "Play", (ImVec2){50, 0})) {
     ts->is_playing ^= 1;
     if (ts->is_playing) {
       ts->last_update_time = igGetTime();
@@ -486,8 +470,6 @@ void render_timeline_controls(timeline_state_t *ts) {
   }
 
   igPopItemWidth();
-  igPopStyleColor(5); // Pop all custom colors
-  igPopStyleVar(3);   // Pop FrameRounding, FramePadding, ItemSpacing
 }
 
 void handle_timeline_interaction(timeline_state_t *ts, ImRect timeline_bb) {
@@ -526,144 +508,104 @@ void handle_timeline_interaction(timeline_state_t *ts, ImRect timeline_bb) {
   }
 }
 
+// Helper: Pick nice tick step that gives enough pixel spacing
+static double choose_nice_tick_step(double pixels_per_tick, double min_label_spacing) {
+  // steps expressed in TICKS (since 50 ticks = 1 sec)
+  static const double nice_steps[] = {
+      1,   2,   5,                                         // very detailed (sub-second ticks)
+      10,  25,  50,                                        // half-sec, multiple ticks
+      100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000 // minutes range (if zoomed way out)
+  };
+
+  int count = sizeof(nice_steps) / sizeof(nice_steps[0]);
+  for (int i = 0; i < count; i++) {
+    double step = nice_steps[i];
+    if (step * pixels_per_tick >= min_label_spacing) {
+      return step;
+    }
+  }
+  return nice_steps[count - 1];
+}
+
 void draw_timeline_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_bb, float header_y) {
-  ImU32 tick_col = igGetColorU32_Col(ImGuiCol_TextDisabled, 0.7f);
-  ImU32 tick_sec_col = igGetColorU32_Col(ImGuiCol_Text, 0.9f);
+  ImU32 tick_minor_col = igGetColorU32_Col(ImGuiCol_TextDisabled, 0.25f); // light/faint line every tick
+  ImU32 tick_col = igGetColorU32_Col(ImGuiCol_TextDisabled, 0.7f);        // adaptive tick
+  ImU32 tick_major_col = igGetColorU32_Col(ImGuiCol_Text, 0.9f);          // 1-second or bigger
   ImU32 tick_text_col = igGetColorU32_Col(ImGuiCol_Text, 1.0f);
 
   float header_height = igGetTextLineHeightWithSpacing();
   float timeline_area_width = timeline_bb.Max.x - timeline_bb.Min.x;
+  float pixels_per_tick = ts->zoom;
+  float min_label_spacing = 60.0f;
 
-  // Determine tick step and label step based on zoom
-  // These values are heuristic and can be adjusted
-  int min_pixels_per_tick_label = 60; // Minimum pixel spacing between major labels
-  float pixels_per_sec = ts->zoom * TPS;
+  // adaptive step in ticks
+  double tick_step = choose_nice_tick_step(pixels_per_tick, min_label_spacing);
 
-  int label_tick_step; // Step for major labels (e.g., seconds or bigger units)
-  int tick_step;       // Step for minor ticks
+  int max_visible_ticks = (int)(timeline_area_width / pixels_per_tick) + 2;
+  int start_tick = (int)floor(ts->view_start_tick);
+  int end_tick = ts->view_start_tick + max_visible_ticks;
 
-  if (pixels_per_sec < min_pixels_per_tick_label * 0.5) { // Less than half min_pixels per second
-    // Labels based on seconds, but maybe skip some seconds
-    int sec_step = (int)ceilf(min_pixels_per_tick_label / pixels_per_sec);
-    if (sec_step <= 1)
-      sec_step = 1; // Every second if enough space
-    else if (sec_step <= 2)
-      sec_step = 2;
-    else if (sec_step <= 5)
-      sec_step = 5;
-    else if (sec_step <= 10)
-      sec_step = 10;
-    else
-      sec_step = (int)ceilf(sec_step / 10.0f) * 10; // 10, 20, 30, ...
-    label_tick_step = sec_step * TPS;
-
-    // Minor ticks within the label step
-    if (ts->zoom < 0.1f)
-      tick_step = label_tick_step / 10; // E.g., 10 ticks per label block
-    else if (ts->zoom < 0.5f)
-      tick_step = label_tick_step / 5;
-    else
-      tick_step = label_tick_step / 2;
-    if (tick_step == 0)
-      tick_step = 1;
-
-  } else { // Enough space to potentially label individual ticks or smaller groups
-    // Labels based on tick counts
-    label_tick_step = (int)ceilf(min_pixels_per_tick_label / ts->zoom);
-    if (label_tick_step <= 1)
-      label_tick_step = 1;
-    else if (label_tick_step <= 2)
-      label_tick_step = 2;
-    else if (label_tick_step <= 5)
-      label_tick_step = 5;
-    else if (label_tick_step <= 10)
-      label_tick_step = 10;
-    else if (label_tick_step <= 25)
-      label_tick_step = 25;
-    else if (label_tick_step <= 50)
-      label_tick_step = 50;
-    else if (label_tick_step <= 100)
-      label_tick_step = 100;
-    else
-      label_tick_step = (int)ceilf(label_tick_step / 100.0f) * 100; // 100, 200, ...
-
-    // Minor ticks within the label step
-    if (ts->zoom > 5.0f)
-      tick_step = 1; // Every tick
-    else if (ts->zoom > 2.0f)
-      tick_step = 2; // Every 2 ticks
-    else if (ts->zoom > 1.0f)
-      tick_step = 5; // Every 5 ticks
-    else
-      tick_step = label_tick_step / 5; // E.g., 5 minor ticks between labels
-    if (tick_step == 0)
-      tick_step = 1;
-  }
-
-  // Ensure label_tick_step is a multiple of tick_step if possible
-  if (label_tick_step < tick_step)
-    label_tick_step = tick_step;
-  else if (label_tick_step % tick_step != 0)
-    label_tick_step = (label_tick_step / tick_step + 1) * tick_step;
-
-  int max_visible_ticks = (int)(timeline_area_width / ts->zoom) + 2; // +2 for safety margins
-  int view_start_tick_rounded =
-      (ts->view_start_tick / tick_step) * tick_step; // Start drawing from a tick_step multiple
-  int view_end_tick = ts->view_start_tick + max_visible_ticks;
-
-  for (int tick = view_start_tick_rounded; tick <= view_end_tick; tick += tick_step) {
+  // pass 1: draw EVERY TICK as faint grey
+  for (int tick = start_tick; tick <= end_tick; tick++) {
     if (tick < 0)
       continue;
 
     float x = tick_to_screen_x(ts, tick, timeline_bb.Min.x);
-
-    // Skip drawing ticks far off-screen
     if (x < timeline_bb.Min.x - 10 || x > timeline_bb.Max.x + 10)
       continue;
 
-    bool is_label_marker = (tick % label_tick_step == 0);
-    bool is_second_marker = (tick != 0 && TPS > 0 && tick % (int)TPS == 0); // Mark full seconds if TPS > 0
-
-    ImU32 current_tick_col = tick_col;
-    float line_height = header_height * 0.4f; // Minor tick height
-
-    if (is_second_marker) {
-      current_tick_col = tick_sec_col;
-      line_height = header_height; // Second markers are full height
-    } else if (is_label_marker) {
-      current_tick_col = tick_col;
-      line_height = header_height * 0.75f; // Label markers are taller than minor
-    }
-
-    // Draw tick line
+    float line_height = header_height * 0.25f;
     ImDrawList_AddLine(draw_list, (ImVec2){x, header_y + header_height - line_height},
-                       (ImVec2){x, header_y + header_height}, current_tick_col, 1.0f);
+                       (ImVec2){x, header_y + header_height}, tick_minor_col, 1.0f);
+  }
 
-    // Draw label text
-    if (is_label_marker) {
-      char label[64];
-      if (is_second_marker) {
-        snprintf(label, sizeof(label), "%ds", tick / (int)TPS);
-      } else {
-        snprintf(label, sizeof(label), "%d", tick);
-      }
+  // pass 2: draw adaptive major ticks & labels
+  double start_tick_major = floor((double)ts->view_start_tick / tick_step) * tick_step;
+  for (double tick = start_tick_major; tick <= end_tick; tick += tick_step) {
+    if (tick < 0)
+      continue;
 
-      ImVec2 text_size;
-      igCalcTextSize(&text_size, label, NULL, false, 0);
-      // Adjust text position slightly to the right of the tick mark and vertically centered
-      ImVec2 text_pos = {x + 3.0f, header_y + (header_height - text_size.y) * 0.5f};
+    float x = tick_to_screen_x(ts, tick, timeline_bb.Min.x);
+    if (x < timeline_bb.Min.x - 10 || x > timeline_bb.Max.x + 10)
+      continue;
 
-      // Prevent labels from drawing over the left window edge
-      if (text_pos.x < timeline_bb.Min.x + 3)
-        text_pos.x = timeline_bb.Min.x + 3;
-      // Prevent labels from drawing too close to the right window edge
-      if (text_pos.x + text_size.x > timeline_bb.Max.x - 3)
-        text_pos.x = timeline_bb.Max.x - text_size.x - 3;
-      if (text_pos.x < timeline_bb.Min.x)
-        continue; // Don't draw if completely off screen
+    bool is_sec_marker = fmod(tick, 50.0) < 1e-6; // 50 ticks = full second
+    ImU32 col = is_sec_marker ? tick_major_col : tick_col;
+    float line_height = is_sec_marker ? header_height * 0.6f : header_height * 0.4f;
 
-      ImDrawList_AddText_Vec2(draw_list, text_pos, tick_text_col, label, NULL);
+    ImDrawList_AddLine(draw_list, (ImVec2){x, header_y + header_height - line_height},
+                       (ImVec2){x, header_y + header_height}, col, 1.0f);
+
+    // labels only for adaptive major ticks
+    char label[64];
+    if (tick < 50) { // show raw ticks in fine zoom
+      snprintf(label, sizeof(label), "%.0f", tick);
+    } else if (tick < 3000) { // under a minute, show sec
+      snprintf(label, sizeof(label), "%.1fs", tick / 50.0);
+    } else if (tick < 180000) { // under an hour
+      int total_secs = (int)(tick / 50.0);
+      int mins = total_secs / 60;
+      int secs = total_secs % 60;
+      snprintf(label, sizeof(label), "%d:%02d", mins, secs);
+    } else {
+      int total_secs = (int)(tick / 50.0);
+      int hours = total_secs / 3600;
+      int mins = (total_secs % 3600) / 60;
+      snprintf(label, sizeof(label), "%dh%02dm", hours, mins);
     }
+
+    ImVec2 text_size;
+    igCalcTextSize(&text_size, label, NULL, false, 0);
+    // draw BELOW the ticks (avoids collision with vertical lines)
+    ImVec2 text_pos = {x - text_size.x * 0.5f, header_y + header_height + 2};
+
+    // clamp horizontally within the timeline bounds
+    if (text_pos.x < timeline_bb.Min.x + 2)
+      text_pos.x = timeline_bb.Min.x + 2;
+    if (text_pos.x + text_size.x > timeline_bb.Max.x - 2)
+      text_pos.x = timeline_bb.Max.x - text_size.x - 2;
+
+    ImDrawList_AddText_Vec2(draw_list, text_pos, tick_text_col, label, NULL);
   }
 }
 
@@ -969,6 +911,13 @@ void render_timeline(timeline_state_t *ts) {
     ts->last_update_time = igGetTime();
   }
 
+  if (igIsKeyPressed_Bool(ImGuiKey_X, ImGuiInputFlags_Repeat)) {
+    ts->is_playing ^= 1;
+    if (ts->is_playing) {
+      ts->last_update_time = igGetTime();
+    }
+  }
+
   bool reverse = igIsKeyDown_Nil(ImGuiKey_C);
   if ((ts->is_playing || reverse) && ts->playback_speed > 0.0f) {
     double current_time = igGetTime();
@@ -996,7 +945,7 @@ void render_timeline(timeline_state_t *ts) {
     render_timeline_controls(ts);
 
     // --- Layout Calculations for Header and Timeline Area ---
-    float header_height = igGetTextLineHeightWithSpacing();
+    float header_height = igGetTextLineHeightWithSpacing() + 12;
 
     // Calculate the available space below the controls for the header and tracks
     ImVec2 available_space_below_controls;
@@ -1191,7 +1140,7 @@ void render_timeline(timeline_state_t *ts) {
       // --- Draw Playhead ---
       // Draw the playhead line over the track area, from its top to its bottom
       draw_playhead(ts, draw_list, timeline_bb,
-                    timeline_bb.Min.y); // Playhead starts at the top Y of the timeline_bb area
+                    timeline_bb.Min.y - 12); // Playhead starts at the top Y of the timeline_bb area
 
     } // End if(timeline_bb has positive dimensions)
 
@@ -1219,7 +1168,7 @@ player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph) {
   // reset player info
   memset(new_track->player_info.name, 0, 32);
   memset(new_track->player_info.clan, 0, 32);
-  snprintf(new_track->player_info.skin, 32, "default.png");
+  new_track->player_info.skin = 0;
   memset(new_track->player_info.color, 0, 3 * sizeof(float));
   new_track->player_info.use_custom_color = 0;
   return new_track;

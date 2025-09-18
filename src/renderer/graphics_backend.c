@@ -156,8 +156,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->viewport[1] = fb_height;
 
   // initialize offscreen target to match the viewport size
-  if (init_offscreen_resources(handler, (uint32_t)handler->viewport[0], (uint32_t)handler->viewport[1]) !=
-      0) {
+  if (init_offscreen_resources(handler, (uint32_t)fb_width, (uint32_t)fb_height) != 0) {
     fprintf(stderr, "Warning: failed to create offscreen resources. ImGui game view will be disabled.\n");
   }
 
@@ -227,7 +226,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   // --- Begin offscreen render pass (for game rendering) ---
   if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE &&
       handler->offscreen_framebuffer != VK_NULL_HANDLE) {
-    VkClearValue clear = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 0.0f}}};
+    VkClearValue clear = {.color = {.float32 = {30.f / 255.f, 35.f / 255.f, 40.f / 255.f, 1.0f}}};
     VkRenderPassBeginInfo rp_info = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
         .renderPass = handler->offscreen_render_pass,
@@ -285,6 +284,8 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   vkCmdBeginRenderPass(handler->current_frame_command_buffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
   // --- Build ImGui windows ---
+  // igShowDemoWindow(NULL);
+  igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0.f, 0.f});
   if (handler->offscreen_initialized && handler->offscreen_texture_id != NULL) {
     igBegin("viewport", NULL, ImGuiWindowFlags_NoScrollbar);
     ImVec2 img_size = {(float)handler->offscreen_width, (float)handler->offscreen_height};
@@ -294,6 +295,7 @@ bool gfx_end_frame(gfx_handler_t *handler) {
     hovered = igIsWindowHovered(0);
     igEnd();
   }
+  igPopStyleVar(1);
 
   igRender();
   ImDrawData *draw_data = igGetDrawData();
@@ -448,7 +450,7 @@ static int init_window(gfx_handler_t *handler) {
     return 1;
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  handler->window = glfwCreateWindow(1280, 720, "frametee", NULL, NULL);
+  handler->window = glfwCreateWindow(1920, 1080, "frametee", NULL, NULL);
   if (!handler->window) {
     glfwTerminate();
     return 1;
@@ -489,14 +491,114 @@ static int init_vulkan(gfx_handler_t *handler) {
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
 
   // Background color
-  wd->ClearValue.color.float32[0] = 0.24f;
-  wd->ClearValue.color.float32[1] = 0.24f;
-  wd->ClearValue.color.float32[2] = 0.24f;
+  wd->ClearValue.color.float32[0] = 0.f;
+  wd->ClearValue.color.float32[1] = 0.f;
+  wd->ClearValue.color.float32[2] = 0.f;
   wd->ClearValue.color.float32[3] = 1.0f;
   wd->ClearEnable = true;
 
   setup_window(handler, wd, surface, w, h);
   return 0;
+}
+
+static ImVec4 hex_vec4(const char *hex, float alpha) {
+  unsigned int r, g, b;
+  sscanf(hex, "%02x%02x%02x", &r, &g, &b);
+  return (ImVec4){(float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f, alpha};
+}
+
+void ayu_dark(void) {
+  ImGuiStyle *style = igGetStyle();
+
+  // Base Colors
+  ImVec4 bg_main = hex_vec4("0A0E14", 1.0f);
+  ImVec4 bg_panel = hex_vec4("0F131A", 1.0f);
+  ImVec4 bg_line = hex_vec4("151A1F", 1.0f);
+
+  ImVec4 fg_text = hex_vec4("E6E1CF", 1.0f);     // warm white
+  ImVec4 fg_inactive = hex_vec4("565B66", 1.0f); // muted gray
+  ImVec4 shadow = hex_vec4("000000", 0.5f);
+
+  // Accent & Syntax
+  ImVec4 accent_yellow = hex_vec4("E6B450", 1.0f);
+  ImVec4 accent_orange = hex_vec4("FF8F40", 1.0f);
+  ImVec4 accent_green = hex_vec4("AAD94C", 1.0f);
+  ImVec4 accent_blue = hex_vec4("39BAE6", 1.0f);
+  ImVec4 accent_pink = hex_vec4("D2A6FF", 1.0f);
+  ImVec4 accent_red = hex_vec4("F07178", 1.0f);
+
+  // Style Metrics
+  style->WindowPadding = (ImVec2){8, 8};
+  style->FramePadding = (ImVec2){6, 4};
+  style->ItemSpacing = (ImVec2){8, 4};
+  style->ScrollbarSize = 14;
+  style->GrabMinSize = 12;
+
+  style->WindowRounding = 3;
+  style->FrameRounding = 3;
+  style->TabRounding = 3;
+  style->ScrollbarRounding = 8;
+
+  ImVec4 *colors = style->Colors;
+
+  // Text
+  colors[ImGuiCol_Text] = fg_text;
+  colors[ImGuiCol_TextDisabled] = fg_inactive;
+
+  // Backgrounds
+  colors[ImGuiCol_WindowBg] = bg_main;
+  colors[ImGuiCol_ChildBg] = bg_panel;
+  colors[ImGuiCol_PopupBg] = bg_panel;
+  colors[ImGuiCol_Border] = bg_line;
+  colors[ImGuiCol_BorderShadow] = shadow;
+
+  // Frames & widgets
+  colors[ImGuiCol_FrameBg] = bg_line;
+  colors[ImGuiCol_FrameBgHovered] = hex_vec4("475266", 0.25f);
+  colors[ImGuiCol_FrameBgActive] = accent_yellow;
+
+  // Titles
+  colors[ImGuiCol_TitleBg] = bg_panel;
+  colors[ImGuiCol_TitleBgActive] = bg_panel;
+  colors[ImGuiCol_TitleBgCollapsed] = bg_main;
+
+  // Scrollbar
+  colors[ImGuiCol_ScrollbarBg] = hex_vec4("0F131A", 0.8f);
+  colors[ImGuiCol_ScrollbarGrab] = fg_inactive;
+  colors[ImGuiCol_ScrollbarGrabHovered] = accent_yellow;
+  colors[ImGuiCol_ScrollbarGrabActive] = accent_orange;
+
+  // Buttons
+  colors[ImGuiCol_Button] = accent_orange;
+  colors[ImGuiCol_ButtonHovered] = hex_vec4("FF8F40", 0.85f);
+  colors[ImGuiCol_ButtonActive] = hex_vec4("FF8F40", 1.0f);
+
+  // Tabs
+  colors[ImGuiCol_Tab] = bg_line;
+  colors[ImGuiCol_TabHovered] = accent_blue;
+  colors[ImGuiCol_TabSelected] = bg_panel;
+  colors[ImGuiCol_TabDimmed] = bg_line;
+  colors[ImGuiCol_TabDimmedSelected] = bg_panel;
+
+  // Selections
+  colors[ImGuiCol_Header] = hex_vec4("409FFF", 0.15f);
+  colors[ImGuiCol_HeaderHovered] = hex_vec4("409FFF", 0.25f);
+  colors[ImGuiCol_HeaderActive] = hex_vec4("FF6F40", 1.0f);
+
+  colors[ImGuiCol_TextSelectedBg] = hex_vec4("409FFF", 0.35f);
+
+  // Special & fun accents
+  colors[ImGuiCol_CheckMark] = accent_green;
+  colors[ImGuiCol_SliderGrab] = accent_yellow;
+  colors[ImGuiCol_SliderGrabActive] = accent_orange;
+
+  colors[ImGuiCol_PlotLines] = accent_blue;
+  colors[ImGuiCol_PlotHistogram] = accent_green;
+
+  // Navigation highlight
+  colors[ImGuiCol_NavCursor] = accent_yellow;
+  colors[ImGuiCol_NavWindowingHighlight] = accent_yellow;
+  colors[ImGuiCol_ModalWindowDimBg] = shadow;
 }
 
 static int init_imgui(gfx_handler_t *handler) {
@@ -505,8 +607,7 @@ static int init_imgui(gfx_handler_t *handler) {
   io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io->ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
   io->ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-
-  igStyleColorsDark(NULL);
+  ayu_dark();
 
   ImGui_ImplGlfw_InitForVulkan(handler->window, true);
   ImGui_ImplVulkan_InitInfo init_info = {.Instance = handler->g_instance,
@@ -663,7 +764,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
       handler->offscreen_sampler, handler->offscreen_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   handler->offscreen_initialized = true;
-  //printf("Offscreen resources created: %ux%u\n", width, height);
+  // printf("Offscreen resources created: %ux%u\n", width, height);
   return 0;
 }
 
@@ -703,7 +804,7 @@ static void destroy_offscreen_resources(gfx_handler_t *handler) {
   handler->offscreen_initialized = false;
   handler->offscreen_width = 0;
   handler->offscreen_height = 0;
-  printf("Offscreen resources destroyed\n");
+  // printf("Offscreen resources destroyed\n");
 }
 
 static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, uint32_t height) {

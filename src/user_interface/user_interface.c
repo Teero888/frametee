@@ -85,13 +85,19 @@ void setup_docking(ui_handler_t *ui) {
     igDockBuilderAddNode(main_dockspace_id, ImGuiDockNodeFlags_DockSpace);
     igDockBuilderSetNodeSize(main_dockspace_id, viewport->WorkSize);
 
+    // Split root into bottom + top remainder
     ImGuiID dock_id_top;
     ImGuiID dock_id_bottom =
         igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.30f, NULL, &dock_id_top);
-    ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.25f, NULL, &dock_id_right);
-    ImGuiID dock_id_left = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Left, 0.25f, NULL, &dock_id_left);
 
-    // assign windows to docks
+    // Split top remainder into left + remainder
+    ImGuiID dock_id_left;
+    ImGuiID dock_id_center; // this will be "viewport"
+    ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.25f, NULL, &dock_id_center);
+    dock_id_left = igDockBuilderSplitNode(dock_id_center, ImGuiDir_Left, 0.25f, NULL, &dock_id_center);
+
+    // now dock_id_center is the leftover = central piece
+    igDockBuilderDockWindow("viewport", dock_id_center);
     igDockBuilderDockWindow("Timeline", dock_id_bottom);
     igDockBuilderDockWindow("Player Info", dock_id_left);
     igDockBuilderDockWindow("Players", dock_id_left);
@@ -471,7 +477,7 @@ void render_players(ui_handler_t *ui) {
 
     vec2 dir = (vec2){core->m_Input.m_TargetX, core->m_Input.m_TargetY};
     glm_vec2_normalize(dir);
-    int skin = gfx->default_skin;
+    int skin = gfx->user_interface.timeline.player_tracks[i].player_info.skin;
     int eye = get_flag_eye_state(&core->m_Input);
     // TODO: implement spec in the physics properly
     if (core->m_FreezeTime > 0) {
@@ -539,7 +545,7 @@ bool ui_render(ui_handler_t *ui) {
     render_player_manager(&ui->timeline, &ui->gfx_handler->physics_handler);
     render_snippet_editor_panel(&ui->timeline);
     if (ui->timeline.selected_player_track_index != -1)
-      render_player_info(&ui->timeline);
+      render_player_info(ui->gfx_handler);
   }
 }
 

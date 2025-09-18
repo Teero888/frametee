@@ -724,10 +724,11 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
       .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
       .colorBlendOp = VK_BLEND_OP_ADD,
       .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-      .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+      .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
       .alphaBlendOp = VK_BLEND_OP_ADD,
       .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-                        VK_COLOR_COMPONENT_A_BIT};
+                        VK_COLOR_COMPONENT_A_BIT,
+  };
 
   VkPipelineColorBlendStateCreateInfo color_blending = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
@@ -1322,7 +1323,7 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
 
   float max_map_size = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
 
-  // World offset from camera center → NDC
+  // World offset from camera center -> NDC
   float ndc_x = (wx - cam->pos[0]) * (cam->zoom * max_map_size);
   float ndc_y = (wy - cam->pos[1]) * (cam->zoom * max_map_size * aspect);
 
@@ -1641,7 +1642,7 @@ void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int sk
   uint32_t i = sr->instance_count++;
   sr->instance_ptr[i].pos[0] = pos[0];
   sr->instance_ptr[i].pos[1] = pos[1];
-  sr->instance_ptr[i].scale = scale;
+  sr->instance_ptr[i].scale = scale * 1.25f;
   sr->instance_ptr[i].skin_index = skin_index;
   sr->instance_ptr[i].eye_state = eye_state + 6;
 
