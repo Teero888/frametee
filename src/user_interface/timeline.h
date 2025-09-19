@@ -5,10 +5,17 @@
 #include "player_info.h"
 #include <cimgui.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #include "../renderer/renderer.h"
 
 #define MAX_SNIPPETS_PER_PLAYER 64
+
+typedef struct {
+  SWorldCore *data;
+  uint32_t current_size;
+  uint32_t max_size;
+} physics_v_t;
 
 typedef struct {
   int id;
@@ -53,6 +60,8 @@ typedef struct timeline_state_t {
   bool recording;
   input_snippet_t *recording_snippet;
   SPlayerInput recording_input;
+
+  physics_v_t vec;
 } timeline_state_t;
 
 input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id);
@@ -66,5 +75,8 @@ int get_max_timeline_tick(timeline_state_t *ts);
 void render_timeline(timeline_state_t *ts);
 void timeline_init(timeline_state_t *ts);
 void timeline_cleanup(timeline_state_t *ts);
+
+void v_init(physics_v_t *t);
+void v_push(physics_v_t *t, SWorldCore *world);
 
 #endif

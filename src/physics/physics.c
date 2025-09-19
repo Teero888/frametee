@@ -1,4 +1,5 @@
 #include "physics.h"
+#include <string.h>
 
 void physics_init(ph_t *h, const char *path) {
   physics_free(h);
@@ -6,6 +7,7 @@ void physics_init(ph_t *h, const char *path) {
     return;
   init_config(&h->config);
   wc_init(&h->world, &h->collision, &h->config);
+  h->loaded = true;
 }
 
 void physics_tick(ph_t *h) {
@@ -14,4 +16,8 @@ void physics_tick(ph_t *h) {
   wc_tick(&h->world);
 }
 
-void physics_free(ph_t *h) { free_collision(&h->collision); }
+void physics_free(ph_t *h) {
+  wc_free(&h->world);
+  free_collision(&h->collision);
+  memset(h, 0, sizeof(ph_t));
+}

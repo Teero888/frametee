@@ -7,6 +7,7 @@ typedef struct {
   SCollision collision;
   SWorldCore world;
   SConfig config;
+  bool loaded;
 } physics_handler_t;
 
 typedef physics_handler_t ph_t;

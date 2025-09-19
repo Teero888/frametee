@@ -268,6 +268,10 @@ static void remove_player(timeline_state_t *ts, ph_t *ph, int index) {
 
 void render_player_manager(timeline_state_t *ts, ph_t *ph) {
   if (igBegin("Players", NULL, 0)) {
+    if (ph->world.m_pCollision && igButton("Add Player", (ImVec2){0, 0})) {
+      add_new_track(ts, ph);
+    }
+    igSeparator();
     for (int i = 0; i < ts->player_track_count; i++) {
       igPushID_Int(i);
       bool sel = (i == ts->selected_player_track_index);
@@ -297,9 +301,6 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
       igPopID();
     }
     igSeparator();
-    if (ph->world.m_pCollision && igButton("Add Player", (ImVec2){0, 0})) {
-      add_new_track(ts, ph);
-    }
 
     if (igBeginPopupModal("ConfirmRemovePlayer", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
       igText("This player has inputs. Remove anyway?");
@@ -389,34 +390,49 @@ static void lerp(vec2 a, vec2 b, float f, vec2 out) {
 void render_players(ui_handler_t *ui) {
   gfx_handler_t *gfx = ui->gfx_handler;
   physics_handler_t *ph = &gfx->physics_handler;
+  if (!ph->loaded)
+    return;
 
   SWorldCore world = wc_empty();
-  wc_copy_world(&world, &ph->world);
-
-  int max_timeline = imin(get_max_timeline_tick(&ui->timeline), ui->timeline.current_tick);
-  for (int i = 0; i < ui->timeline.current_tick; ++i) {
-    for (int p = 0; p < world.m_NumCharacters; ++p) {
-      SPlayerInput input = get_input(&ui->timeline, p, i);
-      cc_on_input(&world.m_pCharacters[p], &input);
-    }
-    wc_tick(&world);
-
-    if (ui->show_prediction)
+  if (ui->timeline.vec.current_size <= ui->timeline.current_tick) {
+    wc_copy_world(&world, &ui->timeline.vec.data[imax(ui->timeline.vec.current_size - 1, 0)]);
+    int diff = ui->timeline.current_tick - ui->timeline.vec.current_size;
+    for (int i = 0; i < diff; ++i) {
       for (int p = 0; p < world.m_NumCharacters; ++p) {
-        SCharacterCore *core = &world.m_pCharacters[p];
-        vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
-        vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-        vec4 color = {[3] = 1.f};
-        if (core->m_JumpedTotal <= 0)
-          color[2] = 1.0f;
-        else
-          color[0] = 0.75f;
-        if (!core->m_ReloadTimer && core->m_ActiveWeapon > 1)
-          color[0] += 0.5f;
-        color[1] = vlength(core->m_Vel) / 50.f;
-        renderer_draw_line(gfx, pp, p, color, 0.05);
+        SPlayerInput input = get_input(&ui->timeline, p, world.m_GameTick);
+        cc_on_input(&world.m_pCharacters[p], &input);
       }
+      wc_tick(&world);
+      v_push(&ui->timeline.vec, &world);
+    }
+  } else {
+    wc_copy_world(&world, &ui->timeline.vec.data[imax(ui->timeline.current_tick, 0)]);
   }
+
+  // int max_timeline = imin(get_max_timeline_tick(&ui->timeline), ui->timeline.current_tick);
+  // for (int i = 0; i < ui->timeline.current_tick; ++i) {
+  //   for (int p = 0; p < world.m_NumCharacters; ++p) {
+  //     SPlayerInput input = get_input(&ui->timeline, p, i);
+  //     cc_on_input(&world.m_pCharacters[p], &input);
+  //   }
+  //   wc_tick(&world);
+  //
+  //   if (ui->show_prediction)
+  //     for (int p = 0; p < world.m_NumCharacters; ++p) {
+  //       SCharacterCore *core = &world.m_pCharacters[p];
+  //       vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+  //       vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+  //       vec4 color = {[3] = 1.f};
+  //       if (core->m_JumpedTotal <= 0)
+  //         color[2] = 1.0f;
+  //       else
+  //         color[0] = 0.75f;
+  //       if (!core->m_ReloadTimer && core->m_ActiveWeapon > 1)
+  //         color[0] += 0.5f;
+  //       color[1] = vlength(core->m_Vel) / 50.f;
+  //       renderer_draw_line(gfx, pp, p, color, 0.05);
+  //     }
+  // }
 
   float intra =
       fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
@@ -487,6 +503,10 @@ void render_players(ui_handler_t *ui) {
     }
     renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir,
                                 &anim_state); // normal eyes
+
+    if (i == gfx->user_interface.timeline.selected_player_track_index)
+      renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(core->m_Vel) / 32.f, p[1] + vgety(core->m_Vel) / 32.f},
+                         (vec4){1.f, 0.f, 0.f, 1.f}, 0.05);
 
     // mvec2 gun_pos = vnormalize(vec2_init(core->m_Input.m_TargetX, core->m_Input.m_TargetY));
     // // printf("%d,%d\n", core->m_Input.m_TargetX, core->m_Input.m_TargetY);

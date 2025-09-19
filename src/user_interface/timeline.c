@@ -1171,12 +1171,19 @@ player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph) {
   new_track->player_info.skin = 0;
   memset(new_track->player_info.color, 0, 3 * sizeof(float));
   new_track->player_info.use_custom_color = 0;
+
+  wc_free(&ts->vec.data[0]);
+  ts->vec.data[0] = wc_empty();
+  wc_copy_world(&ts->vec.data[0], &ph->world);
   return new_track;
 }
 
 void timeline_init(timeline_state_t *ts) {
   timeline_cleanup(ts);
   memset(ts, 0, sizeof(timeline_state_t));
+
+  v_init(&ts->vec);
+
   // Initialize Timeline State variables
   ts->playback_speed = 50;
   ts->is_playing = 0;
@@ -1258,4 +1265,21 @@ input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int d
   s.input_count = 0;
   init_snippet_inputs(&s);
   return s;
+}
+
+void v_init(physics_v_t *t) {
+  t->current_size = 1;
+  t->max_size = 1;
+  t->data = calloc(1, sizeof(SWorldCore));
+  t->data[0] = wc_empty();
+}
+
+void v_push(physics_v_t *t, SWorldCore *world) {
+  ++t->current_size;
+  if (t->current_size > t->max_size) {
+    t->max_size *= 2;
+    t->data = realloc(t->data, t->max_size * sizeof(SWorldCore));
+  }
+  t->data[t->current_size - 1] = wc_empty();
+  wc_copy_world(&t->data[t->current_size - 1], world);
 }

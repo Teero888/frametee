@@ -287,7 +287,7 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   // igShowDemoWindow(NULL);
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0.f, 0.f});
   if (handler->offscreen_initialized && handler->offscreen_texture_id != NULL) {
-    igBegin("viewport", NULL, ImGuiWindowFlags_NoScrollbar);
+    igBegin("viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImVec2 img_size = {(float)handler->offscreen_width, (float)handler->offscreen_height};
     igImage(handler->offscreen_texture_id, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
 
