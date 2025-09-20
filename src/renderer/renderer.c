@@ -540,7 +540,7 @@ int renderer_init(gfx_handler_t *handler) {
       renderer_load_shader(handler, "data/shaders/skin.vert.spv", "data/shaders/skin.frag.spv");
 
   // Allocate big instance buffer (enough for thousands)
-  create_buffer(handler, sizeof(skin_instance_t) * 10000, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  create_buffer(handler, sizeof(skin_instance_t) * 100000, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &renderer->skin_renderer.instance_buffer);
   vkMapMemory(handler->g_device, renderer->skin_renderer.instance_buffer.memory, 0, VK_WHOLE_SIZE, 0,

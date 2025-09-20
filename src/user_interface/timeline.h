@@ -62,11 +62,12 @@ typedef struct timeline_state_t {
   SPlayerInput recording_input;
 
   physics_v_t vec;
+  SWorldCore previous_world;
 } timeline_state_t;
 
 input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id);
 void free_snippet_inputs(input_snippet_t *snippet);
-player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph);
+player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph, int num);
 SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick);
 input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int duration);
 void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx);

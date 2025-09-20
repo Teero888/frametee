@@ -269,8 +269,15 @@ static void remove_player(timeline_state_t *ts, ph_t *ph, int index) {
 void render_player_manager(timeline_state_t *ts, ph_t *ph) {
   if (igBegin("Players", NULL, 0)) {
     if (ph->world.m_pCollision && igButton("Add Player", (ImVec2){0, 0})) {
-      add_new_track(ts, ph);
+      add_new_track(ts, ph, 1);
     }
+    igSameLine(0, 10.f);
+    if (ph->world.m_pCollision && igButton("Add 1000 Players", (ImVec2){0, 0})) {
+      add_new_track(ts, ph, 1000);
+    }
+    igSameLine(0, 10.f);
+    igText("Players: %d", ts->player_track_count);
+
     igSeparator();
     for (int i = 0; i < ts->player_track_count; i++) {
       igPushID_Int(i);
@@ -387,6 +394,17 @@ static void lerp(vec2 a, vec2 b, float f, vec2 out) {
   out[1] = lint2(a[1], b[1], f);
 }
 
+static int find_snapshot_index_le(const physics_v_t *vec, int target_tick) {
+    // returns index of the last snapshot with m_GameTick <= target_tick
+    // returns -1 if none found
+    if (vec->current_size == 0) return -1;
+    for (int i = vec->current_size - 1; i >= 0; --i) {
+        if (vec->data[i].m_GameTick <= target_tick)
+            return i;
+    }
+    return -1;
+}
+
 void render_players(ui_handler_t *ui) {
   gfx_handler_t *gfx = ui->gfx_handler;
   physics_handler_t *ph = &gfx->physics_handler;
@@ -394,50 +412,90 @@ void render_players(ui_handler_t *ui) {
     return;
 
   SWorldCore world = wc_empty();
-  if (ui->timeline.vec.current_size <= ui->timeline.current_tick) {
-    wc_copy_world(&world, &ui->timeline.vec.data[imax(ui->timeline.vec.current_size - 1, 0)]);
-    int diff = ui->timeline.current_tick - ui->timeline.vec.current_size;
-    for (int i = 0; i < diff; ++i) {
+  const int step = 50;
+  int target = ui->timeline.current_tick;
+  int prevTick = ui->timeline.previous_world.m_GameTick;
+
+  if (prevTick == target) {
+    // fast path: already at desired tick
+    wc_copy_world(&world, &ui->timeline.previous_world);
+
+  } else if (prevTick < target) {
+    // forward from previous_world
+    wc_copy_world(&world, &ui->timeline.previous_world);
+
+    while (world.m_GameTick < target) {
       for (int p = 0; p < world.m_NumCharacters; ++p) {
         SPlayerInput input = get_input(&ui->timeline, p, world.m_GameTick);
         cc_on_input(&world.m_pCharacters[p], &input);
       }
+
       wc_tick(&world);
-      v_push(&ui->timeline.vec, &world);
+
+      // Only push a snapshot if it's at a step boundary AND it's beyond current vec size.
+      if (world.m_GameTick % step == 0) {
+        int needed_index = world.m_GameTick / step;
+        if (needed_index >= ui->timeline.vec.current_size) {
+          v_push(&ui->timeline.vec, &world); // assume v_push deep-copies
+        }
+        // otherwise a snapshot for this tick already exists — don't duplicate
+      }
     }
-  } else {
-    wc_copy_world(&world, &ui->timeline.vec.data[imax(ui->timeline.current_tick, 0)]);
+
+    // update previous_world to the reached tick
+    wc_free(&ui->timeline.previous_world);
+    ui->timeline.previous_world = wc_empty();
+    wc_copy_world(&ui->timeline.previous_world, &world);
+
+  } else { // prevTick > target -> seek backwards: pick best snapshot <= target then forward to target
+    int idx = find_snapshot_index_le(&ui->timeline.vec, target);
+
+    if (idx >= 0) {
+      // use the found snapshot
+      wc_copy_world(&world, &ui->timeline.vec.data[idx]);
+    } else if (ui->timeline.vec.current_size > 0) {
+      // no snapshot <= target but vec has entries (all are > target) -> use earliest snapshot (vec.data[0])
+      // Better: ensure vec[0] is tick 0 in your program to avoid this situation.
+      wc_copy_world(&world, &ui->timeline.vec.data[0]);
+    } else {
+      // vec empty: fallback to previous_world if it's <= target, otherwise fallback to previous_world
+      // NOTE: if previous_world.m_GameTick > target and vec is empty, we cannot "rewind" by simulation.
+      // You should guarantee a base snapshot (e.g. tick 0) in vec to make backward seeks safe.
+      wc_copy_world(&world, &ui->timeline.previous_world);
+    }
+
+    // If our starting snapshot is already past target, we cannot roll back by simulation.
+    // The code below only advances forward. If world.m_GameTick > target, we'll clamp by leaving world as-is.
+    // It's recommended to always have a snapshot with m_GameTick <= any target you will seek to (e.g., tick 0).
+    while (world.m_GameTick < target) {
+      for (int p = 0; p < world.m_NumCharacters; ++p) {
+        SPlayerInput input = get_input(&ui->timeline, p, world.m_GameTick);
+        cc_on_input(&world.m_pCharacters[p], &input);
+      }
+
+      wc_tick(&world);
+
+      // Only push if this snapshot is beyond existing vec size (prevents duplicates).
+      if (world.m_GameTick % step == 0) {
+        int needed_index = world.m_GameTick / step;
+        if (needed_index >= ui->timeline.vec.current_size) {
+          v_push(&ui->timeline.vec, &world);
+        }
+      }
+    }
+
+    // update previous_world so subsequent small forwards are fast
+    wc_free(&ui->timeline.previous_world);
+    ui->timeline.previous_world = wc_empty();
+    wc_copy_world(&ui->timeline.previous_world, &world);
   }
 
-  // int max_timeline = imin(get_max_timeline_tick(&ui->timeline), ui->timeline.current_tick);
-  // for (int i = 0; i < ui->timeline.current_tick; ++i) {
-  //   for (int p = 0; p < world.m_NumCharacters; ++p) {
-  //     SPlayerInput input = get_input(&ui->timeline, p, i);
-  //     cc_on_input(&world.m_pCharacters[p], &input);
-  //   }
-  //   wc_tick(&world);
-  //
-  //   if (ui->show_prediction)
-  //     for (int p = 0; p < world.m_NumCharacters; ++p) {
-  //       SCharacterCore *core = &world.m_pCharacters[p];
-  //       vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
-  //       vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-  //       vec4 color = {[3] = 1.f};
-  //       if (core->m_JumpedTotal <= 0)
-  //         color[2] = 1.0f;
-  //       else
-  //         color[0] = 0.75f;
-  //       if (!core->m_ReloadTimer && core->m_ActiveWeapon > 1)
-  //         color[0] += 0.5f;
-  //       color[1] = vlength(core->m_Vel) / 50.f;
-  //       renderer_draw_line(gfx, pp, p, color, 0.05);
-  //     }
-  // }
-
+  // --- unchanged rendering code below ---
   float intra =
       fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
   if (igIsKeyDown_Nil(ImGuiKey_C))
     intra = 1.f - intra;
+
   // quick fix the camera so it is updated in time for all the transformations
   if (ui->timeline.recording) {
     SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
@@ -449,7 +507,7 @@ void render_players(ui_handler_t *ui) {
     ui->gfx_handler->renderer.camera.pos[1] = (p[1]) / ui->gfx_handler->map_data->height;
   }
 
-  for (int i = 0; i < ph->world.m_NumCharacters; ++i) {
+  for (int i = 0; i < world.m_NumCharacters; ++i) {
     SCharacterCore *core = &world.m_pCharacters[i];
 
     vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
@@ -508,10 +566,6 @@ void render_players(ui_handler_t *ui) {
       renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(core->m_Vel) / 32.f, p[1] + vgety(core->m_Vel) / 32.f},
                          (vec4){1.f, 0.f, 0.f, 1.f}, 0.05);
 
-    // mvec2 gun_pos = vnormalize(vec2_init(core->m_Input.m_TargetX, core->m_Input.m_TargetY));
-    // // printf("%d,%d\n", core->m_Input.m_TargetX, core->m_Input.m_TargetY);
-    // renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(gun_pos) * 0.75f, p[1] + vgety(gun_pos) * 0.75f},
-    //                    (vec4){.5f, .5f, .5f, 1.f}, 0.2);
     if (core->m_HookState > 0)
       renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
                          (vec4){1.f, 1.f, 1.f, 1.f}, 0.05);
@@ -553,6 +607,7 @@ void render_players(ui_handler_t *ui) {
       }
     }
   }
+  wc_free(&world);
 }
 
 bool ui_render(ui_handler_t *ui) {

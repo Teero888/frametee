@@ -5,6 +5,7 @@
 
 typedef struct {
   SCollision collision;
+  STeeGrid grid;
   SWorldCore world;
   SConfig config;
   bool loaded;

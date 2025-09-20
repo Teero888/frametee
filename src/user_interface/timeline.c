@@ -1151,31 +1151,62 @@ void render_timeline(timeline_state_t *ts) {
   igEnd(); // End Timeline window
 }
 
-// Helper to add a new empty track
-player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph) {
-  if (ph) {
-    int num_chars = ph->world.m_NumCharacters;
-    wc_add_character(&ph->world);
-    if (num_chars == ph->world.m_NumCharacters)
-      return NULL;
-  }
+// Helper to add a new empty track(s)
+player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
+    if (num <= 0) {
+        return NULL; // pointless to add 0 tracks
+    }
 
-  ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * (ts->player_track_count + 1));
-  player_track_t *new_track = &ts->player_tracks[ts->player_track_count];
-  new_track->snippets = NULL; // Initialize as empty dynamic array
-  new_track->snippet_count = 0;
-  ts->player_track_count++;
-  // reset player info
-  memset(new_track->player_info.name, 0, 32);
-  memset(new_track->player_info.clan, 0, 32);
-  new_track->player_info.skin = 0;
-  memset(new_track->player_info.color, 0, 3 * sizeof(float));
-  new_track->player_info.use_custom_color = 0;
+    int old_num_chars = 0;
+    if (ph) {
+        old_num_chars = ph->world.m_NumCharacters;
 
-  wc_free(&ts->vec.data[0]);
-  ts->vec.data[0] = wc_empty();
-  wc_copy_world(&ts->vec.data[0], &ph->world);
-  return new_track;
+        // Call bulk character spawner
+        SCharacterCore *pFirstChar = wc_add_character(&ph->world, num);
+        if (!pFirstChar) {
+            return NULL; // failed spawning
+        }
+
+        // Double check world count grew
+        if (ph->world.m_NumCharacters <= old_num_chars) {
+            return NULL;
+        }
+    }
+
+    // Allocate space for num new tracks in timeline
+    int old_count = ts->player_track_count;
+    int new_count = old_count + num;
+
+    ts->player_tracks = realloc(ts->player_tracks,
+                                sizeof(player_track_t) * new_count);
+
+    // Initialize each new track slot
+    for (int i = 0; i < num; i++) {
+        player_track_t *new_track = &ts->player_tracks[old_count + i];
+        new_track->snippets = NULL; 
+        new_track->snippet_count = 0;
+
+        // Reset player info
+        memset(new_track->player_info.name, 0, sizeof(new_track->player_info.name));
+        memset(new_track->player_info.clan, 0, sizeof(new_track->player_info.clan));
+        new_track->player_info.skin = 0;
+        memset(new_track->player_info.color, 0, 3 * sizeof(float));
+        new_track->player_info.use_custom_color = 0;
+    }
+
+    ts->player_track_count = new_count;
+
+    // Update timeline copies with the new world 
+    wc_free(&ts->vec.data[0]);
+    ts->vec.data[0] = wc_empty();
+    wc_copy_world(&ts->vec.data[0], &ph->world);
+
+    wc_free(&ts->previous_world);
+    ts->previous_world = wc_empty();
+    wc_copy_world(&ts->previous_world, &ph->world);
+
+    // Return a pointer to the *first* new track (similar to wc_add_character behavior)
+    return &ts->player_tracks[old_count];
 }
 
 void timeline_init(timeline_state_t *ts) {
@@ -1183,6 +1214,7 @@ void timeline_init(timeline_state_t *ts) {
   memset(ts, 0, sizeof(timeline_state_t));
 
   v_init(&ts->vec);
+  ts->previous_world = wc_empty();
 
   // Initialize Timeline State variables
   ts->playback_speed = 50;
