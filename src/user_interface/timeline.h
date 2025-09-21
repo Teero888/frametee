@@ -79,5 +79,6 @@ void timeline_cleanup(timeline_state_t *ts);
 
 void v_init(physics_v_t *t);
 void v_push(physics_v_t *t, SWorldCore *world);
+void v_destroy(physics_v_t *t);
 
 #endif

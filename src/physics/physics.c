@@ -21,6 +21,7 @@ void physics_tick(ph_t *h) {
 }
 
 void physics_free(ph_t *h) {
+  tg_destroy(&h->grid);
   wc_free(&h->world);
   free_collision(&h->collision);
   memset(h, 0, sizeof(ph_t));

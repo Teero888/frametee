@@ -6,7 +6,7 @@
 typedef struct {
   SCollision collision;
   STeeGrid grid;
-  SWorldCore world;
+  SWorldCore world; // initial world
   SConfig config;
   bool loaded;
 } physics_handler_t;

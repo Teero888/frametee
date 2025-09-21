@@ -31,7 +31,6 @@ void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx) {
     ts->recording_input.m_TargetX = vgetx(n) * 500.f;
     ts->recording_input.m_TargetY = vgety(n) * 500.f;
   }
-  // printf("%d,%d\n", ts->recording_input.m_TargetX, ts->recording_input.m_TargetY);
 
   ts->recording_input.m_Fire = igIsMouseDown_Nil(ImGuiMouseButton_Left);
   ts->recording_input.m_WantedWeapon = igIsKeyDown_Nil(ImGuiKey_1)   ? 0
@@ -118,7 +117,7 @@ input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id) {
       return &track->snippets[i];
     }
   }
-  return NULL; // Not found
+  return NULL;
 }
 
 void advance_tick(timeline_state_t *ts, int steps) {
@@ -165,14 +164,12 @@ int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, i
       for (int k = 0; k < 2; ++k) {
         int other_edge_tick = other_snap_targets[k];
 
-        // Option 1: Snap the dragged snippet's START to the other snippet's edge
         float dist_start_to_other_edge = fabsf((float)(desired_start_tick - other_edge_tick));
         if (dist_start_to_other_edge < min_distance) {
           min_distance = dist_start_to_other_edge;
           candidate_snapped_start_tick = other_edge_tick; // The new start tick is the other snippet's edge
         }
 
-        // Option 2: Snap the dragged snippet's END to the other snippet's edge
         int desired_end_tick = desired_start_tick + dragged_snippet_duration;
         float dist_end_to_other_edge = fabsf((float)(desired_end_tick - other_edge_tick));
         // Check if this snap possibility is closer than the current minimum distance found so far
@@ -186,20 +183,11 @@ int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, i
   }
 
   // --- Check snapping to tick 0 ---
-  // Option 1: Snap the dragged snippet's START to tick 0
   float dist_start_to_zero = fabsf((float)(desired_start_tick - 0));
   if (dist_start_to_zero < min_distance) {
     min_distance = dist_start_to_zero;
     candidate_snapped_start_tick = 0; // Snap start to 0
   }
-
-  // Option 2: Snap the dragged snippet's END to tick 0 (implies start is negative, only useful if duration is
-  // 0) Usually, snapping the start to 0 is sufficient for the left boundary. Omitting snapping end to 0. int
-  // desired_end_tick = desired_start_tick + dragged_snippet_duration; // Already calculated float
-  // dist_end_to_zero = fabsf((float)(desired_end_tick - 0)); if (dist_end_to_zero < min_distance) {
-  //     min_distance = dist_end_to_zero;
-  //     candidate_snapped_start_tick = 0 - dragged_snippet_duration; // Snap end to 0
-  // }
 
   // If the minimum distance found is within the snap threshold, apply the snap.
   // Otherwise, the snippet does not snap, and we return the original desired tick.
@@ -423,8 +411,6 @@ void render_timeline_controls(timeline_state_t *ts) {
                     ImGuiSliderFlags_Logarithmic)) {
     ts->zoom = fmaxf(MIN_TIMELINE_ZOOM, fminf(MAX_TIMELINE_ZOOM, ts->zoom)); // Clamp
     // Adjust view_start_tick to zoom towards the mouse position if timeline area is hovered
-    // This logic is also in handle_timeline_interaction, could potentially be unified or this is removed.
-    // For simplicity here, just clamp the view start tick after zoom
     if (ts->view_start_tick < 0)
       ts->view_start_tick = 0;
   }
@@ -745,9 +731,6 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
   if (igIsMouseClicked_Bool(ImGuiMouseButton_Right, 0) &&
       igIsMouseHoveringRect((ImVec2){timeline_bb.Min.x, track_top}, (ImVec2){timeline_bb.Max.x, track_bottom},
                             true)) {
-
-    ImVec2 mouse_pos = igGetIO_Nil()->MousePos;
-
     igOpenPopup_Str("RightClickMenu", 0);
     ts->selected_player_track_index = track_index;
   }
@@ -857,7 +840,6 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
   }
 
   // Determine the potential target track based on mouse Y position
-  // ... (calculate potential_target_track_idx) ...
   float track_y = io->MousePos.y - timeline_bb.Min.y;
   int potential_target_track_idx = (int)(track_y / ts->track_height);
   if (potential_target_track_idx < 0)
@@ -866,7 +848,6 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
     potential_target_track_idx = ts->player_track_count - 1;
 
   // Calculate screen position for the preview rectangle on the potential target track
-  // ... (calculate preview_min, preview_max) ...
   float preview_start_x = tick_to_screen_x(ts, snapped_start_tick, timeline_bb.Min.x);
   float preview_end_x = tick_to_screen_x(ts, snapped_end_tick, timeline_bb.Min.x);
   float preview_track_top = timeline_bb.Min.y + potential_target_track_idx * ts->track_height;
@@ -878,7 +859,6 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
   bool overlaps = check_for_overlap(&ts->player_tracks[potential_target_track_idx], snapped_start_tick,
                                     snapped_end_tick, dragged_snippet->id);
 
-  // ... (draw preview rectangle based on overlaps) ...
   ImU32 preview_col =
       overlaps ? igGetColorU32_Col(ImGuiCol_PlotLinesHovered, 0.5f) // Use a different color for invalid drop
                : igGetColorU32_Col(ImGuiCol_DragDropTarget, 0.6f);  // Standard drag drop color
@@ -888,7 +868,6 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
                      igGetColorU32_Col(ImGuiCol_NavWindowingHighlight, 0.8f), 4.0f,
                      ImDrawFlags_RoundCornersAll, 1.5f);
 
-  // ... (draw text on preview) ...
   char label[64];
   snprintf(label, sizeof(label), "ID: %d", dragged_snippet->id);
   ImVec2 text_size;
@@ -1153,60 +1132,57 @@ void render_timeline(timeline_state_t *ts) {
 
 // Helper to add a new empty track(s)
 player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
-    if (num <= 0) {
-        return NULL; // pointless to add 0 tracks
+  if (num <= 0) {
+    return NULL; // pointless to add 0 tracks
+  }
+
+  int old_num_chars = 0;
+  if (ph) {
+    old_num_chars = ph->world.m_NumCharacters;
+
+    // Call bulk character spawner
+    SCharacterCore *pFirstChar = wc_add_character(&ph->world, num);
+    if (!pFirstChar) {
+      return NULL; // failed spawning
     }
 
-    int old_num_chars = 0;
-    if (ph) {
-        old_num_chars = ph->world.m_NumCharacters;
-
-        // Call bulk character spawner
-        SCharacterCore *pFirstChar = wc_add_character(&ph->world, num);
-        if (!pFirstChar) {
-            return NULL; // failed spawning
-        }
-
-        // Double check world count grew
-        if (ph->world.m_NumCharacters <= old_num_chars) {
-            return NULL;
-        }
+    // Double check world count grew
+    if (ph->world.m_NumCharacters <= old_num_chars) {
+      return NULL;
     }
+  }
 
-    // Allocate space for num new tracks in timeline
-    int old_count = ts->player_track_count;
-    int new_count = old_count + num;
+  // Allocate space for num new tracks in timeline
+  int old_count = ts->player_track_count;
+  int new_count = old_count + num;
 
-    ts->player_tracks = realloc(ts->player_tracks,
-                                sizeof(player_track_t) * new_count);
+  ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * new_count);
 
-    // Initialize each new track slot
-    for (int i = 0; i < num; i++) {
-        player_track_t *new_track = &ts->player_tracks[old_count + i];
-        new_track->snippets = NULL; 
-        new_track->snippet_count = 0;
+  // Initialize each new track slot
+  for (int i = 0; i < num; i++) {
+    player_track_t *new_track = &ts->player_tracks[old_count + i];
+    new_track->snippets = NULL;
+    new_track->snippet_count = 0;
 
-        // Reset player info
-        memset(new_track->player_info.name, 0, sizeof(new_track->player_info.name));
-        memset(new_track->player_info.clan, 0, sizeof(new_track->player_info.clan));
-        new_track->player_info.skin = 0;
-        memset(new_track->player_info.color, 0, 3 * sizeof(float));
-        new_track->player_info.use_custom_color = 0;
-    }
+    // Reset player info
+    memset(new_track->player_info.name, 0, sizeof(new_track->player_info.name));
+    memset(new_track->player_info.clan, 0, sizeof(new_track->player_info.clan));
+    new_track->player_info.skin = 0;
+    memset(new_track->player_info.color, 0, 3 * sizeof(float));
+    new_track->player_info.use_custom_color = 0;
+  }
 
-    ts->player_track_count = new_count;
+  ts->player_track_count = new_count;
 
-    // Update timeline copies with the new world 
-    wc_free(&ts->vec.data[0]);
-    ts->vec.data[0] = wc_empty();
-    wc_copy_world(&ts->vec.data[0], &ph->world);
+  // update size so it recalculates
+  ts->vec.current_size = 1;
 
-    wc_free(&ts->previous_world);
-    ts->previous_world = wc_empty();
-    wc_copy_world(&ts->previous_world, &ph->world);
+  // Update timeline copies with the new world
+  wc_copy_world(&ts->vec.data[0], &ph->world);
+  wc_copy_world(&ts->previous_world, &ph->world);
 
-    // Return a pointer to the *first* new track (similar to wc_add_character behavior)
-    return &ts->player_tracks[old_count];
+  // Return a pointer to the first new track
+  return &ts->player_tracks[old_count];
 }
 
 void timeline_init(timeline_state_t *ts) {
@@ -1284,6 +1260,9 @@ void timeline_cleanup(timeline_state_t *ts) {
   ts->drag_state.dragged_snippet_id = -1;
   ts->drag_state.drag_offset_ticks = 0;
   ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
+
+  v_destroy(&ts->vec);
+  wc_free(&ts->previous_world);
 }
 
 input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int duration) {
@@ -1314,4 +1293,12 @@ void v_push(physics_v_t *t, SWorldCore *world) {
   }
   t->data[t->current_size - 1] = wc_empty();
   wc_copy_world(&t->data[t->current_size - 1], world);
+}
+
+void v_destroy(physics_v_t *t) {
+  for (int i = 0; i < t->current_size; ++i)
+    wc_free(&t->data[i]);
+  free(t->data);
+  t->current_size = 0;
+  t->max_size = 0;
 }

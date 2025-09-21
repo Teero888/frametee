@@ -242,6 +242,7 @@ void render_snippet_editor_panel(timeline_state_t *ts) {
 static bool g_remove_confirm_needed = true;
 static int g_pending_remove_index = -1;
 
+// TODO: move this to timeline.c?
 static void remove_player(timeline_state_t *ts, ph_t *ph, int index) {
   if (index < 0 || index >= ts->player_track_count)
     return;
@@ -263,6 +264,13 @@ static void remove_player(timeline_state_t *ts, ph_t *ph, int index) {
     ts->selected_player_track_index = -1;
   else if (ts->selected_player_track_index > index)
     ts->selected_player_track_index--;
+
+  ts->vec.current_size = 1;
+
+  // Update timeline copies with the new world
+  wc_copy_world(&ts->vec.data[0], &ph->world);
+  wc_copy_world(&ts->previous_world, &ph->world);
+
   wc_remove_character(&ph->world, index);
 }
 
@@ -395,14 +403,15 @@ static void lerp(vec2 a, vec2 b, float f, vec2 out) {
 }
 
 static int find_snapshot_index_le(const physics_v_t *vec, int target_tick) {
-    // returns index of the last snapshot with m_GameTick <= target_tick
-    // returns -1 if none found
-    if (vec->current_size == 0) return -1;
-    for (int i = vec->current_size - 1; i >= 0; --i) {
-        if (vec->data[i].m_GameTick <= target_tick)
-            return i;
-    }
+  // returns index of the last snapshot with m_GameTick <= target_tick
+  // returns -1 if none found
+  if (vec->current_size == 0)
     return -1;
+  for (int i = vec->current_size - 1; i >= 0; --i) {
+    if (vec->data[i].m_GameTick <= target_tick)
+      return i;
+  }
+  return -1;
 }
 
 void render_players(ui_handler_t *ui) {
@@ -412,85 +421,34 @@ void render_players(ui_handler_t *ui) {
     return;
 
   SWorldCore world = wc_empty();
+
   const int step = 50;
-  int target = ui->timeline.current_tick;
-  int prevTick = ui->timeline.previous_world.m_GameTick;
-
-  if (prevTick == target) {
-    // fast path: already at desired tick
+  int target_tick = ui->timeline.current_tick;
+  if (target_tick < ui->timeline.previous_world.m_GameTick)
+    wc_copy_world(
+        &world,
+        &ui->timeline.vec.data[iclamp((target_tick - 1) / step, 0, ui->timeline.vec.current_size - 1)]);
+  else
     wc_copy_world(&world, &ui->timeline.previous_world);
 
-  } else if (prevTick < target) {
-    // forward from previous_world
-    wc_copy_world(&world, &ui->timeline.previous_world);
-
-    while (world.m_GameTick < target) {
-      for (int p = 0; p < world.m_NumCharacters; ++p) {
-        SPlayerInput input = get_input(&ui->timeline, p, world.m_GameTick);
-        cc_on_input(&world.m_pCharacters[p], &input);
-      }
-
-      wc_tick(&world);
-
-      // Only push a snapshot if it's at a step boundary AND it's beyond current vec size.
-      if (world.m_GameTick % step == 0) {
-        int needed_index = world.m_GameTick / step;
-        if (needed_index >= ui->timeline.vec.current_size) {
-          v_push(&ui->timeline.vec, &world); // assume v_push deep-copies
-        }
-        // otherwise a snapshot for this tick already exists — don't duplicate
+  int i = 0;
+  while (world.m_GameTick < target_tick) {
+    for (int p = 0; p < world.m_NumCharacters; ++p) {
+      SPlayerInput input = get_input(&ui->timeline, p, world.m_GameTick);
+      cc_on_input(&world.m_pCharacters[p], &input);
+    }
+    wc_tick(&world);
+    if (world.m_GameTick % step == 0) {
+      if (world.m_GameTick / step >= ui->timeline.vec.current_size)
+        v_push(&ui->timeline.vec, &world);
+      else {
+        wc_copy_world(&ui->timeline.vec.data[world.m_GameTick / step], &world);
       }
     }
-
-    // update previous_world to the reached tick
-    wc_free(&ui->timeline.previous_world);
-    ui->timeline.previous_world = wc_empty();
-    wc_copy_world(&ui->timeline.previous_world, &world);
-
-  } else { // prevTick > target -> seek backwards: pick best snapshot <= target then forward to target
-    int idx = find_snapshot_index_le(&ui->timeline.vec, target);
-
-    if (idx >= 0) {
-      // use the found snapshot
-      wc_copy_world(&world, &ui->timeline.vec.data[idx]);
-    } else if (ui->timeline.vec.current_size > 0) {
-      // no snapshot <= target but vec has entries (all are > target) -> use earliest snapshot (vec.data[0])
-      // Better: ensure vec[0] is tick 0 in your program to avoid this situation.
-      wc_copy_world(&world, &ui->timeline.vec.data[0]);
-    } else {
-      // vec empty: fallback to previous_world if it's <= target, otherwise fallback to previous_world
-      // NOTE: if previous_world.m_GameTick > target and vec is empty, we cannot "rewind" by simulation.
-      // You should guarantee a base snapshot (e.g. tick 0) in vec to make backward seeks safe.
-      wc_copy_world(&world, &ui->timeline.previous_world);
-    }
-
-    // If our starting snapshot is already past target, we cannot roll back by simulation.
-    // The code below only advances forward. If world.m_GameTick > target, we'll clamp by leaving world as-is.
-    // It's recommended to always have a snapshot with m_GameTick <= any target you will seek to (e.g., tick 0).
-    while (world.m_GameTick < target) {
-      for (int p = 0; p < world.m_NumCharacters; ++p) {
-        SPlayerInput input = get_input(&ui->timeline, p, world.m_GameTick);
-        cc_on_input(&world.m_pCharacters[p], &input);
-      }
-
-      wc_tick(&world);
-
-      // Only push if this snapshot is beyond existing vec size (prevents duplicates).
-      if (world.m_GameTick % step == 0) {
-        int needed_index = world.m_GameTick / step;
-        if (needed_index >= ui->timeline.vec.current_size) {
-          v_push(&ui->timeline.vec, &world);
-        }
-      }
-    }
-
-    // update previous_world so subsequent small forwards are fast
-    wc_free(&ui->timeline.previous_world);
-    ui->timeline.previous_world = wc_empty();
-    wc_copy_world(&ui->timeline.previous_world, &world);
+    ++i;
   }
+  wc_copy_world(&ui->timeline.previous_world, &world);
 
-  // --- unchanged rendering code below ---
   float intra =
       fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
   if (igIsKeyDown_Nil(ImGuiKey_C))
