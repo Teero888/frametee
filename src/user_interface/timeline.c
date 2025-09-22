@@ -903,12 +903,23 @@ void render_timeline(timeline_state_t *ts) {
     double elapsed_time = current_time - ts->last_update_time;
     double tick_interval = 1.0 / (double)ts->playback_speed; // Time per tick in seconds
 
+    bool record = true;
+    // don't record behind recording input snippet
+    if (reverse && ts->recording && ts->current_tick <= ts->recording_snippet->start_tick)
+      record = false;
+    if (ts->recording && check_for_overlap(&ts->player_tracks[ts->selected_player_track_index],
+                                           ts->current_tick, ts->current_tick + 1, ts->recording_snippet->id))
+      record = false;
+
     // Accumulate elapsed time and advance ticks as needed
-    while (elapsed_time >= tick_interval) {
-      advance_tick(ts, reverse ? -1 : 1);
-      elapsed_time -= tick_interval;
-      ts->last_update_time = current_time - elapsed_time;
-    }
+    if (record)
+      while (elapsed_time >= tick_interval) {
+        advance_tick(ts, reverse ? -1 : 1);
+        elapsed_time -= tick_interval;
+        ts->last_update_time = current_time - elapsed_time;
+      }
+    else
+      ts->last_update_time = current_time;
   }
 
   igSetNextWindowClass(&((ImGuiWindowClass){.DockingAllowUnclassed = false}));

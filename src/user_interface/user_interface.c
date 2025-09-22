@@ -430,6 +430,10 @@ void render_players(ui_handler_t *ui) {
         &ui->timeline.vec.data[iclamp((target_tick - 1) / step, 0, ui->timeline.vec.current_size - 1)]);
   else
     wc_copy_world(&world, &ui->timeline.previous_world);
+  if (ui->timeline.player_track_count != world.m_NumCharacters) {
+    wc_free(&world);
+    return;
+  }
 
   int i = 0;
   while (world.m_GameTick < target_tick) {
