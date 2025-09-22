@@ -2,14 +2,13 @@
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
 #include <GLFW/glfw3.h>
-#include <stdio.h>
 
 int main(void) {
   gfx_handler_t handler;
   if (init_gfx_handler(&handler) != 0)
     return 1;
   handler.map_data = &handler.physics_handler.collision.m_MapData;
-  //on_map_load(&handler, "data/maps/Kobra 4.map");
+  // on_map_load(&handler, "data/maps/Kobra 4.map");
 
   bool viewport_hovered = false;
 

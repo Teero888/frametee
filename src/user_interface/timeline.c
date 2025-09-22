@@ -956,7 +956,8 @@ void render_timeline(timeline_state_t *ts) {
     ImRect header_bb = {header_bb_min, header_bb_max};
 
     // --- Handle Mouse Interaction on Header ---
-    bool is_header_hovered = igIsMouseHoveringRect(header_bb.Min, header_bb.Max, true);
+    bool is_header_hovered = !(io->ConfigFlags & ImGuiConfigFlags_NoMouse) &&
+                             igIsMouseHoveringRect(header_bb.Min, header_bb.Max, true);
 
     // Start header drag: If header is hovered AND left mouse button is initially clicked
     if (is_header_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, 0)) {
