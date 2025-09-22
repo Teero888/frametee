@@ -221,7 +221,7 @@ bool check_for_overlap(const player_track_t *track, int start_tick, int end_tick
 
 // Removes a snippet from a track by ID
 // Returns true if removed, false if not found
-bool remove_snippet_from_track(player_track_t *track, int snippet_id) {
+bool remove_snippet_from_track(timeline_state_t *t, player_track_t *track, int snippet_id) {
   int found_idx = -1;
   for (int i = 0; i < track->snippet_count; ++i) {
     if (track->snippets[i].id == snippet_id) {
@@ -232,10 +232,16 @@ bool remove_snippet_from_track(player_track_t *track, int snippet_id) {
 
   if (found_idx != -1) {
     free_snippet_inputs(&track->snippets[found_idx]);
+
+    t->vec.current_size =
+        imin(t->vec.current_size, imax((track->snippets[found_idx].start_tick - 1) / 50, 1));
+    t->previous_world.m_GameTick = (1U << 31U) - 1U;
+
     memmove(&track->snippets[found_idx], &track->snippets[found_idx + 1],
             (track->snippet_count - found_idx - 1) * sizeof(input_snippet_t));
     track->snippet_count--;
     track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * track->snippet_count);
+
     return true;
   }
   return false;
@@ -286,6 +292,7 @@ bool try_move_snippet(timeline_state_t *ts, int snippet_id, int source_track_idx
   }
 
   int duration = snippet_to_move.end_tick - snippet_to_move.start_tick;
+  int old_start_tick = snippet_to_move.start_tick;
   int new_start_tick = desired_start_tick;
   int new_end_tick = new_start_tick + duration;
 
@@ -313,25 +320,25 @@ bool try_move_snippet(timeline_state_t *ts, int snippet_id, int source_track_idx
     resize_snippet_inputs(sn, new_duration);
     ts->selected_snippet_id = snippet_id;
     ts->selected_player_track_index = source_track_idx;
+
+    ts->vec.current_size =
+        imin(ts->vec.current_size, imax((imin(new_start_tick, old_start_tick) - 1) / 50, 1));
+    ts->previous_world.m_GameTick = (1U << 31U) - 1U; // INT_MAX
   } else {
-    // Cross track: deep copy
-    if (remove_snippet_from_track(source_track, snippet_id)) {
-      snippet_to_move.start_tick = new_start_tick;
-      snippet_to_move.end_tick = new_end_tick;
+    // cross track deep copy
+    snippet_to_move.start_tick = new_start_tick;
+    snippet_to_move.end_tick = new_end_tick;
 
-      input_snippet_t new_snip = snippet_to_move;
-      new_snip.inputs = NULL;
-      new_snip.input_count = 0;
-      copy_snippet_inputs(&new_snip, &snippet_to_move);
-      add_snippet_to_track(target_track, &new_snip);
+    input_snippet_t new_snip = snippet_to_move;
+    new_snip.inputs = NULL;
+    new_snip.input_count = 0;
+    copy_snippet_inputs(&new_snip, &snippet_to_move);
+    add_snippet_to_track(target_track, &new_snip);
 
-      ts->selected_snippet_id = snippet_id;
-      ts->selected_player_track_index = target_track_idx;
+    ts->selected_snippet_id = snippet_id;
+    ts->selected_player_track_index = target_track_idx;
 
-      free_snippet_inputs(&snippet_to_move);
-    } else {
-      return false;
-    }
+    remove_snippet_from_track(ts, source_track, snippet_id);
   }
 
   return true;
@@ -778,7 +785,7 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
         igShortcut_Nil(ImGuiMod_Ctrl | ImGuiKey_D, ImGuiInputFlags_RouteGlobal)) {
       if (ts->selected_player_track_index >= 0 && ts->selected_snippet_id >= 0) {
         player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
-        if (remove_snippet_from_track(track, ts->selected_snippet_id)) {
+        if (remove_snippet_from_track(ts, track, ts->selected_snippet_id)) {
           ts->selected_snippet_id = -1;
         }
       }
