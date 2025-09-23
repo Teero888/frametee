@@ -124,7 +124,7 @@ void advance_tick(timeline_state_t *ts, int steps) {
   ts->current_tick = imax(ts->current_tick + steps, 0);
 
   // record new tick
-  if (ts->recording_snippet && ts->current_tick > ts->recording_snippet->start_tick) {
+  if (ts->recording_snippet && ts->current_tick > ts->recording_snippet->end_tick) {
     resize_snippet_inputs(ts->recording_snippet, ts->current_tick - ts->recording_snippet->start_tick);
     ts->recording_snippet->end_tick = ts->current_tick;
     if (ts->recording_snippet->input_count > 0)
@@ -891,7 +891,15 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
 void render_timeline(timeline_state_t *ts) {
   ImGuiIO *io = igGetIO_Nil();
 
-  // Advance timeline state
+  if (ts->recording && igIsKeyPressed_Bool(ImGuiKey_F, false)) {
+    if (ts->recording_snippet && ts->current_tick > ts->recording_snippet->start_tick) {
+      resize_snippet_inputs(ts->recording_snippet, ts->current_tick - ts->recording_snippet->start_tick);
+      ts->recording_snippet->end_tick = ts->current_tick;
+      if (ts->recording_snippet->input_count > 0)
+        ts->recording_snippet->inputs[ts->recording_snippet->input_count - 1] = ts->recording_input;
+    }
+  }
+
   if (igIsKeyPressed_Bool(ImGuiKey_C, false)) {
     ts->is_playing = 0;
     ts->last_update_time = igGetTime();
@@ -921,7 +929,7 @@ void render_timeline(timeline_state_t *ts) {
     // Accumulate elapsed time and advance ticks as needed
     if (record)
       while (elapsed_time >= tick_interval) {
-        advance_tick(ts, reverse ? -1 : 1);
+        advance_tick(ts, reverse ? -2 : 1);
         elapsed_time -= tick_interval;
         ts->last_update_time = current_time - elapsed_time;
       }
