@@ -508,7 +508,7 @@ int renderer_init(gfx_handler_t *handler) {
   strncpy(default_tex->path, "default_white", sizeof(default_tex->path) - 1);
   renderer->default_texture = default_tex;
 
-  // --- Primitive & UBO Ring Buffer Setup ---
+  // Primitive & UBO Ring Buffer Setup ---
   renderer->primitive_shader =
       renderer_load_shader(handler, "data/shaders/primitive.vert.spv", "data/shaders/primitive.frag.spv");
 
@@ -1140,7 +1140,7 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
 
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
-    // --- UBO RING BUFFER LOGIC ---
+    // UBO RING BUFFER LOGIC ---
     VkDeviceSize aligned_size =
         (ubo_sizes[i] + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
     assert(renderer->ubo_buffer_offset + aligned_size <= DYNAMIC_UBO_BUFFER_SIZE);
@@ -1358,7 +1358,7 @@ static void setup_vertex_descriptions() {
                                           .format = VK_FORMAT_R32G32_SFLOAT,
                                           .offset = offsetof(vertex_t, tex_coord)};
 
-  // --- skin instanced data ---
+  // skin instanced data ---
   skin_binding_desc[0] = (VkVertexInputBindingDescription){
       .binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
   skin_binding_desc[1] = (VkVertexInputBindingDescription){
@@ -1678,7 +1678,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   pipeline_cache_entry_t *pso =
       get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 10);
 
-  // --- prepare camera UBO (same as primitives) ---
+  // prepare camera UBO (same as primitives) ---
   primitive_ubo_t ubo;
   ubo.camPos[0] = renderer->camera.pos[0];
   ubo.camPos[1] = renderer->camera.pos[1];
@@ -1727,7 +1727,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
                                      .pImageInfo = &img}};
   vkUpdateDescriptorSets(h->g_device, 2, writes, 0, NULL);
 
-  // --- issue draw ---
+  // issue draw ---
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
   VkBuffer bufs[2] = {quad->vertex_buffer.buffer, sr->instance_buffer.buffer};
   VkDeviceSize offs[2] = {0, 0};

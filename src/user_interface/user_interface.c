@@ -76,7 +76,7 @@ void setup_docking(ui_handler_t *ui) {
               NULL); // Passthru allows seeing background
   igEnd();
 
-  // -- build the initial layout programmatically --
+  // build the initial layout programmatically --
   static bool first_time = true;
   if (first_time) {
     first_time = false;

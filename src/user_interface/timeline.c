@@ -150,7 +150,7 @@ int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, i
   // The potential tick that would become the *start* of the dragged snippet after snapping
   int candidate_snapped_start_tick = desired_start_tick;
 
-  // --- Check snapping to other snippet edges ---
+  // Check snapping to other snippet edges ---
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
     for (int j = 0; j < track->snippet_count; ++j) {
@@ -182,7 +182,7 @@ int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, i
     }
   }
 
-  // --- Check snapping to tick 0 ---
+  // Check snapping to tick 0 ---
   float dist_start_to_zero = fabsf((float)(desired_start_tick - 0));
   if (dist_start_to_zero < min_distance) {
     min_distance = dist_start_to_zero;
@@ -623,7 +623,7 @@ void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_ind
   if (track_bottom - track_top - 4.0f <= 0)
     return;
 
-  // --- Snippet Interaction ---
+  // Snippet Interaction ---
   igPushID_Int(snippet->id); // Use snippet ID for unique ImGui ID
   // We use the actual bounds for the invisible button, even if drawing is clamped
   igSetCursorScreenPos((ImVec2){snippet_start_x, track_top + 2.0f});
@@ -659,7 +659,7 @@ void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_ind
     }
   }
 
-  // --- Draw Snippet ---
+  // Draw Snippet ---
   bool is_selected = (snippet->id == ts->selected_snippet_id);
   // Use is_item_hovered for visual hover feedback, not the function parameter which might be clipped
   ImU32 snippet_col =
@@ -946,10 +946,10 @@ void render_timeline(timeline_state_t *ts) {
     ImDrawList *overlay_draw_list = igGetForegroundDrawList_WindowPtr(igGetCurrentWindow());
     igPopStyleVar(2);
 
-    // --- Controls ---
+    // Controls ---
     render_timeline_controls(ts);
 
-    // --- Layout Calculations for Header and Timeline Area ---
+    // Layout Calculations for Header and Timeline Area ---
     float header_height = igGetTextLineHeightWithSpacing() + 12;
 
     // Calculate the available space below the controls for the header and tracks
@@ -963,7 +963,7 @@ void render_timeline(timeline_state_t *ts) {
                             header_bb_min.y + header_height};
     ImRect header_bb = {header_bb_min, header_bb_max};
 
-    // --- Handle Mouse Interaction on Header ---
+    // Handle Mouse Interaction on Header ---
     bool is_header_hovered = !(io->ConfigFlags & ImGuiConfigFlags_NoMouse) &&
                              igIsMouseHoveringRect(header_bb.Min, header_bb.Max, true);
 
@@ -997,7 +997,7 @@ void render_timeline(timeline_state_t *ts) {
       ts->is_header_dragging = false;
     }
 
-    // --- Draw Header (Ticks) ---
+    // Draw Header (Ticks) ---
     // Draw the ticks and labels within the header area
     draw_timeline_header(ts, draw_list, header_bb, header_bb_min.y);
 
@@ -1020,14 +1020,14 @@ void render_timeline(timeline_state_t *ts) {
     // Ensure timeline_bb has positive dimensions
     if (timeline_bb.Max.x > timeline_bb.Min.x && timeline_bb.Max.y > timeline_bb.Min.y) {
 
-      // --- Handle Mouse Interaction for Pan/Zoom on Timeline Area (Tracks) ---
+      // Handle Mouse Interaction for Pan/Zoom on Timeline Area (Tracks) ---
       // This interaction should apply to the track area, not the header.
       // Make sure this doesn't conflict with header dragging if both are active
       if (!ts->is_header_dragging) { // Only pan/zoom tracks if not currently dragging header
         handle_timeline_interaction(ts, timeline_bb);
       }
 
-      // --- Draw Timeline Tracks and Snippets ---
+      // Draw Timeline Tracks and Snippets ---
       // clip rect and track drawing loop using timeline_bb
       igPushClipRect(timeline_bb.Min, timeline_bb.Max, true);
       float current_track_y = timeline_bb.Min.y;
@@ -1047,7 +1047,7 @@ void render_timeline(timeline_state_t *ts) {
       }
       igPopClipRect();
 
-      // --- Draw Scrollbar ---
+      // Draw Scrollbar ---
       ImS64 max_tick = get_max_timeline_tick(ts);
 
       // Calculate visible ticks based on window width
@@ -1085,7 +1085,7 @@ void render_timeline(timeline_state_t *ts) {
         ts->view_start_tick = 0;
       igPopID();
 
-      // --- Handle Mouse Release -> Commit Drag/Drop (for SNIPPETS) ---
+      // Handle Mouse Release -> Commit Drag/Drop (for SNIPPETS) ---
       // This only happens if a snippet drag was started and header is not being dragged
       if (ts->drag_state.active && igIsMouseReleased_Nil(ImGuiMouseButton_Left) && !ts->is_header_dragging) {
         ImVec2 mouse_pos = igGetIO_Nil()->MousePos;
@@ -1143,14 +1143,14 @@ void render_timeline(timeline_state_t *ts) {
         // drag_offset_ticks and initial_mouse_pos are irrelevant after release
       } // End if snippet drag active and mouse released
 
-      // --- Draw Playhead ---
+      // Draw Playhead ---
       // Draw the playhead line over the track area, from its top to its bottom
       draw_playhead(ts, draw_list, timeline_bb,
                     timeline_bb.Min.y - 12); // Playhead starts at the top Y of the timeline_bb area
 
     } // End if(timeline_bb has positive dimensions)
 
-    // --- Draw Drag Preview (on overlay) ---
+    // Draw Drag Preview (on overlay) ---
     // This uses the overlay draw list and needs the timeline_bb for positioning
     draw_drag_preview(ts, overlay_draw_list, timeline_bb);
   }
