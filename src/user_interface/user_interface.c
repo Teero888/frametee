@@ -546,7 +546,27 @@ void render_players(ui_handler_t *ui) {
                                 0.25, (vec4){1.f, 0.f, 0.f, 0.4f}, 16);
   }
 
-  if (ui->timeline.recording && ui->show_prediction) {
+  // int pos_x, pos_y;
+  // float vel_x, vel_y;
+  // int freezetime;
+  // int reloadtime;
+  // int weapon;
+  // bool weapons[NUM_WEAPONS];
+  // fill data to be displayed
+  if (ui->timeline.selected_player_track_index >= 0) {
+    SCharacterCore *p = &world.m_pCharacters[ui->timeline.selected_player_track_index];
+    ui->pos_x = vgetx(p->m_Pos);
+    ui->pos_y = vgety(p->m_Pos);
+    ui->vel_x = vgetx(p->m_Vel);
+    ui->vel_y = vgety(p->m_Vel);
+    ui->freezetime = p->m_FreezeTime;
+    ui->reloadtime = p->m_ReloadTimer;
+    ui->weapon = p->m_ActiveWeapon;
+    for (int i = 0; i < NUM_WEAPONS; ++i)
+      ui->weapons[i] = p->m_aWeaponGot[i];
+  }
+
+  if (ui->timeline.selected_player_track_index >= 0 && ui->show_prediction) {
     for (int i = 0; i < 100; ++i) {
       for (int p = 0; p < world.m_NumCharacters; ++p) {
         SPlayerInput input = p == ui->timeline.selected_player_track_index
@@ -572,7 +592,7 @@ void render_players(ui_handler_t *ui) {
   wc_free(&world);
 }
 
-bool ui_render(ui_handler_t *ui) {
+void ui_render(ui_handler_t *ui) {
   timeline_update_inputs(&ui->timeline, ui->gfx_handler);
 
   render_menu_bar(ui);
@@ -584,6 +604,40 @@ bool ui_render(ui_handler_t *ui) {
     if (ui->timeline.selected_player_track_index != -1)
       render_player_info(ui->gfx_handler);
   }
+}
+
+// render viewport and related things
+bool ui_render_late(ui_handler_t *ui) {
+  bool hovered = false;
+  // igShowDemoWindow(NULL);
+  if (ui->gfx_handler->offscreen_initialized && ui->gfx_handler->offscreen_texture_id != NULL) {
+    igBegin("viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImVec2 start;
+    igGetCursorScreenPos(&start);
+
+    ImVec2 wpos;
+    igGetWindowPos(&wpos);
+    igSetCursorScreenPos(wpos);
+    ImVec2 img_size = {(float)ui->gfx_handler->offscreen_width, (float)ui->gfx_handler->offscreen_height};
+    igImage(ui->gfx_handler->offscreen_texture_id, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
+
+    igGetWindowSize(&ui->gfx_handler->viewport[0]);
+    hovered = igIsWindowHovered(0);
+
+    if (ui->timeline.selected_player_track_index >= 0) {
+      igSetCursorScreenPos(start);
+      igText("Pos: %d, %d; (%d, %d)", ui->pos_x, ui->pos_y, ui->pos_x >> 5, ui->pos_y >> 5);
+      igText("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", ui->vel_x, ui->vel_y, ui->vel_x * (50.f / 32.f),
+             ui->vel_y * (50.f / 32.f));
+      igText("Freeze: %d", ui->freezetime);
+      igText("Reload: %d", ui->reloadtime);
+      igText("Weapon: %d", ui->weapon);
+      igText("Weapons: [ %d, %d, %d, %d, %d, %d ]", ui->weapons[0], ui->weapons[1], ui->weapons[2],
+             ui->weapons[3], ui->weapons[4], ui->weapons[5]);
+    }
+    igEnd();
+  }
+  return hovered;
 }
 
 void ui_cleanup(ui_handler_t *ui) {

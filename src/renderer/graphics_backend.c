@@ -283,19 +283,7 @@ bool gfx_end_frame(gfx_handler_t *handler) {
                                    .pClearValues = &wd->ClearValue};
   vkCmdBeginRenderPass(handler->current_frame_command_buffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
-  // --- Build ImGui windows ---
-  // igShowDemoWindow(NULL);
-  igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0.f, 0.f});
-  if (handler->offscreen_initialized && handler->offscreen_texture_id != NULL) {
-    igBegin("viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    ImVec2 img_size = {(float)handler->offscreen_width, (float)handler->offscreen_height};
-    igImage(handler->offscreen_texture_id, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
-
-    igGetWindowSize(&handler->viewport[0]);
-    hovered = igIsWindowHovered(0);
-    igEnd();
-  }
-  igPopStyleVar(1);
+  hovered = ui_render_late(&handler->user_interface);
 
   igRender();
   ImDrawData *draw_data = igGetDrawData();

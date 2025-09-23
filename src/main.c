@@ -26,7 +26,7 @@ int main(void) {
     render_players(&handler.user_interface);
     renderer_flush_skins(&handler, handler.current_frame_command_buffer,
                          handler.renderer.skin_manager.atlas_array);
-    viewport_hovered = ui_render(&handler.user_interface);
+    ui_render(&handler.user_interface);
 
     ImGuiIO *io = igGetIO_Nil();
     if (handler.user_interface.timeline.recording) {
