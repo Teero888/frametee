@@ -32,7 +32,7 @@ typedef struct {
   player_info_t player_info;
 } player_track_t;
 
-// State for managing snippet dragging
+// state for managing snippet dragging
 typedef struct {
   bool active;
   int source_track_index;

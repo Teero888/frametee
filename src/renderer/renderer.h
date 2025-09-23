@@ -184,7 +184,7 @@ void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
 void renderer_draw_map(gfx_handler_t *h);
 
-// --- Primitive Drawing API ---
+// primitive drawing api
 void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4 color);
 void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color,
                                  uint32_t segments);
@@ -196,7 +196,7 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
 void screen_to_world(gfx_handler_t *handler, float screen_x, float screen_y, float *world_x, float *world_y);
 void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy);
 
-// -- Skin rendering ---
+// skin rendering
 void renderer_begin_skins(gfx_handler_t *h);
 void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state,
                                  vec2 dir, const anim_state_t *anim_state);

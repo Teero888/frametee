@@ -15,7 +15,7 @@
 #define ARRAYSIZE(_ARR) ((int)(sizeof(_ARR) / sizeof(*(_ARR))))
 #define ENTITIES_PATH "data/textures/ddnet.png"
 
-// --- Forward Declarations of Static Functions ---
+// forward declarations of static functions
 static void glfw_error_callback(int error, const char *description);
 static int init_window(gfx_handler_t *handler);
 static int init_vulkan(gfx_handler_t *handler);
@@ -25,12 +25,12 @@ static void cleanup_vulkan_window(gfx_handler_t *handler);
 // frame_render and frame_present are now folded into gfx_begin/end_frame
 static void cleanup_map_resources(gfx_handler_t *handler);
 
-// Offscreen helpers
+// offscreen helpers
 static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint32_t height);
 static void destroy_offscreen_resources(gfx_handler_t *handler);
 static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, uint32_t height);
 
-// --- Vulkan Initialization Helpers ---
+// vulkan initialization helpers
 static VkResult create_instance(gfx_handler_t *handler, const char **extensions, uint32_t extensions_count);
 static void select_physical_device(gfx_handler_t *handler);
 static void create_logical_device(gfx_handler_t *handler);
@@ -38,7 +38,7 @@ static void create_descriptor_pool(gfx_handler_t *handler);
 static void setup_window(gfx_handler_t *handler, struct ImGui_ImplVulkanH_Window *wd, VkSurfaceKHR surface,
                          int width, int height);
 
-// --- GLFW Error Callback ---
+// glfw error callback
 static void glfw_error_callback(int error, const char *description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
@@ -54,7 +54,7 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   handler->raw_mouse.y = ypos;
 }
 
-// --- Public API Implementation ---
+// public api implementation
 int init_gfx_handler(gfx_handler_t *handler) {
   memset(handler, 0, sizeof(gfx_handler_t));
   handler->g_allocator = NULL;
@@ -431,7 +431,7 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
       load_layer_texture(handler, map[1], handler->map_data->width, handler->map_data->height);
 }
 
-// --- Initialization and Cleanup ---
+// initialization and cleanup
 static int init_window(gfx_handler_t *handler) {
   glfwSetErrorCallback(glfw_error_callback);
   if (!glfwInit())
@@ -645,7 +645,7 @@ static void cleanup_vulkan_window(gfx_handler_t *handler) {
                                   handler->g_allocator);
 }
 
-// --- Offscreen resource helpers ---
+// offscreen resource helpers
 static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint32_t height) {
   if (width == 0 || height == 0) {
     return 1;
@@ -807,7 +807,7 @@ static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, 
   return 0;
 }
 
-// --- Vulkan Setup Helpers ---
+// vulkan setup helpers
 static bool is_extension_available(const VkExtensionProperties *properties, uint32_t properties_count,
                                    const char *extension) {
   for (uint32_t i = 0; i < properties_count; i++) {
@@ -965,7 +965,7 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
                                          handler->g_min_image_count);
 }
 
-// --- Frame Rendering and Presentation ---
+// frame rendering and presentation
 static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;

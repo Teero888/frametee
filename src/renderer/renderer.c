@@ -17,7 +17,7 @@
 
 #define DYNAMIC_UBO_BUFFER_SIZE (16 * 1024 * 1024) // 16 MB
 
-// --- Helper Function Prototypes ---
+// helper function prototypes
 static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter,
                                  VkMemoryPropertyFlags properties);
 static void create_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsageFlags usage,
@@ -43,7 +43,7 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
                        const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count);
 static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
-// --- Vertex Description Helpers ---
+// vertex description helpers
 static VkVertexInputBindingDescription primitive_binding_description;
 static VkVertexInputAttributeDescription primitive_attribute_descriptions[2];
 static VkVertexInputBindingDescription mesh_binding_description;
@@ -1409,7 +1409,7 @@ static void setup_vertex_descriptions() {
                                                                .offset = offsetof(skin_instance_t, dir)};
 }
 
-// --- Primitive Drawing Implementation ---
+// primitive drawing implementation
 static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &h->renderer;
   if (renderer->primitive_index_count == 0) {

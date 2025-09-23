@@ -48,7 +48,7 @@ void render_menu_bar(ui_handler_t *ui) {
   }
 }
 
-// --- Docking Setup ---
+// docking setup
 void setup_docking(ui_handler_t *ui) {
   ImGuiID main_dockspace_id = igGetID_Str("MainDockSpace");
 
@@ -107,7 +107,7 @@ void setup_docking(ui_handler_t *ui) {
   }
 }
 
-// ---------------- Snippet Editor Panel ----------------
+// snippet editor panel
 static const char *dir_options[] = {"Left", "Neutral", "Right"};
 static const char *weapon_options[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
 
@@ -238,11 +238,11 @@ void render_snippet_editor_panel(timeline_state_t *ts) {
   }
   igEnd();
 }
-// ---------------- Player Manager Panel ----------------
+// player manager panel
 static bool g_remove_confirm_needed = true;
 static int g_pending_remove_index = -1;
 
-// TODO: move this to timeline.c?
+// todo: move this to timeline.c?
 static void remove_player(timeline_state_t *ts, ph_t *ph, int index) {
   if (index < 0 || index >= ts->player_track_count)
     return;

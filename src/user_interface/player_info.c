@@ -5,7 +5,7 @@
 #include "timeline.h"
 #include <string.h>
 
-// TODO: make list of already loaded skins to avoid duplicates
+// todo: make list of already loaded skins to avoid duplicates
 void render_player_info(gfx_handler_t *h) {
   player_info_t *player_info =
       &h->user_interface.timeline.player_tracks[h->user_interface.timeline.selected_player_track_index]

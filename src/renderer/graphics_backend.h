@@ -15,12 +15,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Forward declaration
+// forward declaration
 struct gfx_handler_t;
 
 enum { FRAME_OK = 0, FRAME_SKIP, FRAME_EXIT };
 
-// --- Public API ---
+// public api
 void on_map_load(struct gfx_handler_t *handler, const char *map_path);
 int init_gfx_handler(struct gfx_handler_t *handler);
 int gfx_begin_frame(struct gfx_handler_t *handler);

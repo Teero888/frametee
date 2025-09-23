@@ -100,17 +100,17 @@ void resize_snippet_inputs(input_snippet_t *snippet, int new_duration) {
   snippet->input_count = new_duration;
 }
 
-// Converts screen X position to timeline tick
+// converts screen x position to timeline tick
 int screen_x_to_tick(const timeline_state_t *ts, float screen_x, float timeline_start_x) {
   return ts->view_start_tick + (int)((screen_x - timeline_start_x) / ts->zoom);
 }
 
-// Converts timeline tick to screen X position
+// converts timeline tick to screen x position
 float tick_to_screen_x(const timeline_state_t *ts, int tick, float timeline_start_x) {
   return timeline_start_x + (tick - ts->view_start_tick) * ts->zoom;
 }
 
-// Finds a snippet by its ID within a track
+// finds a snippet by its id within a track
 input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id) {
   for (int i = 0; i < track->snippet_count; ++i) {
     if (track->snippets[i].id == snippet_id) {
@@ -132,15 +132,15 @@ void advance_tick(timeline_state_t *ts, int steps) {
   }
 }
 
-// Finds a snippet by its ID and track index
+// finds a snippet by its id and track index
 input_snippet_t *find_snippet_by_id_and_track(timeline_state_t *ts, int snippet_id, int track_idx) {
   if (track_idx < 0 || track_idx >= ts->player_track_count)
     return NULL;
   return find_snippet_by_id(&ts->player_tracks[track_idx], snippet_id);
 }
 
-// Calculates a snapped tick position based on nearby snippet edges
-// Considers snapping both the start and end of the dragged snippet.
+// calculates a snapped tick position based on nearby snippet edges
+// considers snapping both the start and end of the dragged snippet.
 int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int dragged_snippet_duration,
                            int exclude_snippet_id) {
   int snapped_start_tick = desired_start_tick; // Default to no snapping
@@ -200,7 +200,7 @@ int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, i
   return snapped_start_tick;
 }
 
-// Checks if a snippet range overlaps with any snippets in a track (excluding one)
+// checks if a snippet range overlaps with any snippets in a track (excluding one)
 bool check_for_overlap(const player_track_t *track, int start_tick, int end_tick, int exclude_snippet_id) {
   if (start_tick >= end_tick)
     return false; // Invalid range
@@ -219,8 +219,8 @@ bool check_for_overlap(const player_track_t *track, int start_tick, int end_tick
   return false; // No overlap
 }
 
-// Removes a snippet from a track by ID
-// Returns true if removed, false if not found
+// removes a snippet from a track by id
+// returns true if removed, false if not found
 bool remove_snippet_from_track(timeline_state_t *t, player_track_t *track, int snippet_id) {
   int found_idx = -1;
   for (int i = 0; i < track->snippet_count; ++i) {
@@ -264,8 +264,8 @@ void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet)
   track->snippet_count++;
 }
 
-// Attempts to move a snippet to a new position and track, checking for overlaps
-// Returns true if the move was successful, false otherwise.
+// attempts to move a snippet to a new position and track, checking for overlaps
+// returns true if the move was successful, false otherwise.
 bool try_move_snippet(timeline_state_t *ts, int snippet_id, int source_track_idx, int target_track_idx,
                       int desired_start_tick) {
   if (source_track_idx < 0 || source_track_idx >= ts->player_track_count || target_track_idx < 0 ||
@@ -357,7 +357,7 @@ int get_max_timeline_tick(timeline_state_t *ts) {
   return max_tick;
 }
 
-// --- Rendering and Interaction Functions ---
+// rendering and interaction functions
 void render_timeline_controls(timeline_state_t *ts) {
   igPushItemWidth(100);
 
@@ -501,7 +501,7 @@ void handle_timeline_interaction(timeline_state_t *ts, ImRect timeline_bb) {
   }
 }
 
-// Helper: Pick nice tick step that gives enough pixel spacing
+// helper: pick nice tick step that gives enough pixel spacing
 static double choose_nice_tick_step(double pixels_per_tick, double min_label_spacing) {
   // steps expressed in TICKS (since 50 ticks = 1 sec)
   static const double nice_steps[] = {
@@ -887,7 +887,7 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
 
 } // End draw_drag_preview
 
-// --- Main Render Function ---
+// main render function
 void render_timeline(timeline_state_t *ts) {
   ImGuiIO *io = igGetIO_Nil();
 
@@ -1157,7 +1157,7 @@ void render_timeline(timeline_state_t *ts) {
   igEnd(); // End Timeline window
 }
 
-// Helper to add a new empty track(s)
+// helper to add a new empty track(s)
 player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
   if (num <= 0) {
     return NULL; // pointless to add 0 tracks
