@@ -569,7 +569,7 @@ void render_players(ui_handler_t *ui) {
   if (ui->timeline.selected_player_track_index >= 0 && ui->show_prediction) {
     for (int i = 0; i < 100; ++i) {
       for (int p = 0; p < world.m_NumCharacters; ++p) {
-        SPlayerInput input = p == ui->timeline.selected_player_track_index
+        SPlayerInput input = ui->timeline.recording && p == ui->timeline.selected_player_track_index
                                  ? ui->timeline.recording_input
                                  : get_input(&ui->timeline, p, world.m_GameTick);
         cc_on_input(&world.m_pCharacters[p], &input);
