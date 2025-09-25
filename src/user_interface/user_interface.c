@@ -528,9 +528,36 @@ void render_players(ui_handler_t *ui) {
       renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(core->m_Vel) / 32.f, p[1] + vgety(core->m_Vel) / 32.f},
                          (vec4){1.f, 0.f, 0.f, 1.f}, 0.05);
 
-    if (core->m_HookState > 0)
+    if (core->m_HookState >= 1)
       renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
                          (vec4){1.f, 1.f, 1.f, 1.f}, 0.05);
+  }
+  for (SProjectile *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
+       ent = ent->m_Base.m_pNextTypeEntity) {
+    float pt = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick - 1) / (float)GAME_TICK_SPEED;
+    float ct = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick) / (float)GAME_TICK_SPEED;
+    mvec2 prev_pos = prj_get_pos(ent, pt);
+    mvec2 cur_pos = prj_get_pos(ent, ct);
+
+    vec2 ppp = {vgetx(prev_pos) / 32.f, vgety(prev_pos) / 32.f};
+    vec2 pp = {vgetx(cur_pos) / 32.f, vgety(cur_pos) / 32.f};
+    vec2 p;
+    lerp(ppp, pp, intra, p);
+
+    renderer_draw_circle_filled(gfx, p, 0.2, (vec4){1.f, 0.f, 0.f, 0.9f}, 8);
+  }
+  for (SLaser *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent;
+       ent = ent->m_Base.m_pNextTypeEntity) {
+    vec2 p1 = {vgetx(ent->m_Base.m_Pos) / 32.f, vgety(ent->m_Base.m_Pos) / 32.f};
+    vec2 p0 = {vgetx(ent->m_From) / 32.f, vgety(ent->m_From) / 32.f};
+
+    vec4 lsr_col = (vec4){0.f, 0.f, 1.f, 0.9f};
+    vec4 sg_col = (vec4){0.570315f, 0.4140625f, 025.f, 0.9f};
+    if (ent->m_Type != WEAPON_LASER)
+      printf("SG!!\n");
+
+    renderer_draw_line(gfx, p0, p1, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 0.25f);
+    renderer_draw_circle_filled(gfx, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);
   }
 
   // render own cursor
@@ -626,6 +653,7 @@ bool ui_render_late(ui_handler_t *ui) {
 
     if (ui->timeline.selected_player_track_index >= 0) {
       igSetCursorScreenPos(start);
+      igText("Character:");
       igText("Pos: %d, %d; (%d, %d)", ui->pos_x, ui->pos_y, ui->pos_x >> 5, ui->pos_y >> 5);
       igText("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", ui->vel_x, ui->vel_y, ui->vel_x * (50.f / 32.f),
              ui->vel_y * (50.f / 32.f));
@@ -634,6 +662,30 @@ bool ui_render_late(ui_handler_t *ui) {
       igText("Weapon: %d", ui->weapon);
       igText("Weapons: [ %d, %d, %d, %d, %d, %d ]", ui->weapons[0], ui->weapons[1], ui->weapons[2],
              ui->weapons[3], ui->weapons[4], ui->weapons[5]);
+      SPlayerInput Input = ui->timeline.recording_input;
+      if (!ui->timeline.recording)
+        Input = get_input(&ui->timeline, ui->timeline.selected_player_track_index, ui->timeline.current_tick);
+      igText("");
+      igText("Input:");
+      igText("Direction: %d", Input.m_Direction);
+      igText("TargetX: %d", Input.m_TargetX);
+      igText("TargetY: %d", Input.m_TargetY);
+      igText("Jump: %d", Input.m_Jump);
+      igText("Fire: %d", Input.m_Fire);
+      igText("Hook: %d", Input.m_Hook);
+      igText("WantedWeapon: %d", Input.m_WantedWeapon);
+      igText("TeleOut: %d", Input.m_TeleOut);
+#define WORD_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c"
+#define WORD_TO_BINARY(word)                                                                                 \
+  ((word) & 0x8000 ? '1' : '0'), ((word) & 0x4000 ? '1' : '0'), ((word) & 0x2000 ? '1' : '0'),               \
+      ((word) & 0x1000 ? '1' : '0'), ((word) & 0x0800 ? '1' : '0'), ((word) & 0x0400 ? '1' : '0'),           \
+      ((word) & 0x0200 ? '1' : '0'), ((word) & 0x0100 ? '1' : '0'), ((word) & 0x0080 ? '1' : '0'),           \
+      ((word) & 0x0040 ? '1' : '0'), ((word) & 0x0020 ? '1' : '0'), ((word) & 0x0010 ? '1' : '0'),           \
+      ((word) & 0x0008 ? '1' : '0'), ((word) & 0x0004 ? '1' : '0'), ((word) & 0x0002 ? '1' : '0'),           \
+      ((word) & 0x0001 ? '1' : '0')
+      igText("Flags: " WORD_TO_BINARY_PATTERN, WORD_TO_BINARY(Input.m_Flags));
+#undef WORD_TO_BINARY
+#undef WORD_TO_BINARY_PATTERN
     }
     igEnd();
   }
