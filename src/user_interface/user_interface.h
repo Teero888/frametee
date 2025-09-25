@@ -14,7 +14,7 @@ typedef struct {
   bool show_prediction;
 
   int pos_x, pos_y;
-  float vel_x, vel_y;
+  float vel_x, vel_y, vel_m, vel_r;
   int freezetime;
   int reloadtime;
   int weapon;

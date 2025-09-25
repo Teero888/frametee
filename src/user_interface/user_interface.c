@@ -586,6 +586,8 @@ void render_players(ui_handler_t *ui) {
     ui->pos_y = vgety(p->m_Pos);
     ui->vel_x = vgetx(p->m_Vel);
     ui->vel_y = vgety(p->m_Vel);
+    ui->vel_m = p->m_VelMag;
+    ui->vel_r = p->m_VelRamp;
     ui->freezetime = p->m_FreezeTime;
     ui->reloadtime = p->m_ReloadTimer;
     ui->weapon = p->m_ActiveWeapon;
@@ -654,9 +656,9 @@ bool ui_render_late(ui_handler_t *ui) {
     if (ui->timeline.selected_player_track_index >= 0) {
       igSetCursorScreenPos(start);
       igText("Character:");
-      igText("Pos: %d, %d; (%d, %d)", ui->pos_x, ui->pos_y, ui->pos_x >> 5, ui->pos_y >> 5);
-      igText("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", ui->vel_x, ui->vel_y, ui->vel_x * (50.f / 32.f),
-             ui->vel_y * (50.f / 32.f));
+      igText("Pos: %d, %d; (%.4f, %.4f)", ui->pos_x, ui->pos_y, ui->pos_x / 32.f, ui->pos_y / 32.f);
+      igText("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", ui->vel_x * ui->vel_r, ui->vel_y,
+             ui->vel_x * ui->vel_r * (50.f / 32.f), ui->vel_y * (50.f / 32.f));
       igText("Freeze: %d", ui->freezetime);
       igText("Reload: %d", ui->reloadtime);
       igText("Weapon: %d", ui->weapon);
