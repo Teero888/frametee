@@ -1553,6 +1553,7 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
   renderer->primitive_index_count += segments * 3;
 }
 
+// TODO: ensuring the width of the thing is atleast 1px is kinda expensive. think of another way to do this
 void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness) {
   renderer_state_t *renderer = &handler->renderer;
   if (renderer->primitive_vertex_count + 4 > MAX_PRIMITIVE_VERTICES ||
@@ -1563,21 +1564,44 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   vec2 dir;
   glm_vec2_sub(p2, p1, dir);
   glm_vec2_normalize(dir);
-
   vec2 normal = {-dir[1], dir[0]};
-  float half_thickness = thickness / 2.0f;
+
+  const float MIN_PIXELS = 1.0f;
+  float sx1, sy1, sx1n, sy1n;
+  float sx2, sy2, sx2n, sy2n;
+
+  world_to_screen(handler, p1[0], p1[1], &sx1, &sy1);
+  world_to_screen(handler, p1[0] + normal[0], p1[1] + normal[1], &sx1n, &sy1n);
+
+  world_to_screen(handler, p2[0], p2[1], &sx2, &sy2);
+  world_to_screen(handler, p2[0] + normal[0], p2[1] + normal[1], &sx2n, &sy2n);
+
+  float pix_per_unit_p1 = hypotf(sx1n - sx1, sy1n - sy1);
+  float pix_per_unit_p2 = hypotf(sx2n - sx2, sy2n - sy2);
+
+  const float EPS = 1e-6f;
+  if (pix_per_unit_p1 < EPS)
+    pix_per_unit_p1 = (pix_per_unit_p2 > EPS ? pix_per_unit_p2 : 1.0f);
+  if (pix_per_unit_p2 < EPS)
+    pix_per_unit_p2 = (pix_per_unit_p1 > EPS ? pix_per_unit_p1 : 1.0f);
+
+  float min_world_thickness_p1 = MIN_PIXELS / pix_per_unit_p1;
+  float min_world_thickness_p2 = MIN_PIXELS / pix_per_unit_p2;
+
+  float half_t1 = fmaxf(thickness * 0.5f, min_world_thickness_p1 * 0.5f);
+  float half_t2 = fmaxf(thickness * 0.5f, min_world_thickness_p2 * 0.5f);
 
   uint32_t base_index = renderer->primitive_vertex_count;
   primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
   uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
 
-  glm_vec2_copy((vec2){p1[0] - normal[0] * half_thickness, p1[1] - normal[1] * half_thickness}, vtx[0].pos);
+  glm_vec2_copy((vec2){p1[0] - normal[0] * half_t1, p1[1] - normal[1] * half_t1}, vtx[0].pos);
   glm_vec4_copy(color, vtx[0].color);
-  glm_vec2_copy((vec2){p2[0] - normal[0] * half_thickness, p2[1] - normal[1] * half_thickness}, vtx[1].pos);
+  glm_vec2_copy((vec2){p2[0] - normal[0] * half_t2, p2[1] - normal[1] * half_t2}, vtx[1].pos);
   glm_vec4_copy(color, vtx[1].color);
-  glm_vec2_copy((vec2){p2[0] + normal[0] * half_thickness, p2[1] + normal[1] * half_thickness}, vtx[2].pos);
+  glm_vec2_copy((vec2){p2[0] + normal[0] * half_t2, p2[1] + normal[1] * half_t2}, vtx[2].pos);
   glm_vec4_copy(color, vtx[2].color);
-  glm_vec2_copy((vec2){p1[0] + normal[0] * half_thickness, p1[1] + normal[1] * half_thickness}, vtx[3].pos);
+  glm_vec2_copy((vec2){p1[0] + normal[0] * half_t1, p1[1] + normal[1] * half_t1}, vtx[3].pos);
   glm_vec4_copy(color, vtx[3].color);
 
   idx[0] = base_index + 0;

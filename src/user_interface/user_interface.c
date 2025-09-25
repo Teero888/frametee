@@ -480,8 +480,9 @@ void render_players(ui_handler_t *ui) {
     anim_state_t anim_state;
     anim_state_set(&anim_state, &anim_base, 0.0f);
 
-    bool stationary = fabsf(vgetx(core->m_Vel)) <= 1;
-    bool running = fabsf(vgetx(core->m_Vel) * 256.f) >= 5000;
+    bool stationary = fabsf(vgetx(core->m_Vel) * 256.f) <= 1;
+    bool running =
+        fabsf(vgetx(core->m_Vel) * 256.f) >= 5000; // 19.53125 is an ugly number so im keeping this here
     bool want_other_dir = (core->m_Input.m_Direction == -1 && vgetx(core->m_Vel) > 0) ||
                           (core->m_Input.m_Direction == 1 && vgetx(core->m_Vel) < 0);
     bool inactive = get_flag_sit(&core->m_Input);
