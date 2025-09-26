@@ -1,5 +1,5 @@
 #include "user_interface.h"
-#include "../../libs/symbols.h"
+#include "../../symbols.h"
 #include "../animation/anim_data.h"
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
@@ -42,6 +42,7 @@ void render_menu_bar(ui_handler_t *ui) {
     if (igBeginMenu("View", true)) {
       igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
       igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
+      igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_manager, true);
       igEndMenu();
     }
 
@@ -302,9 +303,8 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
 
       ImVec2 vMin;
       igGetContentRegionAvail(&vMin);
-      // Place "X" button at row end
       igSameLine(vMin.x - 20.f, -1.0f); // shift right
-      if (igSmallButton("X")) {
+      if (igSmallButton(ICON_KI_TRASH)) {
         if (g_remove_confirm_needed && ts->player_tracks[i].snippet_count > 0) {
           g_pending_remove_index = i;
           igPopID();
@@ -411,6 +411,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->show_prediction = true;
   timeline_init(&ui->timeline);
   camera_init(&gfx_handler->renderer.camera);
+  skin_manager_init(&ui->skin_manager);
   NFD_Init();
 }
 
@@ -671,6 +672,8 @@ void ui_render(ui_handler_t *ui) {
     if (ui->timeline.selected_player_track_index != -1)
       render_player_info(ui->gfx_handler);
   }
+  if (ui->show_skin_manager)
+    render_skin_manager(ui->gfx_handler);
 }
 
 // render viewport and related things
@@ -736,5 +739,6 @@ bool ui_render_late(ui_handler_t *ui) {
 
 void ui_cleanup(ui_handler_t *ui) {
   timeline_cleanup(&ui->timeline);
+  skin_manager_free(&ui->skin_manager);
   NFD_Quit();
 }

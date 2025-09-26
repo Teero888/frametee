@@ -118,8 +118,8 @@ typedef struct {
   skin_instance_t *instance_ptr;
   uint32_t instance_count;
 } skin_renderer_t;
-#define MAX_SKINS 1024
 
+#define MAX_SKINS 128
 typedef struct {
   texture_t *atlas_array; // giant 2D array texture for all skins
   bool layer_used[MAX_SKINS];

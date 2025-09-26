@@ -39,6 +39,21 @@ vec4 sample_skin(part_info_t part, vec2 frag_uv, int skin_index) {
   return c;
 }
 
+vec4 sample_skin_mirror(part_info_t part, vec2 frag_uv, int skin_index) {
+    if (frag_uv.x < part.place_offset.x || frag_uv.x > part.place_offset.x + part.place_size.x ||
+        frag_uv.y < part.place_offset.y || frag_uv.y > part.place_offset.y + part.place_size.y) {
+        return vec4(0.0);
+    }
+    vec2 local_uv = (frag_uv - part.place_offset) / part.place_size;
+    // flip horizontally
+    local_uv.x = 1.0 - local_uv.x;
+    vec2 atlas_full = vec2(256.0, 128.0);
+    vec2 uv = vec2(part.atlas_offset) / atlas_full + local_uv * (vec2(part.atlas_size) / atlas_full);
+    vec4 c = texture(skins, vec3(uv, float(skin_index)));
+    c.rgb *= c.a;
+    return c;
+}
+
 vec4 blend_pma(vec4 dst, vec4 src) {
   return vec4(src.rgb + dst.rgb * (1.0 - src.a), src.a + dst.a * (1.0 - src.a));
 }
@@ -69,8 +84,7 @@ void main() {
   );
 
   vec2 offset = vec2(frag_dir.x * 0.125f, -0.05f + frag_dir.y * 0.10f);
-  // on ddnet it's 0.075f but it doesn't look exactly the same here.
-  vec2 eye = vec2(0.07f - 0.010f * abs(frag_dir.x), 0.0);
+  vec2 eye = vec2(0.075f - 0.010f * abs(frag_dir.x), 0.0);
 
   vec2 size = vec2(0.4);
   // blink
@@ -96,7 +110,7 @@ void main() {
   final_color = blend_pma(final_color, sample_skin(body_shadow, uv_body, frag_skin_index));
   final_color = blend_pma(final_color, sample_skin(body, uv_body, frag_skin_index));
 
-  final_color = blend_pma(final_color, sample_skin(eye_right, uv_body, frag_skin_index));
+  final_color = blend_pma(final_color, sample_skin_mirror(eye_right, uv_body, frag_skin_index));
   final_color = blend_pma(final_color, sample_skin(eye_left, uv_body, frag_skin_index));
 
   final_color = blend_pma(final_color, sample_skin(foot, uv_front, frag_skin_index));

@@ -1,6 +1,7 @@
 #ifndef USER_INTERFACE_H
 #define USER_INTERFACE_H
 
+#include "player_info.h"
 #include "timeline.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -9,11 +10,13 @@ typedef struct {
   bool show_timeline;
   timeline_state_t timeline;
   struct gfx_handler_t *gfx_handler;
+  skin_manager_t skin_manager;
 
   ImFont *font;
 
   // configs
   bool show_prediction;
+  bool show_skin_manager;
 
   int pos_x, pos_y;
   float vel_x, vel_y, vel_m, vel_r;
