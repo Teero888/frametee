@@ -24,6 +24,7 @@ set(SRCS
 # find dependencies
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
+find_package(X11 REQUIRED)
 
 # find vulkan glslangvalidator for shader compilation
 find_program(GLSLANG_VALIDATOR glslangValidator HINTS ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE})
@@ -68,6 +69,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     cglm
     cimgui
     glfw
+    X11
     Vulkan::Vulkan
 )
 
@@ -111,7 +113,6 @@ if(ENABLE_SANITIZERS)
         set(WRAPPER_SCRIPT "${CMAKE_BINARY_DIR}/ddnet_frametee.sh")
         file(WRITE ${WRAPPER_SCRIPT}
             "#!/bin/sh\n"
-            "export ASAN_OPTIONS=detect_odr_violation=0\n"
             "export LSAN_OPTIONS=suppressions=${CMAKE_BINARY_DIR}/asan_suppressions.txt\n"
             "exec ${CMAKE_BINARY_DIR}/ddnet_frametee \"$@\"\n"
         )

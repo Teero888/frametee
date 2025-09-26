@@ -89,7 +89,7 @@ struct gfx_handler_t {
   VkFramebuffer offscreen_framebuffer;
   VkRenderPass offscreen_render_pass;
   // ImGui texture id returned by ImGui_ImplVulkan_AddTexture
-  ImTextureID offscreen_texture_id;
+  ImTextureRef *offscreen_texture;
   uint32_t offscreen_width;
   uint32_t offscreen_height;
   bool offscreen_initialized;

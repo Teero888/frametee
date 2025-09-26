@@ -397,7 +397,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ImFontAtlas_AddFontDefault(atlas, NULL);
 
   // load material icons font
-  ImFontConfig *config = ImFontConfig_ImFontConfig();
+/*   ImFontConfig *config = ImFontConfig_ImFontConfig();
   config->MergeMode = true;
   config->GlyphMinAdvanceX = 13.0f;
 
@@ -405,7 +405,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ImFont *icon_font = ImFontAtlas_AddFontFromFileTTF(
       io, "/home/teero/.local/share/fonts/fontawesome-webfont.ttf", 13.0f, config, icon_ranges);
 
-  ImFontConfig_destroy(config);
+  ImFontConfig_destroy(config); */
 
   ui->gfx_handler = gfx_handler;
   ui->show_timeline = true;
@@ -674,7 +674,7 @@ void ui_render(ui_handler_t *ui) {
 bool ui_render_late(ui_handler_t *ui) {
   bool hovered = false;
   // igShowDemoWindow(NULL);
-  if (ui->gfx_handler->offscreen_initialized && ui->gfx_handler->offscreen_texture_id != NULL) {
+  if (ui->gfx_handler->offscreen_initialized && ui->gfx_handler->offscreen_texture != NULL) {
     igBegin("viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImVec2 start;
     igGetCursorScreenPos(&start);
@@ -683,7 +683,7 @@ bool ui_render_late(ui_handler_t *ui) {
     igGetWindowPos(&wpos);
     igSetCursorScreenPos(wpos);
     ImVec2 img_size = {(float)ui->gfx_handler->offscreen_width, (float)ui->gfx_handler->offscreen_height};
-    igImage(ui->gfx_handler->offscreen_texture_id, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
+    igImage(*ui->gfx_handler->offscreen_texture, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
 
     igGetWindowSize(&ui->gfx_handler->viewport[0]);
     hovered = igIsWindowHovered(0);

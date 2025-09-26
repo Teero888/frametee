@@ -74,7 +74,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->offscreen_sampler = VK_NULL_HANDLE;
   handler->offscreen_framebuffer = VK_NULL_HANDLE;
   handler->offscreen_render_pass = VK_NULL_HANDLE;
-  handler->offscreen_texture_id = 0;
+  handler->offscreen_texture = NULL;
 
   if (init_window(handler) != 0) {
     return 1;
@@ -512,8 +512,6 @@ void ayu_dark(void) {
   ImVec4 accent_orange = hex_vec4("FF8F40", 1.0f);
   ImVec4 accent_green = hex_vec4("AAD94C", 1.0f);
   ImVec4 accent_blue = hex_vec4("39BAE6", 1.0f);
-  ImVec4 accent_pink = hex_vec4("D2A6FF", 1.0f);
-  ImVec4 accent_red = hex_vec4("F07178", 1.0f);
 
   // Style Metrics
   style->WindowPadding = (ImVec2){8, 8};
@@ -748,9 +746,11 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
 
   // Add ImGui texture handle from sampler + image view
   // ImGui_ImplVulkan_AddTexture returns an ImTextureID (void*).
-  handler->offscreen_texture_id = (ImTextureID)ImGui_ImplVulkan_AddTexture(
-      handler->offscreen_sampler, handler->offscreen_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
+  
+  ImTextureID id = (ImTextureID)ImGui_ImplVulkan_AddTexture(
+    handler->offscreen_sampler, handler->offscreen_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    
+    handler->offscreen_texture = ImTextureRef_ImTextureRef_TextureID(id);
   handler->offscreen_initialized = true;
   // printf("Offscreen resources created: %ux%u\n", width, height);
   return 0;
@@ -788,7 +788,7 @@ static void destroy_offscreen_resources(gfx_handler_t *handler) {
     handler->offscreen_memory = VK_NULL_HANDLE;
   }
 
-  handler->offscreen_texture_id = 0;
+  ImTextureRef_destroy(handler->offscreen_texture);
   handler->offscreen_initialized = false;
   handler->offscreen_width = 0;
   handler->offscreen_height = 0;
