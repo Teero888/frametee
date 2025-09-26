@@ -316,7 +316,8 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
       }
       igPopID();
     }
-    igSeparator();
+    if (ts->player_track_count > 0)
+      igSeparator();
 
     if (igBeginPopupModal("ConfirmRemovePlayer", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
       igText("This player has inputs. Remove anyway?");
@@ -392,20 +393,18 @@ void camera_init(camera_t *camera) {
 void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ImGuiIO *io = igGetIO_Nil();
   ImFontAtlas *atlas = io->Fonts;
-  // ImFont *font = ImFontAtlas_AddFontFromFileTTF(
-  //     io->Fonts, "/home/teero/.local/share/fonts/Inter-VariableFont_opsz,wght.ttf", 18.f, NULL, NULL);
-  ImFontAtlas_AddFontDefault(atlas, NULL);
 
-  // load material icons font
-/*   ImFontConfig *config = ImFontConfig_ImFontConfig();
+  ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/JetBrainsMono-Medium.ttf", 19.f,
+                                            NULL, NULL);
+
+  ImFontConfig *config = ImFontConfig_ImFontConfig();
   config->MergeMode = true;
   config->GlyphMinAdvanceX = 13.0f;
+  config->GlyphOffset = (ImVec2){0.0f, 1.0f};
 
-  static const ImWchar icon_ranges[] = {ICON_MIN_FA, ICON_MAX_FA, 0};
-  ImFont *icon_font = ImFontAtlas_AddFontFromFileTTF(
-      io, "/home/teero/.local/share/fonts/fontawesome-webfont.ttf", 13.0f, config, icon_ranges);
+  ImFontAtlas_AddFontFromFileTTF(atlas, "data/fonts/kenney-icon-font.ttf", 14.0f, config, NULL);
 
-  ImFontConfig_destroy(config); */
+  ImFontConfig_destroy(config);
 
   ui->gfx_handler = gfx_handler;
   ui->show_timeline = true;
@@ -689,6 +688,7 @@ bool ui_render_late(ui_handler_t *ui) {
     hovered = igIsWindowHovered(0);
 
     if (ui->timeline.selected_player_track_index >= 0) {
+      igPushFont(ui->font, 25.f);
       igSetCursorScreenPos(start);
       igText("Character:");
       igText("Pos: %d, %d; (%.4f, %.4f)", ui->pos_x, ui->pos_y, ui->pos_x / 32.f, ui->pos_y / 32.f);
@@ -723,6 +723,7 @@ bool ui_render_late(ui_handler_t *ui) {
       igText("Flags: " WORD_TO_BINARY_PATTERN, WORD_TO_BINARY(Input.m_Flags));
 #undef WORD_TO_BINARY
 #undef WORD_TO_BINARY_PATTERN
+      igPopFont();
     }
     igEnd();
   }

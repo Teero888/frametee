@@ -1,4 +1,5 @@
 #include "timeline.h"
+#include "../../libs/symbols.h"
 #include "cimgui.h"
 #include <GLFW/glfw3.h>
 #include <math.h>
@@ -368,45 +369,43 @@ void render_timeline_controls(timeline_state_t *ts) {
       ts->current_tick = 0;
   }
 
-  if ((igShortcut_Nil(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal) ||
-       igShortcut_Nil(ImGuiKey_MouseX1, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) &&
+  if ((igIsKeyPressed_Bool(ImGuiKey_LeftArrow, true) || igIsKeyPressed_Bool(ImGuiKey_MouseX1, true)) &&
       ts->current_tick > 0) {
     ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
     ts->is_playing = false;
     advance_tick(ts, -1);
   }
-  if (igShortcut_Nil(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal) ||
-      igShortcut_Nil(ImGuiKey_MouseX2, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) {
+  if (igIsKeyPressed_Bool(ImGuiKey_RightArrow, true) || igIsKeyPressed_Bool(ImGuiKey_MouseX2, true)) {
     ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
     ts->is_playing = false;
     advance_tick(ts, 1);
   }
 
-  if (igShortcut_Nil(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) {
+  if (igIsKeyPressed_Bool(ImGuiKey_DownArrow, true)) {
     ts->gui_playback_speed = imax(--ts->playback_speed, 1);
   }
-  if (igShortcut_Nil(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) {
+  if (igIsKeyPressed_Bool(ImGuiKey_UpArrow, true)) {
     ++ts->gui_playback_speed;
   }
 
   igSameLine(0, 8);
-  if (igButton("|<", (ImVec2){30, 0}))
+  if (igButton(ICON_KI_STEP_BACKWARD, (ImVec2){30, 0}))
     ts->current_tick = 0;
   igSameLine(0, 4);
-  if (igArrowButton("<<", ImGuiDir_Left))
-    ts->current_tick = (ts->current_tick >= 50) ? ts->current_tick - 50 : 0;
+  if (igButton(ICON_KI_BACKWARD, (ImVec2){30, 0}))
+    advance_tick(ts, -ts->playback_speed);
   igSameLine(0, 4);
-  if (igButton(ts->is_playing ? "Pause" : "Play", (ImVec2){50, 0})) {
+  if (igButton(ts->is_playing ? ICON_KI_PAUSE : ICON_KI_CARET_RIGHT, (ImVec2){50, 0})) {
     ts->is_playing ^= 1;
     if (ts->is_playing) {
       ts->last_update_time = igGetTime();
     }
   }
   igSameLine(0, 4);
-  if (igArrowButton(">>", ImGuiDir_Right))
-    ts->current_tick += 50;
+  if (igButton(ICON_KI_FORWARD, (ImVec2){30, 0}))
+    advance_tick(ts, ts->playback_speed);
   igSameLine(0, 4);
-  if (igButton(">|", (ImVec2){30, 0})) {
+  if (igButton(ICON_KI_STEP_FORWARD, (ImVec2){30, 0})) {
     ts->current_tick = get_max_timeline_tick(ts);
   }
 
@@ -468,7 +467,7 @@ void render_timeline_controls(timeline_state_t *ts) {
 
   if (ts->recording) {
     igSameLine(0, 10);
-    igTextColored((ImVec4){1.0f, 0.2f, 0.2f, 1.0f}, "REC");
+    igTextColored((ImVec4){1.0f, 0.2f, 0.2f, 1.0f}, ICON_KI_REC);
   }
 
   igPopItemWidth();
@@ -964,7 +963,7 @@ void render_timeline(timeline_state_t *ts) {
     render_timeline_controls(ts);
 
     // Layout Calculations for Header and Timeline Area ---
-    float header_height = igGetTextLineHeightWithSpacing() + 12;
+    float header_height = igGetTextLineHeightWithSpacing() + 15;
 
     // Calculate the available space below the controls for the header and tracks
     ImVec2 available_space_below_controls;

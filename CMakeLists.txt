@@ -175,6 +175,15 @@ add_custom_command(
     COMMENT "Copying textures to build directory"
 )
 
+# copy fonts folder to build directory
+add_custom_command(
+    TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory 
+        ${CMAKE_SOURCE_DIR}/data/fonts 
+        ${CMAKE_BINARY_DIR}/data/fonts
+    COMMENT "Copying fonts to build directory"
+)
+
 # copy compiled shaders to build directory
 add_custom_command(
     TARGET ${PROJECT_NAME} POST_BUILD

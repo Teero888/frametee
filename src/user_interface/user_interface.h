@@ -10,6 +10,8 @@ typedef struct {
   timeline_state_t timeline;
   struct gfx_handler_t *gfx_handler;
 
+  ImFont *font;
+
   // configs
   bool show_prediction;
 
