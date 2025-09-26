@@ -55,6 +55,7 @@ typedef struct timeline_state_t {
   int next_snippet_id;
   bool is_header_dragging;
   bool is_playing;
+  int gui_playback_speed;
   int playback_speed;
   double last_update_time;
   bool recording;

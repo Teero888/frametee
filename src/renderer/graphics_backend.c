@@ -503,8 +503,8 @@ void ayu_dark(void) {
   ImVec4 bg_panel = hex_vec4("0F131A", 1.0f);
   ImVec4 bg_line = hex_vec4("151A1F", 1.0f);
 
-  ImVec4 fg_text = hex_vec4("E6E1CF", 1.0f);     // warm white
-  ImVec4 fg_inactive = hex_vec4("565B66", 1.0f); // muted gray
+  ImVec4 fg_text = hex_vec4("E6E1CF", 1.0f);
+  ImVec4 fg_inactive = hex_vec4("565B66", 1.0f);
   ImVec4 shadow = hex_vec4("000000", 0.5f);
 
   // Accent & Syntax
@@ -575,7 +575,7 @@ void ayu_dark(void) {
 
   colors[ImGuiCol_TextSelectedBg] = hex_vec4("409FFF", 0.35f);
 
-  // Special & fun accents
+  // Special
   colors[ImGuiCol_CheckMark] = accent_green;
   colors[ImGuiCol_SliderGrab] = accent_yellow;
   colors[ImGuiCol_SliderGrabActive] = accent_orange;

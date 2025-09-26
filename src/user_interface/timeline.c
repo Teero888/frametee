@@ -124,7 +124,7 @@ void advance_tick(timeline_state_t *ts, int steps) {
   ts->current_tick = imax(ts->current_tick + steps, 0);
 
   // record new tick
-  if (ts->recording_snippet && ts->current_tick <= ts->recording_snippet->start_tick)
+  if (ts->recording_snippet && ts->current_tick < ts->recording_snippet->start_tick)
     ts->current_tick -= steps;
   if (ts->recording_snippet && ts->current_tick > ts->recording_snippet->end_tick) {
     resize_snippet_inputs(ts->recording_snippet, ts->current_tick - ts->recording_snippet->start_tick);
@@ -371,20 +371,22 @@ void render_timeline_controls(timeline_state_t *ts) {
   if ((igShortcut_Nil(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal) ||
        igShortcut_Nil(ImGuiKey_MouseX1, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) &&
       ts->current_tick > 0) {
+    ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
     ts->is_playing = false;
     advance_tick(ts, -1);
   }
   if (igShortcut_Nil(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal) ||
       igShortcut_Nil(ImGuiKey_MouseX2, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) {
+    ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
     ts->is_playing = false;
     advance_tick(ts, 1);
   }
 
   if (igShortcut_Nil(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) {
-    ts->playback_speed = imax(--ts->playback_speed, 1);
+    ts->gui_playback_speed = imax(--ts->playback_speed, 1);
   }
   if (igShortcut_Nil(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat | ImGuiInputFlags_RouteGlobal)) {
-    ++ts->playback_speed;
+    ++ts->gui_playback_speed;
   }
 
   igSameLine(0, 8);
@@ -427,7 +429,7 @@ void render_timeline_controls(timeline_state_t *ts) {
   igText("Playback Speed:");
   igSameLine(0, 4);
   igSetNextItemWidth(150);
-  igSliderInt("##Speed", &ts->playback_speed, 1, 100, "%d", ImGuiSliderFlags_None);
+  igSliderInt("##Speed", &ts->gui_playback_speed, 1, 100, "%d", ImGuiSliderFlags_None);
 
   igSameLine(0, 20);
   bool was_recording = ts->recording;
@@ -442,8 +444,13 @@ void render_timeline_controls(timeline_state_t *ts) {
       }
       if (!is_in_way) {
         ts->recording = !ts->recording;
-        if (!ts->recording)
+        if (!ts->recording) {
+          if (!ts->recording_snippet->input_count) {
+            const player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
+            remove_snippet_from_track(ts, track, ts->recording_snippet->id);
+          }
           ts->recording_snippet = NULL;
+        }
       }
     }
   }
@@ -892,41 +899,42 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
 // main render function
 void render_timeline(timeline_state_t *ts) {
   ImGuiIO *io = igGetIO_Nil();
+  ts->playback_speed = ts->gui_playback_speed;
 
   if (ts->recording && igIsKeyPressed_Bool(ImGuiKey_F, false)) {
-    if (ts->recording_snippet && ts->current_tick > ts->recording_snippet->start_tick) {
+    if (ts->recording_snippet && ts->current_tick >= ts->recording_snippet->start_tick) {
       resize_snippet_inputs(ts->recording_snippet, ts->current_tick - ts->recording_snippet->start_tick);
       ts->recording_snippet->end_tick = ts->current_tick;
       if (ts->recording_snippet->input_count > 0)
         ts->recording_snippet->inputs[ts->recording_snippet->input_count - 1] = ts->recording_input;
     }
   }
+  bool reverse = igIsKeyDown_Nil(ImGuiKey_C);
+  if (reverse)
+    ts->playback_speed *= 2.f;
 
   if (igIsKeyPressed_Bool(ImGuiKey_C, false)) {
     ts->is_playing = 0;
-    ts->last_update_time = igGetTime();
+    ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
   }
 
   if (igIsKeyPressed_Bool(ImGuiKey_X, ImGuiInputFlags_Repeat)) {
     ts->is_playing ^= 1;
     if (ts->is_playing) {
-      ts->last_update_time = igGetTime();
+      ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
     }
   }
 
-  bool reverse = igIsKeyDown_Nil(ImGuiKey_C);
   if ((ts->is_playing || reverse) && ts->playback_speed > 0.0f) {
     double current_time = igGetTime();
     double elapsed_time = current_time - ts->last_update_time;
-    double tick_interval = 1.0 / (double)ts->playback_speed; // Time per tick in seconds
+    double tick_interval = 1.0 / ((double)ts->playback_speed); // Time per tick in seconds
 
     bool record = true;
     // make sure to reverse all the way no matter the step size here
-    int reverse_speed =
-        ts->recording ? imin(2, ts->current_tick - (ts->recording_snippet->start_tick + 1)) : 2;
 
     // don't record behind recording input snippet
-    if (reverse && ts->recording && ts->current_tick <= ts->recording_snippet->start_tick)
+    if (reverse && ts->recording && ts->current_tick < ts->recording_snippet->start_tick)
       record = false;
     if (ts->recording && check_for_overlap(&ts->player_tracks[ts->selected_player_track_index],
                                            ts->current_tick, ts->current_tick + 1, ts->recording_snippet->id))
@@ -935,7 +943,7 @@ void render_timeline(timeline_state_t *ts) {
     // Accumulate elapsed time and advance ticks as needed
     if (record)
       while (elapsed_time >= tick_interval) {
-        advance_tick(ts, reverse ? -reverse_speed : 1);
+        advance_tick(ts, reverse ? -1 : 1);
         elapsed_time -= tick_interval;
         ts->last_update_time = current_time - elapsed_time;
       }
@@ -1226,6 +1234,7 @@ void timeline_init(timeline_state_t *ts) {
   ts->previous_world = wc_empty();
 
   // Initialize Timeline State variables
+  ts->gui_playback_speed = 50;
   ts->playback_speed = 50;
   ts->is_playing = 0;
   ts->current_tick = 0;
@@ -1283,7 +1292,8 @@ void timeline_cleanup(timeline_state_t *ts) {
   ts->next_snippet_id = 1;
   ts->is_header_dragging = false;
   ts->is_playing = false;
-  ts->playback_speed = 0;
+  ts->playback_speed = 50;
+  ts->gui_playback_speed = 50;
   ts->last_update_time = 0.0;
 
   // reset drag state

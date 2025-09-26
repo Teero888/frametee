@@ -1,4 +1,5 @@
 #include "user_interface.h"
+#include "../../libs/symbols.h"
 #include "../animation/anim_data.h"
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
@@ -389,8 +390,26 @@ void camera_init(camera_t *camera) {
 }
 
 void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
+  ImGuiIO *io = igGetIO_Nil();
+  ImFontAtlas *atlas = io->Fonts;
+  // ImFont *font = ImFontAtlas_AddFontFromFileTTF(
+  //     io->Fonts, "/home/teero/.local/share/fonts/Inter-VariableFont_opsz,wght.ttf", 18.f, NULL, NULL);
+  ImFontAtlas_AddFontDefault(atlas, NULL);
+
+  // load material icons font
+  ImFontConfig *config = ImFontConfig_ImFontConfig();
+  config->MergeMode = true;
+  config->GlyphMinAdvanceX = 13.0f;
+
+  static const ImWchar icon_ranges[] = {ICON_MIN_FA, ICON_MAX_FA, 0};
+  ImFont *icon_font = ImFontAtlas_AddFontFromFileTTF(
+      io, "/home/teero/.local/share/fonts/fontawesome-webfont.ttf", 13.0f, config, icon_ranges);
+
+  ImFontConfig_destroy(config);
+
   ui->gfx_handler = gfx_handler;
-  ui->show_timeline = false;
+  ui->show_timeline = true;
+  ui->show_prediction = true;
   timeline_init(&ui->timeline);
   camera_init(&gfx_handler->renderer.camera);
   NFD_Init();
@@ -525,9 +544,10 @@ void render_players(ui_handler_t *ui) {
     renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir,
                                 &anim_state); // normal eyes
 
-    if (i == gfx->user_interface.timeline.selected_player_track_index)
-      renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(core->m_Vel) / 32.f, p[1] + vgety(core->m_Vel) / 32.f},
-                         (vec4){1.f, 0.f, 0.f, 1.f}, 0.05);
+    // if (i == gfx->user_interface.timeline.selected_player_track_index)
+    //   renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(core->m_Vel) / 32.f, p[1] + vgety(core->m_Vel)
+    //   / 32.f},
+    //                      (vec4){1.f, 0.f, 0.f, 1.f}, 0.05);
 
     if (core->m_HookState >= 1)
       renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
@@ -554,8 +574,6 @@ void render_players(ui_handler_t *ui) {
 
     vec4 lsr_col = (vec4){0.f, 0.f, 1.f, 0.9f};
     vec4 sg_col = (vec4){0.570315f, 0.4140625f, 025.f, 0.9f};
-    if (ent->m_Type != WEAPON_LASER)
-      printf("SG!!\n");
 
     renderer_draw_line(gfx, p0, p1, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 0.25f);
     renderer_draw_circle_filled(gfx, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);
@@ -597,6 +615,22 @@ void render_players(ui_handler_t *ui) {
   }
 
   if (ui->timeline.selected_player_track_index >= 0 && ui->show_prediction) {
+    // draw the first line from the currently interpolated position to the actual position
+    for (int p = 0; p < world.m_NumCharacters; ++p) {
+      SCharacterCore *core = &world.m_pCharacters[ui->timeline.selected_player_track_index];
+      vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+      vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+      vec2 p;
+      lerp(ppp, pp, intra, p);
+
+      vec4 color = {[3] = 0.8f};
+      if (core->m_FreezeTime > 0)
+        color[0] = 1.f;
+      else
+        color[1] = 1.f;
+      renderer_draw_line(gfx, pp, p, color, 0.05);
+    }
+
     for (int i = 0; i < 100; ++i) {
       for (int p = 0; p < world.m_NumCharacters; ++p) {
         SPlayerInput input = ui->timeline.recording && p == ui->timeline.selected_player_track_index
