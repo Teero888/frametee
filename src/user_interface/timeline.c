@@ -2,6 +2,7 @@
 #include "../../libs/symbols.h"
 #include "cimgui.h"
 #include <GLFW/glfw3.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,6 +53,12 @@ SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick) {
   return (SPlayerInput){.m_TargetY = -1};
 }
 
+static void recalc_ts(timeline_state_t *ts, int tick)
+{
+    ts->vec.current_size = imin(ts->vec.current_size, imax((tick - 1) / 50, 1));
+    ts->previous_world.m_GameTick = INT_MAX;
+}
+
 void init_snippet_inputs(input_snippet_t *snippet) {
   int duration = snippet->end_tick - snippet->start_tick;
   if (duration <= 0) {
@@ -81,7 +88,7 @@ void free_snippet_inputs(input_snippet_t *snippet) {
   snippet->input_count = 0;
 }
 
-void resize_snippet_inputs(input_snippet_t *snippet, int new_duration) {
+void resize_snippet_inputs(timeline_state_t *t, input_snippet_t *snippet, int new_duration) {
   if (new_duration <= 0) {
     free_snippet_inputs(snippet);
     snippet->start_tick = snippet->end_tick;
@@ -98,6 +105,12 @@ void resize_snippet_inputs(input_snippet_t *snippet, int new_duration) {
     memset(&snippet->inputs[snippet->input_count], 0,
            (new_duration - snippet->input_count) * sizeof(SPlayerInput));
   }
+  snippet->end_tick = snippet->start_tick + new_duration;
+
+  // recalculate rendering
+  if (new_duration < snippet->input_count && snippet->end_tick <= t->current_tick)
+    recalc_ts(t, snippet->start_tick - 1);
+
   snippet->input_count = new_duration;
 }
 
@@ -128,7 +141,7 @@ void advance_tick(timeline_state_t *ts, int steps) {
   if (ts->recording_snippet && ts->current_tick < ts->recording_snippet->start_tick)
     ts->current_tick -= steps;
   if (ts->recording_snippet && ts->current_tick > ts->recording_snippet->end_tick) {
-    resize_snippet_inputs(ts->recording_snippet, ts->current_tick - ts->recording_snippet->start_tick);
+    resize_snippet_inputs(ts, ts->recording_snippet, ts->current_tick - ts->recording_snippet->start_tick);
     ts->recording_snippet->end_tick = ts->current_tick;
     if (ts->recording_snippet->input_count > 0)
       ts->recording_snippet->inputs[ts->recording_snippet->input_count - 1] = ts->recording_input;
@@ -236,9 +249,7 @@ bool remove_snippet_from_track(timeline_state_t *t, player_track_t *track, int s
   if (found_idx != -1) {
     free_snippet_inputs(&track->snippets[found_idx]);
 
-    t->vec.current_size =
-        imin(t->vec.current_size, imax((track->snippets[found_idx].start_tick - 1) / 50, 1));
-    t->previous_world.m_GameTick = (1U << 31U) - 1U;
+    recalc_ts(t, track->snippets[found_idx].start_tick);
 
     memmove(&track->snippets[found_idx], &track->snippets[found_idx + 1],
             (track->snippet_count - found_idx - 1) * sizeof(input_snippet_t));
@@ -320,13 +331,11 @@ bool try_move_snippet(timeline_state_t *ts, int snippet_id, int source_track_idx
     sn->start_tick = new_start_tick;
     sn->end_tick = new_end_tick;
     int new_duration = new_end_tick - new_start_tick;
-    resize_snippet_inputs(sn, new_duration);
+    resize_snippet_inputs(ts, sn, new_duration);
     ts->selected_snippet_id = snippet_id;
     ts->selected_player_track_index = source_track_idx;
 
-    ts->vec.current_size =
-        imin(ts->vec.current_size, imax((imin(new_start_tick, old_start_tick) - 1) / 50, 1));
-    ts->previous_world.m_GameTick = (1U << 31U) - 1U; // INT_MAX
+    recalc_ts(ts, imin(new_start_tick, old_start_tick));
   } else {
     // cross track deep copy
     snippet_to_move.start_tick = new_start_tick;
@@ -780,7 +789,7 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
           }
 
           // Adjust original (left-hand) snippet
-          resize_snippet_inputs(snippet, offset);
+          resize_snippet_inputs(ts,snippet, offset);
           snippet->end_tick = split_tick;
 
           // Insert the right-hand snippet into the track
@@ -902,7 +911,7 @@ void render_timeline(timeline_state_t *ts) {
 
   if (ts->recording && igIsKeyPressed_Bool(ImGuiKey_F, false)) {
     if (ts->recording_snippet && ts->current_tick >= ts->recording_snippet->start_tick) {
-      resize_snippet_inputs(ts->recording_snippet, ts->current_tick - ts->recording_snippet->start_tick);
+      resize_snippet_inputs(ts,ts->recording_snippet, (ts->current_tick - ts->recording_snippet->start_tick) + 1);
       ts->recording_snippet->end_tick = ts->current_tick;
       if (ts->recording_snippet->input_count > 0)
         ts->recording_snippet->inputs[ts->recording_snippet->input_count - 1] = ts->recording_input;

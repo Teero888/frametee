@@ -308,7 +308,7 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
         if (g_remove_confirm_needed && ts->player_tracks[i].snippet_count > 0) {
           g_pending_remove_index = i;
           igPopID();
-          igOpenPopup_Str("ConfirmRemovePlayer", ImGuiPopupFlags_AnyPopupLevel);
+          igOpenPopup_Str("Confirm remove player", ImGuiPopupFlags_AnyPopupLevel);
           igPushID_Int(i);
         } else {
           remove_player(ts, ph, i);
@@ -319,7 +319,7 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
     if (ts->player_track_count > 0)
       igSeparator();
 
-    if (igBeginPopupModal("ConfirmRemovePlayer", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (igBeginPopupModal("Confirm remove player", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
       igText("This player has inputs. Remove anyway?");
       static bool dont_ask_again = false;
       igCheckbox("Do not ask again", &dont_ask_again);
@@ -394,8 +394,8 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ImGuiIO *io = igGetIO_Nil();
   ImFontAtlas *atlas = io->Fonts;
 
-  ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/JetBrainsMono-Medium.ttf", 19.f,
-                                            NULL, NULL);
+  ui->font =
+      ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/JetBrainsMono-Medium.ttf", 19.f, NULL, NULL);
 
   ImFontConfig *config = ImFontConfig_ImFontConfig();
   config->MergeMode = true;
@@ -442,12 +442,16 @@ void render_players(ui_handler_t *ui) {
 
   const int step = 50;
   int target_tick = ui->timeline.current_tick;
+
+  // DEBUG:
+  // wc_copy_world(&world, &ui->timeline.vec.data[0]);
   if (target_tick < ui->timeline.previous_world.m_GameTick)
     wc_copy_world(
         &world,
         &ui->timeline.vec.data[iclamp((target_tick - 1) / step, 0, ui->timeline.vec.current_size - 1)]);
   else
     wc_copy_world(&world, &ui->timeline.previous_world);
+
   if (ui->timeline.player_track_count != world.m_NumCharacters) {
     wc_free(&world);
     return;
