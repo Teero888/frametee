@@ -564,16 +564,34 @@ void render_players(ui_handler_t *ui) {
 
     vec2 dir = (vec2){core->m_Input.m_TargetX, core->m_Input.m_TargetY};
     glm_vec2_normalize(dir);
-    int skin = gfx->user_interface.timeline.player_tracks[i].player_info.skin;
+    player_info_t *info = &gfx->user_interface.timeline.player_tracks[i].player_info;
+    int skin = info->skin;
     int eye = get_flag_eye_state(&core->m_Input);
+    vec3 feet_col = {1.f, 1.f, 1.f};
+    vec3 body_col = {};
+    bool custom_col = info->use_custom_color;
     // TODO: implement spec in the physics properly
     if (core->m_FreezeTime > 0) {
       skin = gfx->x_ninja_skin;
       if (eye == 0)
         eye = EYE_BLINK;
+      custom_col = false;
     }
-    renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir,
-                                &anim_state); // normal eyes
+    if (custom_col) {
+      memcpy(feet_col, info->color_feet, 3 * sizeof(float));
+      memcpy(body_col, info->color_body, 3 * sizeof(float));
+    }
+    if (core->m_JumpedTotal >= core->m_Jumps - 1) {
+      if (custom_col) {
+        feet_col[0] *= 0.5f;
+        feet_col[1] *= 0.5f;
+        feet_col[2] *= 0.5f;
+      } else {
+        feet_col[0] = 0.5f;
+      }
+    }
+
+    renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
 
     // if (i == gfx->user_interface.timeline.selected_player_track_index)
     //   renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(core->m_Vel) / 32.f, p[1] + vgety(core->m_Vel)

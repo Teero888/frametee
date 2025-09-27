@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <string.h>
 
-// todo: make list of already loaded skins to avoid duplicates
 void render_player_info(gfx_handler_t *h) {
   player_info_t *player_info =
       &h->user_interface.timeline.player_tracks[h->user_interface.timeline.selected_player_track_index]
@@ -19,8 +18,12 @@ void render_player_info(gfx_handler_t *h) {
     igInputInt("Skin Id", &player_info->skin, 1, 1, 0);
     igCheckbox("Use custom color", &player_info->use_custom_color);
     if (player_info->use_custom_color) {
-      igColorPicker3("Color", player_info->color, 0);
+      igColorEdit3("Color body", player_info->color_body, 0);
+      igColorEdit3("Color feet", player_info->color_feet, 0);
     }
+    if (igButton("Apply info to all players", (ImVec2){}))
+      for (int i = 0; i < h->user_interface.timeline.player_track_count; ++i)
+        memcpy(&h->user_interface.timeline.player_tracks[i].player_info, player_info, sizeof(player_info_t));
   }
   igEnd();
 }
