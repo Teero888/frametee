@@ -10,6 +10,7 @@
 #include <limits.h>
 #include <nfd.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -90,13 +91,13 @@ void setup_docking(ui_handler_t *ui) {
     // Split root into bottom + top remainder
     ImGuiID dock_id_top;
     ImGuiID dock_id_bottom =
-        igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.30f, NULL, &dock_id_top);
+        igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.20f, NULL, &dock_id_top);
 
     // Split top remainder into left + remainder
     ImGuiID dock_id_left;
     ImGuiID dock_id_center; // this will be "viewport"
     ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.25f, NULL, &dock_id_center);
-    dock_id_left = igDockBuilderSplitNode(dock_id_center, ImGuiDir_Left, 0.25f, NULL, &dock_id_center);
+    dock_id_left = igDockBuilderSplitNode(dock_id_center, ImGuiDir_Left, 0.40f, NULL, &dock_id_center);
 
     // now dock_id_center is the leftover = central piece
     igDockBuilderDockWindow("viewport", dock_id_center);
@@ -137,7 +138,7 @@ void render_snippet_editor_panel(timeline_state_t *ts) {
 
         // Begin table with columns
         if (igBeginTable("SnippetInputsTable", 9, flags, (ImVec2){0, 0}, 0)) {
-
+          igTableSetupScrollFreeze(0, 1); // freeze top row
           // Setup column headers
           igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 0.0f, 0);
           igTableSetupColumn("Dir", ImGuiTableColumnFlags_WidthFixed, 0.0f, 1);
@@ -151,81 +152,105 @@ void render_snippet_editor_panel(timeline_state_t *ts) {
 
           igTableHeadersRow();
 
-          // Iterate over inputs
-          for (int i = 0; i < snippet->input_count; i++) {
-            SPlayerInput *inp = &snippet->inputs[i];
-            igTableNextRow(ImGuiTableRowFlags_None, 0.0f);
+          float row_height = igGetTextLineHeightWithSpacing();
 
-            // Tick (read-only display)
-            igTableSetColumnIndex(0);
-            igText("%d", snippet->start_tick + i);
+          ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
+          ImGuiListClipper_Begin(clipper, snippet->input_count, row_height);
 
-            // Direction: plain int input (-1, 0, 1)
-            igTableSetColumnIndex(1);
-            igPushID_Int(i * 10 + 1);
-            int dir_temp = (int)inp->m_Direction;    // promote to int
-            igInputInt("##Dir", &dir_temp, 0, 0, 0); // edit as int
-            dir_temp = iclamp(dir_temp, -1, 1);
-            if (dir_temp != (int)inp->m_Direction)
-              inp->m_Direction = (int8_t)dir_temp;
-            igPopID();
+          while (ImGuiListClipper_Step(clipper)) {
+            for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; ++i) {
+              SPlayerInput *inp = &snippet->inputs[i];
+              igTableNextRow(ImGuiTableRowFlags_None, 0.0f);
 
-            // Target X: full int range, no buttons
-            igTableSetColumnIndex(2);
-            igPushID_Int(i * 10 + 2);
-            igInputInt("##TX", &inp->m_TargetX, 0, 0, 0);
-            igPopID();
+              igTableSetColumnIndex(0);
+              igText("%d", snippet->start_tick + i);
 
-            // Target Y: full int range, no buttons
-            igTableSetColumnIndex(3);
-            igPushID_Int(i * 10 + 3);
-            igInputInt("##TY", &inp->m_TargetY, 0, 0, 0);
-            igPopID();
+              igTableSetColumnIndex(1);
+              igPushID_Int(i * 10 + 1);
+              int dir_temp = (int)inp->m_Direction;
+              igInputInt("##Dir", &dir_temp, 0, 0, 0);
+              dir_temp = iclamp(dir_temp, -1, 1);
+              if (dir_temp != (int)inp->m_Direction) {
+                inp->m_Direction = (int8_t)dir_temp;
+                recalc_ts(ts, snippet->start_tick + i);
+              }
+              igPopID();
 
-            // TeleOut: keep as is, but remove buttons
-            igTableSetColumnIndex(4);
-            igPushID_Int(i * 10 + 4);
-            int tele_temp = (int)inp->m_TeleOut;
-            igInputInt("##TO", &tele_temp, 0, 0, 0);
-            tele_temp = iclamp(tele_temp, 0, 4);
-            if (tele_temp != (int)inp->m_TeleOut)
-              inp->m_TeleOut = (uint8_t)tele_temp;
-            igPopID();
+              igTableSetColumnIndex(2);
+              igPushID_Int(i * 10 + 2);
+              int target_x = (int)inp->m_TargetX;
+              igInputInt("##TX", &target_x, 0, 0, 0);
+              target_x = iclamp(target_x, INT16_MIN, INT16_MAX);
+              if (target_x != (int)inp->m_TargetX) {
+                inp->m_TargetX = (int16_t)target_x;
+                recalc_ts(ts, snippet->start_tick + i);
+              }
+              igPopID();
 
-            // Jump (Checkbox)
-            igTableSetColumnIndex(5);
-            igPushID_Int(i * 10 + 5);
-            bool jump = inp->m_Jump;
-            if (igCheckbox("##J", &jump))
-              inp->m_Jump = jump;
-            igPopID();
+              // Target Y: full int range, no buttons
+              igTableSetColumnIndex(3);
+              igPushID_Int(i * 10 + 3);
+              int target_y = (int)inp->m_TargetY;
+              igInputInt("##TY", &target_y, 0, 0, 0);
+              target_y = iclamp(target_y, INT16_MIN, INT16_MAX);
+              if (target_y != (int)inp->m_TargetY) {
+                inp->m_TargetY = (int16_t)target_y;
+                recalc_ts(ts, snippet->start_tick + i);
+              }
+              igPopID();
 
-            // Fire (Checkbox)
-            igTableSetColumnIndex(6);
-            igPushID_Int(i * 10 + 6);
-            bool fire = inp->m_Fire;
-            if (igCheckbox("##F", &fire))
-              inp->m_Fire = fire;
-            igPopID();
+              igTableSetColumnIndex(4);
+              igPushID_Int(i * 10 + 4);
+              int tele_temp = (int)inp->m_TeleOut;
+              igInputInt("##TO", &tele_temp, 0, 0, 0);
+              tele_temp = iclamp(tele_temp, 0, 4);
+              if (tele_temp != (int)inp->m_TeleOut) {
+                inp->m_TeleOut = (uint8_t)tele_temp;
+                recalc_ts(ts, snippet->start_tick + i);
+              }
+              igPopID();
 
-            // Hook (Checkbox)
-            igTableSetColumnIndex(7);
-            igPushID_Int(i * 10 + 7);
-            bool hook = inp->m_Hook;
-            if (igCheckbox("##H", &hook))
-              inp->m_Hook = hook;
-            igPopID();
+              igTableSetColumnIndex(5);
+              igPushID_Int(i * 10 + 5);
+              bool jump = inp->m_Jump;
+              if (igCheckbox("##J", &jump)) {
+                inp->m_Jump = jump;
+                recalc_ts(ts, snippet->start_tick + i);
+              }
+              igPopID();
 
-            // weapon
-            igTableSetColumnIndex(8);
-            igPushID_Int(i * 10 + 8);
-            int wpn_temp = (int)inp->m_WantedWeapon;
-            igInputInt("##Wpn", &wpn_temp, 0, 0, 0);
-            wpn_temp = iclamp(wpn_temp, 0, 4);
-            if (wpn_temp != (int)inp->m_WantedWeapon)
-              inp->m_WantedWeapon = (int8_t)wpn_temp;
-            igPopID();
+              igTableSetColumnIndex(6);
+              igPushID_Int(i * 10 + 6);
+              bool fire = inp->m_Fire;
+              if (igCheckbox("##F", &fire)) {
+                inp->m_Fire = fire;
+                recalc_ts(ts, snippet->start_tick + i);
+              }
+              igPopID();
+
+              igTableSetColumnIndex(7);
+              igPushID_Int(i * 10 + 7);
+              bool hook = inp->m_Hook;
+              if (igCheckbox("##H", &hook)) {
+                inp->m_Hook = hook;
+                recalc_ts(ts, snippet->start_tick + i);
+              }
+              igPopID();
+
+              igTableSetColumnIndex(8);
+              igPushID_Int(i * 10 + 8);
+              int wpn = (int)inp->m_WantedWeapon;
+              igInputInt("##Wpn", &wpn, 0, 0, 0);
+              wpn = iclamp(wpn, 0, 4);
+              if (wpn != (int)inp->m_WantedWeapon) {
+                inp->m_WantedWeapon = (int8_t)wpn;
+                recalc_ts(ts, snippet->start_tick + i);
+              }
+              igPopID();
+            }
           }
+          ImGuiListClipper_End(clipper);
+          ImGuiListClipper_destroy(clipper);
 
           igEndTable();
         }
@@ -293,7 +318,7 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
       igPushID_Int(i);
       bool sel = (i == ts->selected_player_track_index);
       const char *label =
-          ts->player_tracks[i].player_info.name[0] ? ts->player_tracks[i].player_info.name : "(Unnamed)";
+          ts->player_tracks[i].player_info.name[0] ? ts->player_tracks[i].player_info.name : "nameless tee";
 
       // Selectable only
       igSetNextItemAllowOverlap();
@@ -342,6 +367,8 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
 }
 
 void on_camera_update(gfx_handler_t *handler, bool hovered) {
+  if (!handler->map_data || !handler->map_data->game_layer.data)
+    return;
   camera_t *camera = &handler->renderer.camera;
   ImGuiIO *io = igGetIO_Nil();
 

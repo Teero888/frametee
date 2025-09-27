@@ -53,10 +53,9 @@ SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick) {
   return (SPlayerInput){.m_TargetY = -1};
 }
 
-static void recalc_ts(timeline_state_t *ts, int tick)
-{
-    ts->vec.current_size = imin(ts->vec.current_size, imax((tick - 1) / 50, 1));
-    ts->previous_world.m_GameTick = INT_MAX;
+void recalc_ts(timeline_state_t *ts, int tick) {
+  ts->vec.current_size = imin(ts->vec.current_size, imax((tick - 1) / 50, 1));
+  ts->previous_world.m_GameTick = INT_MAX;
 }
 
 void init_snippet_inputs(input_snippet_t *snippet) {
@@ -789,7 +788,7 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
           }
 
           // Adjust original (left-hand) snippet
-          resize_snippet_inputs(ts,snippet, offset);
+          resize_snippet_inputs(ts, snippet, offset);
           snippet->end_tick = split_tick;
 
           // Insert the right-hand snippet into the track
@@ -911,7 +910,8 @@ void render_timeline(timeline_state_t *ts) {
 
   if (ts->recording && igIsKeyPressed_Bool(ImGuiKey_F, false)) {
     if (ts->recording_snippet && ts->current_tick >= ts->recording_snippet->start_tick) {
-      resize_snippet_inputs(ts,ts->recording_snippet, (ts->current_tick - ts->recording_snippet->start_tick) + 1);
+      resize_snippet_inputs(ts, ts->recording_snippet,
+                            (ts->current_tick - ts->recording_snippet->start_tick) + 1);
       ts->recording_snippet->end_tick = ts->current_tick;
       if (ts->recording_snippet->input_count > 0)
         ts->recording_snippet->inputs[ts->recording_snippet->input_count - 1] = ts->recording_input;
@@ -1341,13 +1341,14 @@ void v_push(physics_v_t *t, SWorldCore *world) {
   if (t->current_size > t->max_size) {
     t->max_size *= 2;
     t->data = realloc(t->data, t->max_size * sizeof(SWorldCore));
+    for (int i = t->max_size / 2; i < t->max_size; ++i)
+      t->data[i] = wc_empty();
   }
-  t->data[t->current_size - 1] = wc_empty();
   wc_copy_world(&t->data[t->current_size - 1], world);
 }
 
 void v_destroy(physics_v_t *t) {
-  for (int i = 0; i < t->current_size; ++i)
+  for (int i = 0; i < t->max_size; ++i)
     wc_free(&t->data[i]);
   free(t->data);
   t->current_size = 0;
