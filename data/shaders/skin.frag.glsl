@@ -15,6 +15,7 @@ layout(location = 7) flat in vec2 frag_dir;
 layout(location = 8) flat in vec3 frag_col_body;
 layout(location = 9) flat in vec3 frag_col_feet;
 layout(location = 10) flat in int frag_col_custom;
+layout(location = 11) flat in int frag_col_gs;
 
 layout(location = 0) out vec4 out_color;
 
@@ -44,7 +45,13 @@ vec4 sample_skin_tinted(part_info_t part, vec2 frag_uv, int skin_index, vec3 tin
   if (src.a <= 0.0001)
     return vec4(0.0);
 
-  return vec4(tint * luminance(src.rgb), src.a);
+  int v = int(luminance(src.rgb) * 255.0 + 0.5);
+  if (v <= frag_col_gs) {
+    v = int(float(v) / float(frag_col_gs) * 192.0 + 0.5);
+  } else {
+    v = int(float(v - frag_col_gs) / float(255 - frag_col_gs) * (255 - 192) + 192.0 + 0.5);
+  }
+  return vec4(tint * float(v) / 255.0, src.a);
 }
 
 vec4 sample_skin_feet(part_info_t part, vec2 frag_uv, int skin_index, float col) {

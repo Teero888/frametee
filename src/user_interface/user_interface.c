@@ -7,6 +7,7 @@
 #include "cimgui.h"
 #include "player_info.h"
 #include "timeline.h"
+#include "widgets/hsl_colorpicker.h"
 #include <limits.h>
 #include <nfd.h>
 #include <stdbool.h>
@@ -578,8 +579,8 @@ void render_players(ui_handler_t *ui) {
       custom_col = false;
     }
     if (custom_col) {
-      memcpy(feet_col, info->color_feet, 3 * sizeof(float));
-      memcpy(body_col, info->color_body, 3 * sizeof(float));
+      packed_hsl_to_rgb(info->color_body, body_col);
+      packed_hsl_to_rgb(info->color_feet, feet_col);
     }
     if (core->m_JumpedTotal >= core->m_Jumps - 1) {
       if (custom_col) {

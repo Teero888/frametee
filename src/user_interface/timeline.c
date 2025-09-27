@@ -1217,8 +1217,8 @@ player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
     memset(new_track->player_info.name, 0, sizeof(new_track->player_info.name));
     memset(new_track->player_info.clan, 0, sizeof(new_track->player_info.clan));
     new_track->player_info.skin = 0;
-    memset(new_track->player_info.color_feet, 0, 3 * sizeof(float));
-    memset(new_track->player_info.color_body, 0, 3 * sizeof(float));
+    new_track->player_info.color_feet = 0;
+    new_track->player_info.color_body = 0;
     new_track->player_info.use_custom_color = 0;
   }
 

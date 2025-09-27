@@ -35,6 +35,7 @@ typedef struct {
   uint32_t mip_levels;
   uint32_t layer_count;
   char path[256];
+  uint8_t gs_org; // ddnet grayscale shit for coloring skins
 } texture_t;
 
 typedef struct {
@@ -113,6 +114,7 @@ typedef struct {
   vec3 col_body;
   vec3 col_feet;
   int col_custom;
+  int col_gs;
 } skin_instance_t;
 
 typedef struct {

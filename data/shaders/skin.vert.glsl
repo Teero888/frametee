@@ -16,6 +16,7 @@ layout(location = 9) in vec2 anim_dir;
 layout(location = 10) in vec3 col_body;
 layout(location = 11) in vec3 col_feet;
 layout(location = 12) in int col_custom;
+layout(location = 13) in int col_gs;
 
 layout(location = 0) out vec2 frag_uv;
 layout(location = 1) flat out int frag_skin_index;
@@ -28,6 +29,7 @@ layout(location = 7) flat out vec2 frag_dir;
 layout(location = 8) flat out vec3 frag_col_body;
 layout(location = 9) flat out vec3 frag_col_feet;
 layout(location = 10) flat out int frag_col_custom;
+layout(location = 11) flat out int frag_col_gs;
 
 layout(binding = 0) uniform primitive_ubo {
     vec2 cam_pos;
@@ -58,4 +60,5 @@ void main() {
 	frag_col_body = col_body;
 	frag_col_feet = col_feet;
 	frag_col_custom = col_custom;
+	frag_col_gs = col_gs;
 }

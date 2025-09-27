@@ -9,8 +9,8 @@ typedef struct {
   char name[32];
   char clan[32];
   int skin; // id
-  float color_body[3];
-  float color_feet[3];
+  uint32_t color_body;
+  uint32_t color_feet;
   bool use_custom_color;
 } player_info_t;
 

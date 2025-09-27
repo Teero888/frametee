@@ -3,6 +3,7 @@
 #include "cimgui.h"
 #include "nfd.h"
 #include "timeline.h"
+#include "widgets/hsl_colorpicker.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -18,8 +19,8 @@ void render_player_info(gfx_handler_t *h) {
     igInputInt("Skin Id", &player_info->skin, 1, 1, 0);
     igCheckbox("Use custom color", &player_info->use_custom_color);
     if (player_info->use_custom_color) {
-      igColorEdit3("Color body", player_info->color_body, 0);
-      igColorEdit3("Color feet", player_info->color_feet, 0);
+      PackedHSLPicker("Color body", &player_info->color_body);
+      PackedHSLPicker("Color feet", &player_info->color_feet);
     }
     if (igButton("Apply info to all players", (ImVec2){}))
       for (int i = 0; i < h->user_interface.timeline.player_track_count; ++i)

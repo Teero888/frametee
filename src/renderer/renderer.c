@@ -1,6 +1,7 @@
 #include "renderer.h"
 #include "graphics_backend.h"
 #include <cglm/cglm.h>
+#include <stdint.h>
 #include <vulkan/vulkan_core.h>
 
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -50,7 +51,7 @@ static VkVertexInputBindingDescription mesh_binding_description;
 static VkVertexInputAttributeDescription mesh_attribute_descriptions[3];
 // skin instancing
 static VkVertexInputBindingDescription skin_binding_desc[2];
-static VkVertexInputAttributeDescription skin_attrib_descs[13];
+static VkVertexInputAttributeDescription skin_attrib_descs[14];
 
 static void setup_vertex_descriptions();
 
@@ -1421,6 +1422,10 @@ static void setup_vertex_descriptions() {
                                           .location = 12,
                                           .format = VK_FORMAT_R32_SINT,
                                           .offset = offsetof(skin_instance_t, col_custom)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
+                                                               .location = 13,
+                                                               .format = VK_FORMAT_R32_SINT,
+                                                               .offset = offsetof(skin_instance_t, col_gs)};
 }
 
 // primitive drawing implementation
@@ -1707,6 +1712,7 @@ void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int sk
   memcpy(sr->instance_ptr[i].col_body, col_body, 3 * sizeof(float));
   memcpy(sr->instance_ptr[i].col_feet, col_feet, 3 * sizeof(float));
   sr->instance_ptr[i].col_custom = use_custom_color;
+  sr->instance_ptr[i].col_gs = h->renderer.skin_manager.atlas_array[skin_index].gs_org;
 }
 
 void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array) {
@@ -1719,7 +1725,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
 
   // pipeline: 1 UBO + 1 texture
   pipeline_cache_entry_t *pso =
-      get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 13);
+      get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 14);
 
   // prepare camera UBO (same as primitives) ---
   primitive_ubo_t ubo;
@@ -1791,13 +1797,13 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
     return -1;
   }
 
-  // Check dimensions (must be multiple of 256x128)
+  // TODO: ACTUALLY FIX THIS PLS: RN ITS ONLY 256x128 NOT ANY OTHER RES
+  // check dimensions (must be multiple of 256x128)
   if (tex_width % 256 != 0 || tex_height % 128 != 0) {
     fprintf(stderr, "Skin %s has invalid dimensions (%dx%d)\n", path, tex_width, tex_height);
     stbi_image_free(pixels);
     return -1;
   }
-
   renderer_state_t *r = &h->renderer;
   int layer = skin_manager_alloc_layer(r);
   if (layer < 0) {
@@ -1805,6 +1811,36 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
     stbi_image_free(pixels);
     return -1;
   }
+
+  // do ddnet grayscale retard logic
+  uint32_t freq[256] = {0};
+  for (int y = 0; y < 96; ++y) {
+    size_t rowBase = (size_t)y * (size_t)tex_width;
+    for (int x = 0; x < 96; ++x) {
+      size_t idx = (rowBase + (size_t)x) * 4u;
+      unsigned char a = pixels[idx + 3];
+      if (a > 128) {
+        unsigned char r = pixels[idx + 0];
+        unsigned char g = pixels[idx + 1];
+        unsigned char b = pixels[idx + 2];
+
+        uint8_t gray = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        if (gray < 0)
+          gray = 0;
+        if (gray > 255)
+          gray = 255;
+
+        freq[gray]++;
+      }
+    }
+  }
+  uint8_t org_weight = 1;
+  for (int i = 1; i < 256; ++i) {
+    if (freq[org_weight] < freq[i]) {
+      org_weight = (uint8_t)i;
+    }
+  }
+  r->skin_manager.atlas_array[layer].gs_org = org_weight;
 
   // Create staging buffer
   VkDeviceSize image_size = tex_width * tex_height * 4;
