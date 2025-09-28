@@ -51,6 +51,13 @@ typedef struct timeline_state_t {
   int player_track_count;
   int selected_snippet_id;         // ID of the currently selected snippet (-1 if none)
   int selected_player_track_index; // Index of the track containing the selected snippet (-1 if none)
+  // Multi-selection support
+  int selected_snippet_ids[256]; // IDs of selected snippets
+  int selected_snippet_count;    // Number of selected snippets
+  bool selection_box_active;     // Are we currently dragging a selection rectangle?
+  ImVec2 selection_box_start;    // Mouse start pos for selection box
+  ImVec2 selection_box_end;      // Current mouse pos for selection box
+
   timeline_drag_state_t drag_state;
   int next_snippet_id;
   bool is_header_dragging;
@@ -58,6 +65,7 @@ typedef struct timeline_state_t {
   int gui_playback_speed;
   int playback_speed;
   double last_update_time;
+  bool auto_scroll_playhead;
   bool recording;
   input_snippet_t *recording_snippet;
   SPlayerInput recording_input;
