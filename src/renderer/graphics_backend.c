@@ -407,6 +407,8 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
 
   physics_free(&handler->physics_handler);
   physics_init(&handler->physics_handler, map_path);
+  handler->renderer.camera.pos[0] = 0.5f;
+  handler->renderer.camera.pos[1] = 0.5f;
   handler->map_data = &handler->physics_handler.collision.m_MapData;
   if (!handler->map_data->game_layer.data) {
     fprintf(stderr, "Failed to load map data: '%s'\n", map_path);
