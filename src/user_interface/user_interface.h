@@ -3,10 +3,11 @@
 
 #include "player_info.h"
 #include "timeline.h"
+#include "undo_redo.h"
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef struct {
+typedef struct ui_handler {
   bool show_timeline;
   timeline_state_t timeline;
   struct gfx_handler_t *gfx_handler;
@@ -26,6 +27,8 @@ typedef struct {
   int reloadtime;
   int weapon;
   bool weapons[NUM_WEAPONS];
+
+  undo_manager_t undo_manager;
 } ui_handler_t;
 
 void on_camera_update(struct gfx_handler_t *handler, bool hovered);

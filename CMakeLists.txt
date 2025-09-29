@@ -14,6 +14,7 @@ set(SRCS
 	src/physics/physics.c
     src/renderer/renderer.c
     src/renderer/graphics_backend.c
+    src/user_interface/undo_redo.c
     src/user_interface/player_info.c
     src/user_interface/snippet_editor.c
     src/user_interface/timeline.c

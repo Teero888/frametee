@@ -4,6 +4,7 @@
 #include "timeline.h"
 
 // Renders the snippet editor panel
-void render_snippet_editor_panel(timeline_state_t *ts);
+typedef struct ui_handler ui_handler_t;
+void render_snippet_editor_panel(ui_handler_t *ui);
 
 #endif // SNIPPET_EDITOR_H

@@ -2,12 +2,11 @@
 #define UI_TIMELINE_H
 
 #include "../physics/physics.h"
+#include "../renderer/renderer.h"
 #include "player_info.h"
+#include "undo_redo.h"
 #include <cimgui.h>
 #include <stdbool.h>
-#include <stdlib.h>
-
-#include "../renderer/renderer.h"
 
 #define MAX_SNIPPETS_PER_PLAYER 64
 
@@ -55,7 +54,8 @@ typedef struct {
   int capacity;
 } recording_snippet_vector_t;
 
-typedef struct timeline_state_t {
+typedef struct ui_handler ui_handler_t;
+typedef struct timeline_state {
   int current_tick;
   float zoom;          // Pixels per tick
   int view_start_tick; // The tick at the left edge of the timeline view
@@ -84,12 +84,15 @@ typedef struct timeline_state_t {
 
   physics_v_t vec;
   SWorldCore previous_world;
+
+  ui_handler_t *ui;
 } timeline_state_t;
 
-void do_add_snippet(timeline_state_t *ts);
-void do_split_selected_snippets(timeline_state_t *ts);
-void do_delete_selected_snippets(timeline_state_t *ts);
-void do_merge_selected_snippets(timeline_state_t *ts);
+undo_command_t *do_add_snippet(ui_handler_t *ui);
+undo_command_t *do_split_selected_snippets(ui_handler_t *ui);
+undo_command_t *do_delete_selected_snippets(ui_handler_t *ui);
+undo_command_t *do_merge_selected_snippets(ui_handler_t *ui);
+undo_command_t *do_remove_player_track(ui_handler_t *ui, int index);
 
 input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id);
 void free_snippet_inputs(input_snippet_t *snippet);
@@ -99,13 +102,18 @@ input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int d
 void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx);
 int get_max_timeline_tick(timeline_state_t *ts);
 void recalc_ts(timeline_state_t *ts, int tick);
+void process_global_shortcuts(ui_handler_t *ui);
 
-void render_timeline(timeline_state_t *ts);
+void render_timeline(ui_handler_t *ui);
 void timeline_init(timeline_state_t *ts);
 void timeline_cleanup(timeline_state_t *ts);
 
 void v_init(physics_v_t *t);
 void v_push(physics_v_t *t, SWorldCore *world);
 void v_destroy(physics_v_t *t);
+
+undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, const int *indices, int count,
+                                           const SPlayerInput *before_states,
+                                           const SPlayerInput *after_states);
 
 #endif

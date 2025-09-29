@@ -1,6 +1,7 @@
 #include "timeline.h"
 #include "../../libs/symbols.h"
 #include "cimgui.h"
+#include "user_interface.h" // For ui_handler_t and undo_manager
 #include "widgets/imcol.h"
 #include <GLFW/glfw3.h>
 #include <limits.h>
@@ -16,6 +17,389 @@
 #define DEFAULT_TRACK_HEIGHT 40.f
 
 #include "../renderer/graphics_backend.h"
+
+// --- Edit Inputs Command (for Snippet Editor) ---
+typedef struct {
+  undo_command_t base;
+  int snippet_id;
+  int count;
+  int *indices;         // Which ticks within the snippet were changed
+  SPlayerInput *before; // State of inputs before the change
+  SPlayerInput *after;  // State of inputs after the change
+} EditInputsCommand;
+
+static void cleanup_edit_inputs_cmd(undo_command_t *cmd) {
+  EditInputsCommand *c = (EditInputsCommand *)cmd;
+  free(c->indices);
+  free(c->before);
+  free(c->after);
+  free(c);
+}
+
+static void apply_input_states(timeline_state_t *ts, int snippet_id, int count, const int *indices,
+                               const SPlayerInput *states) {
+  input_snippet_t *snippet = NULL;
+  for (int i = 0; i < ts->player_track_count && !snippet; i++) {
+    snippet = find_snippet_by_id(&ts->player_tracks[i], snippet_id);
+  }
+  if (!snippet)
+    return;
+
+  for (int i = 0; i < count; i++) {
+    int idx = indices[i];
+    if (idx >= 0 && idx < snippet->input_count) {
+      snippet->inputs[idx] = states[i];
+    }
+  }
+}
+
+static void undo_edit_inputs(undo_command_t *cmd, timeline_state_t *ts) {
+  EditInputsCommand *c = (EditInputsCommand *)cmd;
+  apply_input_states(ts, c->snippet_id, c->count, c->indices, c->before);
+}
+
+static void redo_edit_inputs(undo_command_t *cmd, timeline_state_t *ts) {
+  EditInputsCommand *c = (EditInputsCommand *)cmd;
+  apply_input_states(ts, c->snippet_id, c->count, c->indices, c->after);
+}
+
+void copy_snippet_inputs(input_snippet_t *dest, const input_snippet_t *src);
+bool remove_snippet_from_track(timeline_state_t *t, player_track_t *track, int snippet_id);
+// --- COMMAND PATTERN IMPLEMENTATION FOR UNDO/REDO ---
+
+// Helper to perform a deep copy of a snippet.
+static void snippet_clone(input_snippet_t *dest, const input_snippet_t *src) {
+  *dest = *src;
+  dest->inputs = NULL;
+  dest->input_count = 0;
+  copy_snippet_inputs(dest, src);
+}
+
+// Helper to insert a snippet into a track, maintaining sorted order by start_tick.
+static void insert_snippet_into_track(player_track_t *track, const input_snippet_t *snippet) {
+  int insert_idx = 0;
+  while (insert_idx < track->snippet_count && track->snippets[insert_idx].start_tick < snippet->start_tick) {
+    insert_idx++;
+  }
+
+  track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * (track->snippet_count + 1));
+  if (insert_idx < track->snippet_count) {
+    memmove(&track->snippets[insert_idx + 1], &track->snippets[insert_idx],
+            (track->snippet_count - insert_idx) * sizeof(input_snippet_t));
+  }
+  track->snippets[insert_idx] = *snippet;
+  track->snippet_count++;
+}
+
+// --- Delete Snippets Command ---
+typedef struct {
+  input_snippet_t snippet_copy;
+  int track_index;
+} DeletedSnippetInfo;
+
+typedef struct {
+  undo_command_t base;
+  DeletedSnippetInfo *deleted_info;
+  int count;
+} DeleteSnippetsCommand;
+
+static void cleanup_delete_cmd(undo_command_t *cmd) {
+  DeleteSnippetsCommand *c = (DeleteSnippetsCommand *)cmd;
+  for (int i = 0; i < c->count; ++i) {
+    free_snippet_inputs(&c->deleted_info[i].snippet_copy);
+  }
+  free(c->deleted_info);
+  free(c);
+}
+
+static void undo_delete_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+  DeleteSnippetsCommand *c = (DeleteSnippetsCommand *)cmd;
+  for (int i = 0; i < c->count; ++i) {
+    player_track_t *track = &ts->player_tracks[c->deleted_info[i].track_index];
+    input_snippet_t new_snip;
+    snippet_clone(&new_snip, &c->deleted_info[i].snippet_copy);
+    insert_snippet_into_track(track, &new_snip);
+  }
+}
+
+static void redo_delete_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+  DeleteSnippetsCommand *c = (DeleteSnippetsCommand *)cmd;
+  for (int i = 0; i < c->count; ++i) {
+    player_track_t *track = &ts->player_tracks[c->deleted_info[i].track_index];
+    remove_snippet_from_track(ts, track, c->deleted_info[i].snippet_copy.id);
+  }
+}
+
+// --- Add Snippet Command ---
+typedef struct {
+  undo_command_t base;
+  int track_index;
+  input_snippet_t snippet_copy; // Store the whole snippet to redo
+} AddSnippetCommand;
+
+static void cleanup_add_cmd(undo_command_t *cmd) {
+  AddSnippetCommand *c = (AddSnippetCommand *)cmd;
+  free_snippet_inputs(&c->snippet_copy);
+  free(c);
+}
+
+static void undo_add_snippet(undo_command_t *cmd, timeline_state_t *ts) {
+  AddSnippetCommand *c = (AddSnippetCommand *)cmd;
+  player_track_t *track = &ts->player_tracks[c->track_index];
+  remove_snippet_from_track(ts, track, c->snippet_copy.id);
+}
+
+static void redo_add_snippet(undo_command_t *cmd, timeline_state_t *ts) {
+  AddSnippetCommand *c = (AddSnippetCommand *)cmd;
+  player_track_t *track = &ts->player_tracks[c->track_index];
+  input_snippet_t new_snip;
+  snippet_clone(&new_snip, &c->snippet_copy);
+  insert_snippet_into_track(track, &new_snip);
+}
+
+// --- Move Snippets Command ---
+typedef struct {
+  int snippet_id;
+  int old_track_index;
+  int new_track_index;
+  int old_start_tick;
+  int new_start_tick;
+} MoveSnippetInfo;
+
+typedef struct {
+  undo_command_t base;
+  MoveSnippetInfo *move_info;
+  int count;
+} MoveSnippetsCommand;
+
+static void cleanup_move_cmd(undo_command_t *cmd) {
+  MoveSnippetsCommand *c = (MoveSnippetsCommand *)cmd;
+  free(c->move_info);
+  free(c);
+}
+
+static void move_snippet_logic(timeline_state_t *ts, int snippet_id, int from_track_idx, int to_track_idx,
+                               int to_start_tick) {
+  player_track_t *source_track = &ts->player_tracks[from_track_idx];
+  input_snippet_t *snippet_to_move = NULL;
+  int snippet_idx_in_source = -1;
+  for (int i = 0; i < source_track->snippet_count; i++) {
+    if (source_track->snippets[i].id == snippet_id) {
+      snippet_to_move = &source_track->snippets[i];
+      snippet_idx_in_source = i;
+      break;
+    }
+  }
+  if (!snippet_to_move)
+    return;
+
+  input_snippet_t snip_copy = *snippet_to_move;
+  const int duration = snip_copy.input_count; // Use the reliable input_count for duration
+  snip_copy.start_tick = to_start_tick;
+  snip_copy.end_tick = to_start_tick + duration;
+
+  snippet_to_move->inputs = NULL; // Prevent double free
+  remove_snippet_from_track(ts, source_track, snippet_id);
+  insert_snippet_into_track(&ts->player_tracks[to_track_idx], &snip_copy);
+}
+
+static void undo_move_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+  MoveSnippetsCommand *c = (MoveSnippetsCommand *)cmd;
+  for (int i = 0; i < c->count; i++) {
+    MoveSnippetInfo *info = &c->move_info[i];
+    move_snippet_logic(ts, info->snippet_id, info->new_track_index, info->old_track_index,
+                       info->old_start_tick);
+  }
+}
+
+static void redo_move_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+  MoveSnippetsCommand *c = (MoveSnippetsCommand *)cmd;
+  for (int i = 0; i < c->count; i++) {
+    MoveSnippetInfo *info = &c->move_info[i];
+    move_snippet_logic(ts, info->snippet_id, info->old_track_index, info->new_track_index,
+                       info->new_start_tick);
+  }
+}
+
+// --- Remove Player Track Command ---
+typedef struct {
+  undo_command_t base;
+  int track_index;
+  player_track_t track_copy; // A full deep copy of the track
+} RemoveTrackCommand;
+
+static void cleanup_remove_track_cmd(undo_command_t *cmd) {
+  RemoveTrackCommand *c = (RemoveTrackCommand *)cmd;
+  for (int i = 0; i < c->track_copy.snippet_count; i++) {
+    free_snippet_inputs(&c->track_copy.snippets[i]);
+  }
+  free(c->track_copy.snippets);
+  free(c);
+}
+
+static void undo_remove_track(undo_command_t *cmd, timeline_state_t *ts) {
+  RemoveTrackCommand *c = (RemoveTrackCommand *)cmd;
+  // Re-insert the track at its original index
+  int new_count = ts->player_track_count + 1;
+  ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * new_count);
+  memmove(&ts->player_tracks[c->track_index + 1], &ts->player_tracks[c->track_index],
+          (ts->player_track_count - c->track_index) * sizeof(player_track_t));
+
+  // Deep copy the track back into place
+  player_track_t *new_track = &ts->player_tracks[c->track_index];
+  new_track->player_info = c->track_copy.player_info;
+  new_track->snippet_count = c->track_copy.snippet_count;
+  new_track->snippets = malloc(sizeof(input_snippet_t) * new_track->snippet_count);
+  for (int i = 0; i < new_track->snippet_count; i++) {
+    snippet_clone(&new_track->snippets[i], &c->track_copy.snippets[i]);
+  }
+
+  ts->player_track_count = new_count;
+  // TODO: Add character back to physics world. For now, just recalc.
+  recalc_ts(ts, 0);
+}
+
+static void redo_remove_track(undo_command_t *cmd, timeline_state_t *ts) {
+  RemoveTrackCommand *c = (RemoveTrackCommand *)cmd;
+  player_track_t *track_to_remove = &ts->player_tracks[c->track_index];
+  for (int j = 0; j < track_to_remove->snippet_count; j++) {
+    free_snippet_inputs(&track_to_remove->snippets[j]);
+  }
+  free(track_to_remove->snippets);
+
+  memmove(&ts->player_tracks[c->track_index], &ts->player_tracks[c->track_index + 1],
+          (ts->player_track_count - c->track_index - 1) * sizeof(player_track_t));
+
+  ts->player_track_count--;
+  ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * ts->player_track_count);
+
+  if (ts->selected_player_track_index == c->track_index)
+    ts->selected_player_track_index = -1;
+  else if (ts->selected_player_track_index > c->track_index)
+    ts->selected_player_track_index--;
+
+  recalc_ts(ts, 0);
+}
+
+// --- Multi-Split Snippet Command ---
+// This command handles splitting multiple snippets at a single tick as one atomic action.
+typedef struct {
+  int track_index;
+  int original_snippet_id;
+  int new_snippet_id;
+  SPlayerInput *moved_inputs;
+  int moved_inputs_count;
+} SplitInfo;
+
+typedef struct {
+  undo_command_t base;
+  SplitInfo *infos;
+  int count;
+  int split_tick;
+} MultiSplitCommand;
+
+static void cleanup_multi_split_cmd(undo_command_t *cmd) {
+  MultiSplitCommand *c = (MultiSplitCommand *)cmd;
+  for (int i = 0; i < c->count; i++) {
+    free(c->infos[i].moved_inputs);
+  }
+  free(c->infos);
+  free(c);
+}
+
+static void undo_multi_split(undo_command_t *cmd, timeline_state_t *ts) {
+  MultiSplitCommand *c = (MultiSplitCommand *)cmd;
+  for (int i = 0; i < c->count; i++) {
+    SplitInfo *info = &c->infos[i];
+    player_track_t *track = &ts->player_tracks[info->track_index];
+    input_snippet_t *original = find_snippet_by_id(track, info->original_snippet_id);
+    if (!original)
+      continue;
+
+    // 1. Append the moved inputs back to the original snippet
+    int old_duration = original->input_count;
+    int new_duration = old_duration + info->moved_inputs_count;
+    original->inputs = realloc(original->inputs, sizeof(SPlayerInput) * new_duration);
+    memcpy(&original->inputs[old_duration], info->moved_inputs,
+           sizeof(SPlayerInput) * info->moved_inputs_count);
+    original->input_count = new_duration;
+    original->end_tick = original->start_tick + new_duration;
+
+    // 2. Remove the newly created snippet
+    remove_snippet_from_track(ts, track, info->new_snippet_id);
+  }
+}
+
+void resize_snippet_inputs(timeline_state_t *t, input_snippet_t *snippet, int new_duration);
+static void redo_multi_split(undo_command_t *cmd, timeline_state_t *ts) {
+  MultiSplitCommand *c = (MultiSplitCommand *)cmd;
+  for (int i = 0; i < c->count; i++) {
+    SplitInfo *info = &c->infos[i];
+    player_track_t *track = &ts->player_tracks[info->track_index];
+    input_snippet_t *original = find_snippet_by_id(track, info->original_snippet_id);
+    if (!original)
+      continue;
+
+    // 1. Create the 'right' snippet
+    input_snippet_t right;
+    right.id = info->new_snippet_id;
+    right.start_tick = c->split_tick;
+    right.end_tick = c->split_tick + info->moved_inputs_count;
+    right.inputs = malloc(sizeof(SPlayerInput) * info->moved_inputs_count);
+    memcpy(right.inputs, info->moved_inputs, sizeof(SPlayerInput) * info->moved_inputs_count);
+    right.input_count = info->moved_inputs_count;
+
+    // 2. Truncate the original snippet
+    int original_new_duration = c->split_tick - original->start_tick;
+    resize_snippet_inputs(ts, original, original_new_duration);
+
+    // 3. Insert the new snippet
+    insert_snippet_into_track(track, &right);
+  }
+}
+
+// --- Merge Snippets Command ---
+typedef struct {
+  undo_command_t base;
+  int track_index;
+  int target_snippet_id; // The snippet that was extended
+  int original_target_end_tick;
+  // We need to store full copies of all snippets that were deleted
+  DeletedSnippetInfo *merged_snippets;
+  int merged_snippets_count;
+} MergeSnippetsCommand;
+
+static void cleanup_merge_cmd(undo_command_t *cmd);
+static void undo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts);
+static void redo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts);
+
+undo_command_t *do_remove_player_track(ui_handler_t *ui, int index) {
+  timeline_state_t *ts = &ui->timeline;
+  ph_t *ph = &ui->gfx_handler->physics_handler;
+  if (index < 0 || index >= ts->player_track_count)
+    return NULL;
+
+  // 1. Create Command and store a deep copy of the track
+  RemoveTrackCommand *cmd = calloc(1, sizeof(RemoveTrackCommand));
+  cmd->base.undo = undo_remove_track;
+  cmd->base.redo = redo_remove_track;
+  cmd->base.cleanup = cleanup_remove_track_cmd;
+  cmd->track_index = index;
+
+  player_track_t *original_track = &ts->player_tracks[index];
+  cmd->track_copy.player_info = original_track->player_info;
+  cmd->track_copy.snippet_count = original_track->snippet_count;
+  cmd->track_copy.snippets = malloc(sizeof(input_snippet_t) * original_track->snippet_count);
+  for (int i = 0; i < original_track->snippet_count; i++) {
+    snippet_clone(&cmd->track_copy.snippets[i], &original_track->snippets[i]);
+  }
+
+  // 2. Perform the action (by calling the redo logic)
+  redo_remove_track(&cmd->base, ts);
+  wc_remove_character(&ph->world, index); // Also remove from physics world
+
+  return &cmd->base;
+}
 
 static void recording_snippet_vector_init(recording_snippet_vector_t *vec) {
   vec->snippets = NULL;
@@ -262,12 +646,14 @@ static int compare_snippets_by_start_tick(const void *p1, const void *p2) {
   return 0;
 }
 
-void do_merge_selected_snippets(timeline_state_t *ts) {
+undo_command_t *do_merge_selected_snippets(ui_handler_t *ui) {
+  timeline_state_t *ts = &ui->timeline;
   if (ts->selected_snippets.count < 2)
-    return;
+    return NULL;
 
   bool merged_something = false;
   int earliest_tick = INT_MAX;
+  MergeSnippetsCommand *cmd = NULL;
 
   for (int ti = 0; ti < ts->player_track_count; ++ti) {
     player_track_t *track = &ts->player_tracks[ti];
@@ -301,12 +687,21 @@ void do_merge_selected_snippets(timeline_state_t *ts) {
     qsort(candidates, candidate_count, sizeof(input_snippet_t *), compare_snippets_by_start_tick);
 
     /* ids to remove: allocate exactly candidate_count (worst-case) */
-    int *ids_to_remove = malloc(sizeof(*ids_to_remove) * candidate_count);
+    int *ids_to_remove = malloc(sizeof(int) * candidate_count);
     if (!ids_to_remove) {
       free(candidates);
       continue;
     }
     int remove_count = 0;
+
+    // Setup command if this is the first mergeable track
+    if (!cmd) {
+      cmd = calloc(1, sizeof(MergeSnippetsCommand));
+      cmd->base.undo = undo_merge_snippets;
+      cmd->base.redo = redo_merge_snippets;
+      cmd->base.cleanup = cleanup_merge_cmd;
+      cmd->track_index = ti; // Assuming merge only happens on one track per action
+    }
 
     /* Iterate and merge adjacent pairs */
     for (int i = 0; i < candidate_count - 1; ++i) {
@@ -315,6 +710,10 @@ void do_merge_selected_snippets(timeline_state_t *ts) {
 
       if (a->end_tick == b->start_tick) { /* adjacent */
         /* Attempt to allocate new buffer for A safely */
+        if (!merged_something) { // First merge in this track
+          cmd->target_snippet_id = a->id;
+          cmd->original_target_end_tick = a->end_tick;
+        }
         int old_a_duration = a->input_count;
         int b_duration = b->input_count;
         int new_duration = old_a_duration + b_duration;
@@ -327,7 +726,24 @@ void do_merge_selected_snippets(timeline_state_t *ts) {
           continue;
         }
         a->inputs = tmp; /* tmp may be NULL only if new_duration == 0, which is OK */
-        /* copy B's inputs (if any) */
+                         /* copy B's inputs (if any) */
+
+        // Store B for undo before we modify/destroy it
+        int new_count = cmd->merged_snippets_count + 1;
+        // Use a temporary pointer for realloc to prevent memory leaks on failure
+        DeletedSnippetInfo *tmp_merged =
+            realloc(cmd->merged_snippets, sizeof(DeletedSnippetInfo) * new_count);
+        if (!tmp_merged) {
+          // Allocation failed. It's not ideal, but we should skip this merge
+          // to avoid crashing. The command will be incomplete, but the application state is preserved.
+          continue;
+        }
+        cmd->merged_snippets = tmp_merged;
+        cmd->merged_snippets_count = new_count;
+
+        cmd->merged_snippets[cmd->merged_snippets_count - 1].track_index = ti;
+        snippet_clone(&cmd->merged_snippets[cmd->merged_snippets_count - 1].snippet_copy, b);
+
         if (b_duration > 0 && b->inputs != NULL) {
           memcpy(&a->inputs[old_a_duration], b->inputs, sizeof(SPlayerInput) * (size_t)b_duration);
           /* free B's buffer (we copied contents) and null it so remove won't double-free */
@@ -368,6 +784,69 @@ void do_merge_selected_snippets(timeline_state_t *ts) {
     clear_selection(ts);
     if (earliest_tick != INT_MAX)
       recalc_ts(ts, earliest_tick);
+    return &cmd->base;
+  }
+
+  // If we created a command but didn't merge anything, clean it up.
+  if (cmd) {
+    cleanup_merge_cmd(&cmd->base);
+  }
+  return NULL;
+}
+
+static void cleanup_merge_cmd(undo_command_t *cmd) {
+  MergeSnippetsCommand *c = (MergeSnippetsCommand *)cmd;
+  if (c->merged_snippets) {
+    for (int i = 0; i < c->merged_snippets_count; i++) {
+      free_snippet_inputs(&c->merged_snippets[i].snippet_copy);
+    }
+    free(c->merged_snippets);
+  }
+  free(c);
+}
+
+static void undo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+  MergeSnippetsCommand *c = (MergeSnippetsCommand *)cmd;
+  player_track_t *track = &ts->player_tracks[c->track_index];
+  input_snippet_t *target = find_snippet_by_id(track, c->target_snippet_id);
+  if (!target)
+    return;
+
+  // 1. Resize the target snippet back to its original size
+  resize_snippet_inputs(ts, target, c->original_target_end_tick - target->start_tick);
+
+  // 2. Re-insert all the snippets that were merged
+  for (int i = 0; i < c->merged_snippets_count; i++) {
+    input_snippet_t new_snip;
+    snippet_clone(&new_snip, &c->merged_snippets[i].snippet_copy);
+    insert_snippet_into_track(track, &new_snip);
+  }
+}
+
+static void redo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+  MergeSnippetsCommand *c = (MergeSnippetsCommand *)cmd;
+  player_track_t *track = &ts->player_tracks[c->track_index];
+
+  // This is essentially the original merge logic, using the command's stored data
+  for (int i = 0; i < c->merged_snippets_count; i++) {
+    // The target pointer can be invalidated by remove_snippet_from_track
+    // because it can cause the snippets array to be reallocated.
+    // We must look up the target snippet by its ID inside every loop iteration.
+    input_snippet_t *target = find_snippet_by_id(track, c->target_snippet_id);
+    if (!target)
+      return; // Safety check in case target is somehow removed
+    DeletedSnippetInfo *info = &c->merged_snippets[i];
+    int old_duration = target->input_count;
+    int new_duration = old_duration + info->snippet_copy.input_count;
+
+    target->inputs = realloc(target->inputs, sizeof(SPlayerInput) * new_duration);
+    memcpy(&target->inputs[old_duration], info->snippet_copy.inputs,
+           sizeof(SPlayerInput) * info->snippet_copy.input_count);
+
+    target->input_count = new_duration;
+    target->end_tick = target->start_tick + new_duration;
+
+    remove_snippet_from_track(ts, track, info->snippet_copy.id);
   }
 }
 
@@ -390,104 +869,203 @@ static void auto_scroll_playhead_if_needed(timeline_state_t *ts, ImRect timeline
   }
 }
 
-void do_add_snippet(timeline_state_t *ts) {
+undo_command_t *do_add_snippet(ui_handler_t *ui) {
+  timeline_state_t *ts = &ui->timeline;
   // Add snippet at current tick to selected track (or first track)
   int track_idx = ts->selected_player_track_index >= 0 ? ts->selected_player_track_index
                                                        : (ts->player_track_count > 0 ? 0 : -1);
   if (track_idx >= 0) {
     input_snippet_t snip = create_empty_snippet(ts, ts->current_tick, 50);
     add_snippet_to_track(&ts->player_tracks[track_idx], &snip);
+    AddSnippetCommand *cmd = calloc(1, sizeof(AddSnippetCommand));
+    cmd->base.undo = undo_add_snippet;
+    cmd->base.redo = redo_add_snippet;
+    cmd->base.cleanup = cleanup_add_cmd;
+    cmd->track_index = track_idx;
+    snippet_clone(&cmd->snippet_copy, &snip); // Save a copy for redo
+    return &cmd->base;
   }
+  return NULL;
 }
 
-void do_split_selected_snippets(timeline_state_t *ts) {
-  if (ts->selected_snippets.count > 0) {
-    int cnt = ts->selected_snippets.count;
-    if (cnt <= 0)
-      return;
+undo_command_t *do_split_selected_snippets(ui_handler_t *ui) {
+  timeline_state_t *ts = &ui->timeline;
 
-    // Dynamically allocate a copy of the original IDs
-    int *originals = malloc(sizeof(int) * cnt);
-    if (!originals)
-      return; // Allocation failed
-    memcpy(originals, ts->selected_snippets.ids, sizeof(int) * cnt);
+  if (ts->selected_snippets.count == 0 || ts->current_tick <= 0) {
+    return NULL;
+  }
 
-    for (int i = 0; i < cnt; ++i) {
-      int sid = originals[i];
-      // find snippet
-      for (int ti = 0; ti < ts->player_track_count; ++ti) {
-        player_track_t *track = &ts->player_tracks[ti];
-        for (int s = 0; s < track->snippet_count; ++s) {
-          input_snippet_t *snippet = &track->snippets[s];
-          if (snippet->id == sid) {
-            int split_tick = ts->current_tick;
-            if (split_tick <= snippet->start_tick || split_tick >= snippet->end_tick)
-              continue;
-            int old_end = snippet->end_tick;
-            int offset = split_tick - snippet->start_tick;
-            int right_count = old_end - split_tick;
+  // Use a temporary dynamic array to store info about snippets that were actually split.
+  SplitInfo *valid_splits = NULL;
+  int split_count = 0;
 
-            // Manually create the 'right' snippet to avoid the double allocation that was causing the leak.
-            input_snippet_t right;
-            right.id = ts->next_snippet_id++;
-            right.start_tick = split_tick;
-            right.end_tick = old_end;
-            right.inputs = NULL;
-            right.input_count = 0;
+  int original_count = ts->selected_snippets.count;
+  int *original_selection = malloc(sizeof(int) * original_count);
+  memcpy(original_selection, ts->selected_snippets.ids, sizeof(int) * original_count);
 
-            if (right_count > 0) {
-              right.inputs = malloc(sizeof(SPlayerInput) * right_count);
-              memcpy(right.inputs, snippet->inputs + offset, right_count * sizeof(SPlayerInput));
-              right.input_count = right_count;
-            }
-            resize_snippet_inputs(ts, snippet, offset);
-            snippet->end_tick = split_tick;
-            add_snippet_to_track(track, &right);
-            snippet_id_vector_add(&ts->selected_snippets, right.id);
-          }
+  snippet_id_vector_t new_snippets_to_select;
+  snippet_id_vector_init(&new_snippets_to_select);
+  int last_split_track_index = -1;
+
+  // --- Pass 1: Find valid splits, perform them, and collect data for the command ---
+  for (int i = 0; i < original_count; ++i) {
+    int sid = original_selection[i];
+    for (int ti = 0; ti < ts->player_track_count; ++ti) {
+      player_track_t *track = &ts->player_tracks[ti];
+      input_snippet_t *snippet = find_snippet_by_id(track, sid);
+
+      if (snippet) {
+        int split_tick = ts->current_tick;
+        if (split_tick <= snippet->start_tick || split_tick >= snippet->end_tick) {
+          break; // Not splittable here, continue to next selected snippet.
         }
+
+        // This snippet is valid to split. Perform the split and record the info.
+        int offset = split_tick - snippet->start_tick;
+        int right_count = snippet->end_tick - split_tick;
+        int new_id = ts->next_snippet_id++;
+
+        // Use safe realloc pattern for our temporary list of split info.
+        SplitInfo *tmp_splits = realloc(valid_splits, sizeof(SplitInfo) * (split_count + 1));
+        if (!tmp_splits) { /* TODO: handle error, free memory and abort */
+          break;
+        }
+        valid_splits = tmp_splits;
+        SplitInfo *info = &valid_splits[split_count];
+
+        info->track_index = ti;
+        info->original_snippet_id = snippet->id;
+        info->new_snippet_id = new_id;
+        info->moved_inputs_count = right_count;
+        info->moved_inputs = malloc(sizeof(SPlayerInput) * right_count);
+        memcpy(info->moved_inputs, snippet->inputs + offset, right_count * sizeof(SPlayerInput));
+        split_count++;
+
+        // Perform the action on the timeline state
+        input_snippet_t right_part;
+        right_part.id = new_id;
+        right_part.start_tick = split_tick;
+        right_part.end_tick = snippet->end_tick;
+        right_part.inputs = malloc(sizeof(SPlayerInput) * right_count);
+        memcpy(right_part.inputs, snippet->inputs + offset, right_count * sizeof(SPlayerInput));
+        right_part.input_count = right_count;
+
+        resize_snippet_inputs(ts, snippet, offset);    // Truncate the left part
+        insert_snippet_into_track(track, &right_part); // Add the new right part
+
+        snippet_id_vector_add(&new_snippets_to_select, new_id);
+        last_split_track_index = ti;
+
+        break; // Found and processed snippet, move to the next ID in original_selection
       }
     }
-    free(originals);
   }
+  free(original_selection);
+
+  // If no snippets were actually split, clean up and return.
+  if (split_count == 0) {
+    snippet_id_vector_free(&new_snippets_to_select);
+    // valid_splits is NULL, so nothing to free.
+    return NULL;
+  }
+
+  // Add the newly created snippets (the right-hand parts) to the selection.
+  for (int i = 0; i < new_snippets_to_select.count; ++i) {
+    add_snippet_to_selection(ts, new_snippets_to_select.ids[i], last_split_track_index);
+  }
+  snippet_id_vector_free(&new_snippets_to_select);
+
+  MultiSplitCommand *cmd = calloc(1, sizeof(MultiSplitCommand));
+  cmd->base.undo = undo_multi_split;
+  cmd->base.redo = redo_multi_split;
+  cmd->base.cleanup = cleanup_multi_split_cmd;
+  cmd->infos = valid_splits; // Transfer ownership of the array
+  cmd->count = split_count;
+  cmd->split_tick = ts->current_tick;
+
+  return &cmd->base;
 }
 
-void do_delete_selected_snippets(timeline_state_t *ts) {
+undo_command_t *do_delete_selected_snippets(ui_handler_t *ui) {
+  timeline_state_t *ts = &ui->timeline;
   int cnt = ts->selected_snippets.count;
   if (cnt <= 0)
-    return;
+    return NULL;
 
+  // 1. Create Command & gather info BEFORE changing state
+  DeleteSnippetsCommand *cmd = calloc(1, sizeof(DeleteSnippetsCommand));
+  cmd->base.undo = undo_delete_snippets;
+  cmd->base.redo = redo_delete_snippets;
+  cmd->base.cleanup = cleanup_delete_cmd;
+  cmd->count = ts->selected_snippets.count;
+  cmd->deleted_info = calloc(cmd->count, sizeof(DeletedSnippetInfo));
+
+  int info_idx = 0;
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    for (int j = 0; j < ts->player_tracks[i].snippet_count; ++j) {
+      input_snippet_t *snip = &ts->player_tracks[i].snippets[j];
+      if (is_snippet_selected(ts, snip->id)) {
+        cmd->deleted_info[info_idx].track_index = i;
+        snippet_clone(&cmd->deleted_info[info_idx].snippet_copy, snip);
+        info_idx++;
+      }
+    }
+  }
+
+  // 2. Perform the action
   int *originals = malloc(sizeof(int) * cnt);
   if (!originals)
-    return;
+    return NULL;
   memcpy(originals, ts->selected_snippets.ids, sizeof(int) * cnt);
 
   for (int i = 0; i < cnt; ++i) {
     int sid = originals[i];
     for (int ti = 0; ti < ts->player_track_count; ++ti) {
       player_track_t *track = &ts->player_tracks[ti];
-      remove_snippet_from_track(ts, track, sid);
+      if (remove_snippet_from_track(ts, track, sid)) {
+        break; // Found and removed, no need to check other tracks
+      }
     }
   }
   clear_selection(ts);
   free(originals);
+  return &cmd->base;
 }
 
 // Global keyboard shortcuts (moved out of popup so they always work)
-static void process_global_shortcuts(timeline_state_t *ts) {
+void process_global_shortcuts(ui_handler_t *ui) {
   ImGuiIO *io = igGetIO_Nil();
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_A, true)) {
-    do_add_snippet(ts);
+  undo_command_t *cmd = NULL;
+  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_A, true))
+    cmd = do_add_snippet(ui);
+  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_R, true))
+    cmd = do_split_selected_snippets(ui);
+  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_D, true))
+    cmd = do_delete_selected_snippets(ui);
+  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_M, true))
+    cmd = do_merge_selected_snippets(ui);
+
+  if (cmd) {
+    undo_manager_register_command(&ui->undo_manager, cmd);
   }
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_R, true)) {
-    do_split_selected_snippets(ts);
-  }
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_D, true)) {
-    do_delete_selected_snippets(ts);
-  }
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_M, true)) {
-    do_merge_selected_snippets(ts);
-  }
+}
+
+undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, const int *indices, int count,
+                                           const SPlayerInput *before_states,
+                                           const SPlayerInput *after_states) {
+  EditInputsCommand *cmd = calloc(1, sizeof(EditInputsCommand));
+  cmd->base.undo = undo_edit_inputs;
+  cmd->base.redo = redo_edit_inputs;
+  cmd->base.cleanup = cleanup_edit_inputs_cmd;
+  cmd->snippet_id = snippet->id;
+  cmd->count = count;
+  cmd->indices = malloc(sizeof(int) * count);
+  cmd->before = malloc(sizeof(SPlayerInput) * count);
+  cmd->after = malloc(sizeof(SPlayerInput) * count);
+  memcpy(cmd->indices, indices, sizeof(int) * count);
+  memcpy(cmd->before, before_states, sizeof(SPlayerInput) * count);
+  memcpy(cmd->after, after_states, sizeof(SPlayerInput) * count);
+  return &cmd->base;
 }
 
 void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx) {
@@ -1297,19 +1875,31 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
 
   if (!ts->recording && igBeginPopup("RightClickMenu", ImGuiPopupFlags_AnyPopupLevel)) {
     if (igMenuItem_Bool("Add Snippet", "Ctrl+a", false, true)) {
-      do_add_snippet(ts);
+      undo_command_t *cmd = do_add_snippet(ts->ui);
+      if (cmd) {
+        undo_manager_register_command(&ts->ui->undo_manager, cmd);
+      }
     }
 
     if (igMenuItem_Bool("Merge Snippets", "Ctrl+m", false, ts->selected_snippets.count > 1)) {
-      do_merge_selected_snippets(ts);
+      undo_command_t *cmd = do_merge_selected_snippets(ts->ui);
+      if (cmd) {
+        undo_manager_register_command(&ts->ui->undo_manager, cmd);
+      }
     }
 
     if (igMenuItem_Bool("Split Snippet", "Ctrl+r", false, ts->selected_snippet_id != -1)) {
-      do_split_selected_snippets(ts);
+      undo_command_t *cmd = do_split_selected_snippets(ts->ui);
+      if (cmd) {
+        undo_manager_register_command(&ts->ui->undo_manager, cmd);
+      }
     }
 
     if (igMenuItem_Bool("Delete Snippet", "Ctrl+d", false, ts->selected_snippets.count > 0)) {
-      do_delete_selected_snippets(ts);
+      undo_command_t *cmd = do_delete_selected_snippets(ts->ui);
+      if (cmd) {
+        undo_manager_register_command(&ts->ui->undo_manager, cmd);
+      }
     }
     igEndPopup();
   }
@@ -1459,14 +2049,10 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
 }
 
 // main render function
-// main render function
-void render_timeline(timeline_state_t *ts) {
+void render_timeline(ui_handler_t *ui) {
+  timeline_state_t *ts = &ui->timeline;
   ImGuiIO *io = igGetIO_Nil();
   ts->playback_speed = ts->gui_playback_speed;
-
-  // Ensure global shortcuts are handled even when the right-click popup isn't open
-  if (!ts->recording)
-    process_global_shortcuts(ts);
 
   if (ts->recording && igIsKeyPressed_Bool(ImGuiKey_F, false)) {
     for (int i = 0; i < ts->recording_snippets.count; i++) {
@@ -1782,6 +2368,8 @@ void render_timeline(timeline_state_t *ts) {
       if (ts->drag_state.active && igIsMouseReleased_Nil(ImGuiMouseButton_Left) && !ts->is_header_dragging) {
         ImVec2 mouse_pos = io->MousePos;
         player_track_t *source_track = &ts->player_tracks[ts->drag_state.source_track_index];
+        undo_command_t *cmd = NULL;
+
         input_snippet_t *clicked_snippet =
             find_snippet_by_id(source_track, ts->drag_state.dragged_snippet_id);
         if (!clicked_snippet) {
@@ -1814,10 +2402,12 @@ void render_timeline(timeline_state_t *ts) {
         int track_delta = target_track_idx - source_base_track_idx;
         int tick_delta = final_drop_tick_clicked - clicked_snippet->start_tick;
 
+        bool is_duplicating = igGetIO_Nil()->KeyAlt;
         if (ts->selected_snippets.count > 0) { // Should always be true for a snippet drag
           bool can_move_all = true;
           // PRE-FLIGHT CHECK
           // First, check if all selected snippets can be moved without conflict.
+          // This check is valid for both moving and duplicating.
           for (int i = 0; i < ts->selected_snippets.count; ++i) {
             int sid = ts->selected_snippets.ids[i];
             input_snippet_t *s = NULL;
@@ -1852,18 +2442,29 @@ void render_timeline(timeline_state_t *ts) {
             }
           }
 
-          // PERFORM MOVE
-          // If the pre-flight check passed for all snippets, perform the actual moves.
-          if (can_move_all) {
-            // Use a copy of IDs, as duplication might alter the selection state.
+          if (!can_move_all) {
+            // Abort if the destination is invalid.
+          } else if (is_duplicating) {
+            // --- DUPLICATE ACTION ---
+            // Create a command that stores the duplicated snippets. Its undo action will be to delete them.
+            // We can reuse the DeleteSnippetsCommand struct and flip its function pointers.
+            DeleteSnippetsCommand *cmd = calloc(1, sizeof(DeleteSnippetsCommand));
+            cmd->base.undo = redo_delete_snippets; // Undo is deleting
+            cmd->base.redo = undo_delete_snippets; // Redo is re-adding
+            cmd->base.cleanup = cleanup_delete_cmd;
+            cmd->count = ts->selected_snippets.count;
+            cmd->deleted_info = calloc(cmd->count, sizeof(DeletedSnippetInfo));
+            int info_idx = 0;
+
             int count = ts->selected_snippets.count;
             int *original_ids = malloc(count * sizeof(int));
             memcpy(original_ids, ts->selected_snippets.ids, count * sizeof(int));
 
+            snippet_id_vector_t new_selection_ids;
+            snippet_id_vector_init(&new_selection_ids);
+
             for (int i = 0; i < count; ++i) {
               int sid = original_ids[i];
-              // Find snippet and its source track again to perform the move
-              // (This is quick and safer than caching pointers that might be invalidated)
               input_snippet_t *s = NULL;
               int s_track_idx = -1;
               for (int ti = 0; ti < ts->player_track_count; ++ti) {
@@ -1873,16 +2474,84 @@ void render_timeline(timeline_state_t *ts) {
                   break;
                 }
               }
+              if (!s)
+                continue;
 
               int new_track_idx = s_track_idx + track_delta;
               int new_start_tick = s->start_tick + tick_delta;
-              try_move_snippet(ts, sid, s_track_idx, new_track_idx, new_start_tick, false);
+              // Perform the duplication
+              input_snippet_t new_snip;
+              new_snip = *s;
+              new_snip.id = ts->next_snippet_id++;
+              new_snip.start_tick = new_start_tick;
+              new_snip.end_tick = new_start_tick + (s->end_tick - s->start_tick);
+              new_snip.inputs = NULL;
+              new_snip.input_count = 0;
+              copy_snippet_inputs(&new_snip, s);
+
+              add_snippet_to_track(&ts->player_tracks[new_track_idx], &new_snip);
+              snippet_id_vector_add(&new_selection_ids, new_snip.id);
+
+              // Populate the undo command with a clone of the NEW snippet
+              cmd->deleted_info[info_idx].track_index = new_track_idx;
+              snippet_clone(&cmd->deleted_info[info_idx].snippet_copy, &new_snip);
+              info_idx++;
+
+              // add_snippet_to_track took ownership of the .inputs pointer. Null it here.
+              new_snip.inputs = NULL;
             }
+
             free(original_ids);
+
+            // Update selection to the new snippets
+            clear_selection(ts);
+            for (int i = 0; i < new_selection_ids.count; i++) {
+              add_snippet_to_selection(ts, new_selection_ids.ids[i], -1);
+            }
+            snippet_id_vector_free(&new_selection_ids);
+
+            undo_manager_register_command(&ui->undo_manager, &cmd->base);
+
+          } else {
+            // --- MOVE ACTION ---
+            MoveSnippetsCommand *move_cmd = calloc(1, sizeof(MoveSnippetsCommand));
+            move_cmd->base.undo = undo_move_snippets;
+            move_cmd->base.redo = redo_move_snippets;
+            move_cmd->base.cleanup = cleanup_move_cmd;
+            move_cmd->count = ts->selected_snippets.count;
+            move_cmd->move_info = calloc(move_cmd->count, sizeof(MoveSnippetInfo));
+
+            // Populate command with "before" state
+            int info_idx = 0;
+            for (int i = 0; i < ts->selected_snippets.count; ++i) {
+              int sid = ts->selected_snippets.ids[i];
+              for (int ti = 0; ti < ts->player_track_count; ++ti) {
+                input_snippet_t *s = find_snippet_by_id(&ts->player_tracks[ti], sid);
+                if (s) {
+                  move_cmd->move_info[info_idx].snippet_id = sid;
+                  move_cmd->move_info[info_idx].old_track_index = ti;
+                  move_cmd->move_info[info_idx].old_start_tick = s->start_tick;
+                  info_idx++;
+                  break;
+                }
+              }
+            }
+            // Perform the actual moves
+            for (int k = 0; k < move_cmd->count; k++) {
+              MoveSnippetInfo *info = &move_cmd->move_info[k];
+              info->new_track_index = info->old_track_index + track_delta;
+              info->new_start_tick = info->old_start_tick + tick_delta;
+              try_move_snippet(ts, info->snippet_id, info->old_track_index, info->new_track_index,
+                               info->new_start_tick, false);
+            }
+            undo_manager_register_command(&ui->undo_manager, &move_cmd->base);
           }
         } else {
-          try_move_snippet(ts, ts->drag_state.dragged_snippet_id, ts->drag_state.source_track_index,
-                           target_track_idx, final_drop_tick_clicked, false);
+          // NOTE: This case should not be hit if selection is handled correctly
+          // but is left as a fallback. It is not undoable.
+          if (!is_duplicating)
+            try_move_snippet(ts, ts->drag_state.dragged_snippet_id, ts->drag_state.source_track_index,
+                             target_track_idx, final_drop_tick_clicked, false);
         }
         ts->drag_state.active = false;
         ts->drag_state.source_track_index = -1;
@@ -1989,6 +2658,7 @@ void timeline_init(timeline_state_t *ts) {
   // Initialize Players/Tracks
   ts->player_track_count = 0;
   ts->player_tracks = NULL;
+  ts->ui = NULL;
 
   snippet_id_vector_init(&ts->selected_snippets);
 
@@ -2039,6 +2709,7 @@ void timeline_cleanup(timeline_state_t *ts) {
   ts->drag_state.drag_offset_y = 0.0f;
 
   ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
+  ts->ui = NULL;
 
   v_destroy(&ts->vec);
   wc_free(&ts->previous_world);

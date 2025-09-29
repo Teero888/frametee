@@ -8,6 +8,7 @@
 #include "player_info.h"
 #include "snippet_editor.h"
 #include "timeline.h"
+#include "undo_redo.h"
 #include "widgets/hsl_colorpicker.h"
 #include <limits.h>
 #include <nfd.h>
@@ -15,6 +16,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+typedef struct ui_handler ui_handler_t;
 
 void on_map_load(gfx_handler_t *handler, const char *map_path);
 void render_menu_bar(ui_handler_t *ui) {
@@ -37,6 +40,19 @@ void render_menu_bar(ui_handler_t *ui) {
       }
       if (igMenuItem_Bool("Save", NULL, false, true)) {
         printf("Save selected (not implemented).\n");
+      }
+      igEndMenu();
+    }
+
+    // Edit menu
+    if (igBeginMenu("Edit", true)) {
+      bool can_undo = undo_manager_can_undo(&ui->undo_manager);
+      if (igMenuItem_Bool("Undo", "Ctrl+Z", false, can_undo)) {
+        undo_manager_undo(&ui->undo_manager, &ui->timeline);
+      }
+      bool can_redo = undo_manager_can_redo(&ui->undo_manager);
+      if (igMenuItem_Bool("Redo", "Ctrl+Y", false, can_redo)) {
+        undo_manager_redo(&ui->undo_manager, &ui->timeline);
       }
       igEndMenu();
     }
@@ -116,39 +132,9 @@ void setup_docking(ui_handler_t *ui) {
 static bool g_remove_confirm_needed = true;
 static int g_pending_remove_index = -1;
 
-// todo: move this to timeline.c?
-static void remove_player(timeline_state_t *ts, ph_t *ph, int index) {
-  if (index < 0 || index >= ts->player_track_count)
-    return;
-  player_track_t *track = &ts->player_tracks[index];
-  if (track->snippets) {
-    for (int j = 0; j < track->snippet_count; j++) {
-      free_snippet_inputs(&track->snippets[j]);
-    }
-    free(track->snippets);
-  }
-  // shift array
-  for (int j = index; j < ts->player_track_count - 1; j++) {
-    ts->player_tracks[j] = ts->player_tracks[j + 1];
-  }
-  ts->player_track_count--;
-  ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * ts->player_track_count);
-
-  if (ts->selected_player_track_index == index)
-    ts->selected_player_track_index = -1;
-  else if (ts->selected_player_track_index > index)
-    ts->selected_player_track_index--;
-
-  ts->vec.current_size = 1;
-
-  // Update timeline copies with the new world
-  wc_copy_world(&ts->vec.data[0], &ph->world);
-  wc_copy_world(&ts->previous_world, &ph->world);
-
-  wc_remove_character(&ph->world, index);
-}
-
-void render_player_manager(timeline_state_t *ts, ph_t *ph) {
+void render_player_manager(ui_handler_t *ui) {
+  timeline_state_t *ts = &ui->timeline;
+  ph_t *ph = &ui->gfx_handler->physics_handler;
   if (igBegin("Players", NULL, 0)) {
     if (ph->world.m_pCollision && igButton("Add Player", (ImVec2){0, 0})) {
       add_new_track(ts, ph, 1);
@@ -183,7 +169,8 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
           igOpenPopup_Str("Confirm remove player", ImGuiPopupFlags_AnyPopupLevel);
           igPushID_Int(i);
         } else {
-          remove_player(ts, ph, i);
+          undo_command_t *cmd = do_remove_player_track(ui, i);
+          undo_manager_register_command(&ui->undo_manager, cmd);
         }
       }
       igPopID();
@@ -196,7 +183,8 @@ void render_player_manager(timeline_state_t *ts, ph_t *ph) {
       static bool dont_ask_again = false;
       igCheckbox("Do not ask again", &dont_ask_again);
       if (igButton("Yes", (ImVec2){0, 0})) {
-        remove_player(ts, ph, g_pending_remove_index);
+        undo_command_t *cmd = do_remove_player_track(ui, g_pending_remove_index);
+        undo_manager_register_command(&ui->undo_manager, cmd);
         if (dont_ask_again)
           g_remove_confirm_needed = false;
         g_pending_remove_index = -1;
@@ -286,6 +274,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->prediction_length = 100;
   timeline_init(&ui->timeline);
   camera_init(&gfx_handler->renderer.camera);
+  undo_manager_init(&ui->undo_manager);
   skin_manager_init(&ui->skin_manager);
   NFD_Init();
 }
@@ -557,11 +546,26 @@ void ui_render(ui_handler_t *ui) {
   timeline_update_inputs(&ui->timeline, ui->gfx_handler);
 
   render_menu_bar(ui);
+
+  ImGuiIO *io = igGetIO_Nil();
+  if (!igIsAnyItemActive()) { // Prevent shortcuts while typing in a text field
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_Z, false)) {
+      undo_manager_undo(&ui->undo_manager, &ui->timeline);
+    }
+    if (io->KeyCtrl && (igIsKeyPressed_Bool(ImGuiKey_Y, false) ||
+                        (io->KeyShift && igIsKeyPressed_Bool(ImGuiKey_Z, false)))) {
+      undo_manager_redo(&ui->undo_manager, &ui->timeline);
+    }
+    process_global_shortcuts(ui); // Handle A, R, D, M shortcuts
+  }
+
   setup_docking(ui);
   if (ui->show_timeline) {
-    render_timeline(&ui->timeline);
-    render_player_manager(&ui->timeline, &ui->gfx_handler->physics_handler);
-    render_snippet_editor_panel(&ui->timeline);
+    if (!ui->timeline.ui)
+      ui->timeline.ui = ui;
+    render_timeline(ui);
+    render_player_manager(ui);
+    render_snippet_editor_panel(ui);
     if (ui->timeline.selected_player_track_index != -1)
       render_player_info(ui->gfx_handler);
   }
@@ -632,6 +636,7 @@ bool ui_render_late(ui_handler_t *ui) {
 
 void ui_cleanup(ui_handler_t *ui) {
   timeline_cleanup(&ui->timeline);
+  undo_manager_cleanup(&ui->undo_manager);
   skin_manager_free(&ui->skin_manager);
   NFD_Quit();
 }

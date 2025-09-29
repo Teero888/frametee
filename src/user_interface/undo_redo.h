@@ -1,0 +1,44 @@
+#ifndef UNDO_REDO_H
+#define UNDO_REDO_H
+
+#include <stdbool.h>
+
+typedef struct timeline_state timeline_state_t;
+// Base struct for all undoable/redoable actions.
+// Specific commands will embed this and add their own data.
+typedef struct undo_command_t {
+  // A function to reverse the action.
+  void (*undo)(struct undo_command_t *cmd, timeline_state_t *ts);
+  // A function to re-apply the action.
+  void (*redo)(struct undo_command_t *cmd, timeline_state_t *ts);
+  // A function to free any memory held by the command itself.
+  void (*cleanup)(struct undo_command_t *cmd);
+} undo_command_t;
+
+// The manager holds separate stacks for undo and redo commands.
+typedef struct {
+  undo_command_t **undo_stack;
+  undo_command_t **redo_stack;
+  int undo_count;
+  int redo_count;
+  int undo_capacity;
+  int redo_capacity;
+} undo_manager_t;
+
+// --- Public API ---
+
+void undo_manager_init(undo_manager_t *manager);
+void undo_manager_cleanup(undo_manager_t *manager);
+
+// Call this AFTER an action is performed to register its corresponding undo command.
+void undo_manager_register_command(undo_manager_t *manager, undo_command_t *command);
+
+// Perform undo/redo operations.
+void undo_manager_undo(undo_manager_t *manager, timeline_state_t *ts);
+void undo_manager_redo(undo_manager_t *manager, timeline_state_t *ts);
+
+// Check if undo/redo is possible.
+bool undo_manager_can_undo(const undo_manager_t *manager);
+bool undo_manager_can_redo(const undo_manager_t *manager);
+
+#endif // UNDO_REDO_H
