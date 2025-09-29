@@ -173,19 +173,17 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
   }
 }
 
-// Comparison function for qsort to sort snippets by their start time
-static int compare_snippets_by_start_tick(const void *a, const void *b) {
-  input_snippet_t *snip_a = *(input_snippet_t **)a;
-  input_snippet_t *snip_b = *(input_snippet_t **)b;
-  if (snip_a->start_tick < snip_b->start_tick)
+/* comparator for qsort: pointers to input_snippet_t* */
+static int compare_snippets_by_start_tick(const void *p1, const void *p2) {
+  const input_snippet_t *const *a = (const input_snippet_t *const *)p1;
+  const input_snippet_t *const *b = (const input_snippet_t *const *)p2;
+  if ((*a)->start_tick < (*b)->start_tick)
     return -1;
-  if (snip_a->start_tick > snip_b->start_tick)
+  if ((*a)->start_tick > (*b)->start_tick)
     return 1;
   return 0;
 }
 
-// Merges adjacent selected snippets across ALL tracks in the current selection.
-// This new function replaces the old static void merge_selected_snippets.
 void do_merge_selected_snippets(timeline_state_t *ts) {
   if (ts->selected_snippet_count < 2)
     return;
@@ -193,74 +191,103 @@ void do_merge_selected_snippets(timeline_state_t *ts) {
   bool merged_something = false;
   int earliest_tick = INT_MAX;
 
-  // Iterate over all tracks
   for (int ti = 0; ti < ts->player_track_count; ++ti) {
     player_track_t *track = &ts->player_tracks[ti];
 
-    // 1. Gather all selected snippets that are on the current track
-    input_snippet_t *candidates[256];
+    /* First pass: count selected snippets on this track */
     int candidate_count = 0;
-
     for (int i = 0; i < track->snippet_count; ++i) {
-      input_snippet_t *snip = &track->snippets[i];
-      if (is_snippet_selected(ts, snip->id)) {
-        candidates[candidate_count++] = snip;
+      if (is_snippet_selected(ts, track->snippets[i].id)) {
+        ++candidate_count;
       }
     }
-
     if (candidate_count < 2)
       continue;
 
-    // 2. Sort the snippets by start_tick to easily find adjacent ones
+    /* Allocate exact-size array for candidates */
+    input_snippet_t **candidates = malloc(sizeof(*candidates) * candidate_count);
+    if (!candidates) {
+      /* allocation failed; skip this track */
+      continue;
+    }
+
+    /* Fill candidates */
+    int idx = 0;
+    for (int i = 0; i < track->snippet_count; ++i) {
+      if (is_snippet_selected(ts, track->snippets[i].id)) {
+        candidates[idx++] = &track->snippets[i];
+      }
+    }
+
+    /* sort by start tick */
     qsort(candidates, candidate_count, sizeof(input_snippet_t *), compare_snippets_by_start_tick);
 
-    int ids_to_remove[256];
+    /* ids to remove: allocate exactly candidate_count (worst-case) */
+    int *ids_to_remove = malloc(sizeof(*ids_to_remove) * candidate_count);
+    if (!ids_to_remove) {
+      free(candidates);
+      continue;
+    }
     int remove_count = 0;
 
-    // 3. Iterate and merge adjacent pairs (A.end_tick == B.start_tick)
+    /* Iterate and merge adjacent pairs */
     for (int i = 0; i < candidate_count - 1; ++i) {
       input_snippet_t *a = candidates[i];
       input_snippet_t *b = candidates[i + 1];
 
-      if (a->end_tick == b->start_tick) { // Found an adjacent pair
-        merged_something = true;
-
+      if (a->end_tick == b->start_tick) { /* adjacent */
+        /* Attempt to allocate new buffer for A safely */
         int old_a_duration = a->input_count;
         int b_duration = b->input_count;
         int new_duration = old_a_duration + b_duration;
 
-        // Append B's inputs to A
-        a->inputs = realloc(a->inputs, sizeof(SPlayerInput) * new_duration);
-        memcpy(&a->inputs[old_a_duration], b->inputs, sizeof(SPlayerInput) * b_duration);
-
-        // Update A's properties
+        /* safe realloc pattern */
+        SPlayerInput *tmp = realloc(a->inputs, sizeof(SPlayerInput) * (size_t)new_duration);
+        if (!tmp && new_duration > 0) {
+          /* allocation failed: skip this particular merge (don't corrupt state) */
+          /* You might want to log this error. */
+          continue;
+        }
+        a->inputs = tmp; /* tmp may be NULL only if new_duration == 0, which is OK */
+        /* copy B's inputs (if any) */
+        if (b_duration > 0 && b->inputs != NULL) {
+          memcpy(&a->inputs[old_a_duration], b->inputs, sizeof(SPlayerInput) * (size_t)b_duration);
+          /* free B's buffer (we copied contents) and null it so remove won't double-free */
+          free(b->inputs);
+          b->inputs = NULL;
+        }
+        /* update A's metadata */
         a->end_tick = b->end_tick;
         a->input_count = new_duration;
         if (a->start_tick < earliest_tick)
           earliest_tick = a->start_tick;
 
-        // Mark B for removal
+        /* mark B for removal */
         ids_to_remove[remove_count++] = b->id;
 
-        // Nullify B's inputs to prevent double-free when it's removed
-        b->inputs = NULL;
+        /* ensure b no longer claims inputs */
         b->input_count = 0;
 
-        // IMPORTANT: For chained merges, make the next iteration's "previous" snippet the newly merged 'a'.
+        /* chain merges: make next "previous" be the merged 'a' */
         candidates[i + 1] = a;
+
+        merged_something = true;
       }
     }
 
-    // 4. Remove all the snippets that were merged on this track
+    /* remove all merged snippets for this track */
     if (remove_count > 0) {
       for (int i = 0; i < remove_count; ++i) {
         remove_snippet_from_track(ts, track, ids_to_remove[i]);
       }
     }
+
+    free(ids_to_remove);
+    free(candidates);
   }
 
   if (merged_something) {
-    clear_selection(ts); // Clear selection after a successful merge
+    clear_selection(ts);
     if (earliest_tick != INT_MAX)
       recalc_ts(ts, earliest_tick);
   }
@@ -579,12 +606,20 @@ bool try_move_snippet(timeline_state_t *ts, int snippet_id, int source_track_idx
   }
 
   // Check for overlaps in the target track at the *proposed* new position
-  // If source and target are the same track, exclude the snippet itself from the overlap check
-  int exclude_id = (source_track_idx == target_track_idx) ? snippet_id : -1;
 
-  if (check_for_overlap(target_track, new_start_tick, new_end_tick, exclude_id)) {
-    // Overlap detected at the desired position, cannot move here
-    return false;
+  for (int i = 0; i < target_track->snippet_count; ++i) {
+    input_snippet_t *other = &target_track->snippets[i];
+
+    // If the other snippet is part of the current selection, it's moving with us,
+    // so we should ignore it for collision purposes.
+    if (is_snippet_selected(ts, other->id)) {
+      continue;
+    }
+
+    // Check for overlap with non-selected snippets.
+    if (new_start_tick < other->end_tick && new_end_tick > other->start_tick) {
+      return false; // Overlap detected
+    }
   }
 
   if (source_track_idx == target_track_idx) {
@@ -1149,7 +1184,6 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
   if (!ts->drag_state.active)
     return;
 
-  // FIX 2: Manually clip the preview drawing to the timeline's bounding box.
   // This prevents the preview from rendering outside the designated track area.
   ImDrawList_PushClipRect(overlay_draw_list, timeline_bb.Min, timeline_bb.Max, true);
 
@@ -1176,7 +1210,6 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
       calculate_snapped_tick(ts, desired_start_tick_clicked, clicked_duration, clicked_snippet->id);
   int delta_ticks = snapped_start_tick_clicked - clicked_snippet->start_tick;
 
-  // FIX 1: The stride calculation was incorrect. The tracks are rendered contiguously
   // with no gap. Using just track_height for the stride fixes the accumulating Y-offset bug.
   const float inner_pad = 2.0f;
   const float snippet_h = ts->track_height - inner_pad * 2.0f;
@@ -1247,7 +1280,20 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
     ImVec2 preview_min = {preview_min_x, preview_min_y};
     ImVec2 preview_max = {preview_max_x, preview_max_y};
 
-    bool overlaps = check_for_overlap(&ts->player_tracks[target_index], preview_start, preview_end, s->id);
+    bool overlaps = false;
+    player_track_t *target_track = &ts->player_tracks[target_index];
+    for (int i = 0; i < target_track->snippet_count; ++i) {
+      input_snippet_t *other = &target_track->snippets[i];
+      // Ignore collision with any snippet that is part of the current selection.
+      if (is_snippet_selected(ts, other->id)) {
+        continue;
+      }
+      // Check for overlap with any non-selected snippet.
+      if (preview_start < other->end_tick && preview_end > other->start_tick) {
+        overlaps = true;
+        break;
+      }
+    }
 
     ImU32 fill = overlaps ? IM_COL32(200, 80, 80, 90) : IM_COL32(100, 150, 240, 90);
     ImDrawList_AddRectFilled(overlay_draw_list, preview_min, preview_max, fill, 4.0f,
