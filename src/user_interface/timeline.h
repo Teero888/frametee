@@ -38,9 +38,22 @@ typedef struct {
   int source_track_index;
   int source_snippet_index; // Index within the source track's snippet array
   int dragged_snippet_id;
-  int drag_offset_ticks;    // Offset from snippet start to mouse click point in ticks
+  int drag_offset_ticks; // Offset from snippet start to mouse click point in ticks
+  float drag_offset_y;
   ImVec2 initial_mouse_pos; // Mouse position when drag started
 } timeline_drag_state_t;
+
+typedef struct {
+  int *ids;     // Pointer to the dynamically allocated array of IDs
+  int count;    // Number of IDs currently in the array
+  int capacity; // Allocated size of the array
+} snippet_id_vector_t;
+
+typedef struct {
+  input_snippet_t **snippets; // An array of POINTERS to snippets
+  int count;
+  int capacity;
+} recording_snippet_vector_t;
 
 typedef struct timeline_state_t {
   int current_tick;
@@ -52,11 +65,10 @@ typedef struct timeline_state_t {
   int selected_snippet_id;         // ID of the currently selected snippet (-1 if none)
   int selected_player_track_index; // Index of the track containing the selected snippet (-1 if none)
   // Multi-selection support
-  int selected_snippet_ids[256]; // IDs of selected snippets
-  int selected_snippet_count;    // Number of selected snippets
-  bool selection_box_active;     // Are we currently dragging a selection rectangle?
-  ImVec2 selection_box_start;    // Mouse start pos for selection box
-  ImVec2 selection_box_end;      // Current mouse pos for selection box
+  snippet_id_vector_t selected_snippets;
+  bool selection_box_active;  // Are we currently dragging a selection rectangle?
+  ImVec2 selection_box_start; // Mouse start pos for selection box
+  ImVec2 selection_box_end;   // Current mouse pos for selection box
 
   timeline_drag_state_t drag_state;
   int next_snippet_id;
@@ -67,7 +79,7 @@ typedef struct timeline_state_t {
   double last_update_time;
   bool auto_scroll_playhead;
   bool recording;
-  input_snippet_t *recording_snippet;
+  recording_snippet_vector_t recording_snippets;
   SPlayerInput recording_input;
 
   physics_v_t vec;
