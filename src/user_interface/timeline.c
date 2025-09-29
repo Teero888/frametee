@@ -32,15 +32,8 @@ void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet)
   if (track->snippets == NULL) {
     return;
   }
-  input_snippet_t *dest = &track->snippets[track->snippet_count];
-  *dest = *snippet; // shallow copy of fields
-  if (snippet->input_count > 0 && snippet->inputs) {
-    dest->inputs = malloc(snippet->input_count * sizeof(SPlayerInput));
-    memcpy(dest->inputs, snippet->inputs, snippet->input_count * sizeof(SPlayerInput));
-  } else {
-    dest->inputs = NULL;
-    dest->input_count = 0;
-  }
+
+  track->snippets[track->snippet_count] = *snippet;
   track->snippet_count++;
 }
 
