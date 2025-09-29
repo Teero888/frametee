@@ -222,29 +222,26 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
   int rect_start_tick = screen_x_to_tick(ts, rect_min_x, timeline_bb.Min.x);
   int rect_end_tick = screen_x_to_tick(ts, rect_max_x, timeline_bb.Min.x);
 
-  // Ensure min/max ordering for tick bounds
   int start_tick = imin(rect_start_tick, rect_end_tick);
   int end_tick = imax(rect_start_tick, rect_end_tick);
 
-  // Convert selection rect Y from screen space to content space
   float content_rect_min_y = rect.Min.y - timeline_bb.Min.y + scroll_y;
   float content_rect_max_y = rect.Max.y - timeline_bb.Min.y + scroll_y;
 
-  clear_selection(ts);
+  ts->selected_snippets.count = 0;
+  ts->selected_snippet_id = -1;
+
   for (int ti = 0; ti < ts->player_track_count; ++ti) {
     player_track_t *track = &ts->player_tracks[ti];
 
-    // Calculate track bounds in content space
     float track_top = (float)ti * ts->track_height;
     float track_bottom = track_top + ts->track_height;
 
-    // Vertical check in CONTENT SPACE: Does the track overlap with the selection rect?
     bool track_is_selected_y = (track_top < content_rect_max_y && track_bottom > content_rect_min_y);
 
     if (track_is_selected_y) {
       for (int si = 0; si < track->snippet_count; ++si) {
         input_snippet_t *snip = &track->snippets[si];
-        // Horizontal check in TICK SPACE
         bool snippet_is_selected_x = (snip->start_tick < end_tick && snip->end_tick > start_tick);
         if (snippet_is_selected_x) {
           add_snippet_to_selection(ts, snip->id, ti);
@@ -1242,15 +1239,29 @@ void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_ind
 
 void render_player_track(timeline_state_t *ts, int track_index, player_track_t *track, ImDrawList *draw_list,
                          ImRect timeline_bb, float track_top, float track_bottom) {
-  // Draw track background
-  ImU32 track_bg_col = (track_index % 2 == 0) ? igGetColorU32_Col(ImGuiCol_TitleBg, 1.0f)
-                                              : igGetColorU32_Col(ImGuiCol_WindowBg, 1.0f);
-  // Add some alpha to see grid/ticks underneath
+
+  bool is_track_selected = (ts->selected_player_track_index == track_index);
+
+  ImU32 track_bg_col;
+  if (is_track_selected) {
+    // A distinct color for the selected track
+    track_bg_col = igGetColorU32_Col(ImGuiCol_FrameBgHovered, 1.0f);
+  } else {
+    // The original alternating background color
+    track_bg_col = (track_index % 2 == 0) ? igGetColorU32_Col(ImGuiCol_TitleBg, 1.0f)
+                                          : igGetColorU32_Col(ImGuiCol_WindowBg, 1.0f);
+  }
   track_bg_col = igGetColorU32_U32(track_bg_col, 0.95f);
 
   ImDrawList_AddRectFilled(draw_list, (ImVec2){timeline_bb.Min.x, track_top},
-                           (ImVec2){timeline_bb.Max.x, track_bottom}, track_bg_col, 0.0f,
-                           ImDrawFlags_None); // No rounding here
+                           (ImVec2){timeline_bb.Max.x, track_bottom}, track_bg_col, 0.0f, ImDrawFlags_None);
+  // igSetCursorScreenPos((ImVec2){timeline_bb.Min.x, track_top});
+  // char track_button_id[32];
+  // snprintf(track_button_id, sizeof(track_button_id), "##track_bg_%d", track_index);
+  // if (igInvisibleButton(track_button_id, (ImVec2){timeline_bb.Max.x - timeline_bb.Min.x, ts->track_height},
+  //                       0)) {
+  //   ts->selected_player_track_index = track_index;
+  // }
 
   // Draw track border/separator
   ImDrawList_AddLine(draw_list, (ImVec2){timeline_bb.Min.x, track_bottom},
@@ -1683,17 +1694,36 @@ void render_timeline(timeline_state_t *ts) {
       ImGuiListClipper_destroy(clipper);
 
       // Interaction logic that must happen AFTER items are submitted
-      // Handle Mouse Click for Selection Box Start
-      // This is done after the child window is drawn so `igIsAnyItemHovered()` is accurate.
       bool is_timeline_area_hovered = igIsMouseHoveringRect(timeline_bb.Min, timeline_bb.Max, true);
+
+      // Handle a click on an empty area to INITIATE track selection AND the selection box
       if (!ts->recording && igIsMouseClicked_Bool(ImGuiMouseButton_Left, 0) && is_timeline_area_hovered &&
           !igIsAnyItemHovered()) {
-        ts->selection_box_active = true;
-        ts->selection_box_start = io->MousePos;
-        ts->selection_box_end = io->MousePos;
+
+        // First, determine which track was clicked on, if any.
+        ImVec2 mouse_pos = io->MousePos;
+        float content_y = mouse_pos.y - timeline_bb.Min.y + tracks_area_scroll_y;
+        int clicked_track_index = (int)floorf(content_y / ts->track_height);
+        float total_tracks_height = ts->player_track_count * ts->track_height;
+
+        int target_track_index = -1; // Default to no track selected
+        if (clicked_track_index >= 0 && clicked_track_index < ts->player_track_count &&
+            content_y < total_tracks_height) {
+          target_track_index = clicked_track_index;
+        }
+
+        // If not holding Shift, clear the previous snippet selection.
         if (!io->KeyShift) {
           clear_selection(ts);
         }
+
+        // Now, set the selected track index. This happens AFTER clearing, so it takes precedence.
+        ts->selected_player_track_index = target_track_index;
+
+        // Finally, ALWAYS start a selection box drag.
+        ts->selection_box_active = true;
+        ts->selection_box_start = io->MousePos;
+        ts->selection_box_end = io->MousePos;
       }
 
       // Handle dragging and drawing for the selection box
