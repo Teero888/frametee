@@ -74,6 +74,11 @@ typedef struct timeline_state_t {
   SWorldCore previous_world;
 } timeline_state_t;
 
+void do_add_snippet(timeline_state_t *ts);
+void do_split_selected_snippets(timeline_state_t *ts);
+void do_delete_selected_snippets(timeline_state_t *ts);
+void do_merge_selected_snippets(timeline_state_t *ts);
+
 input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id);
 void free_snippet_inputs(input_snippet_t *snippet);
 player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph, int num);

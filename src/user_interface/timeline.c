@@ -140,25 +140,43 @@ static void remove_snippet_from_selection(timeline_state_t *ts, int snippet_id) 
     }
   }
 }
-static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb) {
+
+static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb, float scroll_y) {
+  float rect_min_x = fminf(rect.Min.x, rect.Max.x);
+  float rect_max_x = fmaxf(rect.Min.x, rect.Max.x);
+
+  int rect_start_tick = screen_x_to_tick(ts, rect_min_x, timeline_bb.Min.x);
+  int rect_end_tick = screen_x_to_tick(ts, rect_max_x, timeline_bb.Min.x);
+
+  // Ensure min/max ordering for tick bounds
+  int start_tick = imin(rect_start_tick, rect_end_tick);
+  int end_tick = imax(rect_start_tick, rect_end_tick);
+
+  // Convert selection rect Y from screen space to content space
+  float content_rect_min_y = rect.Min.y - timeline_bb.Min.y + scroll_y;
+  float content_rect_max_y = rect.Max.y - timeline_bb.Min.y + scroll_y;
+
   clear_selection(ts);
-  float track_top = timeline_bb.Min.y;
   for (int ti = 0; ti < ts->player_track_count; ++ti) {
     player_track_t *track = &ts->player_tracks[ti];
-    float th = ts->track_height;
-    float track_bottom = track_top + th;
-    for (int si = 0; si < track->snippet_count; ++si) {
-      input_snippet_t *snip = &track->snippets[si];
-      float x1 = tick_to_screen_x(ts, snip->start_tick, timeline_bb.Min.x);
-      float x2 = tick_to_screen_x(ts, snip->end_tick, timeline_bb.Min.x);
-      ImRect snip_rect = (ImRect){.Min = {x1, track_top + 4}, .Max = {x2, track_bottom - 4}};
-      // overlap test
-      if (!(snip_rect.Max.x < rect.Min.x || snip_rect.Min.x > rect.Max.x || snip_rect.Max.y < rect.Min.y ||
-            snip_rect.Min.y > rect.Max.y)) {
-        add_snippet_to_selection(ts, snip->id, ti);
+
+    // Calculate track bounds in content space
+    float track_top = (float)ti * ts->track_height;
+    float track_bottom = track_top + ts->track_height;
+
+    // Vertical check in CONTENT SPACE: Does the track overlap with the selection rect?
+    bool track_is_selected_y = (track_top < content_rect_max_y && track_bottom > content_rect_min_y);
+
+    if (track_is_selected_y) {
+      for (int si = 0; si < track->snippet_count; ++si) {
+        input_snippet_t *snip = &track->snippets[si];
+        // Horizontal check in TICK SPACE
+        bool snippet_is_selected_x = (snip->start_tick < end_tick && snip->end_tick > start_tick);
+        if (snippet_is_selected_x) {
+          add_snippet_to_selection(ts, snip->id, ti);
+        }
       }
     }
-    track_top = track_bottom + 4;
   }
 }
 
@@ -173,73 +191,85 @@ static int compare_snippets_by_start_tick(const void *a, const void *b) {
   return 0;
 }
 
-// Merges selected snippets on a given track that are adjacent
-static void merge_selected_snippets(timeline_state_t *ts, int track_index) {
-  if (ts->selected_snippet_count < 2 || track_index < 0)
+// Merges adjacent selected snippets across ALL tracks in the current selection.
+// This new function replaces the old static void merge_selected_snippets.
+void do_merge_selected_snippets(timeline_state_t *ts) {
+  if (ts->selected_snippet_count < 2)
     return;
 
-  player_track_t *track = &ts->player_tracks[track_index];
-  input_snippet_t *candidates[256];
-  int candidate_count = 0;
-
-  // Gather all selected snippets that are on the target track
-  for (int i = 0; i < ts->selected_snippet_count; ++i) {
-    input_snippet_t *snip = find_snippet_by_id(track, ts->selected_snippet_ids[i]);
-    if (snip) {
-      candidates[candidate_count++] = snip;
-    }
-  }
-
-  if (candidate_count < 2)
-    return;
-
-  // Sort the snippets by start_tick to easily find adjacent ones
-  qsort(candidates, candidate_count, sizeof(input_snippet_t *), compare_snippets_by_start_tick);
-
-  int ids_to_remove[256];
-  int remove_count = 0;
+  bool merged_something = false;
   int earliest_tick = INT_MAX;
 
-  // Iterate and merge
-  for (int i = 0; i < candidate_count - 1; ++i) {
-    input_snippet_t *a = candidates[i];
-    input_snippet_t *b = candidates[i + 1];
+  // Iterate over all tracks
+  for (int ti = 0; ti < ts->player_track_count; ++ti) {
+    player_track_t *track = &ts->player_tracks[ti];
 
-    if (a->end_tick == b->start_tick) { // Found an adjacent pair
-      int old_a_duration = a->input_count;
-      int b_duration = b->input_count;
-      int new_duration = old_a_duration + b_duration;
+    // 1. Gather all selected snippets that are on the current track
+    input_snippet_t *candidates[256];
+    int candidate_count = 0;
 
-      // Append B's inputs to A
-      a->inputs = realloc(a->inputs, sizeof(SPlayerInput) * new_duration);
-      memcpy(&a->inputs[old_a_duration], b->inputs, sizeof(SPlayerInput) * b_duration);
+    for (int i = 0; i < track->snippet_count; ++i) {
+      input_snippet_t *snip = &track->snippets[i];
+      if (is_snippet_selected(ts, snip->id)) {
+        candidates[candidate_count++] = snip;
+      }
+    }
 
-      // Update A's properties
-      a->end_tick = b->end_tick;
-      a->input_count = new_duration;
-      if (a->start_tick < earliest_tick)
-        earliest_tick = a->start_tick;
+    if (candidate_count < 2)
+      continue;
 
-      // Mark B for removal
-      ids_to_remove[remove_count++] = b->id;
+    // 2. Sort the snippets by start_tick to easily find adjacent ones
+    qsort(candidates, candidate_count, sizeof(input_snippet_t *), compare_snippets_by_start_tick);
 
-      // Nullify B's inputs to prevent double-free when it's removed
-      b->inputs = NULL;
-      b->input_count = 0;
+    int ids_to_remove[256];
+    int remove_count = 0;
 
-      // IMPORTANT: For chained merges (A+B, then result+C), make the next
-      // iteration's "previous" snippet the newly merged 'a'.
-      candidates[i + 1] = a;
+    // 3. Iterate and merge adjacent pairs (A.end_tick == B.start_tick)
+    for (int i = 0; i < candidate_count - 1; ++i) {
+      input_snippet_t *a = candidates[i];
+      input_snippet_t *b = candidates[i + 1];
+
+      if (a->end_tick == b->start_tick) { // Found an adjacent pair
+        merged_something = true;
+
+        int old_a_duration = a->input_count;
+        int b_duration = b->input_count;
+        int new_duration = old_a_duration + b_duration;
+
+        // Append B's inputs to A
+        a->inputs = realloc(a->inputs, sizeof(SPlayerInput) * new_duration);
+        memcpy(&a->inputs[old_a_duration], b->inputs, sizeof(SPlayerInput) * b_duration);
+
+        // Update A's properties
+        a->end_tick = b->end_tick;
+        a->input_count = new_duration;
+        if (a->start_tick < earliest_tick)
+          earliest_tick = a->start_tick;
+
+        // Mark B for removal
+        ids_to_remove[remove_count++] = b->id;
+
+        // Nullify B's inputs to prevent double-free when it's removed
+        b->inputs = NULL;
+        b->input_count = 0;
+
+        // IMPORTANT: For chained merges, make the next iteration's "previous" snippet the newly merged 'a'.
+        candidates[i + 1] = a;
+      }
+    }
+
+    // 4. Remove all the snippets that were merged on this track
+    if (remove_count > 0) {
+      for (int i = 0; i < remove_count; ++i) {
+        remove_snippet_from_track(ts, track, ids_to_remove[i]);
+      }
     }
   }
 
-  if (remove_count > 0) {
-    // Remove all the snippets that were merged
-    for (int i = 0; i < remove_count; ++i) {
-      remove_snippet_from_track(ts, track, ids_to_remove[i]);
-    }
-    clear_selection(ts);
-    recalc_ts(ts, earliest_tick);
+  if (merged_something) {
+    clear_selection(ts); // Clear selection after a successful merge
+    if (earliest_tick != INT_MAX)
+      recalc_ts(ts, earliest_tick);
   }
 }
 
@@ -261,70 +291,84 @@ static void auto_scroll_playhead_if_needed(timeline_state_t *ts, ImRect timeline
     ts->view_start_tick += (int)ceilf(ticks);
   }
 }
-// Global keyboard shortcuts (moved out of popup so they always work)
-static void process_global_shortcuts(timeline_state_t *ts) {
-  ImGuiIO *io = igGetIO_Nil();
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_A, true)) {
-    // Add snippet at current tick to selected track (or first track)
-    int track_idx = ts->selected_player_track_index >= 0 ? ts->selected_player_track_index
-                                                         : (ts->player_track_count > 0 ? 0 : -1);
-    if (track_idx >= 0) {
-      input_snippet_t snip = create_empty_snippet(ts, ts->current_tick, 50);
-      add_snippet_to_track(&ts->player_tracks[track_idx], &snip);
-    }
+
+void do_add_snippet(timeline_state_t *ts) {
+  // Add snippet at current tick to selected track (or first track)
+  int track_idx = ts->selected_player_track_index >= 0 ? ts->selected_player_track_index
+                                                       : (ts->player_track_count > 0 ? 0 : -1);
+  if (track_idx >= 0) {
+    input_snippet_t snip = create_empty_snippet(ts, ts->current_tick, 50);
+    add_snippet_to_track(&ts->player_tracks[track_idx], &snip);
   }
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_R, true)) {
-    // Split all selected snippets at current_tick
-    if (ts->selected_snippet_count > 0) {
-      int originals[256];
-      int cnt = ts->selected_snippet_count;
-      for (int i = 0; i < cnt; ++i)
-        originals[i] = ts->selected_snippet_ids[i];
-      for (int i = 0; i < cnt; ++i) {
-        int sid = originals[i];
-        // find snippet
-        for (int ti = 0; ti < ts->player_track_count; ++ti) {
-          player_track_t *track = &ts->player_tracks[ti];
-          for (int s = 0; s < track->snippet_count; ++s) {
-            input_snippet_t *snippet = &track->snippets[s];
-            if (snippet->id == sid) {
-              int split_tick = ts->current_tick;
-              if (split_tick <= snippet->start_tick || split_tick >= snippet->end_tick)
-                continue;
-              int old_end = snippet->end_tick;
-              input_snippet_t right = create_empty_snippet(ts, split_tick, old_end - split_tick);
-              int offset = split_tick - snippet->start_tick;
-              int right_count = old_end - split_tick;
-              if (right_count > 0) {
-                right.inputs = malloc(sizeof(SPlayerInput) * right_count);
-                memcpy(right.inputs, snippet->inputs + offset, right_count * sizeof(SPlayerInput));
-                right.input_count = right_count;
-              }
-              resize_snippet_inputs(ts, snippet, offset);
-              snippet->end_tick = split_tick;
-              add_snippet_to_track(track, &right);
+}
+
+void do_split_selected_snippets(timeline_state_t *ts) {
+  if (ts->selected_snippet_count > 0) {
+    int originals[256];
+    int cnt = ts->selected_snippet_count;
+    for (int i = 0; i < cnt; ++i)
+      originals[i] = ts->selected_snippet_ids[i];
+    for (int i = 0; i < cnt; ++i) {
+      int sid = originals[i];
+      // find snippet
+      for (int ti = 0; ti < ts->player_track_count; ++ti) {
+        player_track_t *track = &ts->player_tracks[ti];
+        for (int s = 0; s < track->snippet_count; ++s) {
+          input_snippet_t *snippet = &track->snippets[s];
+          if (snippet->id == sid) {
+            int split_tick = ts->current_tick;
+            if (split_tick <= snippet->start_tick || split_tick >= snippet->end_tick)
+              continue;
+            int old_end = snippet->end_tick;
+            input_snippet_t right = create_empty_snippet(ts, split_tick, old_end - split_tick);
+            int offset = split_tick - snippet->start_tick;
+            int right_count = old_end - split_tick;
+            if (right_count > 0) {
+              right.inputs = malloc(sizeof(SPlayerInput) * right_count);
+              memcpy(right.inputs, snippet->inputs + offset, right_count * sizeof(SPlayerInput));
+              right.input_count = right_count;
             }
+            resize_snippet_inputs(ts, snippet, offset);
+            snippet->end_tick = split_tick;
+            add_snippet_to_track(track, &right);
           }
         }
       }
     }
   }
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_D, true)) {
-    // Delete all selected snippets
-    if (ts->selected_snippet_count > 0) {
-      int originals[256];
-      int cnt = ts->selected_snippet_count;
-      for (int i = 0; i < cnt; ++i)
-        originals[i] = ts->selected_snippet_ids[i];
-      for (int i = 0; i < cnt; ++i) {
-        int sid = originals[i];
-        for (int ti = 0; ti < ts->player_track_count; ++ti) {
-          player_track_t *track = &ts->player_tracks[ti];
-          remove_snippet_from_track(ts, track, sid);
-        }
+}
+
+void do_delete_selected_snippets(timeline_state_t *ts) {
+  if (ts->selected_snippet_count > 0) {
+    int originals[256];
+    int cnt = ts->selected_snippet_count;
+    for (int i = 0; i < cnt; ++i)
+      originals[i] = ts->selected_snippet_ids[i];
+    for (int i = 0; i < cnt; ++i) {
+      int sid = originals[i];
+      for (int ti = 0; ti < ts->player_track_count; ++ti) {
+        player_track_t *track = &ts->player_tracks[ti];
+        remove_snippet_from_track(ts, track, sid);
       }
-      clear_selection(ts);
     }
+    clear_selection(ts);
+  }
+}
+
+// Global keyboard shortcuts (moved out of popup so they always work)
+static void process_global_shortcuts(timeline_state_t *ts) {
+  ImGuiIO *io = igGetIO_Nil();
+  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_A, true)) {
+    do_add_snippet(ts);
+  }
+  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_R, true)) {
+    do_split_selected_snippets(ts);
+  }
+  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_D, true)) {
+    do_delete_selected_snippets(ts);
+  }
+  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_M, true)) {
+    do_merge_selected_snippets(ts);
   }
 }
 
@@ -421,13 +465,6 @@ void advance_tick(timeline_state_t *ts, int steps) {
     if (ts->recording_snippet->input_count > 0)
       ts->recording_snippet->inputs[ts->recording_snippet->input_count - 1] = ts->recording_input;
   }
-}
-
-// finds a snippet by its id and track index
-input_snippet_t *find_snippet_by_id_and_track(timeline_state_t *ts, int snippet_id, int track_idx) {
-  if (track_idx < 0 || track_idx >= ts->player_track_count)
-    return NULL;
-  return find_snippet_by_id(&ts->player_tracks[track_idx], snippet_id);
 }
 
 // calculates a snapped tick position based on nearby snippet edges
@@ -787,21 +824,13 @@ void handle_timeline_interaction(timeline_state_t *ts, ImRect timeline_bb) {
                                ImDrawFlags_None);
       ImDrawList_AddRect(overlay_draw_list, min, max, IM_COL32(100, 150, 240, 180), 0.0f, ImDrawFlags_None,
                          0.0f);
-    } else {
-      // mouse released -> finalize selection
-      ImVec2 a = ts->selection_box_start;
-      ImVec2 b = ts->selection_box_end;
-      ImRect rect =
-          (ImRect){.Min = {fminf(a.x, b.x), fminf(a.y, b.y)}, .Max = {fmaxf(a.x, b.x), fmaxf(a.y, b.y)}};
-      select_snippets_in_rect(ts, rect, timeline_bb);
-      ts->selection_box_active = false;
     }
   }
 
   // Zoom with mouse wheel
   if (is_timeline_hovered && io->MouseWheel != 0) {
     int mouse_tick_before_zoom = screen_x_to_tick(ts, mouse_pos.x, timeline_bb.Min.x);
-    float zoom_delta = io->MouseWheel * 0.1f * ts->zoom; // Scale zoom delta by current zoom
+    float zoom_delta = io->KeyCtrl * io->MouseWheel * 0.1f * ts->zoom; // Scale zoom delta by current zoom
     ts->zoom = fmaxf(MIN_TIMELINE_ZOOM, fminf(MAX_TIMELINE_ZOOM, ts->zoom + zoom_delta));
 
     // Adjust view_start_tick so that the position under the mouse stays at the same tick
@@ -1085,83 +1114,20 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
   }
 
   if (igBeginPopup("RightClickMenu", ImGuiPopupFlags_AnyPopupLevel)) {
-    if (igMenuItem_Bool("Add Snippet (Ctrl+a)", NULL, false, true)) {
-      int track_idx = ts->selected_player_track_index;
-      input_snippet_t snip = create_empty_snippet(ts, ts->current_tick, 50);
-      add_snippet_to_track(&ts->player_tracks[track_idx], &snip);
+    if (igMenuItem_Bool("Add Snippet", "Ctrl+a", false, true)) {
+      do_add_snippet(ts);
     }
 
-    // Check if the current selection is a valid candidate for merging
-    bool can_merge = false;
-    if (ts->selected_snippet_count > 1 && ts->selected_player_track_index >= 0) {
-      player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
-      input_snippet_t *sorted_selection[256];
-      int count = 0;
-      for (int i = 0; i < ts->selected_snippet_count; ++i) {
-        input_snippet_t *snip = find_snippet_by_id(track, ts->selected_snippet_ids[i]);
-        if (snip)
-          sorted_selection[count++] = snip;
-      }
-      if (count > 1) {
-        qsort(sorted_selection, count, sizeof(input_snippet_t *), compare_snippets_by_start_tick);
-        for (int i = 0; i < count - 1; ++i) {
-          if (sorted_selection[i]->end_tick == sorted_selection[i + 1]->start_tick) {
-            can_merge = true;
-            break;
-          }
-        }
-      }
+    if (igMenuItem_Bool("Merge Snippets", "Ctrl+m", false, ts->selected_snippet_count > 1)) {
+      do_merge_selected_snippets(ts);
     }
 
-    if (igMenuItem_Bool("Merge Snippets", "Ctrl+M", false, can_merge)) {
-      merge_selected_snippets(ts, ts->selected_player_track_index);
+    if (igMenuItem_Bool("Split Snippet", "Ctrl+r", false, ts->selected_snippet_id != -1)) {
+      do_split_selected_snippets(ts);
     }
 
-    if (igMenuItem_Bool("Split Snippet (Ctrl+r)", NULL, false, ts->selected_snippet_id != -1)) {
-      if (ts->selected_player_track_index >= 0 && ts->selected_snippet_id >= 0) {
-        player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
-        input_snippet_t *snippet = find_snippet_by_id(track, ts->selected_snippet_id);
-        if (snippet && ts->current_tick > snippet->start_tick && ts->current_tick < snippet->end_tick) {
-          int old_end = snippet->end_tick;
-          int split_tick = ts->current_tick;
-
-          // Create right-hand snippet
-          input_snippet_t right = create_empty_snippet(ts, split_tick, old_end - split_tick);
-
-          // Copy the inputs after the split point
-          int offset = split_tick - snippet->start_tick;
-          if (offset < snippet->input_count) {
-            int right_count = snippet->input_count - offset;
-            right.inputs = malloc(right_count * sizeof(SPlayerInput));
-            memcpy(right.inputs, snippet->inputs + offset, right_count * sizeof(SPlayerInput));
-            right.input_count = right_count;
-          }
-
-          // Adjust original (left-hand) snippet
-          resize_snippet_inputs(ts, snippet, offset);
-          snippet->end_tick = split_tick;
-
-          // Insert the right-hand snippet into the track
-          add_snippet_to_track(track, &right);
-        }
-      }
-    }
-
-    if (igMenuItem_Bool("Delete Snippet (Ctrl+d)", NULL, false, ts->selected_snippet_count > 0)) {
-      if (ts->selected_snippet_count > 0) { // Redundant check, but safe
-        int originals[256];
-        int cnt = ts->selected_snippet_count;
-        for (int i = 0; i < cnt; ++i)
-          originals[i] = ts->selected_snippet_ids[i];
-
-        for (int i = 0; i < cnt; ++i) {
-          int sid = originals[i];
-          for (int ti = 0; ti < ts->player_track_count; ++ti) {
-            remove_snippet_from_track(ts, &ts->player_tracks[ti], sid);
-          }
-        }
-        clear_selection(ts);
-      }
+    if (igMenuItem_Bool("Delete Snippet", "Ctrl+d", false, ts->selected_snippet_count > 0)) {
+      do_delete_selected_snippets(ts);
     }
     igEndPopup();
   }
@@ -1522,6 +1488,16 @@ void render_timeline(timeline_state_t *ts) {
       if (ts->view_start_tick < 0)
         ts->view_start_tick = 0;
       igPopID();
+
+      // Handle Mouse Release for Selection Box
+      if (ts->selection_box_active && igIsMouseReleased_Nil(ImGuiMouseButton_Left)) {
+        ImVec2 a = ts->selection_box_start;
+        ImVec2 b = ts->selection_box_end;
+        ImRect rect =
+            (ImRect){.Min = {fminf(a.x, b.x), fminf(a.y, b.y)}, .Max = {fmaxf(a.x, b.x), fmaxf(a.y, b.y)}};
+        select_snippets_in_rect(ts, rect, timeline_bb, tracks_area_scroll_y);
+        ts->selection_box_active = false;
+      }
 
       // Handle Mouse Release for Snippet Drag & Drop
       if (ts->drag_state.active && igIsMouseReleased_Nil(ImGuiMouseButton_Left) && !ts->is_header_dragging) {
