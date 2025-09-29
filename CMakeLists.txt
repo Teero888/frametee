@@ -14,11 +14,11 @@ set(SRCS
 	src/physics/physics.c
     src/renderer/renderer.c
     src/renderer/graphics_backend.c
-    src/user_interface/widgets/hsl_colorpicker.c
     src/user_interface/player_info.c
-    src/user_interface/player_info.c
+    src/user_interface/snippet_editor.c
     src/user_interface/timeline.c
     src/user_interface/user_interface.c
+    src/user_interface/widgets/hsl_colorpicker.c
     src/animation/anim_data.c
     src/animation/anim_system.c
 )

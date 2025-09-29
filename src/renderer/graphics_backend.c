@@ -555,9 +555,9 @@ void ayu_dark(void) {
   colors[ImGuiCol_ScrollbarGrabActive] = accent_orange;
 
   // Buttons
-  colors[ImGuiCol_Button] = accent_orange;
-  colors[ImGuiCol_ButtonHovered] = hex_vec4("FF8F40", 0.85f);
-  colors[ImGuiCol_ButtonActive] = hex_vec4("FF8F40", 1.0f);
+  colors[ImGuiCol_Button] = hex_vec4("D4652F", 1.0f);
+  colors[ImGuiCol_ButtonHovered] = hex_vec4("E67D4A", 1.0f);
+  colors[ImGuiCol_ButtonActive] = hex_vec4("C25A29", 1.0f);
 
   // Tabs
   colors[ImGuiCol_Tab] = bg_line;
@@ -746,11 +746,11 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
 
   // Add ImGui texture handle from sampler + image view
   // ImGui_ImplVulkan_AddTexture returns an ImTextureID (void*).
-  
+
   ImTextureID id = (ImTextureID)ImGui_ImplVulkan_AddTexture(
-    handler->offscreen_sampler, handler->offscreen_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    
-    handler->offscreen_texture = ImTextureRef_ImTextureRef_TextureID(id);
+      handler->offscreen_sampler, handler->offscreen_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+  handler->offscreen_texture = ImTextureRef_ImTextureRef_TextureID(id);
   handler->offscreen_initialized = true;
   // printf("Offscreen resources created: %ux%u\n", width, height);
   return 0;

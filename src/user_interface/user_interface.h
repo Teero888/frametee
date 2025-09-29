@@ -16,6 +16,8 @@ typedef struct {
 
   // configs
   bool show_prediction;
+  int prediction_length; // TODO: make proper ui for this setting
+
   bool show_skin_manager;
 
   int pos_x, pos_y;

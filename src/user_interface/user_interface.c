@@ -6,6 +6,7 @@
 #include "cglm/vec2.h"
 #include "cimgui.h"
 #include "player_info.h"
+#include "snippet_editor.h"
 #include "timeline.h"
 #include "widgets/hsl_colorpicker.h"
 #include <limits.h>
@@ -111,161 +112,6 @@ void setup_docking(ui_handler_t *ui) {
   }
 }
 
-// snippet editor panel
-static const char *dir_options[] = {"Left", "Neutral", "Right"};
-static const char *weapon_options[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
-
-void render_snippet_editor_panel(timeline_state_t *ts) {
-  if (igBegin("Snippet Editor", NULL, 0)) {
-    if (ts->selected_snippet_id != -1) {
-      // Find snippet globally
-      input_snippet_t *snippet = NULL;
-      for (int i = 0; i < ts->player_track_count; i++) {
-        snippet = find_snippet_by_id(&ts->player_tracks[i], ts->selected_snippet_id);
-        if (snippet)
-          break;
-      }
-
-      if (snippet && snippet->input_count > 0) {
-        igText("Editing Snippet %d (%d inputs)", snippet->id, snippet->input_count);
-        igSeparator();
-
-        // Begin scrollable child region
-        igBeginChild_Str("InputsScroll", (ImVec2){0, 0}, true, 0);
-
-        // Define table flags
-        ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                                ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInner;
-
-        // Begin table with columns
-        if (igBeginTable("SnippetInputsTable", 9, flags, (ImVec2){0, 0}, 0)) {
-          igTableSetupScrollFreeze(0, 1); // freeze top row
-          // Setup column headers
-          igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 0.0f, 0);
-          igTableSetupColumn("Dir", ImGuiTableColumnFlags_WidthFixed, 0.0f, 1);
-          igTableSetupColumn("TargetX", ImGuiTableColumnFlags_WidthFixed, 0.0f, 2);
-          igTableSetupColumn("TargetY", ImGuiTableColumnFlags_WidthFixed, 0.0f, 3);
-          igTableSetupColumn("Tele", ImGuiTableColumnFlags_WidthFixed, 0.0f, 4);
-          igTableSetupColumn("Jump", ImGuiTableColumnFlags_WidthFixed, 0.0f, 5);
-          igTableSetupColumn("Fire", ImGuiTableColumnFlags_WidthFixed, 0.0f, 6);
-          igTableSetupColumn("Hook", ImGuiTableColumnFlags_WidthFixed, 0.0f, 7);
-          igTableSetupColumn("Wpn", ImGuiTableColumnFlags_WidthFixed, 0.0f, 8);
-
-          igTableHeadersRow();
-
-          float row_height = igGetTextLineHeightWithSpacing();
-
-          ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
-          ImGuiListClipper_Begin(clipper, snippet->input_count, row_height);
-
-          while (ImGuiListClipper_Step(clipper)) {
-            for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; ++i) {
-              SPlayerInput *inp = &snippet->inputs[i];
-              igTableNextRow(ImGuiTableRowFlags_None, 0.0f);
-
-              igTableSetColumnIndex(0);
-              igText("%d", snippet->start_tick + i);
-
-              igTableSetColumnIndex(1);
-              igPushID_Int(i * 10 + 1);
-              int dir_temp = (int)inp->m_Direction;
-              igInputInt("##Dir", &dir_temp, 0, 0, 0);
-              dir_temp = iclamp(dir_temp, -1, 1);
-              if (dir_temp != (int)inp->m_Direction) {
-                inp->m_Direction = (int8_t)dir_temp;
-                recalc_ts(ts, snippet->start_tick + i);
-              }
-              igPopID();
-
-              igTableSetColumnIndex(2);
-              igPushID_Int(i * 10 + 2);
-              int target_x = (int)inp->m_TargetX;
-              igInputInt("##TX", &target_x, 0, 0, 0);
-              target_x = iclamp(target_x, INT16_MIN, INT16_MAX);
-              if (target_x != (int)inp->m_TargetX) {
-                inp->m_TargetX = (int16_t)target_x;
-                recalc_ts(ts, snippet->start_tick + i);
-              }
-              igPopID();
-
-              // Target Y: full int range, no buttons
-              igTableSetColumnIndex(3);
-              igPushID_Int(i * 10 + 3);
-              int target_y = (int)inp->m_TargetY;
-              igInputInt("##TY", &target_y, 0, 0, 0);
-              target_y = iclamp(target_y, INT16_MIN, INT16_MAX);
-              if (target_y != (int)inp->m_TargetY) {
-                inp->m_TargetY = (int16_t)target_y;
-                recalc_ts(ts, snippet->start_tick + i);
-              }
-              igPopID();
-
-              igTableSetColumnIndex(4);
-              igPushID_Int(i * 10 + 4);
-              int tele_temp = (int)inp->m_TeleOut;
-              igInputInt("##TO", &tele_temp, 0, 0, 0);
-              tele_temp = iclamp(tele_temp, 0, 4);
-              if (tele_temp != (int)inp->m_TeleOut) {
-                inp->m_TeleOut = (uint8_t)tele_temp;
-                recalc_ts(ts, snippet->start_tick + i);
-              }
-              igPopID();
-
-              igTableSetColumnIndex(5);
-              igPushID_Int(i * 10 + 5);
-              bool jump = inp->m_Jump;
-              if (igCheckbox("##J", &jump)) {
-                inp->m_Jump = jump;
-                recalc_ts(ts, snippet->start_tick + i);
-              }
-              igPopID();
-
-              igTableSetColumnIndex(6);
-              igPushID_Int(i * 10 + 6);
-              bool fire = inp->m_Fire;
-              if (igCheckbox("##F", &fire)) {
-                inp->m_Fire = fire;
-                recalc_ts(ts, snippet->start_tick + i);
-              }
-              igPopID();
-
-              igTableSetColumnIndex(7);
-              igPushID_Int(i * 10 + 7);
-              bool hook = inp->m_Hook;
-              if (igCheckbox("##H", &hook)) {
-                inp->m_Hook = hook;
-                recalc_ts(ts, snippet->start_tick + i);
-              }
-              igPopID();
-
-              igTableSetColumnIndex(8);
-              igPushID_Int(i * 10 + 8);
-              int wpn = (int)inp->m_WantedWeapon;
-              igInputInt("##Wpn", &wpn, 0, 0, 0);
-              wpn = iclamp(wpn, 0, 4);
-              if (wpn != (int)inp->m_WantedWeapon) {
-                inp->m_WantedWeapon = (int8_t)wpn;
-                recalc_ts(ts, snippet->start_tick + i);
-              }
-              igPopID();
-            }
-          }
-          ImGuiListClipper_End(clipper);
-          ImGuiListClipper_destroy(clipper);
-
-          igEndTable();
-        }
-
-        igEndChild(); // End InputsScroll
-      } else {
-        igText("Snippet has no inputs");
-      }
-    } else {
-      igText("No snippet selected");
-    }
-  }
-  igEnd();
-}
 // player manager panel
 static bool g_remove_confirm_needed = true;
 static int g_pending_remove_index = -1;
@@ -436,7 +282,8 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
 
   ui->gfx_handler = gfx_handler;
   ui->show_timeline = true;
-  ui->show_prediction = true;
+  ui->show_prediction = false;
+  ui->prediction_length = 100;
   timeline_init(&ui->timeline);
   camera_init(&gfx_handler->renderer.camera);
   skin_manager_init(&ui->skin_manager);
@@ -681,7 +528,7 @@ void render_players(ui_handler_t *ui) {
       renderer_draw_line(gfx, pp, p, color, 0.05);
     }
 
-    for (int i = 0; i < 100; ++i) {
+    for (int i = 0; i < ui->prediction_length; ++i) {
       for (int p = 0; p < world.m_NumCharacters; ++p) {
         SPlayerInput input = ui->timeline.recording && p == ui->timeline.selected_player_track_index
                                  ? ui->timeline.recording_input
