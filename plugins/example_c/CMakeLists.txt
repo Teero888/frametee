@@ -13,6 +13,8 @@ if(NOT HOST_APP_DIR)
     message(FATAL_ERROR "Please provide the path to the host application root via -DHOST_APP_DIR=../..")
 endif()
 
+find_package(Vulkan REQUIRED)
+
 set(PLUGIN_C_SOURCES
     example.c
 )
@@ -42,8 +44,12 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${HOST_APP_DIR}/libs/cimgui/imgui"
 )
 
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    Vulkan::Vulkan
+)
+
 target_compile_options(${PROJECT_NAME} PRIVATE
-    $<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra;-pedantic-errors>
+    $<$<COMPILE_LANGUAGE:C>:-Wall;-pedantic-errors>
 )
 
 install(TARGETS ${PROJECT_NAME}

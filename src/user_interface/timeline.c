@@ -18,7 +18,7 @@
 
 #include "../renderer/graphics_backend.h"
 
-// --- Edit Inputs Command (for Snippet Editor) ---
+// Edit Inputs Command (for Snippet Editor)
 typedef struct {
   undo_command_t base;
   int snippet_id;
@@ -61,6 +61,25 @@ static void undo_edit_inputs(undo_command_t *cmd, timeline_state_t *ts) {
 static void redo_edit_inputs(undo_command_t *cmd, timeline_state_t *ts) {
   EditInputsCommand *c = (EditInputsCommand *)cmd;
   apply_input_states(ts, c->snippet_id, c->count, c->indices, c->after);
+}
+
+// checks if a snippet range overlaps with any snippets in a track (excluding one)
+bool check_for_overlap(const player_track_t *track, int start_tick, int end_tick, int exclude_snippet_id) {
+  if (start_tick >= end_tick)
+    return false; // Invalid range
+
+  for (int i = 0; i < track->snippet_count; ++i) {
+    input_snippet_t *other = &track->snippets[i];
+    if (other->id == exclude_snippet_id)
+      continue; // Don't check against ourselves
+
+    // Check for overlap: [start_tick, end_tick) and [other->start_tick, other->end_tick)
+    // Overlap occurs if (start1 < end2 && end1 > start2)
+    if (start_tick < other->end_tick && end_tick > other->start_tick) {
+      return true; // Overlap detected
+    }
+  }
+  return false; // No overlap
 }
 
 void copy_snippet_inputs(input_snippet_t *dest, const input_snippet_t *src);
@@ -612,8 +631,12 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
   float content_rect_min_y = rect.Min.y - timeline_bb.Min.y + scroll_y;
   float content_rect_max_y = rect.Max.y - timeline_bb.Min.y + scroll_y;
 
-  ts->selected_snippets.count = 0;
-  ts->selected_snippet_id = -1;
+  // add to selection if shift is held
+  ImGuiIO *io = igGetIO_Nil();
+  if (!io->KeyShift) {
+    ts->selected_snippets.count = 0;
+    ts->selected_snippet_id = -1;
+  }
 
   for (int ti = 0; ti < ts->player_track_count; ++ti) {
     player_track_t *track = &ts->player_tracks[ti];
@@ -875,8 +898,17 @@ undo_command_t *do_add_snippet(ui_handler_t *ui) {
   int track_idx = ts->selected_player_track_index >= 0 ? ts->selected_player_track_index
                                                        : (ts->player_track_count > 0 ? 0 : -1);
   if (track_idx >= 0) {
-    input_snippet_t snip = create_empty_snippet(ts, ts->current_tick, 50);
-    add_snippet_to_track(&ts->player_tracks[track_idx], &snip);
+    player_track_t *target_track = &ts->player_tracks[track_idx];
+    int start = ts->current_tick;
+    int end = start + 50; // Default duration
+
+    // Check for overlap before adding
+    if (check_for_overlap(target_track, start, end, -1)) {
+      return NULL; // Overlap detected, cancel the action
+    }
+
+    input_snippet_t snip = create_empty_snippet(ts, start, end - start);
+    add_snippet_to_track(target_track, &snip);
     AddSnippetCommand *cmd = calloc(1, sizeof(AddSnippetCommand));
     cmd->base.undo = undo_add_snippet;
     cmd->base.redo = redo_add_snippet;
@@ -1237,25 +1269,6 @@ int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, i
   return snapped_start_tick;
 }
 
-// checks if a snippet range overlaps with any snippets in a track (excluding one)
-bool check_for_overlap(const player_track_t *track, int start_tick, int end_tick, int exclude_snippet_id) {
-  if (start_tick >= end_tick)
-    return false; // Invalid range
-
-  for (int i = 0; i < track->snippet_count; ++i) {
-    input_snippet_t *other = &track->snippets[i];
-    if (other->id == exclude_snippet_id)
-      continue; // Don't check against ourselves
-
-    // Check for overlap: [start_tick, end_tick) and [other->start_tick, other->end_tick)
-    // Overlap occurs if (start1 < end2 && end1 > start2)
-    if (start_tick < other->end_tick && end_tick > other->start_tick) {
-      return true; // Overlap detected
-    }
-  }
-  return false; // No overlap
-}
-
 // attempts to move a snippet to a new position and track, checking for overlaps
 // returns true if the move was successful, false otherwise.
 bool try_move_snippet(timeline_state_t *ts, int snippet_id, int source_track_idx, int target_track_idx,
@@ -1480,10 +1493,8 @@ void render_timeline_controls(timeline_state_t *ts) {
     bool can_record = false;
 
     if (ts->selected_snippets.count == 0) {
-      // CASE 1: CREATE a new snippet
-      int track_idx = ts->player_track_count > 0 ? 0 : -1; // Default to track 0
-      if (track_idx != -1) {
-        player_track_t *track = &ts->player_tracks[track_idx];
+      if (ts->selected_player_track_index != -1) {
+        player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
         if (!check_for_overlap(track, ts->current_tick, ts->current_tick + 1, -1)) {
           input_snippet_t new_snip = create_empty_snippet(ts, ts->current_tick, 1);
           add_snippet_to_track(track, &new_snip);
@@ -1493,7 +1504,6 @@ void render_timeline_controls(timeline_state_t *ts) {
         }
       }
     } else {
-      // CASE 2: EXTEND selected snippet(s)
       int reference_end_tick = -1;
       bool all_share_end_tick = true;
       input_snippet_t **candidates = malloc(ts->selected_snippets.count * sizeof(input_snippet_t *));
@@ -2478,6 +2488,11 @@ void render_timeline(ui_handler_t *ui) {
 
               int new_track_idx = s_track_idx + track_delta;
               int new_start_tick = s->start_tick + tick_delta;
+
+              // Prevent snippet from being duplicated before tick 0
+              if (new_start_tick < 0)
+                new_start_tick = 0;
+
               // Perform the duplication
               input_snippet_t new_snip;
               new_snip = *s;
