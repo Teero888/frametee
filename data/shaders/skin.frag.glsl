@@ -109,12 +109,12 @@ void main() {
   vec2 uv_front = apply_anim(frag_uv, frag_front, foot);
 
   final_color = blend_pma(final_color, get_part_color(foot_shadow, uv_back, frag_skin_index, false, true, false, false));
+  final_color = blend_pma(final_color, get_part_color(body_shadow, uv_body, frag_skin_index, true, true, false, false));
   final_color = blend_pma(final_color, get_part_color(foot_shadow, uv_front, frag_skin_index, false, true, false, false));
   final_color = blend_pma(final_color, get_part_color(foot, uv_back, frag_skin_index, false, false, false, false));
-  final_color = blend_pma(final_color, get_part_color(body_shadow, uv_body, frag_skin_index, true, true, false, false));
   final_color = blend_pma(final_color, get_part_color(body, uv_body, frag_skin_index, true, false, true, false));
-  final_color = blend_pma(final_color, get_part_color(eye_right, uv_body, frag_skin_index, true, false, false, true)); // Mirrored
   final_color = blend_pma(final_color, get_part_color(eye_left, uv_body, frag_skin_index, true, false, false, false)); // Not Mirrored
+  final_color = blend_pma(final_color, get_part_color(eye_right, uv_body, frag_skin_index, true, false, false, true)); // Mirrored
   final_color = blend_pma(final_color, get_part_color(foot, uv_front, frag_skin_index, false, false, false, false));
 
   out_color = final_color;

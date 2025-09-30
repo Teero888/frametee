@@ -1445,6 +1445,8 @@ void render_timeline_controls(timeline_state_t *ts) {
   bool was_recording = ts->recording;
   if (igButton(ts->recording ? "Stop Recording" : "Record", (ImVec2){0, 0})) {
     ts->recording = !ts->recording;
+    if (ts->recording && ts->selected_player_track_index < 0)
+      ts->recording = 0; // can't record if no track is selected
 
     // If we just STOPPED recording, handle cleanup.
     if (!ts->recording && ts->recording_snippets.count > 0) {
