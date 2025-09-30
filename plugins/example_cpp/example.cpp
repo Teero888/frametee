@@ -6,49 +6,49 @@
 
 class CppPlugin {
 private:
-  const tas_api_t *m_api;
-  const tas_context_t *m_context;
-  bool m_show_window;
-  int m_snippet_duration;
+  const tas_api_t *m_pAPI;
+  const tas_context_t *m_pContext;
+  bool m_ShowWindow;
+  int m_SnippetDuration;
 
 public:
-  CppPlugin(tas_context_t *context, const tas_api_t *api)
-      : m_api(api), m_context(context), m_show_window(true), m_snippet_duration(100) {
-    m_api->log_info("Native C++ ImGui Plugin", "Plugin instance created!");
+  CppPlugin(tas_context_t *pContext, const tas_api_t *pAPI)
+      : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_SnippetDuration(100) {
+    m_pAPI->log_info("Native C++ ImGui Plugin", "Plugin instance created!");
   }
 
-  ~CppPlugin() { m_api->log_info("Native C++ ImGui Plugin", "Plugin instance destroyed."); }
+  ~CppPlugin() { m_pAPI->log_info("Native C++ ImGui Plugin", "Plugin instance destroyed."); }
 
   void update() {
-    ImGui::SetCurrentContext(m_context->imgui_context);
+    ImGui::SetCurrentContext(m_pContext->imgui_context);
 
     if (ImGui::BeginMainMenuBar()) {
       if (ImGui::BeginMenu("C++ Native Plugin")) {
-        ImGui::MenuItem("Show Window", nullptr, &m_show_window);
+        ImGui::MenuItem("Show Window", nullptr, &m_ShowWindow);
         ImGui::EndMenu();
       }
       ImGui::EndMainMenuBar();
     }
 
-    if (m_show_window) {
-      if (ImGui::Begin("C++ Native Plugin Window", &m_show_window)) {
+    if (m_ShowWindow) {
+      if (ImGui::Begin("C++ Native Plugin Window", &m_ShowWindow)) {
         ImGui::Text("This window is rendered from a C++ plugin using the native ImGui API!");
         ImGui::Separator();
 
-        ImGui::Text("Host Context: %d tracks", m_context->timeline->player_track_count);
-        ImGui::Text("Host API: Current tick is %d", m_api->get_current_tick());
+        ImGui::Text("Host Context: %d tracks", m_pContext->timeline->player_track_count);
+        ImGui::Text("Host API: Current tick is %d", m_pAPI->get_current_tick());
         ImGui::Separator();
 
-        ImGui::SliderInt("Snippet Duration", &m_snippet_duration, 10, 500, "%d ticks");
+        ImGui::SliderInt("Snippet Duration", &m_SnippetDuration, 10, 500, "%d ticks");
 
-        int selected_track = m_context->timeline->selected_player_track_index;
-        if (selected_track < 0) {
+        int SelectedTrack = m_pContext->timeline->selected_player_track_index;
+        if (SelectedTrack < 0) {
           ImGui::TextDisabled("Select a track to create a snippet.");
         } else {
           if (ImGui::Button("Create Snippet via API", ImVec2(0, 0))) {
-            int current_tick = m_api->get_current_tick();
-            undo_command_t *cmd = m_api->do_create_snippet(selected_track, current_tick, m_snippet_duration);
-            m_api->register_undo_command(cmd);
+            int CurrentTick = m_pAPI->get_current_tick();
+            undo_command_t *pCmd = m_pAPI->do_create_snippet(SelectedTrack, CurrentTick, m_SnippetDuration);
+            m_pAPI->register_undo_command(pCmd);
           }
         }
       }
