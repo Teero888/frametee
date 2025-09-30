@@ -56,4 +56,11 @@ typedef plugin_info_t (*get_plugin_info_func)(void);
 #define GET_PLUGIN_UPDATE_FUNC_NAME "plugin_update"
 #define GET_PLUGIN_SHUTDOWN_FUNC_NAME "plugin_shutdown"
 
+#undef FT_API
+#ifdef _WIN32
+#define FT_API __declspec(dllexport)
+#else
+#define FT_API extern
+#endif
+
 #endif // PLUGIN_API_H

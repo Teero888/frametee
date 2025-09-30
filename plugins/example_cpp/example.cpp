@@ -64,9 +64,9 @@ plugin_info_t get_plugin_info() {
           "A self-contained plugin written in C++ using the native ImGui API."};
 }
 
-void *plugin_init(tas_context_t *context, const tas_api_t *api) { return new CppPlugin(context, api); }
+FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) { return new CppPlugin(context, api); }
 
-void plugin_update(void *plugin_data) { static_cast<CppPlugin *>(plugin_data)->update(); }
+FT_API void plugin_update(void *plugin_data) { static_cast<CppPlugin *>(plugin_data)->update(); }
 
-void plugin_shutdown(void *plugin_data) { delete static_cast<CppPlugin *>(plugin_data); }
+FT_API void plugin_shutdown(void *plugin_data) { delete static_cast<CppPlugin *>(plugin_data); }
 }

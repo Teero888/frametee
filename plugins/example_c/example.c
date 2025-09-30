@@ -18,7 +18,7 @@ plugin_info_t get_plugin_info(void) {
                              "A self-contained plugin written in C that compiles its own ImGui sources."};
 }
 
-void *plugin_init(tas_context_t *context, const tas_api_t *api) {
+FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
   plugin_state_t *state = (plugin_state_t *)calloc(1, sizeof(plugin_state_t));
   if (!state)
     return NULL;
@@ -32,7 +32,7 @@ void *plugin_init(tas_context_t *context, const tas_api_t *api) {
   return state;
 }
 
-void plugin_update(void *plugin_data) {
+FT_API void plugin_update(void *plugin_data) {
   plugin_state_t *state = (plugin_state_t *)plugin_data;
   igSetCurrentContext(state->context->imgui_context);
 
@@ -71,7 +71,7 @@ void plugin_update(void *plugin_data) {
   }
 }
 
-void plugin_shutdown(void *plugin_data) {
+FT_API void plugin_shutdown(void *plugin_data) {
   plugin_state_t *state = (plugin_state_t *)plugin_data;
   state->api->log_info("C API Example", "Plugin is shutting down.");
   free(state);
