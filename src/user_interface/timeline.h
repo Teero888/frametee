@@ -55,7 +55,7 @@ typedef struct {
 } recording_snippet_vector_t;
 
 typedef struct ui_handler ui_handler_t;
-typedef struct timeline_state {
+struct timeline_state {
   int current_tick;
   float zoom;          // Pixels per tick
   int view_start_tick; // The tick at the left edge of the timeline view
@@ -86,7 +86,7 @@ typedef struct timeline_state {
   SWorldCore previous_world;
 
   ui_handler_t *ui;
-} timeline_state_t;
+};
 
 undo_command_t *do_add_snippet(ui_handler_t *ui);
 undo_command_t *do_split_selected_snippets(ui_handler_t *ui);
@@ -103,6 +103,7 @@ void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx);
 int get_max_timeline_tick(timeline_state_t *ts);
 void recalc_ts(timeline_state_t *ts, int tick);
 void process_global_shortcuts(ui_handler_t *ui);
+void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet);
 
 void render_timeline(ui_handler_t *ui);
 void timeline_init(timeline_state_t *ts);

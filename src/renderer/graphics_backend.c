@@ -192,7 +192,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
     recreate_offscreen_if_needed(handler, (uint32_t)fb_width, (uint32_t)fb_height);
   }
 
-  // Acquire Image and Begin Command Buffer ---
+  // Acquire Image and Begin Command Buffer
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
   // Ensure the previous use of this frame's fence is completed, so reuse of semaphores is safe
@@ -223,7 +223,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
   handler->current_frame_command_buffer = fd->CommandBuffer;
 
-  // Begin offscreen render pass (for game rendering) ---
+  // Begin offscreen render pass (for game rendering)
   if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE &&
       handler->offscreen_framebuffer != VK_NULL_HANDLE) {
     VkClearValue clear = {.color = {.float32 = {30.f / 255.f, 35.f / 255.f, 40.f / 255.f, 1.0f}}};
@@ -237,7 +237,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
     vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
   }
 
-  // Start ImGui and Renderer Frames ---
+  // Start ImGui and Renderer Frames
   ImGui_ImplVulkan_NewFrame();
   ImGui_ImplGlfw_NewFrame();
   igNewFrame();
@@ -264,7 +264,7 @@ bool gfx_end_frame(gfx_handler_t *handler) {
     return hovered;
   }
 
-  // Finish game rendering into offscreen target ---
+  // Finish game rendering into offscreen target
   if (handler->offscreen_initialized) {
     renderer_end_frame(handler, handler->current_frame_command_buffer);
     vkCmdEndRenderPass(handler->current_frame_command_buffer);
@@ -272,7 +272,7 @@ bool gfx_end_frame(gfx_handler_t *handler) {
     renderer_end_frame(handler, handler->current_frame_command_buffer);
   }
 
-  // Begin swapchain render pass for ImGui ---
+  // Begin swapchain render pass for ImGui
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
   VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -329,8 +329,12 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   check_vk_result(err);
 
   handler->current_frame_command_buffer = VK_NULL_HANDLE;
-
-  // Present ---
+  ImGuiIO *io = igGetIO_Nil();
+  if (io->ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+    igUpdatePlatformWindows();
+    igRenderPlatformWindowsDefault(NULL, NULL);
+  }
+  // Present
   VkPresentInfoKHR present_info = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                                    .waitSemaphoreCount = 1,
                                    .pWaitSemaphores = &render_complete_semaphore,
@@ -595,6 +599,7 @@ static int init_imgui(gfx_handler_t *handler) {
   io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io->ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
   io->ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // io->ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   ayu_dark();
 
   ImGui_ImplGlfw_InitForVulkan(handler->window, true);
@@ -1007,7 +1012,7 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
     vkCmdBeginRenderPass(fd->CommandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);
   }
 
-  // Immediate Mode Drawing Logic ---
+  // Immediate Mode Drawing Logic
   renderer_begin_frame(handler, fd->CommandBuffer);
 
   if (handler->map_shader && handler->quad_mesh && handler->map_texture_count > 0) {
@@ -1042,7 +1047,7 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
 
   // Draw primitives on top
   renderer_end_frame(handler, fd->CommandBuffer);
-  // End Immediate Mode Drawing ---
+  // End Immediate Mode Drawing
 
   ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer, VK_NULL_HANDLE);
 

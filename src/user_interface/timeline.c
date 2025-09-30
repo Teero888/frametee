@@ -2059,9 +2059,6 @@ void render_timeline(ui_handler_t *ui) {
       input_snippet_t *snippet = ts->recording_snippets.snippets[i];
       if (ts->current_tick >= snippet->start_tick) {
         resize_snippet_inputs(ts, snippet, (ts->current_tick - snippet->start_tick) + 1);
-        snippet->end_tick = ts->current_tick;
-        if (snippet->input_count > 0)
-          snippet->inputs[snippet->input_count - 1] = ts->recording_input;
       }
     }
   }

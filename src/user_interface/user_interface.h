@@ -1,6 +1,7 @@
 #ifndef USER_INTERFACE_H
 #define USER_INTERFACE_H
 
+#include "../plugins/plugin_manager.h"
 #include "player_info.h"
 #include "timeline.h"
 #include "undo_redo.h"
@@ -29,6 +30,10 @@ typedef struct ui_handler {
   bool weapons[NUM_WEAPONS];
 
   undo_manager_t undo_manager;
+
+  plugin_manager_t plugin_manager;
+  tas_context_t plugin_context;
+  tas_api_t plugin_api;
 } ui_handler_t;
 
 void on_camera_update(struct gfx_handler_t *handler, bool hovered);

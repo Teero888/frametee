@@ -10,18 +10,19 @@ option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer
 project(ddnet_frametee)
 set(SRCS 
     src/main.c
-	src/physics/physics.h
+    src/animation/anim_data.c
+    src/animation/anim_system.c
 	src/physics/physics.c
-    src/renderer/renderer.c
+    src/plugins/api_impl.c
+    src/plugins/plugin_manager.c
     src/renderer/graphics_backend.c
-    src/user_interface/undo_redo.c
+    src/renderer/renderer.c
     src/user_interface/player_info.c
     src/user_interface/snippet_editor.c
     src/user_interface/timeline.c
+    src/user_interface/undo_redo.c
     src/user_interface/user_interface.c
     src/user_interface/widgets/hsl_colorpicker.c
-    src/animation/anim_data.c
-    src/animation/anim_system.c
 )
 
 # find dependencies
@@ -76,8 +77,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Vulkan::Vulkan
 )
 
-# Compiler warnings for the project
-target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wpedantic)
+# compiler warnings for the project
+target_compile_options(${PROJECT_NAME} PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra;-pedantic-errors>
+)
 
 # Sanitizer options
 if(ENABLE_SANITIZERS)
@@ -168,6 +171,14 @@ add_custom_target(
 
 # ensure shaders are compiled before the main target
 add_dependencies(${PROJECT_NAME} compile_shaders)
+
+# create plugins directory in build folder
+add_custom_command(
+    TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory 
+        ${CMAKE_BINARY_DIR}/plugins
+    COMMENT "Creating plugins directory in build folder"
+)
 
 # copy textures folder to build directory
 add_custom_command(

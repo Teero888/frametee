@@ -1,6 +1,7 @@
 #include "user_interface.h"
 #include "../../symbols.h"
 #include "../animation/anim_data.h"
+#include "../plugins/api_impl.h"
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
 #include "cglm/vec2.h"
@@ -64,6 +65,16 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_manager, true);
       igEndMenu();
     }
+    
+    const char* button_text = "Reload Plugins";
+    ImVec2 button_size;
+    igCalcTextSize(&button_size, button_text, NULL, false, 0.0f);
+    button_size.x += igGetStyle()->FramePadding.x * 2.0f; 
+    ImVec2 region_avail;
+    igGetContentRegionAvail(&region_avail);
+    igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x);
+    if (igButton(button_text, (ImVec2){0,0})) 
+        plugin_manager_reload_all(&ui->plugin_manager, "plugins");
 
     igEndMainMenuBar();
   }
@@ -277,6 +288,15 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   undo_manager_init(&ui->undo_manager);
   skin_manager_init(&ui->skin_manager);
   NFD_Init();
+
+  printf("Initializing plugin system...\n");
+  ui->plugin_api = api_init(ui);
+  ui->plugin_context.ui_handler = ui;
+  ui->plugin_context.timeline = &ui->timeline;
+  ui->plugin_context.gfx_handler = gfx_handler;
+  ui->plugin_context.imgui_context = igGetCurrentContext();
+  plugin_manager_init(&ui->plugin_manager, &ui->plugin_context, &ui->plugin_api);
+  plugin_manager_load_all(&ui->plugin_manager, "plugins"); // Load from 'plugins' directory
 }
 
 static float lint2(float a, float b, float f) { return a + f * (b - a); }
@@ -544,8 +564,10 @@ void render_players(ui_handler_t *ui) {
 
 void ui_render(ui_handler_t *ui) {
   timeline_update_inputs(&ui->timeline, ui->gfx_handler);
-
   render_menu_bar(ui);
+
+  // render menu bar first so the plugin can add menu items
+  plugin_manager_update_all(&ui->plugin_manager);
 
   ImGuiIO *io = igGetIO_Nil();
   if (!igIsAnyItemActive()) { // Prevent shortcuts while typing in a text field
@@ -635,6 +657,7 @@ bool ui_render_late(ui_handler_t *ui) {
 }
 
 void ui_cleanup(ui_handler_t *ui) {
+  plugin_manager_shutdown(&ui->plugin_manager);
   timeline_cleanup(&ui->timeline);
   undo_manager_cleanup(&ui->undo_manager);
   skin_manager_free(&ui->skin_manager);
