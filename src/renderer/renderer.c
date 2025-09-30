@@ -8,6 +8,8 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize2.h"
 
 #include <assert.h>
 #include <math.h>
@@ -532,15 +534,15 @@ int renderer_init(gfx_handler_t *handler) {
   vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0,
               &renderer->ubo_buffer_ptr);
 
-  // Create a 2D array texture to hold MAX_SKINS atlases (each 256x128, RGBA8)
+  // create a 2d array texture to hold max_skins atlases (each 512x256, rgba8)
   renderer->skin_manager.atlas_array =
-      renderer_create_texture_2d_array(handler, 256, 128, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
+      renderer_create_texture_2d_array(handler, 512, 256, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
   memset(renderer->skin_manager.layer_used, 0, sizeof(renderer->skin_manager.layer_used));
-  // Skin Renderer
+  // skin renderer
   renderer->skin_renderer.skin_shader =
       renderer_load_shader(handler, "data/shaders/skin.vert.spv", "data/shaders/skin.frag.spv");
 
-  // Allocate big instance buffer (enough for thousands)
+  // allocate big instance buffer
   create_buffer(handler, sizeof(skin_instance_t) * 100000, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &renderer->skin_renderer.instance_buffer);
@@ -1797,39 +1799,57 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
     return -1;
   }
 
-  // TODO: ACTUALLY FIX THIS PLS: RN ITS ONLY 256x128 NOT ANY OTHER RES
   // check dimensions (must be multiple of 256x128)
-  if (tex_width % 256 != 0 || tex_height % 128 != 0) {
-    fprintf(stderr, "Skin %s has invalid dimensions (%dx%d)\n", path, tex_width, tex_height);
+  if (tex_width <= 0 || tex_height <= 0 || tex_width % 256 != 0 || tex_height % 128 != 0) {
+    fprintf(stderr, "Skin %s has invalid dimensions (%dx%d), must be a multiple of 256x128\n", path,
+            tex_width, tex_height);
     stbi_image_free(pixels);
     return -1;
   }
+
+  stbi_uc *used_pixels = pixels;
+  const int final_width = 512;
+  const int final_height = 256;
+
+  if (tex_width != final_width || tex_height != final_height) {
+    printf("Info: resizing skin '%s' from %dx%d to %dx%d\n", path, tex_width, tex_height, final_width,
+           final_height);
+    stbi_uc *resized_pixels = malloc(final_width * final_height * 4);
+    if (!resized_pixels) {
+      fprintf(stderr, "Failed to allocate memory for skin resize.\n");
+      stbi_image_free(pixels);
+      return -1;
+    }
+    stbir_resize_uint8_srgb(pixels, tex_width, tex_height, 0, resized_pixels, final_width, final_height, 0,
+                            4);
+    used_pixels = resized_pixels; // from now on, use the resized pixels
+  }
+
   renderer_state_t *r = &h->renderer;
   int layer = skin_manager_alloc_layer(r);
   if (layer < 0) {
     fprintf(stderr, "No free skin layers available\n");
+    if (used_pixels != pixels)
+      free(used_pixels);
     stbi_image_free(pixels);
     return -1;
   }
 
   // do ddnet grayscale retard logic
+  // Note: this is done on the original 'pixels' for best quality before resize
   uint32_t freq[256] = {0};
-  for (int y = 0; y < 96; ++y) {
-    size_t rowBase = (size_t)y * (size_t)tex_width;
-    for (int x = 0; x < 96; ++x) {
+  int body_w = (tex_width / 256) * 96;
+  int body_h = (tex_height / 128) * 96;
+  for (int y = 0; y < body_h; ++y) {
+    size_t rowBase = (size_t)y * tex_width;
+    for (int x = 0; x < body_w; ++x) {
       size_t idx = (rowBase + (size_t)x) * 4u;
       unsigned char a = pixels[idx + 3];
       if (a > 128) {
         unsigned char r = pixels[idx + 0];
         unsigned char g = pixels[idx + 1];
         unsigned char b = pixels[idx + 2];
-
-        uint8_t gray = 0.2126f * r + 0.7152f * g + 0.0722f * b;
-        if (gray < 0)
-          gray = 0;
-        if (gray > 255)
-          gray = 255;
-
+        uint8_t gray = (uint8_t)(0.2126f * r + 0.7152f * g + 0.0722f * b);
         freq[gray]++;
       }
     }
@@ -1843,16 +1863,18 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
   r->skin_manager.atlas_array[layer].gs_org = org_weight;
 
   // Create staging buffer
-  VkDeviceSize image_size = tex_width * tex_height * 4;
+  VkDeviceSize image_size = final_width * final_height * 4;
   buffer_t staging;
   create_buffer(h, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging);
 
   void *data;
   vkMapMemory(h->g_device, staging.memory, 0, image_size, 0, &data);
-  memcpy(data, pixels, image_size);
+  memcpy(data, used_pixels, image_size);
   vkUnmapMemory(h->g_device, staging.memory);
-  stbi_image_free(pixels);
+  if (used_pixels != pixels)
+    free(used_pixels);     // free resized buffer
+  stbi_image_free(pixels); // free original buffer
 
   // Transition -> TRANSFER_DST
   transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image,
@@ -1867,7 +1889,7 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
                            .mipLevel = 0,
                            .baseArrayLayer = layer,
                            .layerCount = 1},
-      .imageExtent = {(uint32_t)tex_width, (uint32_t)tex_height, 1},
+      .imageExtent = {(uint32_t)final_width, (uint32_t)final_height, 1},
   };
   vkCmdCopyBufferToImage(cmd, staging.buffer, r->skin_manager.atlas_array->image,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);

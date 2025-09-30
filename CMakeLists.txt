@@ -36,9 +36,9 @@ if(NOT GLSLANG_VALIDATOR)
     message(FATAL_ERROR "glslangValidator not found. Please ensure Vulkan SDK is installed.")
 endif()
 
-# stb image library
-add_library(stb_image INTERFACE)
-target_include_directories(stb_image INTERFACE ${CMAKE_SOURCE_DIR}/libs/stb_image)
+# stb library
+add_library(stb INTERFACE)
+target_include_directories(stb INTERFACE ${CMAKE_SOURCE_DIR}/libs/stb)
 
 # imgui sources
 set(IMGUI_SOURCES 
@@ -68,7 +68,7 @@ add_subdirectory(libs/nfd)
 target_compile_options(${PROJECT_NAME} PRIVATE -w)
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nfd
-    stb_image
+    stb
     ddnet_physics
     cglm
     cimgui

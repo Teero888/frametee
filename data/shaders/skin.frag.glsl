@@ -32,69 +32,6 @@ mat2 rot(float a) {
 }
 float luminance(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
-vec4 sample_skin_tinted(part_info_t part, vec2 frag_uv, int skin_index, vec3 tint) {
-  if (frag_uv.x < part.place_offset.x || frag_uv.x > part.place_offset.x + part.place_size.x ||
-      frag_uv.y < part.place_offset.y || frag_uv.y > part.place_offset.y + part.place_size.y) {
-    return vec4(0.0);
-  }
-  vec2 local_uv = (frag_uv - part.place_offset) / part.place_size;
-  vec2 atlas_full = vec2(256.0, 128.0);
-  vec2 uv = vec2(part.atlas_offset) / atlas_full + local_uv * (vec2(part.atlas_size) / atlas_full);
-
-  vec4 src = texture(skins, vec3(uv, float(skin_index)));
-  if (src.a <= 0.0001)
-    return vec4(0.0);
-
-  int v = int(luminance(src.rgb) * 255.0 + 0.5);
-  if (v <= frag_col_gs) {
-    v = int(float(v) / float(frag_col_gs) * 192.0 + 0.5);
-  } else {
-    v = int(float(v - frag_col_gs) / float(255 - frag_col_gs) * (255 - 192) + 192.0 + 0.5);
-  }
-  return vec4(tint * float(v) / 255.0, src.a);
-}
-
-vec4 sample_skin_feet(part_info_t part, vec2 frag_uv, int skin_index, float col) {
-  if (frag_uv.x < part.place_offset.x || frag_uv.x > part.place_offset.x + part.place_size.x ||
-      frag_uv.y < part.place_offset.y || frag_uv.y > part.place_offset.y + part.place_size.y) {
-    return vec4(0.0);
-  }
-  vec2 local_uv = (frag_uv - part.place_offset) / part.place_size;
-  vec2 atlas_full = vec2(256.0, 128.0);
-  vec2 uv = vec2(part.atlas_offset) / atlas_full + local_uv * (vec2(part.atlas_size) / atlas_full);
-  vec4 c = texture(skins, vec3(uv, float(skin_index)));
-  c.rgb *= col * c.a;
-  return c;
-}
-
-vec4 sample_skin(part_info_t part, vec2 frag_uv, int skin_index) {
-  if (frag_uv.x < part.place_offset.x || frag_uv.x > part.place_offset.x + part.place_size.x ||
-      frag_uv.y < part.place_offset.y || frag_uv.y > part.place_offset.y + part.place_size.y) {
-    return vec4(0.0);
-  }
-  vec2 local_uv = (frag_uv - part.place_offset) / part.place_size;
-  vec2 atlas_full = vec2(256.0, 128.0);
-  vec2 uv = vec2(part.atlas_offset) / atlas_full + local_uv * (vec2(part.atlas_size) / atlas_full);
-  vec4 c = texture(skins, vec3(uv, float(skin_index)));
-  c.rgb *= c.a;
-  return c;
-}
-
-vec4 sample_skin_mirror(part_info_t part, vec2 frag_uv, int skin_index) {
-  if (frag_uv.x < part.place_offset.x || frag_uv.x > part.place_offset.x + part.place_size.x ||
-      frag_uv.y < part.place_offset.y || frag_uv.y > part.place_offset.y + part.place_size.y) {
-    return vec4(0.0);
-  }
-  vec2 local_uv = (frag_uv - part.place_offset) / part.place_size;
-  // flip horizontally
-  local_uv.x = 1.0 - local_uv.x;
-  vec2 atlas_full = vec2(256.0, 128.0);
-  vec2 uv = vec2(part.atlas_offset) / atlas_full + local_uv * (vec2(part.atlas_size) / atlas_full);
-  vec4 c = texture(skins, vec3(uv, float(skin_index)));
-  c.rgb *= c.a;
-  return c;
-}
-
 vec4 blend_pma(vec4 dst, vec4 src) {
   return vec4(src.rgb + dst.rgb * (1.0 - src.a), src.a + dst.a * (1.0 - src.a));
 }
@@ -108,6 +45,45 @@ vec2 apply_anim(vec2 uv, vec3 anim, part_info_t part) {
   return uv + offs;
 }
 
+vec4 get_part_color(part_info_t part, vec2 frag_uv, int skin_index, bool use_body_color, bool is_shadow, bool apply_gs_contrast, bool mirror) {
+    if (frag_uv.x < part.place_offset.x || frag_uv.x > part.place_offset.x + part.place_size.x ||
+        frag_uv.y < part.place_offset.y || frag_uv.y > part.place_offset.y + part.place_size.y) {
+        return vec4(0.0);
+    }
+    vec2 local_uv = (frag_uv - part.place_offset) / part.place_size;
+    if (mirror) {
+        local_uv.x = 1.0 - local_uv.x;
+    }
+    vec2 atlas_full = vec2(256.0, 128.0);
+    vec2 uv = vec2(part.atlas_offset) / atlas_full + local_uv * (vec2(part.atlas_size) / atlas_full);
+    vec4 src = texture(skins, vec3(uv, float(skin_index)));
+    if (src.a <= 0.0001) {
+        return vec4(0.0);
+    }
+    if (frag_col_custom != 0) {
+        int v = int(luminance(src.rgb) * 255.0 + 0.5);
+
+        if (apply_gs_contrast) {
+            if (v <= frag_col_gs) {
+                v = int(float(v) / float(frag_col_gs) * 192.0 + 0.5);
+            } else {
+                v = int(float(v - frag_col_gs) / float(255 - frag_col_gs) * (255 - 192) + 192.0 + 0.5);
+            }
+        }
+        
+        vec3 tint = use_body_color ? frag_col_body : frag_col_feet;
+        return vec4(tint * (float(v) / 255.0) * src.a, src.a);
+
+    } else {
+        if (!use_body_color && !is_shadow) {
+            src.rgb *= frag_col_feet.r * src.a;
+        } else {
+            src.rgb *= src.a;
+        }
+        return src;
+    }
+}
+
 void main() {
   part_info_t foot = part_info_t(ivec2(192, 32), ivec2(64, 32), vec2(0.0, 0.25), vec2(1.0, 0.5));
   part_info_t foot_shadow = part_info_t(ivec2(192, 64), ivec2(64, 32), vec2(0.0, 0.25), vec2(1.0, 0.5));
@@ -115,59 +91,31 @@ void main() {
   part_info_t body = part_info_t(ivec2(0, 0), ivec2(96, 96), vec2(0.0), vec2(1.0, 1.0));
   part_info_t body_shadow = part_info_t(ivec2(96, 0), ivec2(96, 96), vec2(0.0), vec2(1.0, 1.0));
 
-  // dead eyes would be ivec2(192,96) but they are unused
-  ivec2 eye_offsets[6] = ivec2[6](ivec2(64, 96),  // normal eyes
-                                  ivec2(96, 96),  // angry
-                                  ivec2(128, 96), // hurt
-                                  ivec2(160, 96), // happy
-                                  ivec2(64, 96),  // blink
-                                  ivec2(224, 96)  // suprise
-  );
+  ivec2 eye_offsets[6] = ivec2[6](ivec2(64, 96), ivec2(96, 96), ivec2(128, 96), ivec2(160, 96), ivec2(64, 96), ivec2(224, 96));
 
   vec2 offset = vec2(frag_dir.x * 0.125f, -0.05f + frag_dir.y * 0.10f);
-  vec2 eye = vec2(0.075f - 0.010f * abs(frag_dir.x), 0.0);
+  vec2 eye_h_offset = vec2(0.075f - 0.010f * abs(frag_dir.x), 0.0);
 
   vec2 size = vec2(0.4);
-  // blink
   if (frag_eye - 6 == 4)
     size.y = 0.15;
-  part_info_t eye_right =
-      part_info_t(eye_offsets[frag_eye - 6], ivec2(32, 32), vec2(0.5) - size * 0.5 + eye + offset, size);
-  part_info_t eye_left =
-      part_info_t(eye_offsets[frag_eye - 6], ivec2(32, 32), vec2(0.5) - size * 0.5 - eye + offset, size);
+  part_info_t eye_right = part_info_t(eye_offsets[frag_eye - 6], ivec2(32, 32), vec2(0.5) - size * 0.5 + eye_h_offset + offset, size);
+  part_info_t eye_left = part_info_t(eye_offsets[frag_eye - 6], ivec2(32, 32), vec2(0.5) - size * 0.5 - eye_h_offset + offset, size);
 
-  // vec4 final_color = vec4(frag_uv.rg, 0.0, 1.0);
   vec4 final_color = vec4(0.0);
 
   vec2 uv_body = apply_anim(frag_uv, frag_body, body);
   vec2 uv_back = apply_anim(frag_uv, frag_back, foot);
   vec2 uv_front = apply_anim(frag_uv, frag_front, foot);
-  vec4 fsample;
 
-  final_color = blend_pma(final_color, sample_skin(foot_shadow, uv_back, frag_skin_index));
-  final_color = blend_pma(final_color, sample_skin(foot_shadow, uv_front, frag_skin_index));
-
-  if (frag_col_custom != 0)
-    fsample = sample_skin_tinted(foot, uv_back, frag_skin_index, frag_col_feet);
-  else
-    fsample = sample_skin_feet(foot, uv_back, frag_skin_index, frag_col_feet.r);
-  final_color = blend_pma(final_color, fsample);
-
-  final_color = blend_pma(final_color, sample_skin(body_shadow, uv_body, frag_skin_index));
-  if (frag_col_custom != 0)
-    fsample = sample_skin_tinted(body, uv_body, frag_skin_index, frag_col_body);
-  else
-    fsample = sample_skin(body, uv_body, frag_skin_index);
-  final_color = blend_pma(final_color, fsample);
-
-  final_color = blend_pma(final_color, sample_skin_mirror(eye_right, uv_body, frag_skin_index));
-  final_color = blend_pma(final_color, sample_skin(eye_left, uv_body, frag_skin_index));
-
-  if (frag_col_custom != 0)
-    fsample = sample_skin_tinted(foot, uv_front, frag_skin_index, frag_col_feet);
-  else
-    fsample = sample_skin_feet(foot, uv_front, frag_skin_index, frag_col_feet.r);
-  final_color = blend_pma(final_color, fsample);
+  final_color = blend_pma(final_color, get_part_color(foot_shadow, uv_back, frag_skin_index, false, true, false, false));
+  final_color = blend_pma(final_color, get_part_color(foot_shadow, uv_front, frag_skin_index, false, true, false, false));
+  final_color = blend_pma(final_color, get_part_color(foot, uv_back, frag_skin_index, false, false, false, false));
+  final_color = blend_pma(final_color, get_part_color(body_shadow, uv_body, frag_skin_index, true, true, false, false));
+  final_color = blend_pma(final_color, get_part_color(body, uv_body, frag_skin_index, true, false, true, false));
+  final_color = blend_pma(final_color, get_part_color(eye_right, uv_body, frag_skin_index, true, false, false, true)); // Mirrored
+  final_color = blend_pma(final_color, get_part_color(eye_left, uv_body, frag_skin_index, true, false, false, false)); // Not Mirrored
+  final_color = blend_pma(final_color, get_part_color(foot, uv_front, frag_skin_index, false, false, false, false));
 
   out_color = final_color;
 }
