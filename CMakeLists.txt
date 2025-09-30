@@ -77,6 +77,7 @@ set(IMGUI_SOURCES
     libs/cimgui/imgui/imgui_draw.cpp
     libs/cimgui/imgui/imgui_demo.cpp
     libs/cimgui/imgui/imgui_widgets.cpp
+    libs/cimgui/imgui/imgui_tables.cpp
     libs/cimgui/imgui/backends/imgui_impl_vulkan.cpp
     libs/cimgui/imgui/backends/imgui_impl_glfw.cpp
 )
