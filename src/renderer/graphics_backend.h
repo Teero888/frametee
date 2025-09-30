@@ -42,6 +42,7 @@ struct gfx_handler_t {
   uint32_t g_queue_family;
   VkQueue g_queue;
   VkDebugReportCallbackEXT g_debug_report;
+  VkDebugUtilsMessengerEXT g_debug_messenger;
   VkPipelineCache g_pipeline_cache;
   VkDescriptorPool g_descriptor_pool; // For ImGui
   struct ImGui_ImplVulkanH_Window g_main_window_data;

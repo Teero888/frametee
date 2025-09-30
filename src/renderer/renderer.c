@@ -494,7 +494,7 @@ int renderer_init(gfx_handler_t *handler) {
                                       &renderer->transfer_command_pool));
 
   VkDescriptorPoolSize pool_sizes[] = {
-      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 100},
+      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 100},
       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100 * MAX_TEXTURES_PER_DRAW}};
   for (int i = 0; i < 3; i++) { // triple buffering
     VkDescriptorPoolCreateInfo pool_create_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -632,7 +632,12 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   renderer_state_t *renderer = &handler->renderer;
   pipeline_cache_entry_t *entry = &renderer->pipeline_cache[shader->id];
 
-  if (entry->initialized && entry->ubo_count == ubo_count && entry->texture_count == texture_count) {
+  VkRenderPass target_render_pass = handler->offscreen_render_pass != VK_NULL_HANDLE
+                                        ? handler->offscreen_render_pass
+                                        : handler->g_main_window_data.RenderPass;
+
+  if (entry->initialized && entry->ubo_count == ubo_count && entry->texture_count == texture_count &&
+      entry->render_pass == target_render_pass) {
     return entry;
   }
 
@@ -644,36 +649,68 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
 
   entry->ubo_count = ubo_count;
   entry->texture_count = texture_count;
+  entry->render_pass = target_render_pass;
 
   uint32_t binding_count = ubo_count + texture_count;
   VLA(VkDescriptorSetLayoutBinding, bindings, binding_count);
+
+  if (shader) {
+    fprintf(stderr, "Creating descriptor set layout for %s: ubo_count=%u texture_count=%u\n",
+            shader->vert_path, ubo_count, texture_count);
+  }
+
+  if (target_render_pass == VK_NULL_HANDLE) {
+    fprintf(stderr, "Cannot create graphics pipeline without a valid render pass.\n");
+    entry->initialized = false;
+    VLA_FREE(bindings);
+    return NULL;
+  }
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
-    bindings[current_binding++] = (VkDescriptorSetLayoutBinding){
-        .binding = current_binding - 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, // MODIFIED
+    uint32_t binding_index = current_binding++;
+    bindings[binding_index] = (VkDescriptorSetLayoutBinding){
+        .binding = binding_index,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = 1,
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT};
   }
   for (uint32_t i = 0; i < texture_count; ++i) {
-    bindings[current_binding++] =
-        (VkDescriptorSetLayoutBinding){.binding = current_binding - 1,
-                                       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                       .descriptorCount = 1,
-                                       .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
+    uint32_t binding_index = current_binding++;
+    bindings[binding_index] = (VkDescriptorSetLayoutBinding){
+        .binding = binding_index,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
+  }
+
+  fprintf(stderr, "Bindings: count=%u\n", binding_count);
+  for (uint32_t i = 0; i < binding_count; ++i) {
+    fprintf(stderr, "  binding[%u]: binding=%u type=%u descriptorCount=%u stageFlags=0x%x\n", i,
+            bindings[i].binding, bindings[i].descriptorType, bindings[i].descriptorCount,
+            bindings[i].stageFlags);
   }
 
   VkDescriptorSetLayoutCreateInfo layout_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                                                  .bindingCount = binding_count,
                                                  .pBindings = bindings};
-  check_vk_result(vkCreateDescriptorSetLayout(handler->g_device, &layout_info, handler->g_allocator,
-                                              &entry->descriptor_set_layout));
+  VkResult err = vkCreateDescriptorSetLayout(handler->g_device, &layout_info, handler->g_allocator,
+                                             &entry->descriptor_set_layout);
+  if (err != VK_SUCCESS) {
+    fprintf(stderr, "vkCreateDescriptorSetLayout failed (shader=%s) err=%d\n",
+            shader ? shader->vert_path : "<unknown>", err);
+  }
+  check_vk_result_line(err, __LINE__);
 
   VkPipelineLayoutCreateInfo pipeline_layout_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                                                      .setLayoutCount = 1,
                                                      .pSetLayouts = &entry->descriptor_set_layout};
-  check_vk_result(vkCreatePipelineLayout(handler->g_device, &pipeline_layout_info, handler->g_allocator,
-                                         &entry->pipeline_layout));
+  err = vkCreatePipelineLayout(handler->g_device, &pipeline_layout_info, handler->g_allocator,
+                               &entry->pipeline_layout);
+  if (err != VK_SUCCESS) {
+    fprintf(stderr, "vkCreatePipelineLayout failed (shader=%s) err=%d\n",
+            shader ? shader->vert_path : "<unknown>", err);
+  }
+  check_vk_result_line(err, __LINE__);
 
   VkPipelineShaderStageCreateInfo vert_shader_stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -756,11 +793,18 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
                                                 .pColorBlendState = &color_blending,
                                                 .pDynamicState = &dynamic_state,
                                                 .layout = entry->pipeline_layout,
-                                                .renderPass = handler->g_main_window_data.RenderPass,
+                                                .renderPass = target_render_pass,
                                                 .subpass = 0};
 
-  check_vk_result(vkCreateGraphicsPipelines(handler->g_device, handler->g_pipeline_cache, 1, &pipeline_info,
-                                            handler->g_allocator, &entry->pipeline));
+  err = vkCreateGraphicsPipelines(handler->g_device, handler->g_pipeline_cache, 1, &pipeline_info,
+                                  handler->g_allocator, &entry->pipeline);
+  if (err != VK_SUCCESS) {
+    fprintf(stderr,
+            "vkCreateGraphicsPipelines failed (shader=%s, render_pass=%p, format=%d) err=%d\n",
+            shader ? shader->vert_path : "<unknown>", (void *)target_render_pass,
+            (int)handler->g_main_window_data.SurfaceFormat.format, err);
+  }
+  check_vk_result_line(err, __LINE__);
 
   entry->initialized = true;
   VLA_FREE(bindings);
@@ -1125,6 +1169,8 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, shader, ubo_count, texture_count,
                                                        &mesh_binding_description, 1, // one binding
                                                        mesh_attribute_descriptions, 3);
+  if (!pso)
+    return;
 
   // Allocate a descriptor set for this pipeline
   VkDescriptorSet descriptor_set;
@@ -1134,13 +1180,18 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
                                                 renderer->frame_descriptor_pools[frame_pool_index],
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &pso->descriptor_set_layout};
-  check_vk_result(vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set));
+  VkResult err = vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set);
+  if (err != VK_SUCCESS) {
+    fprintf(stderr, "vkAllocateDescriptorSets failed (shader=%s) err=%d\n",
+            shader ? shader->vert_path : "<unknown>", err);
+  }
+  check_vk_result_line(err, __LINE__);
 
   uint32_t binding_count = ubo_count + texture_count;
   VLA(VkWriteDescriptorSet, descriptor_writes, binding_count);
   VLA(VkDescriptorBufferInfo, buffer_infos, ubo_count);
   VLA(VkDescriptorImageInfo, image_infos, texture_count);
-  VLA(uint32_t, dynamic_offsets, ubo_count);
+  VLA(VkDeviceSize, ubo_offsets, ubo_count);
 
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
@@ -1149,31 +1200,33 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
         (ubo_sizes[i] + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
     assert(renderer->ubo_buffer_offset + aligned_size <= DYNAMIC_UBO_BUFFER_SIZE);
 
-    dynamic_offsets[i] = renderer->ubo_buffer_offset;
-    memcpy((char *)renderer->ubo_buffer_ptr + dynamic_offsets[i], ubos[i], ubo_sizes[i]);
+    ubo_offsets[i] = renderer->ubo_buffer_offset;
+    memcpy((char *)renderer->ubo_buffer_ptr + ubo_offsets[i], ubos[i], ubo_sizes[i]);
     renderer->ubo_buffer_offset += aligned_size;
 
     buffer_infos[i] = (VkDescriptorBufferInfo){
-        .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = 0, .range = ubo_sizes[i]};
-    descriptor_writes[current_binding++] =
-        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                               .dstSet = descriptor_set,
-                               .dstBinding = current_binding - 1,
-                               .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-                               .descriptorCount = 1,
-                               .pBufferInfo = &buffer_infos[i]};
+        .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = ubo_offsets[i], .range = ubo_sizes[i]};
+    uint32_t binding_index = current_binding++;
+    descriptor_writes[binding_index] = (VkWriteDescriptorSet){
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = descriptor_set,
+        .dstBinding = binding_index,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .pBufferInfo = &buffer_infos[i]};
   }
   for (uint32_t i = 0; i < texture_count; ++i) {
     image_infos[i] = (VkDescriptorImageInfo){.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                              .imageView = textures[i]->image_view,
                                              .sampler = textures[i]->sampler};
-    descriptor_writes[current_binding++] =
-        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                               .dstSet = descriptor_set,
-                               .dstBinding = current_binding - 1,
-                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                               .descriptorCount = 1,
-                               .pImageInfo = &image_infos[i]};
+    uint32_t binding_index = current_binding++;
+    descriptor_writes[binding_index] = (VkWriteDescriptorSet){
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = descriptor_set,
+        .dstBinding = binding_index,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .pImageInfo = &image_infos[i]};
   }
   vkUpdateDescriptorSets(handler->g_device, binding_count, descriptor_writes, 0, NULL);
 
@@ -1188,14 +1241,14 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   }
 
   vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1,
-                          &descriptor_set, ubo_count, dynamic_offsets);
+                          &descriptor_set, 0, NULL);
 
   if (mesh->index_count > 0) {
     vkCmdDrawIndexed(command_buffer, mesh->index_count, 1, 0, 0, 0);
   } else {
     vkCmdDraw(command_buffer, mesh->vertex_count, 1, 0, 0);
   }
-  VLA_FREE(dynamic_offsets);
+  VLA_FREE(ubo_offsets);
   VLA_FREE(image_infos);
   VLA_FREE(buffer_infos);
   VLA_FREE(descriptor_writes);
@@ -1445,6 +1498,8 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive_shader, 1, 0,
                                                        &primitive_binding_description, 1, // one binding
                                                        primitive_attribute_descriptions, 2);
+  if (!pso)
+    return;
 
   primitive_ubo_t ubo;
   ubo.camPos[0] = h->renderer.camera.pos[0];
@@ -1479,14 +1534,18 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &pso->descriptor_set_layout};
 
-  check_vk_result(vkAllocateDescriptorSets(h->g_device, &alloc_info, &descriptor_set));
+  VkResult err = vkAllocateDescriptorSets(h->g_device, &alloc_info, &descriptor_set);
+  if (err != VK_SUCCESS) {
+    fprintf(stderr, "vkAllocateDescriptorSets failed (primitive shader) err=%d\n", err);
+  }
+  check_vk_result_line(err, __LINE__);
 
   VkDescriptorBufferInfo buffer_info = {
-      .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = 0, .range = sizeof(primitive_ubo_t)};
+      .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dynamic_offset, .range = sizeof(primitive_ubo_t)};
   VkWriteDescriptorSet descriptor_write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                            .dstSet = descriptor_set,
                                            .dstBinding = 0,
-                                           .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                                           .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                            .descriptorCount = 1,
                                            .pBufferInfo = &buffer_info};
   vkUpdateDescriptorSets(h->g_device, 1, &descriptor_write, 0, NULL);
@@ -1496,7 +1555,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   vkCmdBindVertexBuffers(command_buffer, 0, 1, &renderer->dynamic_vertex_buffer.buffer, offsets);
   vkCmdBindIndexBuffer(command_buffer, renderer->dynamic_index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
   vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1,
-                          &descriptor_set, 1, &dynamic_offset);
+                          &descriptor_set, 0, NULL);
   vkCmdDrawIndexed(command_buffer, renderer->primitive_index_count, 1, 0, 0, 0);
 
   renderer->primitive_vertex_count = 0;
@@ -1733,6 +1792,8 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   // pipeline: 1 UBO + 1 texture
   pipeline_cache_entry_t *pso =
       get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 14);
+  if (!pso)
+    return;
 
   // prepare camera UBO (same as primitives) ---
   primitive_ubo_t ubo;

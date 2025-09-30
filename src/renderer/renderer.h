@@ -96,6 +96,7 @@ typedef struct {
   VkPipeline pipeline;
   VkPipelineLayout pipeline_layout;
   VkDescriptorSetLayout descriptor_set_layout;
+  VkRenderPass render_pass;
   uint32_t ubo_count;
   uint32_t texture_count;
 } pipeline_cache_entry_t;

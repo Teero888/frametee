@@ -24,6 +24,16 @@ static void cleanup_vulkan_window(gfx_handler_t *handler);
 // frame_render and frame_present are now folded into gfx_begin/end_frame
 static void cleanup_map_resources(gfx_handler_t *handler);
 
+#ifdef APP_USE_VULKAN_DEBUG_REPORT
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT object_type,
+                                                  uint64_t object, size_t location, int32_t message_code,
+                                                  const char *layer_prefix, const char *message, void *user_data);
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                                                           VkDebugUtilsMessageTypeFlagsEXT type,
+                                                           const VkDebugUtilsMessengerCallbackDataEXT *callback_data,
+                                                           void *user_data);
+#endif
+
 // offscreen helpers
 static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint32_t height);
 static void destroy_offscreen_resources(gfx_handler_t *handler);
@@ -41,6 +51,52 @@ static void setup_window(gfx_handler_t *handler, struct ImGui_ImplVulkanH_Window
 static void glfw_error_callback(int error, const char *description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
+
+#ifdef APP_USE_VULKAN_DEBUG_REPORT
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT object_type,
+                                                  uint64_t object, size_t location, int32_t message_code,
+                                                  const char *layer_prefix, const char *message, void *user_data) {
+  (void)flags;
+  (void)object_type;
+  (void)object;
+  (void)location;
+  (void)user_data;
+
+  fprintf(stderr, "[vulkan][%s] code %d: %s\n", layer_prefix ? layer_prefix : "unknown", message_code, message);
+  fflush(stderr);
+  return VK_FALSE; // do not abort
+}
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL
+debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
+                     const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *user_data) {
+  (void)type;
+  (void)user_data;
+
+  const char *severity_str = "";
+  switch (severity) {
+  case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
+    severity_str = "VERBOSE";
+    break;
+  case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
+    severity_str = "INFO";
+    break;
+  case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
+    severity_str = "WARN";
+    break;
+  case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
+    severity_str = "ERROR";
+    break;
+  default:
+    severity_str = "UNKNOWN";
+    break;
+  }
+
+  fprintf(stderr, "[vulkan][%s] %s\n", severity_str, callback_data && callback_data->pMessage ? callback_data->pMessage : "(null)");
+  fflush(stderr);
+  return VK_FALSE;
+}
+#endif
 
 static void cursor_position_callback(GLFWwindow *window, double xpos, double ypos) {
   gfx_handler_t *handler = glfwGetWindowUserPointer(window);
@@ -63,6 +119,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->g_queue_family = (uint32_t)-1;
   handler->g_queue = VK_NULL_HANDLE;
   handler->g_debug_report = VK_NULL_HANDLE;
+  handler->g_debug_messenger = VK_NULL_HANDLE;
   handler->g_pipeline_cache = VK_NULL_HANDLE;
   handler->g_descriptor_pool = VK_NULL_HANDLE;
   handler->g_min_image_count = 2;
@@ -627,11 +684,18 @@ static void cleanup_vulkan(gfx_handler_t *handler) {
   }
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
   PFN_vkDestroyDebugReportCallbackEXT f_vkDestroyDebugReportCallbackEXT =
-      (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(handler->g_Instance,
+      (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(handler->g_instance,
                                                                  "vkDestroyDebugReportCallbackEXT");
-  if (f_vkDestroyDebugReportCallbackEXT && handler->g_DebugReport != VK_NULL_HANDLE) {
-    f_vkDestroyDebugReportCallbackEXT(handler->g_Instance, handler->g_DebugReport, handler->g_Allocator);
-    handler->g_DebugReport = VK_NULL_HANDLE;
+  if (f_vkDestroyDebugReportCallbackEXT && handler->g_debug_report != VK_NULL_HANDLE) {
+    f_vkDestroyDebugReportCallbackEXT(handler->g_instance, handler->g_debug_report, handler->g_allocator);
+    handler->g_debug_report = VK_NULL_HANDLE;
+  }
+  PFN_vkDestroyDebugUtilsMessengerEXT f_vkDestroyDebugUtilsMessengerEXT =
+      (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(handler->g_instance,
+                                                                 "vkDestroyDebugUtilsMessengerEXT");
+  if (f_vkDestroyDebugUtilsMessengerEXT && handler->g_debug_messenger != VK_NULL_HANDLE) {
+    f_vkDestroyDebugUtilsMessengerEXT(handler->g_instance, handler->g_debug_messenger, handler->g_allocator);
+    handler->g_debug_messenger = VK_NULL_HANDLE;
   }
 #endif
   if (handler->g_device != VK_NULL_HANDLE) {
@@ -848,27 +912,38 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
 #endif
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
   extensions[extensions_count++] = "VK_EXT_debug_report";
+  extensions[extensions_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 #endif
 
   VkInstanceCreateInfo create_info = {
       .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
       .enabledExtensionCount = extensions_count,
       .ppEnabledExtensionNames = extensions,
+      .pNext = NULL,
   };
-  const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
+#ifdef APP_USE_VULKAN_DEBUG_REPORT
+  const char *validation_layers[] = {"VK_LAYER_KHRONOS_validation"};
   create_info.enabledLayerCount = 1;
-  create_info.ppEnabledLayerNames = layers;
+  create_info.ppEnabledLayerNames = validation_layers;
+  VkDebugUtilsMessengerCreateInfoEXT debug_utils_ci = {
+      .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+      .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+      .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                     VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+      .pfnUserCallback = debug_utils_callback,
+  };
+  create_info.pNext = &debug_utils_ci;
+#else
+  create_info.enabledLayerCount = 0;
+  create_info.ppEnabledLayerNames = NULL;
+#endif
 
 #ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
   if (is_extension_available(properties, properties_count, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
     create_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
   }
-#endif
-
-#ifdef APP_USE_VULKAN_DEBUG_REPORT
-  const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
-  create_info.enabledLayerCount = 1;
-  create_info.ppEnabledLayerNames = layers;
 #endif
 
   err = vkCreateInstance(&create_info, handler->g_allocator, &handler->g_instance);
@@ -878,7 +953,7 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
   PFN_vkCreateDebugReportCallbackEXT f_vkCreateDebugReportCallbackEXT =
-      (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(handler->g_Instance,
+      (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(handler->g_instance,
                                                                 "vkCreateDebugReportCallbackEXT");
   assert(f_vkCreateDebugReportCallbackEXT != NULL);
   VkDebugReportCallbackCreateInfoEXT debug_report_ci = {
@@ -887,9 +962,29 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
                VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
       .pfnCallback = debug_report,
   };
-  err = f_vkCreateDebugReportCallbackEXT(handler->g_Instance, &debug_report_ci, handler->g_Allocator,
-                                         &handler->g_DebugReport);
+  err = f_vkCreateDebugReportCallbackEXT(handler->g_instance, &debug_report_ci, handler->g_allocator,
+                                         &handler->g_debug_report);
   check_vk_result(err);
+
+  PFN_vkCreateDebugUtilsMessengerEXT f_vkCreateDebugUtilsMessengerEXT =
+      (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(handler->g_instance,
+                                                                "vkCreateDebugUtilsMessengerEXT");
+  if (f_vkCreateDebugUtilsMessengerEXT) {
+    VkDebugUtilsMessengerCreateInfoEXT messenger_ci = {
+        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+        .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+        .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                       VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+        .pfnUserCallback = debug_utils_callback,
+    };
+    err = f_vkCreateDebugUtilsMessengerEXT(handler->g_instance, &messenger_ci, handler->g_allocator,
+                                           &handler->g_debug_messenger);
+    check_vk_result(err);
+  }
 #endif
 
   return err;
