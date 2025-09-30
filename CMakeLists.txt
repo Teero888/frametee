@@ -83,6 +83,7 @@ set(IMGUI_SOURCES
 )
 add_executable(${PROJECT_NAME} ${SRCS} ${IMGUI_SOURCES})
 
+set(IMGUI_STATIC "yes" CACHE STRING "Build as a static library" FORCE)
 # cimgui configuration
 add_subdirectory(libs/cimgui)
 target_compile_definitions(${PROJECT_NAME} PRIVATE 
