@@ -87,10 +87,4 @@ void main() {
   }
 
   out_color = final_color;
-  if (final_color.a > 0.0) {
-    out_color.rgb /= final_color.a;
-    out_color.a = clamp(final_color.a, 0.0, 1.0);
-  } else {
-    discard;
-  }
 }

@@ -1049,12 +1049,12 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
     exit(-1);
   }
 
-  const VkFormat requestSurfaceImageFormat[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
+  const VkFormat request_surface_image_format[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
                                                 VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM};
-  const VkColorSpaceKHR requestSurfaceColorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+  const VkColorSpaceKHR request_surface_color_space = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
   wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(
-      handler->g_physical_device, wd->Surface, requestSurfaceImageFormat,
-      (size_t)ARRAYSIZE(requestSurfaceImageFormat), requestSurfaceColorSpace);
+      handler->g_physical_device, wd->Surface, request_surface_image_format,
+      (size_t)ARRAYSIZE(request_surface_image_format), request_surface_color_space);
 
   VkPresentModeKHR present_modes[] = {VK_PRESENT_MODE_FIFO_KHR};
   wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, wd->Surface,
