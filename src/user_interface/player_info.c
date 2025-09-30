@@ -123,8 +123,17 @@ void render_skin_manager(gfx_handler_t *h) {
           skin_info_t info = {};
           info.id = renderer_load_skin_from_file(h, path);
           if (info.id >= 0) {
-            char *skin_name = strrchr(path, '/') + 1;
-            int len = strlen(skin_name);
+            const char *skin_name = path;
+            const char *forward_sep = strrchr(path, '/');
+            const char *backward_sep = strrchr(path, '\\');
+            const char *separator = forward_sep;
+            if (!separator || (backward_sep && backward_sep > separator)) {
+              separator = backward_sep;
+            }
+            if (separator) {
+              skin_name = separator + 1;
+            }
+            int len = (int)strlen(skin_name);
             memcpy(info.name, skin_name, imin(len, 32));
             // does a copy
             skin_manager_add(m, &info);

@@ -1811,6 +1811,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   // copy into dynamic UBO ring
   VkDeviceSize ubo_size = sizeof(ubo);
   VkDeviceSize aligned = (ubo_size + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
+  assert(renderer->ubo_buffer_offset + aligned <= DYNAMIC_UBO_BUFFER_SIZE);
   uint32_t dyn_offset = renderer->ubo_buffer_offset;
   memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, ubo_size);
   renderer->ubo_buffer_offset += aligned;
@@ -1825,15 +1826,16 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   check_vk_result(vkAllocateDescriptorSets(h->g_device, &ai, &desc));
 
   // write UBO
-  VkDescriptorBufferInfo bufInfo = {
-      .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = 0, .range = sizeof(primitive_ubo_t)};
+  VkDescriptorBufferInfo bufInfo = {.buffer = renderer->dynamic_ubo_buffer.buffer,
+                                    .offset = dyn_offset,
+                                    .range = sizeof(primitive_ubo_t)};
   VkDescriptorImageInfo img = {.sampler = skin_array->sampler,
                                .imageView = skin_array->image_view,
                                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
   VkWriteDescriptorSet writes[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                      .dstSet = desc,
                                      .dstBinding = 0,
-                                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                      .descriptorCount = 1,
                                      .pBufferInfo = &bufInfo},
                                     {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1850,8 +1852,8 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   VkDeviceSize offs[2] = {0, 0};
   vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
   vkCmdBindIndexBuffer(cmd, quad->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 1,
-                          &dyn_offset);
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0,
+                          NULL);
   vkCmdDrawIndexed(cmd, quad->index_count, sr->instance_count, 0, 0, 0);
 
   sr->instance_count = 0;
