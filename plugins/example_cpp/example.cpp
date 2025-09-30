@@ -59,7 +59,7 @@ public:
 
 extern "C" {
 
-plugin_info_t get_plugin_info() {
+FT_API plugin_info_t get_plugin_info() {
   return {"C++ Native ImGui Example", "Teero", "69.420",
           "A self-contained plugin written in C++ using the native ImGui API."};
 }

@@ -10,7 +10,7 @@ typedef struct {
   int snippet_duration;
 } plugin_state_t;
 
-plugin_info_t get_plugin_info(void) {
+FT_API plugin_info_t get_plugin_info(void) {
   return (plugin_info_t){.name = "C API Example",
                          .author = "Teero",
                          .version = "420.69",
