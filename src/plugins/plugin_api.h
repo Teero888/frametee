@@ -3,17 +3,10 @@
 
 #include "../user_interface/timeline.h"
 
-// Forward declare ImGuiContext to avoid plugins needing to include cimgui.h if they don't have a UI.
+// forward declare ImGuiContext to avoid plugins needing to include cimgui.h if they don't have a UI.
 struct ImGuiContext;
 
-//=================================================================================================
-//
-// CONTEXT STRUCT
-//
-// Passed to plugins to provide read-only access to high-level application state.
-//
-//=================================================================================================
-
+// passed to plugins to provide read-only access to high-level application state.
 typedef struct {
   ui_handler_t *ui_handler;
   timeline_state_t *timeline;
@@ -21,43 +14,30 @@ typedef struct {
   struct ImGuiContext *imgui_context;
 } tas_context_t;
 
-//=================================================================================================
-//
-// API FUNCTION TABLE
-//
-// A struct of function pointers provided by the host application.
-//
-//=================================================================================================
-
+// api functions provided to plugins for interacting with the host application.
 typedef struct {
-  // --- Timeline & Input API ---
+  // Timeline & Input API
   int (*get_current_tick)(void);
   int (*get_track_count)(void);
   SWorldCore (*get_inital_world)(void);
 
-  // --- Undo-able Write Operations ---
+  // Undo-able Write Operations
   undo_command_t *(*do_create_snippet)(int track_index, int start_tick, int duration);
   undo_command_t *(*do_delete_snippet)(int snippet_id);
   undo_command_t *(*do_set_inputs)(int snippet_id, int tick_offset, int count,
                                    const SPlayerInput *new_inputs);
   void (*register_undo_command)(undo_command_t *command);
 
-  // --- Debug Drawing API ---
+  // Debug Drawing API
   void (*draw_line_world)(vec2 start, vec2 end, vec4 color, float thickness);
   void (*draw_circle_world)(vec2 center, float radius, vec4 color);
   void (*draw_text_world)(vec2 pos, const char *text, vec4 color);
 
-  // --- Utility API ---
+  // Utility API
   void (*log_info)(const char *plugin_name, const char *message);
   void (*log_warning)(const char *plugin_name, const char *message);
   void (*log_error)(const char *plugin_name, const char *message);
 } tas_api_t;
-
-//=================================================================================================
-//
-// PLUGIN DEFINITION
-//
-//=================================================================================================
 
 typedef struct {
   const char *name;
