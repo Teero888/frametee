@@ -723,7 +723,7 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
 
   VkPipelineColorBlendAttachmentState color_blend_attachment = {
       .blendEnable = VK_TRUE,
-      .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+      .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
       .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
       .colorBlendOp = VK_BLEND_OP_ADD,
       .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
@@ -1825,7 +1825,7 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
       stbi_image_free(pixels);
       return -1;
     }
-    stbir_resize_uint8_srgb(pixels, tex_width, tex_height, 0, resized_pixels, final_width, final_height, 0,
+    stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_pixels, final_width, final_height, 0,
                             4);
     used_pixels = resized_pixels; // from now on, use the resized pixels
   }
