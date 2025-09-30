@@ -1,1 +1,5 @@
+*.h text
+*.c text
+*.txt text
+*.sh text
 *.h linguist-language=C

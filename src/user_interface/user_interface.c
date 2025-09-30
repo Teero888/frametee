@@ -419,13 +419,13 @@ void render_players(ui_handler_t *ui) {
         anim_state_add(&anim_state, &anim_walk, walk_time, 1.0f);
     }
 
-    vec2 dir = (vec2){core->m_Input.m_TargetX, core->m_Input.m_TargetY};
+    vec2 dir = {core->m_Input.m_TargetX, core->m_Input.m_TargetY};
     glm_vec2_normalize(dir);
     player_info_t *info = &gfx->user_interface.timeline.player_tracks[i].player_info;
     int skin = info->skin;
     int eye = get_flag_eye_state(&core->m_Input);
     vec3 feet_col = {1.f, 1.f, 1.f};
-    vec3 body_col = {};
+    vec3 body_col = {0.0f, 0.0f, 0.0f};
     bool custom_col = info->use_custom_color;
     // TODO: implement spec in the physics properly
     if (core->m_FreezeTime > 0) {
@@ -478,8 +478,8 @@ void render_players(ui_handler_t *ui) {
     vec2 p1 = {vgetx(ent->m_Base.m_Pos) / 32.f, vgety(ent->m_Base.m_Pos) / 32.f};
     vec2 p0 = {vgetx(ent->m_From) / 32.f, vgety(ent->m_From) / 32.f};
 
-    vec4 lsr_col = (vec4){0.f, 0.f, 1.f, 0.9f};
-    vec4 sg_col = (vec4){0.570315f, 0.4140625f, 025.f, 0.9f};
+    vec4 lsr_col = {0.f, 0.f, 1.f, 0.9f};
+    vec4 sg_col = {0.570315f, 0.4140625f, 025.f, 0.9f};
 
     renderer_draw_line(gfx, p0, p1, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 0.25f);
     renderer_draw_circle_filled(gfx, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);

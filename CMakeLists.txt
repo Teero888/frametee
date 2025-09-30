@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.14)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED TRUE)
@@ -27,8 +27,39 @@ set(SRCS
 
 # find dependencies
 find_package(Vulkan REQUIRED)
-find_package(glfw3 REQUIRED)
-find_package(X11 REQUIRED)
+
+# Try to find an existing glfw3 installation first; fall back to fetching it if unavailable.
+find_package(glfw3 CONFIG QUIET)
+if(NOT glfw3_FOUND)
+    find_package(glfw3 QUIET)
+endif()
+
+if(NOT glfw3_FOUND)
+    message(STATUS "glfw3 not found via CMake package registry, fetching from source")
+    include(FetchContent)
+    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        glfw
+        GIT_REPOSITORY https://github.com/glfw/glfw.git
+        GIT_TAG 3.3.9
+    )
+    FetchContent_MakeAvailable(glfw)
+endif()
+
+set(GLFW_LINK_TARGET glfw)
+if(TARGET glfw::glfw)
+    set(GLFW_LINK_TARGET glfw::glfw)
+elseif(TARGET glfw)
+    set(GLFW_LINK_TARGET glfw)
+endif()
+
+set(PLATFORM_LIBS)
+if(UNIX AND NOT APPLE)
+    find_package(X11 REQUIRED)
+    list(APPEND PLATFORM_LIBS X11)
+endif()
 
 # find vulkan glslangvalidator for shader compilation
 find_program(GLSLANG_VALIDATOR glslangValidator HINTS ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE})
@@ -65,21 +96,25 @@ add_subdirectory(libs/ddnet_physics)
 add_subdirectory(libs/nfd)
 
 # linking + suppress all warnings for the libs
-target_compile_options(${PROJECT_NAME} PRIVATE -w)
+target_compile_options(${PROJECT_NAME} PRIVATE
+    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>:-w>
+    $<$<C_COMPILER_ID:MSVC>:/W0>
+)
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nfd
     stb
     ddnet_physics
     cglm
     cimgui
-    glfw
-    X11
+    ${GLFW_LINK_TARGET}
+    ${PLATFORM_LIBS}
     Vulkan::Vulkan
 )
 
 # compiler warnings for the project
 target_compile_options(${PROJECT_NAME} PRIVATE
-    $<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra;-pedantic-errors>
+    $<$<AND:$<COMPILE_LANGUAGE:C>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>>:-Wall;-Wextra;-pedantic-errors>
+    $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/W4>
 )
 
 # Sanitizer options

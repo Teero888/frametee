@@ -9,7 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <vulkan/vulkan_core.h>
 
 #define ARRAYSIZE(_ARR) ((int)(sizeof(_ARR) / sizeof(*(_ARR))))
@@ -170,7 +169,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   glfwPollEvents();
 
   if (glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
-    usleep(10000);
+    ImGui_ImplGlfw_Sleep(10);
     return FRAME_SKIP;
   }
 

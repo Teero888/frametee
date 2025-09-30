@@ -646,7 +646,7 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   entry->texture_count = texture_count;
 
   uint32_t binding_count = ubo_count + texture_count;
-  VkDescriptorSetLayoutBinding bindings[binding_count];
+  VLA(VkDescriptorSetLayoutBinding, bindings, binding_count);
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
     bindings[current_binding++] = (VkDescriptorSetLayoutBinding){
@@ -763,6 +763,7 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
                                             handler->g_allocator, &entry->pipeline));
 
   entry->initialized = true;
+  VLA_FREE(bindings);
   return entry;
 }
 
@@ -1136,10 +1137,10 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   check_vk_result(vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set));
 
   uint32_t binding_count = ubo_count + texture_count;
-  VkWriteDescriptorSet descriptor_writes[binding_count];
-  VkDescriptorBufferInfo buffer_infos[ubo_count];
-  VkDescriptorImageInfo image_infos[texture_count];
-  uint32_t dynamic_offsets[ubo_count];
+  VLA(VkWriteDescriptorSet, descriptor_writes, binding_count);
+  VLA(VkDescriptorBufferInfo, buffer_infos, ubo_count);
+  VLA(VkDescriptorImageInfo, image_infos, texture_count);
+  VLA(uint32_t, dynamic_offsets, ubo_count);
 
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
@@ -1194,6 +1195,10 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   } else {
     vkCmdDraw(command_buffer, mesh->vertex_count, 1, 0, 0);
   }
+  VLA_FREE(dynamic_offsets);
+  VLA_FREE(image_infos);
+  VLA_FREE(buffer_infos);
+  VLA_FREE(descriptor_writes);
 }
 
 void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) {

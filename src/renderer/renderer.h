@@ -14,6 +14,15 @@
 #define MAX_PRIMITIVE_VERTICES 100000
 #define MAX_PRIMITIVE_INDICES 200000
 
+#if defined(_MSC_VER) && !defined(__clang__)
+  #include <malloc.h>
+  #define VLA(T, name, n)  T *name = (T*)_malloca(sizeof(T) * (n))
+  #define VLA_FREE(name)   _freea(name)
+#else
+  #define VLA(T, name, n)  T name[(n)]
+  #define VLA_FREE(name)   (void)0
+#endif
+
 typedef struct gfx_handler_t gfx_handler_t;
 
 typedef struct {
