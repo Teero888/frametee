@@ -22,6 +22,7 @@ set(PLUGIN_CPP_SOURCES
     "${HOST_APP_DIR}/libs/cimgui/cimgui.cpp"
     "${HOST_APP_DIR}/libs/cimgui/imgui/imgui.cpp"
     "${HOST_APP_DIR}/libs/cimgui/imgui/imgui_draw.cpp"
+    "${HOST_APP_DIR}/libs/cimgui/imgui/imgui_demo.cpp"
     "${HOST_APP_DIR}/libs/cimgui/imgui/imgui_widgets.cpp"
     "${HOST_APP_DIR}/libs/cimgui/imgui/imgui_tables.cpp"
 )
