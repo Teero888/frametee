@@ -1,4 +1,5 @@
 #include "graphics_backend.h"
+#include "../logger/logger.h"
 #include "../user_interface/user_interface.h"
 #include "cimgui.h"
 #include "renderer.h"
@@ -14,6 +15,8 @@
 #define ARRAYSIZE(_ARR) ((int)(sizeof(_ARR) / sizeof(*(_ARR))))
 #define ENTITIES_PATH "data/textures/ddnet.png"
 
+static const char *LOG_SOURCE = "GfxBackend";
+
 // forward declarations of static functions
 static void glfw_error_callback(int error, const char *description);
 static int init_window(gfx_handler_t *handler);
@@ -25,13 +28,14 @@ static void cleanup_vulkan_window(gfx_handler_t *handler);
 static void cleanup_map_resources(gfx_handler_t *handler);
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
-static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT object_type,
-                                                  uint64_t object, size_t location, int32_t message_code,
-                                                  const char *layer_prefix, const char *message, void *user_data);
-static VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-                                                           VkDebugUtilsMessageTypeFlagsEXT type,
-                                                           const VkDebugUtilsMessengerCallbackDataEXT *callback_data,
-                                                           void *user_data);
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags,
+                                                   VkDebugReportObjectTypeEXT object_type, uint64_t object,
+                                                   size_t location, int32_t message_code,
+                                                   const char *layer_prefix, const char *message,
+                                                   void *user_data);
+static VKAPI_ATTR VkBool32 VKAPI_CALL
+debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
+                     const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *user_data);
 #endif
 
 // offscreen helpers
@@ -49,20 +53,23 @@ static void setup_window(gfx_handler_t *handler, struct ImGui_ImplVulkanH_Window
 
 // glfw error callback
 static void glfw_error_callback(int error, const char *description) {
-  fprintf(stderr, "GLFW Error %d: %s\n", error, description);
+  log_error("GLFW", "%d: %s", error, description);
 }
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
-static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT object_type,
-                                                  uint64_t object, size_t location, int32_t message_code,
-                                                  const char *layer_prefix, const char *message, void *user_data) {
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags,
+                                                   VkDebugReportObjectTypeEXT object_type, uint64_t object,
+                                                   size_t location, int32_t message_code,
+                                                   const char *layer_prefix, const char *message,
+                                                   void *user_data) {
   (void)flags;
   (void)object_type;
   (void)object;
   (void)location;
   (void)user_data;
 
-  fprintf(stderr, "[vulkan][%s] code %d: %s\n", layer_prefix ? layer_prefix : "unknown", message_code, message);
+  log_error(LOG_SOURCE, "[vulkan][%s] code %d: %s\n", layer_prefix ? layer_prefix : "unknown", message_code,
+            message);
   fflush(stderr);
   return VK_FALSE; // do not abort
 }
@@ -92,7 +99,8 @@ debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUti
     break;
   }
 
-  fprintf(stderr, "[vulkan][%s] %s\n", severity_str, callback_data && callback_data->pMessage ? callback_data->pMessage : "(null)");
+  log_error(LOG_SOURCE, "[vulkan][%s] %s\n", severity_str,
+            callback_data && callback_data->pMessage ? callback_data->pMessage : "(null)");
   fflush(stderr);
   return VK_FALSE;
 }
@@ -109,7 +117,6 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   handler->raw_mouse.y = ypos;
 }
 
-// public api implementation
 int init_gfx_handler(gfx_handler_t *handler) {
   memset(handler, 0, sizeof(gfx_handler_t));
   handler->g_allocator = NULL;
@@ -160,13 +167,12 @@ int init_gfx_handler(gfx_handler_t *handler) {
     return 1;
   }
 
-  ui_init(&handler->user_interface, handler);
-
   texture_t *entities_atlas = renderer_load_texture(handler, ENTITIES_PATH);
   if (!entities_atlas) {
-    fprintf(stderr,
-            "Failed to load entities at: '%s', you might have started the program from the wrong location.\n",
-            ENTITIES_PATH);
+    log_error(LOG_SOURCE,
+              "Failed to load entities atlas at '%s'. The program might have been started from the wrong "
+              "directory.",
+              ENTITIES_PATH);
     return 1;
   }
 
@@ -194,16 +200,17 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->x_ninja_skin = renderer_load_skin_from_file(handler, "data/textures/x_ninja.png");
   handler->x_spec_skin = renderer_load_skin_from_file(handler, "data/textures/x_spec.png");
   if (handler->default_skin == -1) {
-    printf("ERROR: default skin texture not found: \"data/textures/default.png\". Maybe you started the "
-           "program from the wrong path?\n");
+    log_error(
+        LOG_SOURCE,
+        "Default skin 'default.png' not found. The program might have been started from the wrong path.");
   }
   if (handler->x_ninja_skin == -1) {
-    printf("ERROR: x_ninja skin texture not found: \"data/textures/x_ninja.png\". Maybe you started the "
-           "program from the wrong path?\n");
+    log_error(LOG_SOURCE,
+              "Ninja skin 'x_ninja.png' not found. The program might have been started from the wrong path.");
   }
   if (handler->x_spec_skin == -1) {
-    printf("ERROR: x_spec skin texture not found: \"data/textures/x_spec.png\". Maybe you started the "
-           "program from the wrong path?\n");
+    log_error(LOG_SOURCE,
+              "Spec skin 'x_spec.png' not found. The program might have been started from the wrong path.");
   }
 
   int fb_width, fb_height;
@@ -213,8 +220,10 @@ int init_gfx_handler(gfx_handler_t *handler) {
 
   // initialize offscreen target to match the viewport size
   if (init_offscreen_resources(handler, (uint32_t)fb_width, (uint32_t)fb_height) != 0) {
-    fprintf(stderr, "Warning: failed to create offscreen resources. ImGui game view will be disabled.\n");
+    log_warn(LOG_SOURCE, "Failed to create offscreen resources. The ImGui game view will be disabled.");
   }
+
+  ui_init(&handler->user_interface, handler);
 
   return 0;
 }
@@ -448,7 +457,7 @@ static void cleanup_map_resources(gfx_handler_t *handler) {
   if (handler->map_texture_count == 0) {
     return;
   }
-  printf("Cleaning up previous map resources...\n");
+  log_info(LOG_SOURCE, "Cleaning up previous map resources...");
 
   vkDeviceWaitIdle(handler->g_device);
   for (uint32_t i = 1; i < handler->map_texture_count; ++i) {
@@ -471,10 +480,11 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
   handler->renderer.camera.pos[1] = 0.5f;
   handler->map_data = &handler->physics_handler.collision.m_MapData;
   if (!handler->map_data->game_layer.data) {
-    fprintf(stderr, "Failed to load map data: '%s'\n", map_path);
+    log_error(LOG_SOURCE, "Failed to load map data from '%s'", map_path);
     return;
   }
-  printf("Loaded map: '%s' (%ux%u)\n", map_path, handler->map_data->width, handler->map_data->height);
+  log_info(LOG_SOURCE, "Loaded map '%s' (%ux%u)", map_path, handler->map_data->width,
+           handler->map_data->height);
 
   // entities texture
   handler->map_textures[handler->map_texture_count++] =
@@ -506,7 +516,7 @@ static int init_window(gfx_handler_t *handler) {
     return 1;
   }
   if (!glfwVulkanSupported()) {
-    printf("GLFW: Vulkan Not Supported\n");
+    log_error("GLFW", "Vulkan is not supported on this system.");
     glfwDestroyWindow(handler->window);
     glfwTerminate();
     return 1;
@@ -518,7 +528,7 @@ static int init_vulkan(gfx_handler_t *handler) {
   uint32_t extensions_count = 0;
   const char **glfw_extensions = glfwGetRequiredInstanceExtensions(&extensions_count);
   if (glfw_extensions == NULL) {
-    fprintf(stderr, "Error: glfwGetRequiredInstanceExtensions failed\n");
+    log_error("Vulkan", "glfwGetRequiredInstanceExtensions failed.");
     return -1;
   }
 
@@ -787,7 +797,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
   VkResult err =
       vkCreateRenderPass(handler->g_device, &rp_info, handler->g_allocator, &handler->offscreen_render_pass);
   if (err != VK_SUCCESS) {
-    fprintf(stderr, "Failed to create offscreen render pass (%d)\n", err);
+    log_error(LOG_SOURCE, "Failed to create offscreen render pass (%d)\n", err);
     return 1;
   }
 
@@ -808,7 +818,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
   err =
       vkCreateFramebuffer(handler->g_device, &fb_info, handler->g_allocator, &handler->offscreen_framebuffer);
   if (err != VK_SUCCESS) {
-    fprintf(stderr, "Failed to create offscreen framebuffer (%d)\n", err);
+    log_error(LOG_SOURCE, "Failed to create offscreen framebuffer (%d)\n", err);
     vkDestroyRenderPass(handler->g_device, handler->offscreen_render_pass, handler->g_allocator);
     handler->offscreen_render_pass = VK_NULL_HANDLE;
     return 1;
@@ -822,7 +832,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
 
   handler->offscreen_texture = ImTextureRef_ImTextureRef_TextureID(id);
   handler->offscreen_initialized = true;
-  // printf("Offscreen resources created: %ux%u\n", width, height);
+  // log_info(LOG_SOURCE,"Offscreen resources created: %ux%u\n", width, height);
   return 0;
 }
 
@@ -862,7 +872,7 @@ static void destroy_offscreen_resources(gfx_handler_t *handler) {
   handler->offscreen_initialized = false;
   handler->offscreen_width = 0;
   handler->offscreen_height = 0;
-  // printf("Offscreen resources destroyed\n");
+  // log_info(LOG_SOURCE, "Offscreen resources destroyed\n");
 }
 
 static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, uint32_t height) {
@@ -927,8 +937,8 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
   create_info.ppEnabledLayerNames = validation_layers;
   VkDebugUtilsMessengerCreateInfoEXT debug_utils_ci = {
       .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-      .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+      .messageSeverity =
+          VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
       .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
                      VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
@@ -972,10 +982,9 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
   if (f_vkCreateDebugUtilsMessengerEXT) {
     VkDebugUtilsMessengerCreateInfoEXT messenger_ci = {
         .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-        .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
-                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+        .messageSeverity =
+            VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+            VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
         .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
                        VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                        VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
@@ -1045,12 +1054,12 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
   vkGetPhysicalDeviceSurfaceSupportKHR(handler->g_physical_device, handler->g_queue_family, wd->Surface,
                                        &res);
   if (res != VK_TRUE) {
-    fprintf(stderr, "Error: no WSI support on physical device 0\n");
+    log_error("Vulkan", "No WSI support on the selected physical device.");
     exit(-1);
   }
 
   const VkFormat request_surface_image_format[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
-                                                VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM};
+                                                   VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM};
   const VkColorSpaceKHR request_surface_color_space = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
   wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(
       handler->g_physical_device, wd->Surface, request_surface_image_format,

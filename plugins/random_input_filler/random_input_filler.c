@@ -197,8 +197,6 @@ FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
   state->start_tick = 0;
   state->seed = (uint32_t)time(NULL);
   set_status(state, "Ready.");
-
-  api->log_info("Random Input Filler", "Plugin initialized.");
   return state;
 }
 

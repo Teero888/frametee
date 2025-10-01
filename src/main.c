@@ -2,8 +2,11 @@
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
 #include <GLFW/glfw3.h>
+#include "logger/logger.h"
 
 int main(void) {
+  logger_init();
+
   gfx_handler_t handler;
   if (init_gfx_handler(&handler) != 0)
     return 1;

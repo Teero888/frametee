@@ -1,4 +1,5 @@
 #include "plugin_manager.h"
+#include "../logger/logger.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,8 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #endif
+
+static const char *LOG_SOURCE = "PluginManager";
 
 #ifdef _WIN32
 void *open_library(const char *path) { return LoadLibrary(path); }
@@ -24,9 +27,9 @@ static void load_plugin(plugin_manager_t *manager, const char *path) {
   void *handle = open_library(path);
   if (!handle) {
 #ifdef _WIN32
-    printf("PLUG-IN ERROR: Failed to load %s (Error: %lu)\n", path, GetLastError());
+    log_error(LOG_SOURCE, "Failed to load %s (Error: %lu)", path, GetLastError());
 #else
-    printf("PLUG-IN ERROR: Failed to load %s (Error: %s)\n", path, dlerror());
+    log_error(LOG_SOURCE, "Failed to load %s (Error: %s)", path, dlerror());
 #endif
     return;
   }
@@ -37,7 +40,7 @@ static void load_plugin(plugin_manager_t *manager, const char *path) {
   plugin_shutdown_func shutdown = (plugin_shutdown_func)get_symbol(handle, GET_PLUGIN_SHUTDOWN_FUNC_NAME);
 
   if (!get_info || !init || !update || !shutdown) {
-    printf("PLUG-IN ERROR: Plugin %s is missing one or more required functions.\n", path);
+    log_error(LOG_SOURCE, "Plugin '%s' is missing one or more required functions.", path);
     close_library(handle);
     return;
   }
@@ -57,15 +60,16 @@ static void load_plugin(plugin_manager_t *manager, const char *path) {
   p->data = p->init(manager->context, manager->api);
 
   if (p->data) {
-    printf("PLUG-IN: Loaded '%s' v%s by %s.\n", p->info.name, p->info.version, p->info.author);
+    log_info(LOG_SOURCE, "Loaded '%s' v%s by %s.", p->info.name, p->info.version, p->info.author);
   } else {
-    printf("PLUG-IN ERROR: Plugin '%s' failed to initialize.\n", p->info.name);
+    log_error(LOG_SOURCE, "Plugin '%s' failed to initialize.", p->info.name);
     close_library(p->handle);
     manager->count--;
   }
 }
 
 void plugin_manager_init(plugin_manager_t *manager, tas_context_t *context, tas_api_t *api) {
+  log_info(LOG_SOURCE, "Initializing plugin system...");
   manager->plugins = NULL;
   manager->count = 0;
   manager->capacity = 0;
@@ -74,7 +78,8 @@ void plugin_manager_init(plugin_manager_t *manager, tas_context_t *context, tas_
 }
 
 void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
-  printf("PLUG-IN: Scanning for plugins in '%s'...\n", directory);
+  log_info(LOG_SOURCE, "Scanning for plugins in '%s'...", directory);
+  int plugins = 0;
 #ifdef _WIN32
   char search_path[MAX_PATH];
   snprintf(search_path, MAX_PATH, "%s\\*.dll", directory);
@@ -88,6 +93,7 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
     char full_path[MAX_PATH];
     snprintf(full_path, MAX_PATH, "%s\\%s", directory, find_data.cFileName);
     load_plugin(manager, full_path);
+    ++plugins;
   } while (FindNextFile(find_handle, &find_data) != 0);
 
   FindClose(find_handle);
@@ -103,10 +109,12 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
       char full_path[1024];
       snprintf(full_path, sizeof(full_path), "%s/%s", directory, entry->d_name);
       load_plugin(manager, full_path);
+      ++plugins;
     }
   }
   closedir(dir);
 #endif
+  log_info(LOG_SOURCE, "Loaded %d plugin%s.", plugins, plugins > 1 ? "s" : "");
 }
 
 void plugin_manager_update_all(plugin_manager_t *manager) {
@@ -119,7 +127,7 @@ void plugin_manager_update_all(plugin_manager_t *manager) {
 
 void plugin_manager_shutdown(plugin_manager_t *manager) {
   for (int i = 0; i < manager->count; ++i) {
-    printf("PLUG-IN: Shutting down '%s'...\n", manager->plugins[i].info.name);
+    log_info(LOG_SOURCE, "Shutting down '%s'...", manager->plugins[i].info.name);
     if (manager->plugins[i].shutdown && manager->plugins[i].data) {
       manager->plugins[i].shutdown(manager->plugins[i].data);
     }
@@ -134,7 +142,7 @@ void plugin_manager_shutdown(plugin_manager_t *manager) {
 void plugin_manager_reload_all(plugin_manager_t *manager, const char *directory) {
   tas_context_t *context = manager->context;
   tas_api_t *api = manager->api;
-  printf("PLUG-IN: Reloading all plugins...\n");
+  log_info(LOG_SOURCE, "Reloading all plugins...");
 
   plugin_manager_shutdown(manager);
   plugin_manager_init(manager, context, api);

@@ -1,4 +1,5 @@
 #include "player_info.h"
+#include "../logger/logger.h"
 #include "../renderer/graphics_backend.h"
 #include "cimgui.h"
 #include "nfd.h"
@@ -140,10 +141,11 @@ void render_skin_manager(gfx_handler_t *h) {
           }
         }
       NFD_PathSet_Free(path_set);
-    } else if (result == NFD_CANCEL)
-      puts("Canceled skin load.");
-    else
-      printf("Error: %s\n", NFD_GetError());
+    } else if (result == NFD_CANCEL) {
+      log_warn("SkinManager", "Skin loading dialog was canceled by the user.");
+    } else {
+      log_error("SkinManager", "File dialog error: %s", NFD_GetError());
+    }
   }
   igEnd();
 }

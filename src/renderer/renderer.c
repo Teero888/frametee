@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "../logger/logger.h"
 #include "graphics_backend.h"
 #include <cglm/cglm.h>
 #include <stdint.h>
@@ -10,6 +11,7 @@
 #include "stb_image.h"
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "stb_image_resize2.h"
+static const char *LOG_SOURCE = "Renderer";
 
 #include <assert.h>
 #include <math.h>
@@ -60,14 +62,14 @@ static void setup_vertex_descriptions();
 void check_vk_result(VkResult err) {
   if (err == VK_SUCCESS)
     return;
-  fprintf(stderr, "[vulkan] Error: VkResult = %d\n", err);
+  log_error("Vulkan", "VkResult = %d", err);
   if (err < 0)
     abort();
 }
 void check_vk_result_line(VkResult err, int line) {
   if (err == VK_SUCCESS)
     return;
-  fprintf(stderr, "[vulkan] Error: VkResult = %d in line: (%d)\n", err, line);
+  log_error("Vulkan", "VkResult = %d in renderer.c (line: %d)", err, line);
   if (err < 0)
     abort();
 }
@@ -83,7 +85,7 @@ static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type
       return i;
     }
   }
-  fprintf(stderr, "Failed to find suitable memory type!\n");
+  log_error(LOG_SOURCE, "Failed to find suitable memory type!");
   exit(EXIT_FAILURE);
 }
 
@@ -210,7 +212,7 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
     source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
   } else {
-    fprintf(stderr, "Unsupported layout transition!\n");
+    log_error(LOG_SOURCE, "Unsupported image layout transition requested!");
     abort();
   }
 
@@ -311,7 +313,7 @@ VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, Vk
 static char *read_file(const char *filename, size_t *length) {
   FILE *file = fopen(filename, "rb");
   if (!file) {
-    fprintf(stderr, "Failed to open file: %s\n", filename);
+    log_error(LOG_SOURCE, "Failed to open file: %s", filename);
     return NULL;
   }
 
@@ -321,7 +323,7 @@ static char *read_file(const char *filename, size_t *length) {
 
   char *buffer = (char *)malloc(*length);
   if (!buffer) {
-    fprintf(stderr, "Failed to allocate memory for file: %s\n", filename);
+    log_error(LOG_SOURCE, "Failed to allocate memory for file: %s", filename);
     fclose(file);
     return NULL;
   }
@@ -330,7 +332,7 @@ static char *read_file(const char *filename, size_t *length) {
   fclose(file);
 
   if (read_count != *length) {
-    fprintf(stderr, "Failed to read entire file: %s\n", filename);
+    log_error(LOG_SOURCE, "Failed to read entire file: %s", filename);
     free(buffer);
     return NULL;
   }
@@ -436,7 +438,7 @@ texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t wid
     }
   }
   if (free_slot == (uint32_t)-1) {
-    fprintf(stderr, "Max texture count reached.\n");
+    log_error(LOG_SOURCE, "Max texture count (%d) reached.", MAX_TEXTURES);
     return NULL;
   }
 
@@ -471,8 +473,7 @@ texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t wid
   // Create sampler
   texArray->sampler = create_texture_sampler(handler, texArray->mip_levels, VK_FILTER_LINEAR);
 
-  printf("Created 2D texture array (%ux%u x %u layers)\n", width, height, layer_count);
-
+  // log_info(LOG_SOURCE, "Created 2D texture array (%ux%u x %u layers)", width, height, layer_count);
   return texArray;
 }
 
@@ -551,7 +552,7 @@ int renderer_init(gfx_handler_t *handler) {
 
   renderer->skin_renderer.instance_count = 0;
 
-  printf("Renderer initialized.\n");
+  log_info(LOG_SOURCE, "Renderer initialized successfully.");
   return 0;
 }
 
@@ -622,7 +623,7 @@ void renderer_cleanup(gfx_handler_t *handler) {
     vkFreeMemory(device, renderer->skin_renderer.instance_buffer.memory, allocator);
   }
 
-  printf("Renderer cleaned up.\n");
+  log_info(LOG_SOURCE, "Renderer cleaned up successfully.");
 }
 
 static pipeline_cache_entry_t *
@@ -655,12 +656,12 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   VLA(VkDescriptorSetLayoutBinding, bindings, binding_count);
 
   if (shader) {
-    fprintf(stderr, "Creating descriptor set layout for %s: ubo_count=%u texture_count=%u\n",
-            shader->vert_path, ubo_count, texture_count);
+    log_error(LOG_SOURCE, "Creating descriptor set layout for %s: ubo_count=%u texture_count=%u\n",
+              shader->vert_path, ubo_count, texture_count);
   }
 
   if (target_render_pass == VK_NULL_HANDLE) {
-    fprintf(stderr, "Cannot create graphics pipeline without a valid render pass.\n");
+    log_error(LOG_SOURCE, "Cannot create graphics pipeline without a valid render pass.");
     entry->initialized = false;
     VLA_FREE(bindings);
     return NULL;
@@ -676,18 +677,11 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   }
   for (uint32_t i = 0; i < texture_count; ++i) {
     uint32_t binding_index = current_binding++;
-    bindings[binding_index] = (VkDescriptorSetLayoutBinding){
-        .binding = binding_index,
-        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
-  }
-
-  fprintf(stderr, "Bindings: count=%u\n", binding_count);
-  for (uint32_t i = 0; i < binding_count; ++i) {
-    fprintf(stderr, "  binding[%u]: binding=%u type=%u descriptorCount=%u stageFlags=0x%x\n", i,
-            bindings[i].binding, bindings[i].descriptorType, bindings[i].descriptorCount,
-            bindings[i].stageFlags);
+    bindings[binding_index] =
+        (VkDescriptorSetLayoutBinding){.binding = binding_index,
+                                       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       .descriptorCount = 1,
+                                       .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
   }
 
   VkDescriptorSetLayoutCreateInfo layout_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -696,8 +690,8 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   VkResult err = vkCreateDescriptorSetLayout(handler->g_device, &layout_info, handler->g_allocator,
                                              &entry->descriptor_set_layout);
   if (err != VK_SUCCESS) {
-    fprintf(stderr, "vkCreateDescriptorSetLayout failed (shader=%s) err=%d\n",
-            shader ? shader->vert_path : "<unknown>", err);
+    log_error(LOG_SOURCE, "vkCreateDescriptorSetLayout failed (shader=%s) err=%d\n",
+              shader ? shader->vert_path : "<unknown>", err);
   }
   check_vk_result_line(err, __LINE__);
 
@@ -707,8 +701,8 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   err = vkCreatePipelineLayout(handler->g_device, &pipeline_layout_info, handler->g_allocator,
                                &entry->pipeline_layout);
   if (err != VK_SUCCESS) {
-    fprintf(stderr, "vkCreatePipelineLayout failed (shader=%s) err=%d\n",
-            shader ? shader->vert_path : "<unknown>", err);
+    log_error(LOG_SOURCE, "vkCreatePipelineLayout failed (shader=%s) err=%d\n",
+              shader ? shader->vert_path : "<unknown>", err);
   }
   check_vk_result_line(err, __LINE__);
 
@@ -799,10 +793,9 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   err = vkCreateGraphicsPipelines(handler->g_device, handler->g_pipeline_cache, 1, &pipeline_info,
                                   handler->g_allocator, &entry->pipeline);
   if (err != VK_SUCCESS) {
-    fprintf(stderr,
-            "vkCreateGraphicsPipelines failed (shader=%s, render_pass=%p, format=%d) err=%d\n",
-            shader ? shader->vert_path : "<unknown>", (void *)target_render_pass,
-            (int)handler->g_main_window_data.SurfaceFormat.format, err);
+    log_error(LOG_SOURCE, "vkCreateGraphicsPipelines failed (shader=%s, render_pass=%p, format=%d) err=%d\n",
+              shader ? shader->vert_path : "<unknown>", (void *)target_render_pass,
+              (int)handler->g_main_window_data.SurfaceFormat.format, err);
   }
   check_vk_result_line(err, __LINE__);
 
@@ -822,7 +815,7 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
   }
 
   if (renderer->shader_count >= MAX_SHADERS) {
-    fprintf(stderr, "Max shader count reached.\n");
+    log_error(LOG_SOURCE, "Max shader count (%d) reached.", MAX_SHADERS);
     return NULL;
   }
 
@@ -863,7 +856,7 @@ texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, cons
   }
 
   if (free_slot == (uint32_t)-1) {
-    fprintf(stderr, "Max texture count reached.\n");
+    log_error(LOG_SOURCE, "Max texture count (%d) reached.", MAX_TEXTURES);
     return NULL;
   }
 
@@ -940,7 +933,7 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
   }
 
   if (free_slot == (uint32_t)-1) {
-    fprintf(stderr, "Max texture count reached.\n");
+    log_error(LOG_SOURCE, "Max texture count (%d) reached.", MAX_TEXTURES);
     return NULL;
   }
 
@@ -1017,14 +1010,14 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   }
 
   if (free_slot == (uint32_t)-1) {
-    fprintf(stderr, "Max texture count reached.\n");
+    log_error(LOG_SOURCE, "Max texture count (%d) reached.", MAX_TEXTURES);
     return NULL;
   }
 
   int tex_width, tex_height, tex_channels;
   stbi_uc *pixels = stbi_load(image_path, &tex_width, &tex_height, &tex_channels, STBI_rgb_alpha);
   if (!pixels) {
-    fprintf(stderr, "Failed to load texture image: %s\n", image_path);
+    log_error(LOG_SOURCE, "Failed to load texture image: %s", image_path);
     return NULL;
   }
 
@@ -1074,7 +1067,7 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
                                           VK_IMAGE_VIEW_TYPE_2D, mip_levels, 1);
   texture->sampler = create_texture_sampler(handler, mip_levels, VK_FILTER_LINEAR);
 
-  printf("Loaded texture: %s\n", image_path);
+  log_info(LOG_SOURCE, "Loaded texture: %s", image_path);
   return texture;
 }
 
@@ -1082,7 +1075,7 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
                              uint32_t *indices, uint32_t index_count) {
   renderer_state_t *renderer = &handler->renderer;
   if (renderer->mesh_count >= MAX_MESHES) {
-    fprintf(stderr, "Maximum mesh count (%d) reached.\n", MAX_MESHES);
+    log_error(LOG_SOURCE, "Maximum mesh count (%d) reached.", MAX_MESHES);
     return NULL;
   }
 
@@ -1139,7 +1132,7 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
     mesh->index_count = 0;
   }
 
-  printf("Created mesh: V=%u, I=%u\n", vertex_count, index_count);
+  // log_info(LOG_SOURCE, "Created mesh (Vertices: %u, Indices: %u)", vertex_count, index_count);
   return mesh;
 }
 
@@ -1182,8 +1175,8 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
                                             .pSetLayouts = &pso->descriptor_set_layout};
   VkResult err = vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set);
   if (err != VK_SUCCESS) {
-    fprintf(stderr, "vkAllocateDescriptorSets failed (shader=%s) err=%d\n",
-            shader ? shader->vert_path : "<unknown>", err);
+    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (shader=%s) err=%d\n",
+              shader ? shader->vert_path : "<unknown>", err);
   }
   check_vk_result_line(err, __LINE__);
 
@@ -1207,26 +1200,26 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
     buffer_infos[i] = (VkDescriptorBufferInfo){
         .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = ubo_offsets[i], .range = ubo_sizes[i]};
     uint32_t binding_index = current_binding++;
-    descriptor_writes[binding_index] = (VkWriteDescriptorSet){
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = descriptor_set,
-        .dstBinding = binding_index,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = 1,
-        .pBufferInfo = &buffer_infos[i]};
+    descriptor_writes[binding_index] =
+        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                               .dstSet = descriptor_set,
+                               .dstBinding = binding_index,
+                               .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                               .descriptorCount = 1,
+                               .pBufferInfo = &buffer_infos[i]};
   }
   for (uint32_t i = 0; i < texture_count; ++i) {
     image_infos[i] = (VkDescriptorImageInfo){.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                              .imageView = textures[i]->image_view,
                                              .sampler = textures[i]->sampler};
     uint32_t binding_index = current_binding++;
-    descriptor_writes[binding_index] = (VkWriteDescriptorSet){
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = descriptor_set,
-        .dstBinding = binding_index,
-        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = 1,
-        .pImageInfo = &image_infos[i]};
+    descriptor_writes[binding_index] =
+        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                               .dstSet = descriptor_set,
+                               .dstBinding = binding_index,
+                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                               .descriptorCount = 1,
+                               .pImageInfo = &image_infos[i]};
   }
   vkUpdateDescriptorSets(handler->g_device, binding_count, descriptor_writes, 0, NULL);
 
@@ -1283,7 +1276,7 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
   }
 
   if (free_slot == (uint32_t)-1) {
-    fprintf(stderr, "Max texture count reached.\n");
+    log_error(LOG_SOURCE, "Max texture count (%d) reached.", MAX_TEXTURES);
     return NULL;
   }
 
@@ -1536,12 +1529,13 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
 
   VkResult err = vkAllocateDescriptorSets(h->g_device, &alloc_info, &descriptor_set);
   if (err != VK_SUCCESS) {
-    fprintf(stderr, "vkAllocateDescriptorSets failed (primitive shader) err=%d\n", err);
+    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (primitive shader) err=%d\n", err);
   }
   check_vk_result_line(err, __LINE__);
 
-  VkDescriptorBufferInfo buffer_info = {
-      .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dynamic_offset, .range = sizeof(primitive_ubo_t)};
+  VkDescriptorBufferInfo buffer_info = {.buffer = renderer->dynamic_ubo_buffer.buffer,
+                                        .offset = dynamic_offset,
+                                        .range = sizeof(primitive_ubo_t)};
   VkWriteDescriptorSet descriptor_write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                            .dstSet = descriptor_set,
                                            .dstBinding = 0,
@@ -1826,9 +1820,8 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   check_vk_result(vkAllocateDescriptorSets(h->g_device, &ai, &desc));
 
   // write UBO
-  VkDescriptorBufferInfo bufInfo = {.buffer = renderer->dynamic_ubo_buffer.buffer,
-                                    .offset = dyn_offset,
-                                    .range = sizeof(primitive_ubo_t)};
+  VkDescriptorBufferInfo bufInfo = {
+      .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
   VkDescriptorImageInfo img = {.sampler = skin_array->sampler,
                                .imageView = skin_array->image_view,
                                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -1852,8 +1845,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   VkDeviceSize offs[2] = {0, 0};
   vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
   vkCmdBindIndexBuffer(cmd, quad->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0,
-                          NULL);
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0, NULL);
   vkCmdDrawIndexed(cmd, quad->index_count, sr->instance_count, 0, 0, 0);
 
   sr->instance_count = 0;
@@ -1863,14 +1855,14 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
   int tex_width, tex_height, channels;
   stbi_uc *pixels = stbi_load(path, &tex_width, &tex_height, &channels, STBI_rgb_alpha);
   if (!pixels) {
-    fprintf(stderr, "Failed to load skin: %s\n", path);
+    log_error(LOG_SOURCE, "Failed to load skin from file: %s", path);
     return -1;
   }
 
   // check dimensions (must be multiple of 256x128)
   if (tex_width <= 0 || tex_height <= 0 || tex_width % 256 != 0 || tex_height % 128 != 0) {
-    fprintf(stderr, "Skin %s has invalid dimensions (%dx%d), must be a multiple of 256x128\n", path,
-            tex_width, tex_height);
+    log_error(LOG_SOURCE, "Skin '%s' has invalid dimensions (%dx%d), must be a multiple of 256x128", path,
+              tex_width, tex_height);
     stbi_image_free(pixels);
     return -1;
   }
@@ -1880,23 +1872,24 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
   const int final_height = 256;
 
   if (tex_width != final_width || tex_height != final_height) {
-    printf("Info: resizing skin '%s' from %dx%d to %dx%d\n", path, tex_width, tex_height, final_width,
-           final_height);
+    // log_info(LOG_SOURCE, "Resizing skin '%s' from %dx%d to %dx%d", path, tex_width, tex_height,
+    // final_width,
+    //          final_height);
     stbi_uc *resized_pixels = malloc(final_width * final_height * 4);
     if (!resized_pixels) {
-      fprintf(stderr, "Failed to allocate memory for skin resize.\n");
+      log_error(LOG_SOURCE, "Failed to allocate memory for skin resize.");
       stbi_image_free(pixels);
       return -1;
     }
     stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_pixels, final_width, final_height, 0,
-                            4);
+                              4);
     used_pixels = resized_pixels; // from now on, use the resized pixels
   }
 
   renderer_state_t *r = &h->renderer;
   int layer = skin_manager_alloc_layer(r);
   if (layer < 0) {
-    fprintf(stderr, "No free skin layers available\n");
+    log_error(LOG_SOURCE, "No free skin layers available (max %d reached).", MAX_SKINS);
     if (used_pixels != pixels)
       free(used_pixels);
     stbi_image_free(pixels);
@@ -1972,12 +1965,12 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
   vkDestroyBuffer(h->g_device, staging.buffer, h->g_allocator);
   vkFreeMemory(h->g_device, staging.memory, h->g_allocator);
 
-  printf("Loaded skin %s into layer %d\n", path, layer);
+  log_info(LOG_SOURCE, "Loaded skin '%s' into layer %d", path, layer);
   return layer; // return usable skin index
 }
 
 void renderer_unload_skin(gfx_handler_t *h, int layer) {
   renderer_state_t *r = &h->renderer;
   skin_manager_free_layer(r, layer);
-  printf("Freed skin layer %d\n", layer);
+  log_info(LOG_SOURCE, "Freed skin layer %d\n", layer);
 }

@@ -12,6 +12,7 @@ set(SRCS
     src/main.c
     src/animation/anim_data.c
     src/animation/anim_system.c
+    src/logger/logger.c
 	src/physics/physics.c
     src/plugins/api_impl.c
     src/plugins/plugin_manager.c

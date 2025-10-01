@@ -1,6 +1,7 @@
 #include "user_interface.h"
 #include "../../symbols.h"
 #include "../animation/anim_data.h"
+#include "../logger/logger.h"
 #include "../plugins/api_impl.h"
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
@@ -17,6 +18,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+static const char *LOG_SOURCE = "UI";
 
 typedef struct ui_handler ui_handler_t;
 
@@ -37,10 +40,10 @@ void render_menu_bar(ui_handler_t *ui) {
         } else if (result == NFD_CANCEL)
           puts("Canceled map load.");
         else
-          printf("Error: %s\n", NFD_GetError());
+          log_error(LOG_SOURCE, "Error: %s\n", NFD_GetError());
       }
       if (igMenuItem_Bool("Save", NULL, false, true)) {
-        printf("Save selected (not implemented).\n");
+        log_warn(LOG_SOURCE, "Save action is not yet implemented.");
       }
       igEndMenu();
     }
@@ -65,16 +68,16 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_manager, true);
       igEndMenu();
     }
-    
-    const char* button_text = "Reload Plugins";
+
+    const char *button_text = "Reload Plugins";
     ImVec2 button_size;
     igCalcTextSize(&button_size, button_text, NULL, false, 0.0f);
-    button_size.x += igGetStyle()->FramePadding.x * 2.0f; 
+    button_size.x += igGetStyle()->FramePadding.x * 2.0f;
     ImVec2 region_avail;
     igGetContentRegionAvail(&region_avail);
     igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x);
-    if (igButton(button_text, (ImVec2){0,0})) 
-        plugin_manager_reload_all(&ui->plugin_manager, "plugins");
+    if (igButton(button_text, (ImVec2){0, 0}))
+      plugin_manager_reload_all(&ui->plugin_manager, "plugins");
 
     igEndMainMenuBar();
   }
@@ -289,14 +292,13 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   skin_manager_init(&ui->skin_manager);
   NFD_Init();
 
-  printf("Initializing plugin system...\n");
   ui->plugin_api = api_init(ui);
   ui->plugin_context.ui_handler = ui;
   ui->plugin_context.timeline = &ui->timeline;
   ui->plugin_context.gfx_handler = gfx_handler;
   ui->plugin_context.imgui_context = igGetCurrentContext();
   plugin_manager_init(&ui->plugin_manager, &ui->plugin_context, &ui->plugin_api);
-  plugin_manager_load_all(&ui->plugin_manager, "plugins"); // Load from 'plugins' directory
+  plugin_manager_load_all(&ui->plugin_manager, "plugins");
 }
 
 static float lint2(float a, float b, float f) { return a + f * (b - a); }

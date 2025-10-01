@@ -1,4 +1,5 @@
 #include "api_impl.h"
+#include "../logger/logger.h"
 #include "../user_interface/timeline.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,8 +8,8 @@
 // API IMPLEMENTATION
 //=================================================================================================
 
-// This global pointer allows the static API functions to access the application's state.
-// It is set once by api_init() and is internal to this file.
+// this global pointer allows the static API functions to access the application's state.
+// it is set once by api_init() and is internal to this file.
 static ui_handler_t *g_ui_handler_for_api = NULL;
 
 static int api_get_current_tick() { return g_ui_handler_for_api->timeline.current_tick; }
@@ -16,13 +17,13 @@ static int api_get_current_tick() { return g_ui_handler_for_api->timeline.curren
 static int api_get_track_count() { return g_ui_handler_for_api->timeline.player_track_count; }
 
 static void api_log_info(const char *plugin_name, const char *message) {
-  printf("INFO [%s]: %s\n", plugin_name, message);
+  log_info(plugin_name, "%s", message);
 }
 static void api_log_warning(const char *plugin_name, const char *message) {
-  printf("WARN [%s]: %s\n", plugin_name, message);
+  log_warn(plugin_name, "%s", message);
 }
 static void api_log_error(const char *plugin_name, const char *message) {
-  printf("ERROR [%s]: %s\n", plugin_name, message);
+  log_error(plugin_name, "%s", message);
 }
 
 static SWorldCore *api_get_world_state_at(int tick) {
