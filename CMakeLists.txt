@@ -83,6 +83,14 @@ set(IMGUI_SOURCES
 )
 add_executable(${PROJECT_NAME} ${SRCS} ${IMGUI_SOURCES})
 
+if(UNIX)
+    # On Linux/macOS, this flag adds all symbols to the dynamic symbol table
+    target_link_options(${PROJECT_NAME} PRIVATE -rdynamic)
+elseif(WIN32)
+    # On Windows, this enables the executable to export symbols like a DLL
+    set_target_properties(${PROJECT_NAME} PROPERTIES ENABLE_EXPORTS ON)
+endif()
+
 set(IMGUI_STATIC "yes" CACHE STRING "Build as a static library" FORCE)
 # cimgui configuration
 add_subdirectory(libs/cimgui)
