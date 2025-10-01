@@ -1,6 +1,49 @@
 #include "anim_data.h"
 #include "anim_system.h"
+#include "gamecore.h"
 #include <string.h>
+
+const data_container_t game_data = {
+    .weapons = {
+        .id = {
+            [WEAPON_HAMMER] =
+                {.firedelay = 125, .offsetx = 4, .offsety = -20, .body_size = {4.0f, 3.0f}, .num_muzzles = 0},
+
+            [WEAPON_GUN] = {.firedelay = 125,
+                            .offsetx = 32,
+                            .offsety = 4,
+                            .muzzleoffsetx = 58.8752f,
+                            .muzzleoffsety = 6,
+                            .muzzleduration = 5,
+                            .num_muzzles = 3,
+                            .body_size = {4.0f, 2.0f},
+                            .muzzle_size = {4.0f, 2.0f}},
+
+            [WEAPON_SHOTGUN] = {.firedelay = 500,
+                                .offsetx = 24,
+                                .offsety = -2,
+                                .muzzleoffsetx = 83.3128f,
+                                .muzzleoffsety = 6,
+                                .muzzleduration = 5,
+                                .num_muzzles = 3,
+                                .body_size = {8.0f, 2.0f},
+                                .muzzle_size = {4.0f, 2.0f}},
+
+            [WEAPON_GRENADE] =
+                {.firedelay = 500, .offsetx = 24, .offsety = -2, .body_size = {7.0f, 2.0f}, .num_muzzles = 0},
+
+            [WEAPON_LASER] =
+                {.firedelay = 800, .offsetx = 24, .offsety = -2, .body_size = {7.0f, 3.0f}, .num_muzzles = 0},
+
+            [WEAPON_NINJA] = {.firedelay = 800,
+                              .offsetx = 0,
+                              .offsety = 0,
+                              .muzzleoffsetx = 40,
+                              .muzzleoffsety = -4,
+                              .muzzleduration = 5,
+                              .num_muzzles = 3,
+                              .body_size = {8.0f, 2.0f},
+                              .muzzle_size = {7.0f, 4.0f}}}}};
 
 /* ---- Base ---- */
 static const anim_keyframe_t base_body[] = {{0.0f, 0.0f, -4.0f, 0.0f}};

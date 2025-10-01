@@ -1,8 +1,8 @@
 #include "cimgui.h"
+#include "logger/logger.h"
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
 #include <GLFW/glfw3.h>
-#include "logger/logger.h"
 
 int main(void) {
   logger_init();
@@ -26,7 +26,10 @@ int main(void) {
     on_camera_update(&handler, viewport_hovered);
 
     renderer_begin_skins(&handler);
+    renderer_begin_atlas_instances(&handler.renderer.gameskin_renderer);
     render_players(&handler.user_interface);
+    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer,
+                                   &handler.renderer.gameskin_renderer);
     renderer_flush_skins(&handler, handler.current_frame_command_buffer,
                          handler.renderer.skin_manager.atlas_array);
     ui_render(&handler.user_interface);

@@ -4,6 +4,7 @@
 #include "../animation/anim_system.h"
 #include <cglm/cglm.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <vulkan/vulkan_core.h>
 
 #define MAX_SHADERS 16
@@ -15,12 +16,12 @@
 #define MAX_PRIMITIVE_INDICES 200000
 
 #if defined(_MSC_VER) && !defined(__clang__)
-  #include <malloc.h>
-  #define VLA(T, name, n)  T *name = (T*)_malloca(sizeof(T) * (n))
-  #define VLA_FREE(name)   _freea(name)
+#include <malloc.h>
+#define VLA(T, name, n) T *name = (T *)_malloca(sizeof(T) * (n))
+#define VLA_FREE(name) _freea(name)
 #else
-  #define VLA(T, name, n)  T name[(n)]
-  #define VLA_FREE(name)   (void)0
+#define VLA(T, name, n) T name[(n)]
+#define VLA_FREE(name) (void)0
 #endif
 
 typedef struct gfx_handler_t gfx_handler_t;
@@ -141,6 +142,29 @@ typedef struct {
 } skin_atlas_manager_t;
 
 typedef struct {
+  uint32_t x, y, w, h;
+} sprite_definition_t;
+
+typedef struct {
+  vec2 pos;             // World-space center position
+  vec2 size;            // World-space size (width, height)
+  float rotation;       // Rotation in radians
+  uint32_t layer_index; // Index of the sprite in the texture array
+  vec2 uv_scale;        // UV scale for sub-texture
+} atlas_instance_t;
+
+#define MAX_ATLAS_SPRITES 512
+typedef struct {
+  shader_t *shader;
+  texture_t *texture_array;
+  buffer_t instance_buffer;
+  atlas_instance_t *instance_ptr;
+  uint32_t instance_count;
+  uint32_t max_instances;
+  vec2 layer_uv_scales[MAX_ATLAS_SPRITES];
+} atlas_renderer_t;
+
+typedef struct {
   shader_t shaders[MAX_SHADERS];
   uint32_t shader_count;
 
@@ -150,11 +174,9 @@ typedef struct {
 
   pipeline_cache_entry_t pipeline_cache[MAX_SHADERS];
 
-  // Descriptor pool per frame-in-flight (swapchain image) to avoid resetting in-use pools
-  VkDescriptorPool frame_descriptor_pools[3]; // assume triple buffering
+  VkDescriptorPool frame_descriptor_pools[3];
   VkCommandPool transfer_command_pool;
 
-  // State for primitive drawing
   shader_t *primitive_shader;
   buffer_t dynamic_vertex_buffer;
   buffer_t dynamic_index_buffer;
@@ -164,7 +186,6 @@ typedef struct {
   uint32_t primitive_index_count;
   VkCommandBuffer current_command_buffer;
 
-  // UBO Ring Buffer
   buffer_t dynamic_ubo_buffer;
   void *ubo_buffer_ptr;
   uint32_t ubo_buffer_offset;
@@ -175,6 +196,7 @@ typedef struct {
   gfx_handler_t *gfx;
   skin_atlas_manager_t skin_manager;
   skin_renderer_t skin_renderer;
+  atlas_renderer_t gameskin_renderer;
 } renderer_state_t;
 
 void check_vk_result(VkResult err);
@@ -226,5 +248,52 @@ void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint3
 VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format,
                               VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count);
 VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
+
+// Creates a texture array with mipmaps from defined sprites in an atlas file.
+texture_t *renderer_create_texture_array_from_sprites(gfx_handler_t *handler, const char *atlas_path,
+                                                      uint32_t layer_width, uint32_t layer_height,
+                                                      const sprite_definition_t *sprites,
+                                                      uint32_t sprite_count, vec2 *out_uv_scales);
+
+// General-purpose Atlas Rendering API
+void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path,
+                                  uint32_t layer_width, uint32_t layer_height,
+                                  const sprite_definition_t *sprites, uint32_t sprite_count,
+                                  uint32_t max_instances);
+void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
+void renderer_begin_atlas_instances(atlas_renderer_t *ar);
+void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation,
+                                  uint32_t layer_index);
+void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar);
+
+// gameskin spire enum
+enum {
+  GAMESKIN_HAMMER_BODY,
+  GAMESKIN_HAMMER_CURSOR,
+  GAMESKIN_GUN_BODY,
+  GAMESKIN_GUN_CURSOR,
+  GAMESKIN_GUN_PROJ,
+  GAMESKIN_GUN_MUZZLE1,
+  GAMESKIN_GUN_MUZZLE2,
+  GAMESKIN_GUN_MUZZLE3,
+  GAMESKIN_SHOTGUN_BODY,
+  GAMESKIN_SHOTGUN_CURSOR,
+  GAMESKIN_SHOTGUN_PROJ,
+  GAMESKIN_SHOTGUN_MUZZLE1,
+  GAMESKIN_SHOTGUN_MUZZLE2,
+  GAMESKIN_SHOTGUN_MUZZLE3,
+  GAMESKIN_GRENADE_BODY,
+  GAMESKIN_GRENADE_CURSOR,
+  GAMESKIN_GRENADE_PROJ,
+  GAMESKIN_LASER_BODY,
+  GAMESKIN_LASER_CURSOR,
+  GAMESKIN_LASER_PROJ,
+  GAMESKIN_NINJA_BODY,
+  GAMESKIN_NINJA_CURSOR,
+  GAMESKIN_NINJA_MUZZLE1,
+  GAMESKIN_NINJA_MUZZLE2,
+  GAMESKIN_NINJA_MUZZLE3,
+  GAMESKIN_SPRITE_COUNT
+};
 
 #endif // RENDERER_H

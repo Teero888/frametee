@@ -57,6 +57,10 @@ static VkVertexInputAttributeDescription mesh_attribute_descriptions[3];
 static VkVertexInputBindingDescription skin_binding_desc[2];
 static VkVertexInputAttributeDescription skin_attrib_descs[14];
 
+// atlas things
+static VkVertexInputBindingDescription atlas_binding_desc[2];
+static VkVertexInputAttributeDescription atlas_attrib_descs[6];
+
 static void setup_vertex_descriptions();
 
 void check_vk_result(VkResult err) {
@@ -552,6 +556,25 @@ int renderer_init(gfx_handler_t *handler) {
 
   renderer->skin_renderer.instance_count = 0;
 
+  static sprite_definition_t gameskin_sprites[GAMESKIN_SPRITE_COUNT] = {
+      [GAMESKIN_HAMMER_BODY] = {64, 32, 128, 96},       [GAMESKIN_HAMMER_CURSOR] = {0, 0, 64, 64},
+      [GAMESKIN_GUN_BODY] = {64, 128, 128, 64},         [GAMESKIN_GUN_CURSOR] = {0, 128, 64, 64},
+      [GAMESKIN_GUN_PROJ] = {192, 128, 64, 64},         [GAMESKIN_GUN_MUZZLE1] = {256, 128, 128, 64},
+      [GAMESKIN_GUN_MUZZLE2] = {384, 128, 128, 64},     [GAMESKIN_GUN_MUZZLE3] = {512, 128, 128, 64},
+      [GAMESKIN_SHOTGUN_BODY] = {64, 192, 256, 64},     [GAMESKIN_SHOTGUN_CURSOR] = {0, 192, 64, 64},
+      [GAMESKIN_SHOTGUN_PROJ] = {320, 192, 64, 64},     [GAMESKIN_SHOTGUN_MUZZLE1] = {384, 192, 128, 64},
+      [GAMESKIN_SHOTGUN_MUZZLE2] = {512, 192, 128, 64}, [GAMESKIN_SHOTGUN_MUZZLE3] = {640, 192, 128, 64},
+      [GAMESKIN_GRENADE_BODY] = {64, 256, 224, 64},     [GAMESKIN_GRENADE_CURSOR] = {0, 256, 64, 64},
+      [GAMESKIN_GRENADE_PROJ] = {320, 256, 64, 64},     [GAMESKIN_LASER_BODY] = {64, 384, 224, 96},
+      [GAMESKIN_LASER_CURSOR] = {0, 384, 64, 64},       [GAMESKIN_LASER_PROJ] = {320, 384, 64, 64},
+      [GAMESKIN_NINJA_BODY] = {64, 320, 256, 64},       [GAMESKIN_NINJA_CURSOR] = {0, 320, 64, 64},
+      [GAMESKIN_NINJA_MUZZLE1] = {800, 0, 224, 128},    [GAMESKIN_NINJA_MUZZLE2] = {800, 128, 224, 128},
+      [GAMESKIN_NINJA_MUZZLE3] = {800, 256, 224, 128},
+  };
+
+  renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png", 256, 128,
+                               gameskin_sprites, GAMESKIN_SPRITE_COUNT, 10000);
+
   log_info(LOG_SOURCE, "Renderer initialized successfully.");
   return 0;
 }
@@ -622,6 +645,7 @@ void renderer_cleanup(gfx_handler_t *handler) {
     vkDestroyBuffer(device, renderer->skin_renderer.instance_buffer.buffer, allocator);
     vkFreeMemory(device, renderer->skin_renderer.instance_buffer.memory, allocator);
   }
+  renderer_cleanup_atlas_renderer(handler, &renderer->gameskin_renderer);
 
   log_info(LOG_SOURCE, "Renderer cleaned up successfully.");
 }
@@ -656,8 +680,8 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   VLA(VkDescriptorSetLayoutBinding, bindings, binding_count);
 
   if (shader) {
-    log_error(LOG_SOURCE, "Creating descriptor set layout for %s: ubo_count=%u texture_count=%u\n",
-              shader->vert_path, ubo_count, texture_count);
+    log_info(LOG_SOURCE, "Creating descriptor set layout for %s: ubo_count=%u texture_count=%u",
+             shader->vert_path, ubo_count, texture_count);
   }
 
   if (target_render_pass == VK_NULL_HANDLE) {
@@ -690,7 +714,7 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   VkResult err = vkCreateDescriptorSetLayout(handler->g_device, &layout_info, handler->g_allocator,
                                              &entry->descriptor_set_layout);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkCreateDescriptorSetLayout failed (shader=%s) err=%d\n",
+    log_error(LOG_SOURCE, "vkCreateDescriptorSetLayout failed (shader=%s) err=%d",
               shader ? shader->vert_path : "<unknown>", err);
   }
   check_vk_result_line(err, __LINE__);
@@ -701,7 +725,7 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   err = vkCreatePipelineLayout(handler->g_device, &pipeline_layout_info, handler->g_allocator,
                                &entry->pipeline_layout);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkCreatePipelineLayout failed (shader=%s) err=%d\n",
+    log_error(LOG_SOURCE, "vkCreatePipelineLayout failed (shader=%s) err=%d",
               shader ? shader->vert_path : "<unknown>", err);
   }
   check_vk_result_line(err, __LINE__);
@@ -793,7 +817,7 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   err = vkCreateGraphicsPipelines(handler->g_device, handler->g_pipeline_cache, 1, &pipeline_info,
                                   handler->g_allocator, &entry->pipeline);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkCreateGraphicsPipelines failed (shader=%s, render_pass=%p, format=%d) err=%d\n",
+    log_error(LOG_SOURCE, "vkCreateGraphicsPipelines failed (shader=%s, render_pass=%p, format=%d) err=%d",
               shader ? shader->vert_path : "<unknown>", (void *)target_render_pass,
               (int)handler->g_main_window_data.SurfaceFormat.format, err);
   }
@@ -1175,7 +1199,7 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
                                             .pSetLayouts = &pso->descriptor_set_layout};
   VkResult err = vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (shader=%s) err=%d\n",
+    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (shader=%s) err=%d",
               shader ? shader->vert_path : "<unknown>", err);
   }
   check_vk_result_line(err, __LINE__);
@@ -1412,7 +1436,7 @@ static void setup_vertex_descriptions() {
                                           .format = VK_FORMAT_R32G32_SFLOAT,
                                           .offset = offsetof(vertex_t, tex_coord)};
 
-  // skin instanced data ---
+  // skin instanced data
   skin_binding_desc[0] = (VkVertexInputBindingDescription){
       .binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
   skin_binding_desc[1] = (VkVertexInputBindingDescription){
@@ -1479,6 +1503,41 @@ static void setup_vertex_descriptions() {
                                                                .location = 13,
                                                                .format = VK_FORMAT_R32_SINT,
                                                                .offset = offsetof(skin_instance_t, col_gs)};
+
+  // Atlas instanced data
+  atlas_binding_desc[0] = (VkVertexInputBindingDescription){
+      .binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+  atlas_binding_desc[1] = (VkVertexInputBindingDescription){
+      .binding = 1, .stride = sizeof(atlas_instance_t), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE};
+
+  i = 0;
+  // from vertex_t (binding 0)
+  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
+  // from atlas_instance_t (binding 1)
+  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
+                                                                .location = 1,
+                                                                .format = VK_FORMAT_R32G32_SFLOAT,
+                                                                .offset = offsetof(atlas_instance_t, pos)};
+  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
+                                                                .location = 2,
+                                                                .format = VK_FORMAT_R32G32_SFLOAT,
+                                                                .offset = offsetof(atlas_instance_t, size)};
+  atlas_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1,
+                                          .location = 3,
+                                          .format = VK_FORMAT_R32_SFLOAT,
+                                          .offset = offsetof(atlas_instance_t, rotation)};
+  atlas_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1,
+                                          .location = 4,
+                                          .format = VK_FORMAT_R32_SINT,
+                                          .offset = offsetof(atlas_instance_t, layer_index)};
+  atlas_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1,
+                                          .location = 5,
+                                          .format = VK_FORMAT_R32G32_SFLOAT,
+                                          .offset = offsetof(atlas_instance_t, uv_scale)};
 }
 
 // primitive drawing implementation
@@ -1529,7 +1588,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
 
   VkResult err = vkAllocateDescriptorSets(h->g_device, &alloc_info, &descriptor_set);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (primitive shader) err=%d\n", err);
+    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (primitive shader) err=%d", err);
   }
   check_vk_result_line(err, __LINE__);
 
@@ -1972,5 +2031,253 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
 void renderer_unload_skin(gfx_handler_t *h, int layer) {
   renderer_state_t *r = &h->renderer;
   skin_manager_free_layer(r, layer);
-  log_info(LOG_SOURCE, "Freed skin layer %d\n", layer);
+  log_info(LOG_SOURCE, "Freed skin layer %d", layer);
+}
+
+texture_t *renderer_create_texture_array_from_sprites(gfx_handler_t *handler, const char *atlas_path,
+                                                      uint32_t layer_width, uint32_t layer_height,
+                                                      const sprite_definition_t *sprites,
+                                                      uint32_t sprite_count, vec2 *out_uv_scales) {
+  renderer_state_t *renderer = &handler->renderer;
+
+  int atlas_w, atlas_h, atlas_channels;
+  stbi_uc *atlas_pixels = stbi_load(atlas_path, &atlas_w, &atlas_h, &atlas_channels, STBI_rgb_alpha);
+  if (!atlas_pixels) {
+    log_error(LOG_SOURCE, "Failed to load source atlas image: %s", atlas_path);
+    return NULL;
+  }
+
+  VkDeviceSize layer_size = (VkDeviceSize)layer_width * layer_height * 4;
+  VkDeviceSize total_buffer_size = layer_size * sprite_count;
+  stbi_uc *all_layers_pixels = malloc(total_buffer_size);
+  if (!all_layers_pixels) {
+    log_error(LOG_SOURCE, "Failed to allocate memory for texture array layers.");
+    stbi_image_free(atlas_pixels);
+    return NULL;
+  }
+
+  stbi_uc *temp_sprite_pixels = NULL;
+
+  for (uint32_t i = 0; i < sprite_count; i++) {
+    const sprite_definition_t *sprite = &sprites[i];
+
+    // Convert normalized coordinates to absolute pixel coordinates
+    uint32_t pixel_x = (uint32_t)(sprite->x);
+    uint32_t pixel_y = (uint32_t)(sprite->y);
+    uint32_t pixel_w = (uint32_t)(sprite->w);
+    uint32_t pixel_h = (uint32_t)(sprite->h);
+
+    if (pixel_x + pixel_w > atlas_w || pixel_y + pixel_h > atlas_h) {
+      log_error(LOG_SOURCE, "Sprite definition %d is out of atlas bounds.", i);
+      continue;
+    }
+
+    temp_sprite_pixels = realloc(temp_sprite_pixels, pixel_w * pixel_h * 4);
+
+    // Extract pixels from the source atlas
+    for (uint32_t y = 0; y < pixel_h; y++) {
+      memcpy(temp_sprite_pixels + y * pixel_w * 4, atlas_pixels + ((pixel_y + y) * atlas_w + pixel_x) * 4,
+             pixel_w * 4);
+    }
+
+    stbi_uc *dest_ptr = all_layers_pixels + i * layer_size;
+
+    memset(dest_ptr, 0, layer_size);
+
+    for (uint32_t y = 0; y < pixel_h; y++) {
+      memcpy(dest_ptr + y * layer_width * 4,       // Destination
+             temp_sprite_pixels + y * pixel_w * 4, // Source
+             pixel_w * 4);                         // Bytes for one row
+    }
+
+    if (out_uv_scales) {
+      out_uv_scales[i][0] = (float)pixel_w / (float)layer_width;
+      out_uv_scales[i][1] = (float)pixel_h / (float)layer_height;
+    }
+  }
+
+  if (temp_sprite_pixels)
+    free(temp_sprite_pixels);
+  stbi_image_free(atlas_pixels);
+
+  uint32_t free_slot = (uint32_t)-1;
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i)
+    if (!renderer->textures[i].active) {
+      free_slot = i;
+      break;
+    }
+  if (free_slot == -1) {
+    log_error(LOG_SOURCE, "Max texture count reached.");
+    free(all_layers_pixels);
+    return NULL;
+  }
+
+  texture_t *tex_array = &renderer->textures[free_slot];
+  memset(tex_array, 0, sizeof(texture_t));
+  tex_array->id = free_slot;
+  tex_array->active = true;
+  tex_array->width = layer_width;
+  tex_array->height = layer_height;
+  tex_array->mip_levels = (uint32_t)floorf(log2f(fmaxf(layer_width, layer_height))) + 1;
+  tex_array->layer_count = sprite_count;
+  snprintf(tex_array->path, sizeof(tex_array->path), "array_from_%s", atlas_path);
+
+  buffer_t staging_buffer;
+  create_buffer(handler, total_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
+  void *data;
+  vkMapMemory(handler->g_device, staging_buffer.memory, 0, total_buffer_size, 0, &data);
+  memcpy(data, all_layers_pixels, total_buffer_size);
+  vkUnmapMemory(handler->g_device, staging_buffer.memory);
+  free(all_layers_pixels);
+
+  create_image(handler, layer_width, layer_height, tex_array->mip_levels, tex_array->layer_count,
+               VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &tex_array->image, &tex_array->memory);
+
+  transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
+                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, tex_array->mip_levels, 0,
+                          tex_array->layer_count);
+
+  VkCommandBuffer cmd = begin_single_time_commands(handler, renderer->transfer_command_pool);
+  VLA(VkBufferImageCopy, regions, sprite_count);
+  for (uint32_t i = 0; i < sprite_count; i++) {
+    regions[i] = (VkBufferImageCopy){.bufferOffset = i * layer_size,
+                                     .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                          .mipLevel = 0,
+                                                          .baseArrayLayer = i,
+                                                          .layerCount = 1},
+                                     .imageExtent = {layer_width, layer_height, 1}};
+  }
+  vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, tex_array->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         sprite_count, regions);
+  VLA_FREE(regions);
+  end_single_time_commands(handler, renderer->transfer_command_pool, cmd);
+
+  vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
+  vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
+
+  build_mipmaps(handler, tex_array->image, layer_width, layer_height, tex_array->mip_levels,
+                tex_array->layer_count);
+
+  tex_array->image_view =
+      create_image_view(handler, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                        tex_array->mip_levels, tex_array->layer_count);
+  tex_array->sampler = create_texture_sampler(handler, tex_array->mip_levels, VK_FILTER_LINEAR);
+
+  log_info(LOG_SOURCE, "Created texture array with %d layers from %s", sprite_count, atlas_path);
+  return tex_array;
+}
+
+void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path,
+                                  uint32_t layer_width, uint32_t layer_height,
+                                  const sprite_definition_t *sprites, uint32_t sprite_count,
+                                  uint32_t max_instances) {
+  ar->shader = renderer_load_shader(h, "data/shaders/atlas.vert.spv", "data/shaders/atlas.frag.spv");
+  ar->texture_array = renderer_create_texture_array_from_sprites(h, atlas_path, layer_width, layer_height,
+                                                                 sprites, sprite_count, ar->layer_uv_scales);
+  ar->max_instances = max_instances;
+  create_buffer(h, sizeof(atlas_instance_t) * ar->max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &ar->instance_buffer);
+  vkMapMemory(h->g_device, ar->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&ar->instance_ptr);
+  ar->instance_count = 0;
+}
+
+void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar) {
+  if (ar->instance_buffer.buffer) {
+    vkDestroyBuffer(h->g_device, ar->instance_buffer.buffer, h->g_allocator);
+    vkFreeMemory(h->g_device, ar->instance_buffer.memory, h->g_allocator);
+  }
+  // The texture array itself will be cleaned up by the main renderer_cleanup loop
+}
+
+void renderer_begin_atlas_instances(atlas_renderer_t *ar) { ar->instance_count = 0; }
+
+void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation,
+                                  uint32_t layer_index) {
+  if (ar->instance_count >= ar->max_instances) {
+    log_warn(LOG_SOURCE, "Max atlas instances reached for this renderer.");
+    return;
+  }
+
+  uint32_t i = ar->instance_count++;
+  glm_vec2_copy(pos, ar->instance_ptr[i].pos);
+  glm_vec2_copy(size, ar->instance_ptr[i].size);
+  ar->instance_ptr[i].rotation = rotation;
+  ar->instance_ptr[i].layer_index = layer_index;
+  glm_vec2_copy(ar->layer_uv_scales[layer_index], ar->instance_ptr[i].uv_scale);
+}
+
+void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar) {
+  renderer_state_t *renderer = &h->renderer;
+  if (ar->instance_count == 0 || !ar->shader || !ar->texture_array)
+    return;
+
+  mesh_t *quad = h->quad_mesh;
+
+  pipeline_cache_entry_t *pso =
+      get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 6);
+  if (!pso)
+    return;
+
+  primitive_ubo_t ubo;
+  ubo.camPos[0] = renderer->camera.pos[0];
+  ubo.camPos[1] = renderer->camera.pos[1];
+  ubo.zoom = renderer->camera.zoom;
+  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
+  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
+  ubo.aspect = window_ratio / map_ratio;
+  ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
+  ubo.mapSize[0] = h->map_data->width;
+  ubo.mapSize[1] = h->map_data->height;
+  glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
+
+  VkDeviceSize ubo_size = sizeof(ubo);
+  VkDeviceSize aligned = (ubo_size + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
+  if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE)
+    return;
+  uint32_t dyn_offset = renderer->ubo_buffer_offset;
+  memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, ubo_size);
+  renderer->ubo_buffer_offset += aligned;
+
+  uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
+  VkDescriptorSet desc;
+  VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                    .descriptorPool = renderer->frame_descriptor_pools[pool_idx],
+                                    .descriptorSetCount = 1,
+                                    .pSetLayouts = &pso->descriptor_set_layout};
+  check_vk_result(vkAllocateDescriptorSets(h->g_device, &ai, &desc));
+
+  VkDescriptorBufferInfo bufInfo = {
+      .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
+  VkDescriptorImageInfo imgInfo = {.sampler = ar->texture_array->sampler,
+                                   .imageView = ar->texture_array->image_view,
+                                   .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+  VkWriteDescriptorSet writes[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                     .dstSet = desc,
+                                     .dstBinding = 0,
+                                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                     .descriptorCount = 1,
+                                     .pBufferInfo = &bufInfo},
+                                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                     .dstSet = desc,
+                                     .dstBinding = 1,
+                                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                     .descriptorCount = 1,
+                                     .pImageInfo = &imgInfo}};
+  vkUpdateDescriptorSets(h->g_device, 2, writes, 0, NULL);
+
+  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
+  VkBuffer bufs[2] = {quad->vertex_buffer.buffer, ar->instance_buffer.buffer};
+  VkDeviceSize offs[2] = {0, 0};
+  vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
+  vkCmdBindIndexBuffer(cmd, quad->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0, NULL);
+  vkCmdDrawIndexed(cmd, quad->index_count, ar->instance_count, 0, 0, 0);
+
+  ar->instance_count = 0;
 }

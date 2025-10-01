@@ -13,11 +13,16 @@
 #include "undo_redo.h"
 #include "widgets/hsl_colorpicker.h"
 #include <limits.h>
+#include <math.h>
 #include <nfd.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 static const char *LOG_SOURCE = "UI";
 
@@ -330,8 +335,6 @@ void render_players(ui_handler_t *ui) {
   const int step = 50;
   int target_tick = ui->timeline.current_tick;
 
-  // DEBUG:
-  // wc_copy_world(&world, &ui->timeline.vec.data[0]);
   if (target_tick < ui->timeline.previous_world.m_GameTick)
     wc_copy_world(
         &world,
@@ -367,7 +370,6 @@ void render_players(ui_handler_t *ui) {
   if (igIsKeyDown_Nil(ImGuiKey_C))
     intra = 1.f - intra;
 
-  // quick fix the camera so it is updated in time for all the transformations
   if (ui->timeline.recording) {
     SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
     vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
@@ -390,8 +392,7 @@ void render_players(ui_handler_t *ui) {
     anim_state_set(&anim_state, &anim_base, 0.0f);
 
     bool stationary = fabsf(vgetx(core->m_Vel) * 256.f) <= 1;
-    bool running =
-        fabsf(vgetx(core->m_Vel) * 256.f) >= 5000; // 19.53125 is an ugly number so im keeping this here
+    bool running = fabsf(vgetx(core->m_Vel) * 256.f) >= 5000;
     bool want_other_dir = (core->m_Input.m_Direction == -1 && vgetx(core->m_Vel) > 0) ||
                           (core->m_Input.m_Direction == 1 && vgetx(core->m_Vel) < 0);
     bool inactive = get_flag_sit(&core->m_Input);
@@ -429,7 +430,7 @@ void render_players(ui_handler_t *ui) {
     vec3 feet_col = {1.f, 1.f, 1.f};
     vec3 body_col = {0.0f, 0.0f, 0.0f};
     bool custom_col = info->use_custom_color;
-    // TODO: implement spec in the physics properly
+
     if (core->m_FreezeTime > 0) {
       skin = gfx->x_ninja_skin;
       if (eye == 0)
@@ -452,10 +453,140 @@ void render_players(ui_handler_t *ui) {
 
     renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
 
-    // if (i == gfx->user_interface.timeline.selected_player_track_index)
-    //   renderer_draw_line(gfx, p, (vec2){p[0] + vgetx(core->m_Vel) / 32.f, p[1] + vgety(core->m_Vel)
-    //   / 32.f},
-    //                      (vec4){1.f, 0.f, 0.f, 1.f}, 0.05);
+    if (core->m_ActiveWeapon >= WEAPON_HAMMER && core->m_ActiveWeapon < NUM_WEAPONS) {
+      const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
+      float fire_delay_ticks = spec->firedelay * (float)GAME_TICK_SPEED / 1000.0f;
+      int attack_ticks_passed = (core->m_ReloadTimer <= 0) ? (int)fire_delay_ticks + 1
+                                                           : (int)(fire_delay_ticks - core->m_ReloadTimer);
+      float aim_angle = atan2f(-dir[1], dir[0]);
+
+      bool is_sit = inactive && !in_air && stationary;
+      float flip_factor = (dir[0] < 0.0f) ? -1.0f : 1.0f;
+
+      vec2 weapon_pos = {p[0], p[1]};
+      float anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
+      float weapon_angle = anim_attach_angle_rad + aim_angle;
+
+      vec2 weapon_size;
+      glm_vec2_copy(spec->body_size, weapon_size);
+      weapon_size[1] *= flip_factor;
+
+      int weapon_sprite_id = -1;
+
+      if (core->m_ActiveWeapon == WEAPON_HAMMER) {
+        weapon_sprite_id = GAMESKIN_HAMMER_BODY;
+        weapon_pos[0] += anim_state.attach.x / 32.0f;
+        weapon_pos[1] += anim_state.attach.y / 32.0f;
+        weapon_pos[1] += spec->offsety / 32.0f;
+
+        if (dir[0] < 0.0f) {
+          weapon_pos[0] -= spec->offsetx / 32.0f;
+        }
+        if (is_sit)
+          weapon_pos[1] += 3.0f / 32.0f;
+
+        if (attack_ticks_passed <= fire_delay_ticks) {
+          anim_state_add(&anim_state, &anim_hammer_swing, (float)attack_ticks_passed / fire_delay_ticks,
+                         1.0f);
+          anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
+          weapon_angle = -M_PI / 2.0f + flip_factor * anim_attach_angle_rad;
+        } else {
+          const float HAMMER_REST_ANGLE = -M_PI / 6.0f;
+          weapon_angle = flip_factor * HAMMER_REST_ANGLE;
+        }
+      } else if (core->m_ActiveWeapon == WEAPON_NINJA) {
+        weapon_sprite_id = GAMESKIN_NINJA_BODY;
+        weapon_pos[1] += spec->offsety / 32.0f;
+        if (is_sit)
+          weapon_pos[1] += 3.0f / 32.0f;
+
+        if (dir[0] < 0.0f) {
+          weapon_pos[0] -= spec->offsetx / 32.0f;
+        }
+
+        if (attack_ticks_passed <= fire_delay_ticks) {
+          anim_state_add(&anim_state, &anim_ninja_swing, (float)attack_ticks_passed / fire_delay_ticks, 1.0f);
+        }
+
+        anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
+        weapon_angle = -M_PI / 2.0f + flip_factor * anim_attach_angle_rad;
+
+        float attack_time_sec = attack_ticks_passed / (float)GAME_TICK_SPEED;
+        if (attack_time_sec <= 1.0f / 6.0f && spec->num_muzzles > 0) {
+          int muzzle_idx = rand() % spec->num_muzzles;
+          vec2 hadoken_dir = {vgetx(core->m_Vel), vgety(core->m_Vel)};
+          if (glm_vec2_norm2(hadoken_dir) < 0.0001f) {
+            hadoken_dir[0] = 1.0f;
+            hadoken_dir[1] = 0.0f;
+          }
+          glm_vec2_normalize(hadoken_dir);
+
+          float hadoken_angle = atan2f(-hadoken_dir[1], hadoken_dir[0]);
+          vec2 muzzle_pos = {p[0], p[1]};
+          muzzle_pos[0] -= hadoken_dir[0] * spec->muzzleoffsetx / 32.0f;
+          muzzle_pos[1] -= hadoken_dir[1] * spec->muzzleoffsetx / 32.0f;
+
+          vec2 muzzle_size;
+          glm_vec2_copy(spec->muzzle_size, muzzle_size); // Real size
+          renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, muzzle_pos, muzzle_size,
+                                       hadoken_angle, GAMESKIN_NINJA_MUZZLE1 + muzzle_idx);
+        }
+      } else {
+        switch (core->m_ActiveWeapon) {
+        case WEAPON_GUN:
+          weapon_sprite_id = GAMESKIN_GUN_BODY;
+          break;
+        case WEAPON_SHOTGUN:
+          weapon_sprite_id = GAMESKIN_SHOTGUN_BODY;
+          break;
+        case WEAPON_GRENADE:
+          weapon_sprite_id = GAMESKIN_GRENADE_BODY;
+          break;
+        case WEAPON_LASER:
+          weapon_sprite_id = GAMESKIN_LASER_BODY;
+          break;
+        }
+
+        float recoil = 0.0f;
+        float a = attack_ticks_passed / 5.0f;
+        if (a < 1.0f)
+          recoil = sinf(a * M_PI);
+
+        weapon_pos[0] += dir[0] * (spec->offsetx - recoil * 10.0f) / 32.0f;
+        weapon_pos[1] += dir[1] * (spec->offsetx - recoil * 10.0f) / 32.0f;
+        weapon_pos[1] += spec->offsety / 32.0f;
+        if (is_sit)
+          weapon_pos[1] += 3.0f / 32.0f;
+
+        if ((core->m_ActiveWeapon == WEAPON_GUN || core->m_ActiveWeapon == WEAPON_SHOTGUN) &&
+            spec->num_muzzles > 0) {
+          if (attack_ticks_passed < spec->muzzleduration + 3.0f) {
+            int muzzle_idx = rand() % spec->num_muzzles;
+            vec2 muzzle_dir_y = {-dir[1], dir[0]};
+            float offset_y = -spec->muzzleoffsety / 32.0f * flip_factor;
+
+            vec2 muzzle_pos = {weapon_pos[0], weapon_pos[1]};
+            muzzle_pos[0] += dir[0] * spec->muzzleoffsetx / 32.0f + muzzle_dir_y[0] * offset_y;
+            muzzle_pos[1] += dir[1] * spec->muzzleoffsetx / 32.0f + muzzle_dir_y[1] * offset_y;
+
+            int muzzle_sprite_id =
+                (core->m_ActiveWeapon == WEAPON_GUN ? GAMESKIN_GUN_MUZZLE1 : GAMESKIN_SHOTGUN_MUZZLE1) +
+                muzzle_idx;
+            vec2 muzzle_size;
+            glm_vec2_copy(spec->muzzle_size, muzzle_size); // Real size
+            muzzle_size[1] *= flip_factor;
+
+            renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, muzzle_pos, muzzle_size,
+                                         weapon_angle, muzzle_sprite_id);
+          }
+        }
+      }
+
+      if (weapon_sprite_id != -1) {
+        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, weapon_pos, weapon_size, weapon_angle,
+                                     weapon_sprite_id);
+      }
+    }
 
     if (core->m_HookState >= 1)
       renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
@@ -487,7 +618,6 @@ void render_players(ui_handler_t *ui) {
     renderer_draw_circle_filled(gfx, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);
   }
 
-  // render own cursor
   if (ui->timeline.recording) {
     SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
     vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
@@ -500,13 +630,6 @@ void render_players(ui_handler_t *ui) {
                                 0.25, (vec4){1.f, 0.f, 0.f, 0.4f}, 16);
   }
 
-  // int pos_x, pos_y;
-  // float vel_x, vel_y;
-  // int freezetime;
-  // int reloadtime;
-  // int weapon;
-  // bool weapons[NUM_WEAPONS];
-  // fill data to be displayed
   if (ui->timeline.selected_player_track_index >= 0) {
     SCharacterCore *p = &world.m_pCharacters[ui->timeline.selected_player_track_index];
     ui->pos_x = vgetx(p->m_Pos);
@@ -523,7 +646,6 @@ void render_players(ui_handler_t *ui) {
   }
 
   if (ui->timeline.selected_player_track_index >= 0 && ui->show_prediction) {
-    // draw the first line from the currently interpolated position to the actual position
     for (int p = 0; p < world.m_NumCharacters; ++p) {
       SCharacterCore *core = &world.m_pCharacters[ui->timeline.selected_player_track_index];
       vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};

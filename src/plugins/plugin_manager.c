@@ -114,7 +114,7 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
   }
   closedir(dir);
 #endif
-  log_info(LOG_SOURCE, "Loaded %d plugin%s.", plugins, plugins > 1 ? "s" : "");
+  log_info(LOG_SOURCE, "Loaded %d plugin%s.", plugins, plugins != 1 ? "s" : "");
 }
 
 void plugin_manager_update_all(plugin_manager_t *manager) {
