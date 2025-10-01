@@ -78,7 +78,12 @@ This struct provides a set of **functions your plugin can call** to interact wit
 
   * `get_current_tick()`: Gets the current tick of the timeline playhead.
   * `log_info()`, `log_warning()`, `log_error()`: Logs a message to the console.
-  * `do_create_snippet()`: An undo-able action to create a new input snippet on a track.
+  * `do_create_track()`: Adds a new player track to the timeline and returns an undo command you can
+    register with the editor.
+  * `do_create_snippet()`: Creates a new input snippet on a track and optionally reports the created
+    snippet's ID so you can modify it further.
+  * `do_set_inputs()`: Overwrites a range of inputs inside an existing snippet. Returns an undo
+    command capturing the changes.
   * `register_undo_command()`: Registers a custom undo/redo action with the editor's undo manager.
   * `draw_line_world()`: A debug function to draw a line in the world view. The unit here is Blocks.
 
@@ -90,7 +95,7 @@ Create a new directory inside `plugins/`, for example `plugins/my_plugin/`. Insi
 
 **2. The C Source (`my_plugin.c`)**
 
-Your C file must implement the four required functions (`get_plugin_info`, `plugin_init`, `plugin_update`, `plugin_shutdown`). For a complete and recommended structure, see the example implementation in `plugins/example_c/example.c`.
+Your C file must implement the four required functions (`get_plugin_info`, `plugin_init`, `plugin_update`, `plugin_shutdown`). For a complete and recommended structure, see the example implementation in `plugins/example_c/example.c`. The `plugins/random_input_filler/` plugin shows how to use the extended API to create tracks and populate snippets with custom input data.
 
 **3. The Build Script (`CMakeLists.txt`)**
 

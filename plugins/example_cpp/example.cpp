@@ -47,7 +47,8 @@ public:
         } else {
           if (ImGui::Button("Create Snippet via API", ImVec2(0, 0))) {
             int CurrentTick = m_pAPI->get_current_tick();
-            undo_command_t *pCmd = m_pAPI->do_create_snippet(SelectedTrack, CurrentTick, m_SnippetDuration);
+            undo_command_t *pCmd =
+                m_pAPI->do_create_snippet(SelectedTrack, CurrentTick, m_SnippetDuration, nullptr);
             m_pAPI->register_undo_command(pCmd);
           }
         }

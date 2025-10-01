@@ -176,6 +176,78 @@ static void redo_add_snippet(undo_command_t *cmd, timeline_state_t *ts) {
   insert_snippet_into_track(track, &new_snip);
 }
 
+// --- Add Player Track Command ---
+typedef struct {
+  undo_command_t base;
+  int track_index;
+  player_info_t player_info;
+} AddTrackCommand;
+
+static void cleanup_add_track_cmd(undo_command_t *cmd) {
+  free(cmd);
+}
+
+static void undo_add_track(undo_command_t *cmd, timeline_state_t *ts) {
+  AddTrackCommand *c = (AddTrackCommand *)cmd;
+  if (c->track_index < 0 || c->track_index >= ts->player_track_count)
+    return;
+
+  ph_t *ph = ts->ui && ts->ui->gfx_handler ? &ts->ui->gfx_handler->physics_handler : NULL;
+  if (ph && ph->world.m_NumCharacters > c->track_index) {
+    wc_remove_character(&ph->world, c->track_index);
+  }
+
+  player_track_t *track = &ts->player_tracks[c->track_index];
+  for (int i = 0; i < track->snippet_count; ++i) {
+    free_snippet_inputs(&track->snippets[i]);
+  }
+  free(track->snippets);
+
+  if (c->track_index < ts->player_track_count - 1) {
+    memmove(&ts->player_tracks[c->track_index], &ts->player_tracks[c->track_index + 1],
+            (ts->player_track_count - c->track_index - 1) * sizeof(player_track_t));
+  }
+
+  ts->player_track_count--;
+  if (ts->player_track_count == 0) {
+    free(ts->player_tracks);
+    ts->player_tracks = NULL;
+  } else {
+    ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * ts->player_track_count);
+  }
+
+  if (ts->selected_player_track_index == c->track_index)
+    ts->selected_player_track_index = -1;
+  else if (ts->selected_player_track_index > c->track_index)
+    ts->selected_player_track_index--;
+
+  recalc_ts(ts, 0);
+}
+
+static void redo_add_track(undo_command_t *cmd, timeline_state_t *ts) {
+  AddTrackCommand *c = (AddTrackCommand *)cmd;
+  ph_t *ph = ts->ui && ts->ui->gfx_handler ? &ts->ui->gfx_handler->physics_handler : NULL;
+
+  int expected_index = ts->player_track_count;
+  player_track_t *new_track = add_new_track(ts, ph, 1);
+  if (!new_track)
+    return;
+
+  player_track_t *track = &ts->player_tracks[ts->player_track_count - 1];
+  if (c->track_index != expected_index && c->track_index >= 0 &&
+      c->track_index < ts->player_track_count) {
+    player_track_t appended_copy = *track;
+    memmove(&ts->player_tracks[c->track_index + 1], &ts->player_tracks[c->track_index],
+            (ts->player_track_count - c->track_index - 1) * sizeof(player_track_t));
+    ts->player_tracks[c->track_index] = appended_copy;
+    track = &ts->player_tracks[c->track_index];
+  }
+
+  track->player_info = c->player_info;
+
+  recalc_ts(ts, 0);
+}
+
 // --- Move Snippets Command ---
 typedef struct {
   int snippet_id;
@@ -2730,6 +2802,137 @@ void timeline_cleanup(timeline_state_t *ts) {
 
   snippet_id_vector_free(&ts->selected_snippets);
   recording_snippet_vector_free(&ts->recording_snippets);
+}
+
+undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t *info,
+                                          int *out_track_index) {
+  if (!ui || !ui->gfx_handler)
+    return NULL;
+
+  timeline_state_t *ts = &ui->timeline;
+  if (!ts->ui)
+    ts->ui = ui;
+  ph_t *ph = &ui->gfx_handler->physics_handler;
+
+  int new_index = ts->player_track_count;
+  player_track_t *new_track = add_new_track(ts, ph, 1);
+  if (!new_track)
+    return NULL;
+
+  if (info)
+    new_track->player_info = *info;
+
+  if (out_track_index)
+    *out_track_index = new_index;
+
+  AddTrackCommand *cmd = (AddTrackCommand *)calloc(1, sizeof(AddTrackCommand));
+  if (!cmd) {
+    AddTrackCommand temp = {0};
+    temp.track_index = new_index;
+    undo_add_track(&temp.base, ts);
+    return NULL;
+  }
+
+  cmd->base.undo = undo_add_track;
+  cmd->base.redo = redo_add_track;
+  cmd->base.cleanup = cleanup_add_track_cmd;
+  cmd->track_index = new_index;
+  cmd->player_info = new_track->player_info;
+
+  return &cmd->base;
+}
+
+undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, int start_tick, int duration,
+                                            int *out_snippet_id) {
+  if (!ui || duration <= 0)
+    return NULL;
+
+  timeline_state_t *ts = &ui->timeline;
+  if (!ts->ui)
+    ts->ui = ui;
+  if (track_index < 0 || track_index >= ts->player_track_count)
+    return NULL;
+
+  player_track_t *track = &ts->player_tracks[track_index];
+  int end_tick = start_tick + duration;
+  if (check_for_overlap(track, start_tick, end_tick, -1))
+    return NULL;
+
+  input_snippet_t snippet = create_empty_snippet(ts, start_tick, duration);
+
+  AddSnippetCommand *cmd = (AddSnippetCommand *)calloc(1, sizeof(AddSnippetCommand));
+  if (!cmd) {
+    free_snippet_inputs(&snippet);
+    return NULL;
+  }
+
+  add_snippet_to_track(track, &snippet);
+
+  if (out_snippet_id)
+    *out_snippet_id = snippet.id;
+
+  cmd->base.undo = undo_add_snippet;
+  cmd->base.redo = redo_add_snippet;
+  cmd->base.cleanup = cleanup_add_cmd;
+  cmd->track_index = track_index;
+  snippet_clone(&cmd->snippet_copy, &snippet);
+
+  return &cmd->base;
+}
+
+undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id, int tick_offset, int count,
+                                                const SPlayerInput *new_inputs) {
+  if (!ui || !new_inputs || count <= 0)
+    return NULL;
+
+  timeline_state_t *ts = &ui->timeline;
+  input_snippet_t *snippet = NULL;
+  for (int track_index = 0; track_index < ts->player_track_count && !snippet; ++track_index) {
+    snippet = find_snippet_by_id(&ts->player_tracks[track_index], snippet_id);
+  }
+
+  if (!snippet)
+    return NULL;
+
+  if (tick_offset < 0 || tick_offset >= snippet->input_count)
+    return NULL;
+
+  int max_write = count;
+  int remaining = snippet->input_count - tick_offset;
+  if (max_write > remaining)
+    max_write = remaining;
+
+  if (max_write <= 0)
+    return NULL;
+
+  int *indices = (int *)malloc(sizeof(int) * max_write);
+  SPlayerInput *before_states = (SPlayerInput *)malloc(sizeof(SPlayerInput) * max_write);
+  SPlayerInput *after_states = (SPlayerInput *)malloc(sizeof(SPlayerInput) * max_write);
+  if (!indices || !before_states || !after_states) {
+    free(indices);
+    free(before_states);
+    free(after_states);
+    return NULL;
+  }
+
+  for (int i = 0; i < max_write; ++i) {
+    int idx = tick_offset + i;
+    indices[i] = idx;
+    before_states[i] = snippet->inputs[idx];
+    after_states[i] = new_inputs[i];
+    snippet->inputs[idx] = new_inputs[i];
+  }
+
+  undo_command_t *cmd = create_edit_inputs_command(snippet, indices, max_write, before_states, after_states);
+
+  free(indices);
+  free(before_states);
+  free(after_states);
+
+  if (snippet->start_tick + tick_offset <= ts->current_tick)
+    recalc_ts(ts, snippet->start_tick + tick_offset);
+
+  return cmd;
 }
 
 input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int duration) {

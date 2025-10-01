@@ -81,11 +81,20 @@ static const SProjectile *api_get_next_projectile(const SProjectile *current) {
   return current ? current->m_Base.m_pNextTypeEntity : NULL;
 }
 
-static undo_command_t *api_do_create_snippet(int track_index, int start_tick, int duration) {
-  // TODO: This is a simplified undo. a full implementation would be needed in timeline.c that creates a proper command for adding a snippet.
-  input_snippet_t snip = create_empty_snippet(&g_ui_handler_for_api->timeline, start_tick, duration);
-  add_snippet_to_track(&g_ui_handler_for_api->timeline.player_tracks[track_index], &snip);
-  return NULL;
+static undo_command_t *api_do_create_track(const player_info_t *info, int *out_track_index) {
+  return timeline_api_create_track(g_ui_handler_for_api, info, out_track_index);
+}
+
+static undo_command_t *api_do_create_snippet(int track_index, int start_tick, int duration,
+                                             int *out_snippet_id) {
+  return timeline_api_create_snippet(g_ui_handler_for_api, track_index, start_tick, duration,
+                                     out_snippet_id);
+}
+
+static undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset, int count,
+                                         const SPlayerInput *new_inputs) {
+  return timeline_api_set_snippet_inputs(g_ui_handler_for_api, snippet_id, tick_offset, count,
+                                         new_inputs);
 }
 
 static void api_register_undo_command(undo_command_t *command) {
@@ -104,8 +113,10 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
   return (tas_api_t){
       .get_current_tick = api_get_current_tick,
       .get_track_count = api_get_track_count,
+      .do_create_track = api_do_create_track,
       .register_undo_command = api_register_undo_command,
       .do_create_snippet = api_do_create_snippet,
+      .do_set_inputs = api_do_set_inputs,
       .draw_line_world = api_draw_line_world,
       .log_info = api_log_info,
       .log_warning = api_log_warning,
