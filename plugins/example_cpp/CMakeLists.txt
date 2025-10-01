@@ -37,3 +37,11 @@ install(TARGETS ${PROJECT_NAME}
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}> "${HOST_APP_DIR}/build/plugins/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
 )
+
+if(WIN32)
+    # On Windows, we must explicitly link against the host executable's
+    # import library (.lib) to resolve the ImGui symbols at link-time.
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        "${HOST_APP_DIR}/build/ddnet_frametee.lib"
+    )
+endif()
