@@ -18,17 +18,9 @@ find_package(Vulkan REQUIRED)
 set(PLUGIN_C_SOURCES
     example.c
 )
-set(PLUGIN_CPP_SOURCES
-    "${HOST_APP_DIR}/libs/cimgui/cimgui.cpp"
-    "${HOST_APP_DIR}/libs/cimgui/imgui/imgui.cpp"
-    "${HOST_APP_DIR}/libs/cimgui/imgui/imgui_draw.cpp"
-    "${HOST_APP_DIR}/libs/cimgui/imgui/imgui_widgets.cpp"
-    "${HOST_APP_DIR}/libs/cimgui/imgui/imgui_tables.cpp"
-)
 
 add_library(${PROJECT_NAME} SHARED
     ${PLUGIN_C_SOURCES}
-    ${PLUGIN_CPP_SOURCES}
 )
 
 set_source_files_properties(${PLUGIN_C_SOURCES} PROPERTIES
