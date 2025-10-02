@@ -6,6 +6,7 @@ layout(location = 1) flat in int frag_layer_index;
 layout(location = 0) out vec4 out_color;
 
 void main() {
-  out_color = texture(atlas_texture_array, vec3(frag_uv, float(frag_layer_index)));
-	// out_color = vec4(frag_uv, 0.0,1.0);
+  vec4 col = texture(atlas_texture_array, vec3(frag_uv, float(frag_layer_index)));
+  out_color = vec4(col.rgb * col.a, col.a);
+  // out_color = vec4(frag_uv, 0.0,1.0);
 }
