@@ -1065,6 +1065,7 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
       handler->g_physical_device, wd->Surface, request_surface_image_format,
       (size_t)ARRAYSIZE(request_surface_image_format), request_surface_color_space);
 
+  // vsync present mode
   VkPresentModeKHR present_modes[] = {VK_PRESENT_MODE_FIFO_KHR};
   wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, wd->Surface,
                                                         &present_modes[0], ARRAYSIZE(present_modes));
