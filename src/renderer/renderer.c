@@ -59,7 +59,7 @@ static VkVertexInputAttributeDescription skin_attrib_descs[14];
 
 // atlas things
 static VkVertexInputBindingDescription atlas_binding_desc[2];
-static VkVertexInputAttributeDescription atlas_attrib_descs[5];
+static VkVertexInputAttributeDescription atlas_attrib_descs[6];
 
 static void setup_vertex_descriptions();
 
@@ -204,14 +204,20 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
     source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
   } else if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+             new_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    source_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  } else if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
              new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
     barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     source_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+  } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
              new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
@@ -516,7 +522,7 @@ int renderer_init(gfx_handler_t *handler) {
   strncpy(default_tex->path, "default_white", sizeof(default_tex->path) - 1);
   renderer->default_texture = default_tex;
 
-  // Primitive & UBO Ring Buffer Setup ---
+  // Primitive & UBO Ring Buffer Setup
   renderer->primitive_shader =
       renderer_load_shader(handler, "data/shaders/primitive.vert.spv", "data/shaders/primitive.frag.spv");
 
@@ -1212,7 +1218,7 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
 
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
-    // UBO RING BUFFER LOGIC ---
+    // UBO RING BUFFER LOGIC
     VkDeviceSize aligned_size =
         (ubo_sizes[i] + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
     assert(renderer->ubo_buffer_offset + aligned_size <= DYNAMIC_UBO_BUFFER_SIZE);
@@ -1531,8 +1537,13 @@ static void setup_vertex_descriptions() {
   atlas_attrib_descs[i++] =
       (VkVertexInputAttributeDescription){.binding = 1,
                                           .location = 4,
-                                          .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-                                          .offset = offsetof(atlas_instance_t, uv_rect)};
+                                          .format = VK_FORMAT_R32_SINT, // Use SINT for integer index
+                                          .offset = offsetof(atlas_instance_t, sprite_index)};
+  atlas_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1,
+                                          .location = 5,
+                                          .format = VK_FORMAT_R32G32_SFLOAT,
+                                          .offset = offsetof(atlas_instance_t, uv_scale)};
 }
 
 // primitive drawing implementation
@@ -1843,7 +1854,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   if (!pso)
     return;
 
-  // prepare camera UBO (same as primitives) ---
+  // prepare camera UBO same as primitives
   primitive_ubo_t ubo;
   ubo.camPos[0] = renderer->camera.pos[0];
   ubo.camPos[1] = renderer->camera.pos[1];
@@ -1893,7 +1904,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
                                      .pImageInfo = &img}};
   vkUpdateDescriptorSets(h->g_device, 2, writes, 0, NULL);
 
-  // issue draw ---
+  // issue draw
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
   VkBuffer bufs[2] = {quad->vertex_buffer.buffer, sr->instance_buffer.buffer};
   VkDeviceSize offs[2] = {0, 0};
@@ -2033,12 +2044,87 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
                                   const sprite_definition_t *sprites, uint32_t sprite_count,
                                   uint32_t max_instances) {
   ar->shader = renderer_load_shader(h, "data/shaders/atlas.vert.spv", "data/shaders/atlas.frag.spv");
-  ar->atlas_texture = renderer_load_texture(h, atlas_path);
   ar->max_instances = max_instances;
 
   ar->sprite_count = sprite_count;
   ar->sprite_definitions = malloc(sizeof(sprite_definition_t) * sprite_count);
   memcpy(ar->sprite_definitions, sprites, sizeof(sprite_definition_t) * sprite_count);
+
+  // create Texture Array from Atlas
+  texture_t *source_atlas = renderer_load_texture(h, atlas_path);
+  if (!source_atlas) {
+    log_error(LOG_SOURCE, "Failed to load source atlas %s for array creation.", atlas_path);
+    return;
+  }
+
+  // texture arrays require all layers to be the same size. Find the largest sprite to define the layer size.
+  uint32_t max_w = 0, max_h = 0;
+  for (uint32_t i = 0; i < sprite_count; ++i) {
+    if (sprites[i].w > max_w)
+      max_w = sprites[i].w;
+    if (sprites[i].h > max_h)
+      max_h = sprites[i].h;
+  }
+
+  if (max_w == 0 || max_h == 0) {
+    log_error(LOG_SOURCE, "Invalid sprite definitions for atlas %s, max width/height is zero.", atlas_path);
+    renderer_destroy_texture(h, source_atlas);
+    return;
+  }
+
+  ar->layer_width = max_w;
+  ar->layer_height = max_h;
+
+  // create the destination texture array
+  ar->atlas_texture =
+      renderer_create_texture_2d_array(h, max_w, max_h, sprite_count, VK_FORMAT_R8G8B8A8_UNORM);
+  if (!ar->atlas_texture) {
+    log_error(LOG_SOURCE, "Failed to create texture array for atlas %s.", atlas_path);
+    renderer_destroy_texture(h, source_atlas);
+    return;
+  }
+
+  VkCommandBuffer cmd = begin_single_time_commands(h, h->renderer.transfer_command_pool);
+
+  transition_image_layout(h, h->renderer.transfer_command_pool, source_atlas->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          source_atlas->mip_levels, 0, 1);
+  transition_image_layout(h, h->renderer.transfer_command_pool, ar->atlas_texture->image,
+                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ar->atlas_texture->mip_levels, 0,
+                          ar->atlas_texture->layer_count);
+
+  for (uint32_t i = 0; i < sprite_count; ++i) {
+    const sprite_definition_t *sprite = &sprites[i];
+    VkImageBlit blit = {
+        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                           .mipLevel = 0,
+                           .baseArrayLayer = 0,
+                           .layerCount = 1},
+        .srcOffsets[0] = {(int32_t)sprite->x, (int32_t)sprite->y, 0},
+        .srcOffsets[1] = {(int32_t)(sprite->x + sprite->w), (int32_t)(sprite->y + sprite->h), 1},
+        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                           .mipLevel = 0,
+                           .baseArrayLayer = i,
+                           .layerCount = 1},
+        .dstOffsets[0] = {0, 0, 0},
+        .dstOffsets[1] = {(int32_t)sprite->w, (int32_t)sprite->h, 1},
+    };
+    vkCmdBlitImage(cmd, source_atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ar->atlas_texture->image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+  }
+  end_single_time_commands(h, h->renderer.transfer_command_pool, cmd);
+
+  // SHADER_READ_ONLY for rendering
+  transition_image_layout(h, h->renderer.transfer_command_pool, source_atlas->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          source_atlas->mip_levels, 0, 1);
+  transition_image_layout(h, h->renderer.transfer_command_pool, ar->atlas_texture->image,
+                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, ar->atlas_texture->mip_levels, 0,
+                          ar->atlas_texture->layer_count);
+
+  renderer_destroy_texture(h, source_atlas); // we don't need the single large atlas texture anymore
 
   create_buffer(h, sizeof(atlas_instance_t) * ar->max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -2078,13 +2164,9 @@ void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, flo
   ar->instance_ptr[i].rotation = rotation;
 
   const sprite_definition_t *sprite = &ar->sprite_definitions[sprite_index];
-  float atlas_w = (float)ar->atlas_texture->width;
-  float atlas_h = (float)ar->atlas_texture->height;
-
-  ar->instance_ptr[i].uv_rect[0] = (float)sprite->x / atlas_w;
-  ar->instance_ptr[i].uv_rect[1] = (float)sprite->y / atlas_h;
-  ar->instance_ptr[i].uv_rect[2] = (float)sprite->w / atlas_w;
-  ar->instance_ptr[i].uv_rect[3] = (float)sprite->h / atlas_h;
+  ar->instance_ptr[i].sprite_index = (int)sprite_index;
+  ar->instance_ptr[i].uv_scale[0] = (float)sprite->w / (float)ar->layer_width;
+  ar->instance_ptr[i].uv_scale[1] = (float)sprite->h / (float)ar->layer_height;
 }
 
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar) {
@@ -2095,7 +2177,7 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
   mesh_t *quad = h->quad_mesh;
 
   pipeline_cache_entry_t *pso =
-      get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 5);
+      get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 6);
   if (!pso)
     return;
 

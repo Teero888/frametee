@@ -25,7 +25,7 @@ typedef struct {
   int redo_capacity;
 } undo_manager_t;
 
-// --- Public API ---
+// Public API
 
 void undo_manager_init(undo_manager_t *manager);
 void undo_manager_cleanup(undo_manager_t *manager);

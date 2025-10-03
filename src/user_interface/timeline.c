@@ -84,7 +84,7 @@ bool check_for_overlap(const player_track_t *track, int start_tick, int end_tick
 
 void copy_snippet_inputs(input_snippet_t *dest, const input_snippet_t *src);
 bool remove_snippet_from_track(timeline_state_t *t, player_track_t *track, int snippet_id);
-// --- COMMAND PATTERN IMPLEMENTATION FOR UNDO/REDO ---
+// COMMAND PATTERN IMPLEMENTATION FOR UNDO/REDO
 
 // Helper to perform a deep copy of a snippet.
 static void snippet_clone(input_snippet_t *dest, const input_snippet_t *src) {
@@ -110,7 +110,7 @@ static void insert_snippet_into_track(player_track_t *track, const input_snippet
   track->snippet_count++;
 }
 
-// --- Delete Snippets Command ---
+// Delete Snippets Command
 typedef struct {
   input_snippet_t snippet_copy;
   int track_index;
@@ -149,7 +149,7 @@ static void redo_delete_snippets(undo_command_t *cmd, timeline_state_t *ts) {
   }
 }
 
-// --- Add Snippet Command ---
+// Add Snippet Command
 typedef struct {
   undo_command_t base;
   int track_index;
@@ -176,16 +176,14 @@ static void redo_add_snippet(undo_command_t *cmd, timeline_state_t *ts) {
   insert_snippet_into_track(track, &new_snip);
 }
 
-// --- Add Player Track Command ---
+// Add Player Track Command
 typedef struct {
   undo_command_t base;
   int track_index;
   player_info_t player_info;
 } AddTrackCommand;
 
-static void cleanup_add_track_cmd(undo_command_t *cmd) {
-  free(cmd);
-}
+static void cleanup_add_track_cmd(undo_command_t *cmd) { free(cmd); }
 
 static void undo_add_track(undo_command_t *cmd, timeline_state_t *ts) {
   AddTrackCommand *c = (AddTrackCommand *)cmd;
@@ -234,8 +232,7 @@ static void redo_add_track(undo_command_t *cmd, timeline_state_t *ts) {
     return;
 
   player_track_t *track = &ts->player_tracks[ts->player_track_count - 1];
-  if (c->track_index != expected_index && c->track_index >= 0 &&
-      c->track_index < ts->player_track_count) {
+  if (c->track_index != expected_index && c->track_index >= 0 && c->track_index < ts->player_track_count) {
     player_track_t appended_copy = *track;
     memmove(&ts->player_tracks[c->track_index + 1], &ts->player_tracks[c->track_index],
             (ts->player_track_count - c->track_index - 1) * sizeof(player_track_t));
@@ -248,7 +245,7 @@ static void redo_add_track(undo_command_t *cmd, timeline_state_t *ts) {
   recalc_ts(ts, 0);
 }
 
-// --- Move Snippets Command ---
+// Move Snippets Command
 typedef struct {
   int snippet_id;
   int old_track_index;
@@ -312,7 +309,7 @@ static void redo_move_snippets(undo_command_t *cmd, timeline_state_t *ts) {
   }
 }
 
-// --- Remove Player Track Command ---
+// Remove Player Track Command
 typedef struct {
   undo_command_t base;
   int track_index;
@@ -372,8 +369,8 @@ static void redo_remove_track(undo_command_t *cmd, timeline_state_t *ts) {
   recalc_ts(ts, 0);
 }
 
-// --- Multi-Split Snippet Command ---
-// This command handles splitting multiple snippets at a single tick as one atomic action.
+// Multi-Split Snippet Command
+//  This command handles splitting multiple snippets at a single tick as one atomic action.
 typedef struct {
   int track_index;
   int original_snippet_id;
@@ -449,7 +446,7 @@ static void redo_multi_split(undo_command_t *cmd, timeline_state_t *ts) {
   }
 }
 
-// --- Merge Snippets Command ---
+// Merge Snippets Command
 typedef struct {
   undo_command_t base;
   int track_index;
@@ -1011,7 +1008,7 @@ undo_command_t *do_split_selected_snippets(ui_handler_t *ui) {
   snippet_id_vector_init(&new_snippets_to_select);
   int last_split_track_index = -1;
 
-  // --- Pass 1: Find valid splits, perform them, and collect data for the command ---
+  // Pass 1: Find valid splits, perform them, and collect data for the command
   for (int i = 0; i < original_count; ++i) {
     int sid = original_selection[i];
     for (int ti = 0; ti < ts->player_track_count; ++ti) {
@@ -2526,9 +2523,9 @@ void render_timeline(ui_handler_t *ui) {
           if (!can_move_all) {
             // Abort if the destination is invalid.
           } else if (is_duplicating) {
-            // --- DUPLICATE ACTION ---
-            // Create a command that stores the duplicated snippets. Its undo action will be to delete them.
-            // We can reuse the DeleteSnippetsCommand struct and flip its function pointers.
+            // DUPLICATE ACTION
+            //  Create a command that stores the duplicated snippets. Its undo action will be to delete them.
+            //  We can reuse the DeleteSnippetsCommand struct and flip its function pointers.
             DeleteSnippetsCommand *cmd = calloc(1, sizeof(DeleteSnippetsCommand));
             cmd->base.undo = redo_delete_snippets; // Undo is deleting
             cmd->base.redo = undo_delete_snippets; // Redo is re-adding
@@ -2599,7 +2596,7 @@ void render_timeline(ui_handler_t *ui) {
             undo_manager_register_command(&ui->undo_manager, &cmd->base);
 
           } else {
-            // --- MOVE ACTION ---
+            // MOVE ACTION
             MoveSnippetsCommand *move_cmd = calloc(1, sizeof(MoveSnippetsCommand));
             move_cmd->base.undo = undo_move_snippets;
             move_cmd->base.redo = redo_move_snippets;
@@ -2804,8 +2801,7 @@ void timeline_cleanup(timeline_state_t *ts) {
   recording_snippet_vector_free(&ts->recording_snippets);
 }
 
-undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t *info,
-                                          int *out_track_index) {
+undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t *info, int *out_track_index) {
   if (!ui || !ui->gfx_handler)
     return NULL;
 

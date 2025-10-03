@@ -33,7 +33,7 @@ typedef struct {
 } raw_mouse_t;
 
 struct gfx_handler_t {
-  // Backend Stuffs ---
+  // Backend Stuffs
   GLFWwindow *window;
   VkAllocationCallbacks *g_allocator;
   VkInstance g_instance;
@@ -49,10 +49,10 @@ struct gfx_handler_t {
   uint32_t g_min_image_count;
   bool g_swap_chain_rebuild;
 
-  // Per-frame data ---
+  // Per-frame data
   VkCommandBuffer current_frame_command_buffer;
 
-  // App Stuffs ---
+  // App Stuffs
   ui_handler_t user_interface;
   renderer_state_t renderer;
   physics_handler_t physics_handler;
@@ -68,7 +68,7 @@ struct gfx_handler_t {
 
   raw_mouse_t raw_mouse;
 
-  // Map Specific Render Data ---
+  // Map Specific Render Data
   shader_t *map_shader;
   mesh_t *quad_mesh;
   // TODO: this should be 2
@@ -82,7 +82,7 @@ struct gfx_handler_t {
   } retire_textures[64];
   uint32_t retire_count;
 
-  // Offscreen rendering (for ImGui game view) ---
+  // Offscreen rendering (for ImGui game view)
   VkImage offscreen_image;
   VkDeviceMemory offscreen_memory;
   VkImageView offscreen_image_view;

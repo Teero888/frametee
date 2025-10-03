@@ -116,11 +116,10 @@ void v_destroy(physics_v_t *t);
 undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, const int *indices, int count,
                                            const SPlayerInput *before_states,
                                            const SPlayerInput *after_states);
-undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t *info,
-                                          int *out_track_index);
-undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, int start_tick,
-                                            int duration, int *out_snippet_id);
-undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id, int tick_offset,
-                                                int count, const SPlayerInput *new_inputs);
+undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t *info, int *out_track_index);
+undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, int start_tick, int duration,
+                                            int *out_snippet_id);
+undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id, int tick_offset, int count,
+                                                const SPlayerInput *new_inputs);
 
 #endif

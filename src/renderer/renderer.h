@@ -146,10 +146,11 @@ typedef struct {
 } sprite_definition_t;
 
 typedef struct {
-  vec2 pos;       // World-space center position
-  vec2 size;      // World-space size (width, height)
-  float rotation; // Rotation in radians
-  vec4 uv_rect;   // UV rectangle in atlas (x, y, w, h)
+  vec2 pos;         // World-space center position
+  vec2 size;        // World-space size (width, height)
+  float rotation;   // Rotation in radians
+  int sprite_index; // Sprite index in the texture array
+  vec2 uv_scale;    // UV scaling to handle non-square sprites in the array
 } atlas_instance_t;
 
 #define MAX_ATLAS_SPRITES 512
@@ -162,6 +163,8 @@ typedef struct {
   atlas_instance_t *instance_ptr;
   uint32_t instance_count;
   uint32_t max_instances;
+  uint32_t layer_width;  // Max width of a sprite, used for UV scaling
+  uint32_t layer_height; // Max height of a sprite, used for UV scaling
 } atlas_renderer_t;
 
 typedef struct {

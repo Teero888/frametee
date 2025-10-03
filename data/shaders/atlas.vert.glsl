@@ -7,7 +7,8 @@ layout(location = 0) in vec2 in_pos;
 layout(location = 1) in vec2 instance_pos;       // World position
 layout(location = 2) in vec2 instance_size;      // World size
 layout(location = 3) in float instance_rotation; // Rotation in radians
-layout(location = 4) in vec4 instance_uv_rect;   // UV rectangle in atlas (x,y,w,h)
+layout(location = 4) in int instance_sprite_index; // Sprite index in texture array
+layout(location = 5) in vec2 instance_uv_scale;   // UV scale for this sprite
  
 // UBO for camera transforms
 layout(binding = 0) uniform primitive_ubo {
@@ -20,6 +21,8 @@ layout(binding = 0) uniform primitive_ubo {
 } ubo;
 
 layout(location = 0) out vec2 frag_uv;
+layout(location = 1) flat out int frag_sprite_index;
+layout(location = 2) out vec2 frag_uv_scale;
 
 mat2 rot(float a) {
   float s = sin(a);
@@ -42,7 +45,8 @@ void main() {
     // Set final clip-space position
     gl_Position = ubo.proj * vec4(rel, 0.0, 1.0);
 
-    // Map base quad UVs [0,1] to the specified sub-rectangle in the atlas
-    vec2 base_uv = in_pos * 0.5 + 0.5;
-    frag_uv = instance_uv_rect.xy + base_uv * instance_uv_rect.zw;
+    // Pass full UV range [0,1] to the fragment shader for the specific layer
+    frag_uv = in_pos * 0.5 + 0.5;
+    frag_sprite_index = instance_sprite_index;
+    frag_uv_scale = instance_uv_scale;
 }

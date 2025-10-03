@@ -72,7 +72,7 @@ static void get_selection_bounds(int *start, int *end) {
   }
 }
 
-// --- UNDO/REDO ACTION MANAGEMENT for Painting and Bulk Edits ---
+// UNDO/REDO ACTION MANAGEMENT for Painting and Bulk Edits
 
 // Begins tracking a new multi-input change.
 static void begin_action() {

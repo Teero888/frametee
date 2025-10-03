@@ -3,8 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// --- Private Helper Functions ---
-
 static void clear_stack(undo_command_t ***stack, int *count, int *capacity) {
   if (!*stack)
     return;
@@ -37,7 +35,7 @@ static undo_command_t *pop_from_stack(undo_command_t **stack, int *count) {
   return stack[--(*count)];
 }
 
-// --- Public API Implementation ---
+// Public API Implementation
 
 void undo_manager_init(undo_manager_t *manager) { memset(manager, 0, sizeof(undo_manager_t)); }
 
