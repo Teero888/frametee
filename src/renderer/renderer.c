@@ -59,7 +59,7 @@ static VkVertexInputAttributeDescription skin_attrib_descs[14];
 
 // atlas things
 static VkVertexInputBindingDescription atlas_binding_desc[2];
-static VkVertexInputAttributeDescription atlas_attrib_descs[6];
+static VkVertexInputAttributeDescription atlas_attrib_descs[5];
 
 static void setup_vertex_descriptions();
 
@@ -572,7 +572,7 @@ int renderer_init(gfx_handler_t *handler) {
       [GAMESKIN_NINJA_MUZZLE3] = {800, 256, 224, 128},
   };
 
-  renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png", 256, 128,
+  renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png",
                                gameskin_sprites, GAMESKIN_SPRITE_COUNT, 10000);
 
   log_info(LOG_SOURCE, "Renderer initialized successfully.");
@@ -1531,13 +1531,8 @@ static void setup_vertex_descriptions() {
   atlas_attrib_descs[i++] =
       (VkVertexInputAttributeDescription){.binding = 1,
                                           .location = 4,
-                                          .format = VK_FORMAT_R32_SINT,
-                                          .offset = offsetof(atlas_instance_t, layer_index)};
-  atlas_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1,
-                                          .location = 5,
-                                          .format = VK_FORMAT_R32G32_SFLOAT,
-                                          .offset = offsetof(atlas_instance_t, uv_scale)};
+                                          .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                                          .offset = offsetof(atlas_instance_t, uv_rect)};
 }
 
 // primitive drawing implementation
@@ -2034,151 +2029,17 @@ void renderer_unload_skin(gfx_handler_t *h, int layer) {
   log_info(LOG_SOURCE, "Freed skin layer %d", layer);
 }
 
-texture_t *renderer_create_texture_array_from_sprites(gfx_handler_t *handler, const char *atlas_path,
-                                                      uint32_t layer_width, uint32_t layer_height,
-                                                      const sprite_definition_t *sprites,
-                                                      uint32_t sprite_count, vec2 *out_uv_scales) {
-  renderer_state_t *renderer = &handler->renderer;
-
-  int atlas_w, atlas_h, atlas_channels;
-  stbi_uc *atlas_pixels = stbi_load(atlas_path, &atlas_w, &atlas_h, &atlas_channels, STBI_rgb_alpha);
-  if (!atlas_pixels) {
-    log_error(LOG_SOURCE, "Failed to load source atlas image: %s", atlas_path);
-    return NULL;
-  }
-
-  VkDeviceSize layer_size = (VkDeviceSize)layer_width * layer_height * 4;
-  VkDeviceSize total_buffer_size = layer_size * sprite_count;
-  stbi_uc *all_layers_pixels = malloc(total_buffer_size);
-  if (!all_layers_pixels) {
-    log_error(LOG_SOURCE, "Failed to allocate memory for texture array layers.");
-    stbi_image_free(atlas_pixels);
-    return NULL;
-  }
-
-  stbi_uc *temp_sprite_pixels = NULL;
-
-  for (uint32_t i = 0; i < sprite_count; i++) {
-    const sprite_definition_t *sprite = &sprites[i];
-
-    // Convert normalized coordinates to absolute pixel coordinates
-    uint32_t pixel_x = (uint32_t)(sprite->x);
-    uint32_t pixel_y = (uint32_t)(sprite->y);
-    uint32_t pixel_w = (uint32_t)(sprite->w);
-    uint32_t pixel_h = (uint32_t)(sprite->h);
-
-    if (pixel_x + pixel_w > atlas_w || pixel_y + pixel_h > atlas_h) {
-      log_error(LOG_SOURCE, "Sprite definition %d is out of atlas bounds.", i);
-      continue;
-    }
-
-    temp_sprite_pixels = realloc(temp_sprite_pixels, pixel_w * pixel_h * 4);
-
-    // Extract pixels from the source atlas
-    for (uint32_t y = 0; y < pixel_h; y++) {
-      memcpy(temp_sprite_pixels + y * pixel_w * 4, atlas_pixels + ((pixel_y + y) * atlas_w + pixel_x) * 4,
-             pixel_w * 4);
-    }
-
-    stbi_uc *dest_ptr = all_layers_pixels + i * layer_size;
-
-    memset(dest_ptr, 0, layer_size);
-
-    for (uint32_t y = 0; y < pixel_h; y++) {
-      memcpy(dest_ptr + y * layer_width * 4,       // Destination
-             temp_sprite_pixels + y * pixel_w * 4, // Source
-             pixel_w * 4);                         // Bytes for one row
-    }
-
-    if (out_uv_scales) {
-      out_uv_scales[i][0] = (float)pixel_w / (float)layer_width;
-      out_uv_scales[i][1] = (float)pixel_h / (float)layer_height;
-    }
-  }
-
-  if (temp_sprite_pixels)
-    free(temp_sprite_pixels);
-  stbi_image_free(atlas_pixels);
-
-  uint32_t free_slot = (uint32_t)-1;
-  for (uint32_t i = 0; i < MAX_TEXTURES; ++i)
-    if (!renderer->textures[i].active) {
-      free_slot = i;
-      break;
-    }
-  if (free_slot == -1) {
-    log_error(LOG_SOURCE, "Max texture count reached.");
-    free(all_layers_pixels);
-    return NULL;
-  }
-
-  texture_t *tex_array = &renderer->textures[free_slot];
-  memset(tex_array, 0, sizeof(texture_t));
-  tex_array->id = free_slot;
-  tex_array->active = true;
-  tex_array->width = layer_width;
-  tex_array->height = layer_height;
-  tex_array->mip_levels = (uint32_t)floorf(log2f(fmaxf(layer_width, layer_height))) + 1;
-  tex_array->layer_count = sprite_count;
-  snprintf(tex_array->path, sizeof(tex_array->path), "array_from_%s", atlas_path);
-
-  buffer_t staging_buffer;
-  create_buffer(handler, total_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
-  void *data;
-  vkMapMemory(handler->g_device, staging_buffer.memory, 0, total_buffer_size, 0, &data);
-  memcpy(data, all_layers_pixels, total_buffer_size);
-  vkUnmapMemory(handler->g_device, staging_buffer.memory);
-  free(all_layers_pixels);
-
-  create_image(handler, layer_width, layer_height, tex_array->mip_levels, tex_array->layer_count,
-               VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &tex_array->image, &tex_array->memory);
-
-  transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
-                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, tex_array->mip_levels, 0,
-                          tex_array->layer_count);
-
-  VkCommandBuffer cmd = begin_single_time_commands(handler, renderer->transfer_command_pool);
-  VLA(VkBufferImageCopy, regions, sprite_count);
-  for (uint32_t i = 0; i < sprite_count; i++) {
-    regions[i] = (VkBufferImageCopy){.bufferOffset = i * layer_size,
-                                     .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                          .mipLevel = 0,
-                                                          .baseArrayLayer = i,
-                                                          .layerCount = 1},
-                                     .imageExtent = {layer_width, layer_height, 1}};
-  }
-  vkCmdCopyBufferToImage(cmd, staging_buffer.buffer, tex_array->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         sprite_count, regions);
-  VLA_FREE(regions);
-  end_single_time_commands(handler, renderer->transfer_command_pool, cmd);
-
-  vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
-  vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
-
-  build_mipmaps(handler, tex_array->image, layer_width, layer_height, tex_array->mip_levels,
-                tex_array->layer_count);
-
-  tex_array->image_view =
-      create_image_view(handler, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-                        tex_array->mip_levels, tex_array->layer_count);
-  tex_array->sampler = create_texture_sampler(handler, tex_array->mip_levels, VK_FILTER_LINEAR);
-
-  log_info(LOG_SOURCE, "Created texture array with %d layers from %s", sprite_count, atlas_path);
-  return tex_array;
-}
-
 void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path,
-                                  uint32_t layer_width, uint32_t layer_height,
                                   const sprite_definition_t *sprites, uint32_t sprite_count,
                                   uint32_t max_instances) {
   ar->shader = renderer_load_shader(h, "data/shaders/atlas.vert.spv", "data/shaders/atlas.frag.spv");
-  ar->texture_array = renderer_create_texture_array_from_sprites(h, atlas_path, layer_width, layer_height,
-                                                                 sprites, sprite_count, ar->layer_uv_scales);
+  ar->atlas_texture = renderer_load_texture(h, atlas_path);
   ar->max_instances = max_instances;
+
+  ar->sprite_count = sprite_count;
+  ar->sprite_definitions = malloc(sizeof(sprite_definition_t) * sprite_count);
+  memcpy(ar->sprite_definitions, sprites, sizeof(sprite_definition_t) * sprite_count);
+
   create_buffer(h, sizeof(atlas_instance_t) * ar->max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &ar->instance_buffer);
@@ -2191,15 +2052,23 @@ void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar) {
     vkDestroyBuffer(h->g_device, ar->instance_buffer.buffer, h->g_allocator);
     vkFreeMemory(h->g_device, ar->instance_buffer.memory, h->g_allocator);
   }
-  // The texture array itself will be cleaned up by the main renderer_cleanup loop
+  if (ar->sprite_definitions) {
+    free(ar->sprite_definitions);
+    ar->sprite_definitions = NULL;
+  }
+  // The atlas texture itself will be cleaned up by the main renderer_cleanup loop
 }
 
 void renderer_begin_atlas_instances(atlas_renderer_t *ar) { ar->instance_count = 0; }
 
 void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation,
-                                  uint32_t layer_index) {
+                                  uint32_t sprite_index) {
   if (ar->instance_count >= ar->max_instances) {
     log_warn(LOG_SOURCE, "Max atlas instances reached for this renderer.");
+    return;
+  }
+  if (sprite_index >= ar->sprite_count) {
+    log_error(LOG_SOURCE, "Invalid sprite_index %d for atlas renderer.", sprite_index);
     return;
   }
 
@@ -2207,19 +2076,26 @@ void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, flo
   glm_vec2_copy(pos, ar->instance_ptr[i].pos);
   glm_vec2_copy(size, ar->instance_ptr[i].size);
   ar->instance_ptr[i].rotation = rotation;
-  ar->instance_ptr[i].layer_index = layer_index;
-  glm_vec2_copy(ar->layer_uv_scales[layer_index], ar->instance_ptr[i].uv_scale);
+
+  const sprite_definition_t *sprite = &ar->sprite_definitions[sprite_index];
+  float atlas_w = (float)ar->atlas_texture->width;
+  float atlas_h = (float)ar->atlas_texture->height;
+
+  ar->instance_ptr[i].uv_rect[0] = (float)sprite->x / atlas_w;
+  ar->instance_ptr[i].uv_rect[1] = (float)sprite->y / atlas_h;
+  ar->instance_ptr[i].uv_rect[2] = (float)sprite->w / atlas_w;
+  ar->instance_ptr[i].uv_rect[3] = (float)sprite->h / atlas_h;
 }
 
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar) {
   renderer_state_t *renderer = &h->renderer;
-  if (ar->instance_count == 0 || !ar->shader || !ar->texture_array)
+  if (ar->instance_count == 0 || !ar->shader || !ar->atlas_texture)
     return;
 
   mesh_t *quad = h->quad_mesh;
 
   pipeline_cache_entry_t *pso =
-      get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 6);
+      get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 5);
   if (!pso)
     return;
 
@@ -2253,8 +2129,8 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
 
   VkDescriptorBufferInfo bufInfo = {
       .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
-  VkDescriptorImageInfo imgInfo = {.sampler = ar->texture_array->sampler,
-                                   .imageView = ar->texture_array->image_view,
+  VkDescriptorImageInfo imgInfo = {.sampler = ar->atlas_texture->sampler,
+                                   .imageView = ar->atlas_texture->image_view,
                                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
   VkWriteDescriptorSet writes[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,

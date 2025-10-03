@@ -347,7 +347,6 @@ void render_players(ui_handler_t *ui) {
     return;
   }
 
-  int i = 0;
   while (world.m_GameTick < target_tick) {
     for (int p = 0; p < world.m_NumCharacters; ++p) {
       SPlayerInput input = get_input(&ui->timeline, p, world.m_GameTick);
@@ -361,7 +360,6 @@ void render_players(ui_handler_t *ui) {
         wc_copy_world(&ui->timeline.vec.data[world.m_GameTick / step], &world);
       }
     }
-    ++i;
   }
   wc_copy_world(&ui->timeline.previous_world, &world);
 
@@ -453,56 +451,54 @@ void render_players(ui_handler_t *ui) {
 
     renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
 
-    if (core->m_ActiveWeapon >= WEAPON_HAMMER && core->m_ActiveWeapon < NUM_WEAPONS) {
+    if (!core->m_FreezeTime && core->m_ActiveWeapon >= WEAPON_HAMMER && core->m_ActiveWeapon < NUM_WEAPONS) {
       const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
       float fire_delay_ticks = spec->firedelay * (float)GAME_TICK_SPEED / 1000.0f;
-      int attack_ticks_passed = (core->m_ReloadTimer <= 0) ? (int)fire_delay_ticks + 1
-                                                           : (int)(fire_delay_ticks - core->m_ReloadTimer);
+      float attack_ticks_passed = (world.m_GameTick - core->m_AttackTick) + intra;
       float aim_angle = atan2f(-dir[1], dir[0]);
 
       bool is_sit = inactive && !in_air && stationary;
       float flip_factor = (dir[0] < 0.0f) ? -1.0f : 1.0f;
 
-      vec2 weapon_pos = {p[0], p[1]};
+      // Start with interpolated physics position
+      vec2 phys_pos_prev = {vgetx(core->m_PrevPos), vgety(core->m_PrevPos)};
+      vec2 phys_pos_curr = {vgetx(core->m_Pos), vgety(core->m_Pos)};
+      vec2 phys_pos;
+      lerp(phys_pos_prev, phys_pos_curr, intra, phys_pos);
+
+      vec2 weapon_pos; // This will be in physics units until the end
+      glm_vec2_copy(phys_pos, weapon_pos);
+
       float anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
       float weapon_angle = anim_attach_angle_rad + aim_angle;
-
-      vec2 weapon_size;
-      glm_vec2_copy(spec->body_size, weapon_size);
-      weapon_size[1] *= flip_factor;
 
       int weapon_sprite_id = -1;
 
       if (core->m_ActiveWeapon == WEAPON_HAMMER) {
         weapon_sprite_id = GAMESKIN_HAMMER_BODY;
-        weapon_pos[0] += anim_state.attach.x / 32.0f;
-        weapon_pos[1] += anim_state.attach.y / 32.0f;
-        weapon_pos[1] += spec->offsety / 32.0f;
-
-        if (dir[0] < 0.0f) {
-          weapon_pos[0] -= spec->offsetx / 32.0f;
-        }
+        weapon_pos[0] += anim_state.attach.x;
+        weapon_pos[1] += anim_state.attach.y;
+        weapon_pos[1] += spec->offsety;
+        if (dir[0] < 0.0f)
+          weapon_pos[0] -= spec->offsetx;
         if (is_sit)
-          weapon_pos[1] += 3.0f / 32.0f;
+          weapon_pos[1] += 3.0f;
 
-        if (attack_ticks_passed <= fire_delay_ticks) {
+        if (!inactive) {
           anim_state_add(&anim_state, &anim_hammer_swing, (float)attack_ticks_passed / fire_delay_ticks,
                          1.0f);
           anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
-          weapon_angle = -M_PI / 2.0f + flip_factor * anim_attach_angle_rad;
+          weapon_angle = M_PI / 2.0f - flip_factor * anim_attach_angle_rad;
         } else {
-          const float HAMMER_REST_ANGLE = -M_PI / 6.0f;
-          weapon_angle = flip_factor * HAMMER_REST_ANGLE;
+          weapon_angle = dir[0] < 0.0 ? 100.f : 500.f;
         }
       } else if (core->m_ActiveWeapon == WEAPON_NINJA) {
         weapon_sprite_id = GAMESKIN_NINJA_BODY;
-        weapon_pos[1] += spec->offsety / 32.0f;
+        weapon_pos[1] += spec->offsety;
         if (is_sit)
-          weapon_pos[1] += 3.0f / 32.0f;
-
-        if (dir[0] < 0.0f) {
-          weapon_pos[0] -= spec->offsetx / 32.0f;
-        }
+          weapon_pos[1] += 3.0f;
+        if (dir[0] < 0.0f)
+          weapon_pos[0] -= spec->offsetx;
 
         if (attack_ticks_passed <= fire_delay_ticks) {
           anim_state_add(&anim_state, &anim_ninja_swing, (float)attack_ticks_passed / fire_delay_ticks, 1.0f);
@@ -513,7 +509,7 @@ void render_players(ui_handler_t *ui) {
 
         float attack_time_sec = attack_ticks_passed / (float)GAME_TICK_SPEED;
         if (attack_time_sec <= 1.0f / 6.0f && spec->num_muzzles > 0) {
-          int muzzle_idx = rand() % spec->num_muzzles;
+          int muzzle_idx = world.m_GameTick % spec->num_muzzles;
           vec2 hadoken_dir = {vgetx(core->m_Vel), vgety(core->m_Vel)};
           if (glm_vec2_norm2(hadoken_dir) < 0.0001f) {
             hadoken_dir[0] = 1.0f;
@@ -522,14 +518,22 @@ void render_players(ui_handler_t *ui) {
           glm_vec2_normalize(hadoken_dir);
 
           float hadoken_angle = atan2f(-hadoken_dir[1], hadoken_dir[0]);
-          vec2 muzzle_pos = {p[0], p[1]};
-          muzzle_pos[0] -= hadoken_dir[0] * spec->muzzleoffsetx / 32.0f;
-          muzzle_pos[1] -= hadoken_dir[1] * spec->muzzleoffsetx / 32.0f;
+          vec2 muzzle_phys_pos;
+          glm_vec2_copy(phys_pos, muzzle_phys_pos);
+          muzzle_phys_pos[0] -= hadoken_dir[0] * spec->muzzleoffsetx;
+          muzzle_phys_pos[1] -= hadoken_dir[1] * spec->muzzleoffsetx;
 
-          vec2 muzzle_size;
-          glm_vec2_copy(spec->muzzle_size, muzzle_size); // Real size
-          renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, muzzle_pos, muzzle_size,
-                                       hadoken_angle, GAMESKIN_NINJA_MUZZLE1 + muzzle_idx);
+          int muzzle_sprite_id = GAMESKIN_NINJA_MUZZLE1 + muzzle_idx;
+          sprite_definition_t *muzzle_sprite_def =
+              &gfx->renderer.gameskin_renderer.sprite_definitions[muzzle_sprite_id];
+          float f = sqrtf(powf(muzzle_sprite_def->w, 2) + powf(muzzle_sprite_def->h, 2));
+          float scaleX = muzzle_sprite_def->w / f;
+          float scaleY = muzzle_sprite_def->h / f;
+          vec2 muzzle_size = {160.0f * scaleX / 32.0f, 160.0f * scaleY / 32.0f};
+
+          vec2 render_pos = {muzzle_phys_pos[0] / 32.0f, muzzle_phys_pos[1] / 32.0f};
+          renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size,
+                                       hadoken_angle, muzzle_sprite_id);
         }
       } else {
         switch (core->m_ActiveWeapon) {
@@ -552,38 +556,61 @@ void render_players(ui_handler_t *ui) {
         if (a < 1.0f)
           recoil = sinf(a * M_PI);
 
-        weapon_pos[0] += dir[0] * (spec->offsetx - recoil * 10.0f) / 32.0f;
-        weapon_pos[1] += dir[1] * (spec->offsetx - recoil * 10.0f) / 32.0f;
-        weapon_pos[1] += spec->offsety / 32.0f;
+        weapon_pos[0] += dir[0] * (spec->offsetx - recoil * 10.0f);
+        weapon_pos[1] += dir[1] * (spec->offsetx - recoil * 10.0f);
+        weapon_pos[1] += spec->offsety;
+
         if (is_sit)
-          weapon_pos[1] += 3.0f / 32.0f;
+          weapon_pos[1] += 3.0f;
 
         if ((core->m_ActiveWeapon == WEAPON_GUN || core->m_ActiveWeapon == WEAPON_SHOTGUN) &&
             spec->num_muzzles > 0) {
           if (attack_ticks_passed < spec->muzzleduration + 3.0f) {
-            int muzzle_idx = rand() % spec->num_muzzles;
+            int muzzle_idx = world.m_GameTick % spec->num_muzzles;
             vec2 muzzle_dir_y = {-dir[1], dir[0]};
-            float offset_y = -spec->muzzleoffsety / 32.0f * flip_factor;
+            float offset_y = -spec->muzzleoffsety * flip_factor;
 
-            vec2 muzzle_pos = {weapon_pos[0], weapon_pos[1]};
-            muzzle_pos[0] += dir[0] * spec->muzzleoffsetx / 32.0f + muzzle_dir_y[0] * offset_y;
-            muzzle_pos[1] += dir[1] * spec->muzzleoffsetx / 32.0f + muzzle_dir_y[1] * offset_y;
+            vec2 muzzle_phys_pos;
+            glm_vec2_copy(weapon_pos, muzzle_phys_pos);
+            muzzle_phys_pos[0] += dir[0] * spec->muzzleoffsetx + muzzle_dir_y[0] * offset_y;
+            muzzle_phys_pos[1] += dir[1] * spec->muzzleoffsetx + muzzle_dir_y[1] * offset_y;
 
             int muzzle_sprite_id =
                 (core->m_ActiveWeapon == WEAPON_GUN ? GAMESKIN_GUN_MUZZLE1 : GAMESKIN_SHOTGUN_MUZZLE1) +
                 muzzle_idx;
+
+            float w = 96.0f, h = 64.0f;
+            float f = sqrtf(w * w + h * h);
+            float scale_x = w / f;
+            float scale_y = h / f;
+
             vec2 muzzle_size;
-            glm_vec2_copy(spec->muzzle_size, muzzle_size); // Real size
+            muzzle_size[0] = spec->visual_size * scale_x * (4.0f / 3.0f) / 32.0f;
+            muzzle_size[1] = spec->visual_size * scale_y / 32.0f;
             muzzle_size[1] *= flip_factor;
 
-            renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, muzzle_pos, muzzle_size,
+            vec2 render_pos = {muzzle_phys_pos[0] / 32.0f, muzzle_phys_pos[1] / 32.0f};
+            renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size,
                                          weapon_angle, muzzle_sprite_id);
           }
         }
       }
 
       if (weapon_sprite_id != -1) {
-        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, weapon_pos, weapon_size, weapon_angle,
+        sprite_definition_t *sprite_def =
+            &gfx->renderer.gameskin_renderer.sprite_definitions[weapon_sprite_id];
+        float w = sprite_def->w;
+        float h = sprite_def->h;
+        float f = sqrtf(w * w + h * h);
+        float scaleX = w / f;
+        float scaleY = h / f;
+
+        vec2 weapon_size = {spec->visual_size * scaleX / 32.0f, spec->visual_size * scaleY / 32.0f};
+        weapon_size[1] *= flip_factor;
+
+        vec2 render_pos = {weapon_pos[0] / 32.0f, weapon_pos[1] / 32.0f};
+
+        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, weapon_size, weapon_angle,
                                      weapon_sprite_id);
       }
     }
@@ -592,6 +619,7 @@ void render_players(ui_handler_t *ui) {
       renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
                          (vec4){1.f, 1.f, 1.f, 1.f}, 0.05);
   }
+  int id = 0;
   for (SProjectile *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
        ent = ent->m_Base.m_pNextTypeEntity) {
     float pt = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick - 1) / (float)GAME_TICK_SPEED;
@@ -604,8 +632,11 @@ void render_players(ui_handler_t *ui) {
     vec2 p;
     lerp(ppp, pp, intra, p);
 
-    renderer_draw_circle_filled(gfx, p, 0.2, (vec4){1.f, 0.f, 0.f, 0.9f}, 8);
+    renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, p, (vec2){1, 1},
+                                 -((world.m_GameTick + intra) / 50.f) * 4 * M_PI + id, GAMESKIN_GRENADE_PROJ);
+    ++id;
   }
+  (void)id;
   for (SLaser *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent;
        ent = ent->m_Base.m_pNextTypeEntity) {
     vec2 p1 = {vgetx(ent->m_Base.m_Pos) / 32.f, vgety(ent->m_Base.m_Pos) / 32.f};

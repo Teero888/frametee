@@ -16,6 +16,7 @@ typedef struct {
   int num_muzzles;
   vec2 body_size;
   vec2 muzzle_size;
+  float visual_size;
 } weapon_spec_t;
 
 typedef struct {

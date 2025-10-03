@@ -146,22 +146,22 @@ typedef struct {
 } sprite_definition_t;
 
 typedef struct {
-  vec2 pos;             // World-space center position
-  vec2 size;            // World-space size (width, height)
-  float rotation;       // Rotation in radians
-  uint32_t layer_index; // Index of the sprite in the texture array
-  vec2 uv_scale;        // UV scale for sub-texture
+  vec2 pos;       // World-space center position
+  vec2 size;      // World-space size (width, height)
+  float rotation; // Rotation in radians
+  vec4 uv_rect;   // UV rectangle in atlas (x, y, w, h)
 } atlas_instance_t;
 
 #define MAX_ATLAS_SPRITES 512
 typedef struct {
   shader_t *shader;
-  texture_t *texture_array;
+  texture_t *atlas_texture;
+  sprite_definition_t *sprite_definitions;
+  uint32_t sprite_count;
   buffer_t instance_buffer;
   atlas_instance_t *instance_ptr;
   uint32_t instance_count;
   uint32_t max_instances;
-  vec2 layer_uv_scales[MAX_ATLAS_SPRITES];
 } atlas_renderer_t;
 
 typedef struct {
@@ -249,21 +249,14 @@ VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat fo
                               VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count);
 VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
 
-// Creates a texture array with mipmaps from defined sprites in an atlas file.
-texture_t *renderer_create_texture_array_from_sprites(gfx_handler_t *handler, const char *atlas_path,
-                                                      uint32_t layer_width, uint32_t layer_height,
-                                                      const sprite_definition_t *sprites,
-                                                      uint32_t sprite_count, vec2 *out_uv_scales);
-
 // General-purpose Atlas Rendering API
 void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path,
-                                  uint32_t layer_width, uint32_t layer_height,
                                   const sprite_definition_t *sprites, uint32_t sprite_count,
                                   uint32_t max_instances);
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 void renderer_begin_atlas_instances(atlas_renderer_t *ar);
 void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation,
-                                  uint32_t layer_index);
+                                  uint32_t sprite_index);
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar);
 
 // gameskin spire enum
