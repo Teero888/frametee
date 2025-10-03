@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 
+static const char *LOG_SOURCE = "SkinManager";
+
 void render_player_info(gfx_handler_t *h) {
   player_info_t *player_info =
       &h->user_interface.timeline.player_tracks[h->user_interface.timeline.selected_player_track_index]
@@ -142,9 +144,9 @@ void render_skin_manager(gfx_handler_t *h) {
         }
       NFD_PathSet_Free(path_set);
     } else if (result == NFD_CANCEL) {
-      log_warn("SkinManager", "Skin loading dialog was canceled by the user.");
+      log_warn(LOG_SOURCE, "Skin loading dialog was canceled by the user.");
     } else {
-      log_error("SkinManager", "File dialog error: %s", NFD_GetError());
+      log_error(LOG_SOURCE, "File dialog error: %s", NFD_GetError());
     }
   }
   igEnd();

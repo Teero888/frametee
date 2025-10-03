@@ -29,6 +29,8 @@ typedef struct ui_handler {
   int weapon;
   bool weapons[NUM_WEAPONS];
 
+  vec2 last_render_pos;
+
   undo_manager_t undo_manager;
 
   plugin_manager_t plugin_manager;
@@ -38,6 +40,7 @@ typedef struct ui_handler {
 
 void on_camera_update(struct gfx_handler_t *handler, bool hovered);
 void render_players(ui_handler_t *ui);
+void render_cursor(ui_handler_t *ui);
 
 void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);
 void ui_render(ui_handler_t *ui);

@@ -579,7 +579,9 @@ int renderer_init(gfx_handler_t *handler) {
   };
 
   renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png",
-                               gameskin_sprites, GAMESKIN_SPRITE_COUNT, 10000);
+                               gameskin_sprites, GAMESKIN_SPRITE_COUNT, 100000);
+  renderer_init_atlas_renderer(handler, &renderer->cursor_renderer, "data/textures/game.png",
+                               gameskin_sprites, GAMESKIN_SPRITE_COUNT, 1); // we only render a single cursor
 
   log_info(LOG_SOURCE, "Renderer initialized successfully.");
   return 0;
@@ -652,6 +654,7 @@ void renderer_cleanup(gfx_handler_t *handler) {
     vkFreeMemory(device, renderer->skin_renderer.instance_buffer.memory, allocator);
   }
   renderer_cleanup_atlas_renderer(handler, &renderer->gameskin_renderer);
+  renderer_cleanup_atlas_renderer(handler, &renderer->cursor_renderer);
 
   log_info(LOG_SOURCE, "Renderer cleaned up successfully.");
 }

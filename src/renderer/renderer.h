@@ -200,6 +200,7 @@ typedef struct {
   skin_atlas_manager_t skin_manager;
   skin_renderer_t skin_renderer;
   atlas_renderer_t gameskin_renderer;
+  atlas_renderer_t cursor_renderer;
 } renderer_state_t;
 
 void check_vk_result(VkResult err);

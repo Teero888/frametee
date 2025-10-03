@@ -2,6 +2,7 @@
 #include "logger/logger.h"
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
+#include "user_interface/user_interface.h"
 #include <GLFW/glfw3.h>
 
 int main(void) {
@@ -25,6 +26,7 @@ int main(void) {
 
     on_camera_update(&handler, viewport_hovered);
 
+    // render players and weapons
     renderer_begin_skins(&handler);
     renderer_begin_atlas_instances(&handler.renderer.gameskin_renderer);
     render_players(&handler.user_interface);
@@ -32,8 +34,10 @@ int main(void) {
                                    &handler.renderer.gameskin_renderer);
     renderer_flush_skins(&handler, handler.current_frame_command_buffer,
                          handler.renderer.skin_manager.atlas_array);
+    // draw ui
     ui_render(&handler.user_interface);
 
+    // lock mouse when recording
     ImGuiIO *io = igGetIO_Nil();
     if (handler.user_interface.timeline.recording) {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -44,6 +48,13 @@ int main(void) {
     }
 
     renderer_draw_map(&handler);
+
+    // render cursor
+    renderer_begin_atlas_instances(&handler.renderer.cursor_renderer);
+    render_cursor(&handler.user_interface);
+    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer,
+                                   &handler.renderer.cursor_renderer);
+
     viewport_hovered = gfx_end_frame(&handler);
   }
 

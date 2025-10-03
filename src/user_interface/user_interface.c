@@ -374,6 +374,8 @@ void render_players(ui_handler_t *ui) {
     vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
     vec2 p;
     lerp(ppp, pp, intra, p);
+
+    glm_vec2_copy(p, ui->last_render_pos);
     ui->gfx_handler->renderer.camera.pos[0] = (p[0]) / ui->gfx_handler->map_data->width;
     ui->gfx_handler->renderer.camera.pos[1] = (p[1]) / ui->gfx_handler->map_data->height;
   }
@@ -649,17 +651,19 @@ void render_players(ui_handler_t *ui) {
     renderer_draw_circle_filled(gfx, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);
   }
 
-  if (ui->timeline.recording) {
-    SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
-    vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
-    vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-    vec2 p;
-    lerp(ppp, pp, intra, p);
-    renderer_draw_circle_filled(gfx,
-                                (vec2){p[0] + gfx->user_interface.timeline.recording_input.m_TargetX / 64.f,
-                                       p[1] + gfx->user_interface.timeline.recording_input.m_TargetY / 64.f},
-                                0.25, (vec4){1.f, 0.f, 0.f, 0.4f}, 16);
-  }
+  // if (ui->timeline.recording) {
+  //   SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
+  //   vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+  //   vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+  //   vec2 p;
+  //   lerp(ppp, pp, intra, p);
+  //   renderer_draw_circle_filled(gfx,
+  //                               (vec2){p[0] + gfx->user_interface.timeline.recording_input.m_TargetX
+  //                               / 64.f,
+  //                                      p[1] + gfx->user_interface.timeline.recording_input.m_TargetY
+  //                                      / 64.f},
+  //                               0.25, (vec4){1.f, 0.f, 0.f, 0.4f}, 16);
+  // }
 
   if (ui->timeline.selected_player_track_index >= 0) {
     SCharacterCore *p = &world.m_pCharacters[ui->timeline.selected_player_track_index];
@@ -715,6 +719,35 @@ void render_players(ui_handler_t *ui) {
     }
   }
   wc_free(&world);
+}
+
+void render_cursor(ui_handler_t *ui) {
+  if (!ui->timeline.recording)
+    return;
+
+  gfx_handler_t *handler = ui->gfx_handler;
+
+  // TODO: for now draw this in world space. fix later when pipeline is better.
+  if (handler->user_interface.timeline.recording) {
+    float norm_x = ui->last_render_pos[0] + handler->user_interface.timeline.recording_input.m_TargetX / 64.f;
+    float norm_y = ui->last_render_pos[1] + handler->user_interface.timeline.recording_input.m_TargetY / 64.f;
+
+    int weapon = handler->user_interface.weapon;
+    int cursor_sprite_id = GAMESKIN_HAMMER_CURSOR;
+    if (weapon == WEAPON_GUN)
+      cursor_sprite_id = GAMESKIN_GUN_CURSOR;
+    else if (weapon == WEAPON_SHOTGUN)
+      cursor_sprite_id = GAMESKIN_SHOTGUN_CURSOR;
+    else if (weapon == WEAPON_GRENADE)
+      cursor_sprite_id = GAMESKIN_GRENADE_CURSOR;
+    else if (weapon == WEAPON_LASER)
+      cursor_sprite_id = GAMESKIN_LASER_CURSOR;
+    else if (weapon == WEAPON_NINJA)
+      cursor_sprite_id = GAMESKIN_NINJA_CURSOR;
+
+    renderer_push_atlas_instance(&handler->renderer.cursor_renderer, (vec2){norm_x, norm_y}, (vec2){1.f, 1.f},
+                                 0.0f, cursor_sprite_id);
+  }
 }
 
 void ui_render(ui_handler_t *ui) {
