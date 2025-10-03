@@ -9,7 +9,6 @@ layout(location = 0) out vec4 out_color;
 void main() {
   vec2 final_uv = frag_uv * frag_uv_scale;
   vec4 col = texture(tex_array, vec3(final_uv, float(frag_sprite_index)));
-  
-  // Pre-multiply alpha
+  // pre-multiply alpha
   out_color = vec4(col.rgb * col.a, col.a);
 }
