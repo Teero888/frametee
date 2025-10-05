@@ -24,6 +24,7 @@ ubo;
 layout(location = 0) out vec2 frag_uv;
 layout(location = 1) flat out int frag_sprite_index;
 layout(location = 2) out vec2 frag_uv_scale;
+layout(location = 3) out vec2 frag_size;
 
 mat2 rot(float a) {
   float s = sin(a);
@@ -41,4 +42,5 @@ void main() {
   frag_uv = in_pos * 0.5 + 0.5;
   frag_sprite_index = instance_sprite_index;
   frag_uv_scale = instance_uv_scale;
+  frag_size = instance_size;
 }

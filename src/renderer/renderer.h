@@ -157,6 +157,7 @@ typedef struct {
 typedef struct {
   shader_t *shader;
   texture_t *atlas_texture;
+  VkSampler sampler;
   sprite_definition_t *sprite_definitions;
   uint32_t sprite_count;
   buffer_t instance_buffer;
@@ -260,33 +261,38 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 void renderer_begin_atlas_instances(atlas_renderer_t *ar);
 void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation,
-                                  uint32_t sprite_index);
+                                  uint32_t sprite_index, bool tile_uv);
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar);
 
 // gameskin spire enum
+
+enum {
+  CURSOR_HAMMER,
+  CURSOR_GUN,
+  CURSOR_SHOTGUN,
+  CURSOR_GRENADE,
+  CURSOR_LASER,
+  CURSOR_NINJA,
+  CURSOR_SPRITE_COUNT
+};
+
 enum {
   GAMESKIN_HAMMER_BODY,
-  GAMESKIN_HAMMER_CURSOR,
   GAMESKIN_GUN_BODY,
-  GAMESKIN_GUN_CURSOR,
   GAMESKIN_GUN_PROJ,
   GAMESKIN_GUN_MUZZLE1,
   GAMESKIN_GUN_MUZZLE2,
   GAMESKIN_GUN_MUZZLE3,
   GAMESKIN_SHOTGUN_BODY,
-  GAMESKIN_SHOTGUN_CURSOR,
   GAMESKIN_SHOTGUN_PROJ,
   GAMESKIN_SHOTGUN_MUZZLE1,
   GAMESKIN_SHOTGUN_MUZZLE2,
   GAMESKIN_SHOTGUN_MUZZLE3,
   GAMESKIN_GRENADE_BODY,
-  GAMESKIN_GRENADE_CURSOR,
   GAMESKIN_GRENADE_PROJ,
   GAMESKIN_LASER_BODY,
-  GAMESKIN_LASER_CURSOR,
   GAMESKIN_LASER_PROJ,
   GAMESKIN_NINJA_BODY,
-  GAMESKIN_NINJA_CURSOR,
   GAMESKIN_NINJA_MUZZLE1,
   GAMESKIN_NINJA_MUZZLE2,
   GAMESKIN_NINJA_MUZZLE3,

@@ -453,6 +453,30 @@ void render_players(ui_handler_t *ui) {
 
     renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
 
+    // render hook
+    if (core->m_HookState >= 1) {
+      vec2 hook_pos = {vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f};
+
+      vec2 direction;
+      glm_vec2_sub(hook_pos, p, direction);
+      float length = glm_vec2_norm(direction);
+      glm_vec2_normalize(direction);
+      float angle = atan2f(-direction[1], direction[0]);
+
+      if (length > 0) {
+        vec2 center_pos;
+        center_pos[0] = p[0] + direction[0] * (length - 1.0) * 0.5f;
+        center_pos[1] = p[1] + direction[1] * (length - 1.0) * 0.5f;
+        vec2 chain_size = {-length, 0.5};
+        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, center_pos, chain_size, angle,
+                                     GAMESKIN_HOOK_CHAIN, true);
+      }
+      sprite_definition_t *head_sprite_def =
+          &gfx->renderer.gameskin_renderer.sprite_definitions[GAMESKIN_HOOK_HEAD];
+      vec2 head_size = {(float)head_sprite_def->w / 64.0f, (float)head_sprite_def->h / 64.0f};
+      renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, hook_pos, head_size, angle,
+                                   GAMESKIN_HOOK_HEAD, false);
+    }
     if (!core->m_FreezeTime && core->m_ActiveWeapon >= WEAPON_HAMMER && core->m_ActiveWeapon < NUM_WEAPONS) {
       const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
       float fire_delay_ticks = spec->firedelay * (float)GAME_TICK_SPEED / 1000.0f;
@@ -535,7 +559,7 @@ void render_players(ui_handler_t *ui) {
 
           vec2 render_pos = {muzzle_phys_pos[0] / 32.0f, muzzle_phys_pos[1] / 32.0f};
           renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size,
-                                       hadoken_angle, muzzle_sprite_id);
+                                       hadoken_angle, muzzle_sprite_id, false);
         }
       } else {
         switch (core->m_ActiveWeapon) {
@@ -593,7 +617,7 @@ void render_players(ui_handler_t *ui) {
 
             vec2 render_pos = {muzzle_phys_pos[0] / 32.0f, muzzle_phys_pos[1] / 32.0f};
             renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size,
-                                         weapon_angle, muzzle_sprite_id);
+                                         weapon_angle, muzzle_sprite_id, false);
           }
         }
       }
@@ -613,13 +637,9 @@ void render_players(ui_handler_t *ui) {
         vec2 render_pos = {weapon_pos[0] / 32.0f, weapon_pos[1] / 32.0f};
 
         renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, weapon_size, weapon_angle,
-                                     weapon_sprite_id);
+                                     weapon_sprite_id, false);
       }
     }
-
-    if (core->m_HookState >= 1)
-      renderer_draw_line(gfx, p, (vec2){vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f},
-                         (vec4){1.f, 1.f, 1.f, 1.f}, 0.05);
   }
   int id = 0;
   for (SProjectile *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
@@ -635,7 +655,8 @@ void render_players(ui_handler_t *ui) {
     lerp(ppp, pp, intra, p);
 
     renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, p, (vec2){1, 1},
-                                 -((world.m_GameTick + intra) / 50.f) * 4 * M_PI + id, GAMESKIN_GRENADE_PROJ);
+                                 -((world.m_GameTick + intra) / 50.f) * 4 * M_PI + id, GAMESKIN_GRENADE_PROJ,
+                                 false);
     ++id;
   }
   (void)id;
@@ -731,22 +752,8 @@ void render_cursor(ui_handler_t *ui) {
   if (handler->user_interface.timeline.recording) {
     float norm_x = ui->last_render_pos[0] + handler->user_interface.timeline.recording_input.m_TargetX / 64.f;
     float norm_y = ui->last_render_pos[1] + handler->user_interface.timeline.recording_input.m_TargetY / 64.f;
-
-    int weapon = handler->user_interface.weapon;
-    int cursor_sprite_id = GAMESKIN_HAMMER_CURSOR;
-    if (weapon == WEAPON_GUN)
-      cursor_sprite_id = GAMESKIN_GUN_CURSOR;
-    else if (weapon == WEAPON_SHOTGUN)
-      cursor_sprite_id = GAMESKIN_SHOTGUN_CURSOR;
-    else if (weapon == WEAPON_GRENADE)
-      cursor_sprite_id = GAMESKIN_GRENADE_CURSOR;
-    else if (weapon == WEAPON_LASER)
-      cursor_sprite_id = GAMESKIN_LASER_CURSOR;
-    else if (weapon == WEAPON_NINJA)
-      cursor_sprite_id = GAMESKIN_NINJA_CURSOR;
-
     renderer_push_atlas_instance(&handler->renderer.cursor_renderer, (vec2){norm_x, norm_y}, (vec2){1.f, 1.f},
-                                 0.0f, cursor_sprite_id);
+                                 0.0f, handler->user_interface.weapon, false);
   }
 }
 

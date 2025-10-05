@@ -564,27 +564,21 @@ int renderer_init(gfx_handler_t *handler) {
 
   static sprite_definition_t gameskin_sprites[GAMESKIN_SPRITE_COUNT] = {
       [GAMESKIN_HAMMER_BODY] = {64, 32, 128, 96},
-      [GAMESKIN_HAMMER_CURSOR] = {0, 0, 64, 64},
       [GAMESKIN_GUN_BODY] = {64, 128, 128, 64},
-      [GAMESKIN_GUN_CURSOR] = {0, 128, 64, 64},
       [GAMESKIN_GUN_PROJ] = {192, 128, 64, 64},
       [GAMESKIN_GUN_MUZZLE1] = {256, 128, 128, 64},
       [GAMESKIN_GUN_MUZZLE2] = {384, 128, 128, 64},
       [GAMESKIN_GUN_MUZZLE3] = {512, 128, 128, 64},
       [GAMESKIN_SHOTGUN_BODY] = {64, 192, 256, 64},
-      [GAMESKIN_SHOTGUN_CURSOR] = {0, 192, 64, 64},
       [GAMESKIN_SHOTGUN_PROJ] = {320, 192, 64, 64},
       [GAMESKIN_SHOTGUN_MUZZLE1] = {384, 192, 128, 64},
       [GAMESKIN_SHOTGUN_MUZZLE2] = {512, 192, 128, 64},
       [GAMESKIN_SHOTGUN_MUZZLE3] = {640, 192, 128, 64},
       [GAMESKIN_GRENADE_BODY] = {64, 256, 224, 64},
-      [GAMESKIN_GRENADE_CURSOR] = {0, 256, 64, 64},
       [GAMESKIN_GRENADE_PROJ] = {320, 256, 64, 64},
       [GAMESKIN_LASER_BODY] = {64, 384, 224, 96},
-      [GAMESKIN_LASER_CURSOR] = {0, 384, 64, 64},
       [GAMESKIN_LASER_PROJ] = {320, 384, 64, 64},
       [GAMESKIN_NINJA_BODY] = {64, 320, 256, 64},
-      [GAMESKIN_NINJA_CURSOR] = {0, 320, 64, 64},
       [GAMESKIN_NINJA_MUZZLE1] = {800, 0, 224, 128},
       [GAMESKIN_NINJA_MUZZLE2] = {800, 128, 224, 128},
       [GAMESKIN_NINJA_MUZZLE3] = {800, 256, 224, 128},
@@ -624,12 +618,12 @@ int renderer_init(gfx_handler_t *handler) {
   renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png",
                                gameskin_sprites, GAMESKIN_SPRITE_COUNT, 100000);
 
-  static sprite_definition_t cursor_sprites[] = {
-      [GAMESKIN_HAMMER_CURSOR] = {0, 0, 64, 64},    [GAMESKIN_GUN_CURSOR] = {0, 128, 64, 64},
-      [GAMESKIN_SHOTGUN_CURSOR] = {0, 192, 64, 64}, [GAMESKIN_GRENADE_CURSOR] = {0, 256, 64, 64},
-      [GAMESKIN_LASER_CURSOR] = {0, 384, 64, 64},   [GAMESKIN_NINJA_CURSOR] = {0, 320, 64, 64}};
+  static sprite_definition_t cursor_sprites[CURSOR_SPRITE_COUNT + 1] = {
+      [CURSOR_HAMMER] = {0, 0, 64, 64},    [CURSOR_GUN] = {0, 128, 64, 64},
+      [CURSOR_SHOTGUN] = {0, 192, 64, 64}, [CURSOR_GRENADE] = {0, 256, 64, 64},
+      [CURSOR_LASER] = {0, 384, 64, 64},   [CURSOR_NINJA] = {0, 320, 64, 64}};
   renderer_init_atlas_renderer(handler, &renderer->cursor_renderer, "data/textures/game.png", cursor_sprites,
-                               6, 1); // we only render a single cursor
+                               CURSOR_SPRITE_COUNT, 1); // we only render a single cursor
 
   log_info(LOG_SOURCE, "Renderer initialized successfully.");
   return 0;
@@ -2159,7 +2153,7 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
                            .baseArrayLayer = i,
                            .layerCount = 1},
         .dstOffsets[0] = {0, 0, 0},
-        .dstOffsets[1] = {(int32_t)sprite->w, (int32_t)sprite->h, 1},
+        .dstOffsets[1] = {(int32_t)ar->layer_width, (int32_t)ar->layer_height, 1},
     };
     vkCmdBlitImage(cmd, source_atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ar->atlas_texture->image,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
@@ -2177,6 +2171,25 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
 
   renderer_destroy_texture(h, source_atlas); // we don't need the single large atlas texture anymore
 
+  // Create a dedicated sampler for this atlas renderer
+  VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                                      .magFilter = VK_FILTER_LINEAR,
+                                      .minFilter = VK_FILTER_LINEAR,
+                                      .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                                      .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                                      .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                                      .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                                      .mipLodBias = 0.0f,
+                                      .anisotropyEnable = VK_FALSE,
+                                      .maxAnisotropy = 1.0f,
+                                      .compareEnable = VK_FALSE,
+                                      .compareOp = VK_COMPARE_OP_ALWAYS,
+                                      .minLod = 0.0f,
+                                      .maxLod = (float)ar->atlas_texture->mip_levels,
+                                      .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+                                      .unnormalizedCoordinates = VK_FALSE};
+  check_vk_result(vkCreateSampler(h->g_device, &sampler_info, h->g_allocator, &ar->sampler));
+
   create_buffer(h, sizeof(atlas_instance_t) * ar->max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &ar->instance_buffer);
@@ -2185,6 +2198,9 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
 }
 
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar) {
+  if (ar->sampler) {
+    vkDestroySampler(h->g_device, ar->sampler, h->g_allocator);
+  }
   if (ar->instance_buffer.buffer) {
     vkDestroyBuffer(h->g_device, ar->instance_buffer.buffer, h->g_allocator);
     vkFreeMemory(h->g_device, ar->instance_buffer.memory, h->g_allocator);
@@ -2199,7 +2215,7 @@ void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar) {
 void renderer_begin_atlas_instances(atlas_renderer_t *ar) { ar->instance_count = 0; }
 
 void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation,
-                                  uint32_t sprite_index) {
+                                  uint32_t sprite_index, bool tile_uv) {
   if (ar->instance_count >= ar->max_instances) {
     log_warn(LOG_SOURCE, "Max atlas instances reached for this renderer.");
     return;
@@ -2214,10 +2230,14 @@ void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, flo
   glm_vec2_copy(size, ar->instance_ptr[i].size);
   ar->instance_ptr[i].rotation = rotation;
 
-  const sprite_definition_t *sprite = &ar->sprite_definitions[sprite_index];
   ar->instance_ptr[i].sprite_index = (int)sprite_index;
-  ar->instance_ptr[i].uv_scale[0] = (float)sprite->w / (float)ar->layer_width;
-  ar->instance_ptr[i].uv_scale[1] = (float)sprite->h / (float)ar->layer_height;
+  if (tile_uv) {
+    ar->instance_ptr[i].uv_scale[0] = size[0] * 1.5f;
+    ar->instance_ptr[i].uv_scale[1] = 1.0f;
+  } else {
+    ar->instance_ptr[i].uv_scale[0] = 1.0f;
+    ar->instance_ptr[i].uv_scale[1] = 1.0f;
+  }
 }
 
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar) {
@@ -2262,7 +2282,7 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
 
   VkDescriptorBufferInfo bufInfo = {
       .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
-  VkDescriptorImageInfo imgInfo = {.sampler = ar->atlas_texture->sampler,
+  VkDescriptorImageInfo imgInfo = {.sampler = ar->sampler,
                                    .imageView = ar->atlas_texture->image_view,
                                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
