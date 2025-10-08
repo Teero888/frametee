@@ -730,10 +730,10 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   uint32_t binding_count = ubo_count + texture_count;
   VLA(VkDescriptorSetLayoutBinding, bindings, binding_count);
 
-  if (shader) {
-    log_info(LOG_SOURCE, "Creating descriptor set layout for %s: ubo_count=%u texture_count=%u",
-             shader->vert_path, ubo_count, texture_count);
-  }
+  // if (shader) {
+  //   log_info(LOG_SOURCE, "Creating descriptor set layout for %s: ubo_count=%u texture_count=%u",
+  //            shader->vert_path, ubo_count, texture_count);
+  // }
 
   if (target_render_pass == VK_NULL_HANDLE) {
     log_error(LOG_SOURCE, "Cannot create graphics pipeline without a valid render pass.");
@@ -1961,17 +1961,19 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   sr->instance_count = 0;
 }
 
-int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
+int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size) {
   int tex_width, tex_height, channels;
-  stbi_uc *pixels = stbi_load(path, &tex_width, &tex_height, &channels, STBI_rgb_alpha);
+  stbi_uc *pixels =
+      stbi_load_from_memory(buffer, (int)size, &tex_width, &tex_height, &channels, STBI_rgb_alpha);
+
   if (!pixels) {
-    log_error(LOG_SOURCE, "Failed to load skin from file: %s", path);
+    log_error(LOG_SOURCE, "Failed to load skin from memory buffer.");
     return -1;
   }
 
   // check dimensions (must be multiple of 256x128)
   if (tex_width <= 0 || tex_height <= 0 || tex_width % 256 != 0 || tex_height % 128 != 0) {
-    log_error(LOG_SOURCE, "Skin '%s' has invalid dimensions (%dx%d), must be a multiple of 256x128", path,
+    log_error(LOG_SOURCE, "Skin from memory has invalid dimensions (%dx%d), must be a multiple of 256x128",
               tex_width, tex_height);
     stbi_image_free(pixels);
     return -1;
@@ -1982,9 +1984,6 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
   const int final_height = 256;
 
   if (tex_width != final_width || tex_height != final_height) {
-    // log_info(LOG_SOURCE, "Resizing skin '%s' from %dx%d to %dx%d", path, tex_width, tex_height,
-    // final_width,
-    //          final_height);
     stbi_uc *resized_pixels = malloc(final_width * final_height * 4);
     if (!resized_pixels) {
       log_error(LOG_SOURCE, "Failed to allocate memory for skin resize.");
@@ -2075,8 +2074,27 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
   vkDestroyBuffer(h->g_device, staging.buffer, h->g_allocator);
   vkFreeMemory(h->g_device, staging.memory, h->g_allocator);
 
-  log_info(LOG_SOURCE, "Loaded skin '%s' into layer %d", path, layer);
+  log_info(LOG_SOURCE, "Loaded skin from memory into layer %d", layer);
   return layer; // return usable skin index
+}
+
+int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f)
+    return -1;
+  fseek(f, 0, SEEK_END);
+  size_t size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  unsigned char *buffer = malloc(size);
+  fread(buffer, size, 1, f);
+  fclose(f);
+  int id = renderer_load_skin_from_memory(h, buffer, size);
+  free(buffer);
+  if (id >= 0) {
+    // Store path for saving later
+    strncpy(h->renderer.textures[id].path, path, sizeof(h->renderer.textures[id].path) - 1);
+  }
+  return id;
 }
 
 void renderer_unload_skin(gfx_handler_t *h, int layer) {

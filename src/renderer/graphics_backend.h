@@ -21,7 +21,8 @@ struct gfx_handler_t;
 enum { FRAME_OK = 0, FRAME_SKIP, FRAME_EXIT };
 
 // public api
-void on_map_load(struct gfx_handler_t *handler, const char *map_path);
+void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buffer, size_t size);
+void on_map_load_path(struct gfx_handler_t *handler, const char *map_path);
 int init_gfx_handler(struct gfx_handler_t *handler);
 int gfx_begin_frame(struct gfx_handler_t *handler);
 bool gfx_end_frame(struct gfx_handler_t *handler);

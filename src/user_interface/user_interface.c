@@ -5,6 +5,7 @@
 #include "../plugins/api_impl.h"
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
+#include "../system/save.h"
 #include "cglm/vec2.h"
 #include "cimgui.h"
 #include "player_info.h"
@@ -17,7 +18,6 @@
 #include <nfd.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 #ifndef M_PI
@@ -28,11 +28,10 @@ static const char *LOG_SOURCE = "UI";
 
 typedef struct ui_handler ui_handler_t;
 
-void on_map_load(gfx_handler_t *handler, const char *map_path);
 void render_menu_bar(ui_handler_t *ui) {
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
-      if (igMenuItem_Bool("Open", NULL, false, true)) {
+      if (igMenuItem_Bool("Open Map", NULL, false, true)) {
         nfdu8char_t *out_path;
         nfdu8filteritem_t filters[] = {{"map files", "map"}};
         nfdopendialogu8args_t args = {0};
@@ -40,15 +39,34 @@ void render_menu_bar(ui_handler_t *ui) {
         args.filterCount = 1;
         nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
         if (result == NFD_OKAY) {
-          on_map_load(ui->gfx_handler, out_path);
+          on_map_load_path(ui->gfx_handler, out_path);
           NFD_FreePathU8(out_path);
         } else if (result == NFD_CANCEL)
-          puts("Canceled map load.");
+          log_warn(LOG_SOURCE, "Canceled map load.");
         else
           log_error(LOG_SOURCE, "Error: %s\n", NFD_GetError());
       }
-      if (igMenuItem_Bool("Save", NULL, false, true)) {
-        log_warn(LOG_SOURCE, "Save action is not yet implemented.");
+      igSeparator();
+      if (igMenuItem_Bool("Open Project", "Ctrl+O", false, true)) {
+        nfdu8char_t *out_path;
+        nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
+        nfdopendialogu8args_t args = {0};
+        args.filterList = filters;
+        args.filterCount = 1;
+        nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
+        if (result == NFD_OKAY) {
+          load_project(ui, out_path);
+          NFD_FreePathU8(out_path);
+        }
+      }
+      if (igMenuItem_Bool("Save Project As...", "Ctrl+S", false, true)) {
+        nfdu8char_t *save_path;
+        nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
+        nfdresult_t result = NFD_SaveDialogU8(&save_path, filters, 1, NULL, "unnamed.tasp");
+        if (result == NFD_OKAY) {
+          save_project(ui, save_path);
+          NFD_FreePathU8(save_path);
+        }
       }
       igEndMenu();
     }

@@ -9,21 +9,22 @@ option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer
 # source files
 project(ddnet_frametee)
 set(SRCS 
-    src/main.c
-    src/animation/anim_data.c
-    src/animation/anim_system.c
-    src/logger/logger.c
+	src/main.c
+	src/animation/anim_data.c
+	src/animation/anim_system.c
+	src/system/save.c
+	src/logger/logger.c
 	src/physics/physics.c
-    src/plugins/api_impl.c
-    src/plugins/plugin_manager.c
-    src/renderer/graphics_backend.c
-    src/renderer/renderer.c
-    src/user_interface/player_info.c
-    src/user_interface/snippet_editor.c
-    src/user_interface/timeline.c
-    src/user_interface/undo_redo.c
-    src/user_interface/user_interface.c
-    src/user_interface/widgets/hsl_colorpicker.c
+	src/plugins/api_impl.c
+	src/plugins/plugin_manager.c
+	src/renderer/graphics_backend.c
+	src/renderer/renderer.c
+	src/user_interface/player_info.c
+	src/user_interface/snippet_editor.c
+	src/user_interface/timeline.c
+	src/user_interface/undo_redo.c
+	src/user_interface/user_interface.c
+	src/user_interface/widgets/hsl_colorpicker.c
 )
 
 # find dependencies

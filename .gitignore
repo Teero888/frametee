@@ -5,3 +5,4 @@ imgui.ini
 .vscode
 *.diff
 *.xml
+*.tasp

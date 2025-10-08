@@ -470,21 +470,12 @@ static void cleanup_map_resources(gfx_handler_t *handler) {
   handler->map_texture_count = 0;
 }
 
-void on_map_load(gfx_handler_t *handler, const char *map_path) {
+void on_map_load(gfx_handler_t *handler) {
   cleanup_map_resources(handler);
-  timeline_init(&handler->user_interface.timeline);
 
-  physics_free(&handler->physics_handler);
-  physics_init(&handler->physics_handler, map_path);
   handler->renderer.camera.pos[0] = 0.5f;
   handler->renderer.camera.pos[1] = 0.5f;
   handler->map_data = &handler->physics_handler.collision.m_MapData;
-  if (!handler->map_data->game_layer.data) {
-    log_error(LOG_SOURCE, "Failed to load map data from '%s'", map_path);
-    return;
-  }
-  log_info(LOG_SOURCE, "Loaded map '%s' (%ux%u)", map_path, handler->map_data->width,
-           handler->map_data->height);
 
   // entities texture
   handler->map_textures[handler->map_texture_count++] =
@@ -501,6 +492,32 @@ void on_map_load(gfx_handler_t *handler, const char *map_path) {
       load_layer_texture(handler, map[0], handler->map_data->width, handler->map_data->height);
   handler->map_textures[handler->map_texture_count++] =
       load_layer_texture(handler, map[1], handler->map_data->width, handler->map_data->height);
+}
+
+void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
+  timeline_cleanup(&handler->user_interface.timeline);
+  timeline_init(&handler->user_interface.timeline);
+  physics_free(&handler->physics_handler);
+  physics_init(&handler->physics_handler, map_path);
+
+  if (!handler->physics_handler.collision.m_MapData.game_layer.data) {
+    log_error(LOG_SOURCE, "Failed to load map data from '%s'", map_path);
+    return;
+  }
+  log_info(LOG_SOURCE, "Loaded map '%s' (%ux%u)", map_path, handler->map_data->width,
+           handler->map_data->height);
+
+  on_map_load(handler);
+}
+
+void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buffer, size_t size) {
+  physics_free(&handler->physics_handler);
+  physics_init_from_memory(&handler->physics_handler, map_buffer, size);
+  if (!handler->physics_handler.collision.m_MapData.game_layer.data) {
+    log_error(LOG_SOURCE, "Failed to load map data from save file");
+    return;
+  }
+  on_map_load(handler);
 }
 
 // initialization and cleanup

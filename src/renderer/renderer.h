@@ -245,6 +245,7 @@ void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int sk
                                  bool use_custom_color);
 void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array);
 int renderer_load_skin_from_file(gfx_handler_t *h, const char *path);
+int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size);
 void renderer_unload_skin(gfx_handler_t *h, int layer);
 
 void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels,

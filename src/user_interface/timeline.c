@@ -2707,7 +2707,6 @@ player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
 }
 
 void timeline_init(timeline_state_t *ts) {
-  timeline_cleanup(ts);
   memset(ts, 0, sizeof(timeline_state_t));
 
   v_init(&ts->vec);

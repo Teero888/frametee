@@ -1,16 +1,37 @@
 #include "physics.h"
 #include <string.h>
 
+void physics_init_from_memory(ph_t *h, const unsigned char *map_buffer, size_t size) {
+  physics_free(h);
+  map_data_t map = load_map_from_memory(map_buffer, size);
+
+  // manually attach the buffer to the map_data struct so it can be saved later
+  // and freed correctly. The physics handler now owns map_buffer.
+  map._map_file_data = (void *)map_buffer;
+  map._map_file_size = size;
+
+  if (!init_collision(&h->collision, &map)) {
+    // if init fails, free_map_data will free the layer data and the map_buffer.
+    free_map_data(&map);
+    return;
+  }
+  init_config(&h->config);
+  h->grid = tg_empty();
+  tg_init(&h->grid, h->collision.m_MapData.width, h->collision.m_MapData.height);
+  wc_init(&h->world, &h->collision, &h->grid, &h->config);
+  h->loaded = true;
+}
+
 void physics_init(ph_t *h, const char *path) {
   physics_free(h);
   map_data_t map = load_map(path);
-  if (!init_collision(&h->collision, &map))
+  if (!init_collision(&h->collision, &map)) {
+    free_map_data(&map);
     return;
+  }
   init_config(&h->config);
-
   h->grid = tg_empty();
   tg_init(&h->grid, h->collision.m_MapData.width, h->collision.m_MapData.height);
-
   wc_init(&h->world, &h->collision, &h->grid, &h->config);
   h->loaded = true;
 }
