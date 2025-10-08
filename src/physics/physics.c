@@ -3,7 +3,8 @@
 
 void physics_init(ph_t *h, const char *path) {
   physics_free(h);
-  if (!init_collision(&h->collision, path))
+  map_data_t map = load_map(path);
+  if (!init_collision(&h->collision, &map))
     return;
   init_config(&h->config);
 

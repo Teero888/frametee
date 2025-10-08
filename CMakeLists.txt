@@ -128,13 +128,17 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/W4>
 )
 
-# Sanitizer options
+set(CMAKE_C_FLAGS_DEBUG "-g -ffast-math -DDEBUG -fsanitize=address,undefined")
+set(CMAKE_C_FLAGS_RELEASE "-g -O3 -ffast-math -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -ffast-math -DDEBUG -fsanitize=address,undefined")
+set(CMAKE_CXX_FLAGS_RELEASE "-g -O3 -ffast-math -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros")
+
+# sanitizer options
 if(ENABLE_SANITIZERS)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${PROJECT_NAME} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_link_options(${PROJECT_NAME} PRIVATE -fsanitize=address,undefined)
-        
-        # Create suppression file for GTK, Vulkan loader, Pango, and FontConfig-related leaks
+        # create suppression file for gtk, vulkan loader, pango, and fontconfig-related leaks
         set(SUPPRESSION_FILE "${CMAKE_BINARY_DIR}/asan_suppressions.txt")
         file(WRITE ${SUPPRESSION_FILE}
             "# Suppressions for GTK-related memory leaks\n"
@@ -160,18 +164,15 @@ if(ENABLE_SANITIZERS)
             "leak:*FcValueSave*\n"
             "leak:*FcLangSetCopy*\n"
         )
-        
-        # Create wrapper script to set LSAN_OPTIONS
+        # create wrapper script to set lsan_options
         set(WRAPPER_SCRIPT "${CMAKE_BINARY_DIR}/ddnet_frametee.sh")
         file(WRITE ${WRAPPER_SCRIPT}
             "#!/bin/sh\n"
             "export LSAN_OPTIONS=suppressions=${CMAKE_BINARY_DIR}/asan_suppressions.txt\n"
             "exec ${CMAKE_BINARY_DIR}/ddnet_frametee \"$@\"\n"
         )
-        # Make the wrapper script executable
+        # make the wrapper script executable
         execute_process(COMMAND chmod +x ${WRAPPER_SCRIPT})
-        
-        # Inform user about the wrapper script
         message(STATUS "Sanitizer wrapper script created at ${WRAPPER_SCRIPT}. Use './ddnet_frametee.sh' to run with suppressions.")
     else()
         message(WARNING "Sanitizers are only supported for GCC and Clang compilers.")

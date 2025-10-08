@@ -1,6 +1,8 @@
 #include "api_impl.h"
 #include "../logger/logger.h"
+#include "../renderer/graphics_backend.h"
 #include "../user_interface/timeline.h"
+#include "gamecore.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -12,9 +14,16 @@
 // it is set once by api_init() and is internal to this file.
 static ui_handler_t *g_ui_handler_for_api = NULL;
 
-static int api_get_current_tick() { return g_ui_handler_for_api->timeline.current_tick; }
+static int api_get_current_tick(void) { return g_ui_handler_for_api->timeline.current_tick; }
 
-static int api_get_track_count() { return g_ui_handler_for_api->timeline.player_track_count; }
+static int api_get_track_count(void) { return g_ui_handler_for_api->timeline.player_track_count; }
+
+// READ ONLY PLEASE
+static SWorldCore *api_get_initial_world(void) {
+  return g_ui_handler_for_api->gfx_handler->physics_handler.loaded
+             ? &g_ui_handler_for_api->gfx_handler->physics_handler.world
+             : NULL;
+}
 
 static void api_log_info(const char *plugin_name, const char *message) {
   log_info(plugin_name, "%s", message);
@@ -88,14 +97,12 @@ static undo_command_t *api_do_create_track(const player_info_t *info, int *out_t
 
 static undo_command_t *api_do_create_snippet(int track_index, int start_tick, int duration,
                                              int *out_snippet_id) {
-  return timeline_api_create_snippet(g_ui_handler_for_api, track_index, start_tick, duration,
-                                     out_snippet_id);
+  return timeline_api_create_snippet(g_ui_handler_for_api, track_index, start_tick, duration, out_snippet_id);
 }
 
 static undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset, int count,
                                          const SPlayerInput *new_inputs) {
-  return timeline_api_set_snippet_inputs(g_ui_handler_for_api, snippet_id, tick_offset, count,
-                                         new_inputs);
+  return timeline_api_set_snippet_inputs(g_ui_handler_for_api, snippet_id, tick_offset, count, new_inputs);
 }
 
 static void api_register_undo_command(undo_command_t *command) {
@@ -114,6 +121,7 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
   return (tas_api_t){
       .get_current_tick = api_get_current_tick,
       .get_track_count = api_get_track_count,
+      .get_initial_world = api_get_initial_world,
       .do_create_track = api_do_create_track,
       .register_undo_command = api_register_undo_command,
       .do_create_snippet = api_do_create_snippet,
