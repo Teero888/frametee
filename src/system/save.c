@@ -242,14 +242,18 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
       return false;
     }
 
-    int loaded_id =
-        renderer_load_skin_from_memory(ui->gfx_handler, texture_data, skin_header.texture_data_size, NULL);
+    skin_info_t info = {};
+    int loaded_id = renderer_load_skin_from_memory(ui->gfx_handler, texture_data,
+                                                   skin_header.texture_data_size, &info.preview_texture_res);
     free(texture_data);
-
     if (loaded_id >= 0) {
-      skin_info_t info = {};
       info.id = loaded_id;
       strncpy(info.name, skin_header.name, sizeof(info.name) - 1);
+      if (info.preview_texture_res) {
+        info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
+            info.preview_texture_res->sampler, info.preview_texture_res->image_view,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+      }
       skin_manager_add(&ui->skin_manager, &info);
     }
   }
