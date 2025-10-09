@@ -9,6 +9,7 @@
 #include "cglm/vec2.h"
 #include "cimgui.h"
 #include "player_info.h"
+#include "skin_browser.h"
 #include "snippet_editor.h"
 #include "timeline.h"
 #include "undo_redo.h"
@@ -144,24 +145,27 @@ void setup_docking(ui_handler_t *ui) {
     igDockBuilderAddNode(main_dockspace_id, ImGuiDockNodeFlags_DockSpace);
     igDockBuilderSetNodeSize(main_dockspace_id, viewport->WorkSize);
 
-    // Split root into bottom + top remainder
+    // split root into bottom + top remainder
     ImGuiID dock_id_top;
     ImGuiID dock_id_bottom =
         igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.20f, NULL, &dock_id_top);
 
-    // Split top remainder into left + remainder
+    // split top remainder into left + remainder
     ImGuiID dock_id_left;
-    ImGuiID dock_id_center; // this will be "viewport"
+    ImGuiID dock_id_center;
     ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.25f, NULL, &dock_id_center);
     dock_id_left = igDockBuilderSplitNode(dock_id_center, ImGuiDir_Left, 0.40f, NULL, &dock_id_center);
 
-    // now dock_id_center is the leftover = central piece
     igDockBuilderDockWindow("viewport", dock_id_center);
+    igDockBuilderDockWindow("Keybind Settings", dock_id_center);
+
     igDockBuilderDockWindow("Timeline", dock_id_bottom);
+
     igDockBuilderDockWindow("Player Info", dock_id_left);
     igDockBuilderDockWindow("Players", dock_id_left);
-    igDockBuilderDockWindow("Snippet Editor", dock_id_right);
+    igDockBuilderDockWindow("Skin manager", dock_id_left);
 
+    igDockBuilderDockWindow("Snippet Editor", dock_id_right);
     igDockBuilderFinish(main_dockspace_id);
   }
 }
@@ -215,26 +219,25 @@ void render_player_manager(ui_handler_t *ui) {
     }
     if (ts->player_track_count > 0)
       igSeparator();
-
-    if (igBeginPopupModal("Confirm remove player", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-      igText("This player has inputs. Remove anyway?");
-      static bool dont_ask_again = false;
-      igCheckbox("Do not ask again", &dont_ask_again);
-      if (igButton("Yes", (ImVec2){0, 0})) {
-        undo_command_t *cmd = do_remove_player_track(ui, g_pending_remove_index);
-        undo_manager_register_command(&ui->undo_manager, cmd);
-        if (dont_ask_again)
-          g_remove_confirm_needed = false;
-        g_pending_remove_index = -1;
-        igCloseCurrentPopup();
-      }
-      igSameLine(0, 10);
-      if (igButton("Cancel", (ImVec2){0, 0})) {
-        g_pending_remove_index = -1;
-        igCloseCurrentPopup();
-      }
-      igEndPopup();
+  }
+  if (igBeginPopupModal("Confirm remove player", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+    igText("This player has inputs. Remove anyway?");
+    static bool dont_ask_again = false;
+    igCheckbox("Do not ask again", &dont_ask_again);
+    if (igButton("Yes", (ImVec2){0, 0})) {
+      undo_command_t *cmd = do_remove_player_track(ui, g_pending_remove_index);
+      undo_manager_register_command(&ui->undo_manager, cmd);
+      if (dont_ask_again)
+        g_remove_confirm_needed = false;
+      g_pending_remove_index = -1;
+      igCloseCurrentPopup();
     }
+    igSameLine(0, 10);
+    if (igButton("Cancel", (ImVec2){0, 0})) {
+      g_pending_remove_index = -1;
+      igCloseCurrentPopup();
+    }
+    igEndPopup();
   }
   igEnd();
 }
@@ -312,6 +315,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->show_timeline = true;
   ui->show_prediction = true;
   ui->prediction_length = 100;
+  ui->show_skin_manager = true;
   timeline_init(&ui->timeline);
   camera_init(&gfx_handler->renderer.camera);
   keybinds_init(&ui->keybinds);
@@ -800,7 +804,7 @@ void ui_render(ui_handler_t *ui) {
   }
   keybinds_render_settings_window(&ui->keybinds);
   if (ui->show_skin_manager)
-    render_skin_manager(ui->gfx_handler);
+    render_skin_browser(ui->gfx_handler);
 }
 
 // render viewport and related things

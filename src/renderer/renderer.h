@@ -8,7 +8,7 @@
 #include <vulkan/vulkan_core.h>
 
 #define MAX_SHADERS 16
-#define MAX_TEXTURES 64
+#define MAX_TEXTURES 256
 #define MAX_MESHES 64
 #define MAX_TEXTURES_PER_DRAW 3
 #define MAX_UBOS_PER_DRAW 2
@@ -214,6 +214,9 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
                                             uint32_t width, uint32_t height);
 texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, const uint8_t **pixel_array,
                                                     uint32_t width, uint32_t height);
+texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsigned char *pixels, int width,
+                                             int height);
+
 void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex);
 mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count,
                              uint32_t *indices, uint32_t index_count);
@@ -244,8 +247,9 @@ void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int sk
                                  vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet,
                                  bool use_custom_color);
 void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array);
-int renderer_load_skin_from_file(gfx_handler_t *h, const char *path);
-int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size);
+int renderer_load_skin_from_file(gfx_handler_t *h, const char *path, texture_t **out_preview_texture);
+int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size,
+                                   texture_t **out_preview_texture);
 void renderer_unload_skin(gfx_handler_t *h, int layer);
 
 void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels,

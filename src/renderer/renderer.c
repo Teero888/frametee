@@ -1146,6 +1146,66 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   return texture;
 }
 
+texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsigned char *pixels, int width,
+                                             int height) {
+  renderer_state_t *renderer = &handler->renderer;
+  if (!pixels)
+    return NULL;
+
+  uint32_t free_slot = (uint32_t)-1;
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
+    if (!renderer->textures[i].active) {
+      free_slot = i;
+      break;
+    }
+  }
+
+  if (free_slot == (uint32_t)-1) {
+    log_error(LOG_SOURCE, "Max texture count (%d) reached.", MAX_TEXTURES);
+    return NULL;
+  }
+
+  VkDeviceSize image_size = (VkDeviceSize)width * height * 4;
+
+  texture_t *texture = &renderer->textures[free_slot];
+  memset(texture, 0, sizeof(texture_t));
+  texture->id = free_slot;
+  texture->active = true;
+  texture->width = width;
+  texture->height = height;
+  texture->mip_levels = 1; // No mipmaps for previews
+  texture->layer_count = 1;
+  strncpy(texture->path, "from_rgba_memory", sizeof(texture->path) - 1);
+
+  buffer_t staging_buffer;
+  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
+
+  void *data;
+  vkMapMemory(handler->g_device, staging_buffer.memory, 0, image_size, 0, &data);
+  memcpy(data, pixels, image_size);
+  vkUnmapMemory(handler->g_device, staging_buffer.memory);
+
+  create_image(handler, width, height, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 0, 1);
+  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, width,
+                       height);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
+                          0, 1);
+
+  vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
+  vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
+
+  texture->image_view =
+      create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
+  texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_NEAREST);
+  return texture;
+}
+
 mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count,
                              uint32_t *indices, uint32_t index_count) {
   renderer_state_t *renderer = &handler->renderer;
@@ -1961,11 +2021,13 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   sr->instance_count = 0;
 }
 
-int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size) {
+int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size,
+                                   texture_t **out_preview_texture) {
   int tex_width, tex_height, channels;
   stbi_uc *pixels =
       stbi_load_from_memory(buffer, (int)size, &tex_width, &tex_height, &channels, STBI_rgb_alpha);
-
+  if (out_preview_texture)
+    *out_preview_texture = NULL;
   if (!pixels) {
     log_error(LOG_SOURCE, "Failed to load skin from memory buffer.");
     return -1;
@@ -1983,6 +2045,22 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
   const int final_width = 512;
   const int final_height = 256;
 
+  // create a smaller separate preview texture for the skin browser
+  if (out_preview_texture) {
+    int preview_width = 128;
+    int preview_height = 64;
+    unsigned char *resized_preview_pixels = malloc(preview_width * preview_height * 4);
+    if (resized_preview_pixels) {
+      stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_preview_pixels, preview_width,
+                                preview_height, 0, STBIR_RGBA);
+      *out_preview_texture =
+          renderer_create_texture_from_rgba(h, resized_preview_pixels, preview_width, preview_height);
+      free(resized_preview_pixels);
+    } else {
+      log_error(LOG_SOURCE, "Failed to allocate memory for skin preview resize.");
+    }
+  }
+
   if (tex_width != final_width || tex_height != final_height) {
     stbi_uc *resized_pixels = malloc(final_width * final_height * 4);
     if (!resized_pixels) {
@@ -1991,7 +2069,7 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
       return -1;
     }
     stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_pixels, final_width, final_height, 0,
-                              4);
+                              STBIR_RGBA);
     used_pixels = resized_pixels; // from now on, use the resized pixels
   }
 
@@ -1999,6 +2077,13 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
   int layer = skin_manager_alloc_layer(r);
   if (layer < 0) {
     log_error(LOG_SOURCE, "No free skin layers available (max %d reached).", MAX_SKINS);
+
+    if (out_preview_texture && *out_preview_texture) {
+      // clean up the preview texture if we can't get a main skin slot
+      renderer_destroy_texture(h, *out_preview_texture);
+      *out_preview_texture = NULL;
+    }
+
     if (used_pixels != pixels)
       free(used_pixels);
     stbi_image_free(pixels);
@@ -2078,17 +2163,20 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
   return layer; // return usable skin index
 }
 
-int renderer_load_skin_from_file(gfx_handler_t *h, const char *path) {
+int renderer_load_skin_from_file(gfx_handler_t *h, const char *path, texture_t **out_preview_texture) {
   FILE *f = fopen(path, "rb");
-  if (!f)
+  if (!f) {
+    if (out_preview_texture)
+      *out_preview_texture = NULL;
     return -1;
+  }
   fseek(f, 0, SEEK_END);
   size_t size = ftell(f);
   fseek(f, 0, SEEK_SET);
   unsigned char *buffer = malloc(size);
   fread(buffer, size, 1, f);
   fclose(f);
-  int id = renderer_load_skin_from_memory(h, buffer, size);
+  int id = renderer_load_skin_from_memory(h, buffer, size, out_preview_texture);
   free(buffer);
   if (id >= 0) {
     // Store path for saving later

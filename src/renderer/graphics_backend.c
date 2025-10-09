@@ -196,9 +196,9 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->entities_array = renderer_create_texture_array_from_atlas(handler, entities_atlas, 64, 64, 16, 16);
   handler->entities_atlas = entities_atlas;
 
-  handler->default_skin = renderer_load_skin_from_file(handler, "data/textures/default.png");
-  handler->x_ninja_skin = renderer_load_skin_from_file(handler, "data/textures/x_ninja.png");
-  handler->x_spec_skin = renderer_load_skin_from_file(handler, "data/textures/x_spec.png");
+  handler->default_skin = renderer_load_skin_from_file(handler, "data/textures/default.png", NULL);
+  handler->x_ninja_skin = renderer_load_skin_from_file(handler, "data/textures/x_ninja.png", NULL);
+  handler->x_spec_skin = renderer_load_skin_from_file(handler, "data/textures/x_spec.png", NULL);
   if (handler->default_skin == -1) {
     log_error(
         LOG_SOURCE,

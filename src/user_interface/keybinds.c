@@ -55,6 +55,7 @@ const char *keybind_get_combo_string(const key_combo_t *combo) {
 
 void keybinds_init(keybind_manager_t *manager) {
   memset(manager, 0, sizeof(keybind_manager_t));
+  manager->show_settings_window = false;
 
   // Playback
   manager->bindings[ACTION_PLAY_PAUSE] =
@@ -170,7 +171,7 @@ static void render_keybind_button(keybind_manager_t *manager, action_t action_id
 
   const char *button_label;
   if (manager->is_waiting_for_input && manager->action_to_rebind == action_id) {
-    button_label = "[ Press a key... ]";
+    button_label = "[ waiting ]";
   } else {
     button_label = keybind_get_combo_string(&binding->combo);
   }
@@ -178,7 +179,6 @@ static void render_keybind_button(keybind_manager_t *manager, action_t action_id
   if (igButton(button_label, (ImVec2){160.0f, 0})) {
     manager->is_waiting_for_input = true;
     manager->action_to_rebind = action_id;
-    igOpenPopup_Str("RebindKeyPopup", 0);
   }
 
   igSameLine(0, 6.0f);
@@ -198,6 +198,8 @@ void keybinds_render_settings_window(keybind_manager_t *manager) {
 
     igSetNextWindowPos((ImVec2){igGetIO_Nil()->DisplaySize.x * 0.5f, igGetIO_Nil()->DisplaySize.y * 0.5f},
                        ImGuiCond_Appearing, (ImVec2){0.5f, 0.5f});
+    if (manager->is_waiting_for_input)
+      igOpenPopup_Str("RebindKeyPopup", ImGuiPopupFlags_AnyPopupLevel);
 
     if (igBeginPopupModal("RebindKeyPopup", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
       igText("Press any key combination to bind to '%s'", manager->bindings[manager->action_to_rebind].name);

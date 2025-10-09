@@ -243,7 +243,7 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
     }
 
     int loaded_id =
-        renderer_load_skin_from_memory(ui->gfx_handler, texture_data, skin_header.texture_data_size);
+        renderer_load_skin_from_memory(ui->gfx_handler, texture_data, skin_header.texture_data_size, NULL);
     free(texture_data);
 
     if (loaded_id >= 0) {

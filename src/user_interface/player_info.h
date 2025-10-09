@@ -2,6 +2,7 @@
 #define PLAYER_INFO_H
 
 #include "../renderer/renderer.h"
+#include "cimgui.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -17,6 +18,8 @@ typedef struct {
 typedef struct {
   char name[32];
   int id;
+  texture_t *preview_texture_res;
+  ImTextureRef *preview_texture;
 } skin_info_t;
 
 typedef struct {
@@ -25,9 +28,9 @@ typedef struct {
 } skin_manager_t;
 
 void render_player_info(struct gfx_handler_t *h);
-void render_skin_manager(gfx_handler_t *h);
 
 void skin_manager_init(skin_manager_t *m);
 int skin_manager_add(skin_manager_t *m, const skin_info_t *skin);
+int skin_manager_remove(skin_manager_t *m, struct gfx_handler_t *h, int index);
 void skin_manager_free(skin_manager_t *m);
 #endif // PLAYER_INFO_H

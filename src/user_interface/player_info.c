@@ -1,11 +1,8 @@
 #include "player_info.h"
-#include "../logger/logger.h"
 #include "../renderer/graphics_backend.h"
 #include "cimgui.h"
-#include "nfd.h"
 #include "timeline.h"
 #include "widgets/hsl_colorpicker.h"
-#include <stdio.h>
 #include <string.h>
 
 static const char *LOG_SOURCE = "SkinManager";
@@ -42,7 +39,9 @@ void skin_manager_init(skin_manager_t *m) {
 void skin_manager_free(skin_manager_t *m) {
   if (!m)
     return;
-  free(m->skins);
+  if (m->skins) {
+    free(m->skins);
+  }
   m->skins = NULL;
   m->num_skins = 0;
 }
@@ -60,9 +59,17 @@ int skin_manager_add(skin_manager_t *m, const skin_info_t *skin) {
   return 0;
 }
 
-int skin_manager_remove(skin_manager_t *m, int index) {
-  if (!m || index < 0 || index >= m->num_skins)
+int skin_manager_remove(skin_manager_t *m, gfx_handler_t *h, int index) {
+  if (!m || !h || index < 0 || index >= m->num_skins)
     return -1;
+
+  // Unload from renderer and destroy preview
+  renderer_unload_skin(h, m->skins[index].id);
+  if (m->skins[index].preview_texture_res) {
+    // The ImTextureID associated with this doesn't need manual cleanup,
+    // ImGui's Vulkan backend handles it when the texture is destroyed.
+    renderer_destroy_texture(h, m->skins[index].preview_texture_res);
+  }
   // shift elements down
   for (int i = index; i < m->num_skins - 1; i++) {
     m->skins[i] = m->skins[i + 1];
@@ -71,83 +78,8 @@ int skin_manager_remove(skin_manager_t *m, int index) {
   if (m->num_skins == 0) {
     free(m->skins);
     m->skins = NULL;
-    return 0;
+  } else {
+    m->skins = realloc(m->skins, m->num_skins * sizeof(skin_info_t));
   }
-  skin_info_t *new_skins = realloc(m->skins, m->num_skins * sizeof(skin_info_t));
-  if (!new_skins) {
-    // keep old pointer. memory is still valid
-    return -1;
-  }
-  m->skins = new_skins;
   return 0;
-}
-
-void render_skin_manager(gfx_handler_t *h) {
-  timeline_state_t *t = &h->user_interface.timeline;
-  skin_manager_t *m = &h->user_interface.skin_manager;
-  igBegin("Skin manager", &h->user_interface.show_skin_manager, 0);
-  for (int i = 0; i < m->num_skins; i++) {
-    igPushID_Int(i);
-    char buf[70];
-    snprintf(buf, 70, "%d : %s", m->skins[i].id, m->skins[i].name);
-
-    // Selectable only
-    igSetNextItemAllowOverlap();
-    if (igSelectable_Bool(buf, false, ImGuiSelectableFlags_AllowDoubleClick, (ImVec2){0, 0})) {
-      if (t->selected_player_track_index >= 0)
-        t->player_tracks[t->selected_player_track_index].player_info.skin = m->skins[i].id;
-    }
-
-    // TODO: WE CANT DELETE SKINS RIGHT NOW PLS FIX XDDDDDDDDDDD
-    // ImVec2 vMin;
-    // igGetContentRegionAvail(&vMin);
-    // igSameLine(vMin.x - 20.f, -1.0f); // shift right
-    // if (igSmallButton("X")) {
-    //   skin_manager_remove(m, i);
-    //   h->renderer.skin_manager.layer_used[m->skins[i].id] = false;
-    // }
-    igPopID();
-  }
-
-  if (igButton("Load Skin", (ImVec2){})) {
-    nfdu8filteritem_t filters[] = {{"skin files", "png"}};
-    nfdopendialogu8args_t args = {0};
-    args.filterList = filters;
-    args.filterCount = 1;
-    nfdpathset_t *path_set;
-    nfdresult_t result = NFD_OpenDialogMultipleU8_With(&path_set, &args);
-    if (result == NFD_OKAY) {
-      nfdpathsetsize_t size;
-      nfdresult_t r = NFD_PathSet_GetCount(path_set, &size);
-      if (r == NFD_OKAY)
-        for (size_t i = 0; i < size; ++i) {
-          nfdchar_t *path;
-          NFD_PathSet_GetPathU8(path_set, i, &path);
-          skin_info_t info = {};
-          info.id = renderer_load_skin_from_file(h, path);
-          if (info.id >= 0) {
-            const char *skin_name = path;
-            const char *forward_sep = strrchr(path, '/');
-            const char *backward_sep = strrchr(path, '\\');
-            const char *separator = forward_sep;
-            if (!separator || (backward_sep && backward_sep > separator)) {
-              separator = backward_sep;
-            }
-            if (separator) {
-              skin_name = separator + 1;
-            }
-            int len = (int)strlen(skin_name);
-            memcpy(info.name, skin_name, imin(len, 32));
-            // does a copy
-            skin_manager_add(m, &info);
-          }
-        }
-      NFD_PathSet_Free(path_set);
-    } else if (result == NFD_CANCEL) {
-      log_warn(LOG_SOURCE, "Skin loading dialog was canceled by the user.");
-    } else {
-      log_error(LOG_SOURCE, "File dialog error: %s", NFD_GetError());
-    }
-  }
-  igEnd();
 }
