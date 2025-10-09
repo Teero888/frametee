@@ -2155,6 +2155,9 @@ void render_timeline(ui_handler_t *ui) {
   // Handle held-down keys that affect playback
   bool reverse = false;
   if (!igIsAnyItemActive()) {
+    if (is_key_combo_pressed(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo, false)) {
+      ts->last_update_time = igGetTime();
+    }
     reverse = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo);
     if (reverse) {
       ts->playback_speed *= 2.f;

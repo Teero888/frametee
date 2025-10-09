@@ -4,7 +4,7 @@
 #include <string.h>
 
 // check if a key combination is pressed for single-press actions
-static bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
+bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
   if (combo->key == ImGuiKey_None)
     return false;
 

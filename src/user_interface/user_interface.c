@@ -310,7 +310,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
 
   ui->gfx_handler = gfx_handler;
   ui->show_timeline = true;
-  ui->show_prediction = false;
+  ui->show_prediction = true;
   ui->prediction_length = 100;
   timeline_init(&ui->timeline);
   camera_init(&gfx_handler->renderer.camera);
@@ -601,7 +601,7 @@ void render_players(ui_handler_t *ui) {
 
         float recoil = 0.0f;
         float a = attack_ticks_passed / 5.0f;
-        if (a < 1.0f)
+        if (attack_ticks_passed > 0 && a < 1.0f)
           recoil = sinf(a * M_PI);
 
         weapon_pos[0] += dir[0] * (spec->offsetx - recoil * 10.0f);
@@ -613,7 +613,7 @@ void render_players(ui_handler_t *ui) {
 
         if ((core->m_ActiveWeapon == WEAPON_GUN || core->m_ActiveWeapon == WEAPON_SHOTGUN) &&
             spec->num_muzzles > 0) {
-          if (attack_ticks_passed < spec->muzzleduration + 3.0f) {
+          if (attack_ticks_passed > 0 && attack_ticks_passed < spec->muzzleduration + 3.0f) {
             int muzzle_idx = world.m_GameTick % spec->num_muzzles;
             vec2 muzzle_dir_y = {-dir[1], dir[0]};
             float offset_y = -spec->muzzleoffsety * flip_factor;

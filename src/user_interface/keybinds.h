@@ -64,5 +64,6 @@ void keybinds_process_inputs(ui_handler_t *ui);
 void keybinds_render_settings_window(keybind_manager_t *manager);
 const char *keybind_get_combo_string(const key_combo_t *combo);
 
+bool is_key_combo_pressed(const key_combo_t *combo, bool repeat);
 bool is_key_combo_down(const key_combo_t *combo);
 #endif // KEYBINDS_H
