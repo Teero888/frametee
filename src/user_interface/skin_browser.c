@@ -16,7 +16,7 @@ static bool g_do_not_ask_again = false;
 void render_skin_browser(gfx_handler_t *h) {
   timeline_state_t *t = &h->user_interface.timeline;
   skin_manager_t *m = &h->user_interface.skin_manager;
-  igBegin("Skin Browser", &h->user_interface.show_skin_manager, 0);
+  igBegin("Skin Browser", &h->user_interface.show_skin_browser, 0);
 
   if (igButton("Load Skin...", (ImVec2){-1, 0})) {
     nfdu8filteritem_t filters[] = {{"Skin Files", "png"}};

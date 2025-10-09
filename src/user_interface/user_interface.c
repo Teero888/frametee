@@ -8,6 +8,7 @@
 #include "../system/save.h"
 #include "cglm/vec2.h"
 #include "cimgui.h"
+#include "gamecore.h"
 #include "player_info.h"
 #include "skin_browser.h"
 #include "snippet_editor.h"
@@ -90,7 +91,7 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
       igMenuItem_BoolPtr("Keybind Settings", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
-      igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_manager, true);
+      igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_browser, true);
       igEndMenu();
     }
 
@@ -158,6 +159,7 @@ void setup_docking(ui_handler_t *ui) {
 
     igDockBuilderDockWindow("viewport", dock_id_center);
     igDockBuilderDockWindow("Keybind Settings", dock_id_center);
+    igDockBuilderDockWindow("Skin Browser", dock_id_center);
 
     igDockBuilderDockWindow("Timeline", dock_id_bottom);
 
@@ -315,7 +317,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->show_timeline = true;
   ui->show_prediction = true;
   ui->prediction_length = 100;
-  ui->show_skin_manager = true;
+  ui->show_skin_browser = false;
   timeline_init(&ui->timeline);
   camera_init(&gfx_handler->renderer.camera);
   keybinds_init(&ui->keybinds);
@@ -727,42 +729,48 @@ void render_players(ui_handler_t *ui) {
       ui->weapons[i] = p->m_aWeaponGot[i];
   }
 
-  if (ui->timeline.selected_player_track_index >= 0 && ui->show_prediction) {
-    for (int p = 0; p < world.m_NumCharacters; ++p) {
-      SCharacterCore *core = &world.m_pCharacters[ui->timeline.selected_player_track_index];
-      vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
-      vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-      vec2 p;
-      lerp(ppp, pp, intra, p);
+  if (ui->timeline.selected_player_track_index < 0 || !ui->show_prediction) {
+    wc_free(&world);
+    return;
+  }
 
+  // draw the first line
+  for (int i = 0; i < world.m_NumCharacters; ++i) {
+    SCharacterCore *core = &world.m_pCharacters[i];
+    vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+    vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+    vec2 p;
+    lerp(ppp, pp, intra, p);
+
+    vec4 color = {[3] = 0.8f};
+    if (core->m_FreezeTime > 0)
+      color[0] = 1.f;
+    else
+      color[1] = 1.f;
+    renderer_draw_line(gfx, pp, p, color, 0.05);
+  }
+
+  // draw the rest of the lines
+  for (int t = 0; t < ui->prediction_length; ++t) {
+    for (int i = 0; i < world.m_NumCharacters; ++i) {
+      SPlayerInput input = ui->timeline.recording && i == ui->timeline.selected_player_track_index &&
+                                   i >= ui->timeline.recording_snippets.snippets[0]->end_tick
+                               ? ui->timeline.recording_input
+                               : get_input(&ui->timeline, i, world.m_GameTick);
+      cc_on_input(&world.m_pCharacters[i], &input);
+    }
+    wc_tick(&world);
+
+    for (int i = 0; i < world.m_NumCharacters; ++i) {
+      SCharacterCore *core = &world.m_pCharacters[i];
+      vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+      vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
       vec4 color = {[3] = 0.8f};
       if (core->m_FreezeTime > 0)
         color[0] = 1.f;
       else
         color[1] = 1.f;
       renderer_draw_line(gfx, pp, p, color, 0.05);
-    }
-
-    for (int i = 0; i < ui->prediction_length; ++i) {
-      for (int p = 0; p < world.m_NumCharacters; ++p) {
-        SPlayerInput input = ui->timeline.recording && p == ui->timeline.selected_player_track_index
-                                 ? ui->timeline.recording_input
-                                 : get_input(&ui->timeline, p, world.m_GameTick);
-        cc_on_input(&world.m_pCharacters[p], &input);
-      }
-      wc_tick(&world);
-
-      for (int p = 0; p < world.m_NumCharacters; ++p) {
-        SCharacterCore *core = &world.m_pCharacters[ui->timeline.selected_player_track_index];
-        vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
-        vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-        vec4 color = {[3] = 0.8f};
-        if (core->m_FreezeTime > 0)
-          color[0] = 1.f;
-        else
-          color[1] = 1.f;
-        renderer_draw_line(gfx, pp, p, color, 0.05);
-      }
     }
   }
   wc_free(&world);
@@ -803,7 +811,7 @@ void ui_render(ui_handler_t *ui) {
       render_player_info(ui->gfx_handler);
   }
   keybinds_render_settings_window(&ui->keybinds);
-  if (ui->show_skin_manager)
+  if (ui->show_skin_browser)
     render_skin_browser(ui->gfx_handler);
 }
 

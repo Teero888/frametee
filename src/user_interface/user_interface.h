@@ -22,7 +22,7 @@ typedef struct ui_handler {
   bool show_prediction;
   int prediction_length; // TODO: make proper ui for this setting
 
-  bool show_skin_manager;
+  bool show_skin_browser;
 
   int pos_x, pos_y;
   float vel_x, vel_y, vel_m, vel_r;
