@@ -665,7 +665,7 @@ static void clear_selection(timeline_state_t *ts) {
   ts->selected_player_track_index = -1;
 }
 
-static void add_snippet_to_selection(timeline_state_t *ts, int snippet_id, int track_index) {
+void add_snippet_to_selection(timeline_state_t *ts, int snippet_id, int track_index) {
   if (snippet_id < 0)
     return;
   if (is_snippet_selected(ts, snippet_id))

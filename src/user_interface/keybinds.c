@@ -63,13 +63,13 @@ void keybinds_init(keybind_manager_t *manager) {
   manager->bindings[ACTION_REWIND_HOLD] =
       (keybind_t){"Rewind (Hold)", "Playback", {ImGuiKey_C, false, false, false}};
   manager->bindings[ACTION_PREV_FRAME] =
-      (keybind_t){"Previous Frame", "Playback", {ImGuiKey_LeftArrow, false, false, false}};
+      (keybind_t){"Previous Frame", "Playback", {ImGuiKey_MouseX1, false, false, false}};
   manager->bindings[ACTION_NEXT_FRAME] =
-      (keybind_t){"Next Frame", "Playback", {ImGuiKey_RightArrow, false, false, false}};
+      (keybind_t){"Next Frame", "Playback", {ImGuiKey_MouseX2, false, false, false}};
 
   // Timeline Editing
-  manager->bindings[ACTION_ADD_SNIPPET] =
-      (keybind_t){"Add Snippet", "Timeline", {ImGuiKey_A, true, false, false}};
+  manager->bindings[ACTION_SELECT_ALL] =
+      (keybind_t){"Select all Snippets", "Timeline", {ImGuiKey_A, true, false, false}};
   manager->bindings[ACTION_DELETE_SNIPPET] =
       (keybind_t){"Delete Snippet", "Timeline", {ImGuiKey_D, true, false, false}};
   manager->bindings[ACTION_SPLIT_SNIPPET] =
@@ -119,8 +119,16 @@ void keybinds_process_inputs(ui_handler_t *ui) {
     }
   }
 
-  if (is_key_combo_pressed(&kb->bindings[ACTION_ADD_SNIPPET].combo, false))
-    cmd = do_add_snippet(ui);
+  if (is_key_combo_pressed(&kb->bindings[ACTION_SELECT_ALL].combo, false)) {
+    ts->selected_snippets.count = 0;
+    ts->selected_snippet_id = -1;
+    ts->selected_player_track_index = -1;
+    for (int i = 0; i < ts->player_track_count; i++) {
+      for (int j = 0; j < ts->player_tracks[i].snippet_count; j++) {
+        add_snippet_to_selection(ts, ts->player_tracks[i].snippets[j].id, i);
+      }
+    }
+  }
   if (is_key_combo_pressed(&kb->bindings[ACTION_DELETE_SNIPPET].combo, false))
     cmd = do_delete_selected_snippets(ui);
   if (is_key_combo_pressed(&kb->bindings[ACTION_SPLIT_SNIPPET].combo, false))
