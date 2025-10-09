@@ -104,6 +104,7 @@ int get_max_timeline_tick(timeline_state_t *ts);
 void recalc_ts(timeline_state_t *ts, int tick);
 void process_global_shortcuts(ui_handler_t *ui);
 void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet);
+void timeline_switch_recording_target(timeline_state_t *ts, int new_track_index);
 
 void render_timeline(ui_handler_t *ui);
 void timeline_init(timeline_state_t *ts);

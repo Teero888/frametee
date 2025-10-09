@@ -1188,12 +1188,13 @@ void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx) {
   }
 
   ts->recording_input.m_Fire = igIsMouseDown_Nil(ImGuiMouseButton_Left);
-  ts->recording_input.m_WantedWeapon = igIsKeyDown_Nil(ImGuiKey_1)   ? 0
-                                       : igIsKeyDown_Nil(ImGuiKey_2) ? 1
-                                       : igIsKeyDown_Nil(ImGuiKey_3) ? 2
-                                       : igIsKeyDown_Nil(ImGuiKey_4) ? 3
-                                       : igIsKeyDown_Nil(ImGuiKey_5) ? 4
-                                                                     : ts->recording_input.m_WantedWeapon;
+  if (!igGetIO_Nil()->KeyAlt)
+    ts->recording_input.m_WantedWeapon = igIsKeyDown_Nil(ImGuiKey_1)   ? 0
+                                         : igIsKeyDown_Nil(ImGuiKey_2) ? 1
+                                         : igIsKeyDown_Nil(ImGuiKey_3) ? 2
+                                         : igIsKeyDown_Nil(ImGuiKey_4) ? 3
+                                         : igIsKeyDown_Nil(ImGuiKey_5) ? 4
+                                                                       : ts->recording_input.m_WantedWeapon;
 }
 
 SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick) {
@@ -1257,13 +1258,6 @@ void advance_tick(timeline_state_t *ts, int steps) {
   if (ts->recording && ts->recording_snippets.count > 0) {
     for (int i = 0; i < ts->recording_snippets.count; i++) {
       input_snippet_t *snippet = ts->recording_snippets.snippets[i];
-
-      // Ensure we don't record backwards over the start of a snippet
-      if (ts->current_tick < snippet->start_tick) {
-        // Prevent playhead from moving before the recording start
-        ts->current_tick = snippet->start_tick;
-        continue;
-      }
 
       // If playhead is past the end, extend the snippet
       if (ts->current_tick > snippet->end_tick) {
@@ -2129,33 +2123,88 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
   ImDrawList_PopClipRect(overlay_draw_list); // Don't forget to pop the clip rect!
 }
 
+static void handle_recording_trim_key(timeline_state_t *ts) {
+  if (!ts->recording || !igIsKeyPressed_Bool(ImGuiKey_F, false)) {
+    return;
+  }
+
+  int count = ts->recording_snippets.count;
+  if (count == 0)
+    return;
+
+  input_snippet_t **snippets_to_process = malloc(count * sizeof(input_snippet_t *));
+  if (!snippets_to_process)
+    return; // Malloc failed
+  memcpy(snippets_to_process, ts->recording_snippets.snippets, count * sizeof(input_snippet_t *));
+
+  recording_snippet_vector_clear(&ts->recording_snippets);
+
+  for (int i = 0; i < count; i++) {
+    input_snippet_t *snippet = snippets_to_process[i];
+
+    player_track_t *track = NULL;
+    for (int ti = 0; ti < ts->player_track_count; ti++) {
+      if (find_snippet_by_id(&ts->player_tracks[ti], snippet->id)) {
+        track = &ts->player_tracks[ti];
+        break;
+      }
+    }
+    if (!track)
+      continue;
+
+    if (ts->current_tick < snippet->start_tick) {
+      // delete old snippet and create new
+      int snippet_id_to_delete = snippet->id;
+      remove_snippet_from_track(ts, track, snippet_id_to_delete);
+
+      int safe_start_tick = ts->current_tick;
+      for (int j = 0; j < track->snippet_count; j++) {
+        input_snippet_t *other = &track->snippets[j];
+        if (safe_start_tick >= other->start_tick && safe_start_tick < other->end_tick) {
+          safe_start_tick = other->end_tick;
+        }
+      }
+
+      ts->current_tick = safe_start_tick;
+      input_snippet_t new_snip = create_empty_snippet(ts, ts->current_tick, 1);
+      add_snippet_to_track(track, &new_snip);
+      recording_snippet_vector_add(&ts->recording_snippets, &track->snippets[track->snippet_count - 1]);
+    } else {
+      // just trim the snippet
+      recording_snippet_vector_add(&ts->recording_snippets, snippet);
+      if (ts->current_tick > snippet->start_tick && ts->current_tick < snippet->end_tick) {
+        int new_duration = ts->current_tick - snippet->start_tick;
+        resize_snippet_inputs(ts, snippet, new_duration);
+        recalc_ts(ts, snippet->start_tick); // ensure physics are updated
+      }
+    }
+  }
+  free(snippets_to_process);
+}
+
 // main render function
 void render_timeline(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   ImGuiIO *io = igGetIO_Nil();
   ts->playback_speed = ts->gui_playback_speed;
 
-  if (ts->recording && igIsKeyPressed_Bool(ImGuiKey_F, false)) {
-    for (int i = 0; i < ts->recording_snippets.count; i++) {
-      input_snippet_t *snippet = ts->recording_snippets.snippets[i];
-      if (ts->current_tick >= snippet->start_tick) {
-        resize_snippet_inputs(ts, snippet, (ts->current_tick - snippet->start_tick) + 1);
-      }
-    }
-  }
-  bool reverse = igIsKeyDown_Nil(ImGuiKey_C);
-  if (reverse)
-    ts->playback_speed *= 2.f;
+  bool reverse = 0;
+  if (!igIsAnyItemActive()) { // prevent shortcuts while typing in a text field
+    handle_recording_trim_key(ts);
+    reverse = igIsKeyDown_Nil(ImGuiKey_C);
+    if (reverse)
+      ts->playback_speed *= 2.f;
 
-  if (igIsKeyPressed_Bool(ImGuiKey_C, false)) {
-    ts->is_playing = 0;
-    ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
-  }
-
-  if (igIsKeyPressed_Bool(ImGuiKey_X, ImGuiInputFlags_Repeat)) {
-    ts->is_playing ^= 1;
-    if (ts->is_playing) {
+    if (igIsKeyPressed_Bool(ImGuiKey_C, false)) {
+      ts->is_playing = 0;
       ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
+    }
+
+    if (igIsKeyPressed_Bool(ImGuiKey_X, ImGuiInputFlags_Repeat)) {
+      ts->is_playing ^= 1;
+      if (ts->is_playing) {
+        ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
+      }
     }
   }
 
@@ -2168,59 +2217,49 @@ void render_timeline(ui_handler_t *ui) {
 
     // checks for multi-snippet recording
     if (ts->recording && ts->recording_snippets.count > 0) {
-      if (reverse) {
-        // Don't play in reverse behind ANY of the recording snippets' start points.
-        for (int i = 0; i < ts->recording_snippets.count; i++) {
-          if (ts->current_tick < ts->recording_snippets.snippets[i]->start_tick) {
-            record = false;
+      // Don't record over any other snippets.
+      bool overlap_found = false;
+      // For each snippet we are actively recording...
+      for (int i = 0; i < ts->recording_snippets.count; i++) {
+        input_snippet_t *rec_snip = ts->recording_snippets.snippets[i];
+
+        // Find its track
+        player_track_t *parent_track = NULL;
+        for (int ti = 0; ti < ts->player_track_count; ti++) {
+          if (find_snippet_by_id(&ts->player_tracks[ti], rec_snip->id)) {
+            parent_track = &ts->player_tracks[ti];
             break;
           }
         }
-      } else {
-        // Don't record over any other snippets.
-        bool overlap_found = false;
-        // For each snippet we are actively recording...
-        for (int i = 0; i < ts->recording_snippets.count; i++) {
-          input_snippet_t *rec_snip = ts->recording_snippets.snippets[i];
 
-          // Find its track
-          player_track_t *parent_track = NULL;
-          for (int ti = 0; ti < ts->player_track_count; ti++) {
-            if (find_snippet_by_id(&ts->player_tracks[ti], rec_snip->id)) {
-              parent_track = &ts->player_tracks[ti];
-              break;
-            }
-          }
+        if (parent_track) {
+          // Check for collision on its track with any other snippet...
+          for (int j = 0; j < parent_track->snippet_count; j++) {
+            input_snippet_t *other = &parent_track->snippets[j];
 
-          if (parent_track) {
-            // Check for collision on its track with any other snippet...
-            for (int j = 0; j < parent_track->snippet_count; j++) {
-              input_snippet_t *other = &parent_track->snippets[j];
-
-              // that isn't also being recorded.
-              bool is_also_recording = false;
-              for (int k = 0; k < ts->recording_snippets.count; k++) {
-                if (other->id == ts->recording_snippets.snippets[k]->id) {
-                  is_also_recording = true;
-                  break;
-                }
-              }
-              if (is_also_recording)
-                continue;
-
-              // Now perform the overlap check at the current playhead position
-              if (ts->current_tick < other->end_tick && (ts->current_tick + 1) > other->start_tick) {
-                overlap_found = true;
+            // that isn't also being recorded.
+            bool is_also_recording = false;
+            for (int k = 0; k < ts->recording_snippets.count; k++) {
+              if (other->id == ts->recording_snippets.snippets[k]->id) {
+                is_also_recording = true;
                 break;
               }
             }
+            if (is_also_recording)
+              continue;
+
+            // Now perform the overlap check at the current playhead position
+            if (ts->current_tick < other->end_tick && (ts->current_tick + 1) > other->start_tick) {
+              overlap_found = true;
+              break;
+            }
           }
-          if (overlap_found)
-            break;
         }
-        if (overlap_found) {
-          record = false;
-        }
+        if (overlap_found)
+          break;
+      }
+      if (overlap_found) {
+        record = false;
       }
     }
 
@@ -2524,8 +2563,8 @@ void render_timeline(ui_handler_t *ui) {
             // Abort if the destination is invalid.
           } else if (is_duplicating) {
             // DUPLICATE ACTION
-            //  Create a command that stores the duplicated snippets. Its undo action will be to delete them.
-            //  We can reuse the DeleteSnippetsCommand struct and flip its function pointers.
+            //  Create a command that stores the duplicated snippets. Its undo action will be to delete
+            //  them. We can reuse the DeleteSnippetsCommand struct and flip its function pointers.
             DeleteSnippetsCommand *cmd = calloc(1, sizeof(DeleteSnippetsCommand));
             cmd->base.undo = redo_delete_snippets; // Undo is deleting
             cmd->base.redo = undo_delete_snippets; // Redo is re-adding
@@ -2941,6 +2980,40 @@ input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int d
   s.input_count = 0;
   init_snippet_inputs(&s);
   return s;
+}
+
+// switches the active recording target to a new player track.
+void timeline_switch_recording_target(timeline_state_t *ts, int new_track_index) {
+  if (!ts->recording || new_track_index < 0 || new_track_index >= ts->player_track_count) {
+    return;
+  }
+
+  recording_snippet_vector_clear(&ts->recording_snippets);
+
+  player_track_t *track = &ts->player_tracks[new_track_index];
+  input_snippet_t *target_snippet = NULL;
+
+  for (int i = 0; i < track->snippet_count; i++) {
+    if (track->snippets[i].end_tick == ts->current_tick) {
+      target_snippet = &track->snippets[i];
+      break;
+    }
+  }
+
+  if (!target_snippet) {
+    if (check_for_overlap(track, ts->current_tick, ts->current_tick + 1, -1)) {
+      ts->recording = false;
+      return;
+    }
+
+    input_snippet_t new_snip = create_empty_snippet(ts, ts->current_tick, 1);
+    add_snippet_to_track(track, &new_snip);
+    target_snippet = &track->snippets[track->snippet_count - 1];
+  }
+
+  if (target_snippet) {
+    recording_snippet_vector_add(&ts->recording_snippets, target_snippet);
+  }
 }
 
 void v_init(physics_v_t *t) {

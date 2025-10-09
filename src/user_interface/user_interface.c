@@ -245,10 +245,12 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
   ImGuiIO *io = igGetIO_Nil();
 
   float scroll_y = !hovered ? 0.0f : io->MouseWheel;
-  if (igIsKeyPressed_Bool(ImGuiKey_W, true))
-    scroll_y = 1.0f;
-  if (igIsKeyPressed_Bool(ImGuiKey_S, true))
-    scroll_y = -1.0f;
+  if (!igIsAnyItemActive()) { // Prevent shortcuts while typing in a text field
+    if (igIsKeyPressed_Bool(ImGuiKey_W, true))
+      scroll_y = 1.0f;
+    if (igIsKeyPressed_Bool(ImGuiKey_S, true))
+      scroll_y = -1.0f;
+  }
   if (scroll_y != 0.0f) {
     float zoom_factor = 1.0f + scroll_y * 0.1f;
     camera->zoom_wanted *= zoom_factor;
@@ -791,7 +793,18 @@ void ui_render(ui_handler_t *ui) {
                         (io->KeyShift && igIsKeyPressed_Bool(ImGuiKey_Z, false)))) {
       undo_manager_redo(&ui->undo_manager, &ui->timeline);
     }
-    process_global_shortcuts(ui); // Handle A, R, D, M shortcuts
+    process_global_shortcuts(ui);
+    // switching quickly between tracks while recording
+    if (io->KeyAlt)
+      for (int i = ImGuiKey_1; i <= ImGuiKey_9; ++i)
+        if (igIsKeyPressed_Bool(i, 0)) {
+          int new_index = imin(i - ImGuiKey_1, ui->timeline.player_track_count - 1);
+          if (ui->timeline.recording && ui->timeline.selected_player_track_index != new_index) {
+            timeline_switch_recording_target(&ui->timeline, new_index);
+          }
+          ui->timeline.selected_player_track_index = new_index;
+          break;
+        }
   }
 
   setup_docking(ui);
