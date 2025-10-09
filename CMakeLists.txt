@@ -19,6 +19,7 @@ set(SRCS
 	src/plugins/plugin_manager.c
 	src/renderer/graphics_backend.c
 	src/renderer/renderer.c
+	src/user_interface/keybinds.c
 	src/user_interface/player_info.c
 	src/user_interface/snippet_editor.c
 	src/user_interface/timeline.c

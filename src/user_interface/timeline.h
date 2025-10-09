@@ -94,6 +94,7 @@ undo_command_t *do_delete_selected_snippets(ui_handler_t *ui);
 undo_command_t *do_merge_selected_snippets(ui_handler_t *ui);
 undo_command_t *do_remove_player_track(ui_handler_t *ui, int index);
 
+void advance_tick(timeline_state_t *ts, int steps);
 input_snippet_t *find_snippet_by_id(player_track_t *track, int snippet_id);
 void free_snippet_inputs(input_snippet_t *snippet);
 player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph, int num);
@@ -102,7 +103,6 @@ input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int d
 void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx);
 int get_max_timeline_tick(timeline_state_t *ts);
 void recalc_ts(timeline_state_t *ts, int tick);
-void process_global_shortcuts(ui_handler_t *ui);
 void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet);
 void timeline_switch_recording_target(timeline_state_t *ts, int new_track_index);
 

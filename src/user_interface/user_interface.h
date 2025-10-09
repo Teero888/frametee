@@ -2,6 +2,7 @@
 #define USER_INTERFACE_H
 
 #include "../plugins/plugin_manager.h"
+#include "keybinds.h"
 #include "player_info.h"
 #include "timeline.h"
 #include "undo_redo.h"
@@ -13,6 +14,7 @@ typedef struct ui_handler {
   timeline_state_t timeline;
   struct gfx_handler_t *gfx_handler;
   skin_manager_t skin_manager;
+  keybind_manager_t keybinds;
 
   ImFont *font;
 

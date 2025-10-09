@@ -87,6 +87,7 @@ void render_menu_bar(ui_handler_t *ui) {
     // view menu
     if (igBeginMenu("View", true)) {
       igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
+      igMenuItem_BoolPtr("Keybind Settings", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_manager, true);
       igEndMenu();
@@ -313,6 +314,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->prediction_length = 100;
   timeline_init(&ui->timeline);
   camera_init(&gfx_handler->renderer.camera);
+  keybinds_init(&ui->keybinds);
   undo_manager_init(&ui->undo_manager);
   skin_manager_init(&ui->skin_manager);
   NFD_Init();
@@ -785,28 +787,7 @@ void ui_render(ui_handler_t *ui) {
   plugin_manager_update_all(&ui->plugin_manager);
 
   ImGuiIO *io = igGetIO_Nil();
-  if (!igIsAnyItemActive()) { // Prevent shortcuts while typing in a text field
-    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_Z, false)) {
-      undo_manager_undo(&ui->undo_manager, &ui->timeline);
-    }
-    if (io->KeyCtrl && (igIsKeyPressed_Bool(ImGuiKey_Y, false) ||
-                        (io->KeyShift && igIsKeyPressed_Bool(ImGuiKey_Z, false)))) {
-      undo_manager_redo(&ui->undo_manager, &ui->timeline);
-    }
-    process_global_shortcuts(ui);
-    // switching quickly between tracks while recording
-    if (io->KeyAlt)
-      for (int i = ImGuiKey_1; i <= ImGuiKey_9; ++i)
-        if (igIsKeyPressed_Bool(i, 0)) {
-          int new_index = imin(i - ImGuiKey_1, ui->timeline.player_track_count - 1);
-          if (ui->timeline.recording && ui->timeline.selected_player_track_index != new_index) {
-            timeline_switch_recording_target(&ui->timeline, new_index);
-          }
-          ui->timeline.selected_player_track_index = new_index;
-          break;
-        }
-  }
-
+  keybinds_process_inputs(ui);
   setup_docking(ui);
   if (ui->show_timeline) {
     if (!ui->timeline.ui)
@@ -817,6 +798,7 @@ void ui_render(ui_handler_t *ui) {
     if (ui->timeline.selected_player_track_index != -1)
       render_player_info(ui->gfx_handler);
   }
+  keybinds_render_settings_window(&ui->keybinds);
   if (ui->show_skin_manager)
     render_skin_manager(ui->gfx_handler);
 }

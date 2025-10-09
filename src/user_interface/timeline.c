@@ -1,6 +1,7 @@
 #include "timeline.h"
 #include "../../libs/symbols.h"
 #include "cimgui.h"
+#include "keybinds.h"
 #include "user_interface.h" // For ui_handler_t and undo_manager
 #include "widgets/imcol.h"
 #include <GLFW/glfw3.h>
@@ -1133,24 +1134,6 @@ undo_command_t *do_delete_selected_snippets(ui_handler_t *ui) {
   return &cmd->base;
 }
 
-// Global keyboard shortcuts (moved out of popup so they always work)
-void process_global_shortcuts(ui_handler_t *ui) {
-  ImGuiIO *io = igGetIO_Nil();
-  undo_command_t *cmd = NULL;
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_A, true))
-    cmd = do_add_snippet(ui);
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_R, true))
-    cmd = do_split_selected_snippets(ui);
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_D, true))
-    cmd = do_delete_selected_snippets(ui);
-  if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_M, true))
-    cmd = do_merge_selected_snippets(ui);
-
-  if (cmd) {
-    undo_manager_register_command(&ui->undo_manager, cmd);
-  }
-}
-
 undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, const int *indices, int count,
                                            const SPlayerInput *before_states,
                                            const SPlayerInput *after_states) {
@@ -1452,25 +1435,6 @@ void render_timeline_controls(timeline_state_t *ts) {
   if (igDragInt("Current Tick", &ts->current_tick, 1, 0, 100000, "%d", ImGuiSliderFlags_None)) {
     if (ts->current_tick < 0)
       ts->current_tick = 0;
-  }
-
-  if ((igIsKeyPressed_Bool(ImGuiKey_LeftArrow, true) || igIsKeyPressed_Bool(ImGuiKey_MouseX1, true)) &&
-      ts->current_tick > 0) {
-    ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
-    ts->is_playing = false;
-    advance_tick(ts, -1);
-  }
-  if (igIsKeyPressed_Bool(ImGuiKey_RightArrow, true) || igIsKeyPressed_Bool(ImGuiKey_MouseX2, true)) {
-    ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
-    ts->is_playing = false;
-    advance_tick(ts, 1);
-  }
-
-  if (igIsKeyPressed_Bool(ImGuiKey_DownArrow, true)) {
-    ts->gui_playback_speed = imax(--ts->playback_speed, 1);
-  }
-  if (igIsKeyPressed_Bool(ImGuiKey_UpArrow, true)) {
-    ++ts->gui_playback_speed;
   }
 
   igSameLine(0, 8);
@@ -2188,25 +2152,18 @@ void render_timeline(ui_handler_t *ui) {
   ImGuiIO *io = igGetIO_Nil();
   ts->playback_speed = ts->gui_playback_speed;
 
-  bool reverse = 0;
-  if (!igIsAnyItemActive()) { // prevent shortcuts while typing in a text field
-    handle_recording_trim_key(ts);
-    reverse = igIsKeyDown_Nil(ImGuiKey_C);
-    if (reverse)
+  // Handle held-down keys that affect playback
+  bool reverse = false;
+  if (!igIsAnyItemActive()) {
+    reverse = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo);
+    if (reverse) {
       ts->playback_speed *= 2.f;
-
-    if (igIsKeyPressed_Bool(ImGuiKey_C, false)) {
-      ts->is_playing = 0;
-      ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
-    }
-
-    if (igIsKeyPressed_Bool(ImGuiKey_X, ImGuiInputFlags_Repeat)) {
-      ts->is_playing ^= 1;
-      if (ts->is_playing) {
-        ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
-      }
+      ts->is_playing = false; // Rewinding is not "playing" forward
     }
   }
+
+  if (!igIsAnyItemActive())
+    handle_recording_trim_key(ts);
 
   if ((ts->is_playing || reverse) && ts->playback_speed > 0.0f) {
     double current_time = igGetTime();
