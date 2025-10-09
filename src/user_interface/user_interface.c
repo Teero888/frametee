@@ -252,9 +252,9 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
 
   float scroll_y = !hovered ? 0.0f : io->MouseWheel;
   if (!igIsAnyItemActive()) { // Prevent shortcuts while typing in a text field
-    if (igIsKeyPressed_Bool(ImGuiKey_W, true))
+    if (is_key_combo_pressed(&handler->user_interface.keybinds.bindings[ACTION_ZOOM_IN].combo, true))
       scroll_y = 1.0f;
-    if (igIsKeyPressed_Bool(ImGuiKey_S, true))
+    if (is_key_combo_pressed(&handler->user_interface.keybinds.bindings[ACTION_ZOOM_OUT].combo, true))
       scroll_y = -1.0f;
   }
   if (scroll_y != 0.0f) {
@@ -754,7 +754,7 @@ void render_players(ui_handler_t *ui) {
   for (int t = 0; t < ui->prediction_length; ++t) {
     for (int i = 0; i < world.m_NumCharacters; ++i) {
       SPlayerInput input = ui->timeline.recording && i == ui->timeline.selected_player_track_index &&
-                                   i >= ui->timeline.recording_snippets.snippets[0]->end_tick
+                                   world.m_GameTick >= ui->timeline.recording_snippets.snippets[0]->end_tick
                                ? ui->timeline.recording_input
                                : get_input(&ui->timeline, i, world.m_GameTick);
       cc_on_input(&world.m_pCharacters[i], &input);

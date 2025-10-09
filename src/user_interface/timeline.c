@@ -1,6 +1,7 @@
 #include "timeline.h"
 #include "../../libs/symbols.h"
 #include "cimgui.h"
+#include "gamecore.h"
 #include "keybinds.h"
 #include "user_interface.h" // For ui_handler_t and undo_manager
 #include "widgets/imcol.h"
@@ -1156,9 +1157,11 @@ void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx) {
   if (!ts->recording || ts->recording_snippets.count == 0)
     return;
 
-  ts->recording_input.m_Direction = igIsKeyDown_Nil(ImGuiKey_D) - igIsKeyDown_Nil(ImGuiKey_A);
-  ts->recording_input.m_Jump = igIsKeyDown_Nil(ImGuiKey_Space);
-  ts->recording_input.m_Hook = igIsMouseDown_Nil(ImGuiMouseButton_Right);
+  keybind_manager_t *k = &ts->ui->keybinds;
+  ts->recording_input.m_Direction = is_key_combo_down(&k->bindings[ACTION_RIGHT].combo) -
+                                    is_key_combo_down(&k->bindings[ACTION_LEFT].combo);
+  ts->recording_input.m_Jump = is_key_combo_down(&k->bindings[ACTION_JUMP].combo);
+  ts->recording_input.m_Hook = is_key_combo_down(&k->bindings[ACTION_HOOK].combo);
 
   ts->recording_input.m_TargetX += (int)gfx->raw_mouse.dx;
   ts->recording_input.m_TargetY += (int)gfx->raw_mouse.dy;
@@ -1170,14 +1173,17 @@ void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx) {
     ts->recording_input.m_TargetY = vgety(n) * 500.f;
   }
 
-  ts->recording_input.m_Fire = igIsMouseDown_Nil(ImGuiMouseButton_Left);
+  ts->recording_input.m_Fire = is_key_combo_down(&k->bindings[ACTION_FIRE].combo);
   if (!igGetIO_Nil()->KeyAlt)
-    ts->recording_input.m_WantedWeapon = igIsKeyDown_Nil(ImGuiKey_1)   ? 0
-                                         : igIsKeyDown_Nil(ImGuiKey_2) ? 1
-                                         : igIsKeyDown_Nil(ImGuiKey_3) ? 2
-                                         : igIsKeyDown_Nil(ImGuiKey_4) ? 3
-                                         : igIsKeyDown_Nil(ImGuiKey_5) ? 4
-                                                                       : ts->recording_input.m_WantedWeapon;
+    ts->recording_input.m_WantedWeapon = is_key_combo_down(&k->bindings[ACTION_HAMMER].combo)    ? 0
+                                         : is_key_combo_down(&k->bindings[ACTION_GUN].combo)     ? 1
+                                         : is_key_combo_down(&k->bindings[ACTION_SHOTGUN].combo) ? 2
+                                         : is_key_combo_down(&k->bindings[ACTION_GRENADE].combo) ? 3
+                                         : is_key_combo_down(&k->bindings[ACTION_LASER].combo)
+                                             ? 4
+                                             : ts->recording_input.m_WantedWeapon;
+
+  set_flag_kill(&ts->recording_input, is_key_combo_down(&k->bindings[ACTION_KILL].combo));
 }
 
 SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick) {

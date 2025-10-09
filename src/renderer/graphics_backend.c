@@ -679,8 +679,6 @@ void ayu_dark(void) {
 static int init_imgui(gfx_handler_t *handler) {
   igCreateContext(NULL);
   ImGuiIO *io = igGetIO_Nil();
-  io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io->ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
   io->ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   // io->ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   ayu_dark();
