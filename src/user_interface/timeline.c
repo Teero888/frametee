@@ -1153,6 +1153,29 @@ undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, const int *
   return &cmd->base;
 }
 
+// Finds the input for a given tick, creating a new 1-tick snippet if none exists.
+// Returns NULL on failure.
+static SPlayerInput *get_or_create_input_at_tick(timeline_state_t *ts, player_track_t *track, int tick) {
+  for (int i = 0; i < track->snippet_count; ++i) {
+    input_snippet_t *snippet = &track->snippets[i];
+    if (tick >= snippet->start_tick && tick < snippet->end_tick) {
+      return &snippet->inputs[tick - snippet->start_tick];
+    }
+  }
+  if (check_for_overlap(track, tick, tick + 1, -1)) {
+    return NULL;
+  }
+  input_snippet_t new_snip = create_empty_snippet(ts, tick, 1);
+  add_snippet_to_track(track, &new_snip);
+  if (track->snippet_count > 0) {
+    input_snippet_t *just_added = &track->snippets[track->snippet_count - 1];
+    if (just_added->input_count > 0) {
+      return &just_added->inputs[0];
+    }
+  }
+  return NULL; // should not be reached
+}
+
 void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx) {
   if (!ts->recording || ts->recording_snippets.count == 0)
     return;
@@ -1174,6 +1197,7 @@ void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx) {
   }
 
   ts->recording_input.m_Fire = is_key_combo_down(&k->bindings[ACTION_FIRE].combo);
+
   if (!igGetIO_Nil()->KeyAlt)
     ts->recording_input.m_WantedWeapon = is_key_combo_down(&k->bindings[ACTION_HAMMER].combo)    ? 0
                                          : is_key_combo_down(&k->bindings[ACTION_GUN].combo)     ? 1
@@ -1184,6 +1208,20 @@ void timeline_update_inputs(timeline_state_t *ts, gfx_handler_t *gfx) {
                                              : ts->recording_input.m_WantedWeapon;
 
   set_flag_kill(&ts->recording_input, is_key_combo_down(&k->bindings[ACTION_KILL].combo));
+
+  if (ts->dummy_copy_input) {
+    for (int i = 0; i < ts->player_track_count; ++i) {
+      if (!ts->player_tracks[i].is_dummy || i == ts->selected_player_track_index)
+        continue;
+      player_track_t *dummy_track = &ts->player_tracks[i];
+      SPlayerInput *dummy_input = get_or_create_input_at_tick(ts, dummy_track, ts->current_tick);
+      if (dummy_input)
+        *dummy_input = ts->recording_input;
+    }
+  }
+
+  if (is_key_combo_down(&k->bindings[ACTION_DUMMY_FIRE].combo))
+    timeline_trigger_dummy_fire(ts);
 }
 
 SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick) {
@@ -1878,13 +1916,6 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
 
   ImDrawList_AddRectFilled(draw_list, (ImVec2){timeline_bb.Min.x, track_top},
                            (ImVec2){timeline_bb.Max.x, track_bottom}, track_bg_col, 0.0f, ImDrawFlags_None);
-  // igSetCursorScreenPos((ImVec2){timeline_bb.Min.x, track_top});
-  // char track_button_id[32];
-  // snprintf(track_button_id, sizeof(track_button_id), "##track_bg_%d", track_index);
-  // if (igInvisibleButton(track_button_id, (ImVec2){timeline_bb.Max.x - timeline_bb.Min.x, ts->track_height},
-  //                       0)) {
-  //   ts->selected_player_track_index = track_index;
-  // }
 
   // Draw track border/separator
   ImDrawList_AddLine(draw_list, (ImVec2){timeline_bb.Min.x, track_bottom},
@@ -1897,35 +1928,12 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
                          timeline_bb);
   }
 
-  // Track label
-  // Add text offset from the left edge, vertically centered
-  char track_label[64];
-  snprintf(track_label, sizeof(track_label), "Track %d", track_index + 1);
-  ImVec2 text_size;
-  igCalcTextSize(&text_size, track_label, NULL, false, 0);
-  ImVec2 text_pos = {timeline_bb.Min.x + 10.0f, track_top + (ts->track_height - text_size.y) * 0.5f};
-  ImDrawList_AddText_Vec2(draw_list, text_pos, igGetColorU32_Col(ImGuiCol_Text, 0.7f), track_label, NULL);
-
   ImGuiIO *io = igGetIO_Nil();
   if (io->ConfigFlags & ImGuiConfigFlags_NoMouse) {
     return;
   }
 
-  if (!ts->recording && igIsMouseClicked_Bool(ImGuiMouseButton_Right, 0) &&
-      igIsMouseHoveringRect((ImVec2){timeline_bb.Min.x, track_top}, (ImVec2){timeline_bb.Max.x, track_bottom},
-                            true)) {
-    igOpenPopup_Str("RightClickMenu", 0);
-    ts->selected_player_track_index = track_index;
-  }
-
   if (!ts->recording && igBeginPopup("RightClickMenu", ImGuiPopupFlags_AnyPopupLevel)) {
-    if (igMenuItem_Bool("Add Snippet", "Ctrl+a", false, true)) {
-      undo_command_t *cmd = do_add_snippet(ts->ui);
-      if (cmd) {
-        undo_manager_register_command(&ts->ui->undo_manager, cmd);
-      }
-    }
-
     if (igMenuItem_Bool("Merge Snippets", "Ctrl+m", false, ts->selected_snippets.count > 1)) {
       undo_command_t *cmd = do_merge_selected_snippets(ts->ui);
       if (cmd) {
@@ -2256,16 +2264,20 @@ void render_timeline(ui_handler_t *ui) {
 
     // Layout Calculations for Header and Timeline Area
     float header_height = igGetTextLineHeightWithSpacing() + 15;
+    float track_header_width = 120.0f; // NEW: Width for the left-side track info panel
 
     // Calculate the available space below the controls for the header and tracks
     ImVec2 available_space_below_controls;
     igGetContentRegionAvail(&available_space_below_controls);
 
+    ImVec2 content_start_pos;
+    igGetCursorScreenPos(&content_start_pos); // Cursor after controls
+
     // Define the bounding box for the Header area (vertical space where ticks/labels go)
-    ImVec2 header_bb_min;
-    igGetCursorScreenPos(&header_bb_min); // Cursor after controls
-    ImVec2 header_bb_max = {header_bb_min.x + available_space_below_controls.x,
-                            header_bb_min.y + header_height};
+    // This now starts after the new track info panel
+    ImVec2 header_bb_min = {content_start_pos.x + track_header_width, content_start_pos.y};
+    ImVec2 header_bb_max = {content_start_pos.x + available_space_below_controls.x,
+                            content_start_pos.y + header_height};
     ImRect header_bb = {header_bb_min, header_bb_max};
 
     // Handle Mouse Interaction on Header
@@ -2301,34 +2313,39 @@ void render_timeline(ui_handler_t *ui) {
     igDummy((ImVec2){available_space_below_controls.x, header_height});
 
     // Calculate the bounding box for the Timeline Tracks area (below the header)
-    ImVec2 timeline_start_pos;
-    igGetCursorScreenPos(&timeline_start_pos); // Cursor after header
+    ImVec2 timeline_area_start_pos;
+    igGetCursorScreenPos(&timeline_area_start_pos); // Cursor after header dummy
     ImVec2 available_space_for_tracks;
     igGetContentRegionAvail(&available_space_for_tracks);
     // Reserve space for the horizontal scrollbar
     float scrollbar_height = igGetStyle()->ScrollbarSize;
     available_space_for_tracks.y -= scrollbar_height;
 
-    ImVec2 timeline_end_pos = (ImVec2){timeline_start_pos.x + available_space_for_tracks.x,
-                                       timeline_start_pos.y + available_space_for_tracks.y};
-    ImRect timeline_bb = (ImRect){timeline_start_pos, timeline_end_pos};
+    ImVec2 timeline_area_end_pos = (ImVec2){timeline_area_start_pos.x + available_space_for_tracks.x,
+                                            timeline_area_start_pos.y + available_space_for_tracks.y};
+
+    // NEW: Define separate bounding boxes for the track headers (left) and snippets (right)
+    ImRect track_headers_bb = {timeline_area_start_pos,
+                               {timeline_area_start_pos.x + track_header_width, timeline_area_end_pos.y}};
+    ImRect timeline_bb = {{timeline_area_start_pos.x + track_header_width, timeline_area_start_pos.y},
+                          timeline_area_end_pos};
 
     // Ensure timeline_bb has positive dimensions
     if (timeline_bb.Max.x > timeline_bb.Min.x && timeline_bb.Max.y > timeline_bb.Min.y) {
 
       // Handle Pan/Zoom on the entire timeline area before drawing the child window
       if (!ts->is_header_dragging) {
+        // Pan/Zoom should work on the snippet area
         handle_timeline_interaction(ts, timeline_bb);
       }
 
-      // Position and begin a child window. This provides the vertical scrollbar.
-      igSetCursorScreenPos(timeline_bb.Min);
-      ImVec2 child_size = {timeline_bb.Max.x - timeline_bb.Min.x, timeline_bb.Max.y - timeline_bb.Min.y};
+      // Position and begin a child window. This provides the vertical scrollbar for both panels.
+      igSetCursorScreenPos(timeline_area_start_pos);
+      ImVec2 child_size = {timeline_area_end_pos.x - timeline_area_start_pos.x,
+                           timeline_area_end_pos.y - timeline_area_start_pos.y};
       igBeginChild_Str("TracksArea", child_size, false, ImGuiWindowFlags_None);
 
-      // We'll use the parent window's draw list so rendering is layered correctly.
       ImDrawList *draw_list_for_tracks = igGetWindowDrawList();
-
       float tracks_area_scroll_y = igGetScrollY();
 
       // Use ImGuiListClipper for high-performance scrolling of many tracks
@@ -2336,27 +2353,63 @@ void render_timeline(ui_handler_t *ui) {
       ImGuiListClipper_Begin(clipper, ts->player_track_count, ts->track_height);
       while (ImGuiListClipper_Step(clipper)) {
         for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; i++) {
-          // Manually set the cursor position for each track. This is crucial for
-          // ensuring that mouse interactions (clicks, popups) work correctly.
-          igSetCursorPosY(i * ts->track_height);
-
-          // Get the absolute screen position for where the track will be drawn
-          ImVec2 track_screen_pos;
-          igGetCursorScreenPos(&track_screen_pos);
-
-          ImVec2 avail;
-          igGetContentRegionAvail(&avail);
-          igDummy((ImVec2){avail.x, ts->track_height});
-
           player_track_t *track = &ts->player_tracks[i];
-          float track_top = track_screen_pos.y;
-          float track_bottom = track_top + ts->track_height;
+          ImVec2 row_start_pos;
+          igGetCursorScreenPos(&row_start_pos);
+
+          // render track info panel
+          bool is_track_selected = (ts->selected_player_track_index == i);
+          bool is_dummy = track->is_dummy;
+          ImU32 header_bg_col;
+
+          if (is_dummy) {
+            // Use a distinct, dimmer color for dummy tracks
+            header_bg_col = is_track_selected ? igGetColorU32_Vec4((ImVec4){0.35f, 0.3f, 0.3f, 1.0f})
+                                              : igGetColorU32_Vec4((ImVec4){0.22f, 0.2f, 0.2f, 1.0f});
+          } else {
+            // Colors for active tracks
+            header_bg_col = is_track_selected ? igGetColorU32_Col(ImGuiCol_FrameBgHovered, 1.0f)
+                                              : igGetColorU32_Col(ImGuiCol_FrameBg, 0.8f);
+          }
+
+          ImVec2 header_rect_min = row_start_pos;
+          ImVec2 header_rect_max = {row_start_pos.x + track_header_width, row_start_pos.y + ts->track_height};
+          ImDrawList_AddRectFilled(draw_list_for_tracks, header_rect_min, header_rect_max, header_bg_col,
+                                   0.0f, 0);
+          ImDrawList_AddLine(draw_list_for_tracks, (ImVec2){header_rect_max.x, header_rect_min.y},
+                             header_rect_max, igGetColorU32_Col(ImGuiCol_Border, 0.5f), 1.0f);
 
           igPushID_Int(i);
-          // Render the track. The outer `timeline_bb` is passed for correct
-          // horizontal (tick-to-pixel) calculations.
-          render_player_track(ts, i, track, draw_list_for_tracks, timeline_bb, track_top, track_bottom);
+
+          // The entire area is a button to toggle dummy state and select the track.
+          igSetCursorScreenPos(row_start_pos);
+          char btn_id[32];
+          snprintf(btn_id, 32, "##track_header_toggle_%d", i);
+          if (igInvisibleButton(btn_id, (ImVec2){track_header_width, ts->track_height}, 0)) {
+            track->is_dummy = !track->is_dummy;
+            recalc_ts(ts, 0);
+          }
+
+          // Handle hover effect for the button
+          if (igIsItemHovered(0)) {
+            ImDrawList_AddRect(draw_list_for_tracks, header_rect_min, header_rect_max,
+                               igGetColorU32_Col(ImGuiCol_HeaderActive, 0.5f), 0.0f, 0, 1.5f);
+          }
+
+          // Draw text on top of the button, vertically centered
+          igSetCursorScreenPos((ImVec2){row_start_pos.x + 5.0f,
+                                        row_start_pos.y + (ts->track_height - igGetTextLineHeight()) * 0.5f});
+          igText("Track %d", i + 1);
+
           igPopID();
+
+          float track_top = row_start_pos.y;
+          float track_bottom = track_top + ts->track_height;
+          render_player_track(ts, i, track, draw_list_for_tracks, timeline_bb, track_top, track_bottom);
+
+          // ensure the cursor is advanced for the next row in the clipper
+          igSetCursorScreenPos(row_start_pos);
+          igDummy((ImVec2){child_size.x, ts->track_height});
         }
       }
       ImGuiListClipper_End(clipper);
@@ -2443,6 +2496,7 @@ void render_timeline(ui_handler_t *ui) {
         ImVec2 b = ts->selection_box_end;
         ImRect rect =
             (ImRect){.Min = {fminf(a.x, b.x), fminf(a.y, b.y)}, .Max = {fmaxf(a.x, b.x), fmaxf(a.y, b.y)}};
+        // The selection rect needs to be calculated relative to the snippet area
         select_snippets_in_rect(ts, rect, timeline_bb, tracks_area_scroll_y);
         ts->selection_box_active = false;
       }
@@ -2688,6 +2742,7 @@ player_track_t *add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
     player_track_t *new_track = &ts->player_tracks[old_count + i];
     new_track->snippets = NULL;
     new_track->snippet_count = 0;
+    new_track->is_dummy = false;
 
     // Reset player info
     memset(new_track->player_info.name, 0, sizeof(new_track->player_info.name));
@@ -2979,6 +3034,42 @@ void timeline_switch_recording_target(timeline_state_t *ts, int new_track_index)
 
   if (target_snippet) {
     recording_snippet_vector_add(&ts->recording_snippets, target_snippet);
+  }
+}
+
+void timeline_trigger_dummy_fire(timeline_state_t *ts) {
+  if (!ts->recording) {
+    return;
+  }
+
+  // Can't do anything if physics state is out of sync or no player is selected
+  if (ts->previous_world.m_NumCharacters != ts->player_track_count || ts->selected_player_track_index < 0) {
+    return;
+  }
+
+  SCharacterCore *rec_core = &ts->previous_world.m_pCharacters[ts->selected_player_track_index];
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    if (!ts->player_tracks[i].is_dummy || i == ts->selected_player_track_index) {
+      continue;
+    }
+
+    player_track_t *dummy_track = &ts->player_tracks[i];
+    SPlayerInput *dummy_input = get_or_create_input_at_tick(ts, dummy_track, ts->current_tick);
+
+    if (!dummy_input) {
+      continue;
+    }
+
+    SCharacterCore *dummy_core = &ts->previous_world.m_pCharacters[i];
+
+    mvec2 rec_pos = rec_core->m_Pos;
+    mvec2 dummy_pos = dummy_core->m_Pos;
+
+    mvec2 target_dir = vvsub(rec_pos, dummy_pos);
+
+    dummy_input->m_TargetX = (int)vgetx(target_dir);
+    dummy_input->m_TargetY = (int)vgety(target_dir);
+    dummy_input->m_Fire = 1;
   }
 }
 

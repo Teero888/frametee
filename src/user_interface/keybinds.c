@@ -66,6 +66,10 @@ void keybinds_init(keybind_manager_t *manager) {
       (keybind_t){"Previous Frame", "Playback", {ImGuiKey_MouseX1, false, false, false}};
   manager->bindings[ACTION_NEXT_FRAME] =
       (keybind_t){"Next Frame", "Playback", {ImGuiKey_MouseX2, false, false, false}};
+  manager->bindings[ACTION_INC_TPS] =
+      (keybind_t){"Increase TPS", "Playback", {ImGuiKey_UpArrow, false, false, false}};
+  manager->bindings[ACTION_DEC_TPS] =
+      (keybind_t){"Next Frame", "Playback", {ImGuiKey_DownArrow, false, false, false}};
 
   // Timeline Editing
   manager->bindings[ACTION_SELECT_ALL] =
@@ -80,6 +84,36 @@ void keybinds_init(keybind_manager_t *manager) {
   // General
   manager->bindings[ACTION_UNDO] = (keybind_t){"Undo", "General", {ImGuiKey_Z, true, false, false}};
   manager->bindings[ACTION_REDO] = (keybind_t){"Redo", "General", {ImGuiKey_Y, true, false, false}};
+
+  // Recording
+  manager->bindings[ACTION_LEFT] = (keybind_t){"Move Left", "Recording", {ImGuiKey_A, false, false, false}};
+  manager->bindings[ACTION_RIGHT] = (keybind_t){"Move Right", "Recording", {ImGuiKey_D, false, false, false}};
+  manager->bindings[ACTION_JUMP] = (keybind_t){"Jump", "Recording", {ImGuiKey_Space, false, false, false}};
+  manager->bindings[ACTION_KILL] = (keybind_t){"Kill", "Recording", {ImGuiKey_K, false, false, false}};
+  manager->bindings[ACTION_FIRE] =
+      (keybind_t){"Fire weapon", "Recording", {ImGuiKey_MouseLeft, false, false, false}};
+  manager->bindings[ACTION_HOOK] =
+      (keybind_t){"Hook", "Recording", {ImGuiKey_MouseRight, false, false, false}};
+  manager->bindings[ACTION_HAMMER] =
+      (keybind_t){"Switch to hammer", "Recording", {ImGuiKey_1, false, false, false}};
+  manager->bindings[ACTION_GUN] =
+      (keybind_t){"Switch to gun", "Recording", {ImGuiKey_2, false, false, false}};
+  manager->bindings[ACTION_SHOTGUN] =
+      (keybind_t){"Switch to shotgun", "Recording", {ImGuiKey_3, false, false, false}};
+  manager->bindings[ACTION_GRENADE] =
+      (keybind_t){"Switch to grenade", "Recording", {ImGuiKey_4, false, false, false}};
+  manager->bindings[ACTION_LASER] =
+      (keybind_t){"Switch to laser", "Recording", {ImGuiKey_5, false, false, false}};
+
+  // Dummy
+  manager->bindings[ACTION_DUMMY_FIRE] =
+      (keybind_t){"Dummy Fire", "Dummy", {ImGuiKey_MouseLeft, false, false, false}};
+  manager->bindings[ACTION_TOGGLE_DUMMY_COPY] =
+      (keybind_t){"Toggle dummy copy", "Dummy", {ImGuiKey_R, false, false, false}};
+
+  // Camera
+  manager->bindings[ACTION_ZOOM_IN] = (keybind_t){"Zoom in", "Camera", {ImGuiKey_W, false, false, false}};
+  manager->bindings[ACTION_ZOOM_OUT] = (keybind_t){"Zoom out", "Camera", {ImGuiKey_S, false, false, false}};
 
   // Track Switching
   manager->bindings[ACTION_SWITCH_TRACK_1] =
@@ -100,30 +134,6 @@ void keybinds_init(keybind_manager_t *manager) {
       (keybind_t){"Switch to Track 8", "Tracks", {ImGuiKey_8, false, true, false}};
   manager->bindings[ACTION_SWITCH_TRACK_9] =
       (keybind_t){"Switch to Track 9", "Tracks", {ImGuiKey_9, false, true, false}};
-
-  // Game
-  manager->bindings[ACTION_LEFT] = (keybind_t){"Move Left", "Recording", {ImGuiKey_A, false, false, false}};
-  manager->bindings[ACTION_RIGHT] = (keybind_t){"Move Right", "Recording", {ImGuiKey_D, false, false, false}};
-  manager->bindings[ACTION_JUMP] = (keybind_t){"Jump", "Recording", {ImGuiKey_Space, false, false, false}};
-  manager->bindings[ACTION_KILL] = (keybind_t){"Kill", "Recording", {ImGuiKey_K, false, false, false}};
-  manager->bindings[ACTION_FIRE] =
-      (keybind_t){"Fire weapon", "Recording", {ImGuiKey_MouseLeft, false, false, false}};
-  manager->bindings[ACTION_HOOK] =
-      (keybind_t){"Hook", "Recording", {ImGuiKey_MouseRight, false, false, false}};
-  manager->bindings[ACTION_HAMMER] =
-      (keybind_t){"Switch to hammer", "Recording", {ImGuiKey_1, false, false, false}};
-  manager->bindings[ACTION_GUN] =
-      (keybind_t){"Switch to gun", "Recording", {ImGuiKey_2, false, false, false}};
-  manager->bindings[ACTION_SHOTGUN] =
-      (keybind_t){"Switch to shotgun", "Recording", {ImGuiKey_3, false, false, false}};
-  manager->bindings[ACTION_GRENADE] =
-      (keybind_t){"Switch to grenade", "Recording", {ImGuiKey_4, false, false, false}};
-  manager->bindings[ACTION_LASER] =
-      (keybind_t){"Switch to laser", "Recording", {ImGuiKey_5, false, false, false}};
-
-  // Camera
-  manager->bindings[ACTION_ZOOM_IN] = (keybind_t){"Zoom in", "Camera", {ImGuiKey_W, false, false, false}};
-  manager->bindings[ACTION_ZOOM_OUT] = (keybind_t){"Zoom out", "Camera", {ImGuiKey_S, false, false, false}};
 }
 
 void keybinds_process_inputs(ui_handler_t *ui) {
@@ -188,7 +198,19 @@ void keybinds_process_inputs(ui_handler_t *ui) {
     ts->is_playing = false;
     advance_tick(ts, 1);
   }
+  if (is_key_combo_pressed(&kb->bindings[ACTION_INC_TPS].combo, true)) {
+    ++ts->gui_playback_speed;
+  }
+  if (is_key_combo_pressed(&kb->bindings[ACTION_DEC_TPS].combo, true)) {
+    --ts->gui_playback_speed;
+  }
+  if (is_key_combo_pressed(&kb->bindings[ACTION_REDO].combo, false))
+    undo_manager_redo(&ui->undo_manager, ts);
+
+  if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_DUMMY_COPY].combo, false))
+    ts->dummy_copy_input ^= 1;
 }
+
 static bool is_modifier_key(ImGuiKey key) {
   return key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl || key == ImGuiKey_LeftShift ||
          key == ImGuiKey_RightShift || key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt ||
@@ -264,7 +286,7 @@ void keybinds_render_settings_window(keybind_manager_t *manager) {
     igText("Click a keybind to change it, or click 'Clear' to unbind it.");
     igSeparator();
 
-    const char *categories[] = {"Playback", "Timeline", "General", "Recording", "Camera", "Tracks"};
+    const char *categories[] = {"Playback", "Timeline", "General", "Recording", "Dummy", "Camera", "Tracks"};
     int num_categories = sizeof(categories) / sizeof(categories[0]);
 
     for (int cat_idx = 0; cat_idx < num_categories; ++cat_idx) {

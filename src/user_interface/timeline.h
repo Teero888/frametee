@@ -29,6 +29,7 @@ typedef struct {
   input_snippet_t *snippets; // Dynamic array of snippets
   int snippet_count;
   player_info_t player_info;
+  bool is_dummy;
 } player_track_t;
 
 // state for managing snippet dragging
@@ -80,7 +81,9 @@ struct timeline_state {
   bool auto_scroll_playhead;
   bool recording;
   recording_snippet_vector_t recording_snippets;
+
   SPlayerInput recording_input;
+  bool dummy_copy_input;
 
   physics_v_t vec;
   SWorldCore previous_world;
@@ -106,6 +109,7 @@ void recalc_ts(timeline_state_t *ts, int tick);
 void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet);
 void timeline_switch_recording_target(timeline_state_t *ts, int new_track_index);
 void add_snippet_to_selection(timeline_state_t *ts, int snippet_id, int track_index);
+void timeline_trigger_dummy_fire(timeline_state_t *ts);
 
 void render_timeline(ui_handler_t *ui);
 void timeline_init(timeline_state_t *ts);
