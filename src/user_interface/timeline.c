@@ -16,7 +16,8 @@
 #define MIN_TIMELINE_ZOOM 0.05f
 #define MAX_TIMELINE_ZOOM 20.0f
 #define SNAP_THRESHOLD_PX 5.0f // Snap threshold in pixels
-#define DEFAULT_TRACK_HEIGHT 40.f
+#define DEFAULT_TRACK_HEIGHT 60.f
+#define MAX_SNIPPET_LAYERS 8
 
 #include "../renderer/graphics_backend.h"
 
@@ -65,24 +66,78 @@ static void redo_edit_inputs(undo_command_t *cmd, timeline_state_t *ts) {
   apply_input_states(ts, c->snippet_id, c->count, c->indices, c->after);
 }
 
-// checks if a snippet range overlaps with any snippets in a track (excluding one)
-bool check_for_overlap(const player_track_t *track, int start_tick, int end_tick, int exclude_snippet_id) {
-  if (start_tick >= end_tick)
-    return false; // Invalid range
+static bool is_snippet_selected(timeline_state_t *ts, int snippet_id);
 
-  for (int i = 0; i < track->snippet_count; ++i) {
-    input_snippet_t *other = &track->snippets[i];
-    if (other->id == exclude_snippet_id)
-      continue; // Don't check against ourselves
-
-    // Check for overlap: [start_tick, end_tick) and [other->start_tick, other->end_tick)
-    // Overlap occurs if (start1 < end2 && end1 > start2)
+// Helper to calculate the number of layers required for a specific time range.
+static int get_stack_size_at_tick_range(const player_track_t *track, int start_tick, int end_tick) {
+  int max_layer = 0;
+  for (int i = 0; i < track->snippet_count; i++) {
+    const input_snippet_t *other = &track->snippets[i];
+    // Check for time overlap
     if (start_tick < other->end_tick && end_tick > other->start_tick) {
-      return true; // Overlap detected
+      if (other->layer > max_layer) {
+        max_layer = other->layer;
+      }
     }
   }
-  return false; // No overlap
+  return max_layer + 1;
 }
+
+// Finds the lowest available layer for a given time range on a track.
+// Returns layer index, or -1 if no layer is available.
+static int find_available_layer(const timeline_state_t *ts, const player_track_t *track, int start_tick,
+                                int end_tick, int exclude_snippet_id) {
+  for (int layer = 0; layer < MAX_SNIPPET_LAYERS; ++layer) {
+    bool layer_is_free = true;
+    for (int i = 0; i < track->snippet_count; ++i) {
+      const input_snippet_t *other = &track->snippets[i];
+
+      // Don't check against the snippet we are trying to place or other moving snippets
+      if (other->id == exclude_snippet_id || is_snippet_selected((timeline_state_t *)ts, other->id))
+        continue;
+
+      if (other->layer == layer) {
+        // Check for time overlap on the same layer
+        if (start_tick < other->end_tick && end_tick > other->start_tick) {
+          layer_is_free = false;
+          break;
+        }
+      }
+    }
+    if (layer_is_free) {
+      return layer;
+    }
+  }
+  return -1; // No free layer found within MAX_SNIPPET_LAYERS
+}
+
+// New helper function, similar to find_available_layer but without the selection check.
+// This is for layer compaction after a snippet is removed.
+static int find_lowest_available_layer(const player_track_t *track, int start_tick,
+                                int end_tick, int exclude_snippet_id) {
+  for (int layer = 0; layer < MAX_SNIPPET_LAYERS; ++layer) {
+    bool layer_is_free = true;
+    for (int i = 0; i < track->snippet_count; ++i) {
+      const input_snippet_t *other = &track->snippets[i];
+
+      if (other->id == exclude_snippet_id)
+        continue;
+
+      if (other->layer == layer) {
+        // Check for time overlap on the same layer
+        if (start_tick < other->end_tick && end_tick > other->start_tick) {
+          layer_is_free = false;
+          break;
+        }
+      }
+    }
+    if (layer_is_free) {
+      return layer; // Found the lowest free layer
+    }
+  }
+  return -1; // No free layer found
+}
+
 
 void copy_snippet_inputs(input_snippet_t *dest, const input_snippet_t *src);
 bool remove_snippet_from_track(timeline_state_t *t, player_track_t *track, int snippet_id);
@@ -254,6 +309,8 @@ typedef struct {
   int new_track_index;
   int old_start_tick;
   int new_start_tick;
+  int old_layer;
+  int new_layer;
 } MoveSnippetInfo;
 
 typedef struct {
@@ -269,14 +326,13 @@ static void cleanup_move_cmd(undo_command_t *cmd) {
 }
 
 static void move_snippet_logic(timeline_state_t *ts, int snippet_id, int from_track_idx, int to_track_idx,
-                               int to_start_tick) {
+                               int to_start_tick, int to_layer) {
   player_track_t *source_track = &ts->player_tracks[from_track_idx];
   input_snippet_t *snippet_to_move = NULL;
-  int snippet_idx_in_source = -1;
+
   for (int i = 0; i < source_track->snippet_count; i++) {
     if (source_track->snippets[i].id == snippet_id) {
       snippet_to_move = &source_track->snippets[i];
-      snippet_idx_in_source = i;
       break;
     }
   }
@@ -284,21 +340,27 @@ static void move_snippet_logic(timeline_state_t *ts, int snippet_id, int from_tr
     return;
 
   input_snippet_t snip_copy = *snippet_to_move;
-  const int duration = snip_copy.input_count; // Use the reliable input_count for duration
+
+  const int duration = snip_copy.input_count;
   snip_copy.start_tick = to_start_tick;
   snip_copy.end_tick = to_start_tick + duration;
+  snip_copy.layer = to_layer;
 
-  snippet_to_move->inputs = NULL; // Prevent double free
+  snippet_to_move->inputs = NULL;
+  snippet_to_move->input_count = 0;
+
   remove_snippet_from_track(ts, source_track, snippet_id);
+
   insert_snippet_into_track(&ts->player_tracks[to_track_idx], &snip_copy);
 }
+
 
 static void undo_move_snippets(undo_command_t *cmd, timeline_state_t *ts) {
   MoveSnippetsCommand *c = (MoveSnippetsCommand *)cmd;
   for (int i = 0; i < c->count; i++) {
     MoveSnippetInfo *info = &c->move_info[i];
     move_snippet_logic(ts, info->snippet_id, info->new_track_index, info->old_track_index,
-                       info->old_start_tick);
+                       info->old_start_tick, info->old_layer);
   }
 }
 
@@ -307,7 +369,7 @@ static void redo_move_snippets(undo_command_t *cmd, timeline_state_t *ts) {
   for (int i = 0; i < c->count; i++) {
     MoveSnippetInfo *info = &c->move_info[i];
     move_snippet_logic(ts, info->snippet_id, info->old_track_index, info->new_track_index,
-                       info->new_start_tick);
+                       info->new_start_tick, info->new_layer);
   }
 }
 
@@ -435,6 +497,8 @@ static void redo_multi_split(undo_command_t *cmd, timeline_state_t *ts) {
     right.id = info->new_snippet_id;
     right.start_tick = c->split_tick;
     right.end_tick = c->split_tick + info->moved_inputs_count;
+    right.is_active = original->is_active; // a split snippet should inherit active state
+    right.layer = original->layer;         // and layer
     right.inputs = malloc(sizeof(SPlayerInput) * info->moved_inputs_count);
     memcpy(right.inputs, info->moved_inputs, sizeof(SPlayerInput) * info->moved_inputs_count);
     right.input_count = info->moved_inputs_count;
@@ -642,19 +706,40 @@ bool remove_snippet_from_track(timeline_state_t *t, player_track_t *track, int s
   }
 
   if (found_idx != -1) {
+    int removed_start_tick = track->snippets[found_idx].start_tick;
+    int removed_end_tick = track->snippets[found_idx].end_tick;
+
     free_snippet_inputs(&track->snippets[found_idx]);
 
-    recalc_ts(t, track->snippets[found_idx].start_tick);
+    recalc_ts(t, removed_start_tick);
 
     memmove(&track->snippets[found_idx], &track->snippets[found_idx + 1],
             (track->snippet_count - found_idx - 1) * sizeof(input_snippet_t));
     track->snippet_count--;
-    track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * track->snippet_count);
+    if(track->snippet_count > 0)
+        track->snippets = realloc(track->snippets, sizeof(input_snippet_t) * track->snippet_count);
+    else {
+        free(track->snippets);
+        track->snippets = NULL;
+    }
+
+
+    // After removal, try to compact layers in the affected time range.
+    for (int i = 0; i < track->snippet_count; i++) {
+        input_snippet_t *s = &track->snippets[i];
+        if (s->start_tick < removed_end_tick && s->end_tick > removed_start_tick) {
+            int new_layer = find_lowest_available_layer(track, s->start_tick, s->end_tick, s->id);
+            if (new_layer != -1 && new_layer < s->layer) {
+                s->layer = new_layer;
+            }
+        }
+    }
 
     return true;
   }
   return false;
 }
+
 
 static bool is_snippet_selected(timeline_state_t *ts, int snippet_id) {
   return snippet_id_vector_contains(&ts->selected_snippets, snippet_id);
@@ -702,28 +787,38 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
   float content_rect_min_y = rect.Min.y - timeline_bb.Min.y + scroll_y;
   float content_rect_max_y = rect.Max.y - timeline_bb.Min.y + scroll_y;
 
-  // add to selection if shift is held
   ImGuiIO *io = igGetIO_Nil();
   if (!io->KeyShift) {
-    ts->selected_snippets.count = 0;
-    ts->selected_snippet_id = -1;
+    clear_selection(ts);
   }
 
   for (int ti = 0; ti < ts->player_track_count; ++ti) {
     player_track_t *track = &ts->player_tracks[ti];
-
     float track_top = (float)ti * ts->track_height;
     float track_bottom = track_top + ts->track_height;
 
-    bool track_is_selected_y = (track_top < content_rect_max_y && track_bottom > content_rect_min_y);
+    // Broad-phase: if selection rect doesn't overlap track rect, skip
+    if (track_top > content_rect_max_y || track_bottom < content_rect_min_y) {
+      continue;
+    }
 
-    if (track_is_selected_y) {
-      for (int si = 0; si < track->snippet_count; ++si) {
-        input_snippet_t *snip = &track->snippets[si];
-        bool snippet_is_selected_x = (snip->start_tick < end_tick && snip->end_tick > start_tick);
-        if (snippet_is_selected_x) {
-          add_snippet_to_selection(ts, snip->id, ti);
-        }
+    for (int si = 0; si < track->snippet_count; ++si) {
+      input_snippet_t *snip = &track->snippets[si];
+
+      // Check for horizontal overlap
+      if (snip->start_tick >= end_tick || snip->end_tick <= start_tick) {
+        continue;
+      }
+
+      // Calculate vertical position and size of this specific snippet
+      int stack_size = get_stack_size_at_tick_range(track, snip->start_tick, snip->end_tick);
+      float sub_lane_height = ts->track_height / (float)stack_size;
+      float snip_top = track_top + snip->layer * sub_lane_height;
+      float snip_bottom = snip_top + sub_lane_height;
+
+      // Narrow-phase: Check for vertical overlap with the selection rectangle
+      if (snip_top < content_rect_max_y && snip_bottom > content_rect_min_y) {
+        add_snippet_to_selection(ts, snip->id, ti);
       }
     }
   }
@@ -973,12 +1068,13 @@ undo_command_t *do_add_snippet(ui_handler_t *ui) {
     int start = ts->current_tick;
     int end = start + 50; // Default duration
 
-    // Check for overlap before adding
-    if (check_for_overlap(target_track, start, end, -1)) {
-      return NULL; // Overlap detected, cancel the action
+    int new_layer = find_available_layer(ts, target_track, start, end, -1);
+    if (new_layer == -1) {
+      return NULL; // No space to add snippet
     }
 
     input_snippet_t snip = create_empty_snippet(ts, start, end - start);
+    snip.layer = new_layer;
     add_snippet_to_track(target_track, &snip);
     AddSnippetCommand *cmd = calloc(1, sizeof(AddSnippetCommand));
     cmd->base.undo = undo_add_snippet;
@@ -1049,6 +1145,8 @@ undo_command_t *do_split_selected_snippets(ui_handler_t *ui) {
         right_part.id = new_id;
         right_part.start_tick = split_tick;
         right_part.end_tick = snippet->end_tick;
+        right_part.layer = snippet->layer;
+        right_part.is_active = snippet->is_active;
         right_part.inputs = malloc(sizeof(SPlayerInput) * right_count);
         memcpy(right_part.inputs, snippet->inputs + offset, right_count * sizeof(SPlayerInput));
         right_part.input_count = right_count;
@@ -1162,10 +1260,13 @@ static SPlayerInput *get_or_create_input_at_tick(timeline_state_t *ts, player_tr
       return &snippet->inputs[tick - snippet->start_tick];
     }
   }
-  if (check_for_overlap(track, tick, tick + 1, -1)) {
+
+  int new_layer = find_available_layer(ts, track, tick, tick + 1, -1);
+  if (new_layer == -1) {
     return NULL;
   }
   input_snippet_t new_snip = create_empty_snippet(ts, tick, 1);
+  new_snip.layer = new_layer;
   add_snippet_to_track(track, &new_snip);
   if (track->snippet_count > 0) {
     input_snippet_t *just_added = &track->snippets[track->snippet_count - 1];
@@ -1228,7 +1329,7 @@ SPlayerInput get_input(const timeline_state_t *ts, int track_index, int tick) {
   const player_track_t *track = &ts->player_tracks[track_index];
   for (int i = 0; i < track->snippet_count; ++i) {
     const input_snippet_t *snippet = &track->snippets[i];
-    if (tick < snippet->end_tick && tick >= snippet->start_tick)
+    if (snippet->is_active && tick < snippet->end_tick && tick >= snippet->start_tick)
       return snippet->inputs[tick - snippet->start_tick];
   }
   return (SPlayerInput){.m_TargetY = -1};
@@ -1359,119 +1460,6 @@ int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, i
   return snapped_start_tick;
 }
 
-// attempts to move a snippet to a new position and track, checking for overlaps
-// returns true if the move was successful, false otherwise.
-bool try_move_snippet(timeline_state_t *ts, int snippet_id, int source_track_idx, int target_track_idx,
-                      int desired_start_tick, bool dry_run) {
-  if (source_track_idx < 0 || source_track_idx >= ts->player_track_count || target_track_idx < 0 ||
-      target_track_idx >= ts->player_track_count) {
-    return false; // Invalid track indices
-  }
-
-  player_track_t *source_track = &ts->player_tracks[source_track_idx];
-  player_track_t *target_track = &ts->player_tracks[target_track_idx];
-
-  // Find the original snippet in the source track
-  int snippet_idx_in_source = -1;
-  input_snippet_t *original_snippet = NULL;
-  for (int i = 0; i < source_track->snippet_count; i++) {
-    if (source_track->snippets[i].id == snippet_id) {
-      snippet_idx_in_source = i;
-      original_snippet = &source_track->snippets[i];
-      break;
-    }
-  }
-
-  if (snippet_idx_in_source == -1 || !original_snippet) {
-    return false; // Snippet not found
-  }
-
-  bool is_duplicating = igGetIO_Nil()->KeyAlt;
-  int duration = original_snippet->end_tick - original_snippet->start_tick;
-  int old_start_tick = original_snippet->start_tick;
-  int new_start_tick = desired_start_tick;
-
-  // Ensure new position is not before tick 0
-  if (new_start_tick < 0)
-    new_start_tick = 0;
-  int new_end_tick = new_start_tick + duration;
-
-  // Check for overlaps in the target track at the *proposed* new position
-  for (int i = 0; i < target_track->snippet_count; ++i) {
-    input_snippet_t *other = &target_track->snippets[i];
-
-    // If MOVING, we can ignore collision with any part of the selection, as it's all moving together.
-    // If DUPLICATING, the originals are obstacles, so we must check collision against them.
-    if (!is_duplicating && is_snippet_selected(ts, other->id)) {
-      continue;
-    }
-
-    // Check for overlap
-    if (new_start_tick < other->end_tick && new_end_tick > other->start_tick) {
-      return false; // Overlap detected
-    }
-  }
-
-  // If this is a dry run, we've succeeded if we reached here without detecting an overlap.
-  if (dry_run) {
-    return true;
-  }
-
-  if (is_duplicating) {
-    // DUPLICATION LOGIC
-    input_snippet_t new_snip;
-    // Start with a struct copy, then modify what's needed
-    new_snip = *original_snippet;
-    new_snip.id = ts->next_snippet_id++;
-    new_snip.start_tick = new_start_tick;
-    new_snip.end_tick = new_end_tick;
-
-    // Deep copy the inputs array
-    new_snip.inputs = NULL;
-    new_snip.input_count = 0;
-    copy_snippet_inputs(&new_snip, original_snippet);
-
-    add_snippet_to_track(target_track, &new_snip);
-  } else {
-    // MOVE LOGIC
-    if (source_track_idx == target_track_idx) {
-      // Move within the same track: update in place
-      original_snippet->start_tick = new_start_tick;
-      original_snippet->end_tick = new_end_tick;
-      recalc_ts(ts, imin(new_start_tick, old_start_tick));
-    } else {
-      // Move to a different track: add to target, remove from source (transfer ownership of inputs)
-      input_snippet_t moved_snippet_data = *original_snippet;
-      moved_snippet_data.start_tick = new_start_tick;
-      moved_snippet_data.end_tick = new_end_tick;
-      add_snippet_to_track(target_track, &moved_snippet_data);
-
-      // To prevent free_snippet_inputs, null out the pointer in the original struct before removing
-      original_snippet->inputs = NULL;
-      original_snippet->input_count = 0;
-      remove_snippet_from_track(ts, source_track, snippet_id);
-    }
-    // Update selection state to follow the moved item
-    ts->selected_snippet_id = snippet_id;
-    ts->selected_player_track_index = target_track_idx;
-  }
-
-  return true;
-}
-
-int get_max_timeline_tick(timeline_state_t *ts) {
-  int max_tick = 0;
-  for (int i = 0; i < ts->player_track_count; ++i) {
-    player_track_t *track = &ts->player_tracks[i];
-    for (int j = 0; j < track->snippet_count; ++j) {
-      if (track->snippets[j].end_tick > max_tick) {
-        max_tick = track->snippets[j].end_tick;
-      }
-    }
-  }
-  return max_tick;
-}
-
 // rendering and interaction functions
 void render_timeline_controls(timeline_state_t *ts) {
   igPushItemWidth(100);
@@ -1566,8 +1554,10 @@ void render_timeline_controls(timeline_state_t *ts) {
     if (ts->selected_snippets.count == 0) {
       if (ts->selected_player_track_index != -1) {
         player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
-        if (!check_for_overlap(track, ts->current_tick, ts->current_tick + 1, -1)) {
+        int new_layer = find_available_layer(ts, track, ts->current_tick, ts->current_tick + 1, -1);
+        if (new_layer != -1) {
           input_snippet_t new_snip = create_empty_snippet(ts, ts->current_tick, 1);
+          new_snip.layer = new_layer;
           add_snippet_to_track(track, &new_snip);
           // Add the new snippet to the recording list
           recording_snippet_vector_add(&ts->recording_snippets, &track->snippets[track->snippet_count - 1]);
@@ -1607,8 +1597,8 @@ void render_timeline_controls(timeline_state_t *ts) {
           for (int i = 0; i < candidate_count; i++) {
             for (int ti = 0; ti < ts->player_track_count; ti++) {
               if (find_snippet_by_id(&ts->player_tracks[ti], candidates[i]->id)) {
-                if (check_for_overlap(&ts->player_tracks[ti], ts->current_tick, ts->current_tick + 1,
-                                      candidates[i]->id)) {
+                if (find_available_layer(ts, &ts->player_tracks[ti], ts->current_tick,
+                                         ts->current_tick + 1, candidates[i]->id) == -1) {
                   any_overlap = true;
                 }
                 break;
@@ -1790,7 +1780,7 @@ void draw_timeline_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect ti
 }
 
 void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_index, input_snippet_t *snippet,
-                          ImDrawList *draw_list, float track_top, float track_bottom, ImRect timeline_bb) {
+                          ImDrawList *draw_list, float lane_top, float lane_bottom, ImRect timeline_bb) {
   ImGuiIO *io = igGetIO_Nil();
 
   float snippet_start_x = tick_to_screen_x(ts, snippet->start_tick, timeline_bb.Min.x);
@@ -1804,19 +1794,19 @@ void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_ind
   if (draw_start_x >= draw_end_x)
     return;
 
-  ImVec2 snippet_min = {draw_start_x, track_top + 2.0f};
-  ImVec2 snippet_max = {draw_end_x, track_bottom - 2.0f};
+  ImVec2 snippet_min = {draw_start_x, lane_top + 2.0f};
+  ImVec2 snippet_max = {draw_end_x, lane_bottom - 2.0f};
 
-  if (track_bottom - track_top - 4.0f <= 0)
+  if (lane_bottom - lane_top - 4.0f <= 0)
     return;
   bool is_item_hovered = false;
   if (!ts->recording) {
     // Invisible button to capture mouse interaction for this snippet
-    igSetCursorScreenPos((ImVec2){snippet_start_x, track_top + 2.0f});
+    igSetCursorScreenPos((ImVec2){snippet_start_x, lane_top});
     char _snippet_id_buf[64];
     snprintf(_snippet_id_buf, sizeof(_snippet_id_buf), "snippet_%d_%d", track_index, snippet->id);
     is_item_hovered = igInvisibleButton(
-        _snippet_id_buf, (ImVec2){snippet_end_x - snippet_start_x, track_bottom - track_top - 4.0f},
+        _snippet_id_buf, (ImVec2){snippet_end_x - snippet_start_x, lane_bottom - lane_top},
         ImGuiButtonFlags_MouseButtonLeft);
     bool is_item_active = igIsItemActive(); // True while button is held or being dragged
     bool is_item_clicked = igIsItemClicked(ImGuiMouseButton_Left);
@@ -1847,7 +1837,7 @@ void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_ind
       ts->drag_state.initial_mouse_pos = io->MousePos;
       int mouse_tick_at_click = screen_x_to_tick(ts, ts->drag_state.initial_mouse_pos.x, timeline_bb.Min.x);
       ts->drag_state.drag_offset_ticks = mouse_tick_at_click - snippet->start_tick;
-      ts->drag_state.drag_offset_y = io->MousePos.y - (track_top + 2.0f);
+      ts->drag_state.drag_offset_y = io->MousePos.y - lane_top;
       ts->drag_state.dragged_snippet_id = snippet->id;
 
       // If clicked snippet wasn't selected, make sure it's selected for the drag
@@ -1855,20 +1845,62 @@ void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_ind
         clear_selection(ts);
         add_snippet_to_selection(ts, snippet->id, track_index);
       }
+      
+      int min_layer = snippet->layer;
+      for (int i = 0; i < ts->selected_snippets.count; i++) {
+          int sid = ts->selected_snippets.ids[i];
+          for (int ti = 0; ti < ts->player_track_count; ti++) {
+              input_snippet_t *s = find_snippet_by_id(&ts->player_tracks[ti], sid);
+              if (s && s->layer < min_layer) {
+                  min_layer = s->layer;
+              }
+          }
+      }
+
+      if (ts->drag_state.drag_infos) {
+          free(ts->drag_state.drag_infos);
+      }
+      ts->drag_state.drag_info_count = ts->selected_snippets.count;
+      ts->drag_state.drag_infos = malloc(sizeof(DraggedSnippetInfo) * ts->drag_state.drag_info_count);
+      
+      for (int i = 0; i < ts->selected_snippets.count; i++) {
+          int sid = ts->selected_snippets.ids[i];
+          input_snippet_t *s = NULL;
+          int s_track_idx = -1;
+          for (int ti = 0; ti < ts->player_track_count; ti++) {
+              s = find_snippet_by_id(&ts->player_tracks[ti], sid);
+              if (s) {
+                  s_track_idx = ti;
+                  break;
+              }
+          }
+
+          if (s) {
+              ts->drag_state.drag_infos[i].snippet_id = sid;
+              ts->drag_state.drag_infos[i].track_offset = s_track_idx - track_index;
+              ts->drag_state.drag_infos[i].layer_offset = s->layer - min_layer;
+          }
+      }
     }
   }
 
   // Draw Snippet
   bool is_selected = is_snippet_selected(ts, snippet->id);
-  // Use is_item_hovered for visual hover feedback, not the function parameter which might be clipped
-  ImU32 snippet_col =
-      is_selected
-          ? igGetColorU32_Col(ImGuiCol_HeaderActive, 1.0f)
-          : (is_item_hovered ? igGetColorU32_Col(ImGuiCol_ButtonHovered, 1.0f)
-                             : igGetColorU32_Col(ImGuiCol_Button, 0.8f)); // Use Button for default color
 
-  ImU32 snippet_border_col = is_selected ? igGetColorU32_Col(ImGuiCol_NavWindowingHighlight, 1.0f)
-                                         : igGetColorU32_Col(ImGuiCol_Border, 0.6f);
+  ImU32 snippet_col;
+  if (snippet->is_active) {
+    snippet_col = is_selected ? igGetColorU32_Col(ImGuiCol_HeaderActive, 1.0f)
+                              : (is_item_hovered ? igGetColorU32_Col(ImGuiCol_ButtonHovered, 1.0f)
+                                                 : igGetColorU32_Col(ImGuiCol_Button, 0.8f));
+  } else {
+    // Grayed out for inactive
+    snippet_col = is_selected ? igGetColorU32_Vec4((ImVec4){0.45f, 0.45f, 0.45f, 1.0f})
+                              : igGetColorU32_Vec4((ImVec4){0.25f, 0.25f, 0.25f, 0.9f});
+  }
+
+  ImU32 snippet_border_col =
+      is_selected ? igGetColorU32_Col(ImGuiCol_NavWindowingHighlight, 1.0f)
+                  : igGetColorU32_Col(ImGuiCol_Border, snippet->is_active ? 0.6f : 0.3f);
   float border_thickness = is_selected ? 2.0f : 1.0f;
 
   ImDrawList_AddRectFilled(draw_list, snippet_min, snippet_max, snippet_col, 4.0f,
@@ -1891,10 +1923,10 @@ void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_ind
 
   // Context menu (right-click)
   if (!ts->recording && igIsMouseClicked_Bool(ImGuiMouseButton_Right, 0) &&
-      igIsMouseHoveringRect((ImVec2){snippet_min.x, snippet_min.y}, (ImVec2){snippet_max.x, snippet_max.y},
-                            true)) {
+      igIsMouseHoveringRect(snippet_min, snippet_max, true)) {
     igOpenPopup_Str("RightClickMenu", 0);
     ts->selected_player_track_index = track_index;
+    ts->context_menu_snippet_id = snippet->id;
   }
 }
 
@@ -1924,7 +1956,16 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
 
   // Draw Snippets for this track
   for (int j = 0; j < track->snippet_count; ++j) {
-    render_input_snippet(ts, track_index, j, &track->snippets[j], draw_list, track_top, track_bottom,
+    input_snippet_t *snippet = &track->snippets[j];
+    if (snippet->layer >= MAX_SNIPPET_LAYERS)
+      continue;
+
+    int stack_size = get_stack_size_at_tick_range(track, snippet->start_tick, snippet->end_tick);
+    float sub_lane_height = (track_bottom - track_top) / (float)stack_size;
+
+    float snippet_top = track_top + snippet->layer * sub_lane_height;
+    float snippet_bottom = snippet_top + sub_lane_height;
+    render_input_snippet(ts, track_index, j, snippet, draw_list, snippet_top, snippet_bottom,
                          timeline_bb);
   }
 
@@ -1934,6 +1975,26 @@ void render_player_track(timeline_state_t *ts, int track_index, player_track_t *
   }
 
   if (!ts->recording && igBeginPopup("RightClickMenu", ImGuiPopupFlags_AnyPopupLevel)) {
+    input_snippet_t *ctx_snippet = NULL;
+    if (ts->selected_player_track_index != -1 && ts->context_menu_snippet_id != -1) {
+      ctx_snippet = find_snippet_by_id(&ts->player_tracks[ts->selected_player_track_index],
+                                       ts->context_menu_snippet_id);
+    }
+
+    if (ctx_snippet) {
+      if (ctx_snippet->is_active) {
+        if (igMenuItem_Bool("Deactivate", NULL, false, true)) {
+          ctx_snippet->is_active = false;
+          recalc_ts(ts, ctx_snippet->start_tick);
+        }
+      } else {
+        if (igMenuItem_Bool("Activate", "A", false, true)) {
+          timeline_activate_snippet(ts, ts->selected_player_track_index, ts->context_menu_snippet_id);
+        }
+      }
+      igSeparator();
+    }
+
     if (igMenuItem_Bool("Merge Snippets", "Ctrl+m", false, ts->selected_snippets.count > 1)) {
       undo_command_t *cmd = do_merge_selected_snippets(ts->ui);
       if (cmd) {
@@ -1976,6 +2037,16 @@ void draw_playhead(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_
                                  igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f));
   }
 }
+
+static int find_track_index_from_y(timeline_state_t *ts, float content_y) {
+  if (content_y < 0)
+    return 0;
+  int index = (int)floorf(content_y / ts->track_height);
+  if (index >= ts->player_track_count)
+    return ts->player_track_count - 1;
+  return index;
+}
+
 void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRect timeline_bb,
                        float tracks_area_scroll_y) {
   ImGuiIO *io = igGetIO_Nil();
@@ -2008,25 +2079,24 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
       calculate_snapped_tick(ts, desired_start_tick_clicked, clicked_duration, clicked_snippet->id);
   int delta_ticks = snapped_start_tick_clicked - clicked_snippet->start_tick;
 
-  const float inner_pad = 2.0f;
-
-  const float stride = ts->track_height;
-
   // Calculate the target track index for the primary dragged snippet based on its desired visual top position
   float clicked_snippet_preview_visual_top_y = io->MousePos.y - ts->drag_state.drag_offset_y;
   float content_y = clicked_snippet_preview_visual_top_y - timeline_bb.Min.y + tracks_area_scroll_y;
-  int base_index = (int)floorf(((content_y - inner_pad) / stride) + 0.5f);
+  int base_index = find_track_index_from_y(ts, content_y);
 
-  if (base_index < 0)
-    base_index = 0;
-  if (base_index >= ts->player_track_count)
-    base_index = ts->player_track_count - 1;
+  if (base_index == -1) {
+    if (content_y < 0)
+      base_index = 0;
+    else
+      base_index = ts->player_track_count - 1;
+  }
+
   // For each selected snippet: keep original relative track offset to clicked snippet.
   for (int si = 0; si < ts->selected_snippets.count; ++si) {
     int sid = ts->selected_snippets.ids[si];
     input_snippet_t *s = NULL;
     int s_track_idx = -1;
-    for (int ti = 0; ti < ts->player_track_count; ++ti) {
+    for (int ti = 0; ti < ts->player_track_count; ti++) {
       s = find_snippet_by_id(&ts->player_tracks[ti], sid);
       if (s) {
         s_track_idx = ti;
@@ -2039,9 +2109,7 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
     // keep relative track offset
     int rel_offset = s_track_idx - clicked_track_idx;
     int target_index = base_index + rel_offset;
-    if (target_index < 0)
-      continue;
-    if (target_index >= ts->player_track_count)
+    if (target_index < 0 || target_index >= ts->player_track_count)
       continue;
 
     // compute preview ticks and screen Xs (snapping applied to clicked item only; group preserves relative
@@ -2050,33 +2118,35 @@ void draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRe
     int preview_start = s->start_tick + delta_ticks;
     int preview_end = preview_start + duration;
 
+    // Find the best layer for this snippet
+    player_track_t *target_track = &ts->player_tracks[target_index];
+    int target_layer = find_available_layer(ts, target_track, preview_start, preview_end, s->id);
+    bool overlaps = (target_layer == -1);
+
+    if (target_layer == -1)
+      target_layer = s->layer; // If no free layer, draw it where it was
+
     float preview_min_x = tick_to_screen_x(ts, preview_start, timeline_bb.Min.x);
     float preview_max_x = tick_to_screen_x(ts, preview_end, timeline_bb.Min.x);
 
+    // Get render-time height of the target track
+    float target_track_content_top = (float)target_index * ts->track_height;
+
+    int stack_size = get_stack_size_at_tick_range(target_track, preview_start, preview_end);
+    // if we are adding a new item, the stack size will be one larger than what's currently there
+    // if there is an available layer. find_available_layer returns the index, so +1 for size
+    if (!overlaps) {
+      stack_size = imax(stack_size, target_layer + 1);
+    }
+    float sub_lane_height = ts->track_height / (float)stack_size;
+
     // compute vertical placement for this snippet using target_index
-    float target_track_content_top = (float)target_index * stride;
     float target_track_top = timeline_bb.Min.y + target_track_content_top - tracks_area_scroll_y;
-    const float snippet_h = ts->track_height - inner_pad * 2.0f;
-    float preview_min_y = target_track_top + inner_pad;
-    float preview_max_y = preview_min_y + snippet_h;
+    float preview_min_y = target_track_top + target_layer * sub_lane_height + 2.0f;
+    float preview_max_y = preview_min_y + sub_lane_height - 4.0f;
 
     ImVec2 preview_min = {preview_min_x, preview_min_y};
     ImVec2 preview_max = {preview_max_x, preview_max_y};
-
-    bool overlaps = false;
-    player_track_t *target_track = &ts->player_tracks[target_index];
-    for (int i = 0; i < target_track->snippet_count; ++i) {
-      input_snippet_t *other = &target_track->snippets[i];
-      // Ignore collision with any snippet that is part of the current selection.
-      if (is_snippet_selected(ts, other->id)) {
-        continue;
-      }
-      // Check for overlap with any non-selected snippet.
-      if (preview_start < other->end_tick && preview_end > other->start_tick) {
-        overlaps = true;
-        break;
-      }
-    }
 
     ImU32 fill = overlaps ? IM_COL32(200, 80, 80, 90) : IM_COL32(100, 150, 240, 90);
     ImDrawList_AddRectFilled(overlay_draw_list, preview_min, preview_max, fill, 4.0f,
@@ -2136,15 +2206,13 @@ static void handle_recording_trim_key(timeline_state_t *ts) {
       remove_snippet_from_track(ts, track, snippet_id_to_delete);
 
       int safe_start_tick = ts->current_tick;
-      for (int j = 0; j < track->snippet_count; j++) {
-        input_snippet_t *other = &track->snippets[j];
-        if (safe_start_tick >= other->start_tick && safe_start_tick < other->end_tick) {
-          safe_start_tick = other->end_tick;
-        }
-      }
+      int new_layer = find_available_layer(ts, track, safe_start_tick, safe_start_tick + 1, -1);
+      if (new_layer == -1)
+        new_layer = 0; // fallback
 
       ts->current_tick = safe_start_tick;
       input_snippet_t new_snip = create_empty_snippet(ts, ts->current_tick, 1);
+      new_snip.layer = new_layer;
       add_snippet_to_track(track, &new_snip);
       recording_snippet_vector_add(&ts->recording_snippets, &track->snippets[track->snippet_count - 1]);
     } else {
@@ -2207,26 +2275,10 @@ void render_timeline(ui_handler_t *ui) {
         }
 
         if (parent_track) {
-          // Check for collision on its track with any other snippet...
-          for (int j = 0; j < parent_track->snippet_count; j++) {
-            input_snippet_t *other = &parent_track->snippets[j];
-
-            // that isn't also being recorded.
-            bool is_also_recording = false;
-            for (int k = 0; k < ts->recording_snippets.count; k++) {
-              if (other->id == ts->recording_snippets.snippets[k]->id) {
-                is_also_recording = true;
-                break;
-              }
-            }
-            if (is_also_recording)
-              continue;
-
-            // Now perform the overlap check at the current playhead position
-            if (ts->current_tick < other->end_tick && (ts->current_tick + 1) > other->start_tick) {
-              overlap_found = true;
-              break;
-            }
+          if (find_available_layer(ts, parent_track, ts->current_tick, ts->current_tick + 1, rec_snip->id) !=
+              rec_snip->layer) {
+            overlap_found = true;
+            break;
           }
         }
         if (overlap_found)
@@ -2425,14 +2477,7 @@ void render_timeline(ui_handler_t *ui) {
         // First, determine which track was clicked on, if any.
         ImVec2 mouse_pos = io->MousePos;
         float content_y = mouse_pos.y - timeline_bb.Min.y + tracks_area_scroll_y;
-        int clicked_track_index = (int)floorf(content_y / ts->track_height);
-        float total_tracks_height = ts->player_track_count * ts->track_height;
-
-        int target_track_index = -1; // Default to no track selected
-        if (clicked_track_index >= 0 && clicked_track_index < ts->player_track_count &&
-            content_y < total_tracks_height) {
-          target_track_index = clicked_track_index;
-        }
+        int clicked_track_index = find_track_index_from_y(ts, content_y);
 
         // If not holding Shift, clear the previous snippet selection.
         if (!io->KeyShift) {
@@ -2440,7 +2485,7 @@ void render_timeline(ui_handler_t *ui) {
         }
 
         // Now, set the selected track index. This happens AFTER clearing, so it takes precedence.
-        ts->selected_player_track_index = target_track_index;
+        ts->selected_player_track_index = clicked_track_index;
 
         // Finally, ALWAYS start a selection box drag.
         ts->selection_box_active = true;
@@ -2504,201 +2549,140 @@ void render_timeline(ui_handler_t *ui) {
       // Handle Mouse Release for Snippet Drag & Drop
       if (ts->drag_state.active && igIsMouseReleased_Nil(ImGuiMouseButton_Left) && !ts->is_header_dragging) {
         ImVec2 mouse_pos = io->MousePos;
-        player_track_t *source_track = &ts->player_tracks[ts->drag_state.source_track_index];
-        undo_command_t *cmd = NULL;
+        int clicked_track_idx = -1;
+        input_snippet_t *clicked_snippet = NULL;
 
-        input_snippet_t *clicked_snippet =
-            find_snippet_by_id(source_track, ts->drag_state.dragged_snippet_id);
-        if (!clicked_snippet) {
-          printf("Error: Dragged snippet ID %d not found in expected source track %d on mouse release!\n",
-                 ts->drag_state.dragged_snippet_id, ts->drag_state.source_track_index);
-          ts->drag_state.active = false;
-          ts->drag_state.source_track_index = -1;
-          ts->drag_state.source_snippet_index = -1;
-          ts->drag_state.dragged_snippet_id = -1;
-          return;
+        // Find the primary snippet that was initially clicked to start the drag
+        for (int i = 0; i < ts->player_track_count; i++) {
+          clicked_snippet = find_snippet_by_id(&ts->player_tracks[i], ts->drag_state.dragged_snippet_id);
+          if (clicked_snippet) {
+            clicked_track_idx = i;
+            break;
+          }
         }
-        int clicked_duration = clicked_snippet->end_tick - clicked_snippet->start_tick;
-        int mouse_tick_at_release = screen_x_to_tick(ts, mouse_pos.x, timeline_bb.Min.x);
-        int desired_drop_tick_clicked = mouse_tick_at_release - ts->drag_state.drag_offset_ticks;
-        int final_drop_tick_clicked = calculate_snapped_tick(ts, desired_drop_tick_clicked, clicked_duration,
-                                                             ts->drag_state.dragged_snippet_id);
 
-        // Calculate the target track index consistently with the drag preview logic
-        float clicked_snippet_drop_visual_top_y = mouse_pos.y - ts->drag_state.drag_offset_y;
-        float content_y = clicked_snippet_drop_visual_top_y - timeline_bb.Min.y + tracks_area_scroll_y;
-        const float inner_pad = 2.0f; // Padding inside track where snippet is drawn
-        int target_track_idx = (int)floorf(((content_y - inner_pad) / ts->track_height) + 0.5f);
+        if (clicked_snippet) {
+          // --- Calculate final drop position for the primary snippet ---
+          int clicked_duration = clicked_snippet->end_tick - clicked_snippet->start_tick;
+          int mouse_tick_at_release = screen_x_to_tick(ts, mouse_pos.x, timeline_bb.Min.x);
+          int desired_drop_tick_clicked = mouse_tick_at_release - ts->drag_state.drag_offset_ticks;
+          int final_drop_tick_clicked =
+              calculate_snapped_tick(ts, desired_drop_tick_clicked, clicked_duration, clicked_snippet->id);
+          int tick_delta = final_drop_tick_clicked - clicked_snippet->start_tick;
 
-        // Clamp the target track index to valid bounds
-        if (target_track_idx < 0)
-          target_track_idx = 0;
-        if (target_track_idx >= ts->player_track_count)
-          target_track_idx = ts->player_track_count - 1;
-        int source_base_track_idx = ts->drag_state.source_track_index;
-        int track_delta = target_track_idx - source_base_track_idx;
-        int tick_delta = final_drop_tick_clicked - clicked_snippet->start_tick;
+          float clicked_snippet_drop_visual_top_y = mouse_pos.y - ts->drag_state.drag_offset_y;
+          float content_y = clicked_snippet_drop_visual_top_y - timeline_bb.Min.y + tracks_area_scroll_y;
+          int target_base_track_idx = find_track_index_from_y(ts, content_y);
 
-        bool is_duplicating = igGetIO_Nil()->KeyAlt;
-        if (ts->selected_snippets.count > 0) { // Should always be true for a snippet drag
-          bool can_move_all = true;
-          // PRE-FLIGHT CHECK
-          // First, check if all selected snippets can be moved without conflict.
-          // This check is valid for both moving and duplicating.
-          for (int i = 0; i < ts->selected_snippets.count; ++i) {
-            int sid = ts->selected_snippets.ids[i];
-            input_snippet_t *s = NULL;
-            int s_track_idx = -1;
-            for (int ti = 0; ti < ts->player_track_count; ++ti) {
-              s = find_snippet_by_id(&ts->player_tracks[ti], sid);
-              if (s) {
-                s_track_idx = ti;
-                break;
-              }
-            }
-            if (!s) { // Should not happen
-              can_move_all = false;
-              break;
-            }
-            int new_track_idx = s_track_idx + track_delta;
-            // Clamp for check consistency
-            if (new_track_idx < 0) {
-              can_move_all = false;
-              break;
-            }
-            if (new_track_idx >= ts->player_track_count) {
-              can_move_all = false;
-              break;
-            }
-            int new_start_tick = s->start_tick + tick_delta;
-
-            // Perform a "dry run" move to check for validity without changing state.
-            if (!try_move_snippet(ts, sid, s_track_idx, new_track_idx, new_start_tick, true)) {
-              can_move_all = false;
-              break;
-            }
+          if (target_base_track_idx == -1) {
+            target_base_track_idx = clicked_track_idx; // fallback to source track
           }
 
-          if (!can_move_all) {
-            // Abort if the destination is invalid.
-          } else if (is_duplicating) {
-            // DUPLICATE ACTION
-            //  Create a command that stores the duplicated snippets. Its undo action will be to delete
-            //  them. We can reuse the DeleteSnippetsCommand struct and flip its function pointers.
-            DeleteSnippetsCommand *cmd = calloc(1, sizeof(DeleteSnippetsCommand));
-            cmd->base.undo = redo_delete_snippets; // Undo is deleting
-            cmd->base.redo = undo_delete_snippets; // Redo is re-adding
-            cmd->base.cleanup = cleanup_delete_cmd;
-            cmd->count = ts->selected_snippets.count;
-            cmd->deleted_info = calloc(cmd->count, sizeof(DeletedSnippetInfo));
-            int info_idx = 0;
+          int base_new_layer = -1;
+          for (int potential_base_layer = 0; potential_base_layer < MAX_SNIPPET_LAYERS; potential_base_layer++) {
+              bool stack_fits = true;
+              for (int i = 0; i < ts->drag_state.drag_info_count; i++) {
+                  DraggedSnippetInfo *info = &ts->drag_state.drag_infos[i];
+                  
+                  input_snippet_t *s = NULL;
+                  // Find the original snippet to get its duration
+                  for (int ti = 0; ti < ts->player_track_count; ti++) {
+                      s = find_snippet_by_id(&ts->player_tracks[ti], info->snippet_id);
+                      if (s) { break; }
+                  }
+                  if (!s) { stack_fits = false; break; }
 
-            int count = ts->selected_snippets.count;
-            int *original_ids = malloc(count * sizeof(int));
-            memcpy(original_ids, ts->selected_snippets.ids, count * sizeof(int));
+                  int new_track_idx = target_base_track_idx + info->track_offset;
+                  if (new_track_idx < 0 || new_track_idx >= ts->player_track_count) { stack_fits = false; break; }
 
-            snippet_id_vector_t new_selection_ids;
-            snippet_id_vector_init(&new_selection_ids);
+                  int new_layer = potential_base_layer + info->layer_offset;
+                  if (new_layer < 0 || new_layer >= MAX_SNIPPET_LAYERS) { stack_fits = false; break; }
 
-            for (int i = 0; i < count; ++i) {
-              int sid = original_ids[i];
-              input_snippet_t *s = NULL;
-              int s_track_idx = -1;
-              for (int ti = 0; ti < ts->player_track_count; ++ti) {
-                s = find_snippet_by_id(&ts->player_tracks[ti], sid);
-                if (s) {
-                  s_track_idx = ti;
-                  break;
-                }
+                  int new_start_tick = s->start_tick + tick_delta;
+                  
+                  player_track_t *target_track = &ts->player_tracks[new_track_idx];
+                  bool layer_is_free = true;
+                  for (int j = 0; j < target_track->snippet_count; j++) {
+                      input_snippet_t *other = &target_track->snippets[j];
+                      if (is_snippet_selected(ts, other->id)) continue; 
+
+                      if (other->layer == new_layer) {
+                          if (new_start_tick < other->end_tick && (new_start_tick + s->input_count) > other->start_tick) {
+                              layer_is_free = false;
+                              break;
+                          }
+                      }
+                  }
+
+                  if (!layer_is_free) {
+                      stack_fits = false;
+                      break; 
+                  }
               }
-              if (!s)
-                continue;
 
-              int new_track_idx = s_track_idx + track_delta;
-              int new_start_tick = s->start_tick + tick_delta;
-
-              // Prevent snippet from being duplicated before tick 0
-              if (new_start_tick < 0)
-                new_start_tick = 0;
-
-              // Perform the duplication
-              input_snippet_t new_snip;
-              new_snip = *s;
-              new_snip.id = ts->next_snippet_id++;
-              new_snip.start_tick = new_start_tick;
-              new_snip.end_tick = new_start_tick + (s->end_tick - s->start_tick);
-              new_snip.inputs = NULL;
-              new_snip.input_count = 0;
-              copy_snippet_inputs(&new_snip, s);
-
-              add_snippet_to_track(&ts->player_tracks[new_track_idx], &new_snip);
-              snippet_id_vector_add(&new_selection_ids, new_snip.id);
-
-              // Populate the undo command with a clone of the NEW snippet
-              cmd->deleted_info[info_idx].track_index = new_track_idx;
-              snippet_clone(&cmd->deleted_info[info_idx].snippet_copy, &new_snip);
-              info_idx++;
-
-              // add_snippet_to_track took ownership of the .inputs pointer. Null it here.
-              new_snip.inputs = NULL;
-            }
-
-            free(original_ids);
-
-            // Update selection to the new snippets
-            clear_selection(ts);
-            for (int i = 0; i < new_selection_ids.count; i++) {
-              add_snippet_to_selection(ts, new_selection_ids.ids[i], -1);
-            }
-            snippet_id_vector_free(&new_selection_ids);
-
-            undo_manager_register_command(&ui->undo_manager, &cmd->base);
-
-          } else {
-            // MOVE ACTION
-            MoveSnippetsCommand *move_cmd = calloc(1, sizeof(MoveSnippetsCommand));
-            move_cmd->base.undo = undo_move_snippets;
-            move_cmd->base.redo = redo_move_snippets;
-            move_cmd->base.cleanup = cleanup_move_cmd;
-            move_cmd->count = ts->selected_snippets.count;
-            move_cmd->move_info = calloc(move_cmd->count, sizeof(MoveSnippetInfo));
-
-            // Populate command with "before" state
-            int info_idx = 0;
-            for (int i = 0; i < ts->selected_snippets.count; ++i) {
-              int sid = ts->selected_snippets.ids[i];
-              for (int ti = 0; ti < ts->player_track_count; ++ti) {
-                input_snippet_t *s = find_snippet_by_id(&ts->player_tracks[ti], sid);
-                if (s) {
-                  move_cmd->move_info[info_idx].snippet_id = sid;
-                  move_cmd->move_info[info_idx].old_track_index = ti;
-                  move_cmd->move_info[info_idx].old_start_tick = s->start_tick;
-                  info_idx++;
-                  break;
-                }
+              if (stack_fits) {
+                  base_new_layer = potential_base_layer;
+                  break; 
               }
-            }
-            // Perform the actual moves
-            for (int k = 0; k < move_cmd->count; k++) {
-              MoveSnippetInfo *info = &move_cmd->move_info[k];
-              info->new_track_index = info->old_track_index + track_delta;
-              info->new_start_tick = info->old_start_tick + tick_delta;
-              try_move_snippet(ts, info->snippet_id, info->old_track_index, info->new_track_index,
-                               info->new_start_tick, false);
-            }
-            undo_manager_register_command(&ui->undo_manager, &move_cmd->base);
           }
-        } else {
-          // NOTE: This case should not be hit if selection is handled correctly
-          // but is left as a fallback. It is not undoable.
-          if (!is_duplicating)
-            try_move_snippet(ts, ts->drag_state.dragged_snippet_id, ts->drag_state.source_track_index,
-                             target_track_idx, final_drop_tick_clicked, false);
+
+          bool can_move_all = (base_new_layer != -1);
+          
+          if (can_move_all) {
+            MoveSnippetInfo *infos = calloc(ts->selected_snippets.count, sizeof(MoveSnippetInfo));
+            if(infos) {
+              for (int i = 0; i < ts->drag_state.drag_info_count; i++) {
+                  DraggedSnippetInfo *d_info = &ts->drag_state.drag_infos[i];
+                  input_snippet_t *s = NULL;
+                  int s_track_idx = -1;
+                  for (int ti = 0; ti < ts->player_track_count; ti++) {
+                      s = find_snippet_by_id(&ts->player_tracks[ti], d_info->snippet_id);
+                      if (s) { s_track_idx = ti; break; }
+                  }
+
+                  infos[i] = (MoveSnippetInfo){
+                      .snippet_id = d_info->snippet_id,
+                      .old_track_index = s_track_idx,
+                      .old_start_tick = s->start_tick,
+                      .old_layer = s->layer,
+                      .new_track_index = target_base_track_idx + d_info->track_offset,
+                      .new_start_tick = s->start_tick + tick_delta,
+                      .new_layer = base_new_layer + d_info->layer_offset
+                  };
+              }
+              
+              for (int i = 0; i < ts->selected_snippets.count; i++) {
+                input_snippet_t *moving_snippet = find_snippet_by_id(&ts->player_tracks[infos[i].old_track_index], infos[i].snippet_id);
+                if (moving_snippet && moving_snippet->is_active) {
+                    player_track_t *target_track = &ts->player_tracks[infos[i].new_track_index];
+                    for (int j = 0; j < target_track->snippet_count; j++) {
+                        input_snippet_t *other = &target_track->snippets[j];
+                        if (is_snippet_selected(ts, other->id)) continue;
+                        if (other->is_active && infos[i].new_start_tick < other->end_tick && (infos[i].new_start_tick + moving_snippet->input_count) > other->start_tick) {
+                            other->is_active = false;
+                        }
+                    }
+                }
+              }
+
+              MoveSnippetsCommand *cmd = calloc(1, sizeof(MoveSnippetsCommand));
+              cmd->base.undo = undo_move_snippets;
+              cmd->base.redo = redo_move_snippets;
+              cmd->base.cleanup = cleanup_move_cmd;
+              cmd->count = ts->selected_snippets.count;
+              cmd->move_info = infos;
+
+              redo_move_snippets(&cmd->base, ts);
+              undo_manager_register_command(&ui->undo_manager, &cmd->base);
+            }
+          }
         }
         ts->drag_state.active = false;
-        ts->drag_state.source_track_index = -1;
-        ts->drag_state.source_snippet_index = -1;
-        ts->drag_state.dragged_snippet_id = -1;
+        if (ts->drag_state.drag_infos) {
+          free(ts->drag_state.drag_infos);
+          ts->drag_state.drag_infos = NULL;
+          ts->drag_state.drag_info_count = 0;
+        }
       }
 
       // Draw Playhead
@@ -2781,6 +2765,7 @@ void timeline_init(timeline_state_t *ts) {
   ts->zoom = 1.0f; // 1 pixel per tick initially
   ts->track_height = DEFAULT_TRACK_HEIGHT;
   ts->selected_player_track_index = -1; // Nothing selected initially
+  ts->context_menu_snippet_id = -1;
   ts->selected_snippet_id = -1;
   ts->last_update_time = 0.f; // Initialize for playback timing
 
@@ -2791,6 +2776,8 @@ void timeline_init(timeline_state_t *ts) {
   ts->drag_state.dragged_snippet_id = -1;
   ts->drag_state.drag_offset_ticks = 0;
   ts->drag_state.drag_offset_y = 0.0f;
+  ts->drag_state.drag_infos = NULL;
+  ts->drag_state.drag_info_count = 0;
 
   ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
 
@@ -2849,6 +2836,11 @@ void timeline_cleanup(timeline_state_t *ts) {
   ts->drag_state.dragged_snippet_id = -1;
   ts->drag_state.drag_offset_ticks = 0;
   ts->drag_state.drag_offset_y = 0.0f;
+  if(ts->drag_state.drag_infos) {
+    free(ts->drag_state.drag_infos);
+    ts->drag_state.drag_infos = NULL;
+    ts->drag_state.drag_info_count = 0;
+  }
 
   ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
   ts->ui = NULL;
@@ -2910,10 +2902,12 @@ undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, i
 
   player_track_t *track = &ts->player_tracks[track_index];
   int end_tick = start_tick + duration;
-  if (check_for_overlap(track, start_tick, end_tick, -1))
+  int new_layer = find_available_layer(ts, track, start_tick, end_tick, -1);
+  if (new_layer == -1)
     return NULL;
 
   input_snippet_t snippet = create_empty_snippet(ts, start_tick, duration);
+  snippet.layer = new_layer;
 
   AddSnippetCommand *cmd = (AddSnippetCommand *)calloc(1, sizeof(AddSnippetCommand));
   if (!cmd) {
@@ -2997,6 +2991,8 @@ input_snippet_t create_empty_snippet(timeline_state_t *ts, int start_tick, int d
   s.id = ts->next_snippet_id++;
   s.start_tick = start_tick;
   s.end_tick = start_tick + duration;
+  s.is_active = true;
+  s.layer = 0;
   s.inputs = NULL;
   s.input_count = 0;
   init_snippet_inputs(&s);
@@ -3022,12 +3018,14 @@ void timeline_switch_recording_target(timeline_state_t *ts, int new_track_index)
   }
 
   if (!target_snippet) {
-    if (check_for_overlap(track, ts->current_tick, ts->current_tick + 1, -1)) {
+    int new_layer = find_available_layer(ts, track, ts->current_tick, ts->current_tick + 1, -1);
+    if (new_layer == -1) {
       ts->recording = false;
       return;
     }
 
     input_snippet_t new_snip = create_empty_snippet(ts, ts->current_tick, 1);
+    new_snip.layer = new_layer;
     add_snippet_to_track(track, &new_snip);
     target_snippet = &track->snippets[track->snippet_count - 1];
   }
@@ -3098,3 +3096,50 @@ void v_destroy(physics_v_t *t) {
   t->current_size = 0;
   t->max_size = 0;
 }
+
+void timeline_activate_snippet(timeline_state_t *ts, int track_index, int snippet_id_to_activate) {
+  if (track_index < 0 || track_index >= ts->player_track_count)
+    return;
+
+  player_track_t *track = &ts->player_tracks[track_index];
+  input_snippet_t *target_snippet = find_snippet_by_id(track, snippet_id_to_activate);
+
+  if (!target_snippet)
+    return;
+
+  // If already active, do nothing.
+  if (target_snippet->is_active)
+    return;
+
+  // Deactivate all other overlapping snippets on the same track
+  for (int i = 0; i < track->snippet_count; ++i) {
+    input_snippet_t *other = &track->snippets[i];
+    if (other->id == snippet_id_to_activate)
+      continue;
+
+    // Check for time overlap
+    if (target_snippet->start_tick < other->end_tick && target_snippet->end_tick > other->start_tick) {
+      other->is_active = false;
+    }
+  }
+
+  // Activate the target snippet
+  target_snippet->is_active = true;
+
+  // Recalculate physics from the start of the activated snippet
+  recalc_ts(ts, target_snippet->start_tick);
+}
+
+int get_max_timeline_tick(timeline_state_t *ts) {
+  int max_tick = 0;
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    player_track_t *track = &ts->player_tracks[i];
+    for (int j = 0; j < track->snippet_count; ++j) {
+      if (track->snippets[j].end_tick > max_tick) {
+        max_tick = track->snippets[j].end_tick;
+      }
+    }
+  }
+  return max_tick;
+}
+

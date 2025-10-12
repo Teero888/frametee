@@ -80,6 +80,8 @@ void keybinds_init(keybind_manager_t *manager) {
       (keybind_t){"Split Snippet", "Timeline", {ImGuiKey_R, true, false, false}};
   manager->bindings[ACTION_MERGE_SNIPPETS] =
       (keybind_t){"Merge Snippets", "Timeline", {ImGuiKey_M, true, false, false}};
+  manager->bindings[ACTION_TOGGLE_SNIPPET_ACTIVE] =
+      (keybind_t){"Toggle Snippet Active", "Timeline", {ImGuiKey_A, false, false, false}};
 
   // General
   manager->bindings[ACTION_UNDO] = (keybind_t){"Undo", "General", {ImGuiKey_Z, true, false, false}};
@@ -169,6 +171,22 @@ void keybinds_process_inputs(ui_handler_t *ui) {
     cmd = do_split_selected_snippets(ui);
   if (is_key_combo_pressed(&kb->bindings[ACTION_MERGE_SNIPPETS].combo, false))
     cmd = do_merge_selected_snippets(ui);
+
+  if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_SNIPPET_ACTIVE].combo, false)) {
+    if (ts->selected_snippet_id != -1 && ts->selected_player_track_index != -1) {
+      player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
+      input_snippet_t *snippet = find_snippet_by_id(track, ts->selected_snippet_id);
+      if (snippet) {
+        if (snippet->is_active) {
+          snippet->is_active = false; // Just deactivate
+          recalc_ts(ts, snippet->start_tick);
+        } else {
+          timeline_activate_snippet(ts, ts->selected_player_track_index, ts->selected_snippet_id);
+        }
+      }
+    }
+  }
+
   if (is_key_combo_pressed(&kb->bindings[ACTION_UNDO].combo, false))
     undo_manager_undo(&ui->undo_manager, ts);
   if (is_key_combo_pressed(&kb->bindings[ACTION_REDO].combo, false))
@@ -325,3 +343,4 @@ void keybinds_render_settings_window(keybind_manager_t *manager) {
   }
   igEnd();
 }
+

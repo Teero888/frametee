@@ -20,6 +20,8 @@ typedef struct {
   int id;
   int start_tick;
   int end_tick;
+  bool is_active;
+  int layer;
 
   SPlayerInput *inputs; // Array of player inputs, one per tick of duration
   int input_count;      // Duration in ticks
@@ -32,6 +34,12 @@ typedef struct {
   bool is_dummy;
 } player_track_t;
 
+typedef struct {
+  int snippet_id;
+  int track_offset;
+  int layer_offset;
+} DraggedSnippetInfo;
+
 // state for managing snippet dragging
 typedef struct {
   bool active;
@@ -41,6 +49,9 @@ typedef struct {
   int drag_offset_ticks; // Offset from snippet start to mouse click point in ticks
   float drag_offset_y;
   ImVec2 initial_mouse_pos; // Mouse position when drag started
+
+  DraggedSnippetInfo *drag_infos;
+  int drag_info_count;
 } timeline_drag_state_t;
 
 typedef struct {
@@ -65,6 +76,7 @@ struct timeline_state {
   int player_track_count;
   int selected_snippet_id;         // ID of the currently selected snippet (-1 if none)
   int selected_player_track_index; // Index of the track containing the selected snippet (-1 if none)
+  int context_menu_snippet_id;
   // Multi-selection support
   snippet_id_vector_t selected_snippets;
   bool selection_box_active;  // Are we currently dragging a selection rectangle?
@@ -110,6 +122,7 @@ void add_snippet_to_track(player_track_t *track, const input_snippet_t *snippet)
 void timeline_switch_recording_target(timeline_state_t *ts, int new_track_index);
 void add_snippet_to_selection(timeline_state_t *ts, int snippet_id, int track_index);
 void timeline_trigger_dummy_fire(timeline_state_t *ts);
+void timeline_activate_snippet(timeline_state_t *ts, int track_index, int snippet_id_to_activate);
 
 void render_timeline(ui_handler_t *ui);
 void timeline_init(timeline_state_t *ts);
@@ -129,3 +142,4 @@ undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id
                                                 const SPlayerInput *new_inputs);
 
 #endif
+
