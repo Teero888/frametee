@@ -184,7 +184,6 @@ void interaction_perform_dummy_copy(ui_handler_t *ui) {
 // Main Interaction Handlers
 void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   ts->playback_speed = ts->gui_playback_speed;
-  ImGuiIO *io = igGetIO_Nil();
 
   // Detect rewind (press or hold)
   bool reverse_down = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo) ||
@@ -236,6 +235,7 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
 }
 
 void interaction_handle_header(timeline_state_t *ts, ImRect header_bb) {
+  if (igGetIO_Nil()->ConfigFlags & ImGuiConfigFlags_NoMouse) return;
   ImGuiIO *io = igGetIO_Nil();
   bool is_header_hovered = igIsMouseHoveringRect(header_bb.Min, header_bb.Max, true);
 
@@ -255,6 +255,7 @@ void interaction_handle_header(timeline_state_t *ts, ImRect header_bb) {
 }
 
 void interaction_handle_timeline_area(timeline_state_t *ts, ImRect timeline_bb, float tracks_scroll_y) {
+  if (igGetIO_Nil()->ConfigFlags & ImGuiConfigFlags_NoMouse) return;
   handle_pan_and_zoom(ts, timeline_bb);
   handle_snippet_drag_and_drop(ts, timeline_bb, tracks_scroll_y);
   handle_selection_box(ts, timeline_bb, tracks_scroll_y);
@@ -704,6 +705,7 @@ void interaction_update_recording_input(ui_handler_t *ui) {
 }
 
 void interaction_handle_context_menu(timeline_state_t *ts) {
+  if (igGetIO_Nil()->ConfigFlags & ImGuiConfigFlags_NoMouse) return;
   if (igBeginPopup("TimelineContextMenu", 0)) {
     if (igMenuItem_Bool("Add Snippet", NULL, false, ts->selected_player_track_index != -1)) {
       undo_command_t *cmd = commands_create_add_snippet(ts->ui, ts->selected_player_track_index, ts->current_tick, 50);
