@@ -12,7 +12,9 @@
 #include "player_info.h"
 #include "skin_browser.h"
 #include "snippet_editor.h"
-#include "timeline.h"
+#include "timeline/timeline_commands.h"
+#include "timeline/timeline_interaction.h"
+#include "timeline/timeline_model.h"
 #include "undo_redo.h"
 #include "widgets/hsl_colorpicker.h"
 #include <limits.h>
@@ -43,10 +45,8 @@ void render_menu_bar(ui_handler_t *ui) {
         if (result == NFD_OKAY) {
           on_map_load_path(ui->gfx_handler, out_path);
           NFD_FreePathU8(out_path);
-        } else if (result == NFD_CANCEL)
-          log_warn(LOG_SOURCE, "Canceled map load.");
-        else
-          log_error(LOG_SOURCE, "Error: %s\n", NFD_GetError());
+        } else if (result == NFD_CANCEL) log_warn(LOG_SOURCE, "Canceled map load.");
+        else log_error(LOG_SOURCE, "Error: %s\n", NFD_GetError());
       }
       igSeparator();
       if (igMenuItem_Bool("Open Project", "Ctrl+O", false, true)) {
@@ -102,8 +102,7 @@ void render_menu_bar(ui_handler_t *ui) {
     ImVec2 region_avail;
     igGetContentRegionAvail(&region_avail);
     igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x);
-    if (igButton(button_text, (ImVec2){0, 0}))
-      plugin_manager_reload_all(&ui->plugin_manager, "plugins");
+    if (igButton(button_text, (ImVec2){0, 0})) plugin_manager_reload_all(&ui->plugin_manager, "plugins");
 
     igEndMainMenuBar();
   }
@@ -120,10 +119,8 @@ void setup_docking(ui_handler_t *ui) {
   igSetNextWindowViewport(viewport->ID);
 
   ImGuiWindowFlags host_window_flags = 0;
-  host_window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                       ImGuiWindowFlags_NoMove;
-  host_window_flags |=
-      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
+  host_window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+  host_window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
 
   igPushStyleVar_Float(ImGuiStyleVar_WindowRounding, 0.0f);
   igPushStyleVar_Float(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -148,8 +145,7 @@ void setup_docking(ui_handler_t *ui) {
 
     // split root into bottom + top remainder
     ImGuiID dock_id_top;
-    ImGuiID dock_id_bottom =
-        igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.20f, NULL, &dock_id_top);
+    ImGuiID dock_id_bottom = igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.20f, NULL, &dock_id_top);
 
     // split top remainder into left + remainder
     ImGuiID dock_id_left;
@@ -181,12 +177,13 @@ void render_player_manager(ui_handler_t *ui) {
   ph_t *ph = &ui->gfx_handler->physics_handler;
   if (igBegin("Players", NULL, 0)) {
     if (ph->world.m_pCollision && igButton("Add Player", (ImVec2){0, 0})) {
-      add_new_track(ts, ph, 1);
+      undo_command_t *cmd = timeline_api_create_track(ui, NULL, NULL);
+      if (cmd) undo_manager_register_command(&ui->undo_manager, cmd);
     }
-    igSameLine(0, 10.f);
-    if (ph->world.m_pCollision && igButton("Add 1000 Players", (ImVec2){0, 0})) {
-      add_new_track(ts, ph, 1000);
-    }
+    // igSameLine(0, 10.f);
+    // if (ph->world.m_pCollision && igButton("Add 1000 Players", (ImVec2){0, 0})) {
+    //   add_new_track(ts, ph, 1000);
+    // }
     igSameLine(0, 10.f);
     igText("Players: %d", ts->player_track_count);
 
@@ -194,8 +191,7 @@ void render_player_manager(ui_handler_t *ui) {
     for (int i = 0; i < ts->player_track_count; i++) {
       igPushID_Int(i);
       bool sel = (i == ts->selected_player_track_index);
-      const char *label =
-          ts->player_tracks[i].player_info.name[0] ? ts->player_tracks[i].player_info.name : "nameless tee";
+      const char *label = ts->player_tracks[i].player_info.name[0] ? ts->player_tracks[i].player_info.name : "nameless tee";
 
       // Selectable only
       igSetNextItemAllowOverlap();
@@ -213,24 +209,22 @@ void render_player_manager(ui_handler_t *ui) {
           igOpenPopup_Str("Confirm remove player", ImGuiPopupFlags_AnyPopupLevel);
           igPushID_Int(i);
         } else {
-          undo_command_t *cmd = do_remove_player_track(ui, i);
+          undo_command_t *cmd = commands_create_remove_track(ui, i);
           undo_manager_register_command(&ui->undo_manager, cmd);
         }
       }
       igPopID();
     }
-    if (ts->player_track_count > 0)
-      igSeparator();
+    if (ts->player_track_count > 0) igSeparator();
   }
   if (igBeginPopupModal("Confirm remove player", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
     igText("This player has inputs. Remove anyway?");
     static bool dont_ask_again = false;
     igCheckbox("Do not ask again", &dont_ask_again);
     if (igButton("Yes", (ImVec2){0, 0})) {
-      undo_command_t *cmd = do_remove_player_track(ui, g_pending_remove_index);
+      undo_command_t *cmd = commands_create_remove_track(ui, g_pending_remove_index);
       undo_manager_register_command(&ui->undo_manager, cmd);
-      if (dont_ask_again)
-        g_remove_confirm_needed = false;
+      if (dont_ask_again) g_remove_confirm_needed = false;
       g_pending_remove_index = -1;
       igCloseCurrentPopup();
     }
@@ -245,17 +239,14 @@ void render_player_manager(ui_handler_t *ui) {
 }
 
 void on_camera_update(gfx_handler_t *handler, bool hovered) {
-  if (!handler->map_data || !handler->map_data->game_layer.data)
-    return;
+  if (!handler->map_data || !handler->map_data->game_layer.data) return;
   camera_t *camera = &handler->renderer.camera;
   ImGuiIO *io = igGetIO_Nil();
 
   float scroll_y = !hovered ? 0.0f : io->MouseWheel;
   if (!igIsAnyItemActive()) { // Prevent shortcuts while typing in a text field
-    if (is_key_combo_pressed(&handler->user_interface.keybinds.bindings[ACTION_ZOOM_IN].combo, true))
-      scroll_y = 1.0f;
-    if (is_key_combo_pressed(&handler->user_interface.keybinds.bindings[ACTION_ZOOM_OUT].combo, true))
-      scroll_y = -1.0f;
+    if (is_key_combo_pressed(&handler->user_interface.keybinds.bindings[ACTION_ZOOM_IN].combo, true)) scroll_y = 1.0f;
+    if (is_key_combo_pressed(&handler->user_interface.keybinds.bindings[ACTION_ZOOM_OUT].combo, true)) scroll_y = -1.0f;
   }
   if (scroll_y != 0.0f) {
     float zoom_factor = 1.0f + scroll_y * 0.1f;
@@ -301,8 +292,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ImGuiIO *io = igGetIO_Nil();
   ImFontAtlas *atlas = io->Fonts;
 
-  ui->font =
-      ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/JetBrainsMono-Medium.ttf", 19.f, NULL, NULL);
+  ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/JetBrainsMono-Medium.ttf", 19.f, NULL, NULL);
 
   ImFontConfig *config = ImFontConfig_ImFontConfig();
   config->MergeMode = true;
@@ -318,7 +308,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->show_prediction = true;
   ui->prediction_length = 100;
   ui->show_skin_browser = false;
-  timeline_init(&ui->timeline);
+  timeline_init(ui);
   camera_init(&gfx_handler->renderer.camera);
   keybinds_init(&ui->keybinds);
   undo_manager_init(&ui->undo_manager);
@@ -343,11 +333,9 @@ static void lerp(vec2 a, vec2 b, float f, vec2 out) {
 static int find_snapshot_index_le(const physics_v_t *vec, int target_tick) {
   // returns index of the last snapshot with m_GameTick <= target_tick
   // returns -1 if none found
-  if (vec->current_size == 0)
-    return -1;
+  if (vec->current_size == 0) return -1;
   for (int i = vec->current_size - 1; i >= 0; --i) {
-    if (vec->data[i].m_GameTick <= target_tick)
-      return i;
+    if (vec->data[i].m_GameTick <= target_tick) return i;
   }
   return -1;
 }
@@ -355,46 +343,20 @@ static int find_snapshot_index_le(const physics_v_t *vec, int target_tick) {
 void render_players(ui_handler_t *ui) {
   gfx_handler_t *gfx = ui->gfx_handler;
   physics_handler_t *ph = &gfx->physics_handler;
-  if (!ph->loaded)
-    return;
+  if (!ph->loaded) return;
 
   SWorldCore world = wc_empty();
 
-  const int step = 50;
-  int target_tick = ui->timeline.current_tick;
-
-  if (target_tick < ui->timeline.previous_world.m_GameTick)
-    wc_copy_world(
-        &world,
-        &ui->timeline.vec.data[iclamp((target_tick - 1) / step, 0, ui->timeline.vec.current_size - 1)]);
-  else
-    wc_copy_world(&world, &ui->timeline.previous_world);
+  // Get the world state at the current tick. The model handles caching internally.
+  model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world);
 
   if (ui->timeline.player_track_count != world.m_NumCharacters) {
     wc_free(&world);
     return;
   }
 
-  while (world.m_GameTick < target_tick) {
-    for (int p = 0; p < world.m_NumCharacters; ++p) {
-      SPlayerInput input = get_input(&ui->timeline, p, world.m_GameTick);
-      cc_on_input(&world.m_pCharacters[p], &input);
-    }
-    wc_tick(&world);
-    if (world.m_GameTick % step == 0) {
-      if (world.m_GameTick / step >= ui->timeline.vec.current_size)
-        v_push(&ui->timeline.vec, &world);
-      else {
-        wc_copy_world(&ui->timeline.vec.data[world.m_GameTick / step], &world);
-      }
-    }
-  }
-  wc_copy_world(&ui->timeline.previous_world, &world);
-
-  float intra =
-      fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
-  if (igIsKeyDown_Nil(ImGuiKey_C))
-    intra = 1.f - intra;
+  float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
+  if (ui->timeline.is_reversing) intra = 1.f - intra;
 
   if (ui->timeline.recording) {
     SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
@@ -421,33 +383,22 @@ void render_players(ui_handler_t *ui) {
 
     bool stationary = fabsf(vgetx(core->m_Vel) * 256.f) <= 1;
     bool running = fabsf(vgetx(core->m_Vel) * 256.f) >= 5000;
-    bool want_other_dir = (core->m_Input.m_Direction == -1 && vgetx(core->m_Vel) > 0) ||
-                          (core->m_Input.m_Direction == 1 && vgetx(core->m_Vel) < 0);
+    bool want_other_dir = (core->m_Input.m_Direction == -1 && vgetx(core->m_Vel) > 0) || (core->m_Input.m_Direction == 1 && vgetx(core->m_Vel) < 0);
     bool inactive = get_flag_sit(&core->m_Input);
-    bool in_air = !(core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) ||
-                  !(check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16)));
+    bool in_air = !(core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) || !(check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16)));
 
     float walk_time = fmod(p[0] * 32.f, 100.0f) / 100.0f;
     float run_time = fmod(p[0] * 32.f, 200.0f) / 200.0f;
-    if (walk_time < 0.0f)
-      walk_time += 1.0f;
-    if (run_time < 0.0f)
-      run_time += 1.0f;
+    if (walk_time < 0.0f) walk_time += 1.0f;
+    if (run_time < 0.0f) run_time += 1.0f;
 
-    if (in_air)
-      anim_state_add(&anim_state, &anim_inair, 0.0f, 1.0f);
+    if (in_air) anim_state_add(&anim_state, &anim_inair, 0.0f, 1.0f);
     else if (stationary) {
-      if (inactive)
-        anim_state_add(&anim_state, core->m_Input.m_Direction < 0 ? &anim_sit_left : &anim_sit_right, 0.0f,
-                       1.0f);
-      else
-        anim_state_add(&anim_state, &anim_idle, 0.0f, 1.0f);
+      if (inactive) anim_state_add(&anim_state, core->m_Input.m_Direction < 0 ? &anim_sit_left : &anim_sit_right, 0.0f, 1.0f);
+      else anim_state_add(&anim_state, &anim_idle, 0.0f, 1.0f);
     } else if (!want_other_dir) {
-      if (running)
-        anim_state_add(&anim_state, vgetx(core->m_Vel) < 0.0f ? &anim_run_left : &anim_run_right, run_time,
-                       1.0f);
-      else
-        anim_state_add(&anim_state, &anim_walk, walk_time, 1.0f);
+      if (running) anim_state_add(&anim_state, vgetx(core->m_Vel) < 0.0f ? &anim_run_left : &anim_run_right, run_time, 1.0f);
+      else anim_state_add(&anim_state, &anim_walk, walk_time, 1.0f);
     }
 
     vec2 dir = {core->m_Input.m_TargetX, core->m_Input.m_TargetY};
@@ -461,8 +412,7 @@ void render_players(ui_handler_t *ui) {
 
     if (core->m_FreezeTime > 0) {
       skin = gfx->x_ninja_skin;
-      if (eye == 0)
-        eye = EYE_BLINK;
+      if (eye == 0) eye = EYE_BLINK;
       custom_col = false;
     }
     if (custom_col) {
@@ -496,14 +446,11 @@ void render_players(ui_handler_t *ui) {
         center_pos[0] = p[0] + direction[0] * (length - 1.0) * 0.5f;
         center_pos[1] = p[1] + direction[1] * (length - 1.0) * 0.5f;
         vec2 chain_size = {-length, 0.5};
-        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, center_pos, chain_size, angle,
-                                     GAMESKIN_HOOK_CHAIN, true);
+        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, center_pos, chain_size, angle, GAMESKIN_HOOK_CHAIN, true);
       }
-      sprite_definition_t *head_sprite_def =
-          &gfx->renderer.gameskin_renderer.sprite_definitions[GAMESKIN_HOOK_HEAD];
+      sprite_definition_t *head_sprite_def = &gfx->renderer.gameskin_renderer.sprite_definitions[GAMESKIN_HOOK_HEAD];
       vec2 head_size = {(float)head_sprite_def->w / 64.0f, (float)head_sprite_def->h / 64.0f};
-      renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, hook_pos, head_size, angle,
-                                   GAMESKIN_HOOK_HEAD, false);
+      renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, hook_pos, head_size, angle, GAMESKIN_HOOK_HEAD, false);
     }
     if (!core->m_FreezeTime && core->m_ActiveWeapon >= WEAPON_HAMMER && core->m_ActiveWeapon < NUM_WEAPONS) {
       const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
@@ -533,14 +480,11 @@ void render_players(ui_handler_t *ui) {
         weapon_pos[0] += anim_state.attach.x;
         weapon_pos[1] += anim_state.attach.y;
         weapon_pos[1] += spec->offsety;
-        if (dir[0] < 0.0f)
-          weapon_pos[0] -= spec->offsetx;
-        if (is_sit)
-          weapon_pos[1] += 3.0f;
+        if (dir[0] < 0.0f) weapon_pos[0] -= spec->offsetx;
+        if (is_sit) weapon_pos[1] += 3.0f;
 
         if (!inactive) {
-          anim_state_add(&anim_state, &anim_hammer_swing, (float)attack_ticks_passed / fire_delay_ticks,
-                         1.0f);
+          anim_state_add(&anim_state, &anim_hammer_swing, (float)attack_ticks_passed / fire_delay_ticks, 1.0f);
           anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
           weapon_angle = M_PI / 2.0f - flip_factor * anim_attach_angle_rad;
         } else {
@@ -549,10 +493,8 @@ void render_players(ui_handler_t *ui) {
       } else if (core->m_ActiveWeapon == WEAPON_NINJA) {
         weapon_sprite_id = GAMESKIN_NINJA_BODY;
         weapon_pos[1] += spec->offsety;
-        if (is_sit)
-          weapon_pos[1] += 3.0f;
-        if (dir[0] < 0.0f)
-          weapon_pos[0] -= spec->offsetx;
+        if (is_sit) weapon_pos[1] += 3.0f;
+        if (dir[0] < 0.0f) weapon_pos[0] -= spec->offsetx;
 
         if (attack_ticks_passed <= fire_delay_ticks) {
           anim_state_add(&anim_state, &anim_ninja_swing, (float)attack_ticks_passed / fire_delay_ticks, 1.0f);
@@ -578,16 +520,14 @@ void render_players(ui_handler_t *ui) {
           muzzle_phys_pos[1] -= hadoken_dir[1] * spec->muzzleoffsetx;
 
           int muzzle_sprite_id = GAMESKIN_NINJA_MUZZLE1 + muzzle_idx;
-          sprite_definition_t *muzzle_sprite_def =
-              &gfx->renderer.gameskin_renderer.sprite_definitions[muzzle_sprite_id];
+          sprite_definition_t *muzzle_sprite_def = &gfx->renderer.gameskin_renderer.sprite_definitions[muzzle_sprite_id];
           float f = sqrtf(powf(muzzle_sprite_def->w, 2) + powf(muzzle_sprite_def->h, 2));
           float scaleX = muzzle_sprite_def->w / f;
           float scaleY = muzzle_sprite_def->h / f;
           vec2 muzzle_size = {160.0f * scaleX / 32.0f, 160.0f * scaleY / 32.0f};
 
           vec2 render_pos = {muzzle_phys_pos[0] / 32.0f, muzzle_phys_pos[1] / 32.0f};
-          renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size,
-                                       hadoken_angle, muzzle_sprite_id, false);
+          renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size, hadoken_angle, muzzle_sprite_id, false);
         }
       } else {
         switch (core->m_ActiveWeapon) {
@@ -607,18 +547,15 @@ void render_players(ui_handler_t *ui) {
 
         float recoil = 0.0f;
         float a = attack_ticks_passed / 5.0f;
-        if (attack_ticks_passed > 0 && a < 1.0f)
-          recoil = sinf(a * M_PI);
+        if (attack_ticks_passed > 0 && a < 1.0f) recoil = sinf(a * M_PI);
 
         weapon_pos[0] += dir[0] * (spec->offsetx - recoil * 10.0f);
         weapon_pos[1] += dir[1] * (spec->offsetx - recoil * 10.0f);
         weapon_pos[1] += spec->offsety;
 
-        if (is_sit)
-          weapon_pos[1] += 3.0f;
+        if (is_sit) weapon_pos[1] += 3.0f;
 
-        if ((core->m_ActiveWeapon == WEAPON_GUN || core->m_ActiveWeapon == WEAPON_SHOTGUN) &&
-            spec->num_muzzles > 0) {
+        if ((core->m_ActiveWeapon == WEAPON_GUN || core->m_ActiveWeapon == WEAPON_SHOTGUN) && spec->num_muzzles > 0) {
           if (attack_ticks_passed > 0 && attack_ticks_passed < spec->muzzleduration + 3.0f) {
             int muzzle_idx = world.m_GameTick % spec->num_muzzles;
             vec2 muzzle_dir_y = {-dir[1], dir[0]};
@@ -629,9 +566,7 @@ void render_players(ui_handler_t *ui) {
             muzzle_phys_pos[0] += dir[0] * spec->muzzleoffsetx + muzzle_dir_y[0] * offset_y;
             muzzle_phys_pos[1] += dir[1] * spec->muzzleoffsetx + muzzle_dir_y[1] * offset_y;
 
-            int muzzle_sprite_id =
-                (core->m_ActiveWeapon == WEAPON_GUN ? GAMESKIN_GUN_MUZZLE1 : GAMESKIN_SHOTGUN_MUZZLE1) +
-                muzzle_idx;
+            int muzzle_sprite_id = (core->m_ActiveWeapon == WEAPON_GUN ? GAMESKIN_GUN_MUZZLE1 : GAMESKIN_SHOTGUN_MUZZLE1) + muzzle_idx;
 
             float w = 96.0f, h = 64.0f;
             float f = sqrtf(w * w + h * h);
@@ -644,15 +579,13 @@ void render_players(ui_handler_t *ui) {
             muzzle_size[1] *= flip_factor;
 
             vec2 render_pos = {muzzle_phys_pos[0] / 32.0f, muzzle_phys_pos[1] / 32.0f};
-            renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size,
-                                         weapon_angle, muzzle_sprite_id, false);
+            renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size, weapon_angle, muzzle_sprite_id, false);
           }
         }
       }
 
       if (weapon_sprite_id != -1) {
-        sprite_definition_t *sprite_def =
-            &gfx->renderer.gameskin_renderer.sprite_definitions[weapon_sprite_id];
+        sprite_definition_t *sprite_def = &gfx->renderer.gameskin_renderer.sprite_definitions[weapon_sprite_id];
         float w = sprite_def->w;
         float h = sprite_def->h;
         float f = sqrtf(w * w + h * h);
@@ -664,14 +597,12 @@ void render_players(ui_handler_t *ui) {
 
         vec2 render_pos = {weapon_pos[0] / 32.0f, weapon_pos[1] / 32.0f};
 
-        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, weapon_size, weapon_angle,
-                                     weapon_sprite_id, false);
+        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, weapon_size, weapon_angle, weapon_sprite_id, false);
       }
     }
   }
   int id = 0;
-  for (SProjectile *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
-       ent = ent->m_Base.m_pNextTypeEntity) {
+  for (SProjectile *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent; ent = ent->m_Base.m_pNextTypeEntity) {
     float pt = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick - 1) / (float)GAME_TICK_SPEED;
     float ct = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick) / (float)GAME_TICK_SPEED;
     mvec2 prev_pos = prj_get_pos(ent, pt);
@@ -682,14 +613,11 @@ void render_players(ui_handler_t *ui) {
     vec2 p;
     lerp(ppp, pp, intra, p);
 
-    renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, p, (vec2){1, 1},
-                                 -((world.m_GameTick + intra) / 50.f) * 4 * M_PI + id, GAMESKIN_GRENADE_PROJ,
-                                 false);
+    renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, p, (vec2){1, 1}, -((world.m_GameTick + intra) / 50.f) * 4 * M_PI + id, GAMESKIN_GRENADE_PROJ, false);
     ++id;
   }
   (void)id;
-  for (SLaser *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent;
-       ent = ent->m_Base.m_pNextTypeEntity) {
+  for (SLaser *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent; ent = ent->m_Base.m_pNextTypeEntity) {
     vec2 p1 = {vgetx(ent->m_Base.m_Pos) / 32.f, vgety(ent->m_Base.m_Pos) / 32.f};
     vec2 p0 = {vgetx(ent->m_From) / 32.f, vgety(ent->m_From) / 32.f};
 
@@ -699,20 +627,6 @@ void render_players(ui_handler_t *ui) {
     renderer_draw_line(gfx, p0, p1, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 0.25f);
     renderer_draw_circle_filled(gfx, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);
   }
-
-  // if (ui->timeline.recording) {
-  //   SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
-  //   vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
-  //   vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-  //   vec2 p;
-  //   lerp(ppp, pp, intra, p);
-  //   renderer_draw_circle_filled(gfx,
-  //                               (vec2){p[0] + gfx->user_interface.timeline.recording_input.m_TargetX
-  //                               / 64.f,
-  //                                      p[1] + gfx->user_interface.timeline.recording_input.m_TargetY
-  //                                      / 64.f},
-  //                               0.25, (vec4){1.f, 0.f, 0.f, 0.4f}, 16);
-  // }
 
   if (ui->timeline.selected_player_track_index >= 0) {
     SCharacterCore *p = &world.m_pCharacters[ui->timeline.selected_player_track_index];
@@ -743,19 +657,15 @@ void render_players(ui_handler_t *ui) {
     lerp(ppp, pp, intra, p);
 
     vec4 color = {[3] = 0.8f};
-    if (core->m_FreezeTime > 0)
-      color[0] = 1.f;
-    else
-      color[1] = 1.f;
+    if (core->m_FreezeTime > 0) color[0] = 1.f;
+    else color[1] = 1.f;
     renderer_draw_line(gfx, pp, p, color, 0.05);
   }
 
   // draw the rest of the lines
   for (int t = 0; t < ui->prediction_length; ++t) {
     for (int i = 0; i < world.m_NumCharacters; ++i) {
-      SPlayerInput input = ui->timeline.recording && i == ui->timeline.selected_player_track_index
-                               ? ui->timeline.recording_input
-                               : get_input(&ui->timeline, i, world.m_GameTick);
+      SPlayerInput input = ui->timeline.recording && i == ui->timeline.selected_player_track_index ? ui->timeline.recording_input : model_get_input_at_tick(&ui->timeline, i, world.m_GameTick);
       cc_on_input(&world.m_pCharacters[i], &input);
     }
     wc_tick(&world);
@@ -765,10 +675,8 @@ void render_players(ui_handler_t *ui) {
       vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
       vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
       vec4 color = {[3] = 0.8f};
-      if (core->m_FreezeTime > 0)
-        color[0] = 1.f;
-      else
-        color[1] = 1.f;
+      if (core->m_FreezeTime > 0) color[0] = 1.f;
+      else color[1] = 1.f;
       renderer_draw_line(gfx, pp, p, color, 0.05);
     }
   }
@@ -776,8 +684,7 @@ void render_players(ui_handler_t *ui) {
 }
 
 void render_cursor(ui_handler_t *ui) {
-  if (!ui->timeline.recording)
-    return;
+  if (!ui->timeline.recording) return;
 
   gfx_handler_t *handler = ui->gfx_handler;
 
@@ -785,13 +692,12 @@ void render_cursor(ui_handler_t *ui) {
   if (handler->user_interface.timeline.recording) {
     float norm_x = ui->last_render_pos[0] + handler->user_interface.timeline.recording_input.m_TargetX / 64.f;
     float norm_y = ui->last_render_pos[1] + handler->user_interface.timeline.recording_input.m_TargetY / 64.f;
-    renderer_push_atlas_instance(&handler->renderer.cursor_renderer, (vec2){norm_x, norm_y}, (vec2){1.f, 1.f},
-                                 0.0f, handler->user_interface.weapon, false);
+    renderer_push_atlas_instance(&handler->renderer.cursor_renderer, (vec2){norm_x, norm_y}, (vec2){1.f, 1.f}, 0.0f, handler->user_interface.weapon, false);
   }
 }
 
 void ui_render(ui_handler_t *ui) {
-  timeline_update_inputs(&ui->timeline, ui->gfx_handler);
+  interaction_update_recording_input(ui);
   render_menu_bar(ui);
 
   // render menu bar first so the plugin can add menu items
@@ -801,17 +707,14 @@ void ui_render(ui_handler_t *ui) {
   keybinds_process_inputs(ui);
   setup_docking(ui);
   if (ui->show_timeline) {
-    if (!ui->timeline.ui)
-      ui->timeline.ui = ui;
+    if (!ui->timeline.ui) ui->timeline.ui = ui;
     render_timeline(ui);
     render_player_manager(ui);
     render_snippet_editor_panel(ui);
-    if (ui->timeline.selected_player_track_index != -1)
-      render_player_info(ui->gfx_handler);
+    if (ui->timeline.selected_player_track_index != -1) render_player_info(ui->gfx_handler);
   }
   keybinds_render_settings_window(&ui->keybinds);
-  if (ui->show_skin_browser)
-    render_skin_browser(ui->gfx_handler);
+  if (ui->show_skin_browser) render_skin_browser(ui->gfx_handler);
 }
 
 // render viewport and related things
@@ -837,16 +740,13 @@ bool ui_render_late(ui_handler_t *ui) {
       igSetCursorScreenPos(start);
       igText("Character:");
       igText("Pos: %d, %d; (%.4f, %.4f)", ui->pos_x, ui->pos_y, ui->pos_x / 32.f, ui->pos_y / 32.f);
-      igText("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", ui->vel_x * ui->vel_r, ui->vel_y,
-             ui->vel_x * ui->vel_r * (50.f / 32.f), ui->vel_y * (50.f / 32.f));
+      igText("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", ui->vel_x * ui->vel_r, ui->vel_y, ui->vel_x * ui->vel_r * (50.f / 32.f), ui->vel_y * (50.f / 32.f));
       igText("Freeze: %d", ui->freezetime);
       igText("Reload: %d", ui->reloadtime);
       igText("Weapon: %d", ui->weapon);
-      igText("Weapons: [ %d, %d, %d, %d, %d, %d ]", ui->weapons[0], ui->weapons[1], ui->weapons[2],
-             ui->weapons[3], ui->weapons[4], ui->weapons[5]);
+      igText("Weapons: [ %d, %d, %d, %d, %d, %d ]", ui->weapons[0], ui->weapons[1], ui->weapons[2], ui->weapons[3], ui->weapons[4], ui->weapons[5]);
       SPlayerInput Input = ui->timeline.recording_input;
-      if (!ui->timeline.recording)
-        Input = get_input(&ui->timeline, ui->timeline.selected_player_track_index, ui->timeline.current_tick);
+      if (!ui->timeline.recording) Input = model_get_input_at_tick(&ui->timeline, ui->timeline.selected_player_track_index, ui->timeline.current_tick);
       igText("");
       igText("Input:");
       igText("Direction: %d", Input.m_Direction);
@@ -858,13 +758,9 @@ bool ui_render_late(ui_handler_t *ui) {
       igText("WantedWeapon: %d", Input.m_WantedWeapon);
       igText("TeleOut: %d", Input.m_TeleOut);
 #define WORD_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c"
-#define WORD_TO_BINARY(word)                                                                                 \
-  ((word) & 0x8000 ? '1' : '0'), ((word) & 0x4000 ? '1' : '0'), ((word) & 0x2000 ? '1' : '0'),               \
-      ((word) & 0x1000 ? '1' : '0'), ((word) & 0x0800 ? '1' : '0'), ((word) & 0x0400 ? '1' : '0'),           \
-      ((word) & 0x0200 ? '1' : '0'), ((word) & 0x0100 ? '1' : '0'), ((word) & 0x0080 ? '1' : '0'),           \
-      ((word) & 0x0040 ? '1' : '0'), ((word) & 0x0020 ? '1' : '0'), ((word) & 0x0010 ? '1' : '0'),           \
-      ((word) & 0x0008 ? '1' : '0'), ((word) & 0x0004 ? '1' : '0'), ((word) & 0x0002 ? '1' : '0'),           \
-      ((word) & 0x0001 ? '1' : '0')
+#define WORD_TO_BINARY(word)                                                                                                                                                                                                                                                                               \
+  ((word) & 0x8000 ? '1' : '0'), ((word) & 0x4000 ? '1' : '0'), ((word) & 0x2000 ? '1' : '0'), ((word) & 0x1000 ? '1' : '0'), ((word) & 0x0800 ? '1' : '0'), ((word) & 0x0400 ? '1' : '0'), ((word) & 0x0200 ? '1' : '0'), ((word) & 0x0100 ? '1' : '0'), ((word) & 0x0080 ? '1' : '0'),                   \
+      ((word) & 0x0040 ? '1' : '0'), ((word) & 0x0020 ? '1' : '0'), ((word) & 0x0010 ? '1' : '0'), ((word) & 0x0008 ? '1' : '0'), ((word) & 0x0004 ? '1' : '0'), ((word) & 0x0002 ? '1' : '0'), ((word) & 0x0001 ? '1' : '0')
       igText("Flags: " WORD_TO_BINARY_PATTERN, WORD_TO_BINARY(Input.m_Flags));
 #undef WORD_TO_BINARY
 #undef WORD_TO_BINARY_PATTERN

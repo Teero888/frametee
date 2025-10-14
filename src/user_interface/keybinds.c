@@ -1,12 +1,15 @@
 #include "keybinds.h"
 #include "cimgui.h"
+#include "timeline/timeline_commands.h"
+#include "timeline/timeline_interaction.h"
+#include "timeline/timeline_model.h"
 #include "user_interface.h"
+#include <limits.h>
 #include <string.h>
 
 // check if a key combination is pressed for single-press actions
 bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
-  if (combo->key == ImGuiKey_None)
-    return false;
+  if (combo->key == ImGuiKey_None) return false;
 
   ImGuiIO *io = igGetIO_Nil();
   if (combo->ctrl != io->KeyCtrl || combo->alt != io->KeyAlt || combo->shift != io->KeyShift) {
@@ -18,8 +21,7 @@ bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
 
 // check if a key combination is held down
 bool is_key_combo_down(const key_combo_t *combo) {
-  if (combo->key == ImGuiKey_None)
-    return false;
+  if (combo->key == ImGuiKey_None) return false;
 
   ImGuiIO *io = igGetIO_Nil();
   if (combo->ctrl != io->KeyCtrl || combo->alt != io->KeyAlt || combo->shift != io->KeyShift) {
@@ -37,12 +39,9 @@ const char *keybind_get_combo_string(const key_combo_t *combo) {
   }
 
   combo_string_buffer[0] = '\0';
-  if (combo->ctrl)
-    strcat(combo_string_buffer, "Ctrl+");
-  if (combo->alt)
-    strcat(combo_string_buffer, "Alt+");
-  if (combo->shift)
-    strcat(combo_string_buffer, "Shift+");
+  if (combo->ctrl) strcat(combo_string_buffer, "Ctrl+");
+  if (combo->alt) strcat(combo_string_buffer, "Alt+");
+  if (combo->shift) strcat(combo_string_buffer, "Shift+");
 
   const char *key_name = igGetKeyName(combo->key);
   if (key_name) {
@@ -58,96 +57,65 @@ void keybinds_init(keybind_manager_t *manager) {
   manager->show_settings_window = false;
 
   // Playback
-  manager->bindings[ACTION_PLAY_PAUSE] =
-      (keybind_t){"Play/Pause", "Playback", {ImGuiKey_X, false, false, false}};
-  manager->bindings[ACTION_REWIND_HOLD] =
-      (keybind_t){"Rewind (Hold)", "Playback", {ImGuiKey_C, false, false, false}};
-  manager->bindings[ACTION_PREV_FRAME] =
-      (keybind_t){"Previous Frame", "Playback", {ImGuiKey_MouseX1, false, false, false}};
-  manager->bindings[ACTION_NEXT_FRAME] =
-      (keybind_t){"Next Frame", "Playback", {ImGuiKey_MouseX2, false, false, false}};
-  manager->bindings[ACTION_INC_TPS] =
-      (keybind_t){"Increase TPS", "Playback", {ImGuiKey_UpArrow, false, false, false}};
-  manager->bindings[ACTION_DEC_TPS] =
-      (keybind_t){"Next Frame", "Playback", {ImGuiKey_DownArrow, false, false, false}};
+  manager->bindings[ACTION_PLAY_PAUSE] = (keybind_t){"Play/Pause", "Playback", {ImGuiKey_X, false, false, false}};
+  manager->bindings[ACTION_REWIND_HOLD] = (keybind_t){"Rewind (Hold)", "Playback", {ImGuiKey_C, false, false, false}};
+  manager->bindings[ACTION_PREV_FRAME] = (keybind_t){"Previous Frame", "Playback", {ImGuiKey_MouseX1, false, false, false}};
+  manager->bindings[ACTION_NEXT_FRAME] = (keybind_t){"Next Frame", "Playback", {ImGuiKey_MouseX2, false, false, false}};
+  manager->bindings[ACTION_INC_TPS] = (keybind_t){"Increase TPS", "Playback", {ImGuiKey_UpArrow, false, false, false}};
+  manager->bindings[ACTION_DEC_TPS] = (keybind_t){"Next Frame", "Playback", {ImGuiKey_DownArrow, false, false, false}};
 
   // Timeline Editing
-  manager->bindings[ACTION_SELECT_ALL] =
-      (keybind_t){"Select all Snippets", "Timeline", {ImGuiKey_A, true, false, false}};
-  manager->bindings[ACTION_DELETE_SNIPPET] =
-      (keybind_t){"Delete Snippet", "Timeline", {ImGuiKey_D, true, false, false}};
-  manager->bindings[ACTION_SPLIT_SNIPPET] =
-      (keybind_t){"Split Snippet", "Timeline", {ImGuiKey_R, true, false, false}};
-  manager->bindings[ACTION_MERGE_SNIPPETS] =
-      (keybind_t){"Merge Snippets", "Timeline", {ImGuiKey_M, true, false, false}};
-  manager->bindings[ACTION_TOGGLE_SNIPPET_ACTIVE] =
-      (keybind_t){"Toggle Snippet Active", "Timeline", {ImGuiKey_A, false, false, false}};
+  manager->bindings[ACTION_SELECT_ALL] = (keybind_t){"Select all Snippets", "Timeline", {ImGuiKey_A, true, false, false}};
+  manager->bindings[ACTION_DELETE_SNIPPET] = (keybind_t){"Delete Snippet", "Timeline", {ImGuiKey_Delete, false, false, false}};
+  manager->bindings[ACTION_SPLIT_SNIPPET] = (keybind_t){"Split Snippet", "Timeline", {ImGuiKey_R, true, false, false}};
+  manager->bindings[ACTION_MERGE_SNIPPETS] = (keybind_t){"Merge Snippets", "Timeline", {ImGuiKey_M, true, false, false}};
+  manager->bindings[ACTION_TOGGLE_SNIPPET_ACTIVE] = (keybind_t){"Toggle Snippet Active", "Timeline", {ImGuiKey_A, false, false, false}};
 
   // General
   manager->bindings[ACTION_UNDO] = (keybind_t){"Undo", "General", {ImGuiKey_Z, true, false, false}};
   manager->bindings[ACTION_REDO] = (keybind_t){"Redo", "General", {ImGuiKey_Y, true, false, false}};
 
   // Recording
+  manager->bindings[ACTION_TRIM_SNIPPET] = (keybind_t){"Trim Recording", "Recording", {ImGuiKey_F, false, false, false}};
   manager->bindings[ACTION_LEFT] = (keybind_t){"Move Left", "Recording", {ImGuiKey_A, false, false, false}};
   manager->bindings[ACTION_RIGHT] = (keybind_t){"Move Right", "Recording", {ImGuiKey_D, false, false, false}};
   manager->bindings[ACTION_JUMP] = (keybind_t){"Jump", "Recording", {ImGuiKey_Space, false, false, false}};
   manager->bindings[ACTION_KILL] = (keybind_t){"Kill", "Recording", {ImGuiKey_K, false, false, false}};
-  manager->bindings[ACTION_FIRE] =
-      (keybind_t){"Fire weapon", "Recording", {ImGuiKey_MouseLeft, false, false, false}};
-  manager->bindings[ACTION_HOOK] =
-      (keybind_t){"Hook", "Recording", {ImGuiKey_MouseRight, false, false, false}};
-  manager->bindings[ACTION_HAMMER] =
-      (keybind_t){"Switch to hammer", "Recording", {ImGuiKey_1, false, false, false}};
-  manager->bindings[ACTION_GUN] =
-      (keybind_t){"Switch to gun", "Recording", {ImGuiKey_2, false, false, false}};
-  manager->bindings[ACTION_SHOTGUN] =
-      (keybind_t){"Switch to shotgun", "Recording", {ImGuiKey_3, false, false, false}};
-  manager->bindings[ACTION_GRENADE] =
-      (keybind_t){"Switch to grenade", "Recording", {ImGuiKey_4, false, false, false}};
-  manager->bindings[ACTION_LASER] =
-      (keybind_t){"Switch to laser", "Recording", {ImGuiKey_5, false, false, false}};
+  manager->bindings[ACTION_FIRE] = (keybind_t){"Fire weapon", "Recording", {ImGuiKey_MouseLeft, false, false, false}};
+  manager->bindings[ACTION_HOOK] = (keybind_t){"Hook", "Recording", {ImGuiKey_MouseRight, false, false, false}};
+  manager->bindings[ACTION_HAMMER] = (keybind_t){"Switch to hammer", "Recording", {ImGuiKey_1, false, false, false}};
+  manager->bindings[ACTION_GUN] = (keybind_t){"Switch to gun", "Recording", {ImGuiKey_2, false, false, false}};
+  manager->bindings[ACTION_SHOTGUN] = (keybind_t){"Switch to shotgun", "Recording", {ImGuiKey_3, false, false, false}};
+  manager->bindings[ACTION_GRENADE] = (keybind_t){"Switch to grenade", "Recording", {ImGuiKey_4, false, false, false}};
+  manager->bindings[ACTION_LASER] = (keybind_t){"Switch to laser", "Recording", {ImGuiKey_5, false, false, false}};
 
   // Dummy
-  manager->bindings[ACTION_DUMMY_FIRE] =
-      (keybind_t){"Dummy Fire", "Dummy", {ImGuiKey_MouseLeft, false, false, false}};
-  manager->bindings[ACTION_TOGGLE_DUMMY_COPY] =
-      (keybind_t){"Toggle dummy copy", "Dummy", {ImGuiKey_R, false, false, false}};
+  manager->bindings[ACTION_DUMMY_FIRE] = (keybind_t){"Dummy Fire", "Dummy", {ImGuiKey_MouseLeft, false, false, false}};
+  manager->bindings[ACTION_TOGGLE_DUMMY_COPY] = (keybind_t){"Toggle dummy copy", "Dummy", {ImGuiKey_R, false, false, false}};
 
   // Camera
   manager->bindings[ACTION_ZOOM_IN] = (keybind_t){"Zoom in", "Camera", {ImGuiKey_W, false, false, false}};
   manager->bindings[ACTION_ZOOM_OUT] = (keybind_t){"Zoom out", "Camera", {ImGuiKey_S, false, false, false}};
 
   // Track Switching
-  manager->bindings[ACTION_SWITCH_TRACK_1] =
-      (keybind_t){"Switch to Track 1", "Tracks", {ImGuiKey_1, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_2] =
-      (keybind_t){"Switch to Track 2", "Tracks", {ImGuiKey_2, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_3] =
-      (keybind_t){"Switch to Track 3", "Tracks", {ImGuiKey_3, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_4] =
-      (keybind_t){"Switch to Track 4", "Tracks", {ImGuiKey_4, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_5] =
-      (keybind_t){"Switch to Track 5", "Tracks", {ImGuiKey_5, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_6] =
-      (keybind_t){"Switch to Track 6", "Tracks", {ImGuiKey_6, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_7] =
-      (keybind_t){"Switch to Track 7", "Tracks", {ImGuiKey_7, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_8] =
-      (keybind_t){"Switch to Track 8", "Tracks", {ImGuiKey_8, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_9] =
-      (keybind_t){"Switch to Track 9", "Tracks", {ImGuiKey_9, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_1] = (keybind_t){"Switch to Track 1", "Tracks", {ImGuiKey_1, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_2] = (keybind_t){"Switch to Track 2", "Tracks", {ImGuiKey_2, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_3] = (keybind_t){"Switch to Track 3", "Tracks", {ImGuiKey_3, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_4] = (keybind_t){"Switch to Track 4", "Tracks", {ImGuiKey_4, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_5] = (keybind_t){"Switch to Track 5", "Tracks", {ImGuiKey_5, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_6] = (keybind_t){"Switch to Track 6", "Tracks", {ImGuiKey_6, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_7] = (keybind_t){"Switch to Track 7", "Tracks", {ImGuiKey_7, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_8] = (keybind_t){"Switch to Track 8", "Tracks", {ImGuiKey_8, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_9] = (keybind_t){"Switch to Track 9", "Tracks", {ImGuiKey_9, false, true, false}};
 }
 
 void keybinds_process_inputs(ui_handler_t *ui) {
-  // prevents shortcuts from firing while typing in a text fields
-  if (igIsAnyItemActive())
-    return;
+  if (igIsAnyItemActive()) return;
 
   timeline_state_t *ts = &ui->timeline;
   keybind_manager_t *kb = &ui->keybinds;
   undo_command_t *cmd = NULL;
 
-  // actions that are pressed once (no repeat)
   if (is_key_combo_pressed(&kb->bindings[ACTION_PLAY_PAUSE].combo, false)) {
     ts->is_playing ^= 1;
     if (ts->is_playing) {
@@ -156,41 +124,51 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   }
 
   if (is_key_combo_pressed(&kb->bindings[ACTION_SELECT_ALL].combo, false)) {
-    ts->selected_snippets.count = 0;
-    ts->selected_snippet_id = -1;
-    ts->selected_player_track_index = -1;
+    interaction_clear_selection(ts);
+    ts->active_snippet_id = -1;
     for (int i = 0; i < ts->player_track_count; i++) {
       for (int j = 0; j < ts->player_tracks[i].snippet_count; j++) {
-        add_snippet_to_selection(ts, ts->player_tracks[i].snippets[j].id, i);
+        interaction_add_snippet_to_selection(ts, ts->player_tracks[i].snippets[j].id, i);
       }
     }
   }
-  if (is_key_combo_pressed(&kb->bindings[ACTION_DELETE_SNIPPET].combo, false))
-    cmd = do_delete_selected_snippets(ui);
-  if (is_key_combo_pressed(&kb->bindings[ACTION_SPLIT_SNIPPET].combo, false))
-    cmd = do_split_selected_snippets(ui);
-  if (is_key_combo_pressed(&kb->bindings[ACTION_MERGE_SNIPPETS].combo, false))
-    cmd = do_merge_selected_snippets(ui);
+  if (is_key_combo_pressed(&kb->bindings[ACTION_DELETE_SNIPPET].combo, false)) cmd = commands_create_delete_selected(ui);
+  if (is_key_combo_pressed(&kb->bindings[ACTION_SPLIT_SNIPPET].combo, false)) cmd = commands_create_split_selected(ui);
+  if (is_key_combo_pressed(&kb->bindings[ACTION_MERGE_SNIPPETS].combo, false)) cmd = commands_create_merge_selected(ui);
 
   if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_SNIPPET_ACTIVE].combo, false)) {
-    if (ts->selected_snippet_id != -1 && ts->selected_player_track_index != -1) {
-      player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
-      input_snippet_t *snippet = find_snippet_by_id(track, ts->selected_snippet_id);
-      if (snippet) {
-        if (snippet->is_active) {
-          snippet->is_active = false; // Just deactivate
-          recalc_ts(ts, snippet->start_tick);
-        } else {
-          timeline_activate_snippet(ts, ts->selected_player_track_index, ts->selected_snippet_id);
+    if (ts->selected_snippets.count > 0) {
+      int earliest_tick_to_recalc = INT_MAX;
+      bool changed = false;
+
+      for (int i = 0; i < ts->selected_snippets.count; ++i) {
+        int snippet_id = ts->selected_snippets.ids[i];
+        int track_idx;
+        input_snippet_t *snippet = model_find_snippet_by_id(ts, snippet_id, &track_idx);
+
+        if (snippet) {
+          if (snippet->start_tick < earliest_tick_to_recalc) {
+            earliest_tick_to_recalc = snippet->start_tick;
+          }
+          changed = true;
+
+          if (snippet->is_active) {
+            snippet->is_active = false;
+          } else {
+            // This function correctly deactivates conflicting snippets on the same track.
+            model_activate_snippet(ts, track_idx, snippet_id);
+          }
         }
+      }
+
+      if (changed && earliest_tick_to_recalc != INT_MAX) {
+        model_recalc_physics(ts, earliest_tick_to_recalc);
       }
     }
   }
 
-  if (is_key_combo_pressed(&kb->bindings[ACTION_UNDO].combo, false))
-    undo_manager_undo(&ui->undo_manager, ts);
-  if (is_key_combo_pressed(&kb->bindings[ACTION_REDO].combo, false))
-    undo_manager_redo(&ui->undo_manager, ts);
+  if (is_key_combo_pressed(&kb->bindings[ACTION_UNDO].combo, false)) undo_manager_undo(&ui->undo_manager, ts);
+  if (is_key_combo_pressed(&kb->bindings[ACTION_REDO].combo, false)) undo_manager_redo(&ui->undo_manager, ts);
 
   for (int i = 0; i < 9; i++) {
     if (is_key_combo_pressed(&kb->bindings[ACTION_SWITCH_TRACK_1 + i].combo, false)) {
@@ -210,11 +188,11 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   // actions that can be held down (repeating)
   if (is_key_combo_pressed(&kb->bindings[ACTION_PREV_FRAME].combo, true)) {
     ts->is_playing = false;
-    advance_tick(ts, -1);
+    model_advance_tick(ts, -1);
   }
   if (is_key_combo_pressed(&kb->bindings[ACTION_NEXT_FRAME].combo, true)) {
     ts->is_playing = false;
-    advance_tick(ts, 1);
+    model_advance_tick(ts, 1);
   }
   if (is_key_combo_pressed(&kb->bindings[ACTION_INC_TPS].combo, true)) {
     ++ts->gui_playback_speed;
@@ -222,19 +200,12 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   if (is_key_combo_pressed(&kb->bindings[ACTION_DEC_TPS].combo, true)) {
     --ts->gui_playback_speed;
   }
-  if (is_key_combo_pressed(&kb->bindings[ACTION_REDO].combo, false))
-    undo_manager_redo(&ui->undo_manager, ts);
-
-  if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_DUMMY_COPY].combo, false))
-    ts->dummy_copy_input ^= 1;
+  if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_DUMMY_COPY].combo, false)) ts->dummy_copy_input ^= 1;
 }
 
 static bool is_modifier_key(ImGuiKey key) {
-  return key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl || key == ImGuiKey_LeftShift ||
-         key == ImGuiKey_RightShift || key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt ||
-         key == ImGuiKey_LeftSuper || key == ImGuiKey_RightSuper || key == ImGuiKey_ReservedForModCtrl ||
-         key == ImGuiKey_ReservedForModShift || key == ImGuiKey_ReservedForModAlt ||
-         key == ImGuiKey_ReservedForModSuper;
+  return key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl || key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift || key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt || key == ImGuiKey_LeftSuper || key == ImGuiKey_RightSuper || key == ImGuiKey_ReservedForModCtrl ||
+         key == ImGuiKey_ReservedForModShift || key == ImGuiKey_ReservedForModAlt || key == ImGuiKey_ReservedForModSuper;
 }
 
 static void render_keybind_button(keybind_manager_t *manager, action_t action_id) {
@@ -262,16 +233,13 @@ static void render_keybind_button(keybind_manager_t *manager, action_t action_id
 }
 
 void keybinds_render_settings_window(keybind_manager_t *manager) {
-  if (!manager->show_settings_window)
-    return;
+  if (!manager->show_settings_window) return;
 
   igSetNextWindowSize((ImVec2){600, 500}, ImGuiCond_FirstUseEver);
   if (igBegin("Keybind Settings", &manager->show_settings_window, 0)) {
 
-    igSetNextWindowPos((ImVec2){igGetIO_Nil()->DisplaySize.x * 0.5f, igGetIO_Nil()->DisplaySize.y * 0.5f},
-                       ImGuiCond_Appearing, (ImVec2){0.5f, 0.5f});
-    if (manager->is_waiting_for_input)
-      igOpenPopup_Str("RebindKeyPopup", ImGuiPopupFlags_AnyPopupLevel);
+    igSetNextWindowPos((ImVec2){igGetIO_Nil()->DisplaySize.x * 0.5f, igGetIO_Nil()->DisplaySize.y * 0.5f}, ImGuiCond_Appearing, (ImVec2){0.5f, 0.5f});
+    if (manager->is_waiting_for_input) igOpenPopup_Str("RebindKeyPopup", ImGuiPopupFlags_AnyPopupLevel);
 
     if (igBeginPopupModal("RebindKeyPopup", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
       igText("Press any key combination to bind to '%s'", manager->bindings[manager->action_to_rebind].name);
@@ -284,8 +252,7 @@ void keybinds_render_settings_window(keybind_manager_t *manager) {
         igCloseCurrentPopup();
       } else {
         for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; key++) {
-          if (key == ImGuiKey_Escape || is_modifier_key(key))
-            continue;
+          if (key == ImGuiKey_Escape || is_modifier_key(key)) continue;
           if (igIsKeyPressed_Bool(key, false)) {
             keybind_t *binding = &manager->bindings[manager->action_to_rebind];
             binding->combo.key = key;
@@ -310,12 +277,10 @@ void keybinds_render_settings_window(keybind_manager_t *manager) {
     for (int cat_idx = 0; cat_idx < num_categories; ++cat_idx) {
       const char *current_category = categories[cat_idx];
 
-      ImGuiTreeNodeFlags flags =
-          (strcmp(current_category, "Tracks") == 0) ? 0 : ImGuiTreeNodeFlags_DefaultOpen;
+      ImGuiTreeNodeFlags flags = (strcmp(current_category, "Tracks") == 0) ? 0 : ImGuiTreeNodeFlags_DefaultOpen;
 
       if (igCollapsingHeader_TreeNodeFlags(current_category, flags)) {
-        if (igBeginTable("KeybindsTable", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg,
-                         (ImVec2){0, 0}, 0)) {
+        if (igBeginTable("KeybindsTable", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg, (ImVec2){0, 0}, 0)) {
           igTableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
           igTableSetupColumn("Binding", ImGuiTableColumnFlags_WidthFixed, 240.0f, 0);
 
@@ -343,4 +308,3 @@ void keybinds_render_settings_window(keybind_manager_t *manager) {
   }
   igEnd();
 }
-

@@ -38,6 +38,7 @@ typedef enum {
   ACTION_SWITCH_TRACK_9,
 
   // recording
+  ACTION_TRIM_SNIPPET,
   ACTION_FIRE,
   ACTION_HOOK,
   ACTION_LEFT,

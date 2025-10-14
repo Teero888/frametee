@@ -1,19 +1,24 @@
 #include "player_info.h"
 #include "../renderer/graphics_backend.h"
 #include "cimgui.h"
-#include "timeline.h"
 #include "widgets/hsl_colorpicker.h"
 #include <string.h>
 
 static const char *LOG_SOURCE = "SkinManager";
 
 void render_player_info(gfx_handler_t *h) {
-  player_info_t *player_info =
-      &h->user_interface.timeline.player_tracks[h->user_interface.timeline.selected_player_track_index]
-           .player_info;
-  if (igBegin("Player Info", NULL,
-              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                  ImGuiWindowFlags_NoFocusOnAppearing)) {
+  timeline_state_t *ts = &h->user_interface.timeline;
+  if (ts->selected_player_track_index < 0 || ts->selected_player_track_index >= ts->player_track_count) {
+    if (igBegin("Player Info", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing)) {
+      igTextDisabled("No player track selected.");
+    }
+    igEnd();
+    return;
+  }
+
+  player_info_t *player_info = &ts->player_tracks[ts->selected_player_track_index].player_info;
+
+  if (igBegin("Player Info", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing)) {
     igInputText("Name", player_info->name, 32, 0, NULL, NULL);
     igInputText("Clan", player_info->clan, 32, 0, NULL, NULL);
     igInputInt("Skin Id", &player_info->skin, 1, 1, 0);
@@ -30,15 +35,13 @@ void render_player_info(gfx_handler_t *h) {
 }
 
 void skin_manager_init(skin_manager_t *m) {
-  if (!m)
-    return;
+  if (!m) return;
   m->num_skins = 0;
   m->skins = NULL;
 }
 
 void skin_manager_free(skin_manager_t *m) {
-  if (!m)
-    return;
+  if (!m) return;
   if (m->skins) {
     free(m->skins);
   }
@@ -47,8 +50,7 @@ void skin_manager_free(skin_manager_t *m) {
 }
 
 int skin_manager_add(skin_manager_t *m, const skin_info_t *skin) {
-  if (!m || !skin)
-    return -1;
+  if (!m || !skin) return -1;
   skin_info_t *new_skins = realloc(m->skins, (m->num_skins + 1) * sizeof(skin_info_t));
   if (!new_skins) {
     return -1;
@@ -60,8 +62,7 @@ int skin_manager_add(skin_manager_t *m, const skin_info_t *skin) {
 }
 
 int skin_manager_remove(skin_manager_t *m, gfx_handler_t *h, int index) {
-  if (!m || !h || index < 0 || index >= m->num_skins)
-    return -1;
+  if (!m || !h || index < 0 || index >= m->num_skins) return -1;
 
   // Unload from renderer and destroy preview
   renderer_unload_skin(h, m->skins[index].id);

@@ -23,10 +23,14 @@ set(SRCS
 	src/user_interface/keybinds.c
 	src/user_interface/player_info.c
 	src/user_interface/snippet_editor.c
-	src/user_interface/timeline.c
 	src/user_interface/undo_redo.c
 	src/user_interface/user_interface.c
 	src/user_interface/widgets/hsl_colorpicker.c
+	src/user_interface/timeline/timeline.c
+	src/user_interface/timeline/timeline_commands.c
+	src/user_interface/timeline/timeline_interaction.c
+	src/user_interface/timeline/timeline_model.c
+	src/user_interface/timeline/timeline_renderer.c
 )
 
 # find dependencies

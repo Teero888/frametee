@@ -4,7 +4,7 @@
 #include "../plugins/plugin_manager.h"
 #include "keybinds.h"
 #include "player_info.h"
-#include "timeline.h"
+#include "timeline/timeline.h"
 #include "undo_redo.h"
 #include <stdbool.h>
 #include <stdint.h>

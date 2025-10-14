@@ -1,7 +1,7 @@
 #ifndef PLUGIN_API_H
 #define PLUGIN_API_H
 
-#include "../user_interface/timeline.h"
+#include "../user_interface/timeline/timeline.h"
 
 // forward declare ImGuiContext to avoid plugins needing to include cimgui.h if they don't have a UI.
 struct ImGuiContext;

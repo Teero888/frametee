@@ -1,7 +1,8 @@
 #include "api_impl.h"
 #include "../logger/logger.h"
 #include "../renderer/graphics_backend.h"
-#include "../user_interface/timeline.h"
+#include "../user_interface/timeline/timeline_commands.h"
+#include "../user_interface/timeline/timeline_model.h"
 #include "gamecore.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,7 +57,7 @@ static SWorldCore *api_get_world_state_at(int tick) {
 
   while (world_copy->m_GameTick < tick) {
     for (int p = 0; p < world_copy->m_NumCharacters; ++p) {
-      SPlayerInput input = get_input(ts, p, world_copy->m_GameTick);
+      SPlayerInput input = model_get_input_at_tick(ts, p, world_copy->m_GameTick);
       cc_on_input(&world_copy->m_pCharacters[p], &input);
     }
     wc_tick(world_copy);

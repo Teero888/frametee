@@ -1,5 +1,5 @@
 #include "undo_redo.h"
-#include "timeline.h"
+#include "timeline/timeline_model.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -62,7 +62,7 @@ void undo_manager_undo(undo_manager_t *manager, timeline_state_t *ts) {
   if (command) {
     command->undo(command, ts);
     push_to_stack(&manager->redo_stack, &manager->redo_count, &manager->redo_capacity, command);
-    recalc_ts(ts, 0); // Recalculate physics to be safe
+    model_recalc_physics(ts, 0); // Recalculate physics to be safe
   }
 }
 
@@ -71,6 +71,6 @@ void undo_manager_redo(undo_manager_t *manager, timeline_state_t *ts) {
   if (command) {
     command->redo(command, ts);
     push_to_stack(&manager->undo_stack, &manager->undo_count, &manager->undo_capacity, command);
-    recalc_ts(ts, 0); // Recalculate physics to be safe
+    model_recalc_physics(ts, 0); // Recalculate physics to be safe
   }
 }

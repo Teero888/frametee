@@ -2,6 +2,7 @@
 #include "../logger/logger.h"
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
+#include "../user_interface/timeline/timeline_model.h"
 #include "gamecore.h"
 #include <stdbool.h>
 #include <stdio.h>
@@ -133,9 +134,10 @@ static bool write_timeline_data(FILE *f, timeline_state_t *ts) {
       fwrite(&snippet->id, sizeof(int), 1, f);
       fwrite(&snippet->start_tick, sizeof(int), 1, f);
       fwrite(&snippet->end_tick, sizeof(int), 1, f);
+      fwrite(&snippet->is_active, sizeof(bool), 1, f);
+      fwrite(&snippet->layer, sizeof(int), 1, f);
       fwrite(&snippet->input_count, sizeof(int), 1, f);
-      if (snippet->input_count > 0)
-        fwrite(snippet->inputs, sizeof(SPlayerInput) * snippet->input_count, 1, f);
+      if (snippet->input_count > 0) fwrite(snippet->inputs, sizeof(SPlayerInput) * snippet->input_count, 1, f);
     }
   }
   return true;
@@ -168,8 +170,8 @@ bool load_project(ui_handler_t *ui, const char *path) {
   skin_manager_free(&ui->skin_manager);
   // mark all skins as unloaded directly
   memset(ui->gfx_handler->renderer.skin_manager.layer_used + 3, 0,
-         125); // start at id 3 so we don't delete the default,ninja and spec skin
-  timeline_init(&ui->timeline);
+         MAX_SKINS - 3); // start at id 3 so we don't delete the default,ninja and spec skin
+  timeline_init(ui);
   skin_manager_init(&ui->skin_manager);
   ui->timeline.ui = ui;
 
@@ -201,7 +203,7 @@ bool load_project(ui_handler_t *ui, const char *path) {
 
   wc_copy_world(&ui->timeline.previous_world, &ui->gfx_handler->physics_handler.world);
   wc_copy_world(&ui->timeline.vec.data[0], &ui->gfx_handler->physics_handler.world);
-  recalc_ts(&ui->timeline, 0); // recalculate physics from the start
+  model_recalc_physics(&ui->timeline, 0); // recalculate physics from the start
   return true;
 }
 
@@ -243,16 +245,13 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
     }
 
     skin_info_t info = {};
-    int loaded_id = renderer_load_skin_from_memory(ui->gfx_handler, texture_data,
-                                                   skin_header.texture_data_size, &info.preview_texture_res);
+    int loaded_id = renderer_load_skin_from_memory(ui->gfx_handler, texture_data, skin_header.texture_data_size, &info.preview_texture_res);
     free(texture_data);
     if (loaded_id >= 0) {
       info.id = loaded_id;
       strncpy(info.name, skin_header.name, sizeof(info.name) - 1);
       if (info.preview_texture_res) {
-        info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
-            info.preview_texture_res->sampler, info.preview_texture_res->image_view,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+        info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(info.preview_texture_res->sampler, info.preview_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
       }
       skin_manager_add(&ui->skin_manager, &info);
     }
@@ -265,32 +264,28 @@ static bool read_and_load_timeline(FILE *f, ui_handler_t *ui) {
 
   // read player info
   for (int i = 0; i < ts->player_track_count; i++) {
-    if (fread(&ts->player_tracks[i].player_info, sizeof(player_info_t), 1, f) != 1)
-      return false;
+    if (fread(&ts->player_tracks[i].player_info, sizeof(player_info_t), 1, f) != 1) return false;
     // add characters to the physics world
     if (!wc_add_character(&ui->gfx_handler->physics_handler.world, 1)) {
       log_error(LOG_SOURCE, "Failed to add character '%s'", ts->player_tracks[i].player_info.name);
     }
   }
 
-  // Read snippets
+  // read snippets
   int max_id = 0;
   for (int i = 0; i < ts->player_track_count; i++) {
     player_track_t *track = &ts->player_tracks[i];
-    if (fread(&track->snippet_count, sizeof(int), 1, f) != 1)
-      return false;
+    if (fread(&track->snippet_count, sizeof(int), 1, f) != 1) return false;
 
     track->snippets = calloc(track->snippet_count, sizeof(input_snippet_t));
     for (int j = 0; j < track->snippet_count; j++) {
       input_snippet_t *snippet = &track->snippets[j];
-      if (fread(&snippet->id, sizeof(int), 1, f) != 1)
-        return false;
-      if (fread(&snippet->start_tick, sizeof(int), 1, f) != 1)
-        return false;
-      if (fread(&snippet->end_tick, sizeof(int), 1, f) != 1)
-        return false;
-      if (fread(&snippet->input_count, sizeof(int), 1, f) != 1)
-        return false;
+      if (fread(&snippet->id, sizeof(int), 1, f) != 1) return false;
+      if (fread(&snippet->start_tick, sizeof(int), 1, f) != 1) return false;
+      if (fread(&snippet->end_tick, sizeof(int), 1, f) != 1) return false;
+      if (fread(&snippet->is_active, sizeof(bool), 1, f) != 1) return false;
+      if (fread(&snippet->layer, sizeof(int), 1, f) != 1) return false;
+      if (fread(&snippet->input_count, sizeof(int), 1, f) != 1) return false;
 
       if (snippet->id > max_id) {
         max_id = snippet->id;
@@ -298,9 +293,7 @@ static bool read_and_load_timeline(FILE *f, ui_handler_t *ui) {
 
       if (snippet->input_count > 0) {
         snippet->inputs = malloc(sizeof(SPlayerInput) * snippet->input_count);
-        if (!snippet->inputs ||
-            fread(snippet->inputs, sizeof(SPlayerInput) * snippet->input_count, 1, f) != 1)
-          return false;
+        if (!snippet->inputs || fread(snippet->inputs, sizeof(SPlayerInput) * snippet->input_count, 1, f) != 1) return false;
       } else {
         snippet->inputs = NULL;
       }

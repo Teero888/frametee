@@ -496,7 +496,7 @@ void on_map_load(gfx_handler_t *handler) {
 
 void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
   timeline_cleanup(&handler->user_interface.timeline);
-  timeline_init(&handler->user_interface.timeline);
+  timeline_init(&handler->user_interface);
   physics_free(&handler->physics_handler);
   physics_init(&handler->physics_handler, map_path);
 
