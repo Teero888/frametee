@@ -210,76 +210,56 @@ void renderer_cleanup(gfx_handler_t *handler);
 
 shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, const char *frag_path);
 texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path);
-texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_t *pixel_array,
-                                            uint32_t width, uint32_t height);
-texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, const uint8_t **pixel_array,
-                                                    uint32_t width, uint32_t height);
-texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsigned char *pixels, int width,
-                                             int height);
+texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_t *pixel_array, uint32_t width, uint32_t height);
+texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, const uint8_t **pixel_array, uint32_t width, uint32_t height);
+texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsigned char *pixels, int width, int height);
 
 void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex);
-mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count,
-                             uint32_t *indices, uint32_t index_count);
+mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count, uint32_t *indices, uint32_t index_count);
 
 void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
-void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh,
-                        shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos,
-                        VkDeviceSize *ubo_sizes, uint32_t ubo_count);
+void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh, shader_t *shader, texture_t **textures,
+                        uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count);
 void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
 void renderer_draw_map(gfx_handler_t *h);
 
 // primitive drawing api
 void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4 color);
-void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color,
-                                 uint32_t segments);
+void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color, uint32_t segments);
 void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness);
 
-texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas,
-                                                    uint32_t tile_width, uint32_t tile_height,
+texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas, uint32_t tile_width, uint32_t tile_height,
                                                     uint32_t num_tiles_x, uint32_t num_tiles_y);
 void screen_to_world(gfx_handler_t *handler, float screen_x, float screen_y, float *world_x, float *world_y);
 void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy);
 
 // skin rendering
 void renderer_begin_skins(gfx_handler_t *h);
-void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state,
-                                 vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet,
-                                 bool use_custom_color);
+void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state,
+                                 vec3 col_body, vec3 col_feet, bool use_custom_color);
 void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array);
 int renderer_load_skin_from_file(gfx_handler_t *h, const char *path, texture_t **out_preview_texture);
-int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size,
-                                   texture_t **out_preview_texture);
+int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size, texture_t **out_preview_texture);
 void renderer_unload_skin(gfx_handler_t *h, int layer);
 
-void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels,
-                  uint32_t array_layers, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
-                  VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory);
-VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format,
-                              VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count);
+void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_layers, VkFormat format,
+                  VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory);
+VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels,
+                              uint32_t layer_count);
 VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
 
 // General-purpose Atlas Rendering API
-void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path,
-                                  const sprite_definition_t *sprites, uint32_t sprite_count,
-                                  uint32_t max_instances);
+void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path, const sprite_definition_t *sprites,
+                                  uint32_t sprite_count, uint32_t max_instances);
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 void renderer_begin_atlas_instances(atlas_renderer_t *ar);
-void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation,
-                                  uint32_t sprite_index, bool tile_uv);
+void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv);
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar);
 
 // gameskin spire enum
 
-enum {
-  CURSOR_HAMMER,
-  CURSOR_GUN,
-  CURSOR_SHOTGUN,
-  CURSOR_GRENADE,
-  CURSOR_LASER,
-  CURSOR_NINJA,
-  CURSOR_SPRITE_COUNT
-};
+enum { CURSOR_HAMMER, CURSOR_GUN, CURSOR_SHOTGUN, CURSOR_GRENADE, CURSOR_LASER, CURSOR_NINJA, CURSOR_SPRITE_COUNT };
 
 enum {
   GAMESKIN_HAMMER_BODY,

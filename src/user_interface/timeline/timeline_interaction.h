@@ -20,9 +20,9 @@ void interaction_select_track(timeline_state_t *ts, int track_index);
 void interaction_toggle_recording(timeline_state_t *ts);
 void interaction_trim_recording_snippet(timeline_state_t *ts);
 void interaction_switch_recording_target(timeline_state_t *ts, int new_track_index);
-void interaction_trigger_dummy_fire(timeline_state_t *ts);
-void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timeline_bb, float scroll_y,
-                                            int *out_snapped_tick, int *out_base_track);
+void interaction_perform_dummy_fire(ui_handler_t *ui);
+void interaction_perform_dummy_copy(ui_handler_t *ui);
+void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timeline_bb, float scroll_y, int *out_snapped_tick, int *out_base_track);
 void interaction_update_recording_input(ui_handler_t *ui);
 
 #endif // UI_TIMELINE_INTERACTION_H

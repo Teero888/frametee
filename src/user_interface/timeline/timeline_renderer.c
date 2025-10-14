@@ -12,8 +12,10 @@
 #define TPS 50
 
 // Forward Declarations for Static Render Helpers
-static void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_index, ImDrawList *draw_list, ImRect timeline_bb, float track_top);
-static void render_player_track(timeline_state_t *ts, int track_index, ImDrawList *draw_list, ImRect timeline_bb, float track_top, float track_bottom, bool is_selected);
+static void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_index, ImDrawList *draw_list, ImRect timeline_bb,
+                                 float track_top);
+static void render_player_track(timeline_state_t *ts, int track_index, ImDrawList *draw_list, ImRect timeline_bb, float track_top, float track_bottom,
+                                bool is_selected);
 static double choose_nice_tick_step(double pixels_per_tick, double min_label_spacing);
 
 // Coordinate Conversion
@@ -22,7 +24,9 @@ int renderer_screen_x_to_tick(const timeline_state_t *ts, float screen_x, float 
   return ts->view_start_tick + (int)((screen_x - timeline_start_x) / ts->zoom);
 }
 
-float renderer_tick_to_screen_x(const timeline_state_t *ts, int tick, float timeline_start_x) { return timeline_start_x + (tick - ts->view_start_tick) * ts->zoom; }
+float renderer_tick_to_screen_x(const timeline_state_t *ts, int tick, float timeline_start_x) {
+  return timeline_start_x + (tick - ts->view_start_tick) * ts->zoom;
+}
 
 float renderer_get_track_screen_y(const timeline_state_t *ts, ImRect timeline_bb, int track_index, float scroll_y) {
   float padding_y = igGetStyle()->WindowPadding.y;
@@ -166,7 +170,8 @@ void renderer_draw_header_and_playhead(timeline_state_t *ts, ImDrawList *draw_li
   float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, header_bb.Min.x);
   if (playhead_x >= header_bb.Min.x && playhead_x <= header_bb.Max.x) {
     ImDrawList *overlay = igGetForegroundDrawList_WindowPtr(igGetCurrentWindow());
-    ImDrawList_AddLine(overlay, (ImVec2){playhead_x, header_bb.Max.y - 1.0}, (ImVec2){playhead_x, window_bottom_y}, igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f);
+    ImDrawList_AddLine(overlay, (ImVec2){playhead_x, header_bb.Max.y - 1.0}, (ImVec2){playhead_x, window_bottom_y},
+                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f);
     ImVec2 head_bottom = {playhead_x + 0.5, header_bb.Max.y + 0.5};
     ImVec2 head_top_left = {(head_bottom.x - 6) + 0.5, head_bottom.y - 10 + 0.5};
     ImVec2 head_top_right = {(head_bottom.x + 6) - 0.5, head_bottom.y - 10 + 0.5};
@@ -343,7 +348,8 @@ void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_l
         float preview_max_y = preview_min_y + sub_lane_height - 4.0f;
 
         ImU32 fill = IM_COL32(100, 150, 240, 90);
-        ImDrawList_AddRectFilled(overlay_draw_list, (ImVec2){preview_min_x, preview_min_y}, (ImVec2){preview_max_x, preview_max_y}, fill, 4.0f, ImDrawFlags_RoundCornersAll);
+        ImDrawList_AddRectFilled(overlay_draw_list, (ImVec2){preview_min_x, preview_min_y}, (ImVec2){preview_max_x, preview_max_y}, fill, 4.0f,
+                                 ImDrawFlags_RoundCornersAll);
       }
     }
     ImDrawList_PopClipRect(overlay_draw_list);
@@ -355,14 +361,16 @@ void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_l
 
 void renderer_draw_selection_box(timeline_state_t *ts, ImDrawList *overlay_draw_list) {
   if (!ts->selection_box_active) return;
-  ImRect rect = {{fminf(ts->selection_box_start.x, ts->selection_box_end.x), fminf(ts->selection_box_start.y, ts->selection_box_end.y)}, {fmaxf(ts->selection_box_start.x, ts->selection_box_end.x), fmaxf(ts->selection_box_start.y, ts->selection_box_end.y)}};
+  ImRect rect = {{fminf(ts->selection_box_start.x, ts->selection_box_end.x), fminf(ts->selection_box_start.y, ts->selection_box_end.y)},
+                 {fmaxf(ts->selection_box_start.x, ts->selection_box_end.x), fmaxf(ts->selection_box_start.y, ts->selection_box_end.y)}};
   ImDrawList_AddRectFilled(overlay_draw_list, rect.Min, rect.Max, IM_COL32(100, 150, 240, 80), 0.0f, 0);
   ImDrawList_AddRect(overlay_draw_list, rect.Min, rect.Max, IM_COL32(100, 150, 240, 180), 0.0f, 0, 1.0f);
 }
 
 // Static Render Helpers
 
-static void render_player_track(timeline_state_t *ts, int track_index, ImDrawList *draw_list, ImRect timeline_bb, float track_top, float track_bottom, bool is_selected) {
+static void render_player_track(timeline_state_t *ts, int track_index, ImDrawList *draw_list, ImRect timeline_bb, float track_top, float track_bottom,
+                                bool is_selected) {
   player_track_t *track = &ts->player_tracks[track_index];
 
   ImU32 track_bg_col;
@@ -373,14 +381,16 @@ static void render_player_track(timeline_state_t *ts, int track_index, ImDrawLis
   }
 
   ImDrawList_AddRectFilled(draw_list, (ImVec2){timeline_bb.Min.x, track_top}, (ImVec2){timeline_bb.Max.x, track_bottom}, track_bg_col, 0.0f, 0);
-  ImDrawList_AddLine(draw_list, (ImVec2){timeline_bb.Min.x, track_bottom}, (ImVec2){timeline_bb.Max.x, track_bottom}, igGetColorU32_Col(ImGuiCol_Border, 0.3f), 1.0f);
+  ImDrawList_AddLine(draw_list, (ImVec2){timeline_bb.Min.x, track_bottom}, (ImVec2){timeline_bb.Max.x, track_bottom},
+                     igGetColorU32_Col(ImGuiCol_Border, 0.3f), 1.0f);
 
   for (int j = 0; j < track->snippet_count; ++j) {
     render_input_snippet(ts, track_index, j, draw_list, timeline_bb, track_top);
   }
 }
 
-static void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_index, ImDrawList *draw_list, ImRect timeline_bb, float track_top) {
+static void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_index, ImDrawList *draw_list, ImRect timeline_bb,
+                                 float track_top) {
   input_snippet_t *snippet = &ts->player_tracks[track_index].snippets[snippet_index];
 
   float start_x = renderer_tick_to_screen_x(ts, snippet->start_tick, timeline_bb.Min.x);
@@ -397,8 +407,12 @@ static void render_input_snippet(timeline_state_t *ts, int track_index, int snip
   // The invisible button for interaction is now handled in the interaction module.
   // Here, we just draw.
   bool is_selected = interaction_is_snippet_selected(ts, snippet->id);
-  ImU32 color = snippet->is_active ? (is_selected ? igGetColorU32_Col(ImGuiCol_HeaderActive, 1.0f) : igGetColorU32_Col(ImGuiCol_Button, 0.8f)) : (is_selected ? igGetColorU32_Vec4((ImVec4){0.45f, 0.45f, 0.45f, 1.0f}) : igGetColorU32_Vec4((ImVec4){0.25f, 0.25f, 0.25f, 0.9f}));
+  ImU32 color = snippet->is_active ? (is_selected ? igGetColorU32_Col(ImGuiCol_HeaderActive, 1.0f) : igGetColorU32_Col(ImGuiCol_Button, 0.8f))
+                                   : (is_selected ? igGetColorU32_Vec4((ImVec4){0.45f, 0.45f, 0.45f, 1.0f})
+                                                  : igGetColorU32_Vec4((ImVec4){0.25f, 0.25f, 0.25f, 0.9f}));
 
   ImDrawList_AddRectFilled(draw_list, min, max, color, 4.0f, ImDrawFlags_RoundCornersAll);
-  ImDrawList_AddRect(draw_list, min, max, is_selected ? igGetColorU32_Col(ImGuiCol_NavWindowingHighlight, 1.0f) : igGetColorU32_Col(ImGuiCol_Border, 0.6f), 4.0f, ImDrawFlags_RoundCornersAll, is_selected ? 2.0f : 1.0f);
+  ImDrawList_AddRect(draw_list, min, max,
+                     is_selected ? igGetColorU32_Col(ImGuiCol_NavWindowingHighlight, 1.0f) : igGetColorU32_Col(ImGuiCol_Border, 0.6f), 4.0f,
+                     ImDrawFlags_RoundCornersAll, is_selected ? 2.0f : 1.0f);
 }

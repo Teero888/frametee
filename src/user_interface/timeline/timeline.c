@@ -41,7 +41,8 @@ void render_timeline(ui_handler_t *ui) {
     igGetContentRegionAvail(&available_space);
 
     // Bounding box for the tick marks and labels
-    ImRect header_bb = {{content_start_pos.x + track_header_width, content_start_pos.y}, {content_start_pos.x + available_space.x, content_start_pos.y + header_height}};
+    ImRect header_bb = {{content_start_pos.x + track_header_width, content_start_pos.y},
+                        {content_start_pos.x + available_space.x, content_start_pos.y + header_height}};
     // Bounding box for the main snippet area (RHS)
     ImRect timeline_bb = {{header_bb.Min.x, header_bb.Max.y}, {header_bb.Max.x, content_start_pos.y + available_space.y}};
 
@@ -86,9 +87,4 @@ void render_timeline(ui_handler_t *ui) {
 void timeline_switch_recording_target(timeline_state_t *ts, int new_track_index) {
   // This logic is primarily interaction-based
   interaction_switch_recording_target(ts, new_track_index);
-}
-
-void timeline_trigger_dummy_fire(timeline_state_t *ts) {
-  // This logic is part of the interaction/recording system
-  interaction_trigger_dummy_fire(ts);
 }

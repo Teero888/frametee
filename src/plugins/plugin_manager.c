@@ -47,8 +47,7 @@ static void load_plugin(plugin_manager_t *manager, const char *path) {
 
   if (manager->count >= manager->capacity) {
     manager->capacity = manager->capacity == 0 ? 4 : manager->capacity * 2;
-    manager->plugins =
-        (loaded_plugin_t *)realloc(manager->plugins, manager->capacity * sizeof(loaded_plugin_t));
+    manager->plugins = (loaded_plugin_t *)realloc(manager->plugins, manager->capacity * sizeof(loaded_plugin_t));
   }
 
   loaded_plugin_t *p = &manager->plugins[manager->count++];
@@ -86,8 +85,7 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
   WIN32_FIND_DATA find_data;
   HANDLE find_handle = FindFirstFile(search_path, &find_data);
 
-  if (find_handle == INVALID_HANDLE_VALUE)
-    return;
+  if (find_handle == INVALID_HANDLE_VALUE) return;
 
   do {
     char full_path[MAX_PATH];
@@ -99,8 +97,7 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
   FindClose(find_handle);
 #else
   DIR *dir = opendir(directory);
-  if (!dir)
-    return;
+  if (!dir) return;
 
   struct dirent *entry;
   while ((entry = readdir(dir)) != NULL) {

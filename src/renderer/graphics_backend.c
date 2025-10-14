@@ -28,14 +28,11 @@ static void cleanup_vulkan_window(gfx_handler_t *handler);
 static void cleanup_map_resources(gfx_handler_t *handler);
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
-static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags,
-                                                   VkDebugReportObjectTypeEXT object_type, uint64_t object,
-                                                   size_t location, int32_t message_code,
-                                                   const char *layer_prefix, const char *message,
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT object_type, uint64_t object,
+                                                   size_t location, int32_t message_code, const char *layer_prefix, const char *message,
                                                    void *user_data);
-static VKAPI_ATTR VkBool32 VKAPI_CALL
-debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
-                     const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *user_data);
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
+                                                           const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *user_data);
 #endif
 
 // offscreen helpers
@@ -48,19 +45,14 @@ static VkResult create_instance(gfx_handler_t *handler, const char **extensions,
 static void select_physical_device(gfx_handler_t *handler);
 static void create_logical_device(gfx_handler_t *handler);
 static void create_descriptor_pool(gfx_handler_t *handler);
-static void setup_window(gfx_handler_t *handler, struct ImGui_ImplVulkanH_Window *wd, VkSurfaceKHR surface,
-                         int width, int height);
+static void setup_window(gfx_handler_t *handler, struct ImGui_ImplVulkanH_Window *wd, VkSurfaceKHR surface, int width, int height);
 
 // glfw error callback
-static void glfw_error_callback(int error, const char *description) {
-  log_error("GLFW", "%d: %s", error, description);
-}
+static void glfw_error_callback(int error, const char *description) { log_error("GLFW", "%d: %s", error, description); }
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
-static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags,
-                                                   VkDebugReportObjectTypeEXT object_type, uint64_t object,
-                                                   size_t location, int32_t message_code,
-                                                   const char *layer_prefix, const char *message,
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT object_type, uint64_t object,
+                                                   size_t location, int32_t message_code, const char *layer_prefix, const char *message,
                                                    void *user_data) {
   (void)flags;
   (void)object_type;
@@ -68,15 +60,13 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags,
   (void)location;
   (void)user_data;
 
-  log_error(LOG_SOURCE, "[vulkan][%s] code %d: %s\n", layer_prefix ? layer_prefix : "unknown", message_code,
-            message);
+  log_error(LOG_SOURCE, "[vulkan][%s] code %d: %s\n", layer_prefix ? layer_prefix : "unknown", message_code, message);
   fflush(stderr);
   return VK_FALSE; // do not abort
 }
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL
-debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
-                     const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *user_data) {
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
+                                                           const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *user_data) {
   (void)type;
   (void)user_data;
 
@@ -99,8 +89,7 @@ debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUti
     break;
   }
 
-  log_error(LOG_SOURCE, "[vulkan][%s] %s\n", severity_str,
-            callback_data && callback_data->pMessage ? callback_data->pMessage : "(null)");
+  log_error(LOG_SOURCE, "[vulkan][%s] %s\n", severity_str, callback_data && callback_data->pMessage ? callback_data->pMessage : "(null)");
   fflush(stderr);
   return VK_FALSE;
 }
@@ -108,8 +97,7 @@ debug_utils_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUti
 
 static void cursor_position_callback(GLFWwindow *window, double xpos, double ypos) {
   gfx_handler_t *handler = glfwGetWindowUserPointer(window);
-  if (!handler)
-    return;
+  if (!handler) return;
 
   handler->raw_mouse.dx += xpos - handler->raw_mouse.x;
   handler->raw_mouse.dy += ypos - handler->raw_mouse.y;
@@ -176,8 +164,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
     return 1;
   }
 
-  handler->map_shader =
-      renderer_load_shader(handler, "data/shaders/map.vert.spv", "data/shaders/map.frag.spv");
+  handler->map_shader = renderer_load_shader(handler, "data/shaders/map.vert.spv", "data/shaders/map.frag.spv");
 
   if (!handler->quad_mesh) {
     vertex_t quad_vertices[] = {
@@ -200,17 +187,13 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->x_ninja_skin = renderer_load_skin_from_file(handler, "data/textures/x_ninja.png", NULL);
   handler->x_spec_skin = renderer_load_skin_from_file(handler, "data/textures/x_spec.png", NULL);
   if (handler->default_skin == -1) {
-    log_error(
-        LOG_SOURCE,
-        "Default skin 'default.png' not found. The program might have been started from the wrong path.");
+    log_error(LOG_SOURCE, "Default skin 'default.png' not found. The program might have been started from the wrong path.");
   }
   if (handler->x_ninja_skin == -1) {
-    log_error(LOG_SOURCE,
-              "Ninja skin 'x_ninja.png' not found. The program might have been started from the wrong path.");
+    log_error(LOG_SOURCE, "Ninja skin 'x_ninja.png' not found. The program might have been started from the wrong path.");
   }
   if (handler->x_spec_skin == -1) {
-    log_error(LOG_SOURCE,
-              "Spec skin 'x_spec.png' not found. The program might have been started from the wrong path.");
+    log_error(LOG_SOURCE, "Spec skin 'x_spec.png' not found. The program might have been started from the wrong path.");
   }
 
   int fb_width, fb_height;
@@ -229,8 +212,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
 }
 
 int gfx_begin_frame(gfx_handler_t *handler) {
-  if (glfwWindowShouldClose(handler->window))
-    return FRAME_EXIT;
+  if (glfwWindowShouldClose(handler->window)) return FRAME_EXIT;
 
   glfwPollEvents();
 
@@ -242,13 +224,11 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   int fb_width, fb_height;
   glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
   if (fb_width > 0 && fb_height > 0 &&
-      (handler->g_swap_chain_rebuild || handler->g_main_window_data.Width != fb_width ||
-       handler->g_main_window_data.Height != fb_height)) {
+      (handler->g_swap_chain_rebuild || handler->g_main_window_data.Width != fb_width || handler->g_main_window_data.Height != fb_height)) {
     vkDeviceWaitIdle(handler->g_device);
     ImGui_ImplVulkan_SetMinImageCount(handler->g_min_image_count);
-    ImGui_ImplVulkanH_CreateOrResizeWindow(
-        handler->g_instance, handler->g_physical_device, handler->g_device, &handler->g_main_window_data,
-        handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count);
+    ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, &handler->g_main_window_data,
+                                           handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count);
     handler->g_main_window_data.FrameIndex = 0;
     handler->g_swap_chain_rebuild = false;
 
@@ -264,8 +244,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   ImGui_ImplVulkanH_Frame *acquire_fd = &wd->Frames.Data[wd->FrameIndex];
   vkWaitForFences(handler->g_device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
 
-  VkResult err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore,
-                                       VK_NULL_HANDLE, &wd->FrameIndex);
+  VkResult err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
     handler->g_swap_chain_rebuild = true;
     // Skip this frame if the swapchain is invalid
@@ -281,24 +260,21 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
   err = vkResetCommandPool(handler->g_device, fd->CommandPool, 0);
   check_vk_result(err);
-  VkCommandBufferBeginInfo info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                                   .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+  VkCommandBufferBeginInfo info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
   err = vkBeginCommandBuffer(fd->CommandBuffer, &info);
   check_vk_result(err);
 
   handler->current_frame_command_buffer = fd->CommandBuffer;
 
   // Begin offscreen render pass (for game rendering)
-  if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE &&
-      handler->offscreen_framebuffer != VK_NULL_HANDLE) {
+  if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE && handler->offscreen_framebuffer != VK_NULL_HANDLE) {
     VkClearValue clear = {.color = {.float32 = {30.f / 255.f, 35.f / 255.f, 40.f / 255.f, 1.0f}}};
-    VkRenderPassBeginInfo rp_info = {
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-        .renderPass = handler->offscreen_render_pass,
-        .framebuffer = handler->offscreen_framebuffer,
-        .renderArea = {{0, 0}, {handler->offscreen_width, handler->offscreen_height}},
-        .clearValueCount = 1,
-        .pClearValues = &clear};
+    VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                     .renderPass = handler->offscreen_render_pass,
+                                     .framebuffer = handler->offscreen_framebuffer,
+                                     .renderArea = {{0, 0}, {handler->offscreen_width, handler->offscreen_height}},
+                                     .clearValueCount = 1,
+                                     .pClearValues = &clear};
     vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
   }
 
@@ -377,8 +353,7 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   VkResult err = vkEndCommandBuffer(handler->current_frame_command_buffer);
   check_vk_result(err);
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-  VkSemaphore render_complete_semaphore =
-      wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
+  VkSemaphore render_complete_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
 
   VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   VkSubmitInfo submit_info = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -423,8 +398,7 @@ void gfx_cleanup(gfx_handler_t *handler) {
   ui_cleanup(&handler->user_interface);
 
   cleanup_map_resources(handler);
-  if (handler->entities_array)
-    renderer_destroy_texture(handler, handler->entities_array);
+  if (handler->entities_array) renderer_destroy_texture(handler, handler->entities_array);
   handler->map_textures[0] = NULL;
 
   physics_free(&handler->physics_handler);
@@ -445,10 +419,8 @@ void gfx_cleanup(gfx_handler_t *handler) {
   glfwTerminate();
 }
 
-static texture_t *load_layer_texture(gfx_handler_t *handler, uint8_t **data, uint32_t width,
-                                     uint32_t height) {
-  if (!data)
-    return handler->renderer.default_texture;
+static texture_t *load_layer_texture(gfx_handler_t *handler, uint8_t **data, uint32_t width, uint32_t height) {
+  if (!data) return handler->renderer.default_texture;
   texture_t *tex = renderer_load_compact_texture_from_array(handler, data, width, height);
   return tex ? tex : handler->renderer.default_texture;
 }
@@ -478,20 +450,15 @@ void on_map_load(gfx_handler_t *handler) {
   handler->map_data = &handler->physics_handler.collision.m_MapData;
 
   // entities texture
-  handler->map_textures[handler->map_texture_count++] =
-      handler->entities_array ? handler->entities_array : handler->renderer.default_texture;
+  handler->map_textures[handler->map_texture_count++] = handler->entities_array ? handler->entities_array : handler->renderer.default_texture;
 
   uint8_t *map[2][3] = {
-      {handler->map_data->game_layer.data, handler->map_data->front_layer.data,
-       handler->map_data->tele_layer.type},
-      {handler->map_data->tune_layer.type, handler->map_data->speedup_layer.type,
-       handler->map_data->switch_layer.type},
+      {handler->map_data->game_layer.data, handler->map_data->front_layer.data, handler->map_data->tele_layer.type},
+      {handler->map_data->tune_layer.type, handler->map_data->speedup_layer.type, handler->map_data->switch_layer.type},
   };
   // collision textures
-  handler->map_textures[handler->map_texture_count++] =
-      load_layer_texture(handler, map[0], handler->map_data->width, handler->map_data->height);
-  handler->map_textures[handler->map_texture_count++] =
-      load_layer_texture(handler, map[1], handler->map_data->width, handler->map_data->height);
+  handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[0], handler->map_data->width, handler->map_data->height);
+  handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[1], handler->map_data->width, handler->map_data->height);
 }
 
 void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
@@ -504,8 +471,7 @@ void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
     log_error(LOG_SOURCE, "Failed to load map data from '%s'", map_path);
     return;
   }
-  log_info(LOG_SOURCE, "Loaded map '%s' (%ux%u)", map_path, handler->map_data->width,
-           handler->map_data->height);
+  log_info(LOG_SOURCE, "Loaded map '%s' (%ux%u)", map_path, handler->map_data->width, handler->map_data->height);
 
   on_map_load(handler);
 }
@@ -523,8 +489,7 @@ void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buf
 // initialization and cleanup
 static int init_window(gfx_handler_t *handler) {
   glfwSetErrorCallback(glfw_error_callback);
-  if (!glfwInit())
-    return 1;
+  if (!glfwInit()) return 1;
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   handler->window = glfwCreateWindow(1920, 1080, "frametee", NULL, NULL);
@@ -558,8 +523,7 @@ static int init_vulkan(gfx_handler_t *handler) {
   create_descriptor_pool(handler);
 
   VkSurfaceKHR surface;
-  VkResult err =
-      glfwCreateWindowSurface(handler->g_instance, handler->window, handler->g_allocator, &surface);
+  VkResult err = glfwCreateWindowSurface(handler->g_instance, handler->window, handler->g_allocator, &surface);
   check_vk_result(err);
 
   int w, h;
@@ -709,15 +673,13 @@ static void cleanup_vulkan(gfx_handler_t *handler) {
   }
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
   PFN_vkDestroyDebugReportCallbackEXT f_vkDestroyDebugReportCallbackEXT =
-      (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(handler->g_instance,
-                                                                 "vkDestroyDebugReportCallbackEXT");
+      (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(handler->g_instance, "vkDestroyDebugReportCallbackEXT");
   if (f_vkDestroyDebugReportCallbackEXT && handler->g_debug_report != VK_NULL_HANDLE) {
     f_vkDestroyDebugReportCallbackEXT(handler->g_instance, handler->g_debug_report, handler->g_allocator);
     handler->g_debug_report = VK_NULL_HANDLE;
   }
   PFN_vkDestroyDebugUtilsMessengerEXT f_vkDestroyDebugUtilsMessengerEXT =
-      (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(handler->g_instance,
-                                                                 "vkDestroyDebugUtilsMessengerEXT");
+      (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(handler->g_instance, "vkDestroyDebugUtilsMessengerEXT");
   if (f_vkDestroyDebugUtilsMessengerEXT && handler->g_debug_messenger != VK_NULL_HANDLE) {
     f_vkDestroyDebugUtilsMessengerEXT(handler->g_instance, handler->g_debug_messenger, handler->g_allocator);
     handler->g_debug_messenger = VK_NULL_HANDLE;
@@ -734,8 +696,7 @@ static void cleanup_vulkan(gfx_handler_t *handler) {
 }
 
 static void cleanup_vulkan_window(gfx_handler_t *handler) {
-  ImGui_ImplVulkanH_DestroyWindow(handler->g_instance, handler->g_device, &handler->g_main_window_data,
-                                  handler->g_allocator);
+  ImGui_ImplVulkanH_DestroyWindow(handler->g_instance, handler->g_device, &handler->g_main_window_data, handler->g_allocator);
 }
 
 // offscreen resource helpers
@@ -754,13 +715,11 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
   VkFormat format = handler->g_main_window_data.SurfaceFormat.format;
 
   // create image (color attachment + sampled)
-  create_image(handler, width, height, 1, 1, format, VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+  create_image(handler, width, height, 1, 1, format, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &handler->offscreen_image, &handler->offscreen_memory);
 
   // create image view
-  handler->offscreen_image_view =
-      create_image_view(handler, handler->offscreen_image, format, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
+  handler->offscreen_image_view = create_image_view(handler, handler->offscreen_image, format, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
 
   // create sampler
   handler->offscreen_sampler = create_texture_sampler(handler, 1, VK_FILTER_LINEAR);
@@ -809,8 +768,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
       .pDependencies = &dependency,
   };
 
-  VkResult err =
-      vkCreateRenderPass(handler->g_device, &rp_info, handler->g_allocator, &handler->offscreen_render_pass);
+  VkResult err = vkCreateRenderPass(handler->g_device, &rp_info, handler->g_allocator, &handler->offscreen_render_pass);
   if (err != VK_SUCCESS) {
     log_error(LOG_SOURCE, "Failed to create offscreen render pass (%d)\n", err);
     return 1;
@@ -830,8 +788,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
       .layers = 1,
   };
 
-  err =
-      vkCreateFramebuffer(handler->g_device, &fb_info, handler->g_allocator, &handler->offscreen_framebuffer);
+  err = vkCreateFramebuffer(handler->g_device, &fb_info, handler->g_allocator, &handler->offscreen_framebuffer);
   if (err != VK_SUCCESS) {
     log_error(LOG_SOURCE, "Failed to create offscreen framebuffer (%d)\n", err);
     vkDestroyRenderPass(handler->g_device, handler->offscreen_render_pass, handler->g_allocator);
@@ -842,8 +799,8 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
   // Add ImGui texture handle from sampler + image view
   // ImGui_ImplVulkan_AddTexture returns an ImTextureID (void*).
 
-  ImTextureID id = (ImTextureID)ImGui_ImplVulkan_AddTexture(
-      handler->offscreen_sampler, handler->offscreen_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  ImTextureID id =
+      (ImTextureID)ImGui_ImplVulkan_AddTexture(handler->offscreen_sampler, handler->offscreen_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   handler->offscreen_texture = ImTextureRef_ImTextureRef_TextureID(id);
   handler->offscreen_initialized = true;
@@ -852,8 +809,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
 }
 
 static void destroy_offscreen_resources(gfx_handler_t *handler) {
-  if (!handler->offscreen_initialized)
-    return;
+  if (!handler->offscreen_initialized) return;
 
   // Note: ImGui_ImplVulkan does not provide an explicit remove for a texture id, but the descriptor set
   // allocated by AddTexture will be freed when the descriptor pool is destroyed / ImGui shuts down.
@@ -891,8 +847,7 @@ static void destroy_offscreen_resources(gfx_handler_t *handler) {
 }
 
 static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, uint32_t height) {
-  if (!handler->offscreen_initialized)
-    return init_offscreen_resources(handler, width, height);
+  if (!handler->offscreen_initialized) return init_offscreen_resources(handler, width, height);
 
   if (handler->offscreen_width != width || handler->offscreen_height != height) {
     // recreate
@@ -903,8 +858,7 @@ static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, 
 }
 
 // vulkan setup helpers
-static bool is_extension_available(const VkExtensionProperties *properties, uint32_t properties_count,
-                                   const char *extension) {
+static bool is_extension_available(const VkExtensionProperties *properties, uint32_t properties_count, const char *extension) {
   for (uint32_t i = 0; i < properties_count; i++) {
     if (strcmp(properties[i].extensionName, extension) == 0) {
       return true;
@@ -913,8 +867,7 @@ static bool is_extension_available(const VkExtensionProperties *properties, uint
   return false;
 }
 
-static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extensions,
-                                uint32_t glfw_extensions_count) {
+static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extensions, uint32_t glfw_extensions_count) {
   VkResult err;
 
   uint32_t properties_count;
@@ -926,8 +879,7 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
   uint32_t extensions_count = glfw_extensions_count;
   memcpy(extensions, glfw_extensions, glfw_extensions_count * sizeof(const char *));
 
-  if (is_extension_available(properties, properties_count,
-                             VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
+  if (is_extension_available(properties, properties_count, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
     extensions[extensions_count++] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
   }
 #ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
@@ -952,10 +904,8 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
   create_info.ppEnabledLayerNames = validation_layers;
   VkDebugUtilsMessengerCreateInfoEXT debug_utils_ci = {
       .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-      .messageSeverity =
-          VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
-      .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+      .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+      .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
       .pfnUserCallback = debug_utils_callback,
   };
@@ -978,35 +928,28 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
   PFN_vkCreateDebugReportCallbackEXT f_vkCreateDebugReportCallbackEXT =
-      (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(handler->g_instance,
-                                                                "vkCreateDebugReportCallbackEXT");
+      (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(handler->g_instance, "vkCreateDebugReportCallbackEXT");
   assert(f_vkCreateDebugReportCallbackEXT != NULL);
   VkDebugReportCallbackCreateInfoEXT debug_report_ci = {
       .sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT,
-      .flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT |
-               VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
+      .flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
       .pfnCallback = debug_report,
   };
-  err = f_vkCreateDebugReportCallbackEXT(handler->g_instance, &debug_report_ci, handler->g_allocator,
-                                         &handler->g_debug_report);
+  err = f_vkCreateDebugReportCallbackEXT(handler->g_instance, &debug_report_ci, handler->g_allocator, &handler->g_debug_report);
   check_vk_result(err);
 
   PFN_vkCreateDebugUtilsMessengerEXT f_vkCreateDebugUtilsMessengerEXT =
-      (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(handler->g_instance,
-                                                                "vkCreateDebugUtilsMessengerEXT");
+      (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(handler->g_instance, "vkCreateDebugUtilsMessengerEXT");
   if (f_vkCreateDebugUtilsMessengerEXT) {
     VkDebugUtilsMessengerCreateInfoEXT messenger_ci = {
         .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-        .messageSeverity =
-            VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
-            VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
-        .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                       VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+        .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+        .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                        VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
         .pfnUserCallback = debug_utils_callback,
     };
-    err = f_vkCreateDebugUtilsMessengerEXT(handler->g_instance, &messenger_ci, handler->g_allocator,
-                                           &handler->g_debug_messenger);
+    err = f_vkCreateDebugUtilsMessengerEXT(handler->g_instance, &messenger_ci, handler->g_allocator, &handler->g_debug_messenger);
     check_vk_result(err);
   }
 #endif
@@ -1039,8 +982,7 @@ static void create_logical_device(gfx_handler_t *handler) {
       .enabledExtensionCount = device_extensions_count,
       .ppEnabledExtensionNames = device_extensions,
   };
-  VkResult err =
-      vkCreateDevice(handler->g_physical_device, &create_info, handler->g_allocator, &handler->g_device);
+  VkResult err = vkCreateDevice(handler->g_physical_device, &create_info, handler->g_allocator, &handler->g_device);
   check_vk_result(err);
   vkGetDeviceQueue(handler->g_device, handler->g_queue_family, 0, &handler->g_queue);
 }
@@ -1056,50 +998,42 @@ static void create_descriptor_pool(gfx_handler_t *handler) {
                                           .maxSets = 1000 * ARRAYSIZE(pool_sizes),
                                           .poolSizeCount = (uint32_t)ARRAYSIZE(pool_sizes),
                                           .pPoolSizes = pool_sizes};
-  VkResult err = vkCreateDescriptorPool(handler->g_device, &pool_info, handler->g_allocator,
-                                        &handler->g_descriptor_pool);
+  VkResult err = vkCreateDescriptorPool(handler->g_device, &pool_info, handler->g_allocator, &handler->g_descriptor_pool);
   check_vk_result(err);
 }
 
-static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, VkSurfaceKHR surface,
-                         int width, int height) {
+static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, VkSurfaceKHR surface, int width, int height) {
   wd->Surface = surface;
 
   VkBool32 res;
-  vkGetPhysicalDeviceSurfaceSupportKHR(handler->g_physical_device, handler->g_queue_family, wd->Surface,
-                                       &res);
+  vkGetPhysicalDeviceSurfaceSupportKHR(handler->g_physical_device, handler->g_queue_family, wd->Surface, &res);
   if (res != VK_TRUE) {
     log_error("Vulkan", "No WSI support on the selected physical device.");
     exit(-1);
   }
 
-  const VkFormat request_surface_image_format[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
-                                                   VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM};
+  const VkFormat request_surface_image_format[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8_UNORM,
+                                                   VK_FORMAT_R8G8B8_UNORM};
   const VkColorSpaceKHR request_surface_color_space = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
-  wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(
-      handler->g_physical_device, wd->Surface, request_surface_image_format,
-      (size_t)ARRAYSIZE(request_surface_image_format), request_surface_color_space);
+  wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(handler->g_physical_device, wd->Surface, request_surface_image_format,
+                                                            (size_t)ARRAYSIZE(request_surface_image_format), request_surface_color_space);
 
   // vsync present mode
   VkPresentModeKHR present_modes[] = {VK_PRESENT_MODE_FIFO_KHR};
-  wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, wd->Surface,
-                                                        &present_modes[0], ARRAYSIZE(present_modes));
+  wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, wd->Surface, &present_modes[0], ARRAYSIZE(present_modes));
 
   assert(handler->g_min_image_count >= 2);
-  ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device,
-                                         wd, handler->g_queue_family, handler->g_allocator, width, height,
-                                         handler->g_min_image_count);
+  ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, wd, handler->g_queue_family,
+                                         handler->g_allocator, width, height, handler->g_min_image_count);
 }
 
 // frame rendering and presentation
 static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-  VkSemaphore render_complete_semaphore =
-      wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
+  VkSemaphore render_complete_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
 
-  VkResult err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore,
-                                       VK_NULL_HANDLE, &wd->FrameIndex);
+  VkResult err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
     handler->g_swap_chain_rebuild = true;
     return;
@@ -1116,8 +1050,7 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
   {
     err = vkResetCommandPool(handler->g_device, fd->CommandPool, 0);
     check_vk_result(err);
-    VkCommandBufferBeginInfo info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                                     .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+    VkCommandBufferBeginInfo info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     err = vkBeginCommandBuffer(fd->CommandBuffer, &info);
     check_vk_result(err);
   }
@@ -1140,27 +1073,20 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
     if (width > 0 && height > 0) {
       float window_ratio = (float)width / (float)height;
       float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
-      if (isnan(map_ratio) || map_ratio == 0)
-        map_ratio = 1.0f;
+      if (isnan(map_ratio) || map_ratio == 0) map_ratio = 1.0f;
 
-      float zoom = 1.0 / (handler->renderer.camera.zoom *
-                          fmax(handler->map_data->width, handler->map_data->height) * 0.001);
-      if (isnan(zoom))
-        zoom = 1.0f;
+      float zoom = 1.0 / (handler->renderer.camera.zoom * fmax(handler->map_data->width, handler->map_data->height) * 0.001);
+      if (isnan(zoom)) zoom = 1.0f;
 
       float aspect = 1.0f / (window_ratio / map_ratio);
-      float lod =
-          fmin(fmax(5.5f - log2f((1.0f / handler->map_data->width) / zoom * (width / 2.0f)), 0.0f), 6.0f);
+      float lod = fmin(fmax(5.5f - log2f((1.0f / handler->map_data->width) / zoom * (width / 2.0f)), 0.0f), 6.0f);
 
-      map_buffer_object_t ubo = {
-          .transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom},
-          .aspect = aspect,
-          .lod = lod};
+      map_buffer_object_t ubo = {.transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom}, .aspect = aspect, .lod = lod};
 
       void *ubos[] = {&ubo};
       VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
-      renderer_draw_mesh(handler, fd->CommandBuffer, handler->quad_mesh, handler->map_shader,
-                         handler->map_textures, handler->map_texture_count, ubos, ubo_sizes, 1);
+      renderer_draw_mesh(handler, fd->CommandBuffer, handler->quad_mesh, handler->map_shader, handler->map_textures, handler->map_texture_count, ubos,
+                         ubo_sizes, 1);
     }
   }
 
@@ -1189,11 +1115,9 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
 }
 
 static void frame_present(gfx_handler_t *handler) {
-  if (handler->g_swap_chain_rebuild)
-    return;
+  if (handler->g_swap_chain_rebuild) return;
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
-  VkSemaphore render_complete_semaphore =
-      wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
+  VkSemaphore render_complete_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
   VkPresentInfoKHR info = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                            .waitSemaphoreCount = 1,
                            .pWaitSemaphores = &render_complete_semaphore,

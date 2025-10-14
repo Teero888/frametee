@@ -42,8 +42,7 @@ void logger_log(log_level_t level, const char *source, const char *format, ...) 
   char source_with_brackets[32];
   snprintf(source_with_brackets, sizeof(source_with_brackets), "[%s]", source);
 
-  fprintf(stdout, "%s[%s] %s[%-4s]%s %-17s ", GRAY, time_buffer, level_colors[level], level_strings[level],
-          RESET, source_with_brackets);
+  fprintf(stdout, "%s[%s] %s[%-4s]%s %-17s ", GRAY, time_buffer, level_colors[level], level_strings[level], RESET, source_with_brackets);
 
   va_list args;
   va_start(args, format);

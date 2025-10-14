@@ -251,7 +251,8 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
       info.id = loaded_id;
       strncpy(info.name, skin_header.name, sizeof(info.name) - 1);
       if (info.preview_texture_res) {
-        info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(info.preview_texture_res->sampler, info.preview_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+        info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
+            info.preview_texture_res->sampler, info.preview_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
       }
       skin_manager_add(&ui->skin_manager, &info);
     }

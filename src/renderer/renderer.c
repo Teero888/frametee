@@ -23,29 +23,21 @@ static const char *LOG_SOURCE = "Renderer";
 #define DYNAMIC_UBO_BUFFER_SIZE (16 * 1024 * 1024) // 16 MB
 
 // helper function prototypes
-static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter,
-                                 VkMemoryPropertyFlags properties);
-static void create_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsageFlags usage,
-                          VkMemoryPropertyFlags properties, buffer_t *buffer);
+static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter, VkMemoryPropertyFlags properties);
+static void create_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, buffer_t *buffer);
 static VkCommandBuffer begin_single_time_commands(gfx_handler_t *handler, VkCommandPool pool);
-static void end_single_time_commands(gfx_handler_t *handler, VkCommandPool pool,
-                                     VkCommandBuffer command_buffer);
-static void copy_buffer(gfx_handler_t *handler, VkCommandPool pool, VkBuffer src_buffer, VkBuffer dst_buffer,
-                        VkDeviceSize size);
+static void end_single_time_commands(gfx_handler_t *handler, VkCommandPool pool, VkCommandBuffer command_buffer);
+static void copy_buffer(gfx_handler_t *handler, VkCommandPool pool, VkBuffer src_buffer, VkBuffer dst_buffer, VkDeviceSize size);
 
-static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, VkImage image,
-                                    VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout,
-                                    uint32_t mip_levels, uint32_t base_layer, uint32_t layer_count);
-static void copy_buffer_to_image(gfx_handler_t *handler, VkCommandPool pool, VkBuffer buffer, VkImage image,
-                                 uint32_t width, uint32_t height);
+static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, VkImage image, VkFormat format, VkImageLayout old_layout,
+                                    VkImageLayout new_layout, uint32_t mip_levels, uint32_t base_layer, uint32_t layer_count);
+static void copy_buffer_to_image(gfx_handler_t *handler, VkCommandPool pool, VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
 static char *read_file(const char *filename, size_t *length);
 static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *code, size_t code_size);
-static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height,
-                          uint32_t mip_levels, uint32_t layer_count);
-static pipeline_cache_entry_t *
-get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count,
-                       const VkVertexInputBindingDescription *binding_descs, uint32_t binding_desc_count,
-                       const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count);
+static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t layer_count);
+static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count,
+                                                      const VkVertexInputBindingDescription *binding_descs, uint32_t binding_desc_count,
+                                                      const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count);
 static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
 // vertex description helpers
@@ -64,28 +56,22 @@ static VkVertexInputAttributeDescription atlas_attrib_descs[6];
 static void setup_vertex_descriptions();
 
 void check_vk_result(VkResult err) {
-  if (err == VK_SUCCESS)
-    return;
+  if (err == VK_SUCCESS) return;
   log_error("Vulkan", "VkResult = %d", err);
-  if (err < 0)
-    abort();
+  if (err < 0) abort();
 }
 void check_vk_result_line(VkResult err, int line) {
-  if (err == VK_SUCCESS)
-    return;
+  if (err == VK_SUCCESS) return;
   log_error("Vulkan", "VkResult = %d in renderer.c (line: %d)", err, line);
-  if (err < 0)
-    abort();
+  if (err < 0) abort();
 }
 
-static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter,
-                                 VkMemoryPropertyFlags properties) {
+static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter, VkMemoryPropertyFlags properties) {
   VkPhysicalDeviceMemoryProperties mem_properties;
   vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_properties);
 
   for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++) {
-    if ((type_filter & (1 << i)) &&
-        (mem_properties.memoryTypes[i].propertyFlags & properties) == properties) {
+    if ((type_filter & (1 << i)) && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties) {
       return i;
     }
   }
@@ -93,15 +79,12 @@ static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type
   exit(EXIT_FAILURE);
 }
 
-static void create_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsageFlags usage,
-                          VkMemoryPropertyFlags properties, buffer_t *buffer) {
+static void create_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, buffer_t *buffer) {
   VkResult err;
   buffer->size = size;
 
-  VkBufferCreateInfo buffer_info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                                    .size = size,
-                                    .usage = usage,
-                                    .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+  VkBufferCreateInfo buffer_info = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size, .usage = usage, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
 
   err = vkCreateBuffer(handler->g_device, &buffer_info, handler->g_allocator, &buffer->buffer);
   check_vk_result_line(err, __LINE__);
@@ -109,11 +92,9 @@ static void create_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsa
   VkMemoryRequirements mem_requirements;
   vkGetBufferMemoryRequirements(handler->g_device, buffer->buffer, &mem_requirements);
 
-  VkMemoryAllocateInfo alloc_info = {
-      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-      .allocationSize = mem_requirements.size,
-      .memoryTypeIndex =
-          find_memory_type(handler->g_physical_device, mem_requirements.memoryTypeBits, properties)};
+  VkMemoryAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                     .allocationSize = mem_requirements.size,
+                                     .memoryTypeIndex = find_memory_type(handler->g_physical_device, mem_requirements.memoryTypeBits, properties)};
 
   err = vkAllocateMemory(handler->g_device, &alloc_info, handler->g_allocator, &buffer->memory);
   check_vk_result_line(err, __LINE__);
@@ -133,19 +114,16 @@ static VkCommandBuffer begin_single_time_commands(gfx_handler_t *handler, VkComm
   VkCommandBuffer command_buffer;
   vkAllocateCommandBuffers(handler->g_device, &alloc_info, &command_buffer);
 
-  VkCommandBufferBeginInfo begin_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                                         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+  VkCommandBufferBeginInfo begin_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
 
   vkBeginCommandBuffer(command_buffer, &begin_info);
   return command_buffer;
 }
 
-static void end_single_time_commands(gfx_handler_t *handler, VkCommandPool pool,
-                                     VkCommandBuffer command_buffer) {
+static void end_single_time_commands(gfx_handler_t *handler, VkCommandPool pool, VkCommandBuffer command_buffer) {
   vkEndCommandBuffer(command_buffer);
 
-  VkSubmitInfo submit_info = {
-      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &command_buffer};
+  VkSubmitInfo submit_info = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &command_buffer};
 
   VkFenceCreateInfo fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   VkFence fence;
@@ -162,8 +140,7 @@ static void end_single_time_commands(gfx_handler_t *handler, VkCommandPool pool,
   vkFreeCommandBuffers(handler->g_device, pool, 1, &command_buffer);
 }
 
-static void copy_buffer(gfx_handler_t *handler, VkCommandPool pool, VkBuffer src_buffer, VkBuffer dst_buffer,
-                        VkDeviceSize size) {
+static void copy_buffer(gfx_handler_t *handler, VkCommandPool pool, VkBuffer src_buffer, VkBuffer dst_buffer, VkDeviceSize size) {
   VkCommandBuffer command_buffer = begin_single_time_commands(handler, pool);
 
   VkBufferCopy copy_region = {.size = size};
@@ -172,9 +149,8 @@ static void copy_buffer(gfx_handler_t *handler, VkCommandPool pool, VkBuffer src
   end_single_time_commands(handler, pool, command_buffer);
 }
 
-static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, VkImage image,
-                                    VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout,
-                                    uint32_t mip_levels, uint32_t base_layer, uint32_t layer_count) {
+static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, VkImage image, VkFormat format, VkImageLayout old_layout,
+                                    VkImageLayout new_layout, uint32_t mip_levels, uint32_t base_layer, uint32_t layer_count) {
   VkCommandBuffer command_buffer = begin_single_time_commands(handler, pool);
 
   VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -197,26 +173,22 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     source_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
     destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
-             new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+  } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-  } else if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
-             new_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+  } else if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && new_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
     barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     source_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  } else if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
-             new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+  } else if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
     barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     source_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
-             new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+  } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
@@ -231,21 +203,18 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
   end_single_time_commands(handler, pool, command_buffer);
 }
 
-static void copy_buffer_to_image(gfx_handler_t *handler, VkCommandPool pool, VkBuffer buffer, VkImage image,
-                                 uint32_t width, uint32_t height) {
+static void copy_buffer_to_image(gfx_handler_t *handler, VkCommandPool pool, VkBuffer buffer, VkImage image, uint32_t width, uint32_t height) {
   VkCommandBuffer command_buffer = begin_single_time_commands(handler, pool);
 
-  VkBufferImageCopy region = {.imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
-                              .imageExtent = {width, height, 1}};
+  VkBufferImageCopy region = {.imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1}, .imageExtent = {width, height, 1}};
 
   vkCmdCopyBufferToImage(command_buffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
   end_single_time_commands(handler, pool, command_buffer);
 }
 
-void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels,
-                  uint32_t array_layers, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
-                  VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory) {
+void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_layers, VkFormat format,
+                  VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory) {
   VkResult err;
   VkImageCreateInfo image_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                                   .imageType = VK_IMAGE_TYPE_2D,
@@ -265,11 +234,9 @@ void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint3
   VkMemoryRequirements mem_requirements;
   vkGetImageMemoryRequirements(handler->g_device, *image, &mem_requirements);
 
-  VkMemoryAllocateInfo alloc_info = {
-      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-      .allocationSize = mem_requirements.size,
-      .memoryTypeIndex =
-          find_memory_type(handler->g_physical_device, mem_requirements.memoryTypeBits, properties)};
+  VkMemoryAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                     .allocationSize = mem_requirements.size,
+                                     .memoryTypeIndex = find_memory_type(handler->g_physical_device, mem_requirements.memoryTypeBits, properties)};
 
   err = vkAllocateMemory(handler->g_device, &alloc_info, handler->g_allocator, image_memory);
   check_vk_result_line(err, __LINE__);
@@ -278,17 +245,15 @@ void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint3
   check_vk_result_line(err, __LINE__);
 }
 
-VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format,
-                              VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count) {
-  VkImageViewCreateInfo view_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                                     .image = image,
-                                     .viewType = view_type,
-                                     .format = format,
-                                     .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                          .baseMipLevel = 0,
-                                                          .levelCount = mip_levels,
-                                                          .baseArrayLayer = 0,
-                                                          .layerCount = layer_count}};
+VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels,
+                              uint32_t layer_count) {
+  VkImageViewCreateInfo view_info = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .image = image,
+      .viewType = view_type,
+      .format = format,
+      .subresourceRange = {
+          .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = mip_levels, .baseArrayLayer = 0, .layerCount = layer_count}};
 
   VkImageView image_view;
   VkResult err = vkCreateImageView(handler->g_device, &view_info, handler->g_allocator, &image_view);
@@ -351,9 +316,8 @@ static char *read_file(const char *filename, size_t *length) {
 }
 
 static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *code, size_t code_size) {
-  VkShaderModuleCreateInfo create_info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-                                          .codeSize = code_size,
-                                          .pCode = (const uint32_t *)code};
+  VkShaderModuleCreateInfo create_info = {
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = code_size, .pCode = (const uint32_t *)code};
 
   VkShaderModule shader_module;
   VkResult err = vkCreateShaderModule(handler->g_device, &create_info, handler->g_allocator, &shader_module);
@@ -362,21 +326,17 @@ static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *c
   return shader_module;
 }
 
-static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height,
-                          uint32_t mip_levels, uint32_t layer_count) {
-  if (mip_levels <= 1)
-    return true;
+static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t layer_count) {
+  if (mip_levels <= 1) return true;
 
   VkCommandBuffer cmd_buffer = begin_single_time_commands(handler, handler->renderer.transfer_command_pool);
 
-  VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                  .image = image,
-                                  .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                  .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                  .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                       .baseArrayLayer = 0,
-                                                       .layerCount = layer_count,
-                                                       .levelCount = 1}};
+  VkImageMemoryBarrier barrier = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .image = image,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseArrayLayer = 0, .layerCount = layer_count, .levelCount = 1}};
 
   int32_t mip_width = width;
   int32_t mip_height = height;
@@ -388,38 +348,27 @@ static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width,
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 
-    vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                         NULL, 0, NULL, 1, &barrier);
+    vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
 
     VkImageBlit blit = {
         .srcOffsets[0] = {0, 0, 0},
         .srcOffsets[1] = {mip_width, mip_height, 1},
-        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                           .mipLevel = i - 1,
-                           .baseArrayLayer = 0,
-                           .layerCount = layer_count},
+        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = i - 1, .baseArrayLayer = 0, .layerCount = layer_count},
         .dstOffsets[0] = {0, 0, 0},
         .dstOffsets[1] = {mip_width > 1 ? mip_width / 2 : 1, mip_height > 1 ? mip_height / 2 : 1, 1},
-        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                           .mipLevel = i,
-                           .baseArrayLayer = 0,
-                           .layerCount = layer_count}};
+        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = i, .baseArrayLayer = 0, .layerCount = layer_count}};
 
-    vkCmdBlitImage(cmd_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+    vkCmdBlitImage(cmd_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
 
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                         0, NULL, 0, NULL, 1, &barrier);
+    vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
 
-    if (mip_width > 1)
-      mip_width /= 2;
-    if (mip_height > 1)
-      mip_height /= 2;
+    if (mip_width > 1) mip_width /= 2;
+    if (mip_height > 1) mip_height /= 2;
   }
 
   barrier.subresourceRange.baseMipLevel = mip_levels - 1;
@@ -428,15 +377,13 @@ static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width,
   barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
   barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-  vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                       0, NULL, 0, NULL, 1, &barrier);
+  vkCmdPipelineBarrier(cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
 
   end_single_time_commands(handler, handler->renderer.transfer_command_pool, cmd_buffer);
   return true;
 }
 
-texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height,
-                                            uint32_t layer_count, VkFormat format) {
+texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t layer_count, VkFormat format) {
   renderer_state_t *renderer = &handler->renderer;
 
   // find free slot
@@ -464,21 +411,18 @@ texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t wid
 
   // Create the VkImage (2D array)
   create_image(handler, width, height, texArray->mip_levels, layer_count, format, VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texArray->image, &texArray->memory);
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texArray->image,
+               &texArray->memory);
 
   // Transition all layers once
-  transition_image_layout(handler, renderer->transfer_command_pool, texArray->image, format,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          texArray->mip_levels, 0, layer_count);
+  transition_image_layout(handler, renderer->transfer_command_pool, texArray->image, format, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, texArray->mip_levels, 0, layer_count);
   // Transition to shader read (empty until uploads)
-  transition_image_layout(handler, renderer->transfer_command_pool, texArray->image, format,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          texArray->mip_levels, 0, layer_count);
+  transition_image_layout(handler, renderer->transfer_command_pool, texArray->image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, texArray->mip_levels, 0, layer_count);
 
   // Create view as 2D array
-  texArray->image_view = create_image_view(handler, texArray->image, format, VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-                                           texArray->mip_levels, layer_count);
+  texArray->image_view = create_image_view(handler, texArray->image, format, VK_IMAGE_VIEW_TYPE_2D_ARRAY, texArray->mip_levels, layer_count);
 
   // Create sampler
   texArray->sampler = create_texture_sampler(handler, texArray->mip_levels, VK_FILTER_LINEAR);
@@ -501,21 +445,17 @@ int renderer_init(gfx_handler_t *handler) {
   VkCommandPoolCreateInfo pool_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
                                        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
                                        .queueFamilyIndex = handler->g_queue_family};
-  check_vk_result(vkCreateCommandPool(handler->g_device, &pool_info, handler->g_allocator,
-                                      &renderer->transfer_command_pool));
+  check_vk_result(vkCreateCommandPool(handler->g_device, &pool_info, handler->g_allocator, &renderer->transfer_command_pool));
 
-  VkDescriptorPoolSize pool_sizes[] = {
-      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 100},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100 * MAX_TEXTURES_PER_DRAW}};
+  VkDescriptorPoolSize pool_sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 100},
+                                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100 * MAX_TEXTURES_PER_DRAW}};
   for (int i = 0; i < 3; i++) { // triple buffering
     VkDescriptorPoolCreateInfo pool_create_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                                    .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
                                                    .maxSets = 100,
-                                                   .poolSizeCount =
-                                                       sizeof(pool_sizes) / sizeof(pool_sizes[0]),
+                                                   .poolSizeCount = sizeof(pool_sizes) / sizeof(pool_sizes[0]),
                                                    .pPoolSizes = pool_sizes};
-    check_vk_result(vkCreateDescriptorPool(handler->g_device, &pool_create_info, handler->g_allocator,
-                                           &renderer->frame_descriptor_pools[i]));
+    check_vk_result(vkCreateDescriptorPool(handler->g_device, &pool_create_info, handler->g_allocator, &renderer->frame_descriptor_pools[i]));
   }
   unsigned char white_pixel[] = {255, 255, 255, 255};
   texture_t *default_tex = renderer_load_texture_from_array(handler, white_pixel, 1, 1);
@@ -523,107 +463,92 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->default_texture = default_tex;
 
   // Primitive & UBO Ring Buffer Setup
-  renderer->primitive_shader =
-      renderer_load_shader(handler, "data/shaders/primitive.vert.spv", "data/shaders/primitive.frag.spv");
+  renderer->primitive_shader = renderer_load_shader(handler, "data/shaders/primitive.vert.spv", "data/shaders/primitive.frag.spv");
 
-  create_buffer(handler, MAX_PRIMITIVE_VERTICES * sizeof(primitive_vertex_t),
-                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &renderer->dynamic_vertex_buffer);
-  vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer.memory, 0, VK_WHOLE_SIZE, 0,
-              (void **)&renderer->vertex_buffer_ptr);
+  create_buffer(handler, MAX_PRIMITIVE_VERTICES * sizeof(primitive_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_vertex_buffer);
+  vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->vertex_buffer_ptr);
 
   create_buffer(handler, MAX_PRIMITIVE_INDICES * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &renderer->dynamic_index_buffer);
-  vkMapMemory(handler->g_device, renderer->dynamic_index_buffer.memory, 0, VK_WHOLE_SIZE, 0,
-              (void **)&renderer->index_buffer_ptr);
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_index_buffer);
+  vkMapMemory(handler->g_device, renderer->dynamic_index_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->index_buffer_ptr);
 
   create_buffer(handler, DYNAMIC_UBO_BUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &renderer->dynamic_ubo_buffer);
-  vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0,
-              &renderer->ubo_buffer_ptr);
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_ubo_buffer);
+  vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0, &renderer->ubo_buffer_ptr);
 
   // create a 2d array texture to hold max_skins atlases (each 512x256, rgba8)
-  renderer->skin_manager.atlas_array =
-      renderer_create_texture_2d_array(handler, 512, 256, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
+  renderer->skin_manager.atlas_array = renderer_create_texture_2d_array(handler, 512, 256, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
   memset(renderer->skin_manager.layer_used, 0, sizeof(renderer->skin_manager.layer_used));
   // skin renderer
-  renderer->skin_renderer.skin_shader =
-      renderer_load_shader(handler, "data/shaders/skin.vert.spv", "data/shaders/skin.frag.spv");
+  renderer->skin_renderer.skin_shader = renderer_load_shader(handler, "data/shaders/skin.vert.spv", "data/shaders/skin.frag.spv");
 
   // allocate big instance buffer
   create_buffer(handler, sizeof(skin_instance_t) * 100000, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &renderer->skin_renderer.instance_buffer);
-  vkMapMemory(handler->g_device, renderer->skin_renderer.instance_buffer.memory, 0, VK_WHOLE_SIZE, 0,
-              (void **)&renderer->skin_renderer.instance_ptr);
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->skin_renderer.instance_buffer);
+  vkMapMemory(handler->g_device, renderer->skin_renderer.instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->skin_renderer.instance_ptr);
 
   renderer->skin_renderer.instance_count = 0;
 
-  static sprite_definition_t gameskin_sprites[GAMESKIN_SPRITE_COUNT] = {
-      [GAMESKIN_HAMMER_BODY] = {64, 32, 128, 96},
-      [GAMESKIN_GUN_BODY] = {64, 128, 128, 64},
-      [GAMESKIN_GUN_PROJ] = {192, 128, 64, 64},
-      [GAMESKIN_GUN_MUZZLE1] = {256, 128, 128, 64},
-      [GAMESKIN_GUN_MUZZLE2] = {384, 128, 128, 64},
-      [GAMESKIN_GUN_MUZZLE3] = {512, 128, 128, 64},
-      [GAMESKIN_SHOTGUN_BODY] = {64, 192, 256, 64},
-      [GAMESKIN_SHOTGUN_PROJ] = {320, 192, 64, 64},
-      [GAMESKIN_SHOTGUN_MUZZLE1] = {384, 192, 128, 64},
-      [GAMESKIN_SHOTGUN_MUZZLE2] = {512, 192, 128, 64},
-      [GAMESKIN_SHOTGUN_MUZZLE3] = {640, 192, 128, 64},
-      [GAMESKIN_GRENADE_BODY] = {64, 256, 224, 64},
-      [GAMESKIN_GRENADE_PROJ] = {320, 256, 64, 64},
-      [GAMESKIN_LASER_BODY] = {64, 384, 224, 96},
-      [GAMESKIN_LASER_PROJ] = {320, 384, 64, 64},
-      [GAMESKIN_NINJA_BODY] = {64, 320, 256, 64},
-      [GAMESKIN_NINJA_MUZZLE1] = {800, 0, 224, 128},
-      [GAMESKIN_NINJA_MUZZLE2] = {800, 128, 224, 128},
-      [GAMESKIN_NINJA_MUZZLE3] = {800, 256, 224, 128},
-      [GAMESKIN_HEALTH_FULL] = {672, 0, 64, 64},
-      [GAMESKIN_HEALTH_EMPTY] = {736, 0, 64, 64},
-      [GAMESKIN_ARMOR_FULL] = {672, 64, 64, 64},
-      [GAMESKIN_ARMOR_EMPTY] = {736, 64, 64, 64},
-      [GAMESKIN_HOOK_CHAIN] = {64, 0, 32, 32},
-      [GAMESKIN_HOOK_HEAD] = {96, 0, 64, 32},
-      [GAMESKIN_PARTICLE_0] = {192, 0, 32, 32},
-      [GAMESKIN_PARTICLE_1] = {192, 32, 32, 32},
-      [GAMESKIN_PARTICLE_2] = {224, 0, 32, 32},
-      [GAMESKIN_PARTICLE_3] = {224, 32, 32, 32},
-      [GAMESKIN_PARTICLE_4] = {256, 0, 32, 32},
-      [GAMESKIN_PARTICLE_5] = {256, 32, 32, 32},
-      [GAMESKIN_PARTICLE_6] = {288, 0, 64, 64},
-      [GAMESKIN_PARTICLE_7] = {352, 0, 64, 64},
-      [GAMESKIN_PARTICLE_8] = {416, 0, 64, 64},
-      [GAMESKIN_STAR_0] = {480, 0, 64, 64},
-      [GAMESKIN_STAR_1] = {544, 0, 64, 64},
-      [GAMESKIN_STAR_2] = {608, 0, 64, 64},
-      [GAMESKIN_PICKUP_HEALTH] = {320, 64, 64, 64},
-      [GAMESKIN_PICKUP_ARMOR] = {384, 64, 64, 64},
-      [GAMESKIN_PICKUP_HAMMER] = {64, 32, 128, 96},
-      [GAMESKIN_PICKUP_GUN] = {64, 128, 128, 64},
-      [GAMESKIN_PICKUP_SHOTGUN] = {64, 192, 256, 64},
-      [GAMESKIN_PICKUP_GRENADE] = {64, 256, 224, 64},
-      [GAMESKIN_PICKUP_LASER] = {64, 384, 224, 96},
-      [GAMESKIN_PICKUP_NINJA] = {64, 320, 256, 64},
-      [GAMESKIN_PICKUP_ARMOR_SHOTGUN] = {480, 64, 64, 64},
-      [GAMESKIN_PICKUP_ARMOR_GRENADE] = {544, 64, 64, 64},
-      [GAMESKIN_PICKUP_ARMOR_NINJA] = {320, 320, 64, 64},
-      [GAMESKIN_PICKUP_ARMOR_LASER] = {608, 64, 64, 64},
-      [GAMESKIN_FLAG_BLUE] = {384, 256, 128, 256},
-      [GAMESKIN_FLAG_RED] = {512, 256, 128, 256}};
+  static sprite_definition_t gameskin_sprites[GAMESKIN_SPRITE_COUNT] = {[GAMESKIN_HAMMER_BODY] = {64, 32, 128, 96},
+                                                                        [GAMESKIN_GUN_BODY] = {64, 128, 128, 64},
+                                                                        [GAMESKIN_GUN_PROJ] = {192, 128, 64, 64},
+                                                                        [GAMESKIN_GUN_MUZZLE1] = {256, 128, 128, 64},
+                                                                        [GAMESKIN_GUN_MUZZLE2] = {384, 128, 128, 64},
+                                                                        [GAMESKIN_GUN_MUZZLE3] = {512, 128, 128, 64},
+                                                                        [GAMESKIN_SHOTGUN_BODY] = {64, 192, 256, 64},
+                                                                        [GAMESKIN_SHOTGUN_PROJ] = {320, 192, 64, 64},
+                                                                        [GAMESKIN_SHOTGUN_MUZZLE1] = {384, 192, 128, 64},
+                                                                        [GAMESKIN_SHOTGUN_MUZZLE2] = {512, 192, 128, 64},
+                                                                        [GAMESKIN_SHOTGUN_MUZZLE3] = {640, 192, 128, 64},
+                                                                        [GAMESKIN_GRENADE_BODY] = {64, 256, 224, 64},
+                                                                        [GAMESKIN_GRENADE_PROJ] = {320, 256, 64, 64},
+                                                                        [GAMESKIN_LASER_BODY] = {64, 384, 224, 96},
+                                                                        [GAMESKIN_LASER_PROJ] = {320, 384, 64, 64},
+                                                                        [GAMESKIN_NINJA_BODY] = {64, 320, 256, 64},
+                                                                        [GAMESKIN_NINJA_MUZZLE1] = {800, 0, 224, 128},
+                                                                        [GAMESKIN_NINJA_MUZZLE2] = {800, 128, 224, 128},
+                                                                        [GAMESKIN_NINJA_MUZZLE3] = {800, 256, 224, 128},
+                                                                        [GAMESKIN_HEALTH_FULL] = {672, 0, 64, 64},
+                                                                        [GAMESKIN_HEALTH_EMPTY] = {736, 0, 64, 64},
+                                                                        [GAMESKIN_ARMOR_FULL] = {672, 64, 64, 64},
+                                                                        [GAMESKIN_ARMOR_EMPTY] = {736, 64, 64, 64},
+                                                                        [GAMESKIN_HOOK_CHAIN] = {64, 0, 32, 32},
+                                                                        [GAMESKIN_HOOK_HEAD] = {96, 0, 64, 32},
+                                                                        [GAMESKIN_PARTICLE_0] = {192, 0, 32, 32},
+                                                                        [GAMESKIN_PARTICLE_1] = {192, 32, 32, 32},
+                                                                        [GAMESKIN_PARTICLE_2] = {224, 0, 32, 32},
+                                                                        [GAMESKIN_PARTICLE_3] = {224, 32, 32, 32},
+                                                                        [GAMESKIN_PARTICLE_4] = {256, 0, 32, 32},
+                                                                        [GAMESKIN_PARTICLE_5] = {256, 32, 32, 32},
+                                                                        [GAMESKIN_PARTICLE_6] = {288, 0, 64, 64},
+                                                                        [GAMESKIN_PARTICLE_7] = {352, 0, 64, 64},
+                                                                        [GAMESKIN_PARTICLE_8] = {416, 0, 64, 64},
+                                                                        [GAMESKIN_STAR_0] = {480, 0, 64, 64},
+                                                                        [GAMESKIN_STAR_1] = {544, 0, 64, 64},
+                                                                        [GAMESKIN_STAR_2] = {608, 0, 64, 64},
+                                                                        [GAMESKIN_PICKUP_HEALTH] = {320, 64, 64, 64},
+                                                                        [GAMESKIN_PICKUP_ARMOR] = {384, 64, 64, 64},
+                                                                        [GAMESKIN_PICKUP_HAMMER] = {64, 32, 128, 96},
+                                                                        [GAMESKIN_PICKUP_GUN] = {64, 128, 128, 64},
+                                                                        [GAMESKIN_PICKUP_SHOTGUN] = {64, 192, 256, 64},
+                                                                        [GAMESKIN_PICKUP_GRENADE] = {64, 256, 224, 64},
+                                                                        [GAMESKIN_PICKUP_LASER] = {64, 384, 224, 96},
+                                                                        [GAMESKIN_PICKUP_NINJA] = {64, 320, 256, 64},
+                                                                        [GAMESKIN_PICKUP_ARMOR_SHOTGUN] = {480, 64, 64, 64},
+                                                                        [GAMESKIN_PICKUP_ARMOR_GRENADE] = {544, 64, 64, 64},
+                                                                        [GAMESKIN_PICKUP_ARMOR_NINJA] = {320, 320, 64, 64},
+                                                                        [GAMESKIN_PICKUP_ARMOR_LASER] = {608, 64, 64, 64},
+                                                                        [GAMESKIN_FLAG_BLUE] = {384, 256, 128, 256},
+                                                                        [GAMESKIN_FLAG_RED] = {512, 256, 128, 256}};
 
-  renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png",
-                               gameskin_sprites, GAMESKIN_SPRITE_COUNT, 100000);
+  renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png", gameskin_sprites, GAMESKIN_SPRITE_COUNT, 100000);
 
   static sprite_definition_t cursor_sprites[CURSOR_SPRITE_COUNT + 1] = {
-      [CURSOR_HAMMER] = {0, 0, 64, 64},    [CURSOR_GUN] = {0, 128, 64, 64},
-      [CURSOR_SHOTGUN] = {0, 192, 64, 64}, [CURSOR_GRENADE] = {0, 256, 64, 64},
-      [CURSOR_LASER] = {0, 384, 64, 64},   [CURSOR_NINJA] = {0, 320, 64, 64}};
-  renderer_init_atlas_renderer(handler, &renderer->cursor_renderer, "data/textures/game.png", cursor_sprites,
-                               CURSOR_SPRITE_COUNT, 1); // we only render a single cursor
+      [CURSOR_HAMMER] = {0, 0, 64, 64},    [CURSOR_GUN] = {0, 128, 64, 64},   [CURSOR_SHOTGUN] = {0, 192, 64, 64},
+      [CURSOR_GRENADE] = {0, 256, 64, 64}, [CURSOR_LASER] = {0, 384, 64, 64}, [CURSOR_NINJA] = {0, 320, 64, 64}};
+  renderer_init_atlas_renderer(handler, &renderer->cursor_renderer, "data/textures/game.png", cursor_sprites, CURSOR_SPRITE_COUNT,
+                               1); // we only render a single cursor
 
   log_info(LOG_SOURCE, "Renderer initialized successfully.");
   return 0;
@@ -701,19 +626,16 @@ void renderer_cleanup(gfx_handler_t *handler) {
   log_info(LOG_SOURCE, "Renderer cleaned up successfully.");
 }
 
-static pipeline_cache_entry_t *
-get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count,
-                       const VkVertexInputBindingDescription *binding_descs, uint32_t binding_desc_count,
-                       const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count) {
+static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count,
+                                                      const VkVertexInputBindingDescription *binding_descs, uint32_t binding_desc_count,
+                                                      const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count) {
   renderer_state_t *renderer = &handler->renderer;
   pipeline_cache_entry_t *entry = &renderer->pipeline_cache[shader->id];
 
-  VkRenderPass target_render_pass = handler->offscreen_render_pass != VK_NULL_HANDLE
-                                        ? handler->offscreen_render_pass
-                                        : handler->g_main_window_data.RenderPass;
+  VkRenderPass target_render_pass =
+      handler->offscreen_render_pass != VK_NULL_HANDLE ? handler->offscreen_render_pass : handler->g_main_window_data.RenderPass;
 
-  if (entry->initialized && entry->ubo_count == ubo_count && entry->texture_count == texture_count &&
-      entry->render_pass == target_render_pass) {
+  if (entry->initialized && entry->ubo_count == ubo_count && entry->texture_count == texture_count && entry->render_pass == target_render_pass) {
     return entry;
   }
 
@@ -744,88 +666,73 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
     uint32_t binding_index = current_binding++;
-    bindings[binding_index] = (VkDescriptorSetLayoutBinding){
-        .binding = binding_index,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT};
+    bindings[binding_index] = (VkDescriptorSetLayoutBinding){.binding = binding_index,
+                                                             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                                             .descriptorCount = 1,
+                                                             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT};
   }
   for (uint32_t i = 0; i < texture_count; ++i) {
     uint32_t binding_index = current_binding++;
-    bindings[binding_index] =
-        (VkDescriptorSetLayoutBinding){.binding = binding_index,
-                                       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                       .descriptorCount = 1,
-                                       .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
+    bindings[binding_index] = (VkDescriptorSetLayoutBinding){.binding = binding_index,
+                                                             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                                             .descriptorCount = 1,
+                                                             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
   }
 
-  VkDescriptorSetLayoutCreateInfo layout_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                                                 .bindingCount = binding_count,
-                                                 .pBindings = bindings};
-  VkResult err = vkCreateDescriptorSetLayout(handler->g_device, &layout_info, handler->g_allocator,
-                                             &entry->descriptor_set_layout);
+  VkDescriptorSetLayoutCreateInfo layout_info = {
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = binding_count, .pBindings = bindings};
+  VkResult err = vkCreateDescriptorSetLayout(handler->g_device, &layout_info, handler->g_allocator, &entry->descriptor_set_layout);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkCreateDescriptorSetLayout failed (shader=%s) err=%d",
-              shader ? shader->vert_path : "<unknown>", err);
+    log_error(LOG_SOURCE, "vkCreateDescriptorSetLayout failed (shader=%s) err=%d", shader ? shader->vert_path : "<unknown>", err);
   }
   check_vk_result_line(err, __LINE__);
 
-  VkPipelineLayoutCreateInfo pipeline_layout_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                                                     .setLayoutCount = 1,
-                                                     .pSetLayouts = &entry->descriptor_set_layout};
-  err = vkCreatePipelineLayout(handler->g_device, &pipeline_layout_info, handler->g_allocator,
-                               &entry->pipeline_layout);
+  VkPipelineLayoutCreateInfo pipeline_layout_info = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &entry->descriptor_set_layout};
+  err = vkCreatePipelineLayout(handler->g_device, &pipeline_layout_info, handler->g_allocator, &entry->pipeline_layout);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkCreatePipelineLayout failed (shader=%s) err=%d",
-              shader ? shader->vert_path : "<unknown>", err);
+    log_error(LOG_SOURCE, "vkCreatePipelineLayout failed (shader=%s) err=%d", shader ? shader->vert_path : "<unknown>", err);
   }
   check_vk_result_line(err, __LINE__);
 
-  VkPipelineShaderStageCreateInfo vert_shader_stage_info = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-      .stage = VK_SHADER_STAGE_VERTEX_BIT,
-      .module = shader->vert_shader_module,
-      .pName = "main"};
-  VkPipelineShaderStageCreateInfo frag_shader_stage_info = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-      .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-      .module = shader->frag_shader_module,
-      .pName = "main"};
+  VkPipelineShaderStageCreateInfo vert_shader_stage_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                                                            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                                                            .module = shader->vert_shader_module,
+                                                            .pName = "main"};
+  VkPipelineShaderStageCreateInfo frag_shader_stage_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                                                            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                                                            .module = shader->frag_shader_module,
+                                                            .pName = "main"};
   VkPipelineShaderStageCreateInfo shader_stages[] = {vert_shader_stage_info, frag_shader_stage_info};
 
-  VkPipelineVertexInputStateCreateInfo vertex_input_info = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-      .vertexBindingDescriptionCount = binding_desc_count,
-      .pVertexBindingDescriptions = binding_descs,
-      .vertexAttributeDescriptionCount = attrib_desc_count,
-      .pVertexAttributeDescriptions = attrib_descs};
+  VkPipelineVertexInputStateCreateInfo vertex_input_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                                                            .vertexBindingDescriptionCount = binding_desc_count,
+                                                            .pVertexBindingDescriptions = binding_descs,
+                                                            .vertexAttributeDescriptionCount = attrib_desc_count,
+                                                            .pVertexAttributeDescriptions = attrib_descs};
 
-  VkPipelineInputAssemblyStateCreateInfo input_assembly = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-      .primitiveRestartEnable = VK_FALSE};
+  VkPipelineInputAssemblyStateCreateInfo input_assembly = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                                                           .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                                                           .primitiveRestartEnable = VK_FALSE};
 
   VkPipelineViewportStateCreateInfo viewport_state = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
 
-  VkPipelineRasterizationStateCreateInfo rasterizer = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-      .depthClampEnable = VK_FALSE,
-      .rasterizerDiscardEnable = VK_FALSE,
-      .polygonMode = VK_POLYGON_MODE_FILL,
-      .cullMode = VK_CULL_MODE_NONE,
-      .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-      .lineWidth = 1.0f};
+  VkPipelineRasterizationStateCreateInfo rasterizer = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                                                       .depthClampEnable = VK_FALSE,
+                                                       .rasterizerDiscardEnable = VK_FALSE,
+                                                       .polygonMode = VK_POLYGON_MODE_FILL,
+                                                       .cullMode = VK_CULL_MODE_NONE,
+                                                       .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                                                       .lineWidth = 1.0f};
 
-  VkPipelineMultisampleStateCreateInfo multisampling = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+  VkPipelineMultisampleStateCreateInfo multisampling = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                                                        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
 
-  VkPipelineDepthStencilStateCreateInfo depth_stencil = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-      .depthTestEnable = VK_FALSE,
-      .depthWriteEnable = VK_FALSE,
-      .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL};
+  VkPipelineDepthStencilStateCreateInfo depth_stencil = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                                                         .depthTestEnable = VK_FALSE,
+                                                         .depthWriteEnable = VK_FALSE,
+                                                         .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL};
 
   VkPipelineColorBlendAttachmentState color_blend_attachment = {
       .blendEnable = VK_TRUE,
@@ -835,20 +742,15 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
       .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
       .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
       .alphaBlendOp = VK_BLEND_OP_ADD,
-      .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-                        VK_COLOR_COMPONENT_A_BIT,
+      .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
   };
 
   VkPipelineColorBlendStateCreateInfo color_blending = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-      .attachmentCount = 1,
-      .pAttachments = &color_blend_attachment};
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &color_blend_attachment};
 
   VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-  VkPipelineDynamicStateCreateInfo dynamic_state = {.sType =
-                                                        VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-                                                    .dynamicStateCount = 2,
-                                                    .pDynamicStates = dynamic_states};
+  VkPipelineDynamicStateCreateInfo dynamic_state = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dynamic_states};
 
   VkGraphicsPipelineCreateInfo pipeline_info = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
                                                 .stageCount = 2,
@@ -865,12 +767,10 @@ get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_co
                                                 .renderPass = target_render_pass,
                                                 .subpass = 0};
 
-  err = vkCreateGraphicsPipelines(handler->g_device, handler->g_pipeline_cache, 1, &pipeline_info,
-                                  handler->g_allocator, &entry->pipeline);
+  err = vkCreateGraphicsPipelines(handler->g_device, handler->g_pipeline_cache, 1, &pipeline_info, handler->g_allocator, &entry->pipeline);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkCreateGraphicsPipelines failed (shader=%s, render_pass=%p, format=%d) err=%d",
-              shader ? shader->vert_path : "<unknown>", (void *)target_render_pass,
-              (int)handler->g_main_window_data.SurfaceFormat.format, err);
+    log_error(LOG_SOURCE, "vkCreateGraphicsPipelines failed (shader=%s, render_pass=%p, format=%d) err=%d", shader ? shader->vert_path : "<unknown>",
+              (void *)target_render_pass, (int)handler->g_main_window_data.SurfaceFormat.format, err);
   }
   check_vk_result_line(err, __LINE__);
 
@@ -916,11 +816,9 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
   return shader;
 }
 
-texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, const uint8_t **pixel_array,
-                                                    uint32_t width, uint32_t height) {
+texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, const uint8_t **pixel_array, uint32_t width, uint32_t height) {
   renderer_state_t *renderer = &handler->renderer;
-  if (!pixel_array)
-    return NULL;
+  if (!pixel_array) return NULL;
 
   uint32_t free_slot = (uint32_t)-1;
   for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
@@ -942,12 +840,9 @@ texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, cons
     memcpy(rgba_pixels, pixel_array, image_size);
   } else {
     for (uint32_t i = 0; i < width * height; i++) {
-      if (pixel_array[0])
-        rgba_pixels[i * 4 + 0] = pixel_array[0][i];
-      if (pixel_array[1])
-        rgba_pixels[i * 4 + 1] = pixel_array[1][i];
-      if (pixel_array[2])
-        rgba_pixels[i * 4 + 2] = pixel_array[2][i];
+      if (pixel_array[0]) rgba_pixels[i * 4 + 0] = pixel_array[0][i];
+      if (pixel_array[1]) rgba_pixels[i * 4 + 1] = pixel_array[1][i];
+      if (pixel_array[2]) rgba_pixels[i * 4 + 2] = pixel_array[2][i];
       rgba_pixels[i * 4 + 3] = 255;
     }
   }
@@ -963,8 +858,8 @@ texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, cons
   strncpy(texture->path, "from_array", sizeof(texture->path) - 1);
 
   buffer_t staging_buffer;
-  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
+  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer);
 
   void *data;
   vkMapMemory(handler->g_device, staging_buffer.memory, 0, image_size, 0, &data);
@@ -973,31 +868,25 @@ texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, cons
   free(rgba_pixels);
 
   create_image(handler, width, height, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
-  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 0, 1);
-  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, width,
-                       height);
-  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
-                          0, 1);
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 0, 1);
+  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, width, height);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, 0, 1);
 
   vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
   vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
-  texture->image_view =
-      create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
+  texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
   texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_NEAREST);
 
   return texture;
 }
 
-texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_t *pixel_array,
-                                            uint32_t width, uint32_t height) {
+texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_t *pixel_array, uint32_t width, uint32_t height) {
   renderer_state_t *renderer = &handler->renderer;
-  if (!pixel_array)
-    return NULL;
+  if (!pixel_array) return NULL;
 
   uint32_t free_slot = (uint32_t)-1;
   for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
@@ -1037,8 +926,8 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
   strncpy(texture->path, "from_array", sizeof(texture->path) - 1);
 
   buffer_t staging_buffer;
-  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
+  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer);
 
   void *data;
   vkMapMemory(handler->g_device, staging_buffer.memory, 0, image_size, 0, &data);
@@ -1047,21 +936,17 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
   free(rgba_pixels);
 
   create_image(handler, width, height, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
-  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 0, 1);
-  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, width,
-                       height);
-  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
-                          0, 1);
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 0, 1);
+  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, width, height);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, 0, 1);
 
   vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
   vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
-  texture->image_view =
-      create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
+  texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
   texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_NEAREST);
 
   return texture;
@@ -1110,8 +995,8 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   strncpy(texture->path, image_path, sizeof(texture->path) - 1);
 
   buffer_t staging_buffer;
-  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
+  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer);
 
   void *data;
   vkMapMemory(handler->g_device, staging_buffer.memory, 0, image_size, 0, &data);
@@ -1119,38 +1004,32 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   vkUnmapMemory(handler->g_device, staging_buffer.memory);
   stbi_image_free(pixels);
 
-  create_image(handler, tex_width, tex_height, mip_levels, 1, VK_FORMAT_R8G8B8A8_UNORM,
-               VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
+  create_image(handler, tex_width, tex_height, mip_levels, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+               &texture->image, &texture->memory);
 
-  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_levels, 0, 1);
-  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image,
-                       tex_width, tex_height);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_levels, 0, 1);
+  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, tex_width, tex_height);
 
   vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
   vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
   if (!build_mipmaps(handler, texture->image, tex_width, tex_height, mip_levels, 1)) {
-    transition_image_layout(handler, renderer->transfer_command_pool, texture->image,
-                            VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mip_levels, 0, 1);
   }
 
-  texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                                          VK_IMAGE_VIEW_TYPE_2D, mip_levels, 1);
+  texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, mip_levels, 1);
   texture->sampler = create_texture_sampler(handler, mip_levels, VK_FILTER_LINEAR);
 
   log_info(LOG_SOURCE, "Loaded texture: %s", image_path);
   return texture;
 }
 
-texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsigned char *pixels, int width,
-                                             int height) {
+texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsigned char *pixels, int width, int height) {
   renderer_state_t *renderer = &handler->renderer;
-  if (!pixels)
-    return NULL;
+  if (!pixels) return NULL;
 
   uint32_t free_slot = (uint32_t)-1;
   for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
@@ -1178,8 +1057,8 @@ texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsig
   strncpy(texture->path, "from_rgba_memory", sizeof(texture->path) - 1);
 
   buffer_t staging_buffer;
-  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer);
+  create_buffer(handler, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer);
 
   void *data;
   vkMapMemory(handler->g_device, staging_buffer.memory, 0, image_size, 0, &data);
@@ -1187,27 +1066,22 @@ texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsig
   vkUnmapMemory(handler->g_device, staging_buffer.memory);
 
   create_image(handler, width, height, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
-  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 0, 1);
-  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, width,
-                       height);
-  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1,
-                          0, 1);
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture->image, &texture->memory);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, 0, 1);
+  copy_buffer_to_image(handler, renderer->transfer_command_pool, staging_buffer.buffer, texture->image, width, height);
+  transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, 0, 1);
 
   vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
   vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
-  texture->image_view =
-      create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
+  texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
   texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_NEAREST);
   return texture;
 }
 
-mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count,
-                             uint32_t *indices, uint32_t index_count) {
+mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count, uint32_t *indices, uint32_t index_count) {
   renderer_state_t *renderer = &handler->renderer;
   if (renderer->mesh_count >= MAX_MESHES) {
     log_error(LOG_SOURCE, "Maximum mesh count (%d) reached.", MAX_MESHES);
@@ -1229,37 +1103,31 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
   buffer_t index_staging_buffer;
 
   create_buffer(handler, vertex_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &vertex_staging_buffer);
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &vertex_staging_buffer);
   void *data;
   vkMapMemory(handler->g_device, vertex_staging_buffer.memory, 0, vertex_buffer_size, 0, &data);
   memcpy(data, vertices, (size_t)vertex_buffer_size);
   vkUnmapMemory(handler->g_device, vertex_staging_buffer.memory);
 
-  create_buffer(handler, vertex_buffer_size,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  create_buffer(handler, vertex_buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &mesh->vertex_buffer);
 
-  copy_buffer(handler, renderer->transfer_command_pool, vertex_staging_buffer.buffer,
-              mesh->vertex_buffer.buffer, vertex_buffer_size);
+  copy_buffer(handler, renderer->transfer_command_pool, vertex_staging_buffer.buffer, mesh->vertex_buffer.buffer, vertex_buffer_size);
 
   vkDestroyBuffer(handler->g_device, vertex_staging_buffer.buffer, handler->g_allocator);
   vkFreeMemory(handler->g_device, vertex_staging_buffer.memory, handler->g_allocator);
 
   if (index_count > 0 && indices) {
     create_buffer(handler, index_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                  &index_staging_buffer);
+                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &index_staging_buffer);
     vkMapMemory(handler->g_device, index_staging_buffer.memory, 0, index_buffer_size, 0, &data);
     memcpy(data, indices, (size_t)index_buffer_size);
     vkUnmapMemory(handler->g_device, index_staging_buffer.memory);
 
-    create_buffer(handler, index_buffer_size,
-                  VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+    create_buffer(handler, index_buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &mesh->index_buffer);
 
-    copy_buffer(handler, renderer->transfer_command_pool, index_staging_buffer.buffer,
-                mesh->index_buffer.buffer, index_buffer_size);
+    copy_buffer(handler, renderer->transfer_command_pool, index_staging_buffer.buffer, mesh->index_buffer.buffer, index_buffer_size);
 
     vkDestroyBuffer(handler->g_device, index_staging_buffer.buffer, handler->g_allocator);
     vkFreeMemory(handler->g_device, index_staging_buffer.memory, handler->g_allocator);
@@ -1274,8 +1142,7 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
 void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &handler->renderer;
   uint32_t frame_pool_index = handler->g_main_window_data.FrameIndex % 3;
-  check_vk_result(
-      vkResetDescriptorPool(handler->g_device, renderer->frame_descriptor_pools[frame_pool_index], 0));
+  check_vk_result(vkResetDescriptorPool(handler->g_device, renderer->frame_descriptor_pools[frame_pool_index], 0));
   renderer->primitive_vertex_count = 0;
   renderer->primitive_index_count = 0;
   renderer->ubo_buffer_offset = 0;
@@ -1287,31 +1154,25 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
   vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 }
 
-void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh,
-                        shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos,
-                        VkDeviceSize *ubo_sizes, uint32_t ubo_count) {
-  if (!mesh || !shader || !mesh->active || !shader->active)
-    return;
+void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh, shader_t *shader, texture_t **textures,
+                        uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count) {
+  if (!mesh || !shader || !mesh->active || !shader->active) return;
   renderer_state_t *renderer = &handler->renderer;
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, shader, ubo_count, texture_count,
-                                                       &mesh_binding_description, 1, // one binding
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, shader, ubo_count, texture_count, &mesh_binding_description, 1, // one binding
                                                        mesh_attribute_descriptions, 3);
-  if (!pso)
-    return;
+  if (!pso) return;
 
   // Allocate a descriptor set for this pipeline
   VkDescriptorSet descriptor_set;
   uint32_t frame_pool_index = handler->g_main_window_data.FrameIndex % 3;
   VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                            .descriptorPool =
-                                                renderer->frame_descriptor_pools[frame_pool_index],
+                                            .descriptorPool = renderer->frame_descriptor_pools[frame_pool_index],
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &pso->descriptor_set_layout};
   VkResult err = vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (shader=%s) err=%d",
-              shader ? shader->vert_path : "<unknown>", err);
+    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (shader=%s) err=%d", shader ? shader->vert_path : "<unknown>", err);
   }
   check_vk_result_line(err, __LINE__);
 
@@ -1324,37 +1185,32 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
     // UBO RING BUFFER LOGIC
-    VkDeviceSize aligned_size =
-        (ubo_sizes[i] + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
+    VkDeviceSize aligned_size = (ubo_sizes[i] + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
     assert(renderer->ubo_buffer_offset + aligned_size <= DYNAMIC_UBO_BUFFER_SIZE);
 
     ubo_offsets[i] = renderer->ubo_buffer_offset;
     memcpy((char *)renderer->ubo_buffer_ptr + ubo_offsets[i], ubos[i], ubo_sizes[i]);
     renderer->ubo_buffer_offset += aligned_size;
 
-    buffer_infos[i] = (VkDescriptorBufferInfo){
-        .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = ubo_offsets[i], .range = ubo_sizes[i]};
+    buffer_infos[i] = (VkDescriptorBufferInfo){.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = ubo_offsets[i], .range = ubo_sizes[i]};
     uint32_t binding_index = current_binding++;
-    descriptor_writes[binding_index] =
-        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                               .dstSet = descriptor_set,
-                               .dstBinding = binding_index,
-                               .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                               .descriptorCount = 1,
-                               .pBufferInfo = &buffer_infos[i]};
+    descriptor_writes[binding_index] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                                              .dstSet = descriptor_set,
+                                                              .dstBinding = binding_index,
+                                                              .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                                              .descriptorCount = 1,
+                                                              .pBufferInfo = &buffer_infos[i]};
   }
   for (uint32_t i = 0; i < texture_count; ++i) {
-    image_infos[i] = (VkDescriptorImageInfo){.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                             .imageView = textures[i]->image_view,
-                                             .sampler = textures[i]->sampler};
+    image_infos[i] = (VkDescriptorImageInfo){
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .imageView = textures[i]->image_view, .sampler = textures[i]->sampler};
     uint32_t binding_index = current_binding++;
-    descriptor_writes[binding_index] =
-        (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                               .dstSet = descriptor_set,
-                               .dstBinding = binding_index,
-                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                               .descriptorCount = 1,
-                               .pImageInfo = &image_infos[i]};
+    descriptor_writes[binding_index] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                                              .dstSet = descriptor_set,
+                                                              .dstBinding = binding_index,
+                                                              .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                                              .descriptorCount = 1,
+                                                              .pImageInfo = &image_infos[i]};
   }
   vkUpdateDescriptorSets(handler->g_device, binding_count, descriptor_writes, 0, NULL);
 
@@ -1368,8 +1224,7 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
     vkCmdBindIndexBuffer(command_buffer, mesh->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
   }
 
-  vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1,
-                          &descriptor_set, 0, NULL);
+  vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &descriptor_set, 0, NULL);
 
   if (mesh->index_count > 0) {
     vkCmdDrawIndexed(command_buffer, mesh->index_count, 1, 0, 0, 0);
@@ -1382,13 +1237,10 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   VLA_FREE(descriptor_writes);
 }
 
-void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
-  flush_primitives(handler, command_buffer);
-}
+void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) { flush_primitives(handler, command_buffer); }
 
 void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex) {
-  if (!tex || !tex->active)
-    return;
+  if (!tex || !tex->active) return;
   // Delay actual destruction until it's safe
   gfx_handler_t *h = handler;
   if (h->retire_count < 64) {
@@ -1398,8 +1250,7 @@ void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex) {
   }
 }
 
-texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas,
-                                                    uint32_t tile_width, uint32_t tile_height,
+texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas, uint32_t tile_width, uint32_t tile_height,
                                                     uint32_t num_tiles_x, uint32_t num_tiles_y) {
   renderer_state_t *renderer = &handler->renderer;
   uint32_t free_slot = (uint32_t)-1;
@@ -1428,57 +1279,49 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
   tex_array->layer_count = layer_count;
   strncpy(tex_array->path, "entities_texture_array", sizeof(tex_array->path) - 1);
 
-  create_image(handler, tile_width, tile_height, mip_levels, layer_count, VK_FORMAT_R8G8B8A8_UNORM,
-               VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &tex_array->image, &tex_array->memory);
-  transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image,
-                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
+  create_image(handler, tile_width, tile_height, mip_levels, layer_count, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+               &tex_array->image, &tex_array->memory);
+  transition_image_layout(handler, renderer->transfer_command_pool, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mip_levels, 0, layer_count);
 
   VkCommandBuffer cmd = begin_single_time_commands(handler, renderer->transfer_command_pool);
-  VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                  .image = atlas->image,
-                                  .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                  .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                  .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                  .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                  .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                                  .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-                                  .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                       .baseMipLevel = 0,
-                                                       .levelCount = atlas->mip_levels,
-                                                       .baseArrayLayer = 0,
-                                                       .layerCount = 1}};
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL,
-                       0, NULL, 1, &barrier);
+  VkImageMemoryBarrier barrier = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .image = atlas->image,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+      .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+      .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
+      .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+      .subresourceRange = {
+          .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = atlas->mip_levels, .baseArrayLayer = 0, .layerCount = 1}};
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
 
   for (uint32_t layer = 0; layer < layer_count; layer++) {
     uint32_t tile_x = layer % num_tiles_x;
     uint32_t tile_y = layer / num_tiles_x;
 
-    VkImageCopy copy_region = {
-        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
-        .srcOffset = {(int32_t)(tile_x * tile_width), (int32_t)(tile_y * tile_height), 0},
-        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseArrayLayer = layer, .layerCount = 1},
-        .extent = {tile_width, tile_height, 1}};
-    vkCmdCopyImage(cmd, atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex_array->image,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+    VkImageCopy copy_region = {.srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
+                               .srcOffset = {(int32_t)(tile_x * tile_width), (int32_t)(tile_y * tile_height), 0},
+                               .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseArrayLayer = layer, .layerCount = 1},
+                               .extent = {tile_width, tile_height, 1}};
+    vkCmdCopyImage(cmd, atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex_array->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
   }
 
   barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
   barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
   barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
   barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL,
-                       0, NULL, 1, &barrier);
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
 
   end_single_time_commands(handler, renderer->transfer_command_pool, cmd);
 
   build_mipmaps(handler, tex_array->image, tile_width, tile_height, mip_levels, layer_count);
 
-  tex_array->image_view = create_image_view(handler, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM,
-                                            VK_IMAGE_VIEW_TYPE_2D_ARRAY, mip_levels, layer_count);
+  tex_array->image_view =
+      create_image_view(handler, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D_ARRAY, mip_levels, layer_count);
   tex_array->sampler = create_texture_sampler(handler, mip_levels, VK_FILTER_LINEAR);
 
   return tex_array;
@@ -1522,133 +1365,79 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
 }
 
 static void setup_vertex_descriptions() {
-  primitive_binding_description = (VkVertexInputBindingDescription){
-      .binding = 0, .stride = sizeof(primitive_vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
-  primitive_attribute_descriptions[0] =
-      (VkVertexInputAttributeDescription){.binding = 0,
-                                          .location = 0,
-                                          .format = VK_FORMAT_R32G32_SFLOAT,
-                                          .offset = offsetof(primitive_vertex_t, pos)};
-  primitive_attribute_descriptions[1] =
-      (VkVertexInputAttributeDescription){.binding = 0,
-                                          .location = 1,
-                                          .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-                                          .offset = offsetof(primitive_vertex_t, color)};
+  primitive_binding_description =
+      (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(primitive_vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+  primitive_attribute_descriptions[0] = (VkVertexInputAttributeDescription){
+      .binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(primitive_vertex_t, pos)};
+  primitive_attribute_descriptions[1] = (VkVertexInputAttributeDescription){
+      .binding = 0, .location = 1, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = offsetof(primitive_vertex_t, color)};
 
-  mesh_binding_description = (VkVertexInputBindingDescription){
-      .binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
-  mesh_attribute_descriptions[0] = (VkVertexInputAttributeDescription){
-      .binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
-  mesh_attribute_descriptions[1] = (VkVertexInputAttributeDescription){
-      .binding = 0, .location = 1, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(vertex_t, color)};
+  mesh_binding_description = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+  mesh_attribute_descriptions[0] =
+      (VkVertexInputAttributeDescription){.binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
+  mesh_attribute_descriptions[1] =
+      (VkVertexInputAttributeDescription){.binding = 0, .location = 1, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(vertex_t, color)};
   mesh_attribute_descriptions[2] =
-      (VkVertexInputAttributeDescription){.binding = 0,
-                                          .location = 2,
-                                          .format = VK_FORMAT_R32G32_SFLOAT,
-                                          .offset = offsetof(vertex_t, tex_coord)};
+      (VkVertexInputAttributeDescription){.binding = 0, .location = 2, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, tex_coord)};
 
   // skin instanced data
-  skin_binding_desc[0] = (VkVertexInputBindingDescription){
-      .binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
-  skin_binding_desc[1] = (VkVertexInputBindingDescription){
-      .binding = 1, .stride = sizeof(skin_instance_t), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE};
+  skin_binding_desc[0] = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+  skin_binding_desc[1] =
+      (VkVertexInputBindingDescription){.binding = 1, .stride = sizeof(skin_instance_t), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE};
 
   int i = 0;
+  skin_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
+  skin_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1, .location = 1, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(skin_instance_t, pos)};
+  skin_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1, .location = 2, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(skin_instance_t, scale)};
+  skin_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1, .location = 3, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, skin_index)};
+  skin_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1, .location = 4, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, eye_state)};
   skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
-      .binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                               .location = 1,
-                                                               .format = VK_FORMAT_R32G32_SFLOAT,
-                                                               .offset = offsetof(skin_instance_t, pos)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                               .location = 2,
-                                                               .format = VK_FORMAT_R32_SFLOAT,
-                                                               .offset = offsetof(skin_instance_t, scale)};
+      .binding = 1, .location = 5, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, body)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 6, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, back_foot)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 7, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, front_foot)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 8, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, attach)};
   skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1,
-                                          .location = 3,
-                                          .format = VK_FORMAT_R32_SINT,
-                                          .offset = offsetof(skin_instance_t, skin_index)};
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1,
-                                          .location = 4,
-                                          .format = VK_FORMAT_R32_SINT,
-                                          .offset = offsetof(skin_instance_t, eye_state)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                               .location = 5,
-                                                               .format = VK_FORMAT_R32G32B32_SFLOAT,
-                                                               .offset = offsetof(skin_instance_t, body)};
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1,
-                                          .location = 6,
-                                          .format = VK_FORMAT_R32G32B32_SFLOAT,
-                                          .offset = offsetof(skin_instance_t, back_foot)};
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1,
-                                          .location = 7,
-                                          .format = VK_FORMAT_R32G32B32_SFLOAT,
-                                          .offset = offsetof(skin_instance_t, front_foot)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                               .location = 8,
-                                                               .format = VK_FORMAT_R32G32B32_SFLOAT,
-                                                               .offset = offsetof(skin_instance_t, attach)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                               .location = 9,
-                                                               .format = VK_FORMAT_R32G32_SFLOAT,
-                                                               .offset = offsetof(skin_instance_t, dir)};
+      (VkVertexInputAttributeDescription){.binding = 1, .location = 9, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(skin_instance_t, dir)};
   // colors
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                               .location = 10,
-                                                               .format = VK_FORMAT_R32G32B32_SFLOAT,
-                                                               .offset = offsetof(skin_instance_t, col_body)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                               .location = 11,
-                                                               .format = VK_FORMAT_R32G32B32_SFLOAT,
-                                                               .offset = offsetof(skin_instance_t, col_feet)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 10, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, col_body)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 11, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, col_feet)};
+  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 12, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, col_custom)};
   skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1,
-                                          .location = 12,
-                                          .format = VK_FORMAT_R32_SINT,
-                                          .offset = offsetof(skin_instance_t, col_custom)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                               .location = 13,
-                                                               .format = VK_FORMAT_R32_SINT,
-                                                               .offset = offsetof(skin_instance_t, col_gs)};
+      (VkVertexInputAttributeDescription){.binding = 1, .location = 13, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, col_gs)};
 
   // Atlas instanced data
-  atlas_binding_desc[0] = (VkVertexInputBindingDescription){
-      .binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
-  atlas_binding_desc[1] = (VkVertexInputBindingDescription){
-      .binding = 1, .stride = sizeof(atlas_instance_t), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE};
+  atlas_binding_desc[0] = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+  atlas_binding_desc[1] =
+      (VkVertexInputBindingDescription){.binding = 1, .stride = sizeof(atlas_instance_t), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE};
 
   i = 0;
   // from vertex_t (binding 0)
-  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){
-      .binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
+  atlas_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
   // from atlas_instance_t (binding 1)
+  atlas_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1, .location = 1, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(atlas_instance_t, pos)};
+  atlas_attrib_descs[i++] =
+      (VkVertexInputAttributeDescription){.binding = 1, .location = 2, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(atlas_instance_t, size)};
+  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 3, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(atlas_instance_t, rotation)};
   atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                                .location = 1,
-                                                                .format = VK_FORMAT_R32G32_SFLOAT,
-                                                                .offset = offsetof(atlas_instance_t, pos)};
-  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){.binding = 1,
-                                                                .location = 2,
-                                                                .format = VK_FORMAT_R32G32_SFLOAT,
-                                                                .offset = offsetof(atlas_instance_t, size)};
-  atlas_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1,
-                                          .location = 3,
-                                          .format = VK_FORMAT_R32_SFLOAT,
-                                          .offset = offsetof(atlas_instance_t, rotation)};
-  atlas_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1,
-                                          .location = 4,
-                                          .format = VK_FORMAT_R32_SINT, // Use SINT for integer index
-                                          .offset = offsetof(atlas_instance_t, sprite_index)};
-  atlas_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1,
-                                          .location = 5,
-                                          .format = VK_FORMAT_R32G32_SFLOAT,
-                                          .offset = offsetof(atlas_instance_t, uv_scale)};
+                                                                .location = 4,
+                                                                .format = VK_FORMAT_R32_SINT, // Use SINT for integer index
+                                                                .offset = offsetof(atlas_instance_t, sprite_index)};
+  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 5, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(atlas_instance_t, uv_scale)};
 }
 
 // primitive drawing implementation
@@ -1658,11 +1447,9 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
     return;
   }
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive_shader, 1, 0,
-                                                       &primitive_binding_description, 1, // one binding
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive_shader, 1, 0, &primitive_binding_description, 1, // one binding
                                                        primitive_attribute_descriptions, 2);
-  if (!pso)
-    return;
+  if (!pso) return;
 
   primitive_ubo_t ubo;
   ubo.camPos[0] = h->renderer.camera.pos[0];
@@ -1680,8 +1467,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
   VkDeviceSize ubo_size = sizeof(ubo);
-  VkDeviceSize aligned_size =
-      (ubo_size + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
+  VkDeviceSize aligned_size = (ubo_size + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
   assert(renderer->ubo_buffer_offset + aligned_size <= DYNAMIC_UBO_BUFFER_SIZE);
 
   uint32_t dynamic_offset = renderer->ubo_buffer_offset;
@@ -1692,8 +1478,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
 
   uint32_t frame_pool_index = h->g_main_window_data.FrameIndex % 3;
   VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                            .descriptorPool =
-                                                renderer->frame_descriptor_pools[frame_pool_index],
+                                            .descriptorPool = renderer->frame_descriptor_pools[frame_pool_index],
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &pso->descriptor_set_layout};
 
@@ -1703,9 +1488,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   }
   check_vk_result_line(err, __LINE__);
 
-  VkDescriptorBufferInfo buffer_info = {.buffer = renderer->dynamic_ubo_buffer.buffer,
-                                        .offset = dynamic_offset,
-                                        .range = sizeof(primitive_ubo_t)};
+  VkDescriptorBufferInfo buffer_info = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dynamic_offset, .range = sizeof(primitive_ubo_t)};
   VkWriteDescriptorSet descriptor_write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                            .dstSet = descriptor_set,
                                            .dstBinding = 0,
@@ -1718,8 +1501,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   VkDeviceSize offsets[] = {0};
   vkCmdBindVertexBuffers(command_buffer, 0, 1, &renderer->dynamic_vertex_buffer.buffer, offsets);
   vkCmdBindIndexBuffer(command_buffer, renderer->dynamic_index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-  vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1,
-                          &descriptor_set, 0, NULL);
+  vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &descriptor_set, 0, NULL);
   vkCmdDrawIndexed(command_buffer, renderer->primitive_index_count, 1, 0, 0, 0);
 
   renderer->primitive_vertex_count = 0;
@@ -1728,8 +1510,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
 
 void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4 color) {
   renderer_state_t *renderer = &handler->renderer;
-  if (renderer->primitive_vertex_count + 4 > MAX_PRIMITIVE_VERTICES ||
-      renderer->primitive_index_count + 6 > MAX_PRIMITIVE_INDICES) {
+  if (renderer->primitive_vertex_count + 4 > MAX_PRIMITIVE_VERTICES || renderer->primitive_index_count + 6 > MAX_PRIMITIVE_INDICES) {
     flush_primitives(handler, renderer->current_command_buffer);
   }
 
@@ -1760,11 +1541,9 @@ void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4
   renderer->primitive_vertex_count += 4;
   renderer->primitive_index_count += 6;
 }
-void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color,
-                                 uint32_t segments) {
+void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color, uint32_t segments) {
   renderer_state_t *renderer = &handler->renderer;
-  if (segments < 3)
-    segments = 3;
+  if (segments < 3) segments = 3;
 
   // Ensure we have enough buffer space, flush if not.
   if (renderer->primitive_vertex_count + segments + 1 > MAX_PRIMITIVE_VERTICES ||
@@ -1805,8 +1584,7 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
 // TODO: ensuring the width of the thing is atleast 1px is kinda expensive. think of another way to do this
 void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness) {
   renderer_state_t *renderer = &handler->renderer;
-  if (renderer->primitive_vertex_count + 4 > MAX_PRIMITIVE_VERTICES ||
-      renderer->primitive_index_count + 6 > MAX_PRIMITIVE_INDICES) {
+  if (renderer->primitive_vertex_count + 4 > MAX_PRIMITIVE_VERTICES || renderer->primitive_index_count + 6 > MAX_PRIMITIVE_INDICES) {
     flush_primitives(handler, renderer->current_command_buffer);
   }
 
@@ -1829,10 +1607,8 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   float pix_per_unit_p2 = hypotf(sx2n - sx2, sy2n - sy2);
 
   const float EPS = 1e-6f;
-  if (pix_per_unit_p1 < EPS)
-    pix_per_unit_p1 = (pix_per_unit_p2 > EPS ? pix_per_unit_p2 : 1.0f);
-  if (pix_per_unit_p2 < EPS)
-    pix_per_unit_p2 = (pix_per_unit_p1 > EPS ? pix_per_unit_p1 : 1.0f);
+  if (pix_per_unit_p1 < EPS) pix_per_unit_p1 = (pix_per_unit_p2 > EPS ? pix_per_unit_p2 : 1.0f);
+  if (pix_per_unit_p2 < EPS) pix_per_unit_p2 = (pix_per_unit_p1 > EPS ? pix_per_unit_p1 : 1.0f);
 
   float min_world_thickness_p1 = MIN_PIXELS / pix_per_unit_p1;
   float min_world_thickness_p2 = MIN_PIXELS / pix_per_unit_p2;
@@ -1865,30 +1641,23 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
 }
 
 void renderer_draw_map(gfx_handler_t *h) {
-  if (!h->map_shader || !h->quad_mesh || h->map_texture_count <= 0)
-    return;
+  if (!h->map_shader || !h->quad_mesh || h->map_texture_count <= 0) return;
 
   float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
-  if (isnan(map_ratio) || map_ratio == 0)
-    map_ratio = 1.0f;
+  if (isnan(map_ratio) || map_ratio == 0) map_ratio = 1.0f;
 
   float zoom = 1.0 / (h->renderer.camera.zoom * fmax(h->map_data->width, h->map_data->height) * 0.001);
-  if (isnan(zoom))
-    zoom = 1.0f;
+  if (isnan(zoom)) zoom = 1.0f;
 
   float aspect = 1.0f / (window_ratio / map_ratio);
-  float lod =
-      fmin(fmax(5.5f - log2f((1.0f / h->map_data->width) / zoom * (h->viewport[0] / 2.0f)), 0.0f), 6.0f);
+  float lod = fmin(fmax(5.5f - log2f((1.0f / h->map_data->width) / zoom * (h->viewport[0] / 2.0f)), 0.0f), 6.0f);
 
-  map_buffer_object_t ubo = {.transform = {h->renderer.camera.pos[0], h->renderer.camera.pos[1], zoom},
-                             .aspect = aspect,
-                             .lod = lod};
+  map_buffer_object_t ubo = {.transform = {h->renderer.camera.pos[0], h->renderer.camera.pos[1], zoom}, .aspect = aspect, .lod = lod};
 
   void *ubos[] = {&ubo};
   VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
-  renderer_draw_mesh(h, h->current_frame_command_buffer, h->quad_mesh, h->map_shader, h->map_textures,
-                     h->map_texture_count, ubos, ubo_sizes, 1);
+  renderer_draw_mesh(h, h->current_frame_command_buffer, h->quad_mesh, h->map_shader, h->map_textures, h->map_texture_count, ubos, ubo_sizes, 1);
 }
 
 static int skin_manager_alloc_layer(renderer_state_t *r) {
@@ -1909,9 +1678,8 @@ static void skin_manager_free_layer(renderer_state_t *r, int idx) {
 
 void renderer_begin_skins(gfx_handler_t *h) { h->renderer.skin_renderer.instance_count = 0; }
 
-void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state,
-                                 vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet,
-                                 bool use_custom_color) {
+void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state,
+                                 vec3 col_body, vec3 col_feet, bool use_custom_color) {
   skin_renderer_t *sr = &h->renderer.skin_renderer;
   uint32_t i = sr->instance_count++;
   sr->instance_ptr[i].pos[0] = pos[0];
@@ -1948,16 +1716,13 @@ void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int sk
 void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array) {
   renderer_state_t *renderer = &h->renderer;
   skin_renderer_t *sr = &renderer->skin_renderer;
-  if (sr->instance_count == 0)
-    return;
+  if (sr->instance_count == 0) return;
 
   mesh_t *quad = h->quad_mesh;
 
   // pipeline: 1 UBO + 1 texture
-  pipeline_cache_entry_t *pso =
-      get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 14);
-  if (!pso)
-    return;
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 14);
+  if (!pso) return;
 
   // prepare camera UBO same as primitives
   primitive_ubo_t ubo;
@@ -1990,11 +1755,9 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   check_vk_result(vkAllocateDescriptorSets(h->g_device, &ai, &desc));
 
   // write UBO
-  VkDescriptorBufferInfo bufInfo = {
-      .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
-  VkDescriptorImageInfo img = {.sampler = skin_array->sampler,
-                               .imageView = skin_array->image_view,
-                               .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  VkDescriptorBufferInfo bufInfo = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
+  VkDescriptorImageInfo img = {
+      .sampler = skin_array->sampler, .imageView = skin_array->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
   VkWriteDescriptorSet writes[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                      .dstSet = desc,
                                      .dstBinding = 0,
@@ -2021,13 +1784,10 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   sr->instance_count = 0;
 }
 
-int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size,
-                                   texture_t **out_preview_texture) {
+int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size, texture_t **out_preview_texture) {
   int tex_width, tex_height, channels;
-  stbi_uc *pixels =
-      stbi_load_from_memory(buffer, (int)size, &tex_width, &tex_height, &channels, STBI_rgb_alpha);
-  if (out_preview_texture)
-    *out_preview_texture = NULL;
+  stbi_uc *pixels = stbi_load_from_memory(buffer, (int)size, &tex_width, &tex_height, &channels, STBI_rgb_alpha);
+  if (out_preview_texture) *out_preview_texture = NULL;
   if (!pixels) {
     log_error(LOG_SOURCE, "Failed to load skin from memory buffer.");
     return -1;
@@ -2035,8 +1795,7 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
 
   // check dimensions (must be multiple of 256x128)
   if (tex_width <= 0 || tex_height <= 0 || tex_width % 256 != 0 || tex_height % 128 != 0) {
-    log_error(LOG_SOURCE, "Skin from memory has invalid dimensions (%dx%d), must be a multiple of 256x128",
-              tex_width, tex_height);
+    log_error(LOG_SOURCE, "Skin from memory has invalid dimensions (%dx%d), must be a multiple of 256x128", tex_width, tex_height);
     stbi_image_free(pixels);
     return -1;
   }
@@ -2051,10 +1810,8 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
     int preview_height = 64;
     unsigned char *resized_preview_pixels = malloc(preview_width * preview_height * 4);
     if (resized_preview_pixels) {
-      stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_preview_pixels, preview_width,
-                                preview_height, 0, STBIR_RGBA);
-      *out_preview_texture =
-          renderer_create_texture_from_rgba(h, resized_preview_pixels, preview_width, preview_height);
+      stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_preview_pixels, preview_width, preview_height, 0, STBIR_RGBA);
+      *out_preview_texture = renderer_create_texture_from_rgba(h, resized_preview_pixels, preview_width, preview_height);
       free(resized_preview_pixels);
     } else {
       log_error(LOG_SOURCE, "Failed to allocate memory for skin preview resize.");
@@ -2068,8 +1825,7 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
       stbi_image_free(pixels);
       return -1;
     }
-    stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_pixels, final_width, final_height, 0,
-                              STBIR_RGBA);
+    stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_pixels, final_width, final_height, 0, STBIR_RGBA);
     used_pixels = resized_pixels; // from now on, use the resized pixels
   }
 
@@ -2084,8 +1840,7 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
       *out_preview_texture = NULL;
     }
 
-    if (used_pixels != pixels)
-      free(used_pixels);
+    if (used_pixels != pixels) free(used_pixels);
     stbi_image_free(pixels);
     return -1;
   }
@@ -2120,40 +1875,33 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
   // Create staging buffer
   VkDeviceSize image_size = final_width * final_height * 4;
   buffer_t staging;
-  create_buffer(h, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging);
+  create_buffer(h, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging);
 
   void *data;
   vkMapMemory(h->g_device, staging.memory, 0, image_size, 0, &data);
   memcpy(data, used_pixels, image_size);
   vkUnmapMemory(h->g_device, staging.memory);
-  if (used_pixels != pixels)
-    free(used_pixels);     // free resized buffer
-  stbi_image_free(pixels); // free original buffer
+  if (used_pixels != pixels) free(used_pixels); // free resized buffer
+  stbi_image_free(pixels);                      // free original buffer
 
   // Transition -> TRANSFER_DST
-  transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image,
-                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, layer, 1);
+  transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, layer, 1);
 
   // Copy staging buffer into array slice
   VkCommandBuffer cmd = begin_single_time_commands(h, r->transfer_command_pool);
   VkBufferImageCopy region = {
       .bufferOffset = 0,
-      .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                           .mipLevel = 0,
-                           .baseArrayLayer = layer,
-                           .layerCount = 1},
+      .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = layer, .layerCount = 1},
       .imageExtent = {(uint32_t)final_width, (uint32_t)final_height, 1},
   };
-  vkCmdCopyBufferToImage(cmd, staging.buffer, r->skin_manager.atlas_array->image,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  vkCmdCopyBufferToImage(cmd, staging.buffer, r->skin_manager.atlas_array->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
   end_single_time_commands(h, r->transfer_command_pool, cmd);
 
   // Transition this layer back to shader-read
-  transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image,
-                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, layer, 1);
+  transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, layer, 1);
 
   // Cleanup staging
   vkDestroyBuffer(h->g_device, staging.buffer, h->g_allocator);
@@ -2166,8 +1914,7 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
 int renderer_load_skin_from_file(gfx_handler_t *h, const char *path, texture_t **out_preview_texture) {
   FILE *f = fopen(path, "rb");
   if (!f) {
-    if (out_preview_texture)
-      *out_preview_texture = NULL;
+    if (out_preview_texture) *out_preview_texture = NULL;
     return -1;
   }
   fseek(f, 0, SEEK_END);
@@ -2191,9 +1938,8 @@ void renderer_unload_skin(gfx_handler_t *h, int layer) {
   log_info(LOG_SOURCE, "Freed skin layer %d", layer);
 }
 
-void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path,
-                                  const sprite_definition_t *sprites, uint32_t sprite_count,
-                                  uint32_t max_instances) {
+void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path, const sprite_definition_t *sprites,
+                                  uint32_t sprite_count, uint32_t max_instances) {
   ar->shader = renderer_load_shader(h, "data/shaders/atlas.vert.spv", "data/shaders/atlas.frag.spv");
   ar->max_instances = max_instances;
 
@@ -2211,10 +1957,8 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
   // texture arrays require all layers to be the same size. Find the largest sprite to define the layer size.
   uint32_t max_w = 0, max_h = 0;
   for (uint32_t i = 0; i < sprite_count; ++i) {
-    if (sprites[i].w > max_w)
-      max_w = sprites[i].w;
-    if (sprites[i].h > max_h)
-      max_h = sprites[i].h;
+    if (sprites[i].w > max_w) max_w = sprites[i].w;
+    if (sprites[i].h > max_h) max_h = sprites[i].h;
   }
 
   if (max_w == 0 || max_h == 0) {
@@ -2227,8 +1971,7 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
   ar->layer_height = max_h;
 
   // create the destination texture array
-  ar->atlas_texture =
-      renderer_create_texture_2d_array(h, max_w, max_h, sprite_count, VK_FORMAT_R8G8B8A8_UNORM);
+  ar->atlas_texture = renderer_create_texture_2d_array(h, max_w, max_h, sprite_count, VK_FORMAT_R8G8B8A8_UNORM);
   if (!ar->atlas_texture) {
     log_error(LOG_SOURCE, "Failed to create texture array for atlas %s.", atlas_path);
     renderer_destroy_texture(h, source_atlas);
@@ -2238,41 +1981,31 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
   VkCommandBuffer cmd = begin_single_time_commands(h, h->renderer.transfer_command_pool);
 
   transition_image_layout(h, h->renderer.transfer_command_pool, source_atlas->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                          source_atlas->mip_levels, 0, 1);
-  transition_image_layout(h, h->renderer.transfer_command_pool, ar->atlas_texture->image,
-                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ar->atlas_texture->mip_levels, 0,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, source_atlas->mip_levels, 0, 1);
+  transition_image_layout(h, h->renderer.transfer_command_pool, ar->atlas_texture->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ar->atlas_texture->mip_levels, 0,
                           ar->atlas_texture->layer_count);
 
   for (uint32_t i = 0; i < sprite_count; ++i) {
     const sprite_definition_t *sprite = &sprites[i];
     VkImageBlit blit = {
-        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                           .mipLevel = 0,
-                           .baseArrayLayer = 0,
-                           .layerCount = 1},
+        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1},
         .srcOffsets[0] = {(int32_t)sprite->x, (int32_t)sprite->y, 0},
         .srcOffsets[1] = {(int32_t)(sprite->x + sprite->w), (int32_t)(sprite->y + sprite->h), 1},
-        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                           .mipLevel = 0,
-                           .baseArrayLayer = i,
-                           .layerCount = 1},
+        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = i, .layerCount = 1},
         .dstOffsets[0] = {0, 0, 0},
         .dstOffsets[1] = {(int32_t)ar->layer_width, (int32_t)ar->layer_height, 1},
     };
-    vkCmdBlitImage(cmd, source_atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ar->atlas_texture->image,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+    vkCmdBlitImage(cmd, source_atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ar->atlas_texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                   &blit, VK_FILTER_NEAREST);
   }
   end_single_time_commands(h, h->renderer.transfer_command_pool, cmd);
 
   // SHADER_READ_ONLY for rendering
-  transition_image_layout(h, h->renderer.transfer_command_pool, source_atlas->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          source_atlas->mip_levels, 0, 1);
-  transition_image_layout(h, h->renderer.transfer_command_pool, ar->atlas_texture->image,
-                          VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, ar->atlas_texture->mip_levels, 0,
+  transition_image_layout(h, h->renderer.transfer_command_pool, source_atlas->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, source_atlas->mip_levels, 0, 1);
+  transition_image_layout(h, h->renderer.transfer_command_pool, ar->atlas_texture->image, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, ar->atlas_texture->mip_levels, 0,
                           ar->atlas_texture->layer_count);
 
   renderer_destroy_texture(h, source_atlas); // we don't need the single large atlas texture anymore
@@ -2297,8 +2030,7 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
   check_vk_result(vkCreateSampler(h->g_device, &sampler_info, h->g_allocator, &ar->sampler));
 
   create_buffer(h, sizeof(atlas_instance_t) * ar->max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &ar->instance_buffer);
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ar->instance_buffer);
   vkMapMemory(h->g_device, ar->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&ar->instance_ptr);
   ar->instance_count = 0;
 }
@@ -2320,8 +2052,7 @@ void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar) {
 
 void renderer_begin_atlas_instances(atlas_renderer_t *ar) { ar->instance_count = 0; }
 
-void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation,
-                                  uint32_t sprite_index, bool tile_uv) {
+void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv) {
   if (ar->instance_count >= ar->max_instances) {
     log_warn(LOG_SOURCE, "Max atlas instances reached for this renderer.");
     return;
@@ -2348,15 +2079,12 @@ void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, flo
 
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar) {
   renderer_state_t *renderer = &h->renderer;
-  if (ar->instance_count == 0 || !ar->shader || !ar->atlas_texture)
-    return;
+  if (ar->instance_count == 0 || !ar->shader || !ar->atlas_texture) return;
 
   mesh_t *quad = h->quad_mesh;
 
-  pipeline_cache_entry_t *pso =
-      get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 6);
-  if (!pso)
-    return;
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 6);
+  if (!pso) return;
 
   primitive_ubo_t ubo;
   ubo.camPos[0] = renderer->camera.pos[0];
@@ -2372,8 +2100,7 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
 
   VkDeviceSize ubo_size = sizeof(ubo);
   VkDeviceSize aligned = (ubo_size + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
-  if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE)
-    return;
+  if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) return;
   uint32_t dyn_offset = renderer->ubo_buffer_offset;
   memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, ubo_size);
   renderer->ubo_buffer_offset += aligned;
@@ -2386,11 +2113,9 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
                                     .pSetLayouts = &pso->descriptor_set_layout};
   check_vk_result(vkAllocateDescriptorSets(h->g_device, &ai, &desc));
 
-  VkDescriptorBufferInfo bufInfo = {
-      .buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
-  VkDescriptorImageInfo imgInfo = {.sampler = ar->sampler,
-                                   .imageView = ar->atlas_texture->image_view,
-                                   .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  VkDescriptorBufferInfo bufInfo = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
+  VkDescriptorImageInfo imgInfo = {
+      .sampler = ar->sampler, .imageView = ar->atlas_texture->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
   VkWriteDescriptorSet writes[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                      .dstSet = desc,

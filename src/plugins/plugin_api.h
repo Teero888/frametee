@@ -25,8 +25,7 @@ typedef struct {
   undo_command_t *(*do_create_track)(const player_info_t *info, int *out_track_index);
   undo_command_t *(*do_create_snippet)(int track_index, int start_tick, int duration, int *out_snippet_id);
   undo_command_t *(*do_delete_snippet)(int snippet_id);
-  undo_command_t *(*do_set_inputs)(int snippet_id, int tick_offset, int count,
-                                   const SPlayerInput *new_inputs);
+  undo_command_t *(*do_set_inputs)(int snippet_id, int tick_offset, int count, const SPlayerInput *new_inputs);
   void (*register_undo_command)(undo_command_t *command);
 
   // Debug Drawing API

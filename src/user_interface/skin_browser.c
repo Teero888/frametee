@@ -37,12 +37,10 @@ void render_skin_browser(gfx_handler_t *h) {
 
         if (info.id >= 0 && info.preview_texture_res) {
           info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
-              info.preview_texture_res->sampler, info.preview_texture_res->image_view,
-              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+              info.preview_texture_res->sampler, info.preview_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
 
           const char *skin_name = strrchr(path, '/');
-          if (!skin_name)
-            skin_name = strrchr(path, '\\');
+          if (!skin_name) skin_name = strrchr(path, '\\');
           skin_name = skin_name ? skin_name + 1 : path;
           strncpy(info.name, skin_name, sizeof(info.name) - 1);
 
@@ -61,8 +59,7 @@ void render_skin_browser(gfx_handler_t *h) {
   float item_width = 128.0f;
   float item_padding = 16.0f;
   int columns = (int)(window_visible_x / (item_width + item_padding));
-  if (columns < 1)
-    columns = 1;
+  if (columns < 1) columns = 1;
 
   if (igBeginTable("SkinGrid", columns, ImGuiTableFlags_SizingStretchSame, (ImVec2){0, 0}, 0)) {
     for (int i = 0; i < m->num_skins; i++) {
@@ -75,10 +72,9 @@ void render_skin_browser(gfx_handler_t *h) {
 
       igPushStyleColor_U32(ImGuiCol_Button, IM_COL32(255, 255, 255, 50));
       igSetNextItemAllowOverlap();
-      if (igImageButton("##skin_preview", *skin->preview_texture, (ImVec2){item_width, 64}, (ImVec2){0, 0},
-                        (ImVec2){1, 1}, (ImVec4){0, 0, 0, 0}, (ImVec4){1, 1, 1, 1})) {
-        if (t->selected_player_track_index >= 0)
-          t->player_tracks[t->selected_player_track_index].player_info.skin = skin->id;
+      if (igImageButton("##skin_preview", *skin->preview_texture, (ImVec2){item_width, 64}, (ImVec2){0, 0}, (ImVec2){1, 1}, (ImVec4){0, 0, 0, 0},
+                        (ImVec4){1, 1, 1, 1})) {
+        if (t->selected_player_track_index >= 0) t->player_tracks[t->selected_player_track_index].player_info.skin = skin->id;
       }
       igPopStyleColor(1);
 

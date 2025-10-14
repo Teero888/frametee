@@ -2,6 +2,7 @@
 #include "../../renderer/graphics_backend.h"
 #include "../../renderer/renderer.h"
 #include "../user_interface.h"
+#include "gamecore.h"
 #include "timeline_commands.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
@@ -19,19 +20,183 @@ static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb, float
 static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb, float scroll_y);
 static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id);
 
+// TODO: Refactor these two functions to reduce code duplication
+void interaction_perform_dummy_fire(ui_handler_t *ui) {
+  timeline_state_t *ts = &ui->timeline;
+  if (!ts->recording || ts->selected_player_track_index == -1) return;
+
+  SWorldCore world = wc_empty();
+  model_get_world_state_at_tick(ts, ts->current_tick, &world);
+  if (ts->selected_player_track_index >= world.m_NumCharacters) return;
+
+  SCharacterCore *recording_char = &world.m_pCharacters[ts->selected_player_track_index];
+  mvec2 recording_pos = recording_char->m_Pos;
+  int tick = ts->current_tick;
+
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    if (i == ts->selected_player_track_index) continue;
+    player_track_t *track = &ts->player_tracks[i];
+    if (!track->is_dummy || i >= world.m_NumCharacters) continue;
+
+    SCharacterCore *dummy_char = &world.m_pCharacters[i];
+    mvec2 dummy_pos = dummy_char->m_Pos;
+
+    SPlayerInput dummy_input = {0};
+    dummy_input.m_Fire = 1;
+    dummy_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
+    dummy_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
+
+    // Case 1: Overwrite existing snippet
+    input_snippet_t *overlapping_snippet = NULL;
+    for (int j = 0; j < track->snippet_count; ++j) {
+      if (track->snippets[j].is_active && tick >= track->snippets[j].start_tick && tick < track->snippets[j].end_tick) {
+        overlapping_snippet = &track->snippets[j];
+        break;
+      }
+    }
+    if (overlapping_snippet) {
+      overlapping_snippet->inputs[tick - overlapping_snippet->start_tick] = dummy_input;
+      continue;
+    }
+
+    // Case 2: Merge or Extend
+    input_snippet_t *before = NULL;
+    input_snippet_t *after = NULL;
+    for (int j = 0; j < track->snippet_count; ++j) {
+      if (track->snippets[j].is_active && track->snippets[j].end_tick == tick) before = &track->snippets[j];
+      if (track->snippets[j].is_active && track->snippets[j].start_tick == tick + 1) after = &track->snippets[j];
+    }
+
+    if (before && after) { // Merge three parts: before, new_input, after
+      int old_before_duration = before->input_count;
+      int after_duration = after->input_count;
+      model_resize_snippet_inputs(ts, before, old_before_duration + 1 + after_duration);
+      before->inputs[old_before_duration] = dummy_input;
+      memcpy(&before->inputs[old_before_duration + 1], after->inputs, sizeof(SPlayerInput) * after_duration);
+      model_remove_snippet_from_track(ts, track, after->id);
+      model_compact_layers_for_track(track);
+    } else if (before) { // Extend snippet before
+      model_resize_snippet_inputs(ts, before, before->input_count + 1);
+      before->inputs[before->input_count - 1] = dummy_input;
+    } else if (after) { // Extend snippet after (prepend)
+      int old_duration = after->input_count;
+      after->inputs = realloc(after->inputs, sizeof(SPlayerInput) * (old_duration + 1));
+      memmove(&after->inputs[1], &after->inputs[0], sizeof(SPlayerInput) * old_duration);
+      after->inputs[0] = dummy_input;
+      after->input_count++;
+      after->start_tick--;
+    } else { // Case 3: Create new 1-tick snippet
+      input_snippet_t new_snippet = {0};
+      new_snippet.id = ts->next_snippet_id++;
+      new_snippet.start_tick = tick;
+      new_snippet.end_tick = tick + 1;
+      new_snippet.is_active = true;
+      new_snippet.input_count = 1;
+      new_snippet.inputs = calloc(1, sizeof(SPlayerInput));
+      new_snippet.inputs[0] = dummy_input;
+      new_snippet.layer = model_find_available_layer(ts, track, tick, tick + 1, -1);
+      if (new_snippet.layer == -1) new_snippet.layer = 0; // Fallback
+      model_insert_snippet_into_track(track, &new_snippet);
+      model_compact_layers_for_track(track);
+    }
+  }
+  model_recalc_physics(ts, tick);
+}
+
+void interaction_perform_dummy_copy(ui_handler_t *ui) {
+  timeline_state_t *ts = &ui->timeline;
+  if (!ts->recording || ts->selected_player_track_index == -1) return;
+
+  SWorldCore world = wc_empty();
+  model_get_world_state_at_tick(ts, ts->current_tick, &world);
+  if (ts->selected_player_track_index >= world.m_NumCharacters) return;
+
+  SCharacterCore *recording_char = &world.m_pCharacters[ts->selected_player_track_index];
+  mvec2 recording_pos = recording_char->m_Pos;
+  int tick = ts->current_tick;
+
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    if (i == ts->selected_player_track_index) continue;
+    player_track_t *track = &ts->player_tracks[i];
+    if (!track->is_dummy || i >= world.m_NumCharacters) continue;
+
+    SCharacterCore *dummy_char = &world.m_pCharacters[i];
+    mvec2 dummy_pos = dummy_char->m_Pos;
+
+    SPlayerInput dummy_input = ts->recording_input;
+    // Case 1: Overwrite existing snippet
+    input_snippet_t *overlapping_snippet = NULL;
+    for (int j = 0; j < track->snippet_count; ++j) {
+      if (track->snippets[j].is_active && tick >= track->snippets[j].start_tick && tick < track->snippets[j].end_tick) {
+        overlapping_snippet = &track->snippets[j];
+        break;
+      }
+    }
+    if (overlapping_snippet) {
+      overlapping_snippet->inputs[tick - overlapping_snippet->start_tick] = dummy_input;
+      continue;
+    }
+
+    // Case 2: Merge or Extend
+    input_snippet_t *before = NULL;
+    input_snippet_t *after = NULL;
+    for (int j = 0; j < track->snippet_count; ++j) {
+      if (track->snippets[j].is_active && track->snippets[j].end_tick == tick) before = &track->snippets[j];
+      if (track->snippets[j].is_active && track->snippets[j].start_tick == tick + 1) after = &track->snippets[j];
+    }
+
+    if (before && after) { // Merge three parts: before, new_input, after
+      int old_before_duration = before->input_count;
+      int after_duration = after->input_count;
+      model_resize_snippet_inputs(ts, before, old_before_duration + 1 + after_duration);
+      before->inputs[old_before_duration] = dummy_input;
+      memcpy(&before->inputs[old_before_duration + 1], after->inputs, sizeof(SPlayerInput) * after_duration);
+      model_remove_snippet_from_track(ts, track, after->id);
+      model_compact_layers_for_track(track);
+    } else if (before) { // Extend snippet before
+      model_resize_snippet_inputs(ts, before, before->input_count + 1);
+      before->inputs[before->input_count - 1] = dummy_input;
+    } else if (after) { // Extend snippet after (prepend)
+      int old_duration = after->input_count;
+      after->inputs = realloc(after->inputs, sizeof(SPlayerInput) * (old_duration + 1));
+      memmove(&after->inputs[1], &after->inputs[0], sizeof(SPlayerInput) * old_duration);
+      after->inputs[0] = dummy_input;
+      after->input_count++;
+      after->start_tick--;
+    } else { // Case 3: Create new 1-tick snippet
+      input_snippet_t new_snippet = {0};
+      new_snippet.id = ts->next_snippet_id++;
+      new_snippet.start_tick = tick;
+      new_snippet.end_tick = tick + 1;
+      new_snippet.is_active = true;
+      new_snippet.input_count = 1;
+      new_snippet.inputs = calloc(1, sizeof(SPlayerInput));
+      new_snippet.inputs[0] = dummy_input;
+      new_snippet.layer = model_find_available_layer(ts, track, tick, tick + 1, -1);
+      if (new_snippet.layer == -1) new_snippet.layer = 0; // Fallback
+      model_insert_snippet_into_track(track, &new_snippet);
+      model_compact_layers_for_track(track);
+    }
+  }
+  model_recalc_physics(ts, tick);
+}
+
 // Main Interaction Handlers
 void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   ts->playback_speed = ts->gui_playback_speed;
   ImGuiIO *io = igGetIO_Nil();
 
   // Detect rewind (press or hold)
-  bool reverse_down = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo) || is_key_combo_pressed(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo, false);
+  bool reverse_down = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo) ||
+                      is_key_combo_pressed(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo, false);
 
   if (reverse_down && !ts->is_reversing) ts->last_update_time = igGetTime();
   if (!reverse_down && ts->is_reversing) ts->last_update_time = igGetTime();
 
   ts->is_reversing = reverse_down;
   if (ts->is_reversing) ts->is_playing = false;
+
+  bool dummy_fire_is_down = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_DUMMY_FIRE].combo);
 
   // Playback tick advancement
   if ((ts->is_playing || ts->is_reversing) && ts->playback_speed > 0) {
@@ -44,8 +209,14 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     int steps = (int)floor(elapsed / tick_interval);
     int dir = ts->is_reversing ? -1 : 1;
     if (steps > 0) {
-      for (int i = 0; i < steps; ++i)
+      for (int i = 0; i < steps; ++i) {
+        if (dir > 0) {
+          // make sure dummy fire overrides dummy copy
+          if (ts->dummy_copy_input) interaction_perform_dummy_copy(ts->ui);
+          if (dummy_fire_is_down) interaction_perform_dummy_fire(ts->ui);
+        }
         model_advance_tick(ts, dir);
+      }
       ts->last_update_time += (double)steps * tick_interval;
     }
   }
@@ -101,7 +272,9 @@ void interaction_add_snippet_to_selection(timeline_state_t *ts, int snippet_id, 
 
 void interaction_remove_snippet_from_selection(timeline_state_t *ts, int snippet_id) { snippet_id_vector_remove(&ts->selected_snippets, snippet_id); }
 
-bool interaction_is_snippet_selected(const timeline_state_t *ts, int snippet_id) { return snippet_id_vector_contains(&ts->selected_snippets, snippet_id); }
+bool interaction_is_snippet_selected(const timeline_state_t *ts, int snippet_id) {
+  return snippet_id_vector_contains(&ts->selected_snippets, snippet_id);
+}
 
 void interaction_select_track(timeline_state_t *ts, int track_index) { ts->selected_player_track_index = track_index; }
 
@@ -276,7 +449,13 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
         int new_layer = model_find_available_layer(ts, &ts->player_tracks[new_track], new_tick, new_tick + s->input_count, s->id);
         if (new_layer == -1) continue; // Collision
 
-        infos[valid_moves++] = (MoveSnippetInfo){.snippet_id = s->id, .old_track_index = s_track_idx, .old_start_tick = s->start_tick, .old_layer = s->layer, .new_track_index = new_track, .new_start_tick = new_tick, .new_layer = new_layer};
+        infos[valid_moves++] = (MoveSnippetInfo){.snippet_id = s->id,
+                                                 .old_track_index = s_track_idx,
+                                                 .old_start_tick = s->start_tick,
+                                                 .old_layer = s->layer,
+                                                 .new_track_index = new_track,
+                                                 .new_start_tick = new_tick,
+                                                 .new_layer = new_layer};
       }
 
       if (valid_moves > 0) {
@@ -304,7 +483,8 @@ static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb, float
     if (igIsMouseDown_Nil(ImGuiMouseButton_Left)) {
       ts->selection_box_end = io->MousePos;
     } else {
-      ImRect rect = {{fminf(ts->selection_box_start.x, ts->selection_box_end.x), fminf(ts->selection_box_start.y, ts->selection_box_end.y)}, {fmaxf(ts->selection_box_start.x, ts->selection_box_end.x), fmaxf(ts->selection_box_start.y, ts->selection_box_end.y)}};
+      ImRect rect = {{fminf(ts->selection_box_start.x, ts->selection_box_end.x), fminf(ts->selection_box_start.y, ts->selection_box_end.y)},
+                     {fmaxf(ts->selection_box_start.x, ts->selection_box_end.x), fmaxf(ts->selection_box_start.y, ts->selection_box_end.y)}};
       select_snippets_in_rect(ts, rect, timeline_bb, tracks_scroll_y);
       ts->selection_box_active = false;
     }
@@ -403,6 +583,7 @@ static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_
   }
   return imax(0, snapped_tick);
 }
+
 // Recording Helpers Implementation
 
 void interaction_toggle_recording(timeline_state_t *ts) {
@@ -440,11 +621,10 @@ void interaction_toggle_recording(timeline_state_t *ts) {
     } else {
       // No track selected, abort recording
       ts->recording = false;
+      return;
     }
   } else {
-    // STOP RECORDING
-    // The snippet is already on the track, we just need to clear our list of recording targets.
-    // A future implementation could create an undo/redo command here for the whole recording.
+    // TODO: could create an undo/redo command here for the whole recording.
     ts->recording_snippets.count = 0;
   }
 }
@@ -492,11 +672,6 @@ void interaction_switch_recording_target(timeline_state_t *ts, int new_track_ind
   }
 }
 
-void interaction_trigger_dummy_fire(timeline_state_t *ts) {
-  // Logic for dummy firing would be implemented here.
-  ts->dummy_copy_input = true;
-}
-
 void interaction_update_recording_input(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   keybind_manager_t *kb = &ui->keybinds;
@@ -516,11 +691,6 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   if (is_key_combo_pressed(&kb->bindings[ACTION_SHOTGUN].combo, false)) input->m_WantedWeapon = WEAPON_SHOTGUN;
   if (is_key_combo_pressed(&kb->bindings[ACTION_GRENADE].combo, false)) input->m_WantedWeapon = WEAPON_GRENADE;
   if (is_key_combo_pressed(&kb->bindings[ACTION_LASER].combo, false)) input->m_WantedWeapon = WEAPON_LASER;
-
-  // if (ts->dummy_copy_input) {
-  //   if (is_key_combo_down(&kb->bindings[ACTION_DUMMY_FIRE].combo)) input->m_Fire++;
-  //   ts->dummy_copy_input = false;
-  // }
 
   ts->recording_input.m_TargetX += (int)ui->gfx_handler->raw_mouse.dx;
   ts->recording_input.m_TargetY += (int)ui->gfx_handler->raw_mouse.dy;

@@ -128,7 +128,8 @@ static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
     after_states[i] = snippet->inputs[idx];
   }
 
-  undo_command_t *cmd = create_edit_inputs_command(snippet, editor_state.action_changed_indices, editor_state.action_changed_count, editor_state.action_before_states, after_states);
+  undo_command_t *cmd = create_edit_inputs_command(snippet, editor_state.action_changed_indices, editor_state.action_changed_count,
+                                                   editor_state.action_before_states, after_states);
   undo_manager_register_command(&ui->undo_manager, cmd);
 
   // We only free the temporary 'after_states' buffer.
@@ -331,7 +332,8 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
     float footer_height = igGetStyle()->ItemSpacing.y + 220;
     igBeginChild_Str("InputsScroll", (ImVec2){0, -footer_height}, false, ImGuiWindowFlags_HorizontalScrollbar);
 
-    ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame;
+    ImGuiTableFlags flags =
+        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame;
 
     if (igBeginTable("InputsTable", 9, flags, (ImVec2){0, 0}, 0)) {
       // The user can still resize them, but they will start out evenly spaced.
@@ -382,7 +384,8 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
 
           // By using a label-less selectable and giving it a proper height, its hitbox
           // will correctly span the entire row thanks to the SpanAllColumns flag.
-          if (igSelectable_Bool(selectable_id, editor_state.selected_rows[i], ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap, (ImVec2){0, igGetFrameHeight()})) {
+          if (igSelectable_Bool(selectable_id, editor_state.selected_rows[i], ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                                (ImVec2){0, igGetFrameHeight()})) {
             // ... (selection logic remains exactly the same)
             ImGuiIO *io = igGetIO_Nil();
             if (io->KeyCtrl) {
@@ -513,7 +516,9 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
             igTableSetColumnIndex(current_column);
             igPushID_Int(i * 10 + current_column);
             uint8_t *val = (j == 0) ? &inp->m_Jump : (j == 1) ? &inp->m_Fire : &inp->m_Hook;
-            ImU32 c_on = (j == 0) ? igGetColorU32_Vec4((ImVec4){0.4f, 0.7f, 1.0f, 1.0f}) : (j == 1) ? igGetColorU32_Vec4((ImVec4){1.0f, 0.4f, 0.4f, 1.0f}) : igGetColorU32_Vec4((ImVec4){0.8f, 0.8f, 0.8f, 1.0f});
+            ImU32 c_on = (j == 0)   ? igGetColorU32_Vec4((ImVec4){0.4f, 0.7f, 1.0f, 1.0f})
+                         : (j == 1) ? igGetColorU32_Vec4((ImVec4){1.0f, 0.4f, 0.4f, 1.0f})
+                                    : igGetColorU32_Vec4((ImVec4){0.8f, 0.8f, 0.8f, 1.0f});
             ImU32 c_off = igGetColorU32_Vec4((ImVec4){0.2f, 0.2f, 0.2f, 1.0f});
             igSetNextItemAllowOverlap();
             // This was already correct, using -1 for width.

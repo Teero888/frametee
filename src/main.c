@@ -9,8 +9,7 @@ int main(void) {
   logger_init();
 
   gfx_handler_t handler;
-  if (init_gfx_handler(&handler) != 0)
-    return 1;
+  if (init_gfx_handler(&handler) != 0) return 1;
   handler.map_data = &handler.physics_handler.collision.m_MapData;
   // on_map_load(&handler, "data/maps/Kobra 4.map");
 
@@ -19,10 +18,8 @@ int main(void) {
   int err = FRAME_SKIP;
   while (1) {
     int frame_result = gfx_begin_frame(&handler);
-    if (frame_result == FRAME_EXIT)
-      break;
-    if (frame_result == FRAME_SKIP)
-      continue;
+    if (frame_result == FRAME_EXIT) break;
+    if (frame_result == FRAME_SKIP) continue;
 
     on_camera_update(&handler, viewport_hovered);
 
@@ -30,10 +27,8 @@ int main(void) {
     renderer_begin_skins(&handler);
     renderer_begin_atlas_instances(&handler.renderer.gameskin_renderer);
     render_players(&handler.user_interface);
-    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer,
-                                   &handler.renderer.gameskin_renderer);
-    renderer_flush_skins(&handler, handler.current_frame_command_buffer,
-                         handler.renderer.skin_manager.atlas_array);
+    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.gameskin_renderer);
+    renderer_flush_skins(&handler, handler.current_frame_command_buffer, handler.renderer.skin_manager.atlas_array);
     // draw ui
     ui_render(&handler.user_interface);
 
@@ -52,8 +47,7 @@ int main(void) {
     // render cursor
     renderer_begin_atlas_instances(&handler.renderer.cursor_renderer);
     render_cursor(&handler.user_interface);
-    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer,
-                                   &handler.renderer.cursor_renderer);
+    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.cursor_renderer);
 
     viewport_hovered = gfx_end_frame(&handler);
   }

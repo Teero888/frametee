@@ -21,27 +21,18 @@ static int api_get_track_count(void) { return g_ui_handler_for_api->timeline.pla
 
 // READ ONLY PLEASE
 static SWorldCore *api_get_initial_world(void) {
-  return g_ui_handler_for_api->gfx_handler->physics_handler.loaded
-             ? &g_ui_handler_for_api->gfx_handler->physics_handler.world
-             : NULL;
+  return g_ui_handler_for_api->gfx_handler->physics_handler.loaded ? &g_ui_handler_for_api->gfx_handler->physics_handler.world : NULL;
 }
 
-static void api_log_info(const char *plugin_name, const char *message) {
-  log_info(plugin_name, "%s", message);
-}
-static void api_log_warning(const char *plugin_name, const char *message) {
-  log_warn(plugin_name, "%s", message);
-}
-static void api_log_error(const char *plugin_name, const char *message) {
-  log_error(plugin_name, "%s", message);
-}
+static void api_log_info(const char *plugin_name, const char *message) { log_info(plugin_name, "%s", message); }
+static void api_log_warning(const char *plugin_name, const char *message) { log_warn(plugin_name, "%s", message); }
+static void api_log_error(const char *plugin_name, const char *message) { log_error(plugin_name, "%s", message); }
 
 static SWorldCore *api_get_world_state_at(int tick) {
   timeline_state_t *ts = &g_ui_handler_for_api->timeline;
 
   SWorldCore *world_copy = (SWorldCore *)malloc(sizeof(SWorldCore));
-  if (!world_copy)
-    return NULL;
+  if (!world_copy) return NULL;
 
   const int step = 50;
   int snapshot_index = (tick - 1) / step;
@@ -73,9 +64,7 @@ static void api_free_world_state(SWorldCore *world) {
   }
 }
 
-static int api_get_player_count(const SWorldCore *world_state) {
-  return world_state ? world_state->m_NumCharacters : 0;
-}
+static int api_get_player_count(const SWorldCore *world_state) { return world_state ? world_state->m_NumCharacters : 0; }
 
 static const SCharacterCore *api_get_player(const SWorldCore *world_state, int player_index) {
   if (world_state && player_index >= 0 && player_index < world_state->m_NumCharacters) {
@@ -88,21 +77,17 @@ static const SProjectile *api_get_first_projectile(const SWorldCore *world_state
   return world_state ? world_state->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE] : NULL;
 }
 
-static const SProjectile *api_get_next_projectile(const SProjectile *current) {
-  return current ? current->m_Base.m_pNextTypeEntity : NULL;
-}
+static const SProjectile *api_get_next_projectile(const SProjectile *current) { return current ? current->m_Base.m_pNextTypeEntity : NULL; }
 
 static undo_command_t *api_do_create_track(const player_info_t *info, int *out_track_index) {
   return timeline_api_create_track(g_ui_handler_for_api, info, out_track_index);
 }
 
-static undo_command_t *api_do_create_snippet(int track_index, int start_tick, int duration,
-                                             int *out_snippet_id) {
+static undo_command_t *api_do_create_snippet(int track_index, int start_tick, int duration, int *out_snippet_id) {
   return timeline_api_create_snippet(g_ui_handler_for_api, track_index, start_tick, duration, out_snippet_id);
 }
 
-static undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset, int count,
-                                         const SPlayerInput *new_inputs) {
+static undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset, int count, const SPlayerInput *new_inputs) {
   return timeline_api_set_snippet_inputs(g_ui_handler_for_api, snippet_id, tick_offset, count, new_inputs);
 }
 

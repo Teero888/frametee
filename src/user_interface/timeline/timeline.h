@@ -10,6 +10,5 @@ void render_timeline(ui_handler_t *ui);
 
 // Other public functions that might be called from outside
 void timeline_switch_recording_target(timeline_state_t *ts, int new_track_index);
-void timeline_trigger_dummy_fire(timeline_state_t *ts);
 
 #endif // UI_TIMELINE_H

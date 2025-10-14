@@ -90,7 +90,7 @@ void keybinds_init(keybind_manager_t *manager) {
   manager->bindings[ACTION_LASER] = (keybind_t){"Switch to laser", "Recording", {ImGuiKey_5, false, false, false}};
 
   // Dummy
-  manager->bindings[ACTION_DUMMY_FIRE] = (keybind_t){"Dummy Fire", "Dummy", {ImGuiKey_MouseLeft, false, false, false}};
+  manager->bindings[ACTION_DUMMY_FIRE] = (keybind_t){"Dummy Fire", "Dummy", {ImGuiKey_V, false, false, false}};
   manager->bindings[ACTION_TOGGLE_DUMMY_COPY] = (keybind_t){"Toggle dummy copy", "Dummy", {ImGuiKey_R, false, false, false}};
 
   // Camera
@@ -200,12 +200,16 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   if (is_key_combo_pressed(&kb->bindings[ACTION_DEC_TPS].combo, true)) {
     --ts->gui_playback_speed;
   }
-  if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_DUMMY_COPY].combo, false)) ts->dummy_copy_input ^= 1;
+  if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_DUMMY_COPY].combo, false)) {
+    ts->dummy_copy_input ^= 1;
+  }
 }
 
 static bool is_modifier_key(ImGuiKey key) {
-  return key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl || key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift || key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt || key == ImGuiKey_LeftSuper || key == ImGuiKey_RightSuper || key == ImGuiKey_ReservedForModCtrl ||
-         key == ImGuiKey_ReservedForModShift || key == ImGuiKey_ReservedForModAlt || key == ImGuiKey_ReservedForModSuper;
+  return key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl || key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift ||
+         key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt || key == ImGuiKey_LeftSuper || key == ImGuiKey_RightSuper ||
+         key == ImGuiKey_ReservedForModCtrl || key == ImGuiKey_ReservedForModShift || key == ImGuiKey_ReservedForModAlt ||
+         key == ImGuiKey_ReservedForModSuper;
 }
 
 static void render_keybind_button(keybind_manager_t *manager, action_t action_id) {

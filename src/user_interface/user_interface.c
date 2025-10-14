@@ -385,7 +385,8 @@ void render_players(ui_handler_t *ui) {
     bool running = fabsf(vgetx(core->m_Vel) * 256.f) >= 5000;
     bool want_other_dir = (core->m_Input.m_Direction == -1 && vgetx(core->m_Vel) > 0) || (core->m_Input.m_Direction == 1 && vgetx(core->m_Vel) < 0);
     bool inactive = get_flag_sit(&core->m_Input);
-    bool in_air = !(core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) || !(check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16)));
+    bool in_air = !(core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) ||
+                  !(check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16)));
 
     float walk_time = fmod(p[0] * 32.f, 100.0f) / 100.0f;
     float run_time = fmod(p[0] * 32.f, 200.0f) / 200.0f;
@@ -613,7 +614,8 @@ void render_players(ui_handler_t *ui) {
     vec2 p;
     lerp(ppp, pp, intra, p);
 
-    renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, p, (vec2){1, 1}, -((world.m_GameTick + intra) / 50.f) * 4 * M_PI + id, GAMESKIN_GRENADE_PROJ, false);
+    renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, p, (vec2){1, 1}, -((world.m_GameTick + intra) / 50.f) * 4 * M_PI + id,
+                                 GAMESKIN_GRENADE_PROJ, false);
     ++id;
   }
   (void)id;
@@ -665,7 +667,9 @@ void render_players(ui_handler_t *ui) {
   // draw the rest of the lines
   for (int t = 0; t < ui->prediction_length; ++t) {
     for (int i = 0; i < world.m_NumCharacters; ++i) {
-      SPlayerInput input = ui->timeline.recording && i == ui->timeline.selected_player_track_index ? ui->timeline.recording_input : model_get_input_at_tick(&ui->timeline, i, world.m_GameTick);
+      SPlayerInput input = ui->timeline.recording && i == ui->timeline.selected_player_track_index
+                               ? ui->timeline.recording_input
+                               : model_get_input_at_tick(&ui->timeline, i, world.m_GameTick);
       cc_on_input(&world.m_pCharacters[i], &input);
     }
     wc_tick(&world);
@@ -692,7 +696,8 @@ void render_cursor(ui_handler_t *ui) {
   if (handler->user_interface.timeline.recording) {
     float norm_x = ui->last_render_pos[0] + handler->user_interface.timeline.recording_input.m_TargetX / 64.f;
     float norm_y = ui->last_render_pos[1] + handler->user_interface.timeline.recording_input.m_TargetY / 64.f;
-    renderer_push_atlas_instance(&handler->renderer.cursor_renderer, (vec2){norm_x, norm_y}, (vec2){1.f, 1.f}, 0.0f, handler->user_interface.weapon, false);
+    renderer_push_atlas_instance(&handler->renderer.cursor_renderer, (vec2){norm_x, norm_y}, (vec2){1.f, 1.f}, 0.0f, handler->user_interface.weapon,
+                                 false);
   }
 }
 
@@ -746,7 +751,8 @@ bool ui_render_late(ui_handler_t *ui) {
       igText("Weapon: %d", ui->weapon);
       igText("Weapons: [ %d, %d, %d, %d, %d, %d ]", ui->weapons[0], ui->weapons[1], ui->weapons[2], ui->weapons[3], ui->weapons[4], ui->weapons[5]);
       SPlayerInput Input = ui->timeline.recording_input;
-      if (!ui->timeline.recording) Input = model_get_input_at_tick(&ui->timeline, ui->timeline.selected_player_track_index, ui->timeline.current_tick);
+      if (!ui->timeline.recording)
+        Input = model_get_input_at_tick(&ui->timeline, ui->timeline.selected_player_track_index, ui->timeline.current_tick);
       igText("");
       igText("Input:");
       igText("Direction: %d", Input.m_Direction);
@@ -758,9 +764,11 @@ bool ui_render_late(ui_handler_t *ui) {
       igText("WantedWeapon: %d", Input.m_WantedWeapon);
       igText("TeleOut: %d", Input.m_TeleOut);
 #define WORD_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c"
-#define WORD_TO_BINARY(word)                                                                                                                                                                                                                                                                               \
-  ((word) & 0x8000 ? '1' : '0'), ((word) & 0x4000 ? '1' : '0'), ((word) & 0x2000 ? '1' : '0'), ((word) & 0x1000 ? '1' : '0'), ((word) & 0x0800 ? '1' : '0'), ((word) & 0x0400 ? '1' : '0'), ((word) & 0x0200 ? '1' : '0'), ((word) & 0x0100 ? '1' : '0'), ((word) & 0x0080 ? '1' : '0'),                   \
-      ((word) & 0x0040 ? '1' : '0'), ((word) & 0x0020 ? '1' : '0'), ((word) & 0x0010 ? '1' : '0'), ((word) & 0x0008 ? '1' : '0'), ((word) & 0x0004 ? '1' : '0'), ((word) & 0x0002 ? '1' : '0'), ((word) & 0x0001 ? '1' : '0')
+#define WORD_TO_BINARY(word)                                                                                                                         \
+  ((word) & 0x8000 ? '1' : '0'), ((word) & 0x4000 ? '1' : '0'), ((word) & 0x2000 ? '1' : '0'), ((word) & 0x1000 ? '1' : '0'),                        \
+      ((word) & 0x0800 ? '1' : '0'), ((word) & 0x0400 ? '1' : '0'), ((word) & 0x0200 ? '1' : '0'), ((word) & 0x0100 ? '1' : '0'),                    \
+      ((word) & 0x0080 ? '1' : '0'), ((word) & 0x0040 ? '1' : '0'), ((word) & 0x0020 ? '1' : '0'), ((word) & 0x0010 ? '1' : '0'),                    \
+      ((word) & 0x0008 ? '1' : '0'), ((word) & 0x0004 ? '1' : '0'), ((word) & 0x0002 ? '1' : '0'), ((word) & 0x0001 ? '1' : '0')
       igText("Flags: " WORD_TO_BINARY_PATTERN, WORD_TO_BINARY(Input.m_Flags));
 #undef WORD_TO_BINARY
 #undef WORD_TO_BINARY_PATTERN

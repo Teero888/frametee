@@ -4,8 +4,7 @@
 #include <string.h>
 
 static void clear_stack(undo_command_t ***stack, int *count, int *capacity) {
-  if (!*stack)
-    return;
+  if (!*stack) return;
   for (int i = 0; i < *count; ++i) {
     if ((*stack)[i] && (*stack)[i]->cleanup) {
       (*stack)[i]->cleanup((*stack)[i]);
@@ -21,8 +20,7 @@ static void push_to_stack(undo_command_t ***stack, int *count, int *capacity, un
   if (*count >= *capacity) {
     int new_capacity = *capacity == 0 ? 8 : *capacity * 2;
     undo_command_t **new_stack = realloc(*stack, sizeof(undo_command_t *) * new_capacity);
-    if (!new_stack)
-      return; // Allocation failed
+    if (!new_stack) return; // Allocation failed
     *stack = new_stack;
     *capacity = new_capacity;
   }
@@ -30,8 +28,7 @@ static void push_to_stack(undo_command_t ***stack, int *count, int *capacity, un
 }
 
 static undo_command_t *pop_from_stack(undo_command_t **stack, int *count) {
-  if (*count == 0)
-    return NULL;
+  if (*count == 0) return NULL;
   return stack[--(*count)];
 }
 
@@ -45,8 +42,7 @@ void undo_manager_cleanup(undo_manager_t *manager) {
 }
 
 void undo_manager_register_command(undo_manager_t *manager, undo_command_t *command) {
-  if (!command)
-    return;
+  if (!command) return;
   // Push the new action to the undo stack
   push_to_stack(&manager->undo_stack, &manager->undo_count, &manager->undo_capacity, command);
   // A new action clears the redo history

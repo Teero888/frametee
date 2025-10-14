@@ -201,7 +201,8 @@ undo_command_t *commands_create_move_snippets(ui_handler_t *ui, const MoveSnippe
       for (int j = 0; j < target_track->snippet_count; j++) {
         input_snippet_t *other = &target_track->snippets[j];
         if (snippet_id_vector_contains(&ts->selected_snippets, other->id)) continue;
-        if (other->is_active && infos[i].new_start_tick < other->end_tick && (infos[i].new_start_tick + moving_snippet->input_count) > other->start_tick) {
+        if (other->is_active && infos[i].new_start_tick < other->end_tick &&
+            (infos[i].new_start_tick + moving_snippet->input_count) > other->start_tick) {
           other->is_active = false;
         }
       }
@@ -409,7 +410,8 @@ static void cleanup_add_snippet_cmd(undo_command_t *cmd) {
 }
 
 // Snippet Editor Command
-undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, int *indices, int count, SPlayerInput *before_states, SPlayerInput *after_states) {
+undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, int *indices, int count, SPlayerInput *before_states,
+                                           SPlayerInput *after_states) {
   if (!snippet || !indices || !before_states || !after_states || count <= 0) return NULL;
 
   EditInputsCommand *cmd = calloc(1, sizeof(EditInputsCommand));
@@ -638,7 +640,8 @@ static void undo_remove_track(undo_command_t *cmd, timeline_state_t *ts) {
   RemoveTrackCommand *c = (RemoveTrackCommand *)cmd;
   int new_count = ts->player_track_count + 1;
   ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * new_count);
-  memmove(&ts->player_tracks[c->track_index + 1], &ts->player_tracks[c->track_index], (ts->player_track_count - c->track_index) * sizeof(player_track_t));
+  memmove(&ts->player_tracks[c->track_index + 1], &ts->player_tracks[c->track_index],
+          (ts->player_track_count - c->track_index) * sizeof(player_track_t));
   player_track_t *new_track = &ts->player_tracks[c->track_index];
   *new_track = c->track_copy;
   new_track->snippets = malloc(sizeof(input_snippet_t) * new_track->snippet_count);

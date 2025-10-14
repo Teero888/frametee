@@ -322,7 +322,8 @@ void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   free(track->snippets);
 
   if (track_index < ts->player_track_count - 1) {
-    memmove(&ts->player_tracks[track_index], &ts->player_tracks[track_index + 1], (ts->player_track_count - track_index - 1) * sizeof(player_track_t));
+    memmove(&ts->player_tracks[track_index], &ts->player_tracks[track_index + 1],
+            (ts->player_track_count - track_index - 1) * sizeof(player_track_t));
   }
 
   ts->player_track_count--;

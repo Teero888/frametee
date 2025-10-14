@@ -6,10 +6,8 @@
 #define DARKEST_LGT (0.5f)
 
 static float clampf_f(float v, float lo, float hi) {
-  if (v < lo)
-    return lo;
-  if (v > hi)
-    return hi;
+  if (v < lo) return lo;
+  if (v > hi) return hi;
   return v;
 }
 
@@ -34,8 +32,7 @@ static void hsl_to_rgbf(float h, float s, float l, float *out_r, float *out_g, f
   float r0 = 0.0f, g0 = 0.0f, b0 = 0.0f;
   int sector = (int)floorf(h1);
   sector %= 6;
-  if (sector < 0)
-    sector += 6;
+  if (sector < 0) sector += 6;
 
   switch (sector) {
   case 0:
@@ -114,14 +111,12 @@ static uint32_t packed_hsl_to_rgb24(uint32_t packed_hsl, float darkest) {
 static uint32_t hsl_to_packed(float h, float s, float l) {
   float l_back = (l - DARKEST_LGT) / (1 - DARKEST_LGT);
   l_back = clampf_f(l_back, 0, 1);
-  uint32_t Hb = (uint32_t)roundf(clampf_f(h, 0, 1) * 255), Sb = (uint32_t)roundf(clampf_f(s, 0, 1) * 255),
-           Lb = (uint32_t)roundf(l_back * 255);
+  uint32_t Hb = (uint32_t)roundf(clampf_f(h, 0, 1) * 255), Sb = (uint32_t)roundf(clampf_f(s, 0, 1) * 255), Lb = (uint32_t)roundf(l_back * 255);
   return (Hb << 16) | (Sb << 8) | Lb;
 }
 
 bool PackedHSLPicker(const char *label, uint32_t *packed_hsl) {
-  if (!packed_hsl)
-    return false;
+  if (!packed_hsl) return false;
   bool changed = false;
 
   igPushID_Str(label);
@@ -143,10 +138,8 @@ bool PackedHSLPicker(const char *label, uint32_t *packed_hsl) {
   ImDrawList *dl = igGetWindowDrawList();
 
   int iw = (int)sv_px, ih = (int)sv_px;
-  if (iw < 2)
-    iw = 2;
-  if (ih < 2)
-    ih = 2;
+  if (iw < 2) iw = 2;
+  if (ih < 2) ih = 2;
 
   for (int x = 0; x < iw; x++) {
     float sx = (float)x / (iw - 1);
