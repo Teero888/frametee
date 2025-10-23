@@ -2,6 +2,7 @@
 #define USER_INTERFACE_H
 
 #include "../plugins/plugin_manager.h"
+#include "demo.h"
 #include "keybinds.h"
 #include "player_info.h"
 #include "timeline/timeline.h"
@@ -33,6 +34,7 @@ typedef struct ui_handler {
 
   vec2 last_render_pos;
 
+  demo_exporter_t demo_exporter;
   undo_manager_t undo_manager;
 
   plugin_manager_t plugin_manager;

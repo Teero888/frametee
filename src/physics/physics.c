@@ -4,12 +4,6 @@
 void physics_init_from_memory(ph_t *h, const unsigned char *map_buffer, size_t size) {
   physics_free(h);
   map_data_t map = load_map_from_memory(map_buffer, size);
-
-  // manually attach the buffer to the map_data struct so it can be saved later
-  // and freed correctly. The physics handler now owns map_buffer.
-  map._map_file_data = (void *)map_buffer;
-  map._map_file_size = size;
-
   if (!init_collision(&h->collision, &map)) {
     // if init fails, free_map_data will free the layer data and the map_buffer.
     free_map_data(&map);

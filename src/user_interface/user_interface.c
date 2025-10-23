@@ -8,6 +8,7 @@
 #include "../system/save.h"
 #include "cglm/vec2.h"
 #include "cimgui.h"
+#include "demo.h"
 #include "gamecore.h"
 #include "player_info.h"
 #include "skin_browser.h"
@@ -33,6 +34,7 @@ static const char *LOG_SOURCE = "UI";
 typedef struct ui_handler ui_handler_t;
 
 void render_menu_bar(ui_handler_t *ui) {
+  bool open_export_popup = false;
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
       if (igMenuItem_Bool("Open Map", NULL, false, true)) {
@@ -70,6 +72,16 @@ void render_menu_bar(ui_handler_t *ui) {
           NFD_FreePathU8(save_path);
         }
       }
+      igSeparator();
+      if (igMenuItem_Bool("Export Demo...", NULL, false, ui->gfx_handler->physics_handler.loaded)) {
+        demo_exporter_t *dx = &ui->demo_exporter;
+        // Set default values when opening the popup
+        dx->num_ticks = model_get_max_timeline_tick(&ui->timeline);
+        if (strlen(dx->map_name) == 0) {
+          strncpy(dx->map_name, "unnamed_map", sizeof(dx->map_name) - 1);
+        }
+        open_export_popup = true;
+      }
       igEndMenu();
     }
 
@@ -105,6 +117,9 @@ void render_menu_bar(ui_handler_t *ui) {
     if (igButton(button_text, (ImVec2){0, 0})) plugin_manager_reload_all(&ui->plugin_manager, "plugins");
 
     igEndMainMenuBar();
+  }
+  if (open_export_popup) {
+    igOpenPopup_Str("Demo Export", ImGuiPopupFlags_AnyPopupLevel);
   }
 }
 
@@ -292,7 +307,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ImGuiIO *io = igGetIO_Nil();
   ImFontAtlas *atlas = io->Fonts;
 
-  ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/JetBrainsMono-Medium.ttf", 19.f, NULL, NULL);
+  ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/Roboto-SemiBold.ttf", 19.f, NULL, NULL);
 
   ImFontConfig *config = ImFontConfig_ImFontConfig();
   config->MergeMode = true;
@@ -718,6 +733,10 @@ void ui_render(ui_handler_t *ui) {
     render_snippet_editor_panel(ui);
     if (ui->timeline.selected_player_track_index != -1) render_player_info(ui->gfx_handler);
   }
+
+  // Render the demo window/popup logic
+  render_demo_window(ui);
+
   keybinds_render_settings_window(&ui->keybinds);
   if (ui->show_skin_browser) render_skin_browser(ui->gfx_handler);
 }

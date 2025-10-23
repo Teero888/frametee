@@ -459,6 +459,10 @@ void on_map_load(gfx_handler_t *handler) {
   // collision textures
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[0], handler->map_data->width, handler->map_data->height);
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[1], handler->map_data->width, handler->map_data->height);
+
+  // update physics data
+  wc_copy_world(&handler->user_interface.timeline.vec.data[0], &handler->physics_handler.world);
+  wc_copy_world(&handler->user_interface.timeline.previous_world, &handler->physics_handler.world);
 }
 
 void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
