@@ -679,11 +679,11 @@ void interaction_handle_context_menu(timeline_state_t *ts) {
       undo_command_t *cmd = commands_create_delete_selected(ts->ui);
       if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
     }
-    igSeparator();
-    if (igMenuItem_Bool("Remove Track", NULL, false, ts->selected_player_track_index != -1)) {
-      undo_command_t *cmd = commands_create_remove_track(ts->ui, ts->selected_player_track_index);
-      if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
-    }
+    // igSeparator();
+    // if (igMenuItem_Bool("Remove Track", NULL, false, ts->selected_player_track_index != -1)) {
+    //   undo_command_t *cmd = commands_create_remove_track(ts->ui, ts->selected_player_track_index);
+    //   if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
+    // }
     igEndPopup();
   }
 }

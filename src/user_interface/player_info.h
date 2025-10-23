@@ -7,8 +7,8 @@
 #include <stdint.h>
 
 typedef struct {
-  char name[32];
-  char clan[32];
+  char name[16];
+  char clan[12];
   int skin; // id
   uint32_t color_body;
   uint32_t color_feet;
@@ -16,7 +16,7 @@ typedef struct {
 } player_info_t;
 
 typedef struct {
-  char name[32];
+  char name[24];
   int id;
   texture_t *preview_texture_res;
   ImTextureRef *preview_texture;

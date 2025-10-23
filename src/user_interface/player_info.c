@@ -19,8 +19,8 @@ void render_player_info(gfx_handler_t *h) {
   player_info_t *player_info = &ts->player_tracks[ts->selected_player_track_index].player_info;
 
   if (igBegin("Player Info", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing)) {
-    igInputText("Name", player_info->name, 32, 0, NULL, NULL);
-    igInputText("Clan", player_info->clan, 32, 0, NULL, NULL);
+    igInputText("Name", player_info->name, 16, 0, NULL, NULL);
+    igInputText("Clan", player_info->clan, 12, 0, NULL, NULL);
     igInputInt("Skin Id", &player_info->skin, 1, 1, 0);
     igCheckbox("Use custom color", &player_info->use_custom_color);
     if (player_info->use_custom_color) {

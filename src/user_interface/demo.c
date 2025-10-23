@@ -159,17 +159,15 @@ uint32_t map_crc32(const void *data, size_t n_bytes) {
   return crc;
 }
 
-void str_to_ints(int *pInts, int num_ints, const char *pStr) {
-  int len = strlen(pStr);
-  for (int i = 0; i < num_ints; i++) {
-    pInts[i] = 0;
-    for (int j = 0; j < 4; j++) {
-      int char_index = i * 4 + j;
-      if (char_index < len) {
-        pInts[i] |= ((int)pStr[char_index]) << (j * 8);
-      }
-    }
+void str_to_ints(int *pInts, size_t NumInts, const char *pStr) {
+  const size_t StrSize = strlen(pStr) + 1;
+  for (size_t i = 0; i < NumInts; i++) {
+    char aBuf[sizeof(int)] = {0, 0, 0, 0};
+    for (size_t c = 0; c < sizeof(int) && i * sizeof(int) + c < StrSize; c++)
+      aBuf[c] = pStr[i * sizeof(int) + c];
+    pInts[i] = ((aBuf[0] + 128) << 24) | ((aBuf[1] + 128) << 16) | ((aBuf[2] + 128) << 8) | (aBuf[3] + 128);
   }
+  pInts[NumInts - 1] &= 0xFFFFFF00;
 }
 
 int round_to_int(float f) {
@@ -181,6 +179,38 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
   int width = cur->m_pCollision->m_MapData.width;
   int height = cur->m_pCollision->m_MapData.height;
   int next_item_id = cur->m_NumCharacters; // start after reserved player ids
+
+  // do pickups first since they have static ids basically
+  for (int y = 0; y < height; ++y) {
+    const int yidx = y * width;
+    for (int x = 0; x < width; ++x) {
+      const SPickup pickup = cur->m_pCollision->m_pPickups[yidx + x];
+      if (pickup.m_Type >= 0) {
+        dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, next_item_id++, sizeof(dd_netobj_ddnet_pickup));
+        if (p) {
+          p->m_X = x * 32 + 16 - MAP_EXPAND32;
+          p->m_Y = y * 32 + 16 - MAP_EXPAND32;
+          p->m_Type = pickup.m_Type;
+          p->m_Subtype = pickup.m_Subtype;
+          p->m_SwitchNumber = pickup.m_Number;
+          p->m_Flags = 0;
+          // log_info("DemoExport", "Added pickup id %d at (%d, %d), type %d, subtype %d", next_item_id, p->m_X, p->m_Y, p->m_Type, p->m_Subtype);
+        }
+      }
+      const SPickup fpickup = cur->m_pCollision->m_pFrontPickups[yidx + x];
+      if (fpickup.m_Type >= 0) {
+        dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, next_item_id++, sizeof(dd_netobj_ddnet_pickup));
+        if (p) {
+          p->m_X = x * 32 + 16 - MAP_EXPAND32;
+          p->m_Y = y * 32 + 16 - MAP_EXPAND32;
+          p->m_Type = fpickup.m_Type;
+          p->m_Subtype = fpickup.m_Subtype;
+          p->m_SwitchNumber = fpickup.m_Number;
+          p->m_Flags = 0;
+        }
+      }
+    }
+  }
 
   // game info
   dd_netobj_game_info *game_info = demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEINFO, 0, sizeof(dd_netobj_game_info));
@@ -209,6 +239,11 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
     dd_netobj_client_info *ci = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, p, sizeof(dd_netobj_client_info));
     str_to_ints(&ci->m_aName, 4, ts->player_tracks[p].player_info.name);
     str_to_ints(&ci->m_aClan, 3, ts->player_tracks[p].player_info.clan);
+
+    // 3 offset to get the correct name
+    if (ts->player_tracks[p].player_info.skin >= 3)
+      str_to_ints(&ci->m_aSkin, 6, ts->ui->skin_manager.skins[ts->player_tracks[p].player_info.skin - 3].name);
+    else *ci->m_aSkin = 0;
     ci->m_Country = 0;
     ci->m_UseCustomColor = ts->player_tracks[p].player_info.use_custom_color;
     ci->m_ColorBody = ts->player_tracks[p].player_info.color_body;
@@ -292,36 +327,147 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
     }
     dc->m_TargetX = c_cur->m_Input.m_TargetX;
     dc->m_TargetY = c_cur->m_Input.m_TargetY;
+
+    if (c_cur->m_RespawnDelay > c_prev->m_RespawnDelay) {
+      dd_netevent_sound_world *nss;
+      nss = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+      nss->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
+      nss->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
+      nss->m_SoundId = DD_SOUND_PLAYER_SPAWN;
+      nss = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+      nss->common.m_X = vgetx(c_prev->m_Pos) - MAP_EXPAND32;
+      nss->common.m_Y = vgety(c_prev->m_Pos) - MAP_EXPAND32;
+      nss->m_SoundId = DD_SOUND_PLAYER_DIE;
+
+      dd_netevent_spawn *ns = demo_sb_add_item(sb, DD_NETEVENTTYPE_SPAWN, next_item_id++, sizeof(dd_netevent_spawn));
+      ns->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
+      ns->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
+
+      dd_netevent_death *nd = demo_sb_add_item(sb, DD_NETEVENTTYPE_DEATH, next_item_id++, sizeof(dd_netevent_death));
+      nd->common.m_X = vgetx(c_prev->m_Pos) - MAP_EXPAND32;
+      nd->common.m_Y = vgety(c_prev->m_Pos) - MAP_EXPAND32;
+      nd->m_ClientId = c_cur->m_Id;
+    }
+    if (c_prev->m_HookState != HOOK_GRABBED && c_cur->m_HookState == HOOK_GRABBED) {
+      dd_netevent_sound_world *nhs = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+      nhs->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
+      nhs->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
+      if (c_prev->m_HookedPlayer == -1 && c_cur->m_HookedPlayer != -1) nhs->m_SoundId = DD_SOUND_HOOK_ATTACH_PLAYER;
+      else nhs->m_SoundId = DD_SOUND_HOOK_ATTACH_GROUND;
+    }
+    if (c_cur->m_Jumped && c_cur->m_Grounded) {
+      dd_netevent_sound_world *njs = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+      njs->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
+      njs->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
+      njs->m_SoundId = DD_SOUND_PLAYER_JUMP;
+    }
+    if (c_cur->m_ReloadTimer > c_prev->m_ReloadTimer) {
+      if (c_cur->m_ActiveWeapon <= 1) {
+        dd_netevent_sound_world *nhs = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+        nhs->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
+        nhs->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
+        nhs->m_SoundId = c_cur->m_ActiveWeapon == WEAPON_HAMMER ? DD_SOUND_HAMMER_FIRE : DD_SOUND_GUN_FIRE;
+      }
+    }
+    // TODO: Getting hit by hammer
+    // if (c_cur->m_DamageTick == pWorld->m_GameTick && pCharacter->m_DamageWeapon == WEAPON_HAMMER) {
+    //   CNetEvent_HammerHit *pNetHammerHit = SnapNewItem<CNetEvent_HammerHit>(((uint64_t)pCharacter + 5) % 0xffff);
+    //   pNetHammerHit->m_X = vgetx(pCharacter->m_Pos);
+    //   pNetHammerHit->m_Y = vgety(pCharacter->m_Pos);
+    //   pCharacter->m_DamageTick = -1;
+    // }
   }
 
-  // do pickups first
-  for (int y = 0; y < height; ++y) {
-    const int yidx = y * width;
-    for (int x = 0; x < width; ++x) {
-      const SPickup pickup = cur->m_pCollision->m_pPickups[yidx + x];
-      if (pickup.m_Type >= 0) {
-        dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, next_item_id++, sizeof(dd_netobj_ddnet_pickup));
-        if (p) {
-          p->m_X = x * 32 + 16 - MAP_EXPAND32;
-          p->m_Y = y * 32 + 16 - MAP_EXPAND32;
-          p->m_Type = pickup.m_Type;
-          p->m_Subtype = pickup.m_Subtype;
-          p->m_SwitchNumber = pickup.m_Number;
-          p->m_Flags = 0;
-          log_info("DemoExport", "Added pickup id %d at (%d, %d), type %d, subtype %d", next_item_id, p->m_X, p->m_Y, p->m_Type, p->m_Subtype);
-        }
+  // do entities
+  for (SProjectile *proj = cur->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; proj; proj = proj->m_Base.m_pNextTypeEntity) {
+    dd_netobj_ddnet_projectile *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPROJECTILE, next_item_id++, sizeof(dd_netobj_ddnet_projectile));
+    if (p) {
+      int Flags = 0;
+      if (proj->m_Bouncing & 1) {
+        Flags |= DD_PROJECTILEFLAG_BOUNCE_HORIZONTAL;
       }
-      const SPickup fpickup = cur->m_pCollision->m_pFrontPickups[yidx + x];
-      if (fpickup.m_Type >= 0) {
-        dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, next_item_id++, sizeof(dd_netobj_ddnet_pickup));
-        if (p) {
-          p->m_X = x * 32 + 16 - MAP_EXPAND32;
-          p->m_Y = y * 32 + 16 - MAP_EXPAND32;
-          p->m_Type = fpickup.m_Type;
-          p->m_Subtype = fpickup.m_Subtype;
-          p->m_SwitchNumber = fpickup.m_Number;
-          p->m_Flags = 0;
-        }
+      if (proj->m_Bouncing & 2) {
+        Flags |= DD_PROJECTILEFLAG_BOUNCE_VERTICAL;
+      }
+      if (proj->m_Explosive) {
+        Flags |= DD_PROJECTILEFLAG_EXPLOSIVE;
+      }
+      if (proj->m_Freeze) {
+        Flags |= DD_PROJECTILEFLAG_FREEZE;
+      }
+      Flags |= DD_PROJECTILEFLAG_NORMALIZE_VEL;
+      p->m_VelX = round_to_int(vgetx(proj->m_Direction) * 1e6f);
+      p->m_VelY = round_to_int(vgety(proj->m_Direction) * 1e6f);
+      p->m_X = round_to_int((vgetx(proj->m_Base.m_Pos) - MAP_EXPAND32) * 100.0f);
+      p->m_Y = round_to_int((vgety(proj->m_Base.m_Pos) - MAP_EXPAND32) * 100.0f);
+      p->m_Type = proj->m_Type;
+      p->m_StartTick = proj->m_StartTick;
+      p->m_Owner = proj->m_Owner;
+      p->m_Flags = Flags;
+      p->m_SwitchNumber = proj->m_Base.m_Number;
+      p->m_TuneZone = 0;
+    }
+
+    const mvec2 pos = prj_get_pos(proj, (cur->m_GameTick - proj->m_StartTick) / (float)GAME_TICK_SPEED);
+    const mvec2 next_pos = prj_get_pos(proj, (cur->m_GameTick - proj->m_StartTick + 1) / (float)GAME_TICK_SPEED);
+    if (proj->m_Owner >= 0 && proj->m_Base.m_Spawned) {
+      dd_netevent_sound_world *nf = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+      nf->common.m_X = vgetx(pos) - MAP_EXPAND32;
+      nf->common.m_Y = vgety(pos) - MAP_EXPAND32;
+      nf->m_SoundId = DD_SOUND_GRENADE_FIRE;
+    }
+    if (proj->m_Explosive) {
+      mvec2 out, _out;
+      if (intersect_line(proj->m_Base.m_pCollision, pos, next_pos, &out, &_out)) {
+        dd_netevent_explosion *ne = demo_sb_add_item(sb, DD_NETEVENTTYPE_EXPLOSION, next_item_id++, sizeof(dd_netevent_explosion));
+        ne->common.m_X = vgetx(out) - MAP_EXPAND32;
+        ne->common.m_Y = vgety(out) - MAP_EXPAND32;
+        dd_netevent_sound_world *nes = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+        nes->common.m_X = vgetx(out) - MAP_EXPAND32;
+        nes->common.m_Y = vgety(out) - MAP_EXPAND32;
+        nes->m_SoundId = DD_SOUND_GRENADE_EXPLODE;
+      }
+      if (proj->m_LifeSpan <= 0) {
+        dd_netevent_explosion *ne = demo_sb_add_item(sb, DD_NETEVENTTYPE_EXPLOSION, next_item_id++, sizeof(dd_netevent_explosion));
+        ne->common.m_X = vgetx(pos) - MAP_EXPAND32;
+        ne->common.m_Y = vgety(pos) - MAP_EXPAND32;
+        dd_netevent_sound_world *nes = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+        nes->common.m_X = vgetx(pos) - MAP_EXPAND32;
+        nes->common.m_Y = vgety(pos) - MAP_EXPAND32;
+        nes->m_SoundId = DD_SOUND_GRENADE_EXPLODE;
+      }
+    }
+  }
+
+  for (SLaser *laser = cur->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; laser; laser = laser->m_Base.m_pNextTypeEntity) {
+    dd_netobj_ddnet_laser *l = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, next_item_id++, sizeof(dd_netobj_ddnet_laser));
+    // laser
+    if (l) {
+      l->m_ToX = (int)vgetx(laser->m_Base.m_Pos) - MAP_EXPAND32;
+      l->m_ToY = (int)vgety(laser->m_Base.m_Pos) - MAP_EXPAND32;
+      l->m_FromX = (int)vgetx(laser->m_From) - MAP_EXPAND32;
+      l->m_FromY = (int)vgety(laser->m_From) - MAP_EXPAND32;
+      l->m_StartTick = laser->m_EvalTick;
+      l->m_Owner = laser->m_Owner;
+      l->m_Type = laser->m_Type == DD_WEAPON_LASER ? DD_LASERTYPE_RIFLE : DD_LASERTYPE_SHOTGUN;
+      l->m_Subtype = -1;
+      l->m_SwitchNumber = laser->m_Base.m_Number;
+      l->m_Flags = 0;
+    }
+    // sounds
+    if (laser->m_Owner >= 0 && laser->m_Base.m_Spawned) {
+      dd_netevent_sound_world *nlss = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+      if (nlss) {
+        nlss->common.m_X = vgetx(laser->m_From) - MAP_EXPAND32;
+        nlss->common.m_Y = vgety(laser->m_From) - MAP_EXPAND32;
+        nlss->m_SoundId = laser->m_Type == DD_WEAPON_LASER ? DD_SOUND_LASER_FIRE : DD_SOUND_SHOTGUN_FIRE;
+      }
+    } else if (laser->m_EvalTick >= cur->m_GameTick) {
+      dd_netevent_sound_world *nlbs = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+      if (nlbs) {
+        nlbs->common.m_X = vgetx(laser->m_From) - MAP_EXPAND32;
+        nlbs->common.m_Y = vgety(laser->m_From) - MAP_EXPAND32;
+        nlbs->m_SoundId = DD_SOUND_LASER_BOUNCE;
       }
     }
   }
@@ -361,15 +507,13 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
 
   for (int t = 0; t < ticks; ++t) {
     demo_sb_clear(sb);
-    snap_world(sb, &ui->timeline, &prev, &cur);
-
-    wc_copy_world(&prev, &cur);
     for (int i = 0; i < cur.m_NumCharacters; ++i) {
       SPlayerInput input = model_get_input_at_tick(&ui->timeline, i, cur.m_GameTick);
       cc_on_input(&cur.m_pCharacters[i], &input);
     }
+    snap_world(sb, &ui->timeline, &prev, &cur);
+    wc_copy_world(&prev, &cur);
     wc_tick(&cur);
-
     int snap_size = demo_sb_finish(sb, snap_buf);
     if (snap_size > 0) demo_w_write_snap(writer, t, snap_buf, snap_size);
   }

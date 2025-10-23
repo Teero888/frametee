@@ -19,7 +19,7 @@ typedef struct tas_project_header_t {
 // header for each embedded skin
 typedef struct skin_file_header_t {
   int id;
-  char name[32];
+  char name[24];
   uint32_t texture_data_size;
 } skin_file_header_t;
 

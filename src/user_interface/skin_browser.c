@@ -42,7 +42,16 @@ void render_skin_browser(gfx_handler_t *h) {
           const char *skin_name = strrchr(path, '/');
           if (!skin_name) skin_name = strrchr(path, '\\');
           skin_name = skin_name ? skin_name + 1 : path;
-          strncpy(info.name, skin_name, sizeof(info.name) - 1);
+
+          // idk if overwriting path is bad so we will make a copy
+          char temp_name[32];
+          strncpy(temp_name, skin_name, sizeof(temp_name) - 1);
+          temp_name[sizeof(temp_name) - 1] = '\0';
+          char *ext = strrchr(temp_name, '.');
+          if (ext) *ext = '\0';
+
+          strncpy(info.name, temp_name, sizeof(info.name) - 1);
+          info.name[sizeof(info.name) - 1] = '\0';
 
           skin_manager_add(m, &info);
         }
