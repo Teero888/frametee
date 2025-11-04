@@ -1,7 +1,7 @@
 #ifndef PHYSICS_H
 #define PHYSICS_H
 
-#include "../../libs/ddnet_physics/include/gamecore.h"
+#include <ddnet_physics/gamecore.h>
 #include <stddef.h>
 
 typedef struct {

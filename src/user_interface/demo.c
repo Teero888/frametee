@@ -2,8 +2,8 @@
 #include "../logger/logger.h"
 #include "../renderer/graphics_backend.h"
 #include "cimgui.h"
-#include "collision.h"
-#include "gamecore.h"
+#include <ddnet_physics/collision.h>
+#include <ddnet_physics/gamecore.h>
 #include "nfd.h"
 #include "timeline/timeline_model.h"
 #include "undo_redo.h"

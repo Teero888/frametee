@@ -2,7 +2,7 @@
 #include "../../renderer/graphics_backend.h"
 #include "../../renderer/renderer.h"
 #include "../user_interface.h"
-#include "gamecore.h"
+#include <ddnet_physics/gamecore.h>
 #include "timeline_commands.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"

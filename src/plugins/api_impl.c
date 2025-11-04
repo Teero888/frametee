@@ -3,7 +3,7 @@
 #include "../renderer/graphics_backend.h"
 #include "../user_interface/timeline/timeline_commands.h"
 #include "../user_interface/timeline/timeline_model.h"
-#include "gamecore.h"
+#include <ddnet_physics/gamecore.h>
 #include <stdio.h>
 #include <stdlib.h>
 

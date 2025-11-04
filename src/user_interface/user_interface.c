@@ -9,7 +9,7 @@
 #include "cglm/vec2.h"
 #include "cimgui.h"
 #include "demo.h"
-#include "gamecore.h"
+#include <ddnet_physics/gamecore.h>
 #include "player_info.h"
 #include "skin_browser.h"
 #include "snippet_editor.h"

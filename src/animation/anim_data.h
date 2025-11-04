@@ -3,7 +3,8 @@
 
 #include "anim_system.h"
 #include "cglm/types.h"
-#include "gamecore.h"
+#include <ddnet_physics/gamecore.h>
+
 
 // Based on content.py
 typedef struct {

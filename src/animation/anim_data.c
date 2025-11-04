@@ -1,6 +1,6 @@
 #include "anim_data.h"
 #include "anim_system.h"
-#include "gamecore.h"
+#include <ddnet_physics/gamecore.h>
 #include <string.h>
 
 const data_container_t game_data = {
