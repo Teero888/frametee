@@ -29,6 +29,13 @@ typedef struct {
 typedef struct {
   input_snippet_t *snippets;
   int snippet_count;
+  int snippet_capacity;
+
+  // A temporary buffer for non-destructive recording
+  input_snippet_t *recording_snippets;
+  int recording_snippet_count;
+  int recording_snippet_capacity;
+
   player_info_t player_info;
   bool is_dummy;
 } player_track_t;

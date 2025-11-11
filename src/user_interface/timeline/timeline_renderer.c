@@ -12,8 +12,8 @@
 #define TPS 50
 
 // Forward Declarations for Static Render Helpers
-static void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_index, ImDrawList *draw_list, ImRect timeline_bb,
-                                 float track_top);
+static void render_input_snippet(timeline_state_t *ts, player_track_t *track, input_snippet_t *snippet, ImDrawList *draw_list, ImRect timeline_bb,
+                                 float track_top, bool is_recording_snippet);
 static void render_player_track(timeline_state_t *ts, int track_index, ImDrawList *draw_list, ImRect timeline_bb, float track_top, float track_bottom,
                                 bool is_selected);
 static double choose_nice_tick_step(double pixels_per_tick, double min_label_spacing);
@@ -385,31 +385,38 @@ static void render_player_track(timeline_state_t *ts, int track_index, ImDrawLis
                      igGetColorU32_Col(ImGuiCol_Border, 0.3f), 1.0f);
 
   for (int j = 0; j < track->snippet_count; ++j) {
-    render_input_snippet(ts, track_index, j, draw_list, timeline_bb, track_top);
+    render_input_snippet(ts, track, &track->snippets[j], draw_list, timeline_bb, track_top, false);
+  }
+
+  if (ts->recording) {
+    for (int j = 0; j < track->recording_snippet_count; ++j) {
+      render_input_snippet(ts, track, &track->recording_snippets[j], draw_list, timeline_bb, track_top, true);
+    }
   }
 }
 
-static void render_input_snippet(timeline_state_t *ts, int track_index, int snippet_index, ImDrawList *draw_list, ImRect timeline_bb,
-                                 float track_top) {
-  input_snippet_t *snippet = &ts->player_tracks[track_index].snippets[snippet_index];
-
+static void render_input_snippet(timeline_state_t *ts, player_track_t *track, input_snippet_t *snippet, ImDrawList *draw_list, ImRect timeline_bb,
+                                 float track_top, bool is_recording_snippet) {
   float start_x = renderer_tick_to_screen_x(ts, snippet->start_tick, timeline_bb.Min.x);
   float end_x = renderer_tick_to_screen_x(ts, snippet->end_tick, timeline_bb.Min.x);
   if (end_x < timeline_bb.Min.x || start_x > timeline_bb.Max.x) return;
 
-  int stack_size = model_get_stack_size_at_tick_range(&ts->player_tracks[track_index], snippet->start_tick, snippet->end_tick);
+  int stack_size = model_get_stack_size_at_tick_range(track, snippet->start_tick, snippet->end_tick);
   float sub_lane_height = ts->track_height / (float)fmax(1, stack_size);
 
   ImVec2 min = {fmaxf(start_x, timeline_bb.Min.x), track_top + snippet->layer * sub_lane_height + 2.0f};
   ImVec2 max = {fminf(end_x, timeline_bb.Max.x), min.y + sub_lane_height - 4.0f};
   if (max.y <= min.y) return;
 
-  // The invisible button for interaction is now handled in the interaction module.
-  // Here, we just draw.
   bool is_selected = interaction_is_snippet_selected(ts, snippet->id);
-  ImU32 color = snippet->is_active ? (is_selected ? igGetColorU32_Col(ImGuiCol_HeaderActive, 1.0f) : igGetColorU32_Col(ImGuiCol_Button, 0.8f))
-                                   : (is_selected ? igGetColorU32_Vec4((ImVec4){0.45f, 0.45f, 0.45f, 1.0f})
-                                                  : igGetColorU32_Vec4((ImVec4){0.25f, 0.25f, 0.25f, 0.9f}));
+  ImU32 color;
+  if (is_recording_snippet) {
+    color = IM_COL32(255, 30, 0, 100);
+  } else {
+    color = snippet->is_active
+                ? (is_selected ? igGetColorU32_Col(ImGuiCol_HeaderActive, 1.0f) : igGetColorU32_Col(ImGuiCol_Button, 0.8f))
+                : (is_selected ? igGetColorU32_Vec4((ImVec4){0.45f, 0.45f, 0.45f, 1.0f}) : igGetColorU32_Vec4((ImVec4){0.25f, 0.25f, 0.25f, 0.9f}));
+  }
 
   ImDrawList_AddRectFilled(draw_list, min, max, color, 4.0f, ImDrawFlags_RoundCornersAll);
   ImDrawList_AddRect(draw_list, min, max,

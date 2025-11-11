@@ -32,6 +32,11 @@ player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num);
 void model_remove_track_logic(timeline_state_t *ts, int track_index);
 void model_compact_layers_for_track(player_track_t *track);
 
+// Recording & Merging
+void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *track, int tick, const SPlayerInput *input);
+void model_clear_all_recording_buffers(timeline_state_t *ts);
+void model_insert_snippet_into_recording_track(player_track_t *track, const input_snippet_t *snippet);
+
 // Physics & Playback
 void model_recalc_physics(timeline_state_t *ts, int tick);
 SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
