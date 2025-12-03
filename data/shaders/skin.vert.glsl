@@ -32,37 +32,38 @@ layout(location = 10) flat out int frag_col_custom;
 layout(location = 11) flat out int frag_col_gs;
 
 layout(binding = 0) uniform primitive_ubo {
-    vec2 cam_pos;
-    float zoom;
-    float aspect;
-    float max_map_size;
-    mat4 proj;
-    vec2 map_size;
-    float lod_bias;
-} ubo;
+  vec2 cam_pos;
+  float zoom;
+  float aspect;
+  float max_map_size;
+  mat4 proj;
+  vec2 map_size;
+  float lod_bias;
+}
+ubo;
 
 layout(location = 12) flat out float frag_lod_bias;
 
 void main() {
-    vec2 norm = (instance_pos + in_pos * instance_scale) / ubo.map_size;
-    vec2 rel = norm - ubo.cam_pos;
-    rel *= (ubo.zoom * ubo.max_map_size);
-    rel.y *= ubo.aspect;
+  vec2 norm = (instance_pos + in_pos * instance_scale) / ubo.map_size;
+  vec2 rel = norm - ubo.cam_pos;
+  rel *= (ubo.zoom * ubo.max_map_size);
+  rel.y *= ubo.aspect;
 
-    gl_Position = ubo.proj * vec4(rel,0.0,1.0);
+  gl_Position = ubo.proj * vec4(rel, 0.0, 1.0);
 
-	// 0.625 because we do * 1.25 for the instance scale so there is enough room for animation
-    frag_uv = in_pos * 0.625+0.5;
-    frag_skin_index = instance_skin;
-    frag_eye = instance_eye;
-    frag_body = anim_body;
-    frag_back = anim_back;
-    frag_front = anim_front;
-    frag_attach = anim_attach;
-	frag_dir = anim_dir;
-	frag_col_body = col_body;
-	frag_col_feet = col_feet;
-	frag_col_custom = col_custom;
-	frag_col_gs = col_gs;
-    frag_lod_bias = ubo.lod_bias;
+  // 0.625 because we do * 1.25 for the instance scale so there is enough room for animation
+  frag_uv = in_pos * 0.625 + 0.5;
+  frag_skin_index = instance_skin;
+  frag_eye = instance_eye;
+  frag_body = anim_body;
+  frag_back = anim_back;
+  frag_front = anim_front;
+  frag_attach = anim_attach;
+  frag_dir = anim_dir;
+  frag_col_body = col_body;
+  frag_col_feet = col_feet;
+  frag_col_custom = col_custom;
+  frag_col_gs = col_gs;
+  frag_lod_bias = ubo.lod_bias;
 }

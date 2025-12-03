@@ -12,8 +12,7 @@ private:
   int m_SnippetDuration;
 
 public:
-  CppPlugin(tas_context_t *pContext, const tas_api_t *pAPI)
-      : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_SnippetDuration(100) {
+  CppPlugin(tas_context_t *pContext, const tas_api_t *pAPI) : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_SnippetDuration(100) {
     m_pAPI->log_info("Native C++ ImGui Plugin", "Plugin instance created!");
   }
 
@@ -47,8 +46,7 @@ public:
         } else {
           if (ImGui::Button("Create Snippet via API", ImVec2(0, 0))) {
             int CurrentTick = m_pAPI->get_current_tick();
-            undo_command_t *pCmd =
-                m_pAPI->do_create_snippet(SelectedTrack, CurrentTick, m_SnippetDuration, nullptr);
+            undo_command_t *pCmd = m_pAPI->do_create_snippet(SelectedTrack, CurrentTick, m_SnippetDuration, nullptr);
             m_pAPI->register_undo_command(pCmd);
           }
         }
@@ -61,8 +59,7 @@ public:
 extern "C" {
 
 FT_API plugin_info_t get_plugin_info() {
-  return {"C++ Native ImGui Example", "Teero", "69.420",
-          "A self-contained plugin written in C++ using the native ImGui API."};
+  return {"C++ Native ImGui Example", "Teero", "69.420", "A self-contained plugin written in C++ using the native ImGui API."};
 }
 
 FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) { return new CppPlugin(context, api); }

@@ -35,14 +35,10 @@ void main() {
   dy *= bias_scale;
 
   // handle texture coordinate wrapping
-  if (tex_coord.x < 0.0)
-    tex_coord.x = mod(tex_coord.x, tile_size.x);
-  if (tex_coord.x > 1.0)
-    tex_coord.x = (1.0 - tile_size.x) + mod(tex_coord.x, tile_size.x);
-  if (tex_coord.y < 0.0)
-    tex_coord.y = mod(tex_coord.y, tile_size.y);
-  if (tex_coord.y > 1.0)
-    tex_coord.y = (1.0 - tile_size.y) + mod(tex_coord.y, tile_size.y);
+  if (tex_coord.x < 0.0) tex_coord.x = mod(tex_coord.x, tile_size.x);
+  if (tex_coord.x > 1.0) tex_coord.x = (1.0 - tile_size.x) + mod(tex_coord.x, tile_size.x);
+  if (tex_coord.y < 0.0) tex_coord.y = mod(tex_coord.y, tile_size.y);
+  if (tex_coord.y > 1.0) tex_coord.y = (1.0 - tile_size.y) + mod(tex_coord.y, tile_size.y);
 
   uint game_tile_id = uint(texture(tex1, tex_coord).r * 255.0);
   uint front_tile_id = uint(texture(tex1, tex_coord).g * 255.0);

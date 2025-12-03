@@ -5,7 +5,6 @@
 #include "cglm/types.h"
 #include <ddnet_physics/gamecore.h>
 
-
 // Based on content.py
 typedef struct {
   int firedelay;

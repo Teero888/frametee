@@ -22,9 +22,7 @@ static inline unsigned int fast_rand_u32(unsigned int *state) {
   return x;
 }
 
-static inline int fast_rand_range(unsigned int *state, int min, int max) {
-  return min + (fast_rand_u32(state) % (max - min + 1));
-}
+static inline int fast_rand_range(unsigned int *state, int min, int max) { return min + (fast_rand_u32(state) % (max - min + 1)); }
 
 static inline void generate_random_input(SPlayerInput *pInput, unsigned int *seed) {
   pInput->m_Direction = fast_rand_range(seed, -1, 1);
@@ -55,8 +53,8 @@ private:
 
 public:
   PhysicsProfilerPlugin(tas_context_t *pContext, const tas_api_t *pAPI)
-      : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_Iterations(200), m_TicksPerIteration(500),
-        m_UseMultiThreading(true), m_IsRunning(false), m_Progress(0), m_LastElapsedTime(0.0) {
+      : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_Iterations(200), m_TicksPerIteration(500), m_UseMultiThreading(true),
+        m_IsRunning(false), m_Progress(0), m_LastElapsedTime(0.0) {
 
     m_pAPI->log_info("Physics Profiler", "Plugin initialized.");
   }
@@ -69,8 +67,7 @@ public:
   }
 
   void Benchmark() {
-    if (!m_pAPI->get_initial_world())
-      return;
+    if (!m_pAPI->get_initial_world()) return;
     ZoneScopedN("Benchmark Execution"); // Tracy Zone for the whole benchmark
 
     m_IsRunning = true;
@@ -135,8 +132,7 @@ public:
   }
 
   void StartBenchmarkThread() {
-    if (m_IsRunning)
-      return;
+    if (m_IsRunning) return;
 
     if (m_BenchmarkThread.joinable()) {
       m_BenchmarkThread.join();
@@ -201,13 +197,9 @@ public:
 
 extern "C" {
 
-FT_API plugin_info_t get_plugin_info() {
-  return {"Physics Profiler", "Teero", "1.0.0", "Integrates Tracy to benchmark the ddnet_physics library."};
-}
+FT_API plugin_info_t get_plugin_info() { return {"Physics Profiler", "Teero", "1.0.0", "Integrates Tracy to benchmark the ddnet_physics library."}; }
 
-FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
-  return new PhysicsProfilerPlugin(context, api);
-}
+FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) { return new PhysicsProfilerPlugin(context, api); }
 
 FT_API void plugin_update(void *plugin_data) { static_cast<PhysicsProfilerPlugin *>(plugin_data)->Update(); }
 
