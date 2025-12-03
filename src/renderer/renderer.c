@@ -1806,6 +1806,20 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
     return -1;
   }
 
+  // create a smaller separate preview texture for the skin browser
+  if (out_preview_texture) {
+    int preview_width = 128;
+    int preview_height = 64;
+    unsigned char *resized_preview_pixels = malloc(preview_width * preview_height * 4);
+    if (resized_preview_pixels) {
+      stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_preview_pixels, preview_width, preview_height, 0, STBIR_RGBA);
+      *out_preview_texture = renderer_create_texture_from_rgba(h, resized_preview_pixels, preview_width, preview_height);
+      free(resized_preview_pixels);
+    } else {
+      log_error(LOG_SOURCE, "Failed to allocate memory for skin preview resize.");
+    }
+  }
+
   // Pre-multiply alpha before resizing (Crucial for correct bilinear interpolation)
   for (int i = 0; i < tex_width * tex_height; i++) {
     int idx = i * 4;
