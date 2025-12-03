@@ -104,6 +104,8 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Keybind Settings", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_browser, true);
+      igSeparator();
+      igDragFloat("LOD Bias", &ui->gfx_handler->renderer.lod_bias, 0.1f, -5.0f, 5.0f, "%.1f", 0);
       igEndMenu();
     }
 

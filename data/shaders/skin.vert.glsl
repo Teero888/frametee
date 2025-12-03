@@ -38,7 +38,10 @@ layout(binding = 0) uniform primitive_ubo {
     float max_map_size;
     mat4 proj;
     vec2 map_size;
+    float lod_bias;
 } ubo;
+
+layout(location = 12) flat out float frag_lod_bias;
 
 void main() {
     vec2 norm = (instance_pos + in_pos * instance_scale) / ubo.map_size;
@@ -61,4 +64,5 @@ void main() {
 	frag_col_feet = col_feet;
 	frag_col_custom = col_custom;
 	frag_col_gs = col_gs;
+    frag_lod_bias = ubo.lod_bias;
 }

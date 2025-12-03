@@ -84,12 +84,13 @@ typedef struct {
   float maxMapSize;
   mat4 proj;
   vec2 mapSize; // width, height
+  float lod_bias;
 } primitive_ubo_t;
 
 typedef struct {
   vec3 transform; // x, y, zoom
   float aspect;
-  float lod;
+  float lod_bias;
 } map_buffer_object_t;
 
 typedef struct {
@@ -196,6 +197,7 @@ typedef struct {
   VkDeviceSize min_ubo_alignment;
 
   camera_t camera;
+  float lod_bias;
   texture_t *default_texture;
   gfx_handler_t *gfx;
   skin_atlas_manager_t skin_manager;

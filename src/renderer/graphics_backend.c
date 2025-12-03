@@ -1083,9 +1083,10 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
       if (isnan(zoom)) zoom = 1.0f;
 
       float aspect = 1.0f / (window_ratio / map_ratio);
-      float lod = fmin(fmax(5.5f - log2f((1.0f / handler->map_data->width) / zoom * (width / 2.0f)), 0.0f), 6.0f);
-
-      map_buffer_object_t ubo = {.transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom}, .aspect = aspect, .lod = lod};
+      
+      map_buffer_object_t ubo = {.transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom},
+                                 .aspect = aspect,
+                                 .lod_bias = handler->renderer.lod_bias};
 
       void *ubos[] = {&ubo};
       VkDeviceSize ubo_sizes[] = {sizeof(ubo)};

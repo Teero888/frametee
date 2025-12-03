@@ -18,6 +18,7 @@ layout(binding = 0) uniform primitive_ubo {
   float max_map_size;
   mat4 proj;
   vec2 map_size;
+  float lod_bias;
 }
 ubo;
 
@@ -25,6 +26,7 @@ layout(location = 0) out vec2 frag_uv;
 layout(location = 1) flat out int frag_sprite_index;
 layout(location = 2) out vec2 frag_uv_scale;
 layout(location = 3) out vec2 frag_size;
+layout(location = 4) flat out float frag_lod_bias;
 
 mat2 rot(float a) {
   float s = sin(a);
@@ -43,4 +45,5 @@ void main() {
   frag_sprite_index = instance_sprite_index;
   frag_uv_scale = instance_uv_scale;
   frag_size = instance_size;
+  frag_lod_bias = ubo.lod_bias;
 }

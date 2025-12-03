@@ -34,7 +34,8 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
 static void copy_buffer_to_image(gfx_handler_t *handler, VkCommandPool pool, VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
 static char *read_file(const char *filename, size_t *length);
 static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *code, size_t code_size);
-static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t layer_count);
+static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t base_layer,
+                          uint32_t layer_count);
 static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count,
                                                       const VkVertexInputBindingDescription *binding_descs, uint32_t binding_desc_count,
                                                       const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count);
@@ -326,7 +327,8 @@ static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *c
   return shader_module;
 }
 
-static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t layer_count) {
+static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t base_layer,
+                          uint32_t layer_count) {
   if (mip_levels <= 1) return true;
 
   VkCommandBuffer cmd_buffer = begin_single_time_commands(handler, handler->renderer.transfer_command_pool);
@@ -336,7 +338,7 @@ static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width,
       .image = image,
       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseArrayLayer = 0, .layerCount = layer_count, .levelCount = 1}};
+      .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseArrayLayer = base_layer, .layerCount = layer_count, .levelCount = 1}};
 
   int32_t mip_width = width;
   int32_t mip_height = height;
@@ -353,10 +355,10 @@ static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width,
     VkImageBlit blit = {
         .srcOffsets[0] = {0, 0, 0},
         .srcOffsets[1] = {mip_width, mip_height, 1},
-        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = i - 1, .baseArrayLayer = 0, .layerCount = layer_count},
+        .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = i - 1, .baseArrayLayer = base_layer, .layerCount = layer_count},
         .dstOffsets[0] = {0, 0, 0},
         .dstOffsets[1] = {mip_width > 1 ? mip_width / 2 : 1, mip_height > 1 ? mip_height / 2 : 1, 1},
-        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = i, .baseArrayLayer = 0, .layerCount = layer_count}};
+        .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = i, .baseArrayLayer = base_layer, .layerCount = layer_count}};
 
     vkCmdBlitImage(cmd_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
 
@@ -405,14 +407,14 @@ texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t wid
   texArray->active = true;
   texArray->width = width;
   texArray->height = height;
-  texArray->mip_levels = 1; // can expand to mip chain later
+  texArray->mip_levels = (uint32_t)floor(log2(fmax(width, height))) + 1;
   texArray->layer_count = layer_count;
   strncpy(texArray->path, "runtime_skin_array", sizeof(texArray->path) - 1);
 
   // Create the VkImage (2D array)
   create_image(handler, width, height, texArray->mip_levels, layer_count, format, VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texArray->image,
-               &texArray->memory);
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+               &texArray->image, &texArray->memory);
 
   // Transition all layers once
   transition_image_layout(handler, renderer->transfer_command_pool, texArray->image, format, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -441,6 +443,9 @@ int renderer_init(gfx_handler_t *handler) {
   VkPhysicalDeviceProperties properties;
   vkGetPhysicalDeviceProperties(handler->g_physical_device, &properties);
   renderer->min_ubo_alignment = properties.limits.minUniformBufferOffsetAlignment;
+
+  renderer->camera.zoom_wanted = 5.0f;
+  renderer->lod_bias = -0.5f; // Default bias
 
   VkCommandPoolCreateInfo pool_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
                                        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
@@ -477,8 +482,8 @@ int renderer_init(gfx_handler_t *handler) {
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_ubo_buffer);
   vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0, &renderer->ubo_buffer_ptr);
 
-  // create a 2d array texture to hold max_skins atlases (each 512x256, rgba8)
-  renderer->skin_manager.atlas_array = renderer_create_texture_2d_array(handler, 512, 256, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
+  // create a 2d array texture to hold max_skins atlases (each 512x512, rgba8)
+  renderer->skin_manager.atlas_array = renderer_create_texture_2d_array(handler, 512, 512, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
   memset(renderer->skin_manager.layer_used, 0, sizeof(renderer->skin_manager.layer_used));
   // skin renderer
   renderer->skin_renderer.skin_shader = renderer_load_shader(handler, "data/shaders/skin.vert.spv", "data/shaders/skin.frag.spv");
@@ -1015,7 +1020,7 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   vkDestroyBuffer(handler->g_device, staging_buffer.buffer, handler->g_allocator);
   vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
-  if (!build_mipmaps(handler, texture->image, tex_width, tex_height, mip_levels, 1)) {
+  if (!build_mipmaps(handler, texture->image, tex_width, tex_height, mip_levels, 0, 1)) {
     transition_image_layout(handler, renderer->transfer_command_pool, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mip_levels, 0, 1);
   }
@@ -1318,7 +1323,7 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
 
   end_single_time_commands(handler, renderer->transfer_command_pool, cmd);
 
-  build_mipmaps(handler, tex_array->image, tile_width, tile_height, mip_levels, layer_count);
+  build_mipmaps(handler, tex_array->image, tile_width, tile_height, mip_levels, 0, layer_count);
 
   tex_array->image_view =
       create_image_view(handler, tex_array->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D_ARRAY, mip_levels, layer_count);
@@ -1463,6 +1468,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
   ubo.mapSize[0] = h->map_data->width;
   ubo.mapSize[1] = h->map_data->height;
+  ubo.lod_bias = renderer->lod_bias;
 
   glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
@@ -1651,9 +1657,9 @@ void renderer_draw_map(gfx_handler_t *h) {
   if (isnan(zoom)) zoom = 1.0f;
 
   float aspect = 1.0f / (window_ratio / map_ratio);
-  float lod = fmin(fmax(5.5f - log2f((1.0f / h->map_data->width) / zoom * (h->viewport[0] / 2.0f)), 0.0f), 6.0f);
 
-  map_buffer_object_t ubo = {.transform = {h->renderer.camera.pos[0], h->renderer.camera.pos[1], zoom}, .aspect = aspect, .lod = lod};
+  map_buffer_object_t ubo = {
+      .transform = {h->renderer.camera.pos[0], h->renderer.camera.pos[1], zoom}, .aspect = aspect, .lod_bias = h->renderer.lod_bias};
 
   void *ubos[] = {&ubo};
   VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
@@ -1735,6 +1741,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
   ubo.mapSize[0] = h->map_data->width;
   ubo.mapSize[1] = h->map_data->height;
+  ubo.lod_bias = renderer->lod_bias;
   glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
   // copy into dynamic UBO ring
@@ -1793,54 +1800,67 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
     return -1;
   }
 
-  // check dimensions (must be multiple of 256x128)
   if (tex_width <= 0 || tex_height <= 0 || tex_width % 256 != 0 || tex_height % 128 != 0) {
     log_error(LOG_SOURCE, "Skin from memory has invalid dimensions (%dx%d), must be a multiple of 256x128", tex_width, tex_height);
     stbi_image_free(pixels);
     return -1;
   }
 
-  stbi_uc *used_pixels = pixels;
-  const int final_width = 512;
-  const int final_height = 256;
-
-  // create a smaller separate preview texture for the skin browser
-  if (out_preview_texture) {
-    int preview_width = 128;
-    int preview_height = 64;
-    unsigned char *resized_preview_pixels = malloc(preview_width * preview_height * 4);
-    if (resized_preview_pixels) {
-      stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_preview_pixels, preview_width, preview_height, 0, STBIR_RGBA);
-      *out_preview_texture = renderer_create_texture_from_rgba(h, resized_preview_pixels, preview_width, preview_height);
-      free(resized_preview_pixels);
-    } else {
-      log_error(LOG_SOURCE, "Failed to allocate memory for skin preview resize.");
-    }
+  // Pre-multiply alpha before resizing (Crucial for correct bilinear interpolation)
+  for (int i = 0; i < tex_width * tex_height; i++) {
+    int idx = i * 4;
+    uint8_t a = pixels[idx + 3];
+    // Integer multiply effectively zeros out the pixel if a is 0
+    pixels[idx + 0] = (uint8_t)((int)pixels[idx + 0] * a / 255);
+    pixels[idx + 1] = (uint8_t)((int)pixels[idx + 1] * a / 255);
+    pixels[idx + 2] = (uint8_t)((int)pixels[idx + 2] * a / 255);
   }
 
-  if (tex_width != final_width || tex_height != final_height) {
-    stbi_uc *resized_pixels = malloc(final_width * final_height * 4);
-    if (!resized_pixels) {
-      log_error(LOG_SOURCE, "Failed to allocate memory for skin resize.");
-      stbi_image_free(pixels);
-      return -1;
+  const int final_width = 512;
+  const int final_height = 512;
+  stbi_uc *repacked_pixels = calloc(1, final_width * final_height * 4);
+  if (!repacked_pixels) {
+    stbi_image_free(pixels);
+    return -1;
+  }
+
+  memset(repacked_pixels, 0, final_width * final_height * 4);
+
+  int scale = tex_width / 256;
+
+#define COPY_PART(src_x, src_y, w, h, dst_x, dst_y)                                                                                                  \
+  stbir_resize_uint8_linear(pixels + ((src_y) * scale * tex_width + (src_x) * scale) * 4, (w) * scale, (h) * scale, tex_width * 4,                   \
+                            repacked_pixels + ((dst_y) * final_width + (dst_x)) * 4, (w) * 2, (h) * 2, final_width * 4, STBIR_RGBA)
+
+  COPY_PART(0, 0, 96, 96, 8, 8);        // Body
+  COPY_PART(96, 0, 96, 96, 208, 8);     // Body Shadow
+  COPY_PART(192, 32, 64, 32, 8, 208);   // Foot
+  COPY_PART(192, 64, 64, 32, 144, 208); // Foot Shadow
+  for (int i = 0; i < 6; ++i) {
+    int src_x = 64 + i * 32;
+    int dst_x = 8 + i * 72;
+    COPY_PART(src_x, 96, 32, 32, dst_x, 280); // Eyes
+  }
+#undef COPY_PART
+
+  for (int i = 0; i < final_width * final_height; i++) {
+    int idx = i * 4;
+    if (repacked_pixels[idx + 3] == 0) {
+      repacked_pixels[idx + 0] = 0;
+      repacked_pixels[idx + 1] = 0;
+      repacked_pixels[idx + 2] = 0;
     }
-    stbir_resize_uint8_linear(pixels, tex_width, tex_height, 0, resized_pixels, final_width, final_height, 0, STBIR_RGBA);
-    used_pixels = resized_pixels; // from now on, use the resized pixels
   }
 
   renderer_state_t *r = &h->renderer;
   int layer = skin_manager_alloc_layer(r);
   if (layer < 0) {
     log_error(LOG_SOURCE, "No free skin layers available (max %d reached).", MAX_SKINS);
-
     if (out_preview_texture && *out_preview_texture) {
-      // clean up the preview texture if we can't get a main skin slot
       renderer_destroy_texture(h, *out_preview_texture);
       *out_preview_texture = NULL;
     }
-
-    if (used_pixels != pixels) free(used_pixels);
+    free(repacked_pixels);
     stbi_image_free(pixels);
     return -1;
   }
@@ -1854,25 +1874,19 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
     size_t rowBase = (size_t)y * tex_width;
     for (int x = 0; x < body_w; ++x) {
       size_t idx = (rowBase + (size_t)x) * 4u;
-      unsigned char a = pixels[idx + 3];
-      if (a > 128) {
-        unsigned char r = pixels[idx + 0];
-        unsigned char g = pixels[idx + 1];
-        unsigned char b = pixels[idx + 2];
-        uint8_t gray = (uint8_t)(0.2126f * r + 0.7152f * g + 0.0722f * b);
+      if (pixels[idx + 3] > 128) {
+        uint8_t gray = (uint8_t)(0.2126f * pixels[idx + 0] + 0.7152f * pixels[idx + 1] + 0.0722f * pixels[idx + 2]);
         freq[gray]++;
       }
     }
   }
   uint8_t org_weight = 1;
   for (int i = 1; i < 256; ++i) {
-    if (freq[org_weight] < freq[i]) {
-      org_weight = (uint8_t)i;
-    }
+    if (freq[org_weight] < freq[i]) org_weight = (uint8_t)i;
   }
   r->skin_manager.atlas_array[layer].gs_org = org_weight;
 
-  // Create staging buffer
+  // Upload to Vulkan
   VkDeviceSize image_size = final_width * final_height * 4;
   buffer_t staging;
   create_buffer(h, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -1880,16 +1894,14 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
 
   void *data;
   vkMapMemory(h->g_device, staging.memory, 0, image_size, 0, &data);
-  memcpy(data, used_pixels, image_size);
+  memcpy(data, repacked_pixels, image_size);
   vkUnmapMemory(h->g_device, staging.memory);
-  if (used_pixels != pixels) free(used_pixels); // free resized buffer
-  stbi_image_free(pixels);                      // free original buffer
+  free(repacked_pixels);
+  stbi_image_free(pixels);
 
-  // Transition -> TRANSFER_DST
   transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image, VK_FORMAT_R8G8B8A8_UNORM,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, layer, 1);
 
-  // Copy staging buffer into array slice
   VkCommandBuffer cmd = begin_single_time_commands(h, r->transfer_command_pool);
   VkBufferImageCopy region = {
       .bufferOffset = 0,
@@ -1899,16 +1911,16 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
   vkCmdCopyBufferToImage(cmd, staging.buffer, r->skin_manager.atlas_array->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
   end_single_time_commands(h, r->transfer_command_pool, cmd);
 
-  // Transition this layer back to shader-read
-  transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, layer, 1);
+  if (!build_mipmaps(h, r->skin_manager.atlas_array->image, final_width, final_height, r->skin_manager.atlas_array->mip_levels, layer, 1)) {
+    transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image, VK_FORMAT_R8G8B8A8_UNORM,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, layer, 1);
+  }
 
-  // Cleanup staging
   vkDestroyBuffer(h->g_device, staging.buffer, h->g_allocator);
   vkFreeMemory(h->g_device, staging.memory, h->g_allocator);
 
   log_info(LOG_SOURCE, "Loaded skin from memory into layer %d", layer);
-  return layer; // return usable skin index
+  return layer;
 }
 
 int renderer_load_skin_from_file(gfx_handler_t *h, const char *path, texture_t **out_preview_texture) {
@@ -2004,11 +2016,21 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
   // SHADER_READ_ONLY for rendering
   transition_image_layout(h, h->renderer.transfer_command_pool, source_atlas->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, source_atlas->mip_levels, 0, 1);
-  transition_image_layout(h, h->renderer.transfer_command_pool, ar->atlas_texture->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, ar->atlas_texture->mip_levels, 0,
-                          ar->atlas_texture->layer_count);
+
+  // Generate mipmaps for the atlas array (all layers)
+  // This handles the transition of ar->atlas_texture to SHADER_READ_ONLY_OPTIMAL
+  if (!build_mipmaps(h, ar->atlas_texture->image, ar->layer_width, ar->layer_height, ar->atlas_texture->mip_levels, 0,
+                     ar->atlas_texture->layer_count)) {
+    transition_image_layout(h, h->renderer.transfer_command_pool, ar->atlas_texture->image, VK_FORMAT_R8G8B8A8_UNORM,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, ar->atlas_texture->mip_levels, 0,
+                            ar->atlas_texture->layer_count);
+  }
 
   renderer_destroy_texture(h, source_atlas); // we don't need the single large atlas texture anymore
+
+  ar->atlas_texture->image_view = create_image_view(h, ar->atlas_texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                                                    ar->atlas_texture->mip_levels, ar->atlas_texture->layer_count);
+  ar->atlas_texture->sampler = create_texture_sampler(h, ar->atlas_texture->mip_levels, VK_FILTER_LINEAR);
 
   // Create a dedicated sampler for this atlas renderer
   VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -2096,6 +2118,7 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
   ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
   ubo.mapSize[0] = h->map_data->width;
   ubo.mapSize[1] = h->map_data->height;
+  ubo.lod_bias = renderer->lod_bias;
   glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
   VkDeviceSize ubo_size = sizeof(ubo);
