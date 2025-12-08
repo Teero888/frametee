@@ -192,6 +192,8 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   }
   if (is_key_combo_pressed(&kb->bindings[ACTION_NEXT_FRAME].combo, true)) {
     ts->is_playing = false;
+    if (ts->dummy_copy_input) interaction_perform_dummy_copy(ui);
+    if (is_key_combo_down(&kb->bindings[ACTION_DUMMY_FIRE].combo)) interaction_perform_dummy_fire(ui);
     model_advance_tick(ts, 1);
   }
   if (is_key_combo_pressed(&kb->bindings[ACTION_INC_TPS].combo, true)) {
