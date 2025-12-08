@@ -684,7 +684,10 @@ void render_players(ui_handler_t *ui) {
   // draw the rest of the lines
   for (int t = 0; t < ui->prediction_length; ++t) {
     for (int i = 0; i < world.m_NumCharacters; ++i) {
-      SPlayerInput input = ui->timeline.recording && i == ui->timeline.selected_player_track_index
+      bool is_selected = (i == ui->timeline.selected_player_track_index);
+      bool is_dummy_copy = ui->timeline.dummy_copy_input && ui->timeline.player_tracks[i].is_dummy;
+
+      SPlayerInput input = (ui->timeline.recording && (is_selected || is_dummy_copy))
                                ? ui->timeline.recording_input
                                : model_get_input_at_tick(&ui->timeline, i, world.m_GameTick);
       cc_on_input(&world.m_pCharacters[i], &input);
