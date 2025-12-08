@@ -562,6 +562,12 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
 
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
+
+    // Only trim the selected track or dummy tracks
+    bool is_selected = (i == ts->selected_player_track_index);
+    bool is_dummy = track->is_dummy;
+    if (!is_selected && !is_dummy) continue;
+
     for (int j = 0; j < track->recording_snippet_count; ++j) {
       input_snippet_t *rec = &track->recording_snippets[j];
       if (!rec) continue;
