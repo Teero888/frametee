@@ -52,7 +52,7 @@ static VkVertexInputAttributeDescription skin_attrib_descs[14];
 
 // atlas things
 static VkVertexInputBindingDescription atlas_binding_desc[2];
-static VkVertexInputAttributeDescription atlas_attrib_descs[6];
+static VkVertexInputAttributeDescription atlas_attrib_descs[8];
 
 static void setup_vertex_descriptions();
 
@@ -1082,7 +1082,7 @@ texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsig
   vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
   texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
-  texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_NEAREST);
+  texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_LINEAR);
   return texture;
 }
 
@@ -1443,6 +1443,10 @@ static void setup_vertex_descriptions() {
                                                                 .offset = offsetof(atlas_instance_t, sprite_index)};
   atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){
       .binding = 1, .location = 5, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(atlas_instance_t, uv_scale)};
+  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 6, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(atlas_instance_t, uv_offset)};
+  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 7, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(atlas_instance_t, tiling)};
 }
 
 // primitive drawing implementation
@@ -1973,14 +1977,12 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
   ar->sprite_definitions = malloc(sizeof(sprite_definition_t) * sprite_count);
   memcpy(ar->sprite_definitions, sprites, sizeof(sprite_definition_t) * sprite_count);
 
-  // create Texture Array from Atlas
   texture_t *source_atlas = renderer_load_texture(h, atlas_path);
   if (!source_atlas) {
     log_error(LOG_SOURCE, "Failed to load source atlas %s for array creation.", atlas_path);
     return;
   }
 
-  // texture arrays require all layers to be the same size. Find the largest sprite to define the layer size.
   uint32_t max_w = 0, max_h = 0;
   for (uint32_t i = 0; i < sprite_count; ++i) {
     if (sprites[i].w > max_w) max_w = sprites[i].w;
@@ -1993,11 +1995,11 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
     return;
   }
 
-  ar->layer_width = max_w;
-  ar->layer_height = max_h;
+  uint32_t padding = 1;
+  ar->layer_width = max_w + padding * 2;
+  ar->layer_height = max_h + padding * 2;
 
-  // create the destination texture array
-  ar->atlas_texture = renderer_create_texture_2d_array(h, max_w, max_h, sprite_count, VK_FORMAT_R8G8B8A8_UNORM);
+  ar->atlas_texture = renderer_create_texture_2d_array(h, ar->layer_width, ar->layer_height, sprite_count, VK_FORMAT_R8G8B8A8_UNORM);
   if (!ar->atlas_texture) {
     log_error(LOG_SOURCE, "Failed to create texture array for atlas %s.", atlas_path);
     renderer_destroy_texture(h, source_atlas);
@@ -2012,27 +2014,70 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ar->atlas_texture->mip_levels, 0,
                           ar->atlas_texture->layer_count);
 
+  VkClearColorValue clearVal = {{0.0f, 0.0f, 0.0f, 0.0f}};
+  VkImageSubresourceRange clearRange = {
+      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = sprite_count};
+  vkCmdClearColorImage(cmd, ar->atlas_texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearVal, 1, &clearRange);
+
+  VkImageMemoryBarrier clear_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                                        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                                        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                        .image = ar->atlas_texture->image,
+                                        .subresourceRange = clearRange};
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &clear_barrier);
+
   for (uint32_t i = 0; i < sprite_count; ++i) {
     const sprite_definition_t *sprite = &sprites[i];
-    VkImageBlit blit = {
+    VkImageBlit center = {
         .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1},
         .srcOffsets[0] = {(int32_t)sprite->x, (int32_t)sprite->y, 0},
         .srcOffsets[1] = {(int32_t)(sprite->x + sprite->w), (int32_t)(sprite->y + sprite->h), 1},
         .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = i, .layerCount = 1},
-        .dstOffsets[0] = {0, 0, 0},
-        .dstOffsets[1] = {(int32_t)ar->layer_width, (int32_t)ar->layer_height, 1},
+        .dstOffsets[0] = {(int32_t)padding, (int32_t)padding, 0},
+        .dstOffsets[1] = {(int32_t)(padding + sprite->w), (int32_t)(padding + sprite->h), 1},
     };
     vkCmdBlitImage(cmd, source_atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ar->atlas_texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                   &blit, VK_FILTER_NEAREST);
+                   &center, VK_FILTER_NEAREST);
+
+    // Top Edge
+    VkImageBlit top = center;
+    top.srcOffsets[1].y = top.srcOffsets[0].y + 1;
+    top.dstOffsets[0].y = 0;
+    top.dstOffsets[1].y = padding;
+    vkCmdBlitImage(cmd, source_atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ar->atlas_texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                   &top, VK_FILTER_NEAREST);
+
+    // Bottom Edge
+    VkImageBlit bottom = center;
+    bottom.srcOffsets[0].y = center.srcOffsets[1].y - 1;
+    bottom.dstOffsets[0].y = padding + sprite->h;
+    bottom.dstOffsets[1].y = padding + sprite->h + padding;
+    vkCmdBlitImage(cmd, source_atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ar->atlas_texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                   &bottom, VK_FILTER_NEAREST);
+
+    // Left Edge
+    VkImageBlit left = center;
+    left.srcOffsets[1].x = left.srcOffsets[0].x + 1;
+    left.dstOffsets[0].x = 0;
+    left.dstOffsets[1].x = padding;
+    vkCmdBlitImage(cmd, source_atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ar->atlas_texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                   &left, VK_FILTER_NEAREST);
+
+    // Right Edge
+    VkImageBlit right = center;
+    right.srcOffsets[0].x = center.srcOffsets[1].x - 1;
+    right.dstOffsets[0].x = padding + sprite->w;
+    right.dstOffsets[1].x = padding + sprite->w + padding;
+    vkCmdBlitImage(cmd, source_atlas->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ar->atlas_texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                   &right, VK_FILTER_NEAREST);
   }
   end_single_time_commands(h, h->renderer.transfer_command_pool, cmd);
 
-  // SHADER_READ_ONLY for rendering
   transition_image_layout(h, h->renderer.transfer_command_pool, source_atlas->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, source_atlas->mip_levels, 0, 1);
 
-  // Generate mipmaps for the atlas array (all layers)
-  // This handles the transition of ar->atlas_texture to SHADER_READ_ONLY_OPTIMAL
   if (!build_mipmaps(h, ar->atlas_texture->image, ar->layer_width, ar->layer_height, ar->atlas_texture->mip_levels, 0,
                      ar->atlas_texture->layer_count)) {
     transition_image_layout(h, h->renderer.transfer_command_pool, ar->atlas_texture->image, VK_FORMAT_R8G8B8A8_UNORM,
@@ -2040,13 +2085,12 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
                             ar->atlas_texture->layer_count);
   }
 
-  renderer_destroy_texture(h, source_atlas); // we don't need the single large atlas texture anymore
+  renderer_destroy_texture(h, source_atlas);
 
   ar->atlas_texture->image_view = create_image_view(h, ar->atlas_texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D_ARRAY,
                                                     ar->atlas_texture->mip_levels, ar->atlas_texture->layer_count);
   ar->atlas_texture->sampler = create_texture_sampler(h, ar->atlas_texture->mip_levels, VK_FILTER_LINEAR);
 
-  // Create a dedicated sampler for this atlas renderer
   VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                                       .magFilter = VK_FILTER_LINEAR,
                                       .minFilter = VK_FILTER_LINEAR,
@@ -2070,7 +2114,6 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
   vkMapMemory(h->g_device, ar->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&ar->instance_ptr);
   ar->instance_count = 0;
 }
-
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar) {
   if (ar->sampler) {
     vkDestroySampler(h->g_device, ar->sampler, h->g_allocator);
@@ -2097,19 +2140,36 @@ void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, flo
     log_error(LOG_SOURCE, "Invalid sprite_index %d for atlas renderer.", sprite_index);
     return;
   }
-
   uint32_t i = ar->instance_count++;
   glm_vec2_copy(pos, ar->instance_ptr[i].pos);
   glm_vec2_copy(size, ar->instance_ptr[i].size);
   ar->instance_ptr[i].rotation = rotation;
-
   ar->instance_ptr[i].sprite_index = (int)sprite_index;
+
+  // uv calc
+  float layer_w = (float)ar->layer_width;
+  float layer_h = (float)ar->layer_height;
+  float sprite_w = (float)ar->sprite_definitions[sprite_index].w;
+  float sprite_h = (float)ar->sprite_definitions[sprite_index].h;
+  float padding = 1.0f; // Matches init function
+
+  // Calculate scaling factors
+  // This ensures 0..1 UV maps exactly to the sprite's content, ignoring padding.
+  ar->instance_ptr[i].uv_scale[0] = sprite_w / layer_w;
+  ar->instance_ptr[i].uv_scale[1] = sprite_h / layer_h;
+
+  // Calculate offsets
+  // Pushes the UVs start point past the transparent padding.
+  ar->instance_ptr[i].uv_offset[0] = padding / layer_w;
+  ar->instance_ptr[i].uv_offset[1] = padding / layer_h;
+
+  // Handle hook chain. hook chain is 1.5 stretched
   if (tile_uv) {
-    ar->instance_ptr[i].uv_scale[0] = size[0] * 1.5f;
-    ar->instance_ptr[i].uv_scale[1] = 1.0f;
+    ar->instance_ptr[i].tiling[0] = (size[0] * 1.5f);
+    ar->instance_ptr[i].tiling[1] = 1.0f;
   } else {
-    ar->instance_ptr[i].uv_scale[0] = 1.0f;
-    ar->instance_ptr[i].uv_scale[1] = 1.0f;
+    ar->instance_ptr[i].tiling[0] = 1.0f;
+    ar->instance_ptr[i].tiling[1] = 1.0f;
   }
 }
 
@@ -2119,7 +2179,7 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
 
   mesh_t *quad = h->quad_mesh;
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 6);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 8);
   if (!pso) return;
 
   primitive_ubo_t ubo;

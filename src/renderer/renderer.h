@@ -151,7 +151,9 @@ typedef struct {
   vec2 size;        // World-space size (width, height)
   float rotation;   // Rotation in radians
   int sprite_index; // Sprite index in the texture array
-  vec2 uv_scale;    // UV scaling to handle non-square sprites in the array
+  vec2 uv_scale;    // Scaling factor (sprite size / layer size)
+  vec2 uv_offset;   // Offset (padding / layer size)
+  vec2 tiling;      // Texture repetition factor
 } atlas_instance_t;
 
 #define MAX_ATLAS_SPRITES 512
