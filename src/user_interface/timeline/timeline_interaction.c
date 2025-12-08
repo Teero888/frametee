@@ -587,7 +587,30 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
 void interaction_switch_recording_target(timeline_state_t *ts, int new_track_index) {
   if (ts->recording && new_track_index >= 0 && new_track_index < ts->player_track_count) {
     ts->selected_player_track_index = new_track_index;
-    // Additional logic for handling recording target switch could go here.
+
+    // Clear active recording targets
+    ts->recording_snippets.count = 0;
+
+    player_track_t *track = &ts->player_tracks[new_track_index];
+
+    // Create a new snippet to record into
+    input_snippet_t new_snippet = {0};
+    new_snippet.id = ts->next_snippet_id++;
+    new_snippet.start_tick = ts->current_tick;
+    new_snippet.end_tick = ts->current_tick;
+    new_snippet.is_active = true;
+    new_snippet.layer = 0;
+
+    // Add it to the recording track
+    model_insert_snippet_into_recording_track(track, &new_snippet);
+
+    // Find the pointer to the newly inserted snippet and add it to our recording list
+    input_snippet_t *recording_target = &track->recording_snippets[track->recording_snippet_count - 1];
+    if (ts->recording_snippets.count >= ts->recording_snippets.capacity) {
+      ts->recording_snippets.capacity = ts->recording_snippets.capacity == 0 ? 4 : ts->recording_snippets.capacity * 2;
+      ts->recording_snippets.snippets = realloc(ts->recording_snippets.snippets, sizeof(input_snippet_t *) * ts->recording_snippets.capacity);
+    }
+    ts->recording_snippets.snippets[ts->recording_snippets.count++] = recording_target;
   }
 }
 
