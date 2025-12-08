@@ -567,7 +567,13 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
       if (!rec) continue;
 
       int trim_to = ts->current_tick;
-      if (trim_to < rec->start_tick) trim_to = rec->start_tick;
+      if (trim_to < rec->start_tick) {
+        model_free_snippet_inputs(rec);
+        memmove(&track->recording_snippets[j], &track->recording_snippets[j + 1], (track->recording_snippet_count - j - 1) * sizeof(input_snippet_t));
+        track->recording_snippet_count--;
+        j--;
+        continue;
+      }
 
       int new_duration = trim_to - rec->start_tick;
       if (new_duration < rec->input_count) {
@@ -581,6 +587,41 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
         j--;
       }
     }
+  }
+
+  // Rebuild the active recording list since pointers might be invalid due to memmove/realloc
+  ts->recording_snippets.count = 0;
+
+  if (ts->selected_player_track_index >= 0 && ts->selected_player_track_index < ts->player_track_count) {
+    player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
+    input_snippet_t *target = NULL;
+
+    // Try to find one that ends exactly at current_tick
+    for (int j = 0; j < track->recording_snippet_count; ++j) {
+      if (track->recording_snippets[j].end_tick == ts->current_tick) {
+        target = &track->recording_snippets[j];
+        break;
+      }
+    }
+
+    if (!target) {
+      // Create new one
+      input_snippet_t new_snippet = {0};
+      new_snippet.id = ts->next_snippet_id++;
+      new_snippet.start_tick = ts->current_tick;
+      new_snippet.end_tick = ts->current_tick;
+      new_snippet.is_active = true;
+      new_snippet.layer = 0;
+      model_insert_snippet_into_recording_track(track, &new_snippet);
+      target = &track->recording_snippets[track->recording_snippet_count - 1];
+    }
+
+    // Add to list
+    if (ts->recording_snippets.count >= ts->recording_snippets.capacity) {
+      ts->recording_snippets.capacity = ts->recording_snippets.capacity == 0 ? 4 : ts->recording_snippets.capacity * 2;
+      ts->recording_snippets.snippets = realloc(ts->recording_snippets.snippets, sizeof(input_snippet_t *) * ts->recording_snippets.capacity);
+    }
+    ts->recording_snippets.snippets[ts->recording_snippets.count++] = target;
   }
 }
 
