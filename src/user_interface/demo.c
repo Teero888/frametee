@@ -2,12 +2,12 @@
 #include "../logger/logger.h"
 #include "../renderer/graphics_backend.h"
 #include "cimgui.h"
-#include <ddnet_physics/collision.h>
-#include <ddnet_physics/gamecore.h>
 #include "nfd.h"
 #include "timeline/timeline_model.h"
 #include "undo_redo.h"
 #include "user_interface.h"
+#include <ddnet_physics/collision.h>
+#include <ddnet_physics/gamecore.h>
 #include <string.h>
 
 #define DDNET_DEMO_IMPLEMENTATION
@@ -314,15 +314,16 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
     if (c_cur->m_ActiveWeapon == WEAPON_NINJA) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_NINJA;
     if (c_cur->m_LiveFrozen) dc->m_Flags |= DD_CHARACTERFLAG_MOVEMENTS_DISABLED;
 
-    dc->m_FreezeEnd = c_cur->m_DeepFrozen ? -1 : c_cur->m_FreezeTime == 0 ? 0 : cur->m_GameTick + c_cur->m_FreezeTime;
-
     dc->m_Jumps = c_cur->m_Jumps;
     dc->m_TeleCheckpoint = c_cur->m_TeleCheckpoint;
     dc->m_StrongWeakId = 0; // pCharacter->m_StrongWeakId;
     dc->m_JumpedTotal = c_cur->m_JumpedTotal;
     dc->m_NinjaActivationTick = c_cur->m_Ninja.m_ActivationTick;
+
     dc->m_FreezeStart = c_cur->m_FreezeStart;
-    if (c_cur->m_FreezeTime > 0) {
+    dc->m_FreezeEnd = c_cur->m_DeepFrozen ? -1 : c_cur->m_FreezeTime == 0 ? 0 : cur->m_GameTick + c_cur->m_FreezeTime;
+
+    if (c_cur->m_IsInFreeze) {
       dc->m_Flags |= DD_CHARACTERFLAG_IN_FREEZE;
     }
     dc->m_TargetX = c_cur->m_Input.m_TargetX;
