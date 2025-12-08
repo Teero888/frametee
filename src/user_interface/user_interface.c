@@ -687,9 +687,24 @@ void render_players(ui_handler_t *ui) {
       bool is_selected = (i == ui->timeline.selected_player_track_index);
       bool is_dummy_copy = ui->timeline.dummy_copy_input && ui->timeline.player_tracks[i].is_dummy;
 
-      SPlayerInput input = (ui->timeline.recording && (is_selected || is_dummy_copy))
-                               ? ui->timeline.recording_input
-                               : model_get_input_at_tick(&ui->timeline, i, world.m_GameTick);
+      SPlayerInput input;
+      if (ui->timeline.recording && is_selected) {
+        input = ui->timeline.recording_input;
+      } else if (ui->timeline.recording && is_dummy_copy) {
+        input = ui->timeline.recording_input;
+        int flags = ui->timeline.player_tracks[i].dummy_copy_flags;
+        if (!(flags & COPY_DIRECTION)) input.m_Direction = 0;
+        if (!(flags & COPY_TARGET)) {
+          input.m_TargetX = 0;
+          input.m_TargetY = 0;
+        }
+        if (!(flags & COPY_JUMP)) input.m_Jump = 0;
+        if (!(flags & COPY_FIRE)) input.m_Fire = 0;
+        if (!(flags & COPY_HOOK)) input.m_Hook = 0;
+        if (!(flags & COPY_WEAPON)) input.m_WantedWeapon = 0;
+      } else {
+        input = model_get_input_at_tick(&ui->timeline, i, world.m_GameTick);
+      }
       cc_on_input(&world.m_pCharacters[i], &input);
     }
     wc_tick(&world);
@@ -742,7 +757,7 @@ void ui_render(ui_handler_t *ui) {
   // Render the demo window/popup logic
   render_demo_window(ui);
 
-  keybinds_render_settings_window(&ui->keybinds);
+  keybinds_render_settings_window(ui);
   if (ui->show_skin_browser) render_skin_browser(ui->gfx_handler);
 }
 

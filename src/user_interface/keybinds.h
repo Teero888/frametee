@@ -86,7 +86,7 @@ typedef struct {
 
 void keybinds_init(keybind_manager_t *manager);
 void keybinds_process_inputs(ui_handler_t *ui);
-void keybinds_render_settings_window(keybind_manager_t *manager);
+void keybinds_render_settings_window(ui_handler_t *ui);
 const char *keybind_get_combo_string(const key_combo_t *combo);
 
 bool is_key_combo_pressed(const key_combo_t *combo, bool repeat);

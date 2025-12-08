@@ -166,18 +166,16 @@ void renderer_draw_header_and_playhead(timeline_state_t *ts, ImDrawList *draw_li
     ImDrawList_AddText_Vec2(draw_list, text_pos, tick_text_col, label, NULL);
   }
 
-  // Draw Playhead (integrated from previous logic)
   float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, header_bb.Min.x);
   if (playhead_x >= header_bb.Min.x && playhead_x <= header_bb.Max.x) {
-    ImDrawList *overlay = igGetForegroundDrawList_WindowPtr(igGetCurrentWindow());
-    ImDrawList_AddLine(overlay, (ImVec2){playhead_x, header_bb.Max.y - 1.0}, (ImVec2){playhead_x, window_bottom_y},
-                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f);
     ImVec2 head_bottom = {playhead_x + 0.5, header_bb.Max.y + 0.5};
     ImVec2 head_top_left = {(head_bottom.x - 6) + 0.5, head_bottom.y - 10 + 0.5};
     ImVec2 head_top_right = {(head_bottom.x + 6) - 0.5, head_bottom.y - 10 + 0.5};
-    ImDrawList_AddTriangleFilled(overlay, head_top_left, head_top_right, head_bottom, igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f));
+    ImDrawList_AddTriangleFilled(draw_list, head_top_left, head_top_right, head_bottom, igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f));
   }
 }
+
+
 
 void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   float track_header_width = 120.0f;
@@ -225,6 +223,33 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
         }
       }
 
+      if (igBeginPopupContextItem("TrackSettings", 1)) {
+        if (track->is_dummy) {
+          igText("Copy Settings");
+          igSeparator();
+          int flags = track->dummy_copy_flags;
+          bool dir = (flags & COPY_DIRECTION) != 0;
+          bool target = (flags & COPY_TARGET) != 0;
+          bool jump = (flags & COPY_JUMP) != 0;
+          bool fire = (flags & COPY_FIRE) != 0;
+          bool hook = (flags & COPY_HOOK) != 0;
+          bool weapon = (flags & COPY_WEAPON) != 0;
+
+          if (igCheckbox("Direction", &dir)) flags ^= COPY_DIRECTION;
+          if (igCheckbox("Target", &target)) flags ^= COPY_TARGET;
+          if (igCheckbox("Jump", &jump)) flags ^= COPY_JUMP;
+          if (igCheckbox("Fire", &fire)) flags ^= COPY_FIRE;
+          if (igCheckbox("Hook", &hook)) flags ^= COPY_HOOK;
+          if (igCheckbox("Weapon", &weapon)) flags ^= COPY_WEAPON;
+
+          track->dummy_copy_flags = flags;
+        } else {
+          igTextDisabled("Not a dummy track");
+          igTextDisabled("Double-click header to toggle");
+        }
+        igEndPopup();
+      }
+
       igPopID();
 
       // Render Track Snippets (Right)
@@ -240,6 +265,12 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   }
   ImGuiListClipper_End(clipper);
   ImGuiListClipper_destroy(clipper);
+
+  float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, timeline_bb.Min.x);
+  if (playhead_x >= timeline_bb.Min.x && playhead_x <= timeline_bb.Max.x) {
+    ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, timeline_bb.Min.y}, (ImVec2){playhead_x, timeline_bb.Max.y},
+                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f);
+  }
 }
 
 void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRect timeline_bb, float tracks_area_scroll_y) {

@@ -26,6 +26,16 @@ typedef struct {
   int input_count;
 } input_snippet_t;
 
+typedef enum {
+  COPY_DIRECTION = 1 << 0,
+  COPY_TARGET = 1 << 1,
+  COPY_JUMP = 1 << 2,
+  COPY_FIRE = 1 << 3,
+  COPY_HOOK = 1 << 4,
+  COPY_WEAPON = 1 << 5,
+  COPY_ALL = 0xFFFF
+} dummy_copy_flags_t;
+
 typedef struct {
   input_snippet_t *snippets;
   int snippet_count;
@@ -38,6 +48,7 @@ typedef struct {
 
   player_info_t player_info;
   bool is_dummy;
+  int dummy_copy_flags;
 } player_track_t;
 
 typedef struct {
@@ -71,6 +82,12 @@ typedef struct {
 
 typedef struct ui_handler ui_handler_t;
 
+typedef enum {
+  DUMMY_ACTION_COPY,
+  DUMMY_ACTION_FIRE,
+  DUMMY_ACTION_COUNT
+} dummy_action_type_t;
+
 typedef struct timeline_state {
   // View State
   float zoom;
@@ -88,6 +105,7 @@ typedef struct timeline_state {
   bool is_reversing;
   SPlayerInput recording_input;
   bool dummy_copy_input;
+  dummy_action_type_t dummy_action_priority[DUMMY_ACTION_COUNT];
 
   // Data Model
   player_track_t *player_tracks;

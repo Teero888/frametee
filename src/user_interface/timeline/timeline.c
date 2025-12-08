@@ -28,11 +28,11 @@ void render_timeline(ui_handler_t *ui) {
     ImDrawList *draw_list = igGetWindowDrawList();
     ImDrawList *overlay_draw_list = igGetForegroundDrawList_WindowPtr(igGetCurrentWindow());
 
-    // 1. Render top controls
+    // Render top controls
     renderer_draw_controls(ts);
     igSeparator();
 
-    // 2. Calculate layout for header and tracks area
+    // Calculate layout for header and tracks area
     float header_height = igGetTextLineHeightWithSpacing() * 2.0f;
     float track_header_width = 120.0f;
     ImVec2 content_start_pos;
@@ -46,33 +46,33 @@ void render_timeline(ui_handler_t *ui) {
     // Bounding box for the main snippet area (RHS)
     ImRect timeline_bb = {{header_bb.Min.x, header_bb.Max.y}, {header_bb.Max.x, content_start_pos.y + available_space.y}};
 
-    // 3. Handle header interaction and render it
+    // Handle header interaction and render it
     interaction_handle_header(ts, header_bb);
     renderer_draw_header_and_playhead(ts, draw_list, header_bb, content_start_pos.y + available_space.y);
     igDummy((ImVec2){0, header_height}); // Advance cursor
 
-    // 4. Create a child window for the vertically scrollable track area
+    // Create a child window for the vertically scrollable track area
     ImVec2 tracks_area_pos;
     igGetCursorScreenPos(&tracks_area_pos);
     igBeginChild_Str("TracksArea", (ImVec2){available_space.x, timeline_bb.Max.y - timeline_bb.Min.y}, false, ImGuiWindowFlags_NoScrollWithMouse);
 
     float tracks_scroll_y = igGetScrollY();
 
-    // 5. Render the track headers and snippets inside the child window
+    // Render the track headers and snippets inside the child window
     renderer_draw_tracks_area(ts, timeline_bb);
 
-    // 6. Handle mouse interactions for the main timeline area (panning, selection, drag-drop)
+    // Handle mouse interactions for the main timeline area (panning, selection, drag-drop)
     interaction_handle_timeline_area(ts, timeline_bb, tracks_scroll_y);
 
-    // 7. Handle context menu
-    if (igIsMouseReleased_Nil(ImGuiMouseButton_Right) && igIsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
+    // Handle context menu
+    if (igIsMouseReleased_Nil(ImGuiMouseButton_Right) && igIsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !igIsAnyItemHovered()) {
       igOpenPopup_Str("TimelineContextMenu", 0);
     }
     interaction_handle_context_menu(ts);
 
     igEndChild();
 
-    // 8. Render overlays (drag preview, selection box)
+    // Render overlays (drag preview, selection box)
     renderer_draw_selection_box(ts, overlay_draw_list);
     renderer_draw_drag_preview(ts, overlay_draw_list, timeline_bb, tracks_scroll_y);
 

@@ -192,8 +192,7 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   }
   if (is_key_combo_pressed(&kb->bindings[ACTION_NEXT_FRAME].combo, true)) {
     ts->is_playing = false;
-    if (ts->dummy_copy_input) interaction_perform_dummy_copy(ui);
-    if (is_key_combo_down(&kb->bindings[ACTION_DUMMY_FIRE].combo)) interaction_perform_dummy_fire(ui);
+    interaction_apply_dummy_inputs(ui);
     model_advance_tick(ts, 1);
   }
   if (is_key_combo_pressed(&kb->bindings[ACTION_INC_TPS].combo, true)) {
@@ -238,7 +237,8 @@ static void render_keybind_button(keybind_manager_t *manager, action_t action_id
   igPopID();
 }
 
-void keybinds_render_settings_window(keybind_manager_t *manager) {
+void keybinds_render_settings_window(ui_handler_t *ui) {
+  keybind_manager_t *manager = &ui->keybinds;
   if (!manager->show_settings_window) return;
 
   igSetNextWindowSize((ImVec2){600, 500}, ImGuiCond_FirstUseEver);
@@ -289,6 +289,32 @@ void keybinds_render_settings_window(keybind_manager_t *manager) {
         if (igBeginTable("KeybindsTable", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg, (ImVec2){0, 0}, 0)) {
           igTableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
           igTableSetupColumn("Binding", ImGuiTableColumnFlags_WidthFixed, 240.0f, 0);
+
+          if (strcmp(current_category, "Dummy") == 0) {
+            igTableNextRow(0, 0);
+            igTableSetColumnIndex(0);
+            igText("Action Priority (Top = First, Bottom = Last/Overwrites)");
+            for (int i = 0; i < DUMMY_ACTION_COUNT; ++i) {
+              igPushID_Int(1000 + i);
+              dummy_action_type_t action = ui->timeline.dummy_action_priority[i];
+              const char *name = (action == DUMMY_ACTION_COPY) ? "Copy Input" : "Dummy Fire";
+              igText("  %d. %s", i + 1, name);
+              igSameLine(0, 10);
+              if (i > 0 && igArrowButton("##up", ImGuiDir_Up)) {
+                dummy_action_type_t temp = ui->timeline.dummy_action_priority[i];
+                ui->timeline.dummy_action_priority[i] = ui->timeline.dummy_action_priority[i - 1];
+                ui->timeline.dummy_action_priority[i - 1] = temp;
+              }
+              igSameLine(0, 10);
+              if (i < DUMMY_ACTION_COUNT - 1 && igArrowButton("##down", ImGuiDir_Down)) {
+                dummy_action_type_t temp = ui->timeline.dummy_action_priority[i];
+                ui->timeline.dummy_action_priority[i] = ui->timeline.dummy_action_priority[i + 1];
+                ui->timeline.dummy_action_priority[i + 1] = temp;
+              }
+              igPopID();
+            }
+            igSeparator();
+          }
 
           for (int i = 0; i < ACTION_COUNT; i++) {
             keybind_t *binding = &manager->bindings[i];

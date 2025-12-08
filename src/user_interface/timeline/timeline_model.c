@@ -37,6 +37,9 @@ void model_init(timeline_state_t *ts, ui_handler_t *ui) {
   ts->drag_state.drag_infos = NULL;
   ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
 
+  ts->dummy_action_priority[0] = DUMMY_ACTION_COPY;
+  ts->dummy_action_priority[1] = DUMMY_ACTION_FIRE;
+
   snippet_id_vector_init(&ts->selected_snippets);
 }
 

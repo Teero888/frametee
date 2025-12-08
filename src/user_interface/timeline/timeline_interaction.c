@@ -48,7 +48,7 @@ static void apply_input_to_recording_buffer(timeline_state_t *ts, player_track_t
   }
 }
 
-void interaction_perform_dummy_fire(ui_handler_t *ui) {
+void interaction_apply_dummy_inputs(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (!ts->recording || ts->selected_player_track_index == -1) return;
 
@@ -63,6 +63,8 @@ void interaction_perform_dummy_fire(ui_handler_t *ui) {
   mvec2 recording_pos = recording_char->m_Pos;
   int tick = ts->current_tick;
 
+  bool dummy_fire_active = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_DUMMY_FIRE].combo);
+
   for (int i = 0; i < ts->player_track_count; ++i) {
     if (i == ts->selected_player_track_index) continue;
     player_track_t *track = &ts->player_tracks[i];
@@ -71,31 +73,39 @@ void interaction_perform_dummy_fire(ui_handler_t *ui) {
     SCharacterCore *dummy_char = &world.m_pCharacters[i];
     mvec2 dummy_pos = dummy_char->m_Pos;
 
-    SPlayerInput dummy_input = {0};
-    dummy_input.m_Fire = 1;
-    dummy_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
-    dummy_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
+    SPlayerInput final_input = {0};
+    bool input_modified = false;
 
-    apply_input_to_recording_buffer(ts, track, tick, &dummy_input);
+    for (int action_idx = 0; action_idx < DUMMY_ACTION_COUNT; ++action_idx) {
+      dummy_action_type_t action = ts->dummy_action_priority[action_idx];
+
+      if (action == DUMMY_ACTION_COPY && ts->dummy_copy_input) {
+        SPlayerInput copy_input = ts->recording_input;
+        
+        if (track->dummy_copy_flags & COPY_DIRECTION) { final_input.m_Direction = copy_input.m_Direction; input_modified = true; }
+        if (track->dummy_copy_flags & COPY_TARGET) { 
+          final_input.m_TargetX = copy_input.m_TargetX; 
+          final_input.m_TargetY = copy_input.m_TargetY; 
+          input_modified = true; 
+        }
+        if (track->dummy_copy_flags & COPY_JUMP) { final_input.m_Jump = copy_input.m_Jump; input_modified = true; }
+        if (track->dummy_copy_flags & COPY_FIRE) { final_input.m_Fire = copy_input.m_Fire; input_modified = true; }
+        if (track->dummy_copy_flags & COPY_HOOK) { final_input.m_Hook = copy_input.m_Hook; input_modified = true; }
+        if (track->dummy_copy_flags & COPY_WEAPON) { final_input.m_WantedWeapon = copy_input.m_WantedWeapon; input_modified = true; }
+      }
+      else if (action == DUMMY_ACTION_FIRE && dummy_fire_active) {
+        final_input.m_Fire = 1;
+        final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
+        final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
+        input_modified = true;
+      }
+    }
+
+    if (input_modified) {
+      apply_input_to_recording_buffer(ts, track, tick, &final_input);
+    }
   }
   wc_free(&world);
-  model_recalc_physics(ts, tick);
-}
-
-void interaction_perform_dummy_copy(ui_handler_t *ui) {
-  timeline_state_t *ts = &ui->timeline;
-  if (!ts->recording || ts->selected_player_track_index == -1) return;
-
-  int tick = ts->current_tick;
-
-  for (int i = 0; i < ts->player_track_count; ++i) {
-    if (i == ts->selected_player_track_index) continue;
-    player_track_t *track = &ts->player_tracks[i];
-    if (!track->is_dummy) continue;
-
-    SPlayerInput dummy_input = ts->recording_input;
-    apply_input_to_recording_buffer(ts, track, tick, &dummy_input);
-  }
   model_recalc_physics(ts, tick);
 }
 
@@ -113,8 +123,6 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   ts->is_reversing = reverse_down;
   if (ts->is_reversing) ts->is_playing = false;
 
-  bool dummy_fire_is_down = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_DUMMY_FIRE].combo);
-
   // Playback tick advancement
   if ((ts->is_playing || ts->is_reversing) && ts->playback_speed > 0) {
     double now = igGetTime();
@@ -128,9 +136,7 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     if (steps > 0) {
       for (int i = 0; i < steps; ++i) {
         if (dir > 0) {
-          // make sure dummy fire overrides dummy copy
-          if (ts->dummy_copy_input) interaction_perform_dummy_copy(ts->ui);
-          if (dummy_fire_is_down) interaction_perform_dummy_fire(ts->ui);
+          interaction_apply_dummy_inputs(ts->ui);
         }
         model_advance_tick(ts, dir);
       }
