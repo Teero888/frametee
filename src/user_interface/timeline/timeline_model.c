@@ -504,13 +504,8 @@ SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index
     for (int i = 0; i < track->recording_snippet_count; ++i) {
       const input_snippet_t *snippet = &track->recording_snippets[i];
       if (snippet->is_active) {
-        if (tick >= snippet->start_tick && tick < snippet->end_tick) {
-          // Input found within the active recording snippet
-          return snippet->inputs[tick - snippet->start_tick];
-        }
-
-        // Check if this snippet contains a later input than the current 'last_valid_input'
-        if (snippet->end_tick - 1 > last_input_tick) {
+        if (tick >= snippet->start_tick && tick < snippet->end_tick) return snippet->inputs[tick - snippet->start_tick];
+        if (snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
           last_input_tick = snippet->end_tick - 1;
           last_valid_input = snippet->inputs[snippet->input_count - 1];
         }
@@ -522,19 +517,14 @@ SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index
   for (int i = 0; i < track->snippet_count; ++i) {
     const input_snippet_t *snippet = &track->snippets[i];
     if (snippet->is_active) {
-      if (tick >= snippet->start_tick && tick < snippet->end_tick) {
-        // Input found within the active regular snippet
-        return snippet->inputs[tick - snippet->start_tick];
-      }
-
-      // Check if this snippet contains a later input than the current 'last_valid_input'
-      if (snippet->end_tick - 1 > last_input_tick) {
+      if (tick >= snippet->start_tick && tick < snippet->end_tick) return snippet->inputs[tick - snippet->start_tick];
+      if (snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
         last_input_tick = snippet->end_tick - 1;
-        last_valid_input = snippet->inputs[snippet->end_tick - 1 - snippet->start_tick];
+        last_valid_input = snippet->inputs[snippet->input_count - 1];
       }
     }
   }
-  // If the tick is past the last input tick, return the last valid input found.
+
   if (tick > last_input_tick && last_input_tick != -1) return last_valid_input;
   return (SPlayerInput){.m_TargetY = -1};
 }

@@ -1,6 +1,7 @@
 #include "player_info.h"
 #include "../renderer/graphics_backend.h"
 #include "cimgui.h"
+#include "ddnet_physics/vmath.h"
 #include "widgets/hsl_colorpicker.h"
 #include <string.h>
 
@@ -22,6 +23,7 @@ void render_player_info(gfx_handler_t *h) {
     igInputText("Name", player_info->name, 16, 0, NULL, NULL);
     igInputText("Clan", player_info->clan, 12, 0, NULL, NULL);
     igInputInt("Skin Id", &player_info->skin, 1, 1, 0);
+    player_info->skin = iclamp(player_info->skin, 0, MAX_SKINS - 1);
     igCheckbox("Use custom color", &player_info->use_custom_color);
     if (player_info->use_custom_color) {
       PackedHSLPicker("Color body", &player_info->color_body);

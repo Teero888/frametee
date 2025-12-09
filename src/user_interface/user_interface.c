@@ -489,6 +489,7 @@ void render_players(ui_handler_t *ui) {
       const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
       float fire_delay_ticks = spec->firedelay * (float)GAME_TICK_SPEED / 1000.0f;
       float attack_ticks_passed = (world.m_GameTick - core->m_AttackTick) + intra;
+      float last_attack_time = attack_ticks_passed / (float)GAME_TICK_SPEED;
       float aim_angle = atan2f(-dir[1], dir[0]);
 
       bool is_sit = inactive && !in_air && stationary;
@@ -517,7 +518,7 @@ void render_players(ui_handler_t *ui) {
         if (is_sit) weapon_pos[1] += 3.0f;
 
         if (!inactive) {
-          anim_state_add(&anim_state, &anim_hammer_swing, (float)attack_ticks_passed / fire_delay_ticks, 1.0f);
+          anim_state_add(&anim_state, &anim_hammer_swing, last_attack_time * 5.f, 1.0f);
           anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
           weapon_angle = M_PI / 2.0f - flip_factor * anim_attach_angle_rad;
         } else {
@@ -530,7 +531,7 @@ void render_players(ui_handler_t *ui) {
         if (dir[0] < 0.0f) weapon_pos[0] -= spec->offsetx;
 
         if (attack_ticks_passed <= fire_delay_ticks) {
-          anim_state_add(&anim_state, &anim_ninja_swing, (float)attack_ticks_passed / fire_delay_ticks, 1.0f);
+          anim_state_add(&anim_state, &anim_ninja_swing, last_attack_time * 2.f, 1.0f);
         }
 
         anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
@@ -580,7 +581,7 @@ void render_players(ui_handler_t *ui) {
 
         float recoil = 0.0f;
         float a = attack_ticks_passed / 5.0f;
-        if (attack_ticks_passed > 0 && a < 1.0f) recoil = sinf(a * M_PI);
+        if (a < 1.0f) recoil = sinf(a * M_PI);
 
         weapon_pos[0] += dir[0] * (spec->offsetx - recoil * 10.0f);
         weapon_pos[1] += dir[1] * (spec->offsetx - recoil * 10.0f);
