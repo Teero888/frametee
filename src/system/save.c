@@ -77,44 +77,41 @@ static bool write_map_data(FILE *f, physics_handler_t *ph) {
 }
 
 static bool write_skin_data(FILE *f, ui_handler_t *ui) {
-  renderer_state_t *renderer = &ui->gfx_handler->renderer;
   skin_manager_t *sm = &ui->skin_manager;
 
   for (int i = 0; i < sm->num_skins; i++) {
     skin_info_t *skin_info = &sm->skins[i];
-    texture_t *texture = &renderer->textures[skin_info->id];
 
-    if (!texture || !texture->active || strlen(texture->path) == 0) {
-      log_warn(LOG_SOURCE, "Skipping invalid skin with id %d", skin_info->id);
-      continue;
+    if (!skin_info->data || skin_info->data_size == 0) {
+      // Try to load from path if data is missing (legacy/fallback)
+      if (strlen(skin_info->path) > 0) {
+        FILE *skin_file = fopen(skin_info->path, "rb");
+        if (skin_file) {
+          fseek(skin_file, 0, SEEK_END);
+          long texture_size = ftell(skin_file);
+          fseek(skin_file, 0, SEEK_SET);
+          skin_info->data = malloc(texture_size);
+          if (skin_info->data) {
+            fread(skin_info->data, texture_size, 1, skin_file);
+            skin_info->data_size = texture_size;
+          }
+          fclose(skin_file);
+        }
+      }
     }
 
-    FILE *skin_file = fopen(texture->path, "rb");
-    if (!skin_file) {
-      log_warn(LOG_SOURCE, "Could not open skin file for reading: '%s'", texture->path);
+    if (!skin_info->data || skin_info->data_size == 0) {
+      log_warn(LOG_SOURCE, "Skipping skin %d ('%s'): No data found.", skin_info->id, skin_info->name);
       continue;
     }
-
-    fseek(skin_file, 0, SEEK_END);
-    long texture_size = ftell(skin_file);
-    fseek(skin_file, 0, SEEK_SET);
-    unsigned char *texture_data = malloc(texture_size);
-    if (!texture_data) {
-      fclose(skin_file);
-      continue;
-    }
-    fread(texture_data, texture_size, 1, skin_file);
-    fclose(skin_file);
 
     skin_file_header_t skin_header;
     skin_header.id = skin_info->id;
     strncpy(skin_header.name, skin_info->name, sizeof(skin_header.name) - 1);
-    skin_header.texture_data_size = texture_size;
+    skin_header.texture_data_size = skin_info->data_size;
 
     fwrite(&skin_header, sizeof(skin_file_header_t), 1, f);
-    fwrite(texture_data, texture_size, 1, f);
-
-    free(texture_data);
+    fwrite(skin_info->data, skin_info->data_size, 1, f);
   }
   return true;
 }
@@ -123,6 +120,8 @@ static bool write_timeline_data(FILE *f, timeline_state_t *ts) {
   // write player info for each track
   for (int i = 0; i < ts->player_track_count; i++) {
     fwrite(&ts->player_tracks[i].player_info, sizeof(player_info_t), 1, f);
+    fwrite(&ts->player_tracks[i].is_dummy, sizeof(bool), 1, f);
+    fwrite(&ts->player_tracks[i].dummy_copy_flags, sizeof(int), 1, f);
   }
 
   // write snippet data
@@ -246,7 +245,11 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
 
     skin_info_t info = {};
     int loaded_id = renderer_load_skin_from_memory(ui->gfx_handler, texture_data, skin_header.texture_data_size, &info.preview_texture_res);
-    free(texture_data);
+    
+    // Store the data in the info structure for future saves
+    info.data = texture_data;
+    info.data_size = skin_header.texture_data_size;
+
     if (loaded_id >= 0) {
       info.id = loaded_id;
       strncpy(info.name, skin_header.name, sizeof(info.name) - 1);
@@ -255,6 +258,8 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
             info.preview_texture_res->sampler, info.preview_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
       }
       skin_manager_add(&ui->skin_manager, &info);
+    } else {
+        free(texture_data);
     }
   }
   return true;
@@ -266,6 +271,8 @@ static bool read_and_load_timeline(FILE *f, ui_handler_t *ui) {
   // read player info
   for (int i = 0; i < ts->player_track_count; i++) {
     if (fread(&ts->player_tracks[i].player_info, sizeof(player_info_t), 1, f) != 1) return false;
+    if (fread(&ts->player_tracks[i].is_dummy, sizeof(bool), 1, f) != 1) return false;
+    if (fread(&ts->player_tracks[i].dummy_copy_flags, sizeof(int), 1, f) != 1) return false;
     // add characters to the physics world
     if (!wc_add_character(&ui->gfx_handler->physics_handler.world, 1)) {
       log_error(LOG_SOURCE, "Failed to add character '%s'", ts->player_tracks[i].player_info.name);

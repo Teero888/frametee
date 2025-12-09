@@ -1955,10 +1955,6 @@ int renderer_load_skin_from_file(gfx_handler_t *h, const char *path, texture_t *
   fclose(f);
   int id = renderer_load_skin_from_memory(h, buffer, size, out_preview_texture);
   free(buffer);
-  if (id >= 0) {
-    // Store path for saving later
-    strncpy(h->renderer.textures[id].path, path, sizeof(h->renderer.textures[id].path) - 1);
-  }
   return id;
 }
 

@@ -45,6 +45,9 @@ void skin_manager_init(skin_manager_t *m) {
 void skin_manager_free(skin_manager_t *m) {
   if (!m) return;
   if (m->skins) {
+    for (int i = 0; i < m->num_skins; i++) {
+      if (m->skins[i].data) free(m->skins[i].data);
+    }
     free(m->skins);
   }
   m->skins = NULL;
@@ -72,6 +75,9 @@ int skin_manager_remove(skin_manager_t *m, gfx_handler_t *h, int index) {
     // The ImTextureID associated with this doesn't need manual cleanup,
     // ImGui's Vulkan backend handles it when the texture is destroyed.
     renderer_destroy_texture(h, m->skins[index].preview_texture_res);
+  }
+  if (m->skins[index].data) {
+    free(m->skins[index].data);
   }
   // shift elements down
   for (int i = index; i < m->num_skins - 1; i++) {

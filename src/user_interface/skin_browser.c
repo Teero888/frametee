@@ -7,6 +7,8 @@
 #include "stb_image.h"
 #include "stb_image_resize2.h"
 #include "widgets/imcol.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *LOG_SOURCE = "SkinBrowser";
@@ -32,28 +34,50 @@ void render_skin_browser(gfx_handler_t *h) {
         nfdchar_t *path;
         NFD_PathSet_GetPathU8(path_set, i, &path);
 
-        skin_info_t info = {0};
-        info.id = renderer_load_skin_from_file(h, path, &info.preview_texture_res);
+        FILE *f = fopen(path, "rb");
+        if (f) {
+          fseek(f, 0, SEEK_END);
+          size_t file_size = ftell(f);
+          fseek(f, 0, SEEK_SET);
+          unsigned char *buffer = malloc(file_size);
+          if (buffer) {
+            if (fread(buffer, 1, file_size, f) == file_size) {
+              skin_info_t info = {0};
+              info.id = renderer_load_skin_from_memory(h, buffer, file_size, &info.preview_texture_res);
 
-        if (info.id >= 0 && info.preview_texture_res) {
-          info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
-              info.preview_texture_res->sampler, info.preview_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+              if (info.id >= 0 && info.preview_texture_res) {
+                info.data = buffer;
+                info.data_size = file_size;
 
-          const char *skin_name = strrchr(path, '/');
-          if (!skin_name) skin_name = strrchr(path, '\\');
-          skin_name = skin_name ? skin_name + 1 : path;
+                info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
+                    info.preview_texture_res->sampler, info.preview_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
 
-          // idk if overwriting path is bad so we will make a copy
-          char temp_name[32];
-          strncpy(temp_name, skin_name, sizeof(temp_name) - 1);
-          temp_name[sizeof(temp_name) - 1] = '\0';
-          char *ext = strrchr(temp_name, '.');
-          if (ext) *ext = '\0';
+                const char *skin_name = strrchr(path, '/');
+                if (!skin_name) skin_name = strrchr(path, '\\');
+                skin_name = skin_name ? skin_name + 1 : path;
 
-          strncpy(info.name, temp_name, sizeof(info.name) - 1);
-          info.name[sizeof(info.name) - 1] = '\0';
+                // idk if overwriting path is bad so we will make a copy
+                char temp_name[32];
+                strncpy(temp_name, skin_name, sizeof(temp_name) - 1);
+                temp_name[sizeof(temp_name) - 1] = '\0';
+                char *ext = strrchr(temp_name, '.');
+                if (ext) *ext = '\0';
 
-          skin_manager_add(m, &info);
+                strncpy(info.name, temp_name, sizeof(info.name) - 1);
+                info.name[sizeof(info.name) - 1] = '\0';
+
+                strncpy(info.path, path, sizeof(info.path) - 1);
+                info.path[sizeof(info.path) - 1] = '\0';
+
+                skin_manager_add(m, &info);
+              } else {
+                free(buffer);
+              }
+            } else {
+              free(buffer);
+            }
+          }
+          fclose(f);
         }
       }
       NFD_PathSet_Free(path_set);

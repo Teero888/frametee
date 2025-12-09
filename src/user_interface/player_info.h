@@ -17,6 +17,9 @@ typedef struct {
 
 typedef struct {
   char name[24];
+  char path[512];
+  void *data;
+  size_t data_size;
   int id;
   texture_t *preview_texture_res;
   ImTextureRef *preview_texture;
