@@ -496,21 +496,46 @@ void model_recalc_physics(timeline_state_t *ts, int tick) {
 
 SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
   const player_track_t *track = &ts->player_tracks[track_index];
+  SPlayerInput last_valid_input = {.m_TargetY = -1};
+  int last_input_tick = -1; // Keep track of the tick of the last valid input found
 
   // Prioritize recording snippets
   if (ts->recording) {
     for (int i = 0; i < track->recording_snippet_count; ++i) {
       const input_snippet_t *snippet = &track->recording_snippets[i];
-      if (snippet->is_active && tick >= snippet->start_tick && tick < snippet->end_tick) {
-        return snippet->inputs[tick - snippet->start_tick];
+      if (snippet->is_active) {
+        if (tick >= snippet->start_tick && tick < snippet->end_tick) {
+          // Input found within the active recording snippet
+          return snippet->inputs[tick - snippet->start_tick];
+        }
+
+        // Check if this snippet contains a later input than the current 'last_valid_input'
+        if (snippet->end_tick - 1 > last_input_tick) {
+          last_input_tick = snippet->end_tick - 1;
+          last_valid_input = snippet->inputs[snippet->end_tick - 1 - snippet->start_tick];
+        }
       }
     }
   }
 
+  // Check regular snippets
   for (int i = 0; i < track->snippet_count; ++i) {
     const input_snippet_t *snippet = &track->snippets[i];
-    if (snippet->is_active && tick >= snippet->start_tick && tick < snippet->end_tick) return snippet->inputs[tick - snippet->start_tick];
+    if (snippet->is_active) {
+      if (tick >= snippet->start_tick && tick < snippet->end_tick) {
+        // Input found within the active regular snippet
+        return snippet->inputs[tick - snippet->start_tick];
+      }
+
+      // Check if this snippet contains a later input than the current 'last_valid_input'
+      if (snippet->end_tick - 1 > last_input_tick) {
+        last_input_tick = snippet->end_tick - 1;
+        last_valid_input = snippet->inputs[snippet->end_tick - 1 - snippet->start_tick];
+      }
+    }
   }
+  // If the tick is past the last input tick, return the last valid input found.
+  if (tick > last_input_tick && last_input_tick != -1) return last_valid_input;
   return (SPlayerInput){.m_TargetY = -1};
 }
 
