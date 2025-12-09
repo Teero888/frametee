@@ -311,6 +311,7 @@ player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
   for (int i = 0; i < num; i++) {
     player_track_t *new_track = &ts->player_tracks[old_count + i];
     memset(new_track, 0, sizeof(player_track_t));
+    new_track->dummy_copy_flags = COPY_ALL;
   }
 
   ts->player_track_count = new_count;

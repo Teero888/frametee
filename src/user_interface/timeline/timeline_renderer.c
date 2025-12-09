@@ -185,7 +185,6 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   float total_row_height = ts->track_height + igGetStyle()->ItemSpacing.y;
   ImGuiListClipper_Begin(clipper, ts->player_track_count, total_row_height);
   while (ImGuiListClipper_Step(clipper)) {
-    igDummy((ImVec2){0.0f, (clipper->DisplayStart) * total_row_height});
     for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; i++) {
       ImVec2 row_start_pos;
       igGetCursorScreenPos(&row_start_pos);
