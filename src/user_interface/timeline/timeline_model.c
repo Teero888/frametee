@@ -512,7 +512,7 @@ SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index
         // Check if this snippet contains a later input than the current 'last_valid_input'
         if (snippet->end_tick - 1 > last_input_tick) {
           last_input_tick = snippet->end_tick - 1;
-          last_valid_input = snippet->inputs[snippet->end_tick - 1 - snippet->start_tick];
+          last_valid_input = snippet->inputs[snippet->input_count - 1];
         }
       }
     }

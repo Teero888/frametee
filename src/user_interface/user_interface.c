@@ -9,7 +9,6 @@
 #include "cglm/vec2.h"
 #include "cimgui.h"
 #include "demo.h"
-#include <ddnet_physics/gamecore.h>
 #include "player_info.h"
 #include "skin_browser.h"
 #include "snippet_editor.h"
@@ -19,6 +18,7 @@
 #include "undo_redo.h"
 #include "widgets/hsl_colorpicker.h"
 #include "widgets/imcol.h"
+#include <ddnet_physics/gamecore.h>
 #include <limits.h>
 #include <math.h>
 #include <nfd.h>
@@ -452,7 +452,21 @@ void render_players(ui_handler_t *ui) {
 
     // render hook
     if (core->m_HookState >= 1) {
-      vec2 hook_pos = {vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f};
+
+      // do interpolation
+      vec2 hook_pos;
+      {
+        vec2 __ = {vgetx(core->m_PrevHookPos) / 32.f, vgety(core->m_PrevHookPos) / 32.f};
+        vec2 _ = {vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f};
+        if (core->m_HookedPlayer != -1) {
+          SCharacterCore *hooked = &world.m_pCharacters[core->m_HookedPlayer];
+          __[0] = vgetx(hooked->m_PrevPos) / 32.f;
+          __[1] = vgety(hooked->m_PrevPos) / 32.f;
+          _[0] = vgetx(hooked->m_Pos) / 32.f;
+          _[1] = vgety(hooked->m_Pos) / 32.f;
+        }
+        lerp(__, _, intra, hook_pos);
+      }
 
       vec2 direction;
       glm_vec2_sub(hook_pos, p, direction);
