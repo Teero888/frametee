@@ -18,6 +18,7 @@
 #include "timeline/timeline_model.h"
 #include "undo_redo.h"
 #include "widgets/hsl_colorpicker.h"
+#include "widgets/imcol.h"
 #include <limits.h>
 #include <math.h>
 #include <nfd.h>
@@ -745,6 +746,7 @@ void ui_render(ui_handler_t *ui) {
 
   ImGuiIO *io = igGetIO_Nil();
   keybinds_process_inputs(ui);
+  interaction_handle_playback_and_shortcuts(&ui->timeline);
   setup_docking(ui);
   if (ui->show_timeline) {
     if (!ui->timeline.ui) ui->timeline.ui = ui;
@@ -778,6 +780,21 @@ bool ui_render_late(ui_handler_t *ui) {
 
     igGetWindowSize(&ui->gfx_handler->viewport[0]);
     hovered = igIsWindowHovered(0);
+
+    if (ui->timeline.recording) {
+      const char *text = "Recording... (ESC to Stop, F4 to Discard)";
+      ImVec2 text_size;
+      igCalcTextSize(&text_size, text, NULL, false, 0.0f);
+      ImVec2 avail;
+      igGetContentRegionAvail(&avail);
+      ImVec2 text_pos = {start.x + avail.x - text_size.x - 10.0f, start.y};
+      igGetWindowDrawList(); // Ensure draw list is active
+      ImDrawList_AddText_Vec2(igGetWindowDrawList(), text_pos, IM_COL32(255, 50, 50, 255), text, NULL);
+    }
+
+    if ((hovered || ui->timeline.recording) && igIsKeyPressed_Bool(ImGuiKey_Tab, false)) {
+      ui->show_timeline = !ui->show_timeline;
+    }
 
     if (ui->timeline.selected_player_track_index >= 0) {
       igPushFont(ui->font, 25.f);

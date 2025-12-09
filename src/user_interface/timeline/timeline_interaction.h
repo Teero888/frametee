@@ -18,6 +18,7 @@ void interaction_select_track(timeline_state_t *ts, int track_index);
 
 // Recording Helpers
 void interaction_toggle_recording(timeline_state_t *ts);
+void interaction_cancel_recording(timeline_state_t *ts);
 void interaction_trim_recording_snippet(timeline_state_t *ts);
 void interaction_switch_recording_target(timeline_state_t *ts, int new_track_index);
 void interaction_apply_dummy_inputs(ui_handler_t *ui);

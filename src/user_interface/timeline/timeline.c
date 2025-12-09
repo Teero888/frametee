@@ -18,8 +18,6 @@ void timeline_cleanup(timeline_state_t *ts) { model_cleanup(ts); }
 void render_timeline(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
 
-  interaction_handle_playback_and_shortcuts(ts);
-
   igSetNextWindowClass(&((ImGuiWindowClass){.DockingAllowUnclassed = false}));
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8, 8});
 

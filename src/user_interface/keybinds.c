@@ -77,6 +77,7 @@ void keybinds_init(keybind_manager_t *manager) {
 
   // Recording
   manager->bindings[ACTION_TRIM_SNIPPET] = (keybind_t){"Trim Recording", "Recording", {ImGuiKey_F, false, false, false}};
+  manager->bindings[ACTION_CANCEL_RECORDING] = (keybind_t){"Cancel Recording", "Recording", {ImGuiKey_F4, false, false, false}};
   manager->bindings[ACTION_LEFT] = (keybind_t){"Move Left", "Recording", {ImGuiKey_A, false, false, false}};
   manager->bindings[ACTION_RIGHT] = (keybind_t){"Move Right", "Recording", {ImGuiKey_D, false, false, false}};
   manager->bindings[ACTION_JUMP] = (keybind_t){"Jump", "Recording", {ImGuiKey_Space, false, false, false}};

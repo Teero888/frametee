@@ -147,6 +147,11 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   // Abort recording
   if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) && ts->recording) interaction_toggle_recording(ts);
 
+  // Cancel recording
+  if (is_key_combo_pressed(&ts->ui->keybinds.bindings[ACTION_CANCEL_RECORDING].combo, false) && ts->recording) {
+    interaction_cancel_recording(ts);
+  }
+
   // Undo / Redo
   if (igIsKeyDown_Nil(ImGuiKey_LeftCtrl) || igIsKeyDown_Nil(ImGuiKey_RightCtrl)) {
     if (igIsKeyPressed_Bool(ImGuiKey_Z, false)) undo_manager_undo(&ts->ui->undo_manager, ts);
@@ -561,6 +566,14 @@ void interaction_toggle_recording(timeline_state_t *ts) {
     model_clear_all_recording_buffers(ts);
     ts->recording_snippets.count = 0;
   }
+}
+
+void interaction_cancel_recording(timeline_state_t *ts) {
+  if (!ts->recording) return;
+  ts->recording = false;
+  model_clear_all_recording_buffers(ts);
+  ts->recording_snippets.count = 0;
+  model_recalc_physics(ts, 0);
 }
 
 void interaction_trim_recording_snippet(timeline_state_t *ts) {

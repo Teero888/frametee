@@ -39,6 +39,7 @@ typedef enum {
 
   // recording
   ACTION_TRIM_SNIPPET,
+  ACTION_CANCEL_RECORDING,
   ACTION_FIRE,
   ACTION_HOOK,
   ACTION_LEFT,

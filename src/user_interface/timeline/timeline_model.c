@@ -516,14 +516,22 @@ SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index
 void model_advance_tick(timeline_state_t *ts, int steps) {
   ts->current_tick = imax(ts->current_tick + steps, 0);
 
-  if (ts->recording && ts->current_tick > ts->recording_snippets.snippets[0]->end_tick) {
-    for (int i = 0; i < ts->recording_snippets.count; ++i) {
-      input_snippet_t *snippet = ts->recording_snippets.snippets[i];
-      if (!snippet) continue;
-      model_resize_snippet_inputs(ts, snippet, snippet->input_count + steps);
-      for (int s = snippet->input_count - 1; s >= snippet->input_count - steps; --s)
-        snippet->inputs[s] = ts->recording_input;
-      ts->current_tick = snippet->end_tick;
+  if (ts->recording && ts->recording_snippets.count > 0) {
+    if (ts->current_tick > ts->recording_snippets.snippets[0]->end_tick) {
+      for (int i = 0; i < ts->recording_snippets.count; ++i) {
+        input_snippet_t *snippet = ts->recording_snippets.snippets[i];
+        if (!snippet) continue;
+        model_resize_snippet_inputs(ts, snippet, snippet->input_count + steps);
+        for (int s = snippet->input_count - 1; s >= snippet->input_count - steps; --s)
+          snippet->inputs[s] = ts->recording_input;
+        ts->current_tick = snippet->end_tick;
+      }
+    } else {
+      input_snippet_t *snippet = ts->recording_snippets.snippets[0];
+      if (snippet && ts->current_tick >= snippet->start_tick && ts->current_tick < snippet->end_tick) {
+        int idx = ts->current_tick - snippet->start_tick;
+        ts->recording_input = snippet->inputs[idx];
+      }
     }
   }
 }
