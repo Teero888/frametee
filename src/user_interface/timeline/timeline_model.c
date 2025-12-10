@@ -281,7 +281,8 @@ void model_resize_snippet_inputs(timeline_state_t *ts, input_snippet_t *snippet,
   snippet->input_count = new_duration;
   snippet->end_tick = snippet->start_tick + new_duration;
 
-  if (snippet->end_tick <= ts->current_tick) model_recalc_physics(ts, snippet->start_tick - 1);
+  int preserve_count = (old_count < new_duration) ? old_count : new_duration;
+  if (snippet->end_tick <= ts->current_tick) model_recalc_physics(ts, snippet->start_tick + preserve_count);
 }
 
 void model_free_snippet_inputs(input_snippet_t *snippet) {
@@ -451,6 +452,7 @@ static void model_remove_tick_from_recording_buffer(timeline_state_t *ts, player
       } else if (offset == 0) { // Remove from start
         memmove(&snippet->inputs[0], &snippet->inputs[1], (snippet->input_count - 1) * sizeof(SPlayerInput));
         snippet->start_tick++;
+        model_recalc_physics(ts, snippet->start_tick - 1);
         model_resize_snippet_inputs(ts, snippet, snippet->input_count - 1);
       } else if (offset == snippet->input_count - 1) { // Remove from end
         snippet->end_tick--;
