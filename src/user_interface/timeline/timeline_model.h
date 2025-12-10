@@ -30,6 +30,7 @@ void model_snippet_clone(input_snippet_t *dest, const input_snippet_t *src);
 void model_free_snippet_inputs(input_snippet_t *snippet);
 player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num);
 void model_remove_track_logic(timeline_state_t *ts, int track_index);
+void model_insert_track_physics(timeline_state_t *ts, int track_index);
 void model_compact_layers_for_track(player_track_t *track);
 
 // Recording & Merging

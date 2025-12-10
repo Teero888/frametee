@@ -1,5 +1,6 @@
 #include "timeline_model.h"
-#include "../user_interface.h" // For ui_handler_t
+#include "../../renderer/graphics_backend.h"
+#include "../user_interface.h"
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -302,7 +303,13 @@ void model_snippet_clone(input_snippet_t *dest, const input_snippet_t *src) {
 
 player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
   if (num <= 0) return NULL;
-  if (ph && wc_add_character(&ph->world, num) == NULL) return NULL;
+
+  // Add characters to all relevant physics states
+  if (wc_add_character(&ts->vec.data[0], num) == NULL) return NULL;
+  wc_add_character(&ts->previous_world, num);
+  if (ph) {
+    wc_add_character(&ph->world, num);
+  }
 
   int old_count = ts->player_track_count;
   int new_count = old_count + num;
@@ -315,16 +322,22 @@ player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
   }
 
   ts->player_track_count = new_count;
+
+  // Invalidate cache
   ts->vec.current_size = 1;
-  if (ph) {
-    wc_copy_world(&ts->vec.data[0], &ph->world);
-    wc_copy_world(&ts->previous_world, &ph->world);
-  }
+
   return &ts->player_tracks[old_count];
 }
 
 void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   if (track_index < 0 || track_index >= ts->player_track_count) return;
+
+  // Remove from physics worlds
+  wc_remove_character(&ts->vec.data[0], track_index);
+  wc_remove_character(&ts->previous_world, track_index);
+  if (ts->ui && ts->ui->gfx_handler) {
+    wc_remove_character(&ts->ui->gfx_handler->physics_handler.world, track_index);
+  }
 
   player_track_t *track = &ts->player_tracks[track_index];
   for (int i = 0; i < track->snippet_count; ++i) {
@@ -353,7 +366,49 @@ void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   if (ts->selected_player_track_index == track_index) ts->selected_player_track_index = -1;
   else if (ts->selected_player_track_index > track_index) ts->selected_player_track_index--;
 
+  ts->vec.current_size = 1; // Invalidate cache
   model_recalc_physics(ts, 0);
+}
+
+static void wc_insert_character_at_index(SWorldCore *pWorld, int index) {
+  if (!wc_add_character(pWorld, 1)) return;
+
+  if (index < pWorld->m_NumCharacters - 1) {
+    SCharacterCore new_char = pWorld->m_pCharacters[pWorld->m_NumCharacters - 1];
+    memmove(&pWorld->m_pCharacters[index + 1], &pWorld->m_pCharacters[index], sizeof(SCharacterCore) * (pWorld->m_NumCharacters - 1 - index));
+    pWorld->m_pCharacters[index] = new_char;
+
+    STeeLink new_link = pWorld->m_Accelerator.m_pTeeList[pWorld->m_NumCharacters - 1];
+    memmove(&pWorld->m_Accelerator.m_pTeeList[index + 1], &pWorld->m_Accelerator.m_pTeeList[index],
+            sizeof(STeeLink) * (pWorld->m_NumCharacters - 1 - index));
+    pWorld->m_Accelerator.m_pTeeList[index] = new_link;
+  }
+
+  for (int i = 0; i < pWorld->m_NumCharacters; ++i) {
+    pWorld->m_pCharacters[i].m_Id = i;
+    pWorld->m_Accelerator.m_pTeeList[i].m_TeeId = i;
+  }
+
+  for (int i = 0; i < pWorld->m_NumCharacters; ++i) {
+    if (i == index) continue;
+    SCharacterCore *pChar = &pWorld->m_pCharacters[i];
+    if (pChar->m_HookedPlayer >= index) {
+      pChar->m_HookedPlayer++;
+    }
+  }
+
+  int size = pWorld->m_pCollision->m_MapData.width * pWorld->m_pCollision->m_MapData.height;
+  memset(pWorld->m_Accelerator.m_pGrid->m_pTeeGrid, -1, size * sizeof(int));
+  pWorld->m_Accelerator.hash = 0;
+}
+
+void model_insert_track_physics(timeline_state_t *ts, int track_index) {
+  wc_insert_character_at_index(&ts->vec.data[0], track_index);
+  wc_insert_character_at_index(&ts->previous_world, track_index);
+  if (ts->ui && ts->ui->gfx_handler) {
+    wc_insert_character_at_index(&ts->ui->gfx_handler->physics_handler.world, track_index);
+  }
+  ts->vec.current_size = 1;
 }
 
 void model_compact_layers_for_track(player_track_t *track) {
@@ -619,7 +674,24 @@ static void v_push(physics_v_t *t, SWorldCore *world) {
   ++t->current_size;
   if (t->current_size > t->max_size) {
     t->max_size *= 2;
-    t->data = realloc(t->data, t->max_size * sizeof(SWorldCore));
+    SWorldCore *new_data = realloc(t->data, t->max_size * sizeof(SWorldCore));
+    if (new_data) {
+      t->data = new_data;
+      // Realloc might have moved the world cores, so we need to update the back-pointers
+      for (uint32_t i = 0; i < t->current_size - 1; ++i) {
+        for (int j = 0; j < t->data[i].m_NumCharacters; ++j) {
+          t->data[i].m_pCharacters[j].m_pWorld = &t->data[i];
+        }
+        // Also update entity world pointers
+        for (int type = 0; type < NUM_WORLD_ENTTYPES; ++type) {
+          for (SEntity *ent = t->data[i].m_apFirstEntityTypes[type]; ent; ent = ent->m_pNextTypeEntity) {
+            ent->m_pWorld = &t->data[i];
+          }
+        }
+      }
+    }
+    // TODO: handle realloc failure?
+
     for (int i = t->max_size / 2; i < t->max_size; ++i)
       t->data[i] = wc_empty();
   }
