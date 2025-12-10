@@ -175,8 +175,6 @@ void renderer_draw_header_and_playhead(timeline_state_t *ts, ImDrawList *draw_li
   }
 }
 
-
-
 void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   float track_header_width = 120.0f;
   ImDrawList *draw_list = igGetWindowDrawList();
@@ -216,7 +214,11 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
       // Handle interactions: double-click to toggle dummy, single-click to select.
       if (igIsItemHovered(0)) {
         if (igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
-          track->is_dummy = !track->is_dummy;
+          if (igGetIO_Nil()->KeyShift) {
+            for (int t = 0; t < ts->player_track_count; ++t)
+              ts->player_tracks[t].is_dummy ^= 1;
+          } else track->is_dummy = !track->is_dummy;
+
         } else if (igIsItemClicked(ImGuiMouseButton_Left)) {
           interaction_select_track(ts, i);
         }

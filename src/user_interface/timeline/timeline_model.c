@@ -325,7 +325,7 @@ player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
   ts->player_track_count = new_count;
 
   // Invalidate cache
-  ts->vec.current_size = 1;
+  model_recalc_physics(ts, 0);
 
   return &ts->player_tracks[old_count];
 }
@@ -548,7 +548,9 @@ void model_clear_all_recording_buffers(timeline_state_t *ts) {
 
 void model_recalc_physics(timeline_state_t *ts, int tick) {
   ts->vec.current_size = imin(ts->vec.current_size, imax((tick - 1) / 50, 1));
-  ts->previous_world.m_GameTick = INT_MAX;
+  if (ts->previous_world.m_GameTick > tick) {
+    ts->previous_world.m_GameTick = INT_MAX;
+  }
 }
 
 SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
@@ -638,7 +640,10 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
     wc_copy_world(out_world, &ts->previous_world);
   }
 
+  double start_time = igGetTime();
   while (out_world->m_GameTick < tick) {
+    if ((igGetTime() - start_time) > 0.015) break;
+
     for (int p = 0; p < out_world->m_NumCharacters; ++p) {
       SPlayerInput input = model_get_input_at_tick(ts, p, out_world->m_GameTick);
       cc_on_input(&out_world->m_pCharacters[p], &input);
