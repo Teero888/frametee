@@ -547,8 +547,8 @@ void model_clear_all_recording_buffers(timeline_state_t *ts) {
 // Physics & Playback
 
 void model_recalc_physics(timeline_state_t *ts, int tick) {
-  ts->vec.current_size = imin(ts->vec.current_size, imax((tick - 1) / 50, 1));
-  if (ts->previous_world.m_GameTick > tick) {
+  ts->vec.current_size = imin(ts->vec.current_size, imax(tick / 50 + 1, 1));
+  if (!ts->recording || ts->previous_world.m_GameTick > tick) {
     ts->previous_world.m_GameTick = INT_MAX;
   }
 }

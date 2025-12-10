@@ -450,6 +450,21 @@ void render_players(ui_handler_t *ui) {
 
     renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
 
+    if (!ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
+      vec2 box_size = {2.0f, 2.0f};
+      vec2 min_pos = {p[0] - 1.0f, p[1] - 1.0f};
+      vec4 red_col = {1.0f, 0.0f, 0.0f, 1.0f};
+      vec2 p1 = {min_pos[0], min_pos[1]};
+      vec2 p2 = {min_pos[0] + 2.0f, min_pos[1]};
+      vec2 p3 = {min_pos[0] + 2.0f, min_pos[1] + 2.0f};
+      vec2 p4 = {min_pos[0], min_pos[1] + 2.0f};
+
+      renderer_draw_line(gfx, p1, p2, red_col, 0.05f);
+      renderer_draw_line(gfx, p2, p3, red_col, 0.05f);
+      renderer_draw_line(gfx, p3, p4, red_col, 0.05f);
+      renderer_draw_line(gfx, p4, p1, red_col, 0.05f);
+    }
+
     // render hook
     if (core->m_HookState >= 1) {
 
@@ -795,6 +810,46 @@ bool ui_render_late(ui_handler_t *ui) {
 
     igGetWindowSize(&ui->gfx_handler->viewport[0]);
     hovered = igIsWindowHovered(0);
+
+    if (hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
+      ImGuiIO *io = igGetIO_Nil();
+      float mx = io->MousePos.x - wpos.x;
+      float my = io->MousePos.y - wpos.y;
+      float wx, wy;
+      screen_to_world(ui->gfx_handler, mx, my, &wx, &wy);
+
+      SWorldCore world = wc_empty();
+      model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world);
+
+      float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
+      if (ui->timeline.is_reversing) intra = 1.f - intra;
+
+      int best_match = -1;
+      float best_dist = 1.5f;
+
+      for (int i = 0; i < world.m_NumCharacters; ++i) {
+        SCharacterCore *core = &world.m_pCharacters[i];
+        vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+        vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+        vec2 p;
+        lerp(ppp, pp, intra, p);
+
+        float dx = p[0] - wx;
+        float dy = p[1] - wy;
+        float dist = sqrtf(dx * dx + dy * dy);
+        if (dist < best_dist) {
+          best_dist = dist;
+          best_match = i;
+        }
+      }
+
+      if (best_match != -1) {
+        interaction_select_track(&ui->timeline, best_match);
+      } else {
+        interaction_select_track(&ui->timeline, -1);
+      }
+      wc_free(&world);
+    }
 
     if (ui->timeline.recording) {
       const char *text = "Recording... (ESC to Stop, F4 to Discard)";
