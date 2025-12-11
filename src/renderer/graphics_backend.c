@@ -99,14 +99,17 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   gfx_handler_t *handler = glfwGetWindowUserPointer(window);
   if (!handler) return;
 
-  handler->raw_mouse.dx += xpos - handler->raw_mouse.x;
-  handler->raw_mouse.dy += ypos - handler->raw_mouse.y;
+  double diff_x = xpos - handler->raw_mouse.x;
+  double diff_y = ypos - handler->raw_mouse.y;
+
+  handler->raw_mouse.dx += diff_x;
+  handler->raw_mouse.dy += diff_y;
   handler->raw_mouse.x = xpos;
   handler->raw_mouse.y = ypos;
 
   // used by recording
-  handler->user_interface.recording_mouse_pos[0] += handler->raw_mouse.dx * (handler->user_interface.mouse_sens * 0.01f);
-  handler->user_interface.recording_mouse_pos[1] += handler->raw_mouse.dy * (handler->user_interface.mouse_sens * 0.01f);
+  handler->user_interface.recording_mouse_pos[0] += diff_x * (handler->user_interface.mouse_sens * 0.01f);
+  handler->user_interface.recording_mouse_pos[1] += diff_y * (handler->user_interface.mouse_sens * 0.01f);
   if (vlength(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1])) >
       handler->user_interface.mouse_max_distance) {
     mvec2 n = vnormalize(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1]));
