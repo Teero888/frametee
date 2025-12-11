@@ -86,11 +86,7 @@ typedef struct {
 
 typedef struct ui_handler ui_handler_t;
 
-typedef enum {
-  DUMMY_ACTION_COPY,
-  DUMMY_ACTION_FIRE,
-  DUMMY_ACTION_COUNT
-} dummy_action_type_t;
+typedef enum { DUMMY_ACTION_COPY, DUMMY_ACTION_FIRE, DUMMY_ACTION_COUNT } dummy_action_type_t;
 
 typedef struct timeline_state {
   // View State
