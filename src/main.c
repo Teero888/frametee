@@ -27,7 +27,7 @@ int main(void) {
     renderer_begin_skins(&handler);
     renderer_begin_atlas_instances(&handler.renderer.gameskin_renderer);
     render_players(&handler.user_interface);
-    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.gameskin_renderer);
+    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.gameskin_renderer, false);
     renderer_flush_skins(&handler, handler.current_frame_command_buffer, handler.renderer.skin_manager.atlas_array);
     // draw ui
     ui_render(&handler.user_interface);
@@ -47,7 +47,7 @@ int main(void) {
     // render cursor
     renderer_begin_atlas_instances(&handler.renderer.cursor_renderer);
     render_cursor(&handler.user_interface);
-    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.cursor_renderer);
+    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.cursor_renderer, true);
 
     viewport_hovered = gfx_end_frame(&handler);
   }

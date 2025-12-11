@@ -759,12 +759,11 @@ void render_cursor(ui_handler_t *ui) {
 
   gfx_handler_t *handler = ui->gfx_handler;
 
-  // TODO: for now draw this in world space. fix later when pipeline is better.
   if (handler->user_interface.timeline.recording) {
-    float norm_x = ui->last_render_pos[0] + handler->user_interface.timeline.recording_input.m_TargetX / 64.f;
-    float norm_y = ui->last_render_pos[1] + handler->user_interface.timeline.recording_input.m_TargetY / 64.f;
-    renderer_push_atlas_instance(&handler->renderer.cursor_renderer, (vec2){norm_x, norm_y}, (vec2){1.f, 1.f}, 0.0f, handler->user_interface.weapon,
-                                 false);
+    renderer_push_atlas_instance(
+        &handler->renderer.cursor_renderer,
+        (vec2){ui->gfx_handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0], ui->gfx_handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1]},
+        (vec2){64.f, 64.f}, 0.0f, handler->user_interface.weapon, false);
   }
 }
 

@@ -2169,7 +2169,7 @@ void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, flo
   }
 }
 
-void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar) {
+void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar, bool screen_space) {
   renderer_state_t *renderer = &h->renderer;
   if (ar->instance_count == 0 || !ar->shader || !ar->atlas_texture) return;
 
@@ -2179,16 +2179,27 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
   if (!pso) return;
 
   primitive_ubo_t ubo;
-  ubo.camPos[0] = renderer->camera.pos[0];
-  ubo.camPos[1] = renderer->camera.pos[1];
-  ubo.zoom = renderer->camera.zoom;
-  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
-  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
-  ubo.aspect = window_ratio / map_ratio;
-  ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
-  ubo.mapSize[0] = h->map_data->width;
-  ubo.mapSize[1] = h->map_data->height;
-  ubo.lod_bias = renderer->lod_bias;
+  if (screen_space) {
+    ubo.camPos[0] = 0.5f;
+    ubo.camPos[1] = 0.5f;
+    ubo.zoom = 2.0f;
+    ubo.aspect = 1.0f;
+    ubo.maxMapSize = 1.0f;
+    ubo.mapSize[0] = h->viewport[0];
+    ubo.mapSize[1] = h->viewport[1];
+    ubo.lod_bias = 0.0f;
+  } else {
+    ubo.camPos[0] = renderer->camera.pos[0];
+    ubo.camPos[1] = renderer->camera.pos[1];
+    ubo.zoom = renderer->camera.zoom;
+    float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
+    float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
+    ubo.aspect = window_ratio / map_ratio;
+    ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
+    ubo.mapSize[0] = h->map_data->width;
+    ubo.mapSize[1] = h->map_data->height;
+    ubo.lod_bias = renderer->lod_bias;
+  }
   glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
   VkDeviceSize ubo_size = sizeof(ubo);
