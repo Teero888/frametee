@@ -12,6 +12,7 @@
 #include <string.h>
 
 #define SNAP_THRESHOLD_PX 5.0f
+#define DRAG_THRESHOLD_PX 5.0f
 
 // Forward Declarations for Static Interaction Helpers
 static void handle_pan_and_zoom(timeline_state_t *ts, ImRect timeline_bb);
@@ -352,7 +353,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
           }
         }
       }
-      if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Left, 0.0f) && !ts->drag_state.active) {
+      if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Left, DRAG_THRESHOLD_PX) && !ts->drag_state.active) {
         start_drag(ts, i, snippet->id, timeline_bb);
       }
       igPopID();

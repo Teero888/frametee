@@ -53,9 +53,12 @@ void render_timeline(ui_handler_t *ui) {
     igDummy((ImVec2){0, header_height}); // Advance cursor
 
     // Create a child window for the vertically scrollable track area
-    ImVec2 tracks_area_pos;
-    igGetCursorScreenPos(&tracks_area_pos);
+    igSetCursorScreenPos((ImVec2){content_start_pos.x, header_bb.Max.y});
+    igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){0, 0});
+    igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0, 0});
+    igPushStyleVar_Float(ImGuiStyleVar_ChildBorderSize, 0.0f);
     igBeginChild_Str("TracksArea", (ImVec2){available_space.x, timeline_bb.Max.y - timeline_bb.Min.y}, false, ImGuiWindowFlags_NoScrollWithMouse);
+    igPopStyleVar(3);
 
     float tracks_scroll_y = igGetScrollY();
 
@@ -66,10 +69,13 @@ void render_timeline(ui_handler_t *ui) {
     interaction_handle_timeline_area(ts, timeline_bb, tracks_scroll_y);
 
     // Handle context menu
-    if (igIsMouseReleased_Nil(ImGuiMouseButton_Right) && igIsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !igIsAnyItemHovered()) {
+    if (igIsMouseReleased_Nil(ImGuiMouseButton_Right) && igIsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
       igOpenPopup_Str("TimelineContextMenu", 0);
     }
     interaction_handle_context_menu(ts);
+
+    // Draw playhead line inside the child window so it's on top of snippets but part of the scrollable area
+    renderer_draw_playhead_line(ts, igGetWindowDrawList(), timeline_bb);
 
     igEndChild();
 
@@ -77,8 +83,8 @@ void render_timeline(ui_handler_t *ui) {
     renderer_draw_selection_box(ts, overlay_draw_list);
     renderer_draw_drag_preview(ts, overlay_draw_list, timeline_bb, tracks_scroll_y);
 
-    // Draw playhead over everything else (but below popups)
-    renderer_draw_playhead(ts, draw_list, timeline_bb, header_bb);
+    // Draw playhead handle in the parent window
+    renderer_draw_playhead_handle(ts, draw_list, timeline_bb, header_bb);
 
     // Horizontal Scrollbar
     static int last_view_start_tick = -1;

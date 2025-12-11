@@ -171,19 +171,25 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
   ImDrawList_PopClipRect(draw_list);
 }
 
-void renderer_draw_playhead(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_rect, ImRect header_bb) {
+void renderer_draw_playhead_line(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_rect) {
+  float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, timeline_rect.Min.x);
+  if (playhead_x >= timeline_rect.Min.x && playhead_x <= timeline_rect.Max.x) {
+    ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, timeline_rect.Min.y}, (ImVec2){playhead_x, timeline_rect.Max.y},
+                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f);
+  }
+}
+
+void renderer_draw_playhead_handle(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_rect, ImRect header_bb) {
   float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, timeline_rect.Min.x);
 
   if (playhead_x >= timeline_rect.Min.x && playhead_x <= timeline_rect.Max.x) {
-    // Draw the full vertical line
-    ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, header_bb.Max.y - 5.0f}, (ImVec2){playhead_x, timeline_rect.Max.y},
-                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f);
-
-    // Draw the triangular handle in the header area
     ImVec2 head_bottom = {playhead_x + 0.5f, header_bb.Max.y + 0.5f};
     ImVec2 head_top_left = {(head_bottom.x - 6.0f) + 0.5f, head_bottom.y - 10.0f + 0.5f};
     ImVec2 head_top_right = {(head_bottom.x + 6.0f) - 0.5f, head_bottom.y - 10.0f + 0.5f};
     ImDrawList_AddTriangleFilled(draw_list, head_top_left, head_top_right, head_bottom, igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f));
+
+    ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, header_bb.Max.y - 5.0f}, (ImVec2){playhead_x, header_bb.Max.y},
+                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f);
   }
 }
 
