@@ -21,7 +21,7 @@ static double choose_nice_tick_step(double pixels_per_tick, double min_label_spa
 // Coordinate Conversion
 int renderer_screen_x_to_tick(const timeline_state_t *ts, float screen_x, float timeline_start_x) {
   if (fabsf(ts->zoom) < 1e-6f) return ts->view_start_tick;
-  return ts->view_start_tick + (int)((screen_x - timeline_start_x) / ts->zoom);
+  return ts->view_start_tick + (int)roundf((screen_x - timeline_start_x) / ts->zoom);
 }
 
 float renderer_tick_to_screen_x(const timeline_state_t *ts, int tick, float timeline_start_x) {
@@ -112,11 +112,13 @@ static double choose_nice_tick_step(double pixels_per_tick, double min_label_spa
   return nice_steps[count - 1];
 }
 
-void renderer_draw_header_and_playhead(timeline_state_t *ts, ImDrawList *draw_list, ImRect header_bb, float window_bottom_y) {
+void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect header_bb, float window_bottom_y) {
   ImU32 tick_minor_col = igGetColorU32_Col(ImGuiCol_TextDisabled, 0.25f);
   ImU32 tick_col = igGetColorU32_Col(ImGuiCol_TextDisabled, 0.7f);
   ImU32 tick_major_col = igGetColorU32_Col(ImGuiCol_Text, 0.9f);
   ImU32 tick_text_col = igGetColorU32_Col(ImGuiCol_Text, 1.0f);
+
+  ImDrawList_PushClipRect(draw_list, header_bb.Min, header_bb.Max, true);
 
   float header_height = header_bb.Max.y - header_bb.Min.y;
   int start_tick = renderer_screen_x_to_tick(ts, header_bb.Min.x, header_bb.Min.x);
@@ -166,11 +168,21 @@ void renderer_draw_header_and_playhead(timeline_state_t *ts, ImDrawList *draw_li
     ImDrawList_AddText_Vec2(draw_list, text_pos, tick_text_col, label, NULL);
   }
 
-  float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, header_bb.Min.x);
-  if (playhead_x >= header_bb.Min.x && playhead_x <= header_bb.Max.x) {
-    ImVec2 head_bottom = {playhead_x + 0.5, header_bb.Max.y + 0.5};
-    ImVec2 head_top_left = {(head_bottom.x - 6) + 0.5, head_bottom.y - 10 + 0.5};
-    ImVec2 head_top_right = {(head_bottom.x + 6) - 0.5, head_bottom.y - 10 + 0.5};
+  ImDrawList_PopClipRect(draw_list);
+}
+
+void renderer_draw_playhead(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_rect, ImRect header_bb) {
+  float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, timeline_rect.Min.x);
+
+  if (playhead_x >= timeline_rect.Min.x && playhead_x <= timeline_rect.Max.x) {
+    // Draw the full vertical line
+    ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, header_bb.Max.y - 5.0f}, (ImVec2){playhead_x, timeline_rect.Max.y},
+                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f);
+
+    // Draw the triangular handle in the header area
+    ImVec2 head_bottom = {playhead_x + 0.5f, header_bb.Max.y + 0.5f};
+    ImVec2 head_top_left = {(head_bottom.x - 6.0f) + 0.5f, head_bottom.y - 10.0f + 0.5f};
+    ImVec2 head_top_right = {(head_bottom.x + 6.0f) - 0.5f, head_bottom.y - 10.0f + 0.5f};
     ImDrawList_AddTriangleFilled(draw_list, head_top_left, head_top_right, head_bottom, igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f));
   }
 }
@@ -275,12 +287,6 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   }
   ImGuiListClipper_End(clipper);
   ImGuiListClipper_destroy(clipper);
-
-  float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, timeline_bb.Min.x);
-  if (playhead_x >= timeline_bb.Min.x && playhead_x <= timeline_bb.Max.x) {
-    ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, timeline_bb.Min.y}, (ImVec2){playhead_x, timeline_bb.Max.y},
-                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f);
-  }
 }
 
 void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRect timeline_bb, float tracks_area_scroll_y) {

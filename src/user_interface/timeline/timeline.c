@@ -38,6 +38,9 @@ void render_timeline(ui_handler_t *ui) {
     ImVec2 available_space;
     igGetContentRegionAvail(&available_space);
 
+    float scrollbar_height = igGetStyle()->ScrollbarSize;
+    if (available_space.y > scrollbar_height) available_space.y -= scrollbar_height;
+
     // Bounding box for the tick marks and labels
     ImRect header_bb = {{content_start_pos.x + track_header_width, content_start_pos.y},
                         {content_start_pos.x + available_space.x, content_start_pos.y + header_height}};
@@ -46,7 +49,7 @@ void render_timeline(ui_handler_t *ui) {
 
     // Handle header interaction and render it
     interaction_handle_header(ts, header_bb);
-    renderer_draw_header_and_playhead(ts, draw_list, header_bb, content_start_pos.y + available_space.y);
+    renderer_draw_header(ts, draw_list, header_bb, content_start_pos.y + available_space.y);
     igDummy((ImVec2){0, header_height}); // Advance cursor
 
     // Create a child window for the vertically scrollable track area
@@ -73,6 +76,27 @@ void render_timeline(ui_handler_t *ui) {
     // Render overlays (drag preview, selection box)
     renderer_draw_selection_box(ts, overlay_draw_list);
     renderer_draw_drag_preview(ts, overlay_draw_list, timeline_bb, tracks_scroll_y);
+
+    // Draw playhead over everything else (but below popups)
+    renderer_draw_playhead(ts, draw_list, timeline_bb, header_bb);
+
+    // Horizontal Scrollbar
+    static int last_view_start_tick = -1;
+    int max_tick = model_get_max_timeline_tick(ts);
+    float total_width = max_tick * ts->zoom + available_space.x; 
+
+    if (ts->view_start_tick != last_view_start_tick) {
+        igSetNextWindowScroll((ImVec2){(float)ts->view_start_tick * ts->zoom, 0.0f});
+    }
+
+    igBeginChild_Str("TimelineScrollbar", (ImVec2){available_space.x, scrollbar_height}, false, ImGuiWindowFlags_HorizontalScrollbar);
+    igDummy((ImVec2){total_width, 1.0f});
+    if (igIsWindowHovered(0) || igIsWindowFocused(0)) {
+        ts->view_start_tick = (int)(igGetScrollX() / ts->zoom);
+        if (ts->view_start_tick < 0) ts->view_start_tick = 0;
+    }
+    last_view_start_tick = ts->view_start_tick;
+    igEndChild();
 
   } else {
     igPopStyleVar(1);

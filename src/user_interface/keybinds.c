@@ -78,8 +78,7 @@ void keybinds_init(keybind_manager_t *manager) {
 
   // Recording
   manager->bindings[ACTION_TRIM_SNIPPET] = (keybind_t){"trim_snippet", "Trim Recording", "Recording", {ImGuiKey_F, false, false, false}};
-  manager->bindings[ACTION_CANCEL_RECORDING] =
-      (keybind_t){"cancel_recording", "Cancel Recording", "Recording", {ImGuiKey_F4, false, false, false}};
+  manager->bindings[ACTION_CANCEL_RECORDING] = (keybind_t){"cancel_recording", "Cancel Recording", "Recording", {ImGuiKey_F4, false, false, false}};
   manager->bindings[ACTION_LEFT] = (keybind_t){"move_left", "Move Left", "Recording", {ImGuiKey_A, false, false, false}};
   manager->bindings[ACTION_RIGHT] = (keybind_t){"move_right", "Move Right", "Recording", {ImGuiKey_D, false, false, false}};
   manager->bindings[ACTION_JUMP] = (keybind_t){"jump", "Jump", "Recording", {ImGuiKey_Space, false, false, false}};
@@ -94,8 +93,7 @@ void keybinds_init(keybind_manager_t *manager) {
 
   // Dummy
   manager->bindings[ACTION_DUMMY_FIRE] = (keybind_t){"dummy_fire", "Dummy Fire", "Dummy", {ImGuiKey_V, false, false, false}};
-  manager->bindings[ACTION_TOGGLE_DUMMY_COPY] =
-      (keybind_t){"toggle_dummy_copy", "Toggle dummy copy", "Dummy", {ImGuiKey_R, false, false, false}};
+  manager->bindings[ACTION_TOGGLE_DUMMY_COPY] = (keybind_t){"toggle_dummy_copy", "Toggle dummy copy", "Dummy", {ImGuiKey_R, false, false, false}};
 
   // Camera
   manager->bindings[ACTION_ZOOM_IN] = (keybind_t){"zoom_in", "Zoom in", "Camera", {ImGuiKey_W, false, false, false}};
@@ -127,6 +125,44 @@ void keybinds_process_inputs(ui_handler_t *ui) {
     }
   }
 
+  for (int i = 0; i < 9; i++) {
+    if (is_key_combo_pressed(&kb->bindings[ACTION_SWITCH_TRACK_1 + i].combo, false)) {
+      int new_index = imin(i, ts->player_track_count - 1);
+      if (ts->recording && ts->selected_player_track_index != new_index) {
+        timeline_switch_recording_target(ts, new_index);
+      }
+      ts->selected_player_track_index = new_index;
+      break;
+    }
+  }
+
+  if (cmd) {
+    undo_manager_register_command(&ui->undo_manager, cmd);
+  }
+
+  // actions that can be held down (repeating)
+  if (is_key_combo_pressed(&kb->bindings[ACTION_PREV_FRAME].combo, true)) {
+    ts->is_playing = false;
+    model_advance_tick(ts, -1);
+  }
+  if (is_key_combo_pressed(&kb->bindings[ACTION_NEXT_FRAME].combo, true)) {
+    ts->is_playing = false;
+    interaction_apply_dummy_inputs(ui);
+    model_advance_tick(ts, 1);
+  }
+  if (is_key_combo_pressed(&kb->bindings[ACTION_INC_TPS].combo, true)) {
+    ++ts->gui_playback_speed;
+  }
+  if (is_key_combo_pressed(&kb->bindings[ACTION_DEC_TPS].combo, true)) {
+    --ts->gui_playback_speed;
+  }
+  if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_DUMMY_COPY].combo, false)) {
+    ts->dummy_copy_input ^= 1;
+  }
+
+  // NOTE: AFTER HERE COME THE TIMELINE KEYBINDS THAT SHOULD NOT WORK WHILE RECORDING
+  if (ts->recording) return;
+  
   if (is_key_combo_pressed(&kb->bindings[ACTION_SELECT_ALL].combo, false)) {
     interaction_clear_selection(ts);
     ts->active_snippet_id = -1;
@@ -173,41 +209,6 @@ void keybinds_process_inputs(ui_handler_t *ui) {
 
   if (is_key_combo_pressed(&kb->bindings[ACTION_UNDO].combo, false)) undo_manager_undo(&ui->undo_manager, ts);
   if (is_key_combo_pressed(&kb->bindings[ACTION_REDO].combo, false)) undo_manager_redo(&ui->undo_manager, ts);
-
-  for (int i = 0; i < 9; i++) {
-    if (is_key_combo_pressed(&kb->bindings[ACTION_SWITCH_TRACK_1 + i].combo, false)) {
-      int new_index = imin(i, ts->player_track_count - 1);
-      if (ts->recording && ts->selected_player_track_index != new_index) {
-        timeline_switch_recording_target(ts, new_index);
-      }
-      ts->selected_player_track_index = new_index;
-      break;
-    }
-  }
-
-  if (cmd) {
-    undo_manager_register_command(&ui->undo_manager, cmd);
-  }
-
-  // actions that can be held down (repeating)
-  if (is_key_combo_pressed(&kb->bindings[ACTION_PREV_FRAME].combo, true)) {
-    ts->is_playing = false;
-    model_advance_tick(ts, -1);
-  }
-  if (is_key_combo_pressed(&kb->bindings[ACTION_NEXT_FRAME].combo, true)) {
-    ts->is_playing = false;
-    interaction_apply_dummy_inputs(ui);
-    model_advance_tick(ts, 1);
-  }
-  if (is_key_combo_pressed(&kb->bindings[ACTION_INC_TPS].combo, true)) {
-    ++ts->gui_playback_speed;
-  }
-  if (is_key_combo_pressed(&kb->bindings[ACTION_DEC_TPS].combo, true)) {
-    --ts->gui_playback_speed;
-  }
-  if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_DUMMY_COPY].combo, false)) {
-    ts->dummy_copy_input ^= 1;
-  }
 }
 
 static bool is_modifier_key(ImGuiKey key) {

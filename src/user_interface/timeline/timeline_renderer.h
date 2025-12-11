@@ -11,7 +11,8 @@ int renderer_screen_y_to_track_index(const timeline_state_t *ts, ImRect timeline
 
 // Main Rendering Functions
 void renderer_draw_controls(timeline_state_t *ts);
-void renderer_draw_header_and_playhead(timeline_state_t *ts, ImDrawList *draw_list, ImRect header_bb, float window_bottom_y);
+void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect header_bb, float window_bottom_y);
+void renderer_draw_playhead(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_rect, ImRect header_bb);
 void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb);
 void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRect timeline_bb, float tracks_area_scroll_y);
 void renderer_draw_selection_box(timeline_state_t *ts, ImDrawList *overlay_draw_list);
