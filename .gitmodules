@@ -13,3 +13,6 @@
 [submodule "libs/ddnet_demo"]
 	path = libs/ddnet_demo
 	url = https://github.com/Teero888/ddnet_demo_c99
+[submodule "libs/toml"]
+	path = libs/toml
+	url = https://github.com/cktan/tomlc17.git

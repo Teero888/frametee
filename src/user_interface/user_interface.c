@@ -5,6 +5,7 @@
 #include "../plugins/api_impl.h"
 #include "../renderer/graphics_backend.h"
 #include "../renderer/renderer.h"
+#include "../system/config.h"
 #include "../system/save.h"
 #include "cglm/vec2.h"
 #include "cimgui.h"
@@ -357,6 +358,8 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
 
   ui->mouse_sens = 80.f;
   ui->mouse_max_distance = 400.f;
+
+  config_load(ui);
 }
 
 static float lint2(float a, float b, float f) { return a + f * (b - a); }
@@ -774,7 +777,6 @@ void ui_render(ui_handler_t *ui) {
   // render menu bar first so the plugin can add menu items
   plugin_manager_update_all(&ui->plugin_manager);
 
-  ImGuiIO *io = igGetIO_Nil();
   keybinds_process_inputs(ui);
   interaction_handle_playback_and_shortcuts(&ui->timeline);
   setup_docking(ui);
@@ -906,6 +908,7 @@ bool ui_render_late(ui_handler_t *ui) {
 }
 
 void ui_cleanup(ui_handler_t *ui) {
+  config_save(ui);
   plugin_manager_shutdown(&ui->plugin_manager);
   timeline_cleanup(&ui->timeline);
   undo_manager_cleanup(&ui->undo_manager);

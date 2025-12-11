@@ -57,57 +57,60 @@ void keybinds_init(keybind_manager_t *manager) {
   manager->show_settings_window = false;
 
   // Playback
-  manager->bindings[ACTION_PLAY_PAUSE] = (keybind_t){"Play/Pause", "Playback", {ImGuiKey_X, false, false, false}};
-  manager->bindings[ACTION_REWIND_HOLD] = (keybind_t){"Rewind (Hold)", "Playback", {ImGuiKey_C, false, false, false}};
-  manager->bindings[ACTION_PREV_FRAME] = (keybind_t){"Previous Frame", "Playback", {ImGuiKey_MouseX1, false, false, false}};
-  manager->bindings[ACTION_NEXT_FRAME] = (keybind_t){"Next Frame", "Playback", {ImGuiKey_MouseX2, false, false, false}};
-  manager->bindings[ACTION_INC_TPS] = (keybind_t){"Increase TPS", "Playback", {ImGuiKey_UpArrow, false, false, false}};
-  manager->bindings[ACTION_DEC_TPS] = (keybind_t){"Next Frame", "Playback", {ImGuiKey_DownArrow, false, false, false}};
+  manager->bindings[ACTION_PLAY_PAUSE] = (keybind_t){"play_pause", "Play/Pause", "Playback", {ImGuiKey_X, false, false, false}};
+  manager->bindings[ACTION_REWIND_HOLD] = (keybind_t){"rewind_hold", "Rewind (Hold)", "Playback", {ImGuiKey_C, false, false, false}};
+  manager->bindings[ACTION_PREV_FRAME] = (keybind_t){"prev_frame", "Previous Frame", "Playback", {ImGuiKey_MouseX1, false, false, false}};
+  manager->bindings[ACTION_NEXT_FRAME] = (keybind_t){"next_frame", "Next Frame", "Playback", {ImGuiKey_MouseX2, false, false, false}};
+  manager->bindings[ACTION_INC_TPS] = (keybind_t){"inc_tps", "Increase TPS", "Playback", {ImGuiKey_UpArrow, false, false, false}};
+  manager->bindings[ACTION_DEC_TPS] = (keybind_t){"dec_tps", "Decrease TPS", "Playback", {ImGuiKey_DownArrow, false, false, false}};
 
   // Timeline Editing
-  manager->bindings[ACTION_SELECT_ALL] = (keybind_t){"Select all Snippets", "Timeline", {ImGuiKey_A, true, false, false}};
-  manager->bindings[ACTION_DELETE_SNIPPET] = (keybind_t){"Delete Snippet", "Timeline", {ImGuiKey_Delete, false, false, false}};
-  manager->bindings[ACTION_SPLIT_SNIPPET] = (keybind_t){"Split Snippet", "Timeline", {ImGuiKey_R, true, false, false}};
-  manager->bindings[ACTION_MERGE_SNIPPETS] = (keybind_t){"Merge Snippets", "Timeline", {ImGuiKey_M, true, false, false}};
-  manager->bindings[ACTION_TOGGLE_SNIPPET_ACTIVE] = (keybind_t){"Toggle Snippet Active", "Timeline", {ImGuiKey_A, false, false, false}};
+  manager->bindings[ACTION_SELECT_ALL] = (keybind_t){"select_all", "Select all Snippets", "Timeline", {ImGuiKey_A, true, false, false}};
+  manager->bindings[ACTION_DELETE_SNIPPET] = (keybind_t){"delete_snippet", "Delete Snippet", "Timeline", {ImGuiKey_Delete, false, false, false}};
+  manager->bindings[ACTION_SPLIT_SNIPPET] = (keybind_t){"split_snippet", "Split Snippet", "Timeline", {ImGuiKey_R, true, false, false}};
+  manager->bindings[ACTION_MERGE_SNIPPETS] = (keybind_t){"merge_snippets", "Merge Snippets", "Timeline", {ImGuiKey_M, true, false, false}};
+  manager->bindings[ACTION_TOGGLE_SNIPPET_ACTIVE] =
+      (keybind_t){"toggle_snippet_active", "Toggle Snippet Active", "Timeline", {ImGuiKey_A, false, false, false}};
 
   // General
-  manager->bindings[ACTION_UNDO] = (keybind_t){"Undo", "General", {ImGuiKey_Z, true, false, false}};
-  manager->bindings[ACTION_REDO] = (keybind_t){"Redo", "General", {ImGuiKey_Y, true, false, false}};
+  manager->bindings[ACTION_UNDO] = (keybind_t){"undo", "Undo", "General", {ImGuiKey_Z, true, false, false}};
+  manager->bindings[ACTION_REDO] = (keybind_t){"redo", "Redo", "General", {ImGuiKey_Y, true, false, false}};
 
   // Recording
-  manager->bindings[ACTION_TRIM_SNIPPET] = (keybind_t){"Trim Recording", "Recording", {ImGuiKey_F, false, false, false}};
-  manager->bindings[ACTION_CANCEL_RECORDING] = (keybind_t){"Cancel Recording", "Recording", {ImGuiKey_F4, false, false, false}};
-  manager->bindings[ACTION_LEFT] = (keybind_t){"Move Left", "Recording", {ImGuiKey_A, false, false, false}};
-  manager->bindings[ACTION_RIGHT] = (keybind_t){"Move Right", "Recording", {ImGuiKey_D, false, false, false}};
-  manager->bindings[ACTION_JUMP] = (keybind_t){"Jump", "Recording", {ImGuiKey_Space, false, false, false}};
-  manager->bindings[ACTION_KILL] = (keybind_t){"Kill", "Recording", {ImGuiKey_K, false, false, false}};
-  manager->bindings[ACTION_FIRE] = (keybind_t){"Fire weapon", "Recording", {ImGuiKey_MouseLeft, false, false, false}};
-  manager->bindings[ACTION_HOOK] = (keybind_t){"Hook", "Recording", {ImGuiKey_MouseRight, false, false, false}};
-  manager->bindings[ACTION_HAMMER] = (keybind_t){"Switch to hammer", "Recording", {ImGuiKey_1, false, false, false}};
-  manager->bindings[ACTION_GUN] = (keybind_t){"Switch to gun", "Recording", {ImGuiKey_2, false, false, false}};
-  manager->bindings[ACTION_SHOTGUN] = (keybind_t){"Switch to shotgun", "Recording", {ImGuiKey_3, false, false, false}};
-  manager->bindings[ACTION_GRENADE] = (keybind_t){"Switch to grenade", "Recording", {ImGuiKey_4, false, false, false}};
-  manager->bindings[ACTION_LASER] = (keybind_t){"Switch to laser", "Recording", {ImGuiKey_5, false, false, false}};
+  manager->bindings[ACTION_TRIM_SNIPPET] = (keybind_t){"trim_snippet", "Trim Recording", "Recording", {ImGuiKey_F, false, false, false}};
+  manager->bindings[ACTION_CANCEL_RECORDING] =
+      (keybind_t){"cancel_recording", "Cancel Recording", "Recording", {ImGuiKey_F4, false, false, false}};
+  manager->bindings[ACTION_LEFT] = (keybind_t){"move_left", "Move Left", "Recording", {ImGuiKey_A, false, false, false}};
+  manager->bindings[ACTION_RIGHT] = (keybind_t){"move_right", "Move Right", "Recording", {ImGuiKey_D, false, false, false}};
+  manager->bindings[ACTION_JUMP] = (keybind_t){"jump", "Jump", "Recording", {ImGuiKey_Space, false, false, false}};
+  manager->bindings[ACTION_KILL] = (keybind_t){"kill", "Kill", "Recording", {ImGuiKey_K, false, false, false}};
+  manager->bindings[ACTION_FIRE] = (keybind_t){"fire", "Fire weapon", "Recording", {ImGuiKey_MouseLeft, false, false, false}};
+  manager->bindings[ACTION_HOOK] = (keybind_t){"hook", "Hook", "Recording", {ImGuiKey_MouseRight, false, false, false}};
+  manager->bindings[ACTION_HAMMER] = (keybind_t){"hammer", "Switch to hammer", "Recording", {ImGuiKey_1, false, false, false}};
+  manager->bindings[ACTION_GUN] = (keybind_t){"gun", "Switch to gun", "Recording", {ImGuiKey_2, false, false, false}};
+  manager->bindings[ACTION_SHOTGUN] = (keybind_t){"shotgun", "Switch to shotgun", "Recording", {ImGuiKey_3, false, false, false}};
+  manager->bindings[ACTION_GRENADE] = (keybind_t){"grenade", "Switch to grenade", "Recording", {ImGuiKey_4, false, false, false}};
+  manager->bindings[ACTION_LASER] = (keybind_t){"laser", "Switch to laser", "Recording", {ImGuiKey_5, false, false, false}};
 
   // Dummy
-  manager->bindings[ACTION_DUMMY_FIRE] = (keybind_t){"Dummy Fire", "Dummy", {ImGuiKey_V, false, false, false}};
-  manager->bindings[ACTION_TOGGLE_DUMMY_COPY] = (keybind_t){"Toggle dummy copy", "Dummy", {ImGuiKey_R, false, false, false}};
+  manager->bindings[ACTION_DUMMY_FIRE] = (keybind_t){"dummy_fire", "Dummy Fire", "Dummy", {ImGuiKey_V, false, false, false}};
+  manager->bindings[ACTION_TOGGLE_DUMMY_COPY] =
+      (keybind_t){"toggle_dummy_copy", "Toggle dummy copy", "Dummy", {ImGuiKey_R, false, false, false}};
 
   // Camera
-  manager->bindings[ACTION_ZOOM_IN] = (keybind_t){"Zoom in", "Camera", {ImGuiKey_W, false, false, false}};
-  manager->bindings[ACTION_ZOOM_OUT] = (keybind_t){"Zoom out", "Camera", {ImGuiKey_S, false, false, false}};
+  manager->bindings[ACTION_ZOOM_IN] = (keybind_t){"zoom_in", "Zoom in", "Camera", {ImGuiKey_W, false, false, false}};
+  manager->bindings[ACTION_ZOOM_OUT] = (keybind_t){"zoom_out", "Zoom out", "Camera", {ImGuiKey_S, false, false, false}};
 
   // Track Switching
-  manager->bindings[ACTION_SWITCH_TRACK_1] = (keybind_t){"Switch to Track 1", "Tracks", {ImGuiKey_1, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_2] = (keybind_t){"Switch to Track 2", "Tracks", {ImGuiKey_2, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_3] = (keybind_t){"Switch to Track 3", "Tracks", {ImGuiKey_3, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_4] = (keybind_t){"Switch to Track 4", "Tracks", {ImGuiKey_4, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_5] = (keybind_t){"Switch to Track 5", "Tracks", {ImGuiKey_5, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_6] = (keybind_t){"Switch to Track 6", "Tracks", {ImGuiKey_6, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_7] = (keybind_t){"Switch to Track 7", "Tracks", {ImGuiKey_7, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_8] = (keybind_t){"Switch to Track 8", "Tracks", {ImGuiKey_8, false, true, false}};
-  manager->bindings[ACTION_SWITCH_TRACK_9] = (keybind_t){"Switch to Track 9", "Tracks", {ImGuiKey_9, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_1] = (keybind_t){"switch_track_1", "Switch to Track 1", "Tracks", {ImGuiKey_1, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_2] = (keybind_t){"switch_track_2", "Switch to Track 2", "Tracks", {ImGuiKey_2, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_3] = (keybind_t){"switch_track_3", "Switch to Track 3", "Tracks", {ImGuiKey_3, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_4] = (keybind_t){"switch_track_4", "Switch to Track 4", "Tracks", {ImGuiKey_4, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_5] = (keybind_t){"switch_track_5", "Switch to Track 5", "Tracks", {ImGuiKey_5, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_6] = (keybind_t){"switch_track_6", "Switch to Track 6", "Tracks", {ImGuiKey_6, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_7] = (keybind_t){"switch_track_7", "Switch to Track 7", "Tracks", {ImGuiKey_7, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_8] = (keybind_t){"switch_track_8", "Switch to Track 8", "Tracks", {ImGuiKey_8, false, true, false}};
+  manager->bindings[ACTION_SWITCH_TRACK_9] = (keybind_t){"switch_track_9", "Switch to Track 9", "Tracks", {ImGuiKey_9, false, true, false}};
 }
 
 void keybinds_process_inputs(ui_handler_t *ui) {

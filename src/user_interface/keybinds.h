@@ -71,6 +71,7 @@ typedef struct {
 } key_combo_t;
 
 typedef struct {
+  const char *identifier;
   const char *name;
   const char *category;
   key_combo_t combo;

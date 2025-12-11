@@ -13,6 +13,7 @@ set(SRCS
 	src/animation/anim_data.c
 	src/animation/anim_system.c
 	src/system/save.c
+	src/system/config.c
 	src/logger/logger.c
 	src/physics/physics.c
 	src/plugins/api_impl.c
@@ -80,6 +81,10 @@ endif()
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE ${CMAKE_SOURCE_DIR}/libs/stb)
 
+# toml library
+add_library(toml STATIC ${CMAKE_SOURCE_DIR}/libs/toml/src/tomlc17.c)
+target_include_directories(toml PUBLIC ${CMAKE_SOURCE_DIR}/libs/toml/src)
+
 # imgui sources
 set(IMGUI_SOURCES 
     libs/cimgui/imgui/imgui.cpp
@@ -122,6 +127,7 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nfd
     stb
+    toml
     ddnet_physics
     cglm
     cimgui
