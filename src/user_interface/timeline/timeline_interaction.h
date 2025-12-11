@@ -25,4 +25,6 @@ void interaction_apply_dummy_inputs(ui_handler_t *ui);
 void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timeline_bb, float scroll_y, int *out_snapped_tick, int *out_base_track);
 void interaction_update_recording_input(ui_handler_t *ui);
 
+SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int track_idx);
+
 #endif // UI_TIMELINE_INTERACTION_H

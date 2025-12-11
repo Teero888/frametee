@@ -243,7 +243,16 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
           if (igCheckbox("Hook", &hook)) flags ^= COPY_HOOK;
           if (igCheckbox("Weapon", &weapon)) flags ^= COPY_WEAPON;
 
+          bool mirror_x = (flags & COPY_MIRROR_X) != 0;
+          bool mirror_y = (flags & COPY_MIRROR_Y) != 0;
+          if (igCheckbox("Mirror Aim X (and Dir)", &mirror_x)) flags ^= COPY_MIRROR_X;
+          if (igCheckbox("Mirror Aim Y", &mirror_y)) flags ^= COPY_MIRROR_Y;
+
           track->dummy_copy_flags = flags;
+
+          igSeparator();
+          igCheckbox("Allow Dummy Hammer", &track->allow_dummy_hammer);
+          igCheckbox("Dummy Hammer Aimbot", &track->dummy_hammer_aimbot);
         } else {
           igTextDisabled("Not a dummy track");
           igTextDisabled("Double-click header to toggle");

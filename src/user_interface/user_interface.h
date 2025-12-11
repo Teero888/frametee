@@ -34,6 +34,11 @@ typedef struct ui_handler {
 
   vec2 last_render_pos;
 
+  float mouse_sens;
+  float mouse_max_distance;
+  // this one gets clamped to edges
+  vec2 recording_mouse_pos;
+
   demo_exporter_t demo_exporter;
   undo_manager_t undo_manager;
 

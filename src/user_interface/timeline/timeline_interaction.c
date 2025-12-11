@@ -54,6 +54,7 @@ void interaction_apply_dummy_inputs(ui_handler_t *ui) {
 
   SWorldCore world = wc_empty();
   model_get_world_state_at_tick(ts, ts->current_tick, &world);
+
   if (ts->selected_player_track_index >= world.m_NumCharacters) {
     wc_free(&world);
     return;
@@ -81,22 +82,46 @@ void interaction_apply_dummy_inputs(ui_handler_t *ui) {
 
       if (action == DUMMY_ACTION_COPY && ts->dummy_copy_input) {
         SPlayerInput copy_input = ts->recording_input;
-        
-        if (track->dummy_copy_flags & COPY_DIRECTION) { final_input.m_Direction = copy_input.m_Direction; input_modified = true; }
-        if (track->dummy_copy_flags & COPY_TARGET) { 
-          final_input.m_TargetX = copy_input.m_TargetX; 
-          final_input.m_TargetY = copy_input.m_TargetY; 
-          input_modified = true; 
+
+        if (track->dummy_copy_flags & COPY_DIRECTION) {
+          final_input.m_Direction = copy_input.m_Direction;
+          input_modified = true;
         }
-        if (track->dummy_copy_flags & COPY_JUMP) { final_input.m_Jump = copy_input.m_Jump; input_modified = true; }
-        if (track->dummy_copy_flags & COPY_FIRE) { final_input.m_Fire = copy_input.m_Fire; input_modified = true; }
-        if (track->dummy_copy_flags & COPY_HOOK) { final_input.m_Hook = copy_input.m_Hook; input_modified = true; }
-        if (track->dummy_copy_flags & COPY_WEAPON) { final_input.m_WantedWeapon = copy_input.m_WantedWeapon; input_modified = true; }
-      }
-      else if (action == DUMMY_ACTION_FIRE && dummy_fire_active) {
+        if (track->dummy_copy_flags & COPY_TARGET) {
+          final_input.m_TargetX = copy_input.m_TargetX;
+          final_input.m_TargetY = copy_input.m_TargetY;
+          input_modified = true;
+        }
+        if (track->dummy_copy_flags & COPY_JUMP) {
+          final_input.m_Jump = copy_input.m_Jump;
+          input_modified = true;
+        }
+        if (track->dummy_copy_flags & COPY_FIRE) {
+          final_input.m_Fire = copy_input.m_Fire;
+          input_modified = true;
+        }
+        if (track->dummy_copy_flags & COPY_HOOK) {
+          final_input.m_Hook = copy_input.m_Hook;
+          input_modified = true;
+        }
+        if (track->dummy_copy_flags & COPY_WEAPON) {
+          final_input.m_WantedWeapon = copy_input.m_WantedWeapon;
+          input_modified = true;
+        }
+
+        if (track->dummy_copy_flags & COPY_MIRROR_X) {
+          final_input.m_TargetX = -final_input.m_TargetX;
+          final_input.m_Direction = -final_input.m_Direction;
+        }
+        if (track->dummy_copy_flags & COPY_MIRROR_Y) {
+          final_input.m_TargetY = -final_input.m_TargetY;
+        }
+      } else if (action == DUMMY_ACTION_FIRE && dummy_fire_active && track->allow_dummy_hammer) {
         final_input.m_Fire = 1;
-        final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
-        final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
+        if (track->dummy_hammer_aimbot) {
+          final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
+          final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
+        }
         input_modified = true;
       }
     }
@@ -106,7 +131,6 @@ void interaction_apply_dummy_inputs(ui_handler_t *ui) {
     }
   }
   wc_free(&world);
-  model_recalc_physics(ts, tick);
 }
 
 // Main Interaction Handlers
@@ -516,6 +540,30 @@ static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_
 
 // Recording Helpers Implementation
 
+static void interaction_start_recording_on_track(timeline_state_t *ts, int track_index) {
+  if (track_index < 0 || track_index >= ts->player_track_count) return;
+  player_track_t *track = &ts->player_tracks[track_index];
+
+  // Create a new snippet to record into
+  input_snippet_t new_snippet = {0};
+  new_snippet.id = ts->next_snippet_id++;
+  new_snippet.start_tick = ts->current_tick;
+  new_snippet.end_tick = ts->current_tick;
+  new_snippet.is_active = true;
+  new_snippet.layer = 0;
+
+  // Add it to the recording track
+  model_insert_snippet_into_recording_track(track, &new_snippet);
+
+  // Find the pointer to the newly inserted snippet and add it to our recording list
+  input_snippet_t *recording_target = &track->recording_snippets[track->recording_snippet_count - 1];
+  if (ts->recording_snippets.count >= ts->recording_snippets.capacity) {
+    ts->recording_snippets.capacity = ts->recording_snippets.capacity == 0 ? 4 : ts->recording_snippets.capacity * 2;
+    ts->recording_snippets.snippets = realloc(ts->recording_snippets.snippets, sizeof(input_snippet_t *) * ts->recording_snippets.capacity);
+  }
+  ts->recording_snippets.snippets[ts->recording_snippets.count++] = recording_target;
+}
+
 void interaction_toggle_recording(timeline_state_t *ts) {
   ts->recording = !ts->recording;
 
@@ -525,27 +573,7 @@ void interaction_toggle_recording(timeline_state_t *ts) {
     ts->recording_snippets.count = 0;
 
     if (ts->selected_player_track_index != -1) {
-      player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
-
-      // Create a new snippet to record into
-      input_snippet_t new_snippet = {0};
-      new_snippet.id = ts->next_snippet_id++;
-      new_snippet.start_tick = ts->current_tick;
-      new_snippet.end_tick = ts->current_tick;
-      new_snippet.is_active = true;
-      new_snippet.layer = 0;
-
-      // Add it to the recording track
-      model_insert_snippet_into_recording_track(track, &new_snippet);
-
-      // Find the pointer to the newly inserted snippet and add it to our recording list
-      input_snippet_t *recording_target = &track->recording_snippets[track->recording_snippet_count - 1];
-      if (ts->recording_snippets.count >= ts->recording_snippets.capacity) {
-        ts->recording_snippets.capacity = ts->recording_snippets.capacity == 0 ? 4 : ts->recording_snippets.capacity * 2;
-        ts->recording_snippets.snippets = realloc(ts->recording_snippets.snippets, sizeof(input_snippet_t *) * ts->recording_snippets.capacity);
-      }
-      ts->recording_snippets.snippets[ts->recording_snippets.count++] = recording_target;
-
+      interaction_start_recording_on_track(ts, ts->selected_player_track_index);
     } else {
       // No track selected, abort recording
       ts->recording = false;
@@ -630,23 +658,14 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
     }
 
     if (!target) {
-      // Create new one
-      input_snippet_t new_snippet = {0};
-      new_snippet.id = ts->next_snippet_id++;
-      new_snippet.start_tick = ts->current_tick;
-      new_snippet.end_tick = ts->current_tick;
-      new_snippet.is_active = true;
-      new_snippet.layer = 0;
-      model_insert_snippet_into_recording_track(track, &new_snippet);
-      target = &track->recording_snippets[track->recording_snippet_count - 1];
+      interaction_start_recording_on_track(ts, ts->selected_player_track_index);
+    } else {
+      if (ts->recording_snippets.count >= ts->recording_snippets.capacity) {
+        ts->recording_snippets.capacity = ts->recording_snippets.capacity == 0 ? 4 : ts->recording_snippets.capacity * 2;
+        ts->recording_snippets.snippets = realloc(ts->recording_snippets.snippets, sizeof(input_snippet_t *) * ts->recording_snippets.capacity);
+      }
+      ts->recording_snippets.snippets[ts->recording_snippets.count++] = target;
     }
-
-    // Add to list
-    if (ts->recording_snippets.count >= ts->recording_snippets.capacity) {
-      ts->recording_snippets.capacity = ts->recording_snippets.capacity == 0 ? 4 : ts->recording_snippets.capacity * 2;
-      ts->recording_snippets.snippets = realloc(ts->recording_snippets.snippets, sizeof(input_snippet_t *) * ts->recording_snippets.capacity);
-    }
-    ts->recording_snippets.snippets[ts->recording_snippets.count++] = target;
   }
 }
 
@@ -657,26 +676,7 @@ void interaction_switch_recording_target(timeline_state_t *ts, int new_track_ind
     // Clear active recording targets
     ts->recording_snippets.count = 0;
 
-    player_track_t *track = &ts->player_tracks[new_track_index];
-
-    // Create a new snippet to record into
-    input_snippet_t new_snippet = {0};
-    new_snippet.id = ts->next_snippet_id++;
-    new_snippet.start_tick = ts->current_tick;
-    new_snippet.end_tick = ts->current_tick;
-    new_snippet.is_active = true;
-    new_snippet.layer = 0;
-
-    // Add it to the recording track
-    model_insert_snippet_into_recording_track(track, &new_snippet);
-
-    // Find the pointer to the newly inserted snippet and add it to our recording list
-    input_snippet_t *recording_target = &track->recording_snippets[track->recording_snippet_count - 1];
-    if (ts->recording_snippets.count >= ts->recording_snippets.capacity) {
-      ts->recording_snippets.capacity = ts->recording_snippets.capacity == 0 ? 4 : ts->recording_snippets.capacity * 2;
-      ts->recording_snippets.snippets = realloc(ts->recording_snippets.snippets, sizeof(input_snippet_t *) * ts->recording_snippets.capacity);
-    }
-    ts->recording_snippets.snippets[ts->recording_snippets.count++] = recording_target;
+    interaction_start_recording_on_track(ts, new_track_index);
   }
 }
 
@@ -700,15 +700,79 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   if (is_key_combo_pressed(&kb->bindings[ACTION_GRENADE].combo, false)) input->m_WantedWeapon = WEAPON_GRENADE;
   if (is_key_combo_pressed(&kb->bindings[ACTION_LASER].combo, false)) input->m_WantedWeapon = WEAPON_LASER;
 
-  ts->recording_input.m_TargetX += (int)ui->gfx_handler->raw_mouse.dx;
-  ts->recording_input.m_TargetY += (int)ui->gfx_handler->raw_mouse.dy;
+  ts->recording_input.m_TargetX = (int)ui->recording_mouse_pos[0];
+  ts->recording_input.m_TargetY = (int)ui->recording_mouse_pos[1];
   ui->gfx_handler->raw_mouse.dx = ui->gfx_handler->raw_mouse.dy = 0.0;
+}
 
-  if (vlength(vec2_init(ts->recording_input.m_TargetX, ts->recording_input.m_TargetY)) > 500.f) {
-    mvec2 n = vnormalize(vec2_init(ts->recording_input.m_TargetX, ts->recording_input.m_TargetY));
-    ts->recording_input.m_TargetX = vgetx(n) * 500.f;
-    ts->recording_input.m_TargetY = vgety(n) * 500.f;
+SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int track_idx) {
+  timeline_state_t *ts = &ui->timeline;
+
+  // Normal playback or recording non-selected/non-dummy tracks
+  if (!ts->recording) {
+    return model_get_input_at_tick(ts, track_idx, world->m_GameTick);
   }
+
+  // Selected recording track
+  if (track_idx == ts->selected_player_track_index) {
+    return ts->recording_input;
+  }
+
+  player_track_t *track = &ts->player_tracks[track_idx];
+
+  // Non-dummy tracks during recording just play back their timeline
+  if (!track->is_dummy) {
+    return model_get_input_at_tick(ts, track_idx, world->m_GameTick);
+  }
+
+  // Dummy tracks during recording derive input
+  SPlayerInput final_input = {0};
+
+  // Get positions from the *predicted* world state
+  if (ts->selected_player_track_index >= world->m_NumCharacters || track_idx >= world->m_NumCharacters) {
+    return final_input;
+  }
+
+  SCharacterCore *recording_char = &world->m_pCharacters[ts->selected_player_track_index];
+  SCharacterCore *dummy_char = &world->m_pCharacters[track_idx];
+  mvec2 recording_pos = recording_char->m_Pos;
+  mvec2 dummy_pos = dummy_char->m_Pos;
+
+  bool dummy_fire_active = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_DUMMY_FIRE].combo);
+
+  for (int action_idx = 0; action_idx < DUMMY_ACTION_COUNT; ++action_idx) {
+    dummy_action_type_t action = ts->dummy_action_priority[action_idx];
+
+    if (action == DUMMY_ACTION_COPY && ts->dummy_copy_input) {
+      SPlayerInput copy_input = ts->recording_input;
+
+      if (track->dummy_copy_flags & COPY_DIRECTION) final_input.m_Direction = copy_input.m_Direction;
+      if (track->dummy_copy_flags & COPY_TARGET) {
+        final_input.m_TargetX = copy_input.m_TargetX;
+        final_input.m_TargetY = copy_input.m_TargetY;
+      }
+      if (track->dummy_copy_flags & COPY_JUMP) final_input.m_Jump = copy_input.m_Jump;
+      if (track->dummy_copy_flags & COPY_FIRE) final_input.m_Fire = copy_input.m_Fire;
+      if (track->dummy_copy_flags & COPY_HOOK) final_input.m_Hook = copy_input.m_Hook;
+      if (track->dummy_copy_flags & COPY_WEAPON) final_input.m_WantedWeapon = copy_input.m_WantedWeapon;
+
+      if (track->dummy_copy_flags & COPY_MIRROR_X) {
+        final_input.m_TargetX = -final_input.m_TargetX;
+        final_input.m_Direction = -final_input.m_Direction;
+      }
+      if (track->dummy_copy_flags & COPY_MIRROR_Y) {
+        final_input.m_TargetY = -final_input.m_TargetY;
+      }
+    } else if (action == DUMMY_ACTION_FIRE && dummy_fire_active && track->allow_dummy_hammer) {
+      final_input.m_Fire = 1;
+      if (track->dummy_hammer_aimbot) {
+        final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
+        final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
+      }
+    }
+  }
+
+  return final_input;
 }
 
 void interaction_handle_context_menu(timeline_state_t *ts) {
@@ -731,11 +795,6 @@ void interaction_handle_context_menu(timeline_state_t *ts) {
       undo_command_t *cmd = commands_create_delete_selected(ts->ui);
       if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
     }
-    // igSeparator();
-    // if (igMenuItem_Bool("Remove Track", NULL, false, ts->selected_player_track_index != -1)) {
-    //   undo_command_t *cmd = commands_create_remove_track(ts->ui, ts->selected_player_track_index);
-    //   if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
-    // }
     igEndPopup();
   }
 }

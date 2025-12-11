@@ -33,7 +33,9 @@ typedef enum {
   COPY_FIRE = 1 << 3,
   COPY_HOOK = 1 << 4,
   COPY_WEAPON = 1 << 5,
-  COPY_ALL = 0xFFFF
+  COPY_MIRROR_X = 1 << 6,
+  COPY_MIRROR_Y = 1 << 7,
+  COPY_ALL = 0xFFFF & ~COPY_MIRROR_X & ~COPY_MIRROR_Y
 } dummy_copy_flags_t;
 
 typedef struct {
@@ -49,6 +51,8 @@ typedef struct {
   player_info_t player_info;
   bool is_dummy;
   int dummy_copy_flags;
+  bool allow_dummy_hammer;
+  bool dummy_hammer_aimbot;
 } player_track_t;
 
 typedef struct {

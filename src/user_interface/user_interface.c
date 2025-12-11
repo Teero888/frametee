@@ -24,6 +24,7 @@
 #include <nfd.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #ifndef M_PI
@@ -102,7 +103,7 @@ void render_menu_bar(ui_handler_t *ui) {
     // view menu
     if (igBeginMenu("View", true)) {
       igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
-      igMenuItem_BoolPtr("Keybind Settings", NULL, &ui->keybinds.show_settings_window, true);
+      igMenuItem_BoolPtr("Controls", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_browser, true);
       igSeparator();
@@ -172,7 +173,7 @@ void setup_docking(ui_handler_t *ui) {
     dock_id_left = igDockBuilderSplitNode(dock_id_center, ImGuiDir_Left, 0.40f, NULL, &dock_id_center);
 
     igDockBuilderDockWindow("viewport", dock_id_center);
-    igDockBuilderDockWindow("Keybind Settings", dock_id_center);
+    igDockBuilderDockWindow("Controls", dock_id_center);
     igDockBuilderDockWindow("Skin Browser", dock_id_center);
 
     igDockBuilderDockWindow("Timeline", dock_id_bottom);
@@ -194,9 +195,22 @@ void render_player_manager(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   ph_t *ph = &ui->gfx_handler->physics_handler;
   if (igBegin("Players", NULL, 0)) {
-    if (ph->world.m_pCollision && igButton("Add Player", (ImVec2){0, 0})) {
-      undo_command_t *cmd = timeline_api_create_track(ui, NULL, NULL);
-      if (cmd) undo_manager_register_command(&ui->undo_manager, cmd);
+    static int num_to_add = 1;
+    igPushItemWidth(50);
+    igDragInt("##NumToAdd", &num_to_add, 1, 1, 1000, "%d", ImGuiSliderFlags_None);
+    // igInputInt("##NumToAdd", &num_to_add, 0, 0, 0);
+    igPopItemWidth();
+    if (num_to_add < 1) num_to_add = 1;
+
+    igSameLine(0, 5.0f);
+
+    char aLabel[16];
+    snprintf(aLabel, 16, "Add Player%s", num_to_add > 1 ? "s" : "");
+    if (ph->world.m_pCollision && igButton(aLabel, (ImVec2){0, 0})) {
+      for (int i = 0; i < num_to_add; ++i) {
+        undo_command_t *cmd = timeline_api_create_track(ui, NULL, NULL);
+        if (cmd) undo_manager_register_command(&ui->undo_manager, cmd);
+      }
     }
     // igSameLine(0, 10.f);
     // if (ph->world.m_pCollision && igButton("Add 1000 Players", (ImVec2){0, 0})) {
@@ -340,6 +354,9 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->plugin_context.imgui_context = igGetCurrentContext();
   plugin_manager_init(&ui->plugin_manager, &ui->plugin_context, &ui->plugin_api);
   plugin_manager_load_all(&ui->plugin_manager, "plugins");
+
+  ui->mouse_sens = 80.f;
+  ui->mouse_max_distance = 400.f;
 }
 
 static float lint2(float a, float b, float f) { return a + f * (b - a); }
@@ -420,9 +437,17 @@ void render_players(ui_handler_t *ui) {
       else anim_state_add(&anim_state, &anim_walk, walk_time, 1.0f);
     }
 
-    vec2 dir = {core->m_Input.m_TargetX, core->m_Input.m_TargetY};
+    vec2 dir;
+    if (ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
+      dir[0] = ui->recording_mouse_pos[0];
+      dir[1] = ui->recording_mouse_pos[1];
+    } else {
+      dir[0] = core->m_Input.m_TargetX;
+      dir[1] = core->m_Input.m_TargetY;
+    }
+
     glm_vec2_normalize(dir);
-    player_info_t *info = &gfx->user_interface.timeline.player_tracks[i].player_info;
+    player_info_t *info = &ui->timeline.player_tracks[i].player_info;
     int skin = info->skin;
     int eye = get_flag_eye_state(&core->m_Input);
     vec3 feet_col = {1.f, 1.f, 1.f};
@@ -698,58 +723,34 @@ void render_players(ui_handler_t *ui) {
     return;
   }
 
-  // draw the first line
+  // Initialize prediction starting points
+  vec2 *prev_positions = malloc(sizeof(vec2) * world.m_NumCharacters);
   for (int i = 0; i < world.m_NumCharacters; ++i) {
     SCharacterCore *core = &world.m_pCharacters[i];
     vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
     vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-    vec2 p;
-    lerp(ppp, pp, intra, p);
-
-    vec4 color = {[3] = 0.8f};
-    if (core->m_FreezeTime > 0) color[0] = 1.f;
-    else color[1] = 1.f;
-    renderer_draw_line(gfx, pp, p, color, 0.05);
+    lerp(ppp, pp, intra, prev_positions[i]);
   }
 
   // draw the rest of the lines
   for (int t = 0; t < ui->prediction_length; ++t) {
     for (int i = 0; i < world.m_NumCharacters; ++i) {
-      bool is_selected = (i == ui->timeline.selected_player_track_index);
-      bool is_dummy_copy = ui->timeline.dummy_copy_input && ui->timeline.player_tracks[i].is_dummy;
-
-      SPlayerInput input;
-      if (ui->timeline.recording && is_selected) {
-        input = ui->timeline.recording_input;
-      } else if (ui->timeline.recording && is_dummy_copy) {
-        input = ui->timeline.recording_input;
-        int flags = ui->timeline.player_tracks[i].dummy_copy_flags;
-        if (!(flags & COPY_DIRECTION)) input.m_Direction = 0;
-        if (!(flags & COPY_TARGET)) {
-          input.m_TargetX = 0;
-          input.m_TargetY = 0;
-        }
-        if (!(flags & COPY_JUMP)) input.m_Jump = 0;
-        if (!(flags & COPY_FIRE)) input.m_Fire = 0;
-        if (!(flags & COPY_HOOK)) input.m_Hook = 0;
-        if (!(flags & COPY_WEAPON)) input.m_WantedWeapon = 0;
-      } else {
-        input = model_get_input_at_tick(&ui->timeline, i, world.m_GameTick);
-      }
+      SPlayerInput input = interaction_predict_input(ui, &world, i);
       cc_on_input(&world.m_pCharacters[i], &input);
     }
     wc_tick(&world);
 
     for (int i = 0; i < world.m_NumCharacters; ++i) {
       SCharacterCore *core = &world.m_pCharacters[i];
-      vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
       vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
       vec4 color = {[3] = 0.8f};
       if (core->m_FreezeTime > 0) color[0] = 1.f;
       else color[1] = 1.f;
-      renderer_draw_line(gfx, pp, p, color, 0.05);
+      renderer_draw_line(gfx, prev_positions[i], p, color, 0.05);
+      glm_vec2_copy(p, prev_positions[i]);
     }
   }
+  free(prev_positions);
   wc_free(&world);
 }
 

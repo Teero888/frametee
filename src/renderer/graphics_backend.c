@@ -103,6 +103,16 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   handler->raw_mouse.dy += ypos - handler->raw_mouse.y;
   handler->raw_mouse.x = xpos;
   handler->raw_mouse.y = ypos;
+
+  // used by recording
+  handler->user_interface.recording_mouse_pos[0] += handler->raw_mouse.dx * (handler->user_interface.mouse_sens * 0.01f);
+  handler->user_interface.recording_mouse_pos[1] += handler->raw_mouse.dy * (handler->user_interface.mouse_sens * 0.01f);
+  if (vlength(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1])) >
+      handler->user_interface.mouse_max_distance) {
+    mvec2 n = vnormalize(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1]));
+    handler->user_interface.recording_mouse_pos[0] = vgetx(n) * handler->user_interface.mouse_max_distance;
+    handler->user_interface.recording_mouse_pos[1] = vgety(n) * handler->user_interface.mouse_max_distance;
+  }
 }
 
 int init_gfx_handler(gfx_handler_t *handler) {
@@ -1083,7 +1093,7 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
       if (isnan(zoom)) zoom = 1.0f;
 
       float aspect = 1.0f / (window_ratio / map_ratio);
-      
+
       map_buffer_object_t ubo = {.transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom},
                                  .aspect = aspect,
                                  .lod_bias = handler->renderer.lod_bias};

@@ -243,7 +243,7 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
   if (!manager->show_settings_window) return;
 
   igSetNextWindowSize((ImVec2){600, 500}, ImGuiCond_FirstUseEver);
-  if (igBegin("Keybind Settings", &manager->show_settings_window, 0)) {
+  if (igBegin("Controls", &manager->show_settings_window, 0)) {
 
     igSetNextWindowPos((ImVec2){igGetIO_Nil()->DisplaySize.x * 0.5f, igGetIO_Nil()->DisplaySize.y * 0.5f}, ImGuiCond_Appearing, (ImVec2){0.5f, 0.5f});
     if (manager->is_waiting_for_input) igOpenPopup_Str("RebindKeyPopup", ImGuiPopupFlags_AnyPopupLevel);
@@ -277,6 +277,11 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
 
     igText("Click a keybind to change it, or click 'Clear' to unbind it.");
     igSeparator();
+
+    if (igCollapsingHeader_TreeNodeFlags("Mouse Settings", 0)) {
+      igDragFloat("Sensitivity", &ui->mouse_sens, 0.5f, 1.0f, 1000.0f, "%.1f", 0);
+      igDragFloat("Max Distance", &ui->mouse_max_distance, 1.0f, 0.0f, 2000.0f, "%.1f", 0);
+    }
 
     const char *categories[] = {"Playback", "Timeline", "General", "Recording", "Dummy", "Camera", "Tracks"};
     int num_categories = sizeof(categories) / sizeof(categories[0]);

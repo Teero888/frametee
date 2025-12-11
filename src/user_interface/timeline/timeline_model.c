@@ -320,6 +320,8 @@ player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
     player_track_t *new_track = &ts->player_tracks[old_count + i];
     memset(new_track, 0, sizeof(player_track_t));
     new_track->dummy_copy_flags = COPY_ALL;
+    new_track->allow_dummy_hammer = true;
+    new_track->dummy_hammer_aimbot = true;
   }
 
   ts->player_track_count = new_count;
@@ -548,7 +550,7 @@ void model_clear_all_recording_buffers(timeline_state_t *ts) {
 
 void model_recalc_physics(timeline_state_t *ts, int tick) {
   ts->vec.current_size = imin(ts->vec.current_size, imax(tick / 50 + 1, 1));
-  if (!ts->recording || ts->previous_world.m_GameTick > tick) {
+  if (ts->previous_world.m_GameTick > tick) {
     ts->previous_world.m_GameTick = INT_MAX;
   }
 }
@@ -606,6 +608,8 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
       if (snippet && ts->current_tick >= snippet->start_tick && ts->current_tick < snippet->end_tick) {
         int idx = ts->current_tick - snippet->start_tick;
         ts->recording_input = snippet->inputs[idx];
+        ts->ui->recording_mouse_pos[0] = ts->recording_input.m_TargetX;
+        ts->ui->recording_mouse_pos[1] = ts->recording_input.m_TargetY;
       }
     }
   }
@@ -640,10 +644,7 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
     wc_copy_world(out_world, &ts->previous_world);
   }
 
-  double start_time = igGetTime();
   while (out_world->m_GameTick < tick) {
-    if ((igGetTime() - start_time) > 0.015) break;
-
     for (int p = 0; p < out_world->m_NumCharacters; ++p) {
       SPlayerInput input = model_get_input_at_tick(ts, p, out_world->m_GameTick);
       cc_on_input(&out_world->m_pCharacters[p], &input);
