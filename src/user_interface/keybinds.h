@@ -1,8 +1,8 @@
 #ifndef KEYBINDS_H
 #define KEYBINDS_H
 
-#include <system/include_cimgui.h>
 #include <stdbool.h>
+#include <system/include_cimgui.h>
 
 typedef enum {
   // playback controls

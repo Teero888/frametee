@@ -1,11 +1,11 @@
 #ifndef USER_INTERFACE_H
 #define USER_INTERFACE_H
 
-#include <plugins/plugin_manager.h>
 #include "demo.h"
 #include "keybinds.h"
 #include "player_info.h"
 #include "undo_redo.h"
+#include <plugins/plugin_manager.h>
 #include <stdbool.h>
 #include <stdint.h>
 

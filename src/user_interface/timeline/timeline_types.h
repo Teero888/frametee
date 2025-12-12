@@ -2,9 +2,9 @@
 #define UI_TIMELINE_TYPES_H
 
 #include <physics/physics.h>
-#include <user_interface/player_info.h>
-#include <system/include_cimgui.h>
 #include <stdbool.h>
+#include <system/include_cimgui.h>
+#include <user_interface/player_info.h>
 
 #define MAX_SNIPPETS_PER_PLAYER 64
 #define MAX_SNIPPET_LAYERS 8

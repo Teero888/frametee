@@ -1,7 +1,6 @@
 #ifndef GRAPHICS_H
 #define GRAPHICS_H
 #include "renderer.h"
-#include <system/include_cimgui.h>
 #include <cimgui_impl.h>
 #include <ddnet_physics/libs/ddnet_map_loader/ddnet_map_loader.h>
 #include <physics/physics.h>
