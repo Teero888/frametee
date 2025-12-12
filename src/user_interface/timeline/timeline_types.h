@@ -1,10 +1,9 @@
 #ifndef UI_TIMELINE_TYPES_H
 #define UI_TIMELINE_TYPES_H
 
-#include "../../physics/physics.h"
-#include "../player_info.h"
-#include "../undo_redo.h"
-#include <cimgui.h>
+#include <physics/physics.h>
+#include <user_interface/player_info.h>
+#include <system/include_cimgui.h>
 #include <stdbool.h>
 
 #define MAX_SNIPPETS_PER_PLAYER 64
@@ -84,8 +83,6 @@ typedef struct {
   int capacity;
 } recording_snippet_vector_t;
 
-typedef struct ui_handler ui_handler_t;
-
 typedef enum { DUMMY_ACTION_COPY, DUMMY_ACTION_FIRE, DUMMY_ACTION_COUNT } dummy_action_type_t;
 
 typedef struct timeline_state {
@@ -131,7 +128,7 @@ typedef struct timeline_state {
   SWorldCore previous_world;
 
   // Back-pointer to parent UI handler
-  ui_handler_t *ui;
+  struct ui_handler *ui;
 } timeline_state_t;
 
 #endif // UI_TIMELINE_TYPES_H

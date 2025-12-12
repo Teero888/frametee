@@ -1,8 +1,9 @@
 #include "config.h"
-#include "../logger/logger.h"
-#include "../user_interface/keybinds.h"
+#include <logger/logger.h>
+#include <user_interface/keybinds.h>
 #include <tomlc17.h>
-#include <cimgui.h>
+#include <system/include_cimgui.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,7 +95,7 @@ static void parse_keybind_string(const char *str, key_combo_t *out) {
   }
 }
 
-void config_load(ui_handler_t *ui) {
+void config_load(struct ui_handler *ui) {
   char config_path[1024];
   get_config_path(config_path, sizeof(config_path));
 
@@ -170,7 +171,7 @@ void config_load(ui_handler_t *ui) {
   log_info(LOG_SOURCE, "Config loaded successfully from %s.", config_path);
 }
 
-void config_save(ui_handler_t *ui) {
+void config_save(struct ui_handler *ui) {
   char config_path[1024];
   get_config_path(config_path, sizeof(config_path));
 

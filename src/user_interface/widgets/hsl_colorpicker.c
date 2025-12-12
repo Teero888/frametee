@@ -1,4 +1,4 @@
-#include "cimgui.h"
+#include <system/include_cimgui.h>
 #include "imcol.h"
 #include <math.h>
 #include <stdint.h>
@@ -11,12 +11,14 @@ static float clampf_f(float v, float lo, float hi) {
   return v;
 }
 
+/*
 static ImU32 rgbf_to_u32(float r, float g, float b) {
   int R = (int)roundf(clampf_f(r, 0.0f, 1.0f) * 255.0f);
   int G = (int)roundf(clampf_f(g, 0.0f, 1.0f) * 255.0f);
   int B = (int)roundf(clampf_f(b, 0.0f, 1.0f) * 255.0f);
   return IM_COL32(R, G, B, 255);
 }
+*/
 
 /* HSL -> RGB (floats) using standard chroma method */
 static void hsl_to_rgbf(float h, float s, float l, float *out_r, float *out_g, float *out_b) {
@@ -87,6 +89,7 @@ void packed_hsl_to_rgb(uint32_t packed, float rgb[3]) {
   rgb[2] = b;
 }
 /* Convert packed HSL (0xHHSSLL) to packed RGB24 (0xRRGGBB) applying darkest remap */
+/*
 static uint32_t packed_hsl_to_rgb24(uint32_t packed_hsl, float darkest) {
   uint8_t Hb = (packed_hsl >> 16) & 0xFFu;
   uint8_t Sb = (packed_hsl >> 8) & 0xFFu;
@@ -96,7 +99,6 @@ static uint32_t packed_hsl_to_rgb24(uint32_t packed_hsl, float darkest) {
   float s = (float)Sb / 255.0f;
   float l_packed = (float)Lb / 255.0f;
 
-  /* ddnet unclamp: l' = darkest + l * (1 - darkest) */
   float l = darkest + l_packed * (1.0f - darkest);
 
   float r, g, b;
@@ -108,6 +110,7 @@ static uint32_t packed_hsl_to_rgb24(uint32_t packed_hsl, float darkest) {
 
   return (R << 16) | (G << 8) | B;
 }
+*/
 static uint32_t hsl_to_packed(float h, float s, float l) {
   float l_back = (l - DARKEST_LGT) / (1 - DARKEST_LGT);
   l_back = clampf_f(l_back, 0, 1);

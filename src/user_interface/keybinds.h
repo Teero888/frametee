@@ -1,10 +1,8 @@
 #ifndef KEYBINDS_H
 #define KEYBINDS_H
 
-#include "cimgui.h"
+#include <system/include_cimgui.h>
 #include <stdbool.h>
-
-typedef struct ui_handler ui_handler_t;
 
 typedef enum {
   // playback controls
@@ -86,9 +84,11 @@ typedef struct {
   action_t action_to_rebind;
 } keybind_manager_t;
 
+struct ui_handler;
+
 void keybinds_init(keybind_manager_t *manager);
-void keybinds_process_inputs(ui_handler_t *ui);
-void keybinds_render_settings_window(ui_handler_t *ui);
+void keybinds_process_inputs(struct ui_handler *ui);
+void keybinds_render_settings_window(struct ui_handler *ui);
 const char *keybind_get_combo_string(const key_combo_t *combo);
 
 bool is_key_combo_pressed(const key_combo_t *combo, bool repeat);

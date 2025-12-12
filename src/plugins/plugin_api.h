@@ -1,14 +1,16 @@
 #ifndef PLUGIN_API_H
 #define PLUGIN_API_H
 
-#include "../user_interface/timeline/timeline.h"
+#include <user_interface/timeline/timeline.h>
 
 // forward declare ImGuiContext to avoid plugins needing to include cimgui.h if they don't have a UI.
 struct ImGuiContext;
 
+struct undo_command_t;
+
 // passed to plugins to provide read-only access to high-level application state.
 typedef struct {
-  ui_handler_t *ui_handler;
+  struct ui_handler *ui_handler;
   timeline_state_t *timeline;
   gfx_handler_t *gfx_handler;
   struct ImGuiContext *imgui_context;
@@ -20,13 +22,14 @@ typedef struct {
   int (*get_current_tick)(void);
   int (*get_track_count)(void);
   SWorldCore *(*get_initial_world)(void);
+  SWorldCore *(*get_world_state_at)(int);
 
   // Undo-able Write Operations
-  undo_command_t *(*do_create_track)(const player_info_t *info, int *out_track_index);
-  undo_command_t *(*do_create_snippet)(int track_index, int start_tick, int duration, int *out_snippet_id);
-  undo_command_t *(*do_delete_snippet)(int snippet_id);
-  undo_command_t *(*do_set_inputs)(int snippet_id, int tick_offset, int count, const SPlayerInput *new_inputs);
-  void (*register_undo_command)(undo_command_t *command);
+  struct undo_command_t *(*do_create_track)(const player_info_t *info, int *out_track_index);
+  struct undo_command_t *(*do_create_snippet)(int track_index, int start_tick, int duration, int *out_snippet_id);
+  struct undo_command_t *(*do_delete_snippet)(int snippet_id);
+  struct undo_command_t *(*do_set_inputs)(int snippet_id, int tick_offset, int count, const SPlayerInput *new_inputs);
+  void (*register_undo_command)(struct undo_command_t *command);
 
   // Debug Drawing API
   void (*draw_line_world)(vec2 start, vec2 end, vec4 color, float thickness);

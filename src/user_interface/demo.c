@@ -1,18 +1,16 @@
 #include "demo.h"
-#include "../logger/logger.h"
-#include "../renderer/graphics_backend.h"
-#include "cimgui.h"
+#include <logger/logger.h>
+#include <renderer/graphics_backend.h>
 #include "ddnet_physics/vmath.h"
 #include "nfd.h"
 #include "timeline/timeline_model.h"
-#include "undo_redo.h"
 #include "user_interface.h"
 #include <ddnet_physics/collision.h>
 #include <ddnet_physics/gamecore.h>
 #include <string.h>
 
 #define DDNET_DEMO_IMPLEMENTATION
-#include "../../libs/ddnet_demo/ddnet_demo.h"
+#include <ddnet_demo/ddnet_demo.h>
 
 static const char *LOG_SOURCE = "DemoExport";
 
@@ -181,9 +179,7 @@ static void on_hammer_hit(mvec2 pos, void *data) {
   if (exporter->num_hammerhits < MAX_HAMMERHITS_PER_TICK) exporter->hammerhits[exporter->num_hammerhits++] = pos;
 }
 
-int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, SWorldCore *cur) {
-  int width = cur->m_pCollision->m_MapData.width;
-  int height = cur->m_pCollision->m_MapData.height;
+static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, SWorldCore *cur) {
   int next_item_id = cur->m_NumCharacters; // start after reserved player ids
 
   // do pickups first since they have static ids basically
@@ -203,7 +199,7 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
 
   // game info
   dd_netobj_game_info *game_info = demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEINFO, 0, sizeof(dd_netobj_game_info));
-  *game_info = (dd_netobj_game_info){};
+  *game_info = (dd_netobj_game_info){0};
   if (cur->m_NumCharacters > 0) {
     SCharacterCore *c = &cur->m_pCharacters[0];
     if (c->m_StartTick != -1) {
@@ -226,12 +222,12 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
     SCharacterCore *c_prev = &prev->m_pCharacters[p];
 
     dd_netobj_client_info *ci = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, p, sizeof(dd_netobj_client_info));
-    str_to_ints(&ci->m_aName, 4, ts->player_tracks[p].player_info.name);
-    str_to_ints(&ci->m_aClan, 3, ts->player_tracks[p].player_info.clan);
+    str_to_ints(ci->m_aName, 4, ts->player_tracks[p].player_info.name);
+    str_to_ints(ci->m_aClan, 3, ts->player_tracks[p].player_info.clan);
 
     // 3 offset to get the correct name
     if (ts->player_tracks[p].player_info.skin >= 3)
-      str_to_ints(&ci->m_aSkin, 6, ts->ui->skin_manager.skins[ts->player_tracks[p].player_info.skin - 3].name);
+      str_to_ints(ci->m_aSkin, 6, ts->ui->skin_manager.skins[ts->player_tracks[p].player_info.skin - 3].name);
     else *ci->m_aSkin = 0;
     ci->m_Country = 0;
     ci->m_UseCustomColor = ts->player_tracks[p].player_info.use_custom_color;
@@ -367,7 +363,7 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
   }
 
   // do entities
-  for (SProjectile *proj = cur->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; proj; proj = proj->m_Base.m_pNextTypeEntity) {
+  for (SProjectile *proj = (SProjectile *)cur->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; proj; proj = (SProjectile *)proj->m_Base.m_pNextTypeEntity) {
     dd_netobj_ddnet_projectile *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPROJECTILE, next_item_id++, sizeof(dd_netobj_ddnet_projectile));
     if (p) {
       int Flags = 0;
@@ -427,7 +423,7 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
     }
   }
 
-  for (SLaser *laser = cur->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; laser; laser = laser->m_Base.m_pNextTypeEntity) {
+  for (SLaser *laser = (SLaser *)cur->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; laser; laser = (SLaser *)laser->m_Base.m_pNextTypeEntity) {
     dd_netobj_ddnet_laser *l = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, next_item_id++, sizeof(dd_netobj_ddnet_laser));
     // laser
     if (l) {
@@ -461,7 +457,7 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
   }
 }
 
-int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int ticks) {
+int export_to_demo(struct ui_handler *ui, const char *path, const char *map_name, int ticks) {
   // set up demo things
   void *map_data = ui->gfx_handler->physics_handler.collision.m_MapData._map_file_data;
   size_t map_size = ui->gfx_handler->physics_handler.collision.m_MapData._map_file_size;
@@ -515,7 +511,7 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
   return 0;
 }
 
-void render_demo_window(ui_handler_t *ui) {
+void render_demo_window(struct ui_handler *ui) {
   demo_exporter_t *dx = &ui->demo_exporter;
 
   // Center the popup on first appearance

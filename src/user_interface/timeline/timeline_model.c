@@ -1,6 +1,6 @@
 #include "timeline_model.h"
-#include "../../renderer/graphics_backend.h"
-#include "../user_interface.h"
+#include <renderer/graphics_backend.h>
+#include <user_interface/user_interface.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +21,7 @@ static int compare_snippets_by_start_tick_p(const void *a, const void *b) {
 
 // Initialization and Cleanup
 
-void model_init(timeline_state_t *ts, ui_handler_t *ui) {
+void model_init(timeline_state_t *ts, struct ui_handler *ui) {
   ts->ui = ui;
   v_init(&ts->vec);
   ts->previous_world = wc_empty();
@@ -136,7 +136,7 @@ input_snippet_t *model_find_snippet_by_id(timeline_state_t *ts, int snippet_id, 
   return NULL;
 }
 
-int model_find_available_layer(const timeline_state_t *ts, const player_track_t *track, int start_tick, int end_tick, int exclude_snippet_id) {
+int model_find_available_layer(const player_track_t *track, int start_tick, int end_tick, int exclude_snippet_id) {
   // Find the lowest layer that is free for [start_tick, end_tick).
   // IMPORTANT: this MUST consider *all* snippets when computing collisions.
   // Previously selected snippets were being skipped which caused overlapping/stacking issues.
@@ -440,6 +440,7 @@ void model_insert_snippet_into_recording_track(player_track_t *track, const inpu
   track->recording_snippet_count++;
 }
 
+/*
 static void model_remove_tick_from_recording_buffer(timeline_state_t *ts, player_track_t *track, int tick) {
   for (int i = 0; i < track->recording_snippet_count; ++i) {
     input_snippet_t *snippet = &track->recording_snippets[i];
@@ -476,6 +477,7 @@ static void model_remove_tick_from_recording_buffer(timeline_state_t *ts, player
     }
   }
 }
+*/
 
 void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *track, int tick, const SPlayerInput *input) {
   // Case 1: Overwrite existing snippet
@@ -526,7 +528,7 @@ void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *trac
     new_snippet.input_count = 1;
     new_snippet.inputs = calloc(1, sizeof(SPlayerInput));
     new_snippet.inputs[0] = *input;
-    new_snippet.layer = model_find_available_layer(ts, track, tick, tick + 1, -1);
+    new_snippet.layer = model_find_available_layer(track, tick, tick + 1, -1);
     if (new_snippet.layer == -1) new_snippet.layer = 0; // Fallback
     model_insert_snippet_into_track(track, &new_snippet);
     model_compact_layers_for_track(track);
@@ -652,7 +654,7 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
     wc_tick(out_world);
     if (out_world->m_GameTick % step == 0) {
       int cache_index = out_world->m_GameTick / step;
-      if (cache_index >= ts->vec.current_size) {
+      if ((uint32_t)cache_index >= ts->vec.current_size) {
         v_push(&ts->vec, out_world);
       } else {
         wc_copy_world(&ts->vec.data[cache_index], out_world);
@@ -671,7 +673,7 @@ static void v_init(physics_v_t *t) {
 }
 
 static void v_destroy(physics_v_t *t) {
-  for (int i = 0; i < t->max_size; ++i)
+  for (uint32_t i = 0; i < t->max_size; ++i)
     wc_free(&t->data[i]);
   free(t->data);
   t->current_size = 0;
@@ -700,7 +702,7 @@ static void v_push(physics_v_t *t, SWorldCore *world) {
     }
     // TODO: handle realloc failure?
 
-    for (int i = t->max_size / 2; i < t->max_size; ++i)
+    for (uint32_t i = t->max_size / 2; i < t->max_size; ++i)
       t->data[i] = wc_empty();
   }
   wc_copy_world(&t->data[t->current_size - 1], world);

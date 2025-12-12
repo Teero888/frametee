@@ -1,5 +1,5 @@
 #include "plugin_manager.h"
-#include "../logger/logger.h"
+#include <logger/logger.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

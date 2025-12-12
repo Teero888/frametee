@@ -1,7 +1,7 @@
 #ifndef USER_INTERFACE_H
 #define USER_INTERFACE_H
 
-#include "../plugins/plugin_manager.h"
+#include <plugins/plugin_manager.h>
 #include "demo.h"
 #include "keybinds.h"
 #include "player_info.h"
@@ -9,65 +9,60 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef struct ui_handler {
-  bool show_timeline;
-  timeline_state_t timeline;
+struct ui_handler {
   struct gfx_handler_t *gfx_handler;
-  skin_manager_t skin_manager;
-  keybind_manager_t keybinds;
-
   ImFont *font;
 
-  // configs
-  bool show_prediction;
-  int prediction_length; // TODO: make proper ui for this setting
-
-  bool show_skin_browser;
-
-  int pos_x, pos_y;
-  float vel_x, vel_y, vel_m, vel_r;
-  int freezetime;
-  int reloadtime;
-  int weapon;
-  bool weapons[NUM_WEAPONS];
-
-  vec2 last_render_pos;
-
-  float mouse_sens;
-  float mouse_max_distance;
-  // this one gets clamped to edges
-  vec2 recording_mouse_pos;
-
-  // graphics settings
-  bool vsync;
-  bool show_fps;
-  int fps_limit;
-  float lod_bias;
-
+  timeline_state_t timeline;
+  skin_manager_t skin_manager;
+  keybind_manager_t keybinds;
   demo_exporter_t demo_exporter;
   undo_manager_t undo_manager;
-
   plugin_manager_t plugin_manager;
   tas_context_t plugin_context;
   tas_api_t plugin_api;
 
-  // store pickups once for rendering and for the demo export
-  int num_pickups;
   SPickup *pickups;
   mvec2 *pickup_positions;
 
-} ui_handler_t;
+  vec2 last_render_pos;
+  vec2 recording_mouse_pos;
+
+  int prediction_length;
+  int pos_x;
+  int pos_y;
+  int freezetime;
+  int reloadtime;
+  int weapon;
+  int num_pickups;
+  int fps_limit;
+
+  float vel_x;
+  float vel_y;
+  float vel_m;
+  float vel_r;
+  float mouse_sens;
+  float mouse_max_distance;
+  float lod_bias;
+
+  bool show_timeline;
+  bool show_prediction;
+  bool show_skin_browser;
+  bool vsync;
+  bool show_fps;
+  bool weapons[NUM_WEAPONS];
+};
 
 void on_camera_update(struct gfx_handler_t *handler, bool hovered);
-void render_players(ui_handler_t *ui);
-void render_pickups(ui_handler_t *ui);
-void render_cursor(ui_handler_t *ui);
+void render_players(struct ui_handler *ui);
+void render_pickups(struct ui_handler *ui);
+void render_cursor(struct ui_handler *ui);
 
-void ui_init_config(ui_handler_t *ui);
-void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);
-void ui_render(ui_handler_t *ui);
-bool ui_render_late(ui_handler_t *ui);
-void ui_post_map_load(ui_handler_t *ui);
-void ui_cleanup(ui_handler_t *ui);
+void ui_init_config(struct ui_handler *ui);
+void ui_init(struct ui_handler *ui, struct gfx_handler_t *gfx_handler);
+void ui_render(struct ui_handler *ui);
+bool ui_render_late(struct ui_handler *ui);
+void ui_post_map_load(struct ui_handler *ui);
+void ui_cleanup(struct ui_handler *ui);
 
 #endif

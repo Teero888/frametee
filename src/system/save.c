@@ -1,9 +1,10 @@
 #include "save.h"
-#include "../logger/logger.h"
-#include "../renderer/graphics_backend.h"
-#include "../renderer/renderer.h"
-#include "../user_interface/timeline/timeline_model.h"
+#include <logger/logger.h>
+#include <renderer/graphics_backend.h>
+#include <renderer/renderer.h>
+#include <user_interface/timeline/timeline_model.h>
 #include <ddnet_physics/gamecore.h>
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,15 +13,15 @@
 static const char *LOG_SOURCE = "SaveFile";
 
 static bool write_map_data(FILE *f, physics_handler_t *ph);
-static bool write_skin_data(FILE *f, ui_handler_t *ui);
+static bool write_skin_data(FILE *f, struct ui_handler *ui);
 static bool write_timeline_data(FILE *f, timeline_state_t *ts);
 
-static bool read_and_load_map(FILE *f, ui_handler_t *ui, uint32_t map_data_size);
-static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins);
-static bool read_and_load_timeline(FILE *f, ui_handler_t *ui);
+static bool read_and_load_map(FILE *f, struct ui_handler *ui, uint32_t map_data_size);
+static bool read_and_load_skins(FILE *f, struct ui_handler *ui, uint32_t num_skins);
+static bool read_and_load_timeline(FILE *f, struct ui_handler *ui);
 
 // Saving {{{
-bool save_project(ui_handler_t *ui, const char *path) {
+bool save_project(struct ui_handler *ui, const char *path) {
   FILE *f = fopen(path, "wb");
   if (!f) {
     log_error(LOG_SOURCE, "Failed to open file for writing: '%s'", path);
@@ -76,7 +77,7 @@ static bool write_map_data(FILE *f, physics_handler_t *ph) {
   return true;
 }
 
-static bool write_skin_data(FILE *f, ui_handler_t *ui) {
+static bool write_skin_data(FILE *f, struct ui_handler *ui) {
   skin_manager_t *sm = &ui->skin_manager;
 
   for (int i = 0; i < sm->num_skins; i++) {
@@ -144,7 +145,7 @@ static bool write_timeline_data(FILE *f, timeline_state_t *ts) {
 //}}}
 
 // Loading {{{
-bool load_project(ui_handler_t *ui, const char *path) {
+bool load_project(struct ui_handler *ui, const char *path) {
   FILE *f = fopen(path, "rb");
   if (!f) {
     log_error(LOG_SOURCE, "Failed to open file for reading: '%s'", path);
@@ -206,7 +207,7 @@ bool load_project(ui_handler_t *ui, const char *path) {
   return true;
 }
 
-static bool read_and_load_map(FILE *f, ui_handler_t *ui, uint32_t map_data_size) {
+static bool read_and_load_map(FILE *f, struct ui_handler *ui, uint32_t map_data_size) {
   unsigned char *map_buffer = malloc(map_data_size);
   if (!map_buffer) {
     log_error(LOG_SOURCE, "Failed to allocate memory for map data.");
@@ -223,7 +224,7 @@ static bool read_and_load_map(FILE *f, ui_handler_t *ui, uint32_t map_data_size)
   return true;
 }
 
-static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
+static bool read_and_load_skins(FILE *f, struct ui_handler *ui, uint32_t num_skins) {
   for (uint32_t i = 0; i < num_skins; i++) {
     skin_file_header_t skin_header;
     if (fread(&skin_header, sizeof(skin_file_header_t), 1, f) != 1) {
@@ -243,7 +244,7 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
       return false;
     }
 
-    skin_info_t info = {};
+    skin_info_t info = {0};
     int loaded_id = renderer_load_skin_from_memory(ui->gfx_handler, texture_data, skin_header.texture_data_size, &info.preview_texture_res);
     
     // Store the data in the info structure for future saves
@@ -265,7 +266,7 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
   return true;
 }
 
-static bool read_and_load_timeline(FILE *f, ui_handler_t *ui) {
+static bool read_and_load_timeline(FILE *f, struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
 
   // read player info

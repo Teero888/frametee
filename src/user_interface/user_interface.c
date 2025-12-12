@@ -1,14 +1,14 @@
 #include "user_interface.h"
-#include "../../symbols.h"
-#include "../animation/anim_data.h"
-#include "../logger/logger.h"
-#include "../plugins/api_impl.h"
-#include "../renderer/graphics_backend.h"
-#include "../renderer/renderer.h"
-#include "../system/config.h"
-#include "../system/save.h"
+#include <symbols.h>
+#include <animation/anim_data.h>
+#include <logger/logger.h>
+#include <plugins/api_impl.h>
+#include <renderer/graphics_backend.h>
+#include <renderer/renderer.h>
+#include <system/config.h>
+#include <system/save.h>
 #include "cglm/vec2.h"
-#include "cimgui.h"
+#include <system/include_cimgui.h>
 #include "ddnet_physics/collision.h"
 #include "demo.h"
 #include "player_info.h"
@@ -35,9 +35,7 @@
 
 static const char *LOG_SOURCE = "UI";
 
-typedef struct ui_handler ui_handler_t;
-
-void render_menu_bar(ui_handler_t *ui) {
+void render_menu_bar(struct ui_handler *ui) {
   bool open_export_popup = false;
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
@@ -164,7 +162,7 @@ void render_menu_bar(ui_handler_t *ui) {
 }
 
 // docking setup
-void setup_docking(ui_handler_t *ui) {
+void setup_docking(void) {
   ImGuiID main_dockspace_id = igGetID_Str("MainDockSpace");
 
   // Ensure the dockspace covers the entire viewport initially
@@ -227,7 +225,7 @@ void setup_docking(ui_handler_t *ui) {
 static bool g_remove_confirm_needed = true;
 static int g_pending_remove_index = -1;
 
-void render_player_manager(ui_handler_t *ui) {
+void render_player_manager(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
   ph_t *ph = &ui->gfx_handler->physics_handler;
   if (igBegin("Players", NULL, 0)) {
@@ -356,7 +354,7 @@ void camera_init(camera_t *camera) {
   camera->zoom_wanted = 5.0f;
 }
 
-void ui_init_config(ui_handler_t *ui) {
+void ui_init_config(struct ui_handler *ui) {
   ui->mouse_sens = 80.f;
   ui->mouse_max_distance = 400.f;
   ui->vsync = true;
@@ -367,7 +365,7 @@ void ui_init_config(ui_handler_t *ui) {
   config_load(ui);
 }
 
-void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
+void ui_init(struct ui_handler *ui, gfx_handler_t *gfx_handler) {
   ImGuiIO *io = igGetIO_Nil();
   ImFontAtlas *atlas = io->Fonts;
 
@@ -412,17 +410,17 @@ static void lerp(vec2 a, vec2 b, float f, vec2 out) {
   out[1] = lint2(a[1], b[1], f);
 }
 
-static int find_snapshot_index_le(const physics_v_t *vec, int target_tick) {
-  // returns index of the last snapshot with m_GameTick <= target_tick
-  // returns -1 if none found
-  if (vec->current_size == 0) return -1;
-  for (int i = vec->current_size - 1; i >= 0; --i) {
-    if (vec->data[i].m_GameTick <= target_tick) return i;
-  }
-  return -1;
-}
+// static int find_snapshot_index_le(const physics_v_t *vec, int target_tick) {
+//   // returns index of the last snapshot with m_GameTick <= target_tick
+//   // returns -1 if none found
+//   if (vec->current_size == 0) return -1;
+//   for (int i = vec->current_size - 1; i >= 0; --i) {
+//     if (vec->data[i].m_GameTick <= target_tick) return i;
+//   }
+//   return -1;
+// }
 
-void render_players(ui_handler_t *ui) {
+void render_players(struct ui_handler *ui) {
   gfx_handler_t *gfx = ui->gfx_handler;
   physics_handler_t *ph = &gfx->physics_handler;
   if (!ph->loaded) return;
@@ -523,7 +521,7 @@ void render_players(ui_handler_t *ui) {
     renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
 
     if (!ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
-      vec2 box_size = {2.0f, 2.0f};
+      // vec2 box_size = {2.0f, 2.0f};
       vec2 min_pos = {p[0] - 1.0f, p[1] - 1.0f};
       vec4 red_col = {1.0f, 0.0f, 0.0f, 1.0f};
       vec2 p1 = {min_pos[0], min_pos[1]};
@@ -723,7 +721,8 @@ void render_players(ui_handler_t *ui) {
     }
   }
   int id = 0;
-  for (SProjectile *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent; ent = ent->m_Base.m_pNextTypeEntity) {
+  for (SProjectile *ent = (SProjectile *)world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
+       ent = (SProjectile *)ent->m_Base.m_pNextTypeEntity) {
     float pt = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick - 1) / (float)GAME_TICK_SPEED;
     float ct = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick) / (float)GAME_TICK_SPEED;
     mvec2 prev_pos = prj_get_pos(ent, pt);
@@ -739,7 +738,7 @@ void render_players(ui_handler_t *ui) {
     ++id;
   }
   (void)id;
-  for (SLaser *ent = world.m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent; ent = ent->m_Base.m_pNextTypeEntity) {
+  for (SLaser *ent = (SLaser *)world.m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent; ent = (SLaser *)ent->m_Base.m_pNextTypeEntity) {
     vec2 p1 = {vgetx(ent->m_Base.m_Pos) / 32.f, vgety(ent->m_Base.m_Pos) / 32.f};
     vec2 p0 = {vgetx(ent->m_From) / 32.f, vgety(ent->m_From) / 32.f};
 
@@ -801,7 +800,7 @@ void render_players(ui_handler_t *ui) {
   wc_free(&world);
 }
 
-void render_pickups(ui_handler_t *ui) {
+void render_pickups(struct ui_handler *ui) {
   gfx_handler_t *h = ui->gfx_handler;
   for (int i = 0; i < ui->num_pickups; ++i) {
     vec2 pos = {vgetx(ui->pickup_positions[i]) / 32.f, vgety(ui->pickup_positions[i]) / 32.f};
@@ -832,7 +831,7 @@ void render_pickups(ui_handler_t *ui) {
       size[1] = spec->visual_size * scaleY / 32.0f;
     } else {
       idx = GAMESKIN_PICKUP_NINJA;
-      const weapon_spec_t *spec = &game_data.weapons.id[pickup.m_Subtype];
+      // const weapon_spec_t *spec = &game_data.weapons.id[pickup.m_Subtype];
       sprite_definition_t *sprite_def = &h->renderer.gameskin_renderer.sprite_definitions[idx];
       float w = sprite_def->w;
       float h = sprite_def->h;
@@ -858,7 +857,7 @@ void render_pickups(ui_handler_t *ui) {
   }
 }
 
-void render_cursor(ui_handler_t *ui) {
+void render_cursor(struct ui_handler *ui) {
   if (!ui->timeline.recording) return;
 
   gfx_handler_t *handler = ui->gfx_handler;
@@ -871,7 +870,7 @@ void render_cursor(ui_handler_t *ui) {
   }
 }
 
-void ui_render(ui_handler_t *ui) {
+void ui_render(struct ui_handler *ui) {
   interaction_update_recording_input(ui);
   render_menu_bar(ui);
 
@@ -880,7 +879,7 @@ void ui_render(ui_handler_t *ui) {
 
   keybinds_process_inputs(ui);
   interaction_handle_playback_and_shortcuts(&ui->timeline);
-  setup_docking(ui);
+  setup_docking();
   if (ui->show_timeline) {
     if (!ui->timeline.ui) ui->timeline.ui = ui;
     render_timeline(ui);
@@ -897,7 +896,7 @@ void ui_render(ui_handler_t *ui) {
 }
 
 // render viewport and related things
-bool ui_render_late(ui_handler_t *ui) {
+bool ui_render_late(struct ui_handler *ui) {
   bool hovered = false;
   // igShowDemoWindow(NULL);
   if (ui->gfx_handler->offscreen_initialized && ui->gfx_handler->offscreen_texture != NULL) {
@@ -911,7 +910,7 @@ bool ui_render_late(ui_handler_t *ui) {
     ImVec2 img_size = {(float)ui->gfx_handler->offscreen_width, (float)ui->gfx_handler->offscreen_height};
     igImage(*ui->gfx_handler->offscreen_texture, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
 
-    igGetWindowSize(&ui->gfx_handler->viewport[0]);
+    igGetWindowSize((ImVec2 *)&ui->gfx_handler->viewport[0]);
     hovered = igIsWindowHovered(0);
 
     if (hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
@@ -1008,7 +1007,7 @@ bool ui_render_late(ui_handler_t *ui) {
   return hovered;
 }
 
-void ui_post_map_load(ui_handler_t *ui) {
+void ui_post_map_load(struct ui_handler *ui) {
   // by default they are NULL so this should be fine
   free(ui->pickups);
   free(ui->pickup_positions);
@@ -1045,7 +1044,7 @@ void ui_post_map_load(ui_handler_t *ui) {
   }
 }
 
-void ui_cleanup(ui_handler_t *ui) {
+void ui_cleanup(struct ui_handler *ui) {
   config_save(ui);
   plugin_manager_shutdown(&ui->plugin_manager);
   timeline_cleanup(&ui->timeline);

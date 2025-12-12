@@ -1,5 +1,5 @@
 #include "renderer.h"
-#include "../logger/logger.h"
+#include <logger/logger.h>
 #include "graphics_backend.h"
 #include <cglm/cglm.h>
 #include <stdint.h>
@@ -54,7 +54,7 @@ static VkVertexInputAttributeDescription skin_attrib_descs[14];
 static VkVertexInputBindingDescription atlas_binding_desc[2];
 static VkVertexInputAttributeDescription atlas_attrib_descs[8];
 
-static void setup_vertex_descriptions();
+static void setup_vertex_descriptions(void);
 
 void check_vk_result(VkResult err) {
   if (err == VK_SUCCESS) return;
@@ -152,6 +152,7 @@ static void copy_buffer(gfx_handler_t *handler, VkCommandPool pool, VkBuffer src
 
 static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, VkImage image, VkFormat format, VkImageLayout old_layout,
                                     VkImageLayout new_layout, uint32_t mip_levels, uint32_t base_layer, uint32_t layer_count) {
+  (void)format;
   VkCommandBuffer command_buffer = begin_single_time_commands(handler, pool);
 
   VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -1369,7 +1370,7 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
   *sy = (ndc_y + 1.0f) * 0.5f * h->viewport[1];
 }
 
-static void setup_vertex_descriptions() {
+static void setup_vertex_descriptions(void) {
   primitive_binding_description =
       (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(primitive_vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
   primitive_attribute_descriptions[0] = (VkVertexInputAttributeDescription){
@@ -1650,6 +1651,8 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   renderer->primitive_index_count += 6;
 }
 
+
+
 void renderer_draw_map(gfx_handler_t *h) {
   if (!h->map_shader || !h->quad_mesh || h->map_texture_count <= 0) return;
 
@@ -1669,6 +1672,7 @@ void renderer_draw_map(gfx_handler_t *h) {
   VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
   renderer_draw_mesh(h, h->current_frame_command_buffer, h->quad_mesh, h->map_shader, h->map_textures, h->map_texture_count, ubos, ubo_sizes, 1);
 }
+
 
 static int skin_manager_alloc_layer(renderer_state_t *r) {
   for (int i = 0; i < MAX_SKINS; i++) {

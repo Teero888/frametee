@@ -1,8 +1,8 @@
-#include "cimgui.h"
 #include "logger/logger.h"
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
 #include "user_interface/user_interface.h"
+
 #include <GLFW/glfw3.h>
 #include <time.h>
 
@@ -18,7 +18,6 @@ int main(void) {
 
   double last_time = glfwGetTime();
 
-  int err = FRAME_SKIP;
   while (1) {
     if (handler.user_interface.fps_limit > 0) {
       double target_dt = 1.0 / (double)handler.user_interface.fps_limit;

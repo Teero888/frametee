@@ -1,7 +1,7 @@
 #include "skin_browser.h"
-#include "../renderer/renderer.h"
-#include "../symbols.h"
-#include "cimgui.h"
+#include <renderer/renderer.h>
+#include <symbols.h>
+#include <system/include_cimgui.h>
 #include "nfd.h"
 #include "player_info.h"
 #include "stb_image.h"
@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *LOG_SOURCE = "SkinBrowser";
+// // // static const char *LOG_SOURCE = "SkinBrowser";
 static int g_skin_to_delete = -1;
 static bool g_do_not_ask_again = false;
 
@@ -25,7 +25,7 @@ void render_skin_browser(gfx_handler_t *h) {
     nfdopendialogu8args_t args = {0};
     args.filterList = filters;
     args.filterCount = 1;
-    nfdpathset_t *path_set;
+    const nfdpathset_t *path_set;
     nfdresult_t result = NFD_OpenDialogMultipleU8_With(&path_set, &args);
     if (result == NFD_OKAY) {
       nfdpathsetsize_t size;

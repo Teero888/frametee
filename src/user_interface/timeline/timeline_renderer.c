@@ -1,7 +1,7 @@
 #include "timeline_renderer.h"
-#include "../../libs/symbols.h"
-#include "../widgets/imcol.h"
-#include "cimgui.h"
+#include <symbols.h>
+#include <user_interface/widgets/imcol.h>
+#include <system/include_cimgui.h>
 #include "timeline_interaction.h" // For selection checks
 #include "timeline_model.h"
 #include <math.h>
@@ -112,7 +112,7 @@ static double choose_nice_tick_step(double pixels_per_tick, double min_label_spa
   return nice_steps[count - 1];
 }
 
-void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect header_bb, float window_bottom_y) {
+void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect header_bb) {
   ImU32 tick_minor_col = igGetColorU32_Col(ImGuiCol_TextDisabled, 0.25f);
   ImU32 tick_col = igGetColorU32_Col(ImGuiCol_TextDisabled, 0.7f);
   ImU32 tick_major_col = igGetColorU32_Col(ImGuiCol_Text, 0.9f);

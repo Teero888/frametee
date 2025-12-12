@@ -1,11 +1,11 @@
 #include "player_info.h"
-#include "../renderer/graphics_backend.h"
-#include "cimgui.h"
-#include "ddnet_physics/vmath.h"
+#include <renderer/renderer.h>
+#include <renderer/graphics_backend.h>
+#include <system/include_cimgui.h>
 #include "widgets/hsl_colorpicker.h"
 #include <string.h>
 
-static const char *LOG_SOURCE = "SkinManager";
+// static const char *LOG_SOURCE = "SkinManager";
 
 void render_player_info(gfx_handler_t *h) {
   timeline_state_t *ts = &h->user_interface.timeline;
@@ -29,7 +29,7 @@ void render_player_info(gfx_handler_t *h) {
       PackedHSLPicker("Color body", &player_info->color_body);
       PackedHSLPicker("Color feet", &player_info->color_feet);
     }
-    if (igButton("Apply info to all players", (ImVec2){}))
+    if (igButton("Apply info to all players", (ImVec2){0}))
       for (int i = 0; i < h->user_interface.timeline.player_track_count; ++i)
         memcpy(&h->user_interface.timeline.player_tracks[i].player_info, player_info, sizeof(player_info_t));
   }

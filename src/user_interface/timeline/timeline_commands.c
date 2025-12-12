@@ -1,6 +1,6 @@
 #include "timeline_commands.h"
-#include "../../renderer/graphics_backend.h"
-#include "../user_interface.h" // For undo_manager
+#include <renderer/graphics_backend.h>
+#include <user_interface/user_interface.h>
 #include "timeline_interaction.h"
 #include "timeline_model.h"
 #include <limits.h>
@@ -82,46 +82,46 @@ typedef struct {
 
 // Forward Declarations for Command Logic
 
-static void undo_add_snippet(undo_command_t *cmd, timeline_state_t *ts);
-static void redo_add_snippet(undo_command_t *cmd, timeline_state_t *ts);
-static void cleanup_add_snippet_cmd(undo_command_t *cmd);
+static void undo_add_snippet(void *cmd, void *ts);
+static void redo_add_snippet(void *cmd, void *ts);
+static void cleanup_add_snippet_cmd(void *cmd);
 
-static void undo_delete_snippets(undo_command_t *cmd, timeline_state_t *ts);
-static void redo_delete_snippets(undo_command_t *cmd, timeline_state_t *ts);
-static void cleanup_delete_snippets_cmd(undo_command_t *cmd);
+static void undo_delete_snippets(void *cmd, void *ts);
+static void redo_delete_snippets(void *cmd, void *ts);
+static void cleanup_delete_snippets_cmd(void *cmd);
 
-static void undo_move_snippets(undo_command_t *cmd, timeline_state_t *ts);
-static void redo_move_snippets(undo_command_t *cmd, timeline_state_t *ts);
-static void cleanup_move_snippets_cmd(undo_command_t *cmd);
+static void undo_move_snippets(void *cmd, void *ts);
+static void redo_move_snippets(void *cmd, void *ts);
+static void cleanup_move_snippets_cmd(void *cmd);
 
-static void undo_multi_split(undo_command_t *cmd, timeline_state_t *ts);
-static void redo_multi_split(undo_command_t *cmd, timeline_state_t *ts);
-static void cleanup_multi_split_cmd(undo_command_t *cmd);
+static void undo_multi_split(void *cmd, void *ts);
+static void redo_multi_split(void *cmd, void *ts);
+static void cleanup_multi_split_cmd(void *cmd);
 
-static void undo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts);
-static void redo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts);
-static void cleanup_merge_snippets_cmd(undo_command_t *cmd);
+static void undo_merge_snippets(void *cmd, void *ts);
+static void redo_merge_snippets(void *cmd, void *ts);
+static void cleanup_merge_snippets_cmd(void *cmd);
 
-static void undo_remove_track(undo_command_t *cmd, timeline_state_t *ts);
-static void redo_remove_track(undo_command_t *cmd, timeline_state_t *ts);
-static void cleanup_remove_track_cmd(undo_command_t *cmd);
+static void undo_remove_track(void *cmd, void *ts);
+static void redo_remove_track(void *cmd, void *ts);
+static void cleanup_remove_track_cmd(void *cmd);
 
-static void undo_add_track(undo_command_t *cmd, timeline_state_t *ts);
-static void redo_add_track(undo_command_t *cmd, timeline_state_t *ts);
-static void cleanup_add_track_cmd(undo_command_t *cmd);
+static void undo_add_track(void *cmd, void *ts);
+static void redo_add_track(void *cmd, void *ts);
+static void cleanup_add_track_cmd(void *cmd);
 
-static void undo_edit_inputs(undo_command_t *cmd, timeline_state_t *ts);
-static void redo_edit_inputs(undo_command_t *cmd, timeline_state_t *ts);
-static void cleanup_edit_inputs_cmd(undo_command_t *cmd);
+static void undo_edit_inputs(void *cmd, void *ts);
+static void redo_edit_inputs(void *cmd, void *ts);
+static void cleanup_edit_inputs_cmd(void *cmd);
 
 // Command Creation Functions
 
-undo_command_t *commands_create_add_snippet(ui_handler_t *ui, int track_idx, int start_tick, int duration) {
+undo_command_t *commands_create_add_snippet(struct ui_handler *ui, int track_idx, int start_tick, int duration) {
   timeline_state_t *ts = &ui->timeline;
   if (track_idx < 0 || track_idx >= ts->player_track_count) return NULL;
 
   player_track_t *track = &ts->player_tracks[track_idx];
-  int new_layer = model_find_available_layer(ts, track, start_tick, start_tick + duration, -1);
+  int new_layer = model_find_available_layer(track, start_tick, start_tick + duration, -1);
   if (new_layer == -1) return NULL;
 
   input_snippet_t snip;
@@ -129,15 +129,10 @@ undo_command_t *commands_create_add_snippet(ui_handler_t *ui, int track_idx, int
   snip.start_tick = start_tick;
   snip.end_tick = start_tick + duration;
   snip.is_active = true;
-  snip.layer = new_layer;
-  snip.inputs = calloc(duration, sizeof(SPlayerInput));
-  snip.input_count = duration;
-
   AddSnippetCommand *cmd = calloc(1, sizeof(AddSnippetCommand));
   cmd->base.undo = undo_add_snippet;
   cmd->base.redo = redo_add_snippet;
   cmd->base.cleanup = cleanup_add_snippet_cmd;
-  cmd->track_index = track_idx;
   model_snippet_clone(&cmd->snippet_copy, &snip);
 
   // Perform the action
@@ -147,7 +142,7 @@ undo_command_t *commands_create_add_snippet(ui_handler_t *ui, int track_idx, int
   return &cmd->base;
 }
 
-undo_command_t *commands_create_delete_selected(ui_handler_t *ui) {
+undo_command_t *commands_create_delete_selected(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (ts->selected_snippets.count <= 0) return NULL;
 
@@ -181,7 +176,7 @@ undo_command_t *commands_create_delete_selected(ui_handler_t *ui) {
   return &cmd->base;
 }
 
-undo_command_t *commands_create_move_snippets(ui_handler_t *ui, const MoveSnippetInfo *infos, int count) {
+undo_command_t *commands_create_move_snippets(struct ui_handler *ui, const MoveSnippetInfo *infos, int count) {
   if (count <= 0) return NULL;
   timeline_state_t *ts = &ui->timeline;
 
@@ -215,7 +210,7 @@ undo_command_t *commands_create_move_snippets(ui_handler_t *ui, const MoveSnippe
   return &cmd->base;
 }
 
-undo_command_t *commands_create_split_selected(ui_handler_t *ui) {
+undo_command_t *commands_create_split_selected(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (ts->selected_snippets.count == 0 || ts->current_tick <= 0) return NULL;
 
@@ -270,7 +265,7 @@ static int compare_snippets_by_start_tick(const void *p1, const void *p2) {
   return a->start_tick - b->start_tick;
 }
 
-undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
+undo_command_t *commands_create_merge_selected(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (ts->selected_snippets.count < 2) return NULL;
 
@@ -360,7 +355,7 @@ undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
   return &cmd->base;
 }
 
-undo_command_t *commands_create_remove_track(ui_handler_t *ui, int track_index) {
+undo_command_t *commands_create_remove_track(struct ui_handler *ui, int track_index) {
   timeline_state_t *ts = &ui->timeline;
   ph_t *ph = &ui->gfx_handler->physics_handler;
   if (track_index < 0 || track_index >= ts->player_track_count) return NULL;
@@ -389,21 +384,23 @@ undo_command_t *commands_create_remove_track(ui_handler_t *ui, int track_index) 
 // Command Implementations (Undo/Redo/Cleanup)
 
 // Add Snippet
-static void undo_add_snippet(undo_command_t *cmd, timeline_state_t *ts) {
+static void undo_add_snippet(void *cmd, void *ts_void) {
   AddSnippetCommand *c = (AddSnippetCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   player_track_t *track = &ts->player_tracks[c->track_index];
   model_remove_snippet_from_track(ts, track, c->snippet_copy.id);
   model_compact_layers_for_track(track);
 }
-static void redo_add_snippet(undo_command_t *cmd, timeline_state_t *ts) {
+static void redo_add_snippet(void *cmd, void *ts_void) {
   AddSnippetCommand *c = (AddSnippetCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   player_track_t *track = &ts->player_tracks[c->track_index];
   input_snippet_t new_snip;
   model_snippet_clone(&new_snip, &c->snippet_copy);
   model_insert_snippet_into_track(track, &new_snip);
   model_compact_layers_for_track(track);
 }
-static void cleanup_add_snippet_cmd(undo_command_t *cmd) {
+static void cleanup_add_snippet_cmd(void *cmd) {
   AddSnippetCommand *c = (AddSnippetCommand *)cmd;
   model_free_snippet_inputs(&c->snippet_copy);
   free(c);
@@ -412,26 +409,25 @@ static void cleanup_add_snippet_cmd(undo_command_t *cmd) {
 // Snippet Editor Command
 undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, int *indices, int count, SPlayerInput *before_states,
                                            SPlayerInput *after_states) {
-  if (!snippet || !indices || !before_states || !after_states || count <= 0) return NULL;
-
   EditInputsCommand *cmd = calloc(1, sizeof(EditInputsCommand));
   cmd->base.undo = undo_edit_inputs;
   cmd->base.redo = redo_edit_inputs;
   cmd->base.cleanup = cleanup_edit_inputs_cmd;
-  cmd->snippet_id = snippet->id;
-  cmd->count = count;
 
   // We must take ownership of the provided pointers
   cmd->indices = indices;
   cmd->before = before_states;
   cmd->after = after_states;
+  cmd->snippet_id = snippet->id;
+  cmd->count = count;
 
   return &cmd->base;
 }
 
 // Delete Snippets
-static void undo_delete_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+static void undo_delete_snippets(void *cmd, void *ts_void) {
   DeleteSnippetsCommand *c = (DeleteSnippetsCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   bool modified_tracks[MAX_MODIFIED_TRACKS_PER_COMMAND] = {false};
 
   for (int i = 0; i < c->count; ++i) {
@@ -448,8 +444,9 @@ static void undo_delete_snippets(undo_command_t *cmd, timeline_state_t *ts) {
     if (i < MAX_MODIFIED_TRACKS_PER_COMMAND && modified_tracks[i]) model_compact_layers_for_track(&ts->player_tracks[i]);
   }
 }
-static void redo_delete_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+static void redo_delete_snippets(void *cmd, void *ts_void) {
   DeleteSnippetsCommand *c = (DeleteSnippetsCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   bool modified_tracks[MAX_MODIFIED_TRACKS_PER_COMMAND] = {false};
 
   for (int i = 0; i < c->count; ++i) {
@@ -464,7 +461,7 @@ static void redo_delete_snippets(undo_command_t *cmd, timeline_state_t *ts) {
     if (i < MAX_MODIFIED_TRACKS_PER_COMMAND && modified_tracks[i]) model_compact_layers_for_track(&ts->player_tracks[i]);
   }
 }
-static void cleanup_delete_snippets_cmd(undo_command_t *cmd) {
+static void cleanup_delete_snippets_cmd(void *cmd) {
   DeleteSnippetsCommand *c = (DeleteSnippetsCommand *)cmd;
   for (int i = 0; i < c->count; ++i) {
     model_free_snippet_inputs(&c->deleted_info[i].snippet_copy);
@@ -489,8 +486,9 @@ static void move_snippet_logic(timeline_state_t *ts, int snippet_id, int from_tr
   model_insert_snippet_into_track(&ts->player_tracks[to_track_idx], &snip_copy);
 }
 
-static void undo_move_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+static void undo_move_snippets(void *cmd, void *ts_void) {
   MoveSnippetsCommand *c = (MoveSnippetsCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   bool modified_tracks[MAX_MODIFIED_TRACKS_PER_COMMAND] = {false};
   for (int i = 0; i < c->count; i++) {
     MoveSnippetInfo *info = &c->move_info[i];
@@ -502,8 +500,9 @@ static void undo_move_snippets(undo_command_t *cmd, timeline_state_t *ts) {
     if (i < MAX_MODIFIED_TRACKS_PER_COMMAND && modified_tracks[i]) model_compact_layers_for_track(&ts->player_tracks[i]);
   }
 }
-static void redo_move_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+static void redo_move_snippets(void *cmd, void *ts_void) {
   MoveSnippetsCommand *c = (MoveSnippetsCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   bool modified_tracks[MAX_MODIFIED_TRACKS_PER_COMMAND] = {false};
   for (int i = 0; i < c->count; i++) {
     MoveSnippetInfo *info = &c->move_info[i];
@@ -515,15 +514,16 @@ static void redo_move_snippets(undo_command_t *cmd, timeline_state_t *ts) {
     if (i < MAX_MODIFIED_TRACKS_PER_COMMAND && modified_tracks[i]) model_compact_layers_for_track(&ts->player_tracks[i]);
   }
 }
-static void cleanup_move_snippets_cmd(undo_command_t *cmd) {
+static void cleanup_move_snippets_cmd(void *cmd) {
   MoveSnippetsCommand *c = (MoveSnippetsCommand *)cmd;
   free(c->move_info);
   free(c);
 }
 
 // Multi-Split Snippets
-static void undo_multi_split(undo_command_t *cmd, timeline_state_t *ts) {
+static void undo_multi_split(void *cmd, void *ts_void) {
   MultiSplitCommand *c = (MultiSplitCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   bool modified_tracks[MAX_MODIFIED_TRACKS_PER_COMMAND] = {false};
   for (int i = 0; i < c->count; i++) {
     SplitInfo *info = &c->infos[i];
@@ -547,8 +547,9 @@ static void undo_multi_split(undo_command_t *cmd, timeline_state_t *ts) {
     if (i < MAX_MODIFIED_TRACKS_PER_COMMAND && modified_tracks[i]) model_compact_layers_for_track(&ts->player_tracks[i]);
   }
 }
-static void redo_multi_split(undo_command_t *cmd, timeline_state_t *ts) {
+static void redo_multi_split(void *cmd, void *ts_void) {
   MultiSplitCommand *c = (MultiSplitCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   bool modified_tracks[MAX_MODIFIED_TRACKS_PER_COMMAND] = {false};
   for (int i = 0; i < c->count; i++) {
     SplitInfo *info = &c->infos[i];
@@ -570,14 +571,14 @@ static void redo_multi_split(undo_command_t *cmd, timeline_state_t *ts) {
 
     model_resize_snippet_inputs(ts, original, c->split_tick - original->start_tick);
     model_insert_snippet_into_track(track, &right);
-    interaction_add_snippet_to_selection(ts, right.id, track_idx);
+    interaction_add_snippet_to_selection(ts, right.id);
     if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
   }
   for (int i = 0; i < ts->player_track_count; i++) {
     if (i < MAX_MODIFIED_TRACKS_PER_COMMAND && modified_tracks[i]) model_compact_layers_for_track(&ts->player_tracks[i]);
   }
 }
-static void cleanup_multi_split_cmd(undo_command_t *cmd) {
+static void cleanup_multi_split_cmd(void *cmd) {
   MultiSplitCommand *c = (MultiSplitCommand *)cmd;
   for (int i = 0; i < c->count; i++) {
     free(c->infos[i].moved_inputs);
@@ -587,8 +588,9 @@ static void cleanup_multi_split_cmd(undo_command_t *cmd) {
 }
 
 // Merge Snippets
-static void undo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+static void undo_merge_snippets(void *cmd, void *ts_void) {
   MergeSnippetsCommand *c = (MergeSnippetsCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   player_track_t *track = &ts->player_tracks[c->track_index];
   input_snippet_t *target = model_find_snippet_in_track(track, c->target_snippet_id);
   if (!target) return;
@@ -603,8 +605,9 @@ static void undo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts) {
   model_compact_layers_for_track(track);
 }
 
-static void redo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts) {
+static void redo_merge_snippets(void *cmd, void *ts_void) {
   MergeSnippetsCommand *c = (MergeSnippetsCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   player_track_t *track = &ts->player_tracks[c->track_index];
 
   for (int i = 0; i < c->merged_snippets_count; i++) {
@@ -624,7 +627,7 @@ static void redo_merge_snippets(undo_command_t *cmd, timeline_state_t *ts) {
   }
   model_compact_layers_for_track(track);
 }
-static void cleanup_merge_snippets_cmd(undo_command_t *cmd) {
+static void cleanup_merge_snippets_cmd(void *cmd) {
   MergeSnippetsCommand *c = (MergeSnippetsCommand *)cmd;
   if (c->merged_snippets) {
     for (int i = 0; i < c->merged_snippets_count; i++) {
@@ -636,8 +639,9 @@ static void cleanup_merge_snippets_cmd(undo_command_t *cmd) {
 }
 
 // Remove Track
-static void undo_remove_track(undo_command_t *cmd, timeline_state_t *ts) {
+static void undo_remove_track(void *cmd, void *ts_void) {
   RemoveTrackCommand *c = (RemoveTrackCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   int new_count = ts->player_track_count + 1;
   ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * new_count);
   memmove(&ts->player_tracks[c->track_index + 1], &ts->player_tracks[c->track_index],
@@ -652,12 +656,13 @@ static void undo_remove_track(undo_command_t *cmd, timeline_state_t *ts) {
   model_recalc_physics(ts, 0);
 }
 
-static void redo_remove_track(undo_command_t *cmd, timeline_state_t *ts) {
+static void redo_remove_track(void *cmd, void *ts_void) {
   RemoveTrackCommand *c = (RemoveTrackCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   model_remove_track_logic(ts, c->track_index);
 }
 
-static void cleanup_remove_track_cmd(undo_command_t *cmd) {
+static void cleanup_remove_track_cmd(void *cmd) {
   RemoveTrackCommand *c = (RemoveTrackCommand *)cmd;
   for (int i = 0; i < c->track_copy.snippet_count; i++) {
     model_free_snippet_inputs(&c->track_copy.snippets[i]);
@@ -668,7 +673,7 @@ static void cleanup_remove_track_cmd(undo_command_t *cmd) {
 
 // API Command Implementations
 
-undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t *info, int *out_track_index) {
+undo_command_t *timeline_api_create_track(struct ui_handler *ui, const player_info_t *info, int *out_track_index) {
   timeline_state_t *ts = &ui->timeline;
   ph_t *ph = &ui->gfx_handler->physics_handler;
 
@@ -689,15 +694,17 @@ undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t 
   return &cmd->base;
 }
 
-static void undo_add_track(undo_command_t *cmd, timeline_state_t *ts) {
+static void undo_add_track(void *cmd, void *ts_void) {
   AddTrackCommand *c = (AddTrackCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   ph_t *ph = &ts->ui->gfx_handler->physics_handler;
   model_remove_track_logic(ts, c->track_index);
   wc_remove_character(&ph->world, c->track_index);
 }
 
-static void redo_add_track(undo_command_t *cmd, timeline_state_t *ts) {
+static void redo_add_track(void *cmd, void *ts_void) {
   AddTrackCommand *c = (AddTrackCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   ph_t *ph = &ts->ui->gfx_handler->physics_handler;
 
   player_track_t *new_track = model_add_new_track(ts, ph, 1);
@@ -707,14 +714,14 @@ static void redo_add_track(undo_command_t *cmd, timeline_state_t *ts) {
   new_track->player_info = c->player_info;
 }
 
-static void cleanup_add_track_cmd(undo_command_t *cmd) { free(cmd); }
+static void cleanup_add_track_cmd(void *cmd) { free(cmd); }
 
-undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, int start_tick, int duration, int *out_snippet_id) {
+undo_command_t *timeline_api_create_snippet(struct ui_handler *ui, int track_index, int start_tick, int duration, int *out_snippet_id) {
   timeline_state_t *ts = &ui->timeline;
   if (track_index < 0 || track_index >= ts->player_track_count || duration <= 0) return NULL;
 
   player_track_t *track = &ts->player_tracks[track_index];
-  int new_layer = model_find_available_layer(ts, track, start_tick, start_tick + duration, -1);
+  int new_layer = model_find_available_layer(track, start_tick, start_tick + duration, -1);
   if (new_layer == -1) return NULL;
 
   input_snippet_t snippet;
@@ -732,7 +739,6 @@ undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, i
   cmd->base.undo = undo_add_snippet;
   cmd->base.redo = redo_add_snippet;
   cmd->base.cleanup = cleanup_add_snippet_cmd;
-  cmd->track_index = track_index;
   model_snippet_clone(&cmd->snippet_copy, &snippet);
 
   model_insert_snippet_into_track(track, &snippet);
@@ -751,15 +757,17 @@ static void apply_input_states(timeline_state_t *ts, int snippet_id, int count, 
   }
 }
 
-static void undo_edit_inputs(undo_command_t *cmd, timeline_state_t *ts) {
+static void undo_edit_inputs(void *cmd, void *ts_void) {
   EditInputsCommand *c = (EditInputsCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   apply_input_states(ts, c->snippet_id, c->count, c->indices, c->before);
 }
-static void redo_edit_inputs(undo_command_t *cmd, timeline_state_t *ts) {
+static void redo_edit_inputs(void *cmd, void *ts_void) {
   EditInputsCommand *c = (EditInputsCommand *)cmd;
+  struct timeline_state *ts = (struct timeline_state *)ts_void;
   apply_input_states(ts, c->snippet_id, c->count, c->indices, c->after);
 }
-static void cleanup_edit_inputs_cmd(undo_command_t *cmd) {
+static void cleanup_edit_inputs_cmd(void *cmd) {
   EditInputsCommand *c = (EditInputsCommand *)cmd;
   free(c->indices);
   free(c->before);
@@ -767,7 +775,7 @@ static void cleanup_edit_inputs_cmd(undo_command_t *cmd) {
   free(c);
 }
 
-undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id, int tick_offset, int count, const SPlayerInput *new_inputs) {
+undo_command_t *timeline_api_set_snippet_inputs(struct ui_handler *ui, int snippet_id, int tick_offset, int count, const SPlayerInput *new_inputs) {
   timeline_state_t *ts = &ui->timeline;
   input_snippet_t *snippet = model_find_snippet_by_id(ts, snippet_id, NULL);
   if (!snippet || !new_inputs || count <= 0 || tick_offset < 0 || tick_offset >= snippet->input_count) return NULL;

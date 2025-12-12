@@ -3,17 +3,15 @@
 
 #include <stdbool.h>
 
-typedef struct timeline_state timeline_state_t;
-// Base struct for all undoable/redoable actions.
-// Specific commands will embed this and add their own data.
-typedef struct undo_command_t {
+typedef struct undo_command_t undo_command_t;
+struct undo_command_t {
   // A function to reverse the action.
-  void (*undo)(struct undo_command_t *cmd, timeline_state_t *ts);
+  void (*undo)(void *cmd, void *ts);
   // A function to re-apply the action.
-  void (*redo)(struct undo_command_t *cmd, timeline_state_t *ts);
+  void (*redo)(void *cmd, void *ts);
   // A function to free any memory held by the command itself.
-  void (*cleanup)(struct undo_command_t *cmd);
-} undo_command_t;
+  void (*cleanup)(void *cmd);
+};
 
 // The manager holds separate stacks for undo and redo commands.
 typedef struct {
@@ -34,8 +32,8 @@ void undo_manager_cleanup(undo_manager_t *manager);
 void undo_manager_register_command(undo_manager_t *manager, undo_command_t *command);
 
 // Perform undo/redo operations.
-void undo_manager_undo(undo_manager_t *manager, timeline_state_t *ts);
-void undo_manager_redo(undo_manager_t *manager, timeline_state_t *ts);
+void undo_manager_undo(undo_manager_t *manager, void *ts);
+void undo_manager_redo(undo_manager_t *manager, void *ts);
 
 // Check if undo/redo is possible.
 bool undo_manager_can_undo(const undo_manager_t *manager);

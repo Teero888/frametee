@@ -1,6 +1,6 @@
 #include "timeline.h"
 #include "../user_interface.h"
-#include "cimgui.h"
+#include <system/include_cimgui.h>
 #include "timeline_interaction.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
@@ -8,14 +8,14 @@
 
 // Public API Implementation
 
-void timeline_init(ui_handler_t *ui) {
-  ui->timeline = (timeline_state_t){};
+void timeline_init(struct ui_handler *ui) {
+  ui->timeline = (timeline_state_t){0};
   model_init(&ui->timeline, ui);
 }
 
 void timeline_cleanup(timeline_state_t *ts) { model_cleanup(ts); }
 
-void render_timeline(ui_handler_t *ui) {
+void render_timeline(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
 
   igSetNextWindowClass(&((ImGuiWindowClass){.DockingAllowUnclassed = false}));
@@ -49,7 +49,7 @@ void render_timeline(ui_handler_t *ui) {
 
     // Handle header interaction and render it
     interaction_handle_header(ts, header_bb);
-    renderer_draw_header(ts, draw_list, header_bb, content_start_pos.y + available_space.y);
+    renderer_draw_header(ts, draw_list, header_bb);
     igDummy((ImVec2){0, header_height}); // Advance cursor
 
     // Create a child window for the vertically scrollable track area

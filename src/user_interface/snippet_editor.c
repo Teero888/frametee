@@ -1,8 +1,8 @@
 #include "snippet_editor.h"
-#include "cimgui.h"
-#include "timeline/timeline_commands.h"
-#include "timeline/timeline_model.h"
-#include "user_interface.h"
+#include <system/include_cimgui.h>
+#include <user_interface/timeline/timeline_commands.h>
+#include <user_interface/timeline/timeline_model.h>
+#include <user_interface/user_interface.h>
 #include <float.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -45,7 +45,7 @@ typedef struct {
 
 static SnippetEditorState editor_state = {.last_selected_row = -1, .active_snippet_id = -1};
 
-static void reset_editor_state() {
+static void reset_editor_state(void) {
   memset(editor_state.selected_rows, 0, sizeof(editor_state.selected_rows));
   editor_state.selection_count = 0;
   editor_state.last_selected_row = -1;
@@ -72,7 +72,7 @@ static void get_selection_bounds(int *start, int *end) {
 // UNDO/REDO ACTION MANAGEMENT for Painting and Bulk Edits
 
 // Begins tracking a new multi-input change.
-static void begin_action() {
+static void begin_action(void) {
   if (editor_state.action_in_progress) return;
 
   // Clean up any old data, just in case.
@@ -112,7 +112,7 @@ static void record_change_if_new(input_snippet_t *snippet, int index) {
 }
 
 // Finishes the action, creates the undo command, and registers it.
-static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
+static void end_action(struct ui_handler *ui, input_snippet_t *snippet) {
   if (!editor_state.action_in_progress || editor_state.action_changed_count == 0) {
     editor_state.action_in_progress = false; // Ensure state is reset
     return;
@@ -143,7 +143,7 @@ static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
 static const char *weapon_options[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
 
 // Bulk Edit Panel
-static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
+static void render_bulk_edit_panel(struct ui_handler *ui, input_snippet_t *snippet) {
   timeline_state_t *ts = &ui->timeline;
 
   // Use a collapsing header for the entire panel
@@ -288,7 +288,7 @@ static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
   }
 }
 
-void render_snippet_editor_panel(ui_handler_t *ui) {
+void render_snippet_editor_panel(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (igBegin("Snippet Editor", NULL, 0)) {
     // Check the number of selected snippets first
@@ -421,7 +421,6 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           // Direction
           igTableSetColumnIndex(1);
           igPushID_Int(i * 10 + 1);
-          // ... (color logic is fine)
           const char *dir_text;
           ImVec4 dir_color;
           switch (inp->m_Direction) {
@@ -604,7 +603,6 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
       int earliest_tick = -1;
 
       ImGuiIO *io = igGetIO_Nil();
-      bool needs_recalc = false;
 
       // Deselect all with Escape
       if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) && editor_state.selection_count > 0) {
@@ -642,7 +640,6 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
             }
           }
           end_action(ui, snippet);
-          needs_recalc = true;
         }
       }
       if (!igIsWindowHovered(0)) {
@@ -674,7 +671,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           else editor_state.action_in_progress = false;
         }
         if (igIsKeyPressed_Bool(ImGuiKey_Space, true)) {
-          begin_action(snippet);
+          begin_action();
           get_selection_bounds(&earliest_tick, NULL);
           for (int i = 0; i < snippet->input_count; i++) {
             if (editor_state.selected_rows[i]) {

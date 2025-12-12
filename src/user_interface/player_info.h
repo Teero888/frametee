@@ -1,8 +1,7 @@
 #ifndef PLAYER_INFO_H
 #define PLAYER_INFO_H
 
-#include "../renderer/renderer.h"
-#include "cimgui.h"
+#include <renderer/renderer.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -22,7 +21,7 @@ typedef struct {
   size_t data_size;
   int id;
   texture_t *preview_texture_res;
-  ImTextureRef *preview_texture;
+  struct ImTextureRef *preview_texture;
 } skin_info_t;
 
 typedef struct {

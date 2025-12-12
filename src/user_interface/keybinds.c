@@ -1,5 +1,4 @@
 #include "keybinds.h"
-#include "cimgui.h"
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
@@ -111,7 +110,7 @@ void keybinds_init(keybind_manager_t *manager) {
   manager->bindings[ACTION_SWITCH_TRACK_9] = (keybind_t){"switch_track_9", "Switch to Track 9", "Tracks", {ImGuiKey_9, false, true, false}};
 }
 
-void keybinds_process_inputs(ui_handler_t *ui) {
+void keybinds_process_inputs(struct ui_handler *ui) {
   if (igIsAnyItemActive()) return;
 
   timeline_state_t *ts = &ui->timeline;
@@ -162,13 +161,13 @@ void keybinds_process_inputs(ui_handler_t *ui) {
 
   // NOTE: AFTER HERE COME THE TIMELINE KEYBINDS THAT SHOULD NOT WORK WHILE RECORDING
   if (ts->recording) return;
-  
+
   if (is_key_combo_pressed(&kb->bindings[ACTION_SELECT_ALL].combo, false)) {
     interaction_clear_selection(ts);
     ts->active_snippet_id = -1;
     for (int i = 0; i < ts->player_track_count; i++) {
       for (int j = 0; j < ts->player_tracks[i].snippet_count; j++) {
-        interaction_add_snippet_to_selection(ts, ts->player_tracks[i].snippets[j].id, i);
+        interaction_add_snippet_to_selection(ts, ts->player_tracks[i].snippets[j].id);
       }
     }
   }
@@ -242,7 +241,7 @@ static void render_keybind_button(keybind_manager_t *manager, action_t action_id
   igPopID();
 }
 
-void keybinds_render_settings_window(ui_handler_t *ui) {
+void keybinds_render_settings_window(struct ui_handler *ui) {
   keybind_manager_t *manager = &ui->keybinds;
   if (!manager->show_settings_window) return;
 

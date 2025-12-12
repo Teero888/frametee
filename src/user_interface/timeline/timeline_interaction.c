@@ -1,5 +1,5 @@
 #include "timeline_interaction.h"
-#include "../user_interface.h"
+#include <user_interface/user_interface.h>
 #include "timeline_commands.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
@@ -47,7 +47,7 @@ static void apply_input_to_recording_buffer(timeline_state_t *ts, player_track_t
   }
 }
 
-void interaction_apply_dummy_inputs(ui_handler_t *ui) {
+void interaction_apply_dummy_inputs(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (!ts->recording || ts->selected_player_track_index == -1) return;
 
@@ -217,7 +217,7 @@ void interaction_handle_timeline_area(timeline_state_t *ts, ImRect timeline_bb, 
 
 void interaction_clear_selection(timeline_state_t *ts) { ts->selected_snippets.count = 0; }
 
-void interaction_add_snippet_to_selection(timeline_state_t *ts, int snippet_id, int track_index) {
+void interaction_add_snippet_to_selection(timeline_state_t *ts, int snippet_id) {
   if (!snippet_id_vector_contains(&ts->selected_snippets, snippet_id)) {
     snippet_id_vector_add(&ts->selected_snippets, snippet_id);
   }
@@ -256,7 +256,7 @@ static void handle_pan_and_zoom(timeline_state_t *ts, ImRect timeline_bb) {
   }
 }
 
-static void start_drag(timeline_state_t *ts, int track_index, int snippet_id, ImRect timeline_bb) {
+static void start_drag(timeline_state_t *ts, int snippet_id, ImRect timeline_bb) {
   ImGuiIO *io = igGetIO_Nil();
   input_snippet_t *snippet = model_find_snippet_by_id(ts, snippet_id, NULL);
   if (!snippet) return;
@@ -270,7 +270,7 @@ static void start_drag(timeline_state_t *ts, int track_index, int snippet_id, Im
 
   if (!interaction_is_snippet_selected(ts, snippet->id)) {
     interaction_clear_selection(ts);
-    interaction_add_snippet_to_selection(ts, snippet_id, track_index);
+    interaction_add_snippet_to_selection(ts, snippet_id);
   }
 
   ts->drag_state.drag_info_count = ts->selected_snippets.count;
@@ -311,7 +311,7 @@ void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timelin
 static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_bb, float tracks_scroll_y) {
   ImGuiIO *io = igGetIO_Nil();
 
-  bool any_item_hovered_before = igIsAnyItemHovered();
+  // bool any_item_hovered_before = igIsAnyItemHovered();
 
   // Iterate through visible snippets to create invisible buttons for interaction
   for (int i = 0; i < ts->player_track_count; ++i) {
@@ -343,16 +343,16 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
       if (igIsItemClicked(ImGuiMouseButton_Left)) {
         if (io->KeyShift) {
           if (interaction_is_snippet_selected(ts, snippet->id)) interaction_remove_snippet_from_selection(ts, snippet->id);
-          else interaction_add_snippet_to_selection(ts, snippet->id, i);
+          else interaction_add_snippet_to_selection(ts, snippet->id);
         } else {
           if (!interaction_is_snippet_selected(ts, snippet->id)) {
             interaction_clear_selection(ts);
-            interaction_add_snippet_to_selection(ts, snippet->id, i);
+            interaction_add_snippet_to_selection(ts, snippet->id);
           }
         }
       }
       if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Left, DRAG_THRESHOLD_PX) && !ts->drag_state.active) {
-        start_drag(ts, i, snippet->id, timeline_bb);
+        start_drag(ts, snippet->id, timeline_bb);
       }
       igPopID();
     }
@@ -399,7 +399,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
         if (new_track < 0 || new_track >= ts->player_track_count) continue;
 
         int new_tick = s->start_tick + tick_delta;
-        int new_layer = model_find_available_layer(ts, &ts->player_tracks[new_track], new_tick, new_tick + s->input_count, s->id);
+        int new_layer = model_find_available_layer(&ts->player_tracks[new_track], new_tick, new_tick + s->input_count, s->id);
         if (new_layer == -1) continue; // Collision
 
         infos[valid_moves++] = (MoveSnippetInfo){.snippet_id = s->id,
@@ -482,7 +482,7 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
       bool y_overlap = rect.Max.y >= snippet_bb.Min.y && rect.Min.y <= snippet_bb.Max.y;
 
       if (x_overlap && y_overlap) {
-        interaction_add_snippet_to_selection(ts, snip->id, i);
+        interaction_add_snippet_to_selection(ts, snip->id);
       }
     }
   }
@@ -679,7 +679,7 @@ void interaction_switch_recording_target(timeline_state_t *ts, int new_track_ind
   }
 }
 
-void interaction_update_recording_input(ui_handler_t *ui) {
+void interaction_update_recording_input(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
   keybind_manager_t *kb = &ui->keybinds;
 
@@ -703,7 +703,7 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   input->m_TargetY = (int)ui->recording_mouse_pos[1];
 }
 
-SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int track_idx) {
+SPlayerInput interaction_predict_input(struct ui_handler *ui, SWorldCore *world, int track_idx) {
   timeline_state_t *ts = &ui->timeline;
 
   // Normal playback or recording non-selected/non-dummy tracks

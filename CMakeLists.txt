@@ -8,6 +8,16 @@ option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer
 
 # source files
 project(ddnet_frametee)
+
+if(UNIX AND CMAKE_C_COMPILER_ID MATCHES "MSVC")
+    message(WARNING "It looks like you are using clang-cl (MSVC compatible) on Linux. This might be unintended. Consider setting CC=clang before running cmake.")
+endif()
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+	message(STATUS "No build type selected, defaulting to Release")
+	set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type (default Release)" FORCE)
+endif()
+
 set(SRCS 
 	src/main.c
 	src/animation/anim_data.c
@@ -119,11 +129,6 @@ add_subdirectory(libs/cglm)
 add_subdirectory(libs/ddnet_physics)
 add_subdirectory(libs/nfd)
 
-# linking + suppress all warnings for the libs
-target_compile_options(${PROJECT_NAME} PRIVATE
-    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>:-w>
-    $<$<C_COMPILER_ID:MSVC>:/W0>
-)
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nfd
     stb
@@ -137,12 +142,25 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
-    $<$<CONFIG:Debug>:-g;-DDEBUG;-ffast-math>
+    -Wall -Wextra -pedantic
+    $<$<CONFIG:Debug>:-g>
+    $<$<CONFIG:Debug>:-DDEBUG>
+    $<$<CONFIG:Debug>:-ffast-math>
 
-    $<$<CONFIG:Release>:-g;-O3;-ffast-math;-funroll-loops;-mfpmath=sse;-fomit-frame-pointer;-fno-trapping-math;-fno-signed-zeros>
+    $<$<CONFIG:Release>:-g>
+    $<$<CONFIG:Release>:-O3>
+    $<$<CONFIG:Release>:-ffast-math>
+    $<$<CONFIG:Release>:-funroll-loops>
+    $<$<CONFIG:Release>:-mfpmath=sse>
+    $<$<CONFIG:Release>:-fomit-frame-pointer>
+    $<$<CONFIG:Release>:-fno-trapping-math>
+    $<$<CONFIG:Release>:-fno-signed-zeros>
 
     $<$<AND:$<BOOL:${ENABLE_SANITIZERS}>,$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-fsanitize=address,undefined>
 )
+
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/libs)
 
 # sanitizer options
 if(ENABLE_SANITIZERS)

@@ -3,7 +3,7 @@
 
 void physics_init_from_memory(ph_t *h, const unsigned char *map_buffer, size_t size) {
   physics_free(h);
-  map_data_t map = load_map_from_memory(map_buffer, size);
+  map_data_t map = load_map_from_memory((unsigned char *)map_buffer, size);
   if (!init_collision(&h->collision, &map)) {
     // if init fails, free_map_data will free the layer data and the map_buffer.
     free_map_data(&map);

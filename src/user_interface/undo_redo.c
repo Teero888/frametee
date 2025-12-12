@@ -53,20 +53,20 @@ bool undo_manager_can_undo(const undo_manager_t *manager) { return manager->undo
 
 bool undo_manager_can_redo(const undo_manager_t *manager) { return manager->redo_count > 0; }
 
-void undo_manager_undo(undo_manager_t *manager, timeline_state_t *ts) {
+void undo_manager_undo(undo_manager_t *manager, void *ts) {
   undo_command_t *command = pop_from_stack(manager->undo_stack, &manager->undo_count);
   if (command) {
     command->undo(command, ts);
     push_to_stack(&manager->redo_stack, &manager->redo_count, &manager->redo_capacity, command);
-    model_recalc_physics(ts, 0); // Recalculate physics to be safe
+    model_recalc_physics((timeline_state_t *)ts, 0); // Recalculate physics to be safe
   }
 }
 
-void undo_manager_redo(undo_manager_t *manager, timeline_state_t *ts) {
+void undo_manager_redo(undo_manager_t *manager, void *ts) {
   undo_command_t *command = pop_from_stack(manager->redo_stack, &manager->redo_count);
   if (command) {
     command->redo(command, ts);
     push_to_stack(&manager->undo_stack, &manager->undo_count, &manager->undo_capacity, command);
-    model_recalc_physics(ts, 0); // Recalculate physics to be safe
+    model_recalc_physics((timeline_state_t *)ts, 0); // Recalculate physics to be safe
   }
 }

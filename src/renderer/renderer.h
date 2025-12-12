@@ -1,7 +1,7 @@
 #ifndef RENDERER_H
 #define RENDERER_H
 
-#include "../animation/anim_system.h"
+#include <animation/anim_system.h>
 #include <cglm/cglm.h>
 #include <stdbool.h>
 #include <stdint.h>

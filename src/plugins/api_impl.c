@@ -13,7 +13,7 @@
 
 // this global pointer allows the static API functions to access the application's state.
 // it is set once by api_init() and is internal to this file.
-static ui_handler_t *g_ui_handler_for_api = NULL;
+static struct ui_handler *g_ui_handler_for_api = NULL;
 
 static int api_get_current_tick(void) { return g_ui_handler_for_api->timeline.current_tick; }
 
@@ -57,41 +57,19 @@ static SWorldCore *api_get_world_state_at(int tick) {
   return world_copy;
 }
 
-static void api_free_world_state(SWorldCore *world) {
-  if (world) {
-    wc_free(world);
-    free(world);
-  }
-}
-
-static int api_get_player_count(const SWorldCore *world_state) { return world_state ? world_state->m_NumCharacters : 0; }
-
-static const SCharacterCore *api_get_player(const SWorldCore *world_state, int player_index) {
-  if (world_state && player_index >= 0 && player_index < world_state->m_NumCharacters) {
-    return &world_state->m_pCharacters[player_index];
-  }
-  return NULL;
-}
-
-static const SProjectile *api_get_first_projectile(const SWorldCore *world_state) {
-  return world_state ? world_state->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE] : NULL;
-}
-
-static const SProjectile *api_get_next_projectile(const SProjectile *current) { return current ? current->m_Base.m_pNextTypeEntity : NULL; }
-
-static undo_command_t *api_do_create_track(const player_info_t *info, int *out_track_index) {
+static struct undo_command_t *api_do_create_track(const player_info_t *info, int *out_track_index) {
   return timeline_api_create_track(g_ui_handler_for_api, info, out_track_index);
 }
 
-static undo_command_t *api_do_create_snippet(int track_index, int start_tick, int duration, int *out_snippet_id) {
+static struct undo_command_t *api_do_create_snippet(int track_index, int start_tick, int duration, int *out_snippet_id) {
   return timeline_api_create_snippet(g_ui_handler_for_api, track_index, start_tick, duration, out_snippet_id);
 }
 
-static undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset, int count, const SPlayerInput *new_inputs) {
+static struct undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset, int count, const SPlayerInput *new_inputs) {
   return timeline_api_set_snippet_inputs(g_ui_handler_for_api, snippet_id, tick_offset, count, new_inputs);
 }
 
-static void api_register_undo_command(undo_command_t *command) {
+static void api_register_undo_command(struct undo_command_t *command) {
   if (command) {
     undo_manager_register_command(&g_ui_handler_for_api->undo_manager, command);
   }
@@ -101,13 +79,14 @@ static void api_draw_line_world(vec2 start, vec2 end, vec4 color, float thicknes
   renderer_draw_line(g_ui_handler_for_api->gfx_handler, start, end, color, thickness);
 }
 
-tas_api_t api_init(ui_handler_t *ui_handler) {
+tas_api_t api_init(struct ui_handler *ui_handler) {
   g_ui_handler_for_api = ui_handler;
 
   return (tas_api_t){
       .get_current_tick = api_get_current_tick,
       .get_track_count = api_get_track_count,
       .get_initial_world = api_get_initial_world,
+      .get_world_state_at = api_get_world_state_at,
       .do_create_track = api_do_create_track,
       .register_undo_command = api_register_undo_command,
       .do_create_snippet = api_do_create_snippet,

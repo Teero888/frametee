@@ -1,12 +1,12 @@
 #ifndef GRAPHICS_H
 #define GRAPHICS_H
-
-#include "../../libs/ddnet_physics/libs/ddnet_map_loader/ddnet_map_loader.h"
-#include "../physics/physics.h"
-#include "../user_interface/user_interface.h"
 #include "renderer.h"
-#include <cimgui.h>
+#include <system/include_cimgui.h>
 #include <cimgui_impl.h>
+#include <ddnet_physics/libs/ddnet_map_loader/ddnet_map_loader.h>
+#include <physics/physics.h>
+#include <system/include_cimgui.h>
+#include <user_interface/user_interface.h>
 #include <vulkan/vulkan_core.h>
 
 #define GLFW_INCLUDE_NONE
@@ -54,7 +54,7 @@ struct gfx_handler_t {
   VkCommandBuffer current_frame_command_buffer;
 
   // App Stuffs
-  ui_handler_t user_interface;
+  struct ui_handler user_interface;
   renderer_state_t renderer;
   physics_handler_t physics_handler;
   map_data_t *map_data; // ptr to ^ collision data for quick typing

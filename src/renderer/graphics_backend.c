@@ -1,12 +1,10 @@
 #include "graphics_backend.h"
-#include "../logger/logger.h"
-#include "../system/config.h"
-#include "../user_interface/user_interface.h"
-#include "cimgui.h"
 #include "renderer.h"
+#include <logger/logger.h>
+#include <user_interface/user_interface.h>
+
 #include <GLFW/glfw3.h>
 #include <assert.h>
-#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -455,7 +453,7 @@ void gfx_cleanup(gfx_handler_t *handler) {
 
 static texture_t *load_layer_texture(gfx_handler_t *handler, uint8_t **data, uint32_t width, uint32_t height) {
   if (!data) return handler->renderer.default_texture;
-  texture_t *tex = renderer_load_compact_texture_from_array(handler, data, width, height);
+  texture_t *tex = renderer_load_compact_texture_from_array(handler, (const uint8_t **)data, width, height);
   return tex ? tex : handler->renderer.default_texture;
 }
 
@@ -1071,6 +1069,7 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
 }
 
 // frame rendering and presentation
+/*
 static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
@@ -1157,7 +1156,9 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
     check_vk_result(err);
   }
 }
+*/
 
+/*
 static void frame_present(gfx_handler_t *handler) {
   if (handler->g_swap_chain_rebuild) return;
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
@@ -1176,3 +1177,4 @@ static void frame_present(gfx_handler_t *handler) {
   }
   wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount;
 }
+*/
