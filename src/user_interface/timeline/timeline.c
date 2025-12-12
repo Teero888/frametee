@@ -69,7 +69,7 @@ void render_timeline(ui_handler_t *ui) {
     interaction_handle_timeline_area(ts, timeline_bb, tracks_scroll_y);
 
     // Handle context menu
-    if (igIsMouseReleased_Nil(ImGuiMouseButton_Right) && igIsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
+    if (igIsMouseClicked_Bool(ImGuiMouseButton_Right, false) && igIsWindowHovered(ImGuiHoveredFlags_ChildWindows) && igGetIO_Nil()->MousePos.x >= timeline_bb.Min.x) {
       igOpenPopup_Str("TimelineContextMenu", 0);
     }
     interaction_handle_context_menu(ts);
