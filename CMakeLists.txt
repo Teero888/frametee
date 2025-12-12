@@ -136,16 +136,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Vulkan::Vulkan
 )
 
-# compiler warnings for the project
 target_compile_options(${PROJECT_NAME} PRIVATE
-    $<$<AND:$<COMPILE_LANGUAGE:C>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>>:-Wall;-Wextra;-pedantic-errors>
-    $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/W4>
-)
+    $<$<CONFIG:Debug>:-g;-DDEBUG;-ffast-math>
 
-set(CMAKE_C_FLAGS_DEBUG "-g -ffast-math -DDEBUG -fsanitize=address,undefined")
-set(CMAKE_C_FLAGS_RELEASE "-g -O3 -ffast-math -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -ffast-math -DDEBUG -fsanitize=address,undefined")
-set(CMAKE_CXX_FLAGS_RELEASE "-g -O3 -ffast-math -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros")
+    $<$<CONFIG:Release>:-g;-O3;-ffast-math;-funroll-loops;-mfpmath=sse;-fomit-frame-pointer;-fno-trapping-math;-fno-signed-zeros>
+
+    $<$<AND:$<BOOL:${ENABLE_SANITIZERS}>,$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-fsanitize=address,undefined>
+)
 
 # sanitizer options
 if(ENABLE_SANITIZERS)

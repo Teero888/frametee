@@ -694,6 +694,7 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   input->m_Jump = is_key_combo_down(&kb->bindings[ACTION_JUMP].combo);
   input->m_Fire = is_key_combo_down(&kb->bindings[ACTION_FIRE].combo);
   input->m_Hook = is_key_combo_down(&kb->bindings[ACTION_HOOK].combo);
+  set_flag_kill(input, is_key_combo_down(&kb->bindings[ACTION_KILL].combo));
 
   if (is_key_combo_pressed(&kb->bindings[ACTION_HAMMER].combo, false)) input->m_WantedWeapon = WEAPON_HAMMER;
   if (is_key_combo_pressed(&kb->bindings[ACTION_GUN].combo, false)) input->m_WantedWeapon = WEAPON_GUN;
@@ -701,9 +702,8 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   if (is_key_combo_pressed(&kb->bindings[ACTION_GRENADE].combo, false)) input->m_WantedWeapon = WEAPON_GRENADE;
   if (is_key_combo_pressed(&kb->bindings[ACTION_LASER].combo, false)) input->m_WantedWeapon = WEAPON_LASER;
 
-  ts->recording_input.m_TargetX = (int)ui->recording_mouse_pos[0];
-  ts->recording_input.m_TargetY = (int)ui->recording_mouse_pos[1];
-  ui->gfx_handler->raw_mouse.dx = ui->gfx_handler->raw_mouse.dy = 0.0;
+  input->m_TargetX = (int)ui->recording_mouse_pos[0];
+  input->m_TargetY = (int)ui->recording_mouse_pos[1];
 }
 
 SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int track_idx) {
