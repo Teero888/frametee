@@ -1,5 +1,7 @@
 #pragma once
 
+// CImGui uses C11 extensions im doomed
+
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wc11-extensions"

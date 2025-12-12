@@ -1,10 +1,8 @@
 #ifndef GRAPHICS_H
 #define GRAPHICS_H
 #include "renderer.h"
-#include <cimgui_impl.h>
 #include <ddnet_physics/libs/ddnet_map_loader/ddnet_map_loader.h>
 #include <physics/physics.h>
-#include <system/include_cimgui.h>
 #include <user_interface/user_interface.h>
 #include <vulkan/vulkan_core.h>
 
@@ -13,6 +11,12 @@
 #include <GLFW/glfw3.h>
 #include <stdbool.h>
 #include <stdint.h>
+
+// These have to be in this order
+#include <system/include_cimgui.h>
+// -------------
+#include <cimgui_impl.h>
+// -------------
 
 // forward declaration
 struct gfx_handler_t;

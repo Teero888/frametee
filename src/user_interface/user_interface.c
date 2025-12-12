@@ -435,7 +435,8 @@ void render_players(struct ui_handler *ui) {
     return;
   }
 
-  float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
+  float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
+  float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
   if (ui->timeline.is_reversing) intra = 1.f - intra;
 
   if (ui->timeline.recording) {
@@ -847,7 +848,8 @@ void render_pickups(struct ui_handler *ui) {
     }
 
     // animation
-    float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
+    float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
+    float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
     if (ui->timeline.is_reversing) intra = 1.f - intra;
     intra += h->user_interface.timeline.current_tick;
 
@@ -925,7 +927,8 @@ bool ui_render_late(struct ui_handler *ui) {
       SWorldCore world = wc_empty();
       model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world);
 
-      float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / ui->timeline.playback_speed), 1.f);
+      float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
+      float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
       if (ui->timeline.is_reversing) intra = 1.f - intra;
 
       int best_match = -1;
