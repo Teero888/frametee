@@ -1,14 +1,5 @@
 #include "user_interface.h"
-#include <symbols.h>
-#include <animation/anim_data.h>
-#include <logger/logger.h>
-#include <plugins/api_impl.h>
-#include <renderer/graphics_backend.h>
-#include <renderer/renderer.h>
-#include <system/config.h>
-#include <system/save.h>
 #include "cglm/vec2.h"
-#include <system/include_cimgui.h>
 #include "ddnet_physics/collision.h"
 #include "demo.h"
 #include "player_info.h"
@@ -20,14 +11,23 @@
 #include "undo_redo.h"
 #include "widgets/hsl_colorpicker.h"
 #include "widgets/imcol.h"
+#include <animation/anim_data.h>
 #include <ddnet_physics/gamecore.h>
 #include <limits.h>
+#include <logger/logger.h>
 #include <math.h>
 #include <nfd.h>
+#include <plugins/api_impl.h>
+#include <renderer/graphics_backend.h>
+#include <renderer/renderer.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <symbols.h>
+#include <system/config.h>
+#include <system/include_cimgui.h>
+#include <system/save.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -769,13 +769,16 @@ void render_players(struct ui_handler *ui) {
     return;
   }
 
-  // Initialize prediction starting points
-  vec2 *prev_positions = malloc(sizeof(vec2) * world.m_NumCharacters);
   for (int i = 0; i < world.m_NumCharacters; ++i) {
     SCharacterCore *core = &world.m_pCharacters[i];
     vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
     vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-    lerp(ppp, pp, intra, prev_positions[i]);
+    vec2 p;
+    lerp(ppp, pp, intra, p);
+    vec4 color = {[3] = 0.8f};
+    if (core->m_FreezeTime > 0) color[0] = 1.f;
+    else color[1] = 1.f;
+    renderer_draw_line(gfx, pp, p, color, 0.05);
   }
 
   // draw the rest of the lines
@@ -788,15 +791,14 @@ void render_players(struct ui_handler *ui) {
 
     for (int i = 0; i < world.m_NumCharacters; ++i) {
       SCharacterCore *core = &world.m_pCharacters[i];
+      vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
       vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
       vec4 color = {[3] = 0.8f};
       if (core->m_FreezeTime > 0) color[0] = 1.f;
       else color[1] = 1.f;
-      renderer_draw_line(gfx, prev_positions[i], p, color, 0.05);
-      glm_vec2_copy(p, prev_positions[i]);
+      renderer_draw_line(gfx, pp, p, color, 0.05);
     }
   }
-  free(prev_positions);
   wc_free(&world);
 }
 
