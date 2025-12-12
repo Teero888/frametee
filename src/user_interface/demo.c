@@ -175,12 +175,18 @@ int round_to_int(float f) {
   else return (int)(f - 0.5f);
 }
 
+static void on_hammer_hit(mvec2 pos, void *data) {
+  demo_exporter_t *exporter = data;
+  if (exporter->num_hammerhits < MAX_HAMMERHITS_PER_TICK) exporter->hammerhits[exporter->num_hammerhits++] = pos;
+}
+
 int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, SWorldCore *cur) {
   int width = cur->m_pCollision->m_MapData.width;
   int height = cur->m_pCollision->m_MapData.height;
   int next_item_id = cur->m_NumCharacters; // start after reserved player ids
 
   // do pickups first since they have static ids basically
+  // BRUH TODO: only loop over once wtf this is so slow
   for (int y = 0; y < height; ++y) {
     const int yidx = y * width;
     for (int x = 0; x < width; ++x) {
@@ -370,6 +376,11 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
         nhs->m_SoundId = c_cur->m_ActiveWeapon == WEAPON_HAMMER ? DD_SOUND_HAMMER_FIRE : DD_SOUND_GUN_FIRE;
       }
     }
+    for (int i = 0; i < ts->ui->demo_exporter.num_hammerhits; ++i) {
+      dd_netevent_hammer_hit *nhh = demo_sb_add_item(sb, DD_NETEVENTTYPE_HAMMERHIT, next_item_id++, sizeof(dd_netevent_hammer_hit));
+      nhh->common.m_X = vgetx(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
+      nhh->common.m_Y = vgety(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
+    }
     // TODO: Getting hit by hammer
     // if (c_cur->m_DamageTick == pWorld->m_GameTick && pCharacter->m_DamageWeapon == WEAPON_HAMMER) {
     //   CNetEvent_HammerHit *pNetHammerHit = SnapNewItem<CNetEvent_HammerHit>(((uint64_t)pCharacter + 5) % 0xffff);
@@ -505,6 +516,8 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
   // get initial worlds
   model_get_world_state_at_tick(&ui->timeline, 0, &cur);
   wc_copy_world(&prev, &cur);
+  cur.user_data = &ui->demo_exporter;
+  cur.eff_hammer = on_hammer_hit;
 
   for (int t = 0; t < ticks; ++t) {
     demo_sb_clear(sb);
@@ -514,6 +527,7 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
     }
     snap_world(sb, &ui->timeline, &prev, &cur);
     wc_copy_world(&prev, &cur);
+    ui->demo_exporter.num_hammerhits = 0;
     wc_tick(&cur);
     int snap_size = demo_sb_finish(sb, snap_buf);
     if (snap_size > 0) demo_w_write_snap(writer, t, snap_buf, snap_size);
