@@ -181,7 +181,7 @@ void config_save(struct ui_handler *ui) {
     return;
   }
 
-  fprintf(fp, "# Frametee Configuration (https://github.com/Teero888/ddnet_frametee_c99)\n\n");
+  fprintf(fp, "# Frametee Configuration (https://github.com/Teero888/frametee)\n\n");
   fprintf(fp, "[keybinds]\n");
 
   keybind_manager_t defaults;
