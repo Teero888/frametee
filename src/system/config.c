@@ -1,8 +1,8 @@
 #include "config.h"
 #include <logger/logger.h>
-#include <user_interface/keybinds.h>
-#include <tomlc17.h>
 #include <system/include_cimgui.h>
+#include <tomlc17.h>
+#include <user_interface/keybinds.h>
 
 #include <stdio.h>
 #include <stdlib.h>

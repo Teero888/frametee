@@ -2,13 +2,41 @@
 
 FrameTee is a TAS editor for the game [DDNet](https://github.com/ddnet/ddnet). It's built using C99, Vulkan and ImGui.
 
+This is a WIP, expect bugs, crashes and missing features. The physics and project file format may change at any time so don't expect your projects to work across versions.
+There is no support for macOS currently, since I don't have a macOS installation to test it.
+
 ## Features
-  - TAS editing
-  - Vulkan graphics
-  - ImGui user interface
+
+### Core & Rendering
+- **Custom Physics:** Custom physics from https://github.com/Teero888/ddnet_physics to prevent cheating in the original game.
+- **Vulkan Renderer:** High-performance rendering using the Vulkan API.
+- **DDNet Map Support:** Full support for DDNet maps (as far as the physics currently allow it).
+- **Skin Rendering:** Full support for DDNet skins.
+
+### TAS Editing
+- **Timeline Interface:** Intuitive timeline for managing inputs across multiple frames.
+- **Multi-Track Editing:** Support for multiple tees (tracks) with independent input streams.
+- **Input Snippets:** Organize inputs into movable, resizable, and editable snippets.
+- **Recording:** Real-time and frame-by-frame recording capabilities.
+- **Prediction:** Visual trajectory prediction to see where the tee will go.
+- **Undo/Redo:** Comprehensive undo/redo system for all timeline operations.
+- **Snippet Editor:** Detailed matrix editor for precise tick-by-tick input modification.
+- **Bulk Editing:** Apply changes (direction, jumping, weapons) to multiple ticks at once.
+
+### Dummy Control
+- **Dummy Handling:** Dedicated controls for dummy tees.
+- **Input Copying:** Configurable input mirroring and copying from the main tee (Mirror X/Y, Copy Aim/Hook/Fire).
+- **Dummy Hammer:** Dummy hammering that behaves similar to the [deepfly bind](https://wiki.ddnet.org/wiki/Binds#Deepfly)
+
+### Tools & Extensibility
+- **Demo Export:** Export your TAS directly to a DDNet compatible demo file.
+- **Project System:** Save and load your work with `.tasp` project files.
+- **Plugin System:** Extend the editor's functionality with C/C++ plugins (DLL/SO).
+- **Skin Browser:** Visual browser for managing and selecting player skins.
+- **Keybinds:** Fully configurable keyboard and mouse bindings.
 
 ## Requirements
-  - `clang` compiler
+  - clang is recommended
   - Vulkan SDK
   - `zlib`
 
@@ -24,7 +52,6 @@ mkdir build && cd build
 
 # configure for a Release build
 cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=On -DCMAKE_BUILD_TYPE=Release
-
 # OR configure for a Debug build with sanitizers enabled
 cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=On -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=On
 
@@ -44,6 +71,43 @@ FrameTee is open-source. Contributions are accepted through issue reports and pu
 You can also contact me via Discord: `teero777`
 
 -----
+
+## Configuration
+
+The config for this program is saved as `~/.config/frametee/config.toml` on Unix based systems or as `%appdata%/frametee/config.toml` on Windows.
+
+## Default Controls
+
+### Playback
+- **Play/Pause:** `X`
+- **Rewind (Hold):** `C`
+- **Previous Frame:** `Mouse Button 4`
+- **Next Frame:** `Mouse Button 5`
+- **Increase TPS:** `Up Arrow`
+- **Decrease TPS:** `Down Arrow`
+
+### Timeline Editing
+- **Select All Snippets:** `Ctrl + A`
+- **Delete Snippet:** `Delete`
+- **Split Snippet:** `Ctrl + R`
+- **Merge Snippets:** `Ctrl + M`
+- **Toggle Snippet Active:** `A`
+
+### Recording
+- **Move Left/Right:** `A` / `D`
+- **Jump:** `Space`
+- **Fire:** `Mouse Left`
+- **Hook:** `Mouse Right`
+- **Kill:** `K`
+- **Trim Recording:** `F`
+- **Cancel Recording:** `F4`
+- **Weapons:** `1`-`5` (Hammer, Gun, Shotgun, Grenade, Laser)
+
+### Dummy & Camera
+- **Dummy Fire:** `V`
+- **Toggle Dummy Copy:** `R`
+- **Zoom In/Out:** `W` / `S`
+- **Switch Track:** `Alt + 1-9`
 
 ## Plugins 
 

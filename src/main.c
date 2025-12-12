@@ -12,7 +12,6 @@ int main(void) {
   gfx_handler_t handler;
   if (init_gfx_handler(&handler) != 0) return 1;
   handler.map_data = &handler.physics_handler.collision.m_MapData;
-  // on_map_load(&handler, "data/maps/Kobra 4.map");
 
   bool viewport_hovered = false;
 
@@ -46,6 +45,7 @@ int main(void) {
     render_players(&handler.user_interface);
     renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.gameskin_renderer, false);
     renderer_flush_skins(&handler, handler.current_frame_command_buffer, handler.renderer.skin_manager.atlas_array);
+    
     // draw ui
     ui_render(&handler.user_interface);
 
