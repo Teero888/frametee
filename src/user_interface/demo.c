@@ -2,6 +2,7 @@
 #include "../logger/logger.h"
 #include "../renderer/graphics_backend.h"
 #include "cimgui.h"
+#include "ddnet_physics/vmath.h"
 #include "nfd.h"
 #include "timeline/timeline_model.h"
 #include "undo_redo.h"
@@ -186,35 +187,17 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
   int next_item_id = cur->m_NumCharacters; // start after reserved player ids
 
   // do pickups first since they have static ids basically
-  // BRUH TODO: only loop over once wtf this is so slow
-  for (int y = 0; y < height; ++y) {
-    const int yidx = y * width;
-    for (int x = 0; x < width; ++x) {
-      const SPickup pickup = cur->m_pCollision->m_pPickups[yidx + x];
-      if (pickup.m_Type >= 0) {
-        dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, next_item_id++, sizeof(dd_netobj_ddnet_pickup));
-        if (p) {
-          p->m_X = x * 32 + 16 - MAP_EXPAND32;
-          p->m_Y = y * 32 + 16 - MAP_EXPAND32;
-          p->m_Type = pickup.m_Type;
-          p->m_Subtype = pickup.m_Subtype;
-          p->m_SwitchNumber = pickup.m_Number;
-          p->m_Flags = 0;
-          // log_info("DemoExport", "Added pickup id %d at (%d, %d), type %d, subtype %d", next_item_id, p->m_X, p->m_Y, p->m_Type, p->m_Subtype);
-        }
-      }
-      const SPickup fpickup = cur->m_pCollision->m_pFrontPickups[yidx + x];
-      if (fpickup.m_Type >= 0) {
-        dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, next_item_id++, sizeof(dd_netobj_ddnet_pickup));
-        if (p) {
-          p->m_X = x * 32 + 16 - MAP_EXPAND32;
-          p->m_Y = y * 32 + 16 - MAP_EXPAND32;
-          p->m_Type = fpickup.m_Type;
-          p->m_Subtype = fpickup.m_Subtype;
-          p->m_SwitchNumber = fpickup.m_Number;
-          p->m_Flags = 0;
-        }
-      }
+  for (int i = 0; i < ts->ui->num_pickups; ++i) {
+    const SPickup pickup = ts->ui->pickups[i];
+    dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, next_item_id++, sizeof(dd_netobj_ddnet_pickup));
+    if (p) {
+      p->m_X = vgetx(ts->ui->pickup_positions[i]) - MAP_EXPAND32;
+      p->m_Y = vgety(ts->ui->pickup_positions[i]) - MAP_EXPAND32;
+      p->m_Type = pickup.m_Type;
+      p->m_Subtype = pickup.m_Subtype;
+      p->m_SwitchNumber = pickup.m_Number;
+      p->m_Flags = 0;
+      // log_info("DemoExport", "Added pickup id %d at (%d, %d), type %d, subtype %d", next_item_id, p->m_X, p->m_Y, p->m_Type, p->m_Subtype);
     }
   }
 
@@ -381,13 +364,6 @@ int snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, 
       nhh->common.m_X = vgetx(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
       nhh->common.m_Y = vgety(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
     }
-    // TODO: Getting hit by hammer
-    // if (c_cur->m_DamageTick == pWorld->m_GameTick && pCharacter->m_DamageWeapon == WEAPON_HAMMER) {
-    //   CNetEvent_HammerHit *pNetHammerHit = SnapNewItem<CNetEvent_HammerHit>(((uint64_t)pCharacter + 5) % 0xffff);
-    //   pNetHammerHit->m_X = vgetx(pCharacter->m_Pos);
-    //   pNetHammerHit->m_Y = vgety(pCharacter->m_Pos);
-    //   pCharacter->m_DamageTick = -1;
-    // }
   }
 
   // do entities

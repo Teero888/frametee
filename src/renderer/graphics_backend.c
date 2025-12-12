@@ -257,8 +257,8 @@ int gfx_begin_frame(gfx_handler_t *handler) {
       present_mode = VK_PRESENT_MODE_FIFO_KHR;
     }
     VkPresentModeKHR present_modes[] = {present_mode};
-    handler->g_main_window_data.PresentMode = ImGui_ImplVulkanH_SelectPresentMode(
-        handler->g_physical_device, handler->g_main_window_data.Surface, &present_modes[0], ARRAYSIZE(present_modes));
+    handler->g_main_window_data.PresentMode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, handler->g_main_window_data.Surface,
+                                                                                  &present_modes[0], ARRAYSIZE(present_modes));
 
     ImGui_ImplVulkan_SetMinImageCount(handler->g_min_image_count);
     ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, &handler->g_main_window_data,
@@ -512,6 +512,7 @@ void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
   log_info(LOG_SOURCE, "Loaded map '%s' (%ux%u)", map_path, handler->map_data->width, handler->map_data->height);
 
   on_map_load(handler);
+  ui_post_map_load(&handler->user_interface);
 }
 
 void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buffer, size_t size) {
@@ -522,6 +523,7 @@ void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buf
     return;
   }
   on_map_load(handler);
+  ui_post_map_load(&handler->user_interface);
 }
 
 // initialization and cleanup

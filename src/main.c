@@ -43,6 +43,7 @@ int main(void) {
     // render players and weapons
     renderer_begin_skins(&handler);
     renderer_begin_atlas_instances(&handler.renderer.gameskin_renderer);
+    render_pickups(&handler.user_interface);
     render_players(&handler.user_interface);
     renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.gameskin_renderer, false);
     renderer_flush_skins(&handler, handler.current_frame_command_buffer, handler.renderer.skin_manager.atlas_array);
