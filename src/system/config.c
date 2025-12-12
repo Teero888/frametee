@@ -143,6 +143,29 @@ void config_load(ui_handler_t *ui) {
     }
   }
 
+  toml_datum_t graphics_settings = toml_get(res.toptab, "graphics");
+  if (graphics_settings.type == TOML_TABLE) {
+    toml_datum_t vsync = toml_get(graphics_settings, "vsync");
+    if (vsync.type == TOML_BOOLEAN) {
+      ui->vsync = vsync.u.boolean;
+    }
+
+    toml_datum_t show_fps = toml_get(graphics_settings, "show_fps");
+    if (show_fps.type == TOML_BOOLEAN) {
+      ui->show_fps = show_fps.u.boolean;
+    }
+
+    toml_datum_t fps_limit = toml_get(graphics_settings, "fps_limit");
+    if (fps_limit.type == TOML_INT64) {
+      ui->fps_limit = (int)fps_limit.u.int64;
+    }
+
+    toml_datum_t lod_bias = toml_get(graphics_settings, "lod_bias");
+    if (lod_bias.type == TOML_FP64) {
+      ui->lod_bias = (float)lod_bias.u.fp64;
+    }
+  }
+
   toml_free(res);
   log_info(LOG_SOURCE, "Config loaded successfully from %s.", config_path);
 }
@@ -183,6 +206,12 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "\n[mouse]\n");
   fprintf(fp, "sensitivity = %.2f\n", ui->mouse_sens);
   fprintf(fp, "max_distance = %.2f\n", ui->mouse_max_distance);
+
+  fprintf(fp, "\n[graphics]\n");
+  fprintf(fp, "vsync = %s\n", ui->vsync ? "true" : "false");
+  fprintf(fp, "show_fps = %s\n", ui->show_fps ? "true" : "false");
+  fprintf(fp, "fps_limit = %d\n", ui->fps_limit);
+  fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
 
   fclose(fp);
   log_info(LOG_SOURCE, "Config saved to %s.", config_path);

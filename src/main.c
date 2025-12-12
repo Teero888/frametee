@@ -4,6 +4,7 @@
 #include "renderer/renderer.h"
 #include "user_interface/user_interface.h"
 #include <GLFW/glfw3.h>
+#include <time.h>
 
 int main(void) {
   logger_init();
@@ -15,8 +16,24 @@ int main(void) {
 
   bool viewport_hovered = false;
 
+  double last_time = glfwGetTime();
+
   int err = FRAME_SKIP;
   while (1) {
+    if (handler.user_interface.fps_limit > 0) {
+      double target_dt = 1.0 / (double)handler.user_interface.fps_limit;
+      while (glfwGetTime() - last_time < target_dt) {
+        double remaining = target_dt - (glfwGetTime() - last_time);
+        if (remaining > 0.001) {
+          struct timespec ts;
+          ts.tv_sec = 0;
+          ts.tv_nsec = (long)((remaining - 0.0005) * 1e9);
+          nanosleep(&ts, NULL);
+        }
+      }
+    }
+    last_time = glfwGetTime();
+
     int frame_result = gfx_begin_frame(&handler);
     if (frame_result == FRAME_EXIT) break;
     if (frame_result == FRAME_SKIP) continue;

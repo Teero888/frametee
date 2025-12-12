@@ -1,5 +1,6 @@
 #include "graphics_backend.h"
 #include "../logger/logger.h"
+#include "../system/config.h"
 #include "../user_interface/user_interface.h"
 #include "cimgui.h"
 #include "renderer.h"
@@ -149,6 +150,12 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->raw_mouse.x = handler->raw_mouse.y = 0.0;
   handler->raw_mouse.dx = handler->raw_mouse.dy = 0.0;
 
+  // Initialize ImGui context early for config keybind parsing
+  igCreateContext(NULL);
+
+  handler->user_interface.gfx_handler = handler;
+  ui_init_config(&handler->user_interface);
+
   if (init_vulkan(handler) != 0) {
     glfwDestroyWindow(handler->window);
     glfwTerminate();
@@ -160,6 +167,10 @@ int init_gfx_handler(gfx_handler_t *handler) {
     glfwTerminate();
     return 1;
   }
+
+  // Apply LOD Bias from config (renderer_init resets it)
+  handler->renderer.lod_bias = handler->user_interface.lod_bias;
+
   if (init_imgui(handler) != 0) {
     renderer_cleanup(handler);
     cleanup_vulkan(handler);
@@ -239,6 +250,16 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   if (fb_width > 0 && fb_height > 0 &&
       (handler->g_swap_chain_rebuild || handler->g_main_window_data.Width != fb_width || handler->g_main_window_data.Height != fb_height)) {
     vkDeviceWaitIdle(handler->g_device);
+
+    // Update Present Mode based on settings
+    VkPresentModeKHR present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    if (handler->user_interface.vsync) {
+      present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    }
+    VkPresentModeKHR present_modes[] = {present_mode};
+    handler->g_main_window_data.PresentMode = ImGui_ImplVulkanH_SelectPresentMode(
+        handler->g_physical_device, handler->g_main_window_data.Surface, &present_modes[0], ARRAYSIZE(present_modes));
+
     ImGui_ImplVulkan_SetMinImageCount(handler->g_min_image_count);
     ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, &handler->g_main_window_data,
                                            handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count);
@@ -658,7 +679,6 @@ void ayu_dark(void) {
 }
 
 static int init_imgui(gfx_handler_t *handler) {
-  igCreateContext(NULL);
   ImGuiIO *io = igGetIO_Nil();
   io->ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   // io->ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
@@ -1036,7 +1056,11 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
                                                             (size_t)ARRAYSIZE(request_surface_image_format), request_surface_color_space);
 
   // vsync present mode
-  VkPresentModeKHR present_modes[] = {VK_PRESENT_MODE_FIFO_KHR};
+  VkPresentModeKHR present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+  if (handler->user_interface.vsync) {
+    present_mode = VK_PRESENT_MODE_FIFO_KHR;
+  }
+  VkPresentModeKHR present_modes[] = {present_mode};
   wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, wd->Surface, &present_modes[0], ARRAYSIZE(present_modes));
 
   assert(handler->g_min_image_count >= 2);

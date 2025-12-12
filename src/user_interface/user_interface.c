@@ -107,8 +107,25 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Controls", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_browser, true);
-      igSeparator();
-      igDragFloat("LOD Bias", &ui->gfx_handler->renderer.lod_bias, 0.1f, -5.0f, 5.0f, "%.1f", 0);
+      igEndMenu();
+    }
+
+    if (igBeginMenu("Settings", true)) {
+      if (igBeginMenu("Graphics", true)) {
+        if (igCheckbox("VSync", &ui->vsync)) {
+          ui->gfx_handler->g_swap_chain_rebuild = true;
+        }
+
+        igCheckbox("Show FPS", &ui->show_fps);
+
+        igSliderInt("FPS Limit", &ui->fps_limit, 0, 1000, "%d", 0);
+        if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("0 = Unlimited");
+
+        if (igDragFloat("LOD Bias", &ui->lod_bias, 0.1f, -5.0f, 5.0f, "%.1f", 0)) {
+          ui->gfx_handler->renderer.lod_bias = ui->lod_bias;
+        }
+        igEndMenu();
+      }
       igEndMenu();
     }
 
@@ -118,7 +135,24 @@ void render_menu_bar(ui_handler_t *ui) {
     button_size.x += igGetStyle()->FramePadding.x * 2.0f;
     ImVec2 region_avail;
     igGetContentRegionAvail(&region_avail);
-    igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x);
+
+    float fps_width = 0.0f;
+    char fps_text[64];
+    if (ui->show_fps) {
+      ImGuiIO *io = igGetIO_Nil();
+      snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms) | ", io->Framerate, 1000.0f / io->Framerate);
+      ImVec2 fps_size;
+      igCalcTextSize(&fps_size, fps_text, NULL, false, 0.0f);
+      fps_width = fps_size.x;
+    }
+
+    igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x - fps_width);
+
+    if (ui->show_fps) {
+      igText("%s", fps_text);
+      igSameLine(0, 0);
+    }
+
     if (igButton(button_text, (ImVec2){0, 0})) plugin_manager_reload_all(&ui->plugin_manager, "plugins");
 
     igEndMainMenuBar();
@@ -321,6 +355,17 @@ void camera_init(camera_t *camera) {
   camera->zoom_wanted = 5.0f;
 }
 
+void ui_init_config(ui_handler_t *ui) {
+  ui->mouse_sens = 80.f;
+  ui->mouse_max_distance = 400.f;
+  ui->vsync = true;
+  ui->fps_limit = 0;
+  ui->lod_bias = -0.5f;
+
+  keybinds_init(&ui->keybinds);
+  config_load(ui);
+}
+
 void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ImGuiIO *io = igGetIO_Nil();
   ImFontAtlas *atlas = io->Fonts;
@@ -343,7 +388,6 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->show_skin_browser = false;
   timeline_init(ui);
   camera_init(&gfx_handler->renderer.camera);
-  keybinds_init(&ui->keybinds);
   undo_manager_init(&ui->undo_manager);
   skin_manager_init(&ui->skin_manager);
   NFD_Init();
@@ -355,11 +399,6 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->plugin_context.imgui_context = igGetCurrentContext();
   plugin_manager_init(&ui->plugin_manager, &ui->plugin_context, &ui->plugin_api);
   plugin_manager_load_all(&ui->plugin_manager, "plugins");
-
-  ui->mouse_sens = 80.f;
-  ui->mouse_max_distance = 400.f;
-
-  config_load(ui);
 }
 
 static float lint2(float a, float b, float f) { return a + f * (b - a); }

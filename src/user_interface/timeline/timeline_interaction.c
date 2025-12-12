@@ -1,6 +1,4 @@
 #include "timeline_interaction.h"
-#include "../../renderer/graphics_backend.h"
-#include "../../renderer/renderer.h"
 #include "../user_interface.h"
 #include "timeline_commands.h"
 #include "timeline_model.h"
@@ -684,7 +682,6 @@ void interaction_switch_recording_target(timeline_state_t *ts, int new_track_ind
 void interaction_update_recording_input(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   keybind_manager_t *kb = &ui->keybinds;
-  gfx_handler_t *gfx = ui->gfx_handler;
 
   if (!ts->recording) return;
 

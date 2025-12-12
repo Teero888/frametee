@@ -39,6 +39,12 @@ typedef struct ui_handler {
   // this one gets clamped to edges
   vec2 recording_mouse_pos;
 
+  // graphics settings
+  bool vsync;
+  bool show_fps;
+  int fps_limit;
+  float lod_bias;
+
   demo_exporter_t demo_exporter;
   undo_manager_t undo_manager;
 
@@ -51,6 +57,7 @@ void on_camera_update(struct gfx_handler_t *handler, bool hovered);
 void render_players(ui_handler_t *ui);
 void render_cursor(ui_handler_t *ui);
 
+void ui_init_config(ui_handler_t *ui);
 void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);
 void ui_render(ui_handler_t *ui);
 bool ui_render_late(ui_handler_t *ui);
