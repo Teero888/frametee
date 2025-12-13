@@ -67,10 +67,10 @@
     mkdir build && cd build
 
     # For Release
-    cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=On -DCMAKE_BUILD_TYPE=Release
+    cmake .. -DCMAKE_BUILD_TYPE=Release
 
     # OR for Debug (with sanitizers)
-    # cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=On -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=On
+    # cmake .. -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=On
 
     make -j$(nproc)
     ```
@@ -147,7 +147,7 @@ Plugins can be built independently without recompiling the main application.
 **Build Command:**
 ```sh
 cd plugins/my_plugin
-cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=On -DHOST_APP_DIR=../../
+cmake -S . -B build -DHOST_APP_DIR=../../
 cmake --build build
 ```
 
