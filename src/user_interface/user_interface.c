@@ -983,7 +983,7 @@ bool ui_render_late(struct ui_handler *ui) {
       igText("Reload: %d", ui->reloadtime);
       igText("Weapon: %d", ui->weapon);
       igText("Weapons: [ %d, %d, %d, %d, %d, %d ]", ui->weapons[0], ui->weapons[1], ui->weapons[2], ui->weapons[3], ui->weapons[4], ui->weapons[5]);
-      SPlayerInput Input = ui->timeline.recording_input;
+      SPlayerInput Input = ui->timeline.player_tracks[ui->timeline.selected_player_track_index].current_input;
       if (!ui->timeline.recording)
         Input = model_get_input_at_tick(&ui->timeline, ui->timeline.selected_player_track_index, ui->timeline.current_tick);
       igText("");

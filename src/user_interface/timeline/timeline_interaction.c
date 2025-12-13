@@ -1,5 +1,4 @@
 #include "timeline_interaction.h"
-#include <user_interface/user_interface.h>
 #include "timeline_commands.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
@@ -8,6 +7,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <user_interface/user_interface.h>
 
 #define SNAP_THRESHOLD_PX 5.0f
 #define DRAG_THRESHOLD_PX 5.0f
@@ -18,43 +18,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
 static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb, float tracks_scroll_y);
 static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb, float scroll_y);
 static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id);
-
-// Helper to apply a single tick of input to a dummy track's recording buffer
-static void apply_input_to_recording_buffer(timeline_state_t *ts, player_track_t *track, int tick, const SPlayerInput *dummy_input) {
-  // Check if we can overwrite an existing recording snippet
-  for (int i = 0; i < track->recording_snippet_count; ++i) {
-    input_snippet_t *snip = &track->recording_snippets[i];
-    if (tick >= snip->start_tick && tick < snip->end_tick) {
-      snip->inputs[tick - snip->start_tick] = *dummy_input;
-      return;
-    }
-  }
-
-  // Find a recording snippet to extend
-  input_snippet_t *extend_target = NULL;
-  for (int i = 0; i < track->recording_snippet_count; ++i) {
-    if (track->recording_snippets[i].end_tick == tick) {
-      extend_target = &track->recording_snippets[i];
-      break;
-    }
-  }
-
-  if (extend_target) { // Extend existing snippet
-    model_resize_snippet_inputs(ts, extend_target, extend_target->input_count + 1);
-    extend_target->inputs[extend_target->input_count - 1] = *dummy_input;
-  } else { // Create new 1-tick snippet
-    input_snippet_t new_snippet = {0};
-    new_snippet.id = ts->next_snippet_id++;
-    new_snippet.start_tick = tick;
-    new_snippet.end_tick = tick + 1;
-    new_snippet.is_active = true;
-    new_snippet.input_count = 1;
-    new_snippet.inputs = calloc(1, sizeof(SPlayerInput));
-    new_snippet.inputs[0] = *dummy_input;
-    new_snippet.layer = 0; // Recording snippets don't need complex layer logic for now
-    model_insert_snippet_into_recording_track(track, &new_snippet);
-  }
-}
+static void interaction_start_recording_on_track(timeline_state_t *ts, int track_index);
 
 void interaction_apply_dummy_inputs(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
@@ -70,12 +34,13 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
 
   SCharacterCore *recording_char = &world.m_pCharacters[ts->selected_player_track_index];
   mvec2 recording_pos = recording_char->m_Pos;
-  int tick = ts->current_tick + 1;
 
+  SPlayerInput source_input = ts->player_tracks[ts->selected_player_track_index].current_input;
   bool dummy_fire_active = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_DUMMY_FIRE].combo);
 
   for (int i = 0; i < ts->player_track_count; ++i) {
     if (i == ts->selected_player_track_index) continue;
+
     player_track_t *track = &ts->player_tracks[i];
     if (!track->is_dummy || i >= world.m_NumCharacters) continue;
 
@@ -83,39 +48,20 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
     mvec2 dummy_pos = dummy_char->m_Pos;
 
     SPlayerInput final_input = {0};
-    bool input_modified = false;
 
     for (int action_idx = 0; action_idx < DUMMY_ACTION_COUNT; ++action_idx) {
       dummy_action_type_t action = ts->dummy_action_priority[action_idx];
 
       if (action == DUMMY_ACTION_COPY && ts->dummy_copy_input) {
-        SPlayerInput copy_input = ts->recording_input;
-
-        if (track->dummy_copy_flags & COPY_DIRECTION) {
-          final_input.m_Direction = copy_input.m_Direction;
-          input_modified = true;
-        }
+        if (track->dummy_copy_flags & COPY_DIRECTION) final_input.m_Direction = source_input.m_Direction;
         if (track->dummy_copy_flags & COPY_TARGET) {
-          final_input.m_TargetX = copy_input.m_TargetX;
-          final_input.m_TargetY = copy_input.m_TargetY;
-          input_modified = true;
+          final_input.m_TargetX = source_input.m_TargetX;
+          final_input.m_TargetY = source_input.m_TargetY;
         }
-        if (track->dummy_copy_flags & COPY_JUMP) {
-          final_input.m_Jump = copy_input.m_Jump;
-          input_modified = true;
-        }
-        if (track->dummy_copy_flags & COPY_FIRE) {
-          final_input.m_Fire = copy_input.m_Fire;
-          input_modified = true;
-        }
-        if (track->dummy_copy_flags & COPY_HOOK) {
-          final_input.m_Hook = copy_input.m_Hook;
-          input_modified = true;
-        }
-        if (track->dummy_copy_flags & COPY_WEAPON) {
-          final_input.m_WantedWeapon = copy_input.m_WantedWeapon;
-          input_modified = true;
-        }
+        if (track->dummy_copy_flags & COPY_JUMP) final_input.m_Jump = source_input.m_Jump;
+        if (track->dummy_copy_flags & COPY_FIRE) final_input.m_Fire = source_input.m_Fire;
+        if (track->dummy_copy_flags & COPY_HOOK) final_input.m_Hook = source_input.m_Hook;
+        if (track->dummy_copy_flags & COPY_WEAPON) final_input.m_WantedWeapon = source_input.m_WantedWeapon;
 
         if (track->dummy_copy_flags & COPY_MIRROR_X) {
           final_input.m_TargetX = -final_input.m_TargetX;
@@ -130,13 +76,9 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
           final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
           final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
         }
-        input_modified = true;
       }
     }
-
-    if (input_modified) {
-      apply_input_to_recording_buffer(ts, track, tick, &final_input);
-    }
+    track->current_input = final_input;
   }
   wc_free(&world);
 }
@@ -155,6 +97,12 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   ts->is_reversing = reverse_down;
   if (ts->is_reversing) ts->is_playing = false;
 
+  // Always update inputs for ALL tracks (selected + dummies) to ensure smooth prediction rendering
+  if (ts->recording) {
+    interaction_update_recording_input(ts->ui);
+    interaction_apply_dummy_inputs(ts->ui);
+  }
+
   // Playback tick advancement
   if ((ts->is_playing || ts->is_reversing) && ts->playback_speed > 0) {
     double now = igGetTime();
@@ -167,9 +115,7 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     int dir = ts->is_reversing ? -1 : 1;
     if (steps > 0) {
       for (int i = 0; i < steps; ++i) {
-        if (dir > 0) {
-          interaction_apply_dummy_inputs(ts->ui);
-        }
+        // model_advance_tick now uses the already-updated current_input values
         model_advance_tick(ts, dir);
       }
       ts->last_update_time += (double)steps * tick_interval;
@@ -576,14 +522,21 @@ void interaction_toggle_recording(timeline_state_t *ts) {
   ts->recording = !ts->recording;
 
   if (ts->recording) {
-    // START RECORDING
-    // Clear any previous recording targets
     ts->recording_snippets.count = 0;
+    bool any_recording_started = false;
 
-    if (ts->selected_player_track_index != -1) {
-      interaction_start_recording_on_track(ts, ts->selected_player_track_index);
-    } else {
-      // No track selected, abort recording
+    for (int i = 0; i < ts->player_track_count; ++i) {
+      player_track_t *track = &ts->player_tracks[i];
+      bool is_selected = (i == ts->selected_player_track_index);
+      bool is_dummy = track->is_dummy;
+
+      if (is_selected || is_dummy) {
+        interaction_start_recording_on_track(ts, i);
+        any_recording_started = true;
+      }
+    }
+
+    if (!any_recording_started) {
       ts->recording = false;
       return;
     }
@@ -618,10 +571,7 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
 
-    // Only trim the selected track or dummy tracks
-    bool is_selected = (i == ts->selected_player_track_index);
-    bool is_dummy = track->is_dummy;
-    if (!is_selected && !is_dummy) continue;
+    if (track->recording_snippet_count == 0) continue;
 
     for (int j = 0; j < track->recording_snippet_count; ++j) {
       input_snippet_t *rec = &track->recording_snippets[j];
@@ -650,14 +600,14 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
     }
   }
 
-  // Rebuild the active recording list since pointers might be invalid due to memmove/realloc
   ts->recording_snippets.count = 0;
 
-  if (ts->selected_player_track_index >= 0 && ts->selected_player_track_index < ts->player_track_count) {
-    player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    player_track_t *track = &ts->player_tracks[i];
+    if (track->recording_snippet_count == 0) continue;
+
     input_snippet_t *target = NULL;
 
-    // Try to find one that ends exactly at current_tick
     for (int j = 0; j < track->recording_snippet_count; ++j) {
       if (track->recording_snippets[j].end_tick == ts->current_tick) {
         target = &track->recording_snippets[j];
@@ -666,7 +616,7 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
     }
 
     if (!target) {
-      interaction_start_recording_on_track(ts, ts->selected_player_track_index);
+      interaction_start_recording_on_track(ts, i);
     } else {
       if (ts->recording_snippets.count >= ts->recording_snippets.capacity) {
         ts->recording_snippets.capacity = ts->recording_snippets.capacity == 0 ? 4 : ts->recording_snippets.capacity * 2;
@@ -680,10 +630,6 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
 void interaction_switch_recording_target(timeline_state_t *ts, int new_track_index) {
   if (ts->recording && new_track_index >= 0 && new_track_index < ts->player_track_count) {
     ts->selected_player_track_index = new_track_index;
-
-    // Clear active recording targets
-    ts->recording_snippets.count = 0;
-
     interaction_start_recording_on_track(ts, new_track_index);
   }
 }
@@ -693,8 +639,9 @@ void interaction_update_recording_input(struct ui_handler *ui) {
   keybind_manager_t *kb = &ui->keybinds;
 
   if (!ts->recording) return;
+  if (ts->selected_player_track_index == -1 || ts->selected_player_track_index >= ts->player_track_count) return;
 
-  SPlayerInput *input = &ts->recording_input;
+  SPlayerInput *input = &ts->player_tracks[ts->selected_player_track_index].current_input;
 
   input->m_Direction = is_key_combo_down(&kb->bindings[ACTION_RIGHT].combo) - is_key_combo_down(&kb->bindings[ACTION_LEFT].combo);
   input->m_Jump = is_key_combo_down(&kb->bindings[ACTION_JUMP].combo);
@@ -715,72 +662,26 @@ void interaction_update_recording_input(struct ui_handler *ui) {
 SPlayerInput interaction_predict_input(struct ui_handler *ui, SWorldCore *world, int track_idx) {
   timeline_state_t *ts = &ui->timeline;
 
-  // Normal playback or recording non-selected/non-dummy tracks
-  if (!ts->recording) {
-    return model_get_input_at_tick(ts, track_idx, world->m_GameTick);
-  }
+  if (ts->recording) {
+    if (track_idx < 0 || track_idx >= ts->player_track_count) return (SPlayerInput){0};
 
-  // Selected recording track
-  if (track_idx == ts->selected_player_track_index) {
-    return ts->recording_input;
-  }
+    // Force update of recording state to ensure smooth visuals at frame rate
+    // This is safe because it only updates the `current_input` struct,
+    // it does not commit to the timeline buffer.
 
-  player_track_t *track = &ts->player_tracks[track_idx];
-
-  // Non-dummy tracks during recording just play back their timeline
-  if (!track->is_dummy) {
-    return model_get_input_at_tick(ts, track_idx, world->m_GameTick);
-  }
-
-  // Dummy tracks during recording derive input
-  SPlayerInput final_input = {0};
-
-  // Get positions from the *predicted* world state
-  if (ts->selected_player_track_index >= world->m_NumCharacters || track_idx >= world->m_NumCharacters) {
-    return final_input;
-  }
-
-  SCharacterCore *recording_char = &world->m_pCharacters[ts->selected_player_track_index];
-  SCharacterCore *dummy_char = &world->m_pCharacters[track_idx];
-  mvec2 recording_pos = recording_char->m_Pos;
-  mvec2 dummy_pos = dummy_char->m_Pos;
-
-  bool dummy_fire_active = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_DUMMY_FIRE].combo);
-
-  for (int action_idx = 0; action_idx < DUMMY_ACTION_COUNT; ++action_idx) {
-    dummy_action_type_t action = ts->dummy_action_priority[action_idx];
-
-    if (action == DUMMY_ACTION_COPY && ts->dummy_copy_input) {
-      SPlayerInput copy_input = ts->recording_input;
-
-      if (track->dummy_copy_flags & COPY_DIRECTION) final_input.m_Direction = copy_input.m_Direction;
-      if (track->dummy_copy_flags & COPY_TARGET) {
-        final_input.m_TargetX = copy_input.m_TargetX;
-        final_input.m_TargetY = copy_input.m_TargetY;
-      }
-      if (track->dummy_copy_flags & COPY_JUMP) final_input.m_Jump = copy_input.m_Jump;
-      if (track->dummy_copy_flags & COPY_FIRE) final_input.m_Fire = copy_input.m_Fire;
-      if (track->dummy_copy_flags & COPY_HOOK) final_input.m_Hook = copy_input.m_Hook;
-      if (track->dummy_copy_flags & COPY_WEAPON) final_input.m_WantedWeapon = copy_input.m_WantedWeapon;
-
-      if (track->dummy_copy_flags & COPY_MIRROR_X) {
-        final_input.m_TargetX = -final_input.m_TargetX;
-        final_input.m_Direction = -final_input.m_Direction;
-      }
-      if (track->dummy_copy_flags & COPY_MIRROR_Y) {
-        final_input.m_TargetY = -final_input.m_TargetY;
-      }
-    } else if (action == DUMMY_ACTION_FIRE && dummy_fire_active && track->allow_dummy_fire) {
-      final_input.m_Fire = (world->m_GameTick % 2) == 0;
-      final_input.m_WantedWeapon = WEAPON_HAMMER;
-      if (track->dummy_fire_aimbot) {
-        final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
-        final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
-      }
+    if (track_idx == ts->selected_player_track_index) {
+      interaction_update_recording_input(ui);
+    } else {
+      // Re-evaluate dummy logic for this specific frame
+      // We can call apply_dummy_inputs which updates ALL dummies,
+      // or we could extract specific logic. Calling the bulk update is safer.
+      interaction_apply_dummy_inputs(ui);
     }
+
+    return ts->player_tracks[track_idx].current_input;
   }
 
-  return final_input;
+  return model_get_input_at_tick(ts, track_idx, world->m_GameTick);
 }
 
 void interaction_handle_context_menu(timeline_state_t *ts) {

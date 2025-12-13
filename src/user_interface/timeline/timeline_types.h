@@ -47,6 +47,9 @@ typedef struct {
   int recording_snippet_count;
   int recording_snippet_capacity;
 
+  // The input state for this track for the current frame/tick
+  SPlayerInput current_input;
+
   player_info_t player_info;
   bool is_dummy;
   int dummy_copy_flags;
@@ -100,7 +103,6 @@ typedef struct timeline_state {
   bool auto_scroll_playhead;
   bool recording;
   bool is_reversing;
-  SPlayerInput recording_input;
   bool dummy_copy_input;
   dummy_action_type_t dummy_action_priority[DUMMY_ACTION_COUNT];
 

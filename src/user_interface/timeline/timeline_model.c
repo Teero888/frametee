@@ -1,9 +1,9 @@
 #include "timeline_model.h"
-#include <renderer/graphics_backend.h>
-#include <user_interface/user_interface.h>
 #include <limits.h>
+#include <renderer/graphics_backend.h>
 #include <stdlib.h>
 #include <string.h>
+#include <user_interface/user_interface.h>
 
 #define DEFAULT_TRACK_HEIGHT 60.f
 
@@ -137,16 +137,12 @@ input_snippet_t *model_find_snippet_by_id(timeline_state_t *ts, int snippet_id, 
 }
 
 int model_find_available_layer(const player_track_t *track, int start_tick, int end_tick, int exclude_snippet_id) {
-  // Find the lowest layer that is free for [start_tick, end_tick).
-  // IMPORTANT: this MUST consider *all* snippets when computing collisions.
-  // Previously selected snippets were being skipped which caused overlapping/stacking issues.
   for (int layer = 0; layer < MAX_SNIPPET_LAYERS; ++layer) {
     bool layer_is_free = true;
     for (int i = 0; i < track->snippet_count; ++i) {
       const input_snippet_t *other = &track->snippets[i];
       if (other->id == exclude_snippet_id) continue;
       if (other->layer != layer) continue;
-      // Overlap test: interval intersects
       if (start_tick < other->end_tick && end_tick > other->start_tick) {
         layer_is_free = false;
         break;
@@ -191,20 +187,17 @@ void timeline_solve_snippet_layers(input_snippet_t **snippets, int count) {
     return;
   }
 
-  // Sort the provided snippet pointers by start time
   qsort(snippets, count, sizeof(input_snippet_t *), compare_snippets_by_start_tick_p);
 
-  // Greedily assign the lowest possible layer to each one
   for (int i = 0; i < count; i++) {
     input_snippet_t *current = snippets[i];
     int start_tick = current->start_tick;
     int end_tick = current->end_tick;
 
-    current->layer = 0; // Default to layer 0
+    current->layer = 0;
 
     for (int layer = 0; layer < MAX_SNIPPET_LAYERS; ++layer) {
       bool layer_is_free = true;
-      // Check for collision against snippets that have already been placed in this pass
       for (int j = 0; j < i; j++) {
         input_snippet_t *other = snippets[j];
         if (other->layer == layer) {
@@ -305,7 +298,6 @@ void model_snippet_clone(input_snippet_t *dest, const input_snippet_t *src) {
 player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
   if (num <= 0) return NULL;
 
-  // Add characters to all relevant physics states
   if (wc_add_character(&ts->vec.data[0], num) == NULL) return NULL;
   wc_add_character(&ts->previous_world, num);
   if (ph) {
@@ -325,8 +317,6 @@ player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
   }
 
   ts->player_track_count = new_count;
-
-  // Invalidate cache
   model_recalc_physics(ts, 0);
 
   return &ts->player_tracks[old_count];
@@ -335,7 +325,6 @@ player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
 void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   if (track_index < 0 || track_index >= ts->player_track_count) return;
 
-  // Remove from physics worlds
   wc_remove_character(&ts->vec.data[0], track_index);
   wc_remove_character(&ts->previous_world, track_index);
   if (ts->ui && ts->ui->gfx_handler) {
@@ -369,7 +358,7 @@ void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   if (ts->selected_player_track_index == track_index) ts->selected_player_track_index = -1;
   else if (ts->selected_player_track_index > track_index) ts->selected_player_track_index--;
 
-  ts->vec.current_size = 1; // Invalidate cache
+  ts->vec.current_size = 1;
   model_recalc_physics(ts, 0);
 }
 
@@ -440,47 +429,7 @@ void model_insert_snippet_into_recording_track(player_track_t *track, const inpu
   track->recording_snippet_count++;
 }
 
-/*
-static void model_remove_tick_from_recording_buffer(timeline_state_t *ts, player_track_t *track, int tick) {
-  for (int i = 0; i < track->recording_snippet_count; ++i) {
-    input_snippet_t *snippet = &track->recording_snippets[i];
-    if (tick >= snippet->start_tick && tick < snippet->end_tick) {
-      int offset = tick - snippet->start_tick;
-
-      if (snippet->input_count == 1) { // Delete the snippet
-        model_free_snippet_inputs(snippet);
-        memmove(&track->recording_snippets[i], &track->recording_snippets[i + 1], (track->recording_snippet_count - i - 1) * sizeof(input_snippet_t));
-        track->recording_snippet_count--;
-        i--;                    // Re-check this index in case of multiple snippets at same tick
-      } else if (offset == 0) { // Remove from start
-        memmove(&snippet->inputs[0], &snippet->inputs[1], (snippet->input_count - 1) * sizeof(SPlayerInput));
-        snippet->start_tick++;
-        model_recalc_physics(ts, snippet->start_tick - 1);
-        model_resize_snippet_inputs(ts, snippet, snippet->input_count - 1);
-      } else if (offset == snippet->input_count - 1) { // Remove from end
-        snippet->end_tick--;
-        model_resize_snippet_inputs(ts, snippet, snippet->input_count - 1);
-      } else { // Split the snippet
-        input_snippet_t right_part = {0};
-        right_part.id = ts->next_snippet_id++;
-        right_part.start_tick = tick + 1;
-        right_part.end_tick = snippet->end_tick;
-        right_part.is_active = snippet->is_active;
-        right_part.layer = snippet->layer;
-        right_part.input_count = snippet->end_tick - (tick + 1);
-        right_part.inputs = malloc(right_part.input_count * sizeof(SPlayerInput));
-        memcpy(right_part.inputs, &snippet->inputs[offset + 1], right_part.input_count * sizeof(SPlayerInput));
-
-        model_resize_snippet_inputs(ts, snippet, offset);
-        model_insert_snippet_into_recording_track(track, &right_part);
-      }
-    }
-  }
-}
-*/
-
 void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *track, int tick, const SPlayerInput *input) {
-  // Case 1: Overwrite existing snippet
   input_snippet_t *overlapping_snippet = NULL;
   for (int j = 0; j < track->snippet_count; ++j) {
     if (track->snippets[j].is_active && tick >= track->snippets[j].start_tick && tick < track->snippets[j].end_tick) {
@@ -493,7 +442,6 @@ void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *trac
     return;
   }
 
-  // Case 2: Merge or Extend
   input_snippet_t *before = NULL;
   input_snippet_t *after = NULL;
   for (int j = 0; j < track->snippet_count; ++j) {
@@ -501,7 +449,7 @@ void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *trac
     if (track->snippets[j].is_active && track->snippets[j].start_tick == tick + 1) after = &track->snippets[j];
   }
 
-  if (before && after) { // Merge three parts: before, new_input, after
+  if (before && after) {
     int old_before_duration = before->input_count;
     int after_duration = after->input_count;
     model_resize_snippet_inputs(ts, before, old_before_duration + 1 + after_duration);
@@ -509,17 +457,17 @@ void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *trac
     memcpy(&before->inputs[old_before_duration + 1], after->inputs, sizeof(SPlayerInput) * after_duration);
     model_remove_snippet_from_track(ts, track, after->id);
     model_compact_layers_for_track(track);
-  } else if (before) { // Extend snippet before
+  } else if (before) {
     model_resize_snippet_inputs(ts, before, before->input_count + 1);
     before->inputs[before->input_count - 1] = *input;
-  } else if (after) { // Extend snippet after (prepend)
+  } else if (after) {
     int old_duration = after->input_count;
     after->inputs = realloc(after->inputs, sizeof(SPlayerInput) * (old_duration + 1));
     memmove(&after->inputs[1], &after->inputs[0], sizeof(SPlayerInput) * old_duration);
     after->inputs[0] = *input;
     after->input_count++;
     after->start_tick--;
-  } else { // Case 3: Create new 1-tick snippet
+  } else {
     input_snippet_t new_snippet = {0};
     new_snippet.id = ts->next_snippet_id++;
     new_snippet.start_tick = tick;
@@ -529,7 +477,7 @@ void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *trac
     new_snippet.inputs = calloc(1, sizeof(SPlayerInput));
     new_snippet.inputs[0] = *input;
     new_snippet.layer = model_find_available_layer(track, tick, tick + 1, -1);
-    if (new_snippet.layer == -1) new_snippet.layer = 0; // Fallback
+    if (new_snippet.layer == -1) new_snippet.layer = 0;
     model_insert_snippet_into_track(track, &new_snippet);
     model_compact_layers_for_track(track);
   }
@@ -560,15 +508,14 @@ void model_recalc_physics(timeline_state_t *ts, int tick) {
 SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
   const player_track_t *track = &ts->player_tracks[track_index];
   SPlayerInput last_valid_input = {.m_TargetY = -1};
-  int last_input_tick = -1; // Keep track of the tick of the last valid input found
+  int last_input_tick = -1;
 
-  // Prioritize recording snippets
   if (ts->recording) {
     for (int i = 0; i < track->recording_snippet_count; ++i) {
       const input_snippet_t *snippet = &track->recording_snippets[i];
       if (snippet->is_active) {
         if (tick >= snippet->start_tick && tick < snippet->end_tick) return snippet->inputs[tick - snippet->start_tick];
-        if (snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
+        if (snippet->end_tick <= tick && snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
           last_input_tick = snippet->end_tick - 1;
           last_valid_input = snippet->inputs[snippet->input_count - 1];
         }
@@ -576,12 +523,11 @@ SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index
     }
   }
 
-  // Check regular snippets
   for (int i = 0; i < track->snippet_count; ++i) {
     const input_snippet_t *snippet = &track->snippets[i];
     if (snippet->is_active) {
       if (tick >= snippet->start_tick && tick < snippet->end_tick) return snippet->inputs[tick - snippet->start_tick];
-      if (snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
+      if (snippet->end_tick <= tick && snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
         last_input_tick = snippet->end_tick - 1;
         last_valid_input = snippet->inputs[snippet->input_count - 1];
       }
@@ -595,23 +541,36 @@ SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index
 void model_advance_tick(timeline_state_t *ts, int steps) {
   ts->current_tick = imax(ts->current_tick + steps, 0);
 
-  if (ts->recording && ts->recording_snippets.count > 0) {
-    if (ts->current_tick > ts->recording_snippets.snippets[0]->end_tick) {
-      for (int i = 0; i < ts->recording_snippets.count; ++i) {
-        input_snippet_t *snippet = ts->recording_snippets.snippets[i];
-        if (!snippet) continue;
-        model_resize_snippet_inputs(ts, snippet, snippet->input_count + steps);
-        for (int s = snippet->input_count - 1; s >= snippet->input_count - steps; --s)
-          snippet->inputs[s] = ts->recording_input;
-        ts->current_tick = snippet->end_tick;
+  if (ts->recording) {
+    for (int i = 0; i < ts->player_track_count; ++i) {
+      player_track_t *track = &ts->player_tracks[i];
+      input_snippet_t *active_rec_snip = NULL;
+
+      if (track->recording_snippet_count > 0) {
+        active_rec_snip = &track->recording_snippets[track->recording_snippet_count - 1];
       }
-    } else {
-      input_snippet_t *snippet = ts->recording_snippets.snippets[0];
-      if (snippet && ts->current_tick >= snippet->start_tick && ts->current_tick < snippet->end_tick) {
-        int idx = ts->current_tick - snippet->start_tick;
-        ts->recording_input = snippet->inputs[idx];
-        ts->ui->recording_mouse_pos[0] = ts->recording_input.m_TargetX;
-        ts->ui->recording_mouse_pos[1] = ts->recording_input.m_TargetY;
+
+      if (active_rec_snip) {
+        // Calculate where the current tick is relative to the start of the snippet
+        int relative_tick = ts->current_tick - active_rec_snip->start_tick;
+
+        // ONLY append if we are past the end of the current recording snippet.
+        // DO NOT overwrite if we are rewinding/scrubbing inside the snippet.
+        if (relative_tick > active_rec_snip->input_count) {
+          int old_count = active_rec_snip->input_count;
+          int needed = relative_tick;
+          model_resize_snippet_inputs(ts, active_rec_snip, needed);
+
+          // Fill the gap (which should be 'steps' wide) with the current input
+          for (int s = old_count; s < needed; ++s) {
+            active_rec_snip->inputs[s] = track->current_input;
+          }
+
+          if (i == ts->selected_player_track_index) {
+            ts->ui->recording_mouse_pos[0] = track->current_input.m_TargetX;
+            ts->ui->recording_mouse_pos[1] = track->current_input.m_TargetY;
+          }
+        }
       }
     }
   }
@@ -687,12 +646,10 @@ static void v_push(physics_v_t *t, SWorldCore *world) {
     SWorldCore *new_data = realloc(t->data, t->max_size * sizeof(SWorldCore));
     if (new_data) {
       t->data = new_data;
-      // Realloc might have moved the world cores, so we need to update the back-pointers
       for (uint32_t i = 0; i < t->current_size - 1; ++i) {
         for (int j = 0; j < t->data[i].m_NumCharacters; ++j) {
           t->data[i].m_pCharacters[j].m_pWorld = &t->data[i];
         }
-        // Also update entity world pointers
         for (int type = 0; type < NUM_WORLD_ENTTYPES; ++type) {
           for (SEntity *ent = t->data[i].m_apFirstEntityTypes[type]; ent; ent = ent->m_pNextTypeEntity) {
             ent->m_pWorld = &t->data[i];
@@ -700,7 +657,6 @@ static void v_push(physics_v_t *t, SWorldCore *world) {
         }
       }
     }
-    // TODO: handle realloc failure?
 
     for (uint32_t i = t->max_size / 2; i < t->max_size; ++i)
       t->data[i] = wc_empty();
