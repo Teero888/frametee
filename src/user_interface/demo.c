@@ -480,7 +480,7 @@ int export_to_demo(struct ui_handler *ui, const char *path, const char *map_name
   demo_w_write_map(writer, map_sha256, map_data, map_size);
 
   dd_snapshot_builder *sb = demo_sb_create();
-  uint8_t snap_buf[DD_MAX_SNAPSHOT_SIZE];
+  uint8_t snap_buf[DD_SNAPSHOT_MAX_SIZE];
 
   // empty previous and current worlds
   SWorldCore prev = wc_empty();
