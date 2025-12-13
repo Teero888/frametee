@@ -5,6 +5,10 @@ FrameTee is a TAS editor for the game [DDNet](https://github.com/ddnet/ddnet). I
 This is a WIP, expect bugs, crashes and missing features. The physics and project file format may change at any time so don't expect your projects to work across versions.
 There is no support for macOS currently, since I don't have a macOS installation to test it.
 
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/a2076aa3-eeff-4466-9ed5-602126e26dc8" />
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/80c6a17f-b476-49c8-b1a8-fc36a3b6a9d4" />
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/6d3db15d-7237-4b3b-bebf-3b772c5d8a2b" />
+
 ## Features
 
 ### Core & Rendering
@@ -18,7 +22,7 @@ There is no support for macOS currently, since I don't have a macOS installation
 - **Multi-Track Editing:** Support for multiple tees (tracks) with independent input streams.
 - **Input Snippets:** Organize inputs into movable, resizable, and editable snippets.
 - **Recording:** Real-time and frame-by-frame recording capabilities.
-- **Prediction:** Visual trajectory prediction to see where the tee will go.
+- **Prediction:** Visual trajectory prediction to see where the tees will go.
 - **Undo/Redo:** Comprehensive undo/redo system for all timeline operations.
 - **Snippet Editor:** Detailed matrix editor for precise tick-by-tick input modification.
 - **Bulk Editing:** Apply changes (direction, jumping, weapons) to multiple ticks at once.
