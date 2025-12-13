@@ -47,6 +47,9 @@ There is no support for macOS currently, since I don't have a macOS installation
 ### FrameTee Application
 
 ```sh
+# make sure to clone recursively, we have some necessary submodules
+git clone --recursive https://github.com/Teero888/frametee.git
+
 # create and navigate to the build directory
 mkdir build && cd build
 
