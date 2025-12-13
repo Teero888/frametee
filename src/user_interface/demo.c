@@ -1,12 +1,12 @@
 #include "demo.h"
-#include <logger/logger.h>
-#include <renderer/graphics_backend.h>
 #include "ddnet_physics/vmath.h"
 #include "nfd.h"
 #include "timeline/timeline_model.h"
 #include "user_interface.h"
 #include <ddnet_physics/collision.h>
 #include <ddnet_physics/gamecore.h>
+#include <logger/logger.h>
+#include <renderer/graphics_backend.h>
 #include <string.h>
 
 #define DDNET_DEMO_IMPLEMENTATION
@@ -363,7 +363,8 @@ static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore
   }
 
   // do entities
-  for (SProjectile *proj = (SProjectile *)cur->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; proj; proj = (SProjectile *)proj->m_Base.m_pNextTypeEntity) {
+  for (SProjectile *proj = (SProjectile *)cur->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; proj;
+       proj = (SProjectile *)proj->m_Base.m_pNextTypeEntity) {
     dd_netobj_ddnet_projectile *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPROJECTILE, next_item_id++, sizeof(dd_netobj_ddnet_projectile));
     if (p) {
       int Flags = 0;
@@ -463,7 +464,7 @@ int export_to_demo(struct ui_handler *ui, const char *path, const char *map_name
   size_t map_size = ui->gfx_handler->physics_handler.collision.m_MapData._map_file_size;
   uint32_t map_crc = map_crc32(map_data, map_size);
   uint8_t map_sha256[32];
-  SHA256_CTX ctx;
+  SHA256_CTX ctx = {0};
   map_sha256_init(&ctx);
   map_sha256_update(&ctx, map_data, map_size);
   map_sha256_final(&ctx, map_sha256);
@@ -471,7 +472,7 @@ int export_to_demo(struct ui_handler *ui, const char *path, const char *map_name
   dd_demo_writer *writer = demo_w_create();
   FILE *f_demo = fopen(path, "wb");
   if (!writer || !f_demo) {
-    log_error(LOG_SOURCE, "Error: Could not create demo writer or open output file.\n");
+    log_error(LOG_SOURCE, "Error: Could not create demo writer or open output file.");
     return 1;
   }
 

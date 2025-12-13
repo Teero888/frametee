@@ -59,7 +59,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, 
   (void)location;
   (void)user_data;
 
-  log_error(LOG_SOURCE, "[vulkan][%s] code %d: %s\n", layer_prefix ? layer_prefix : "unknown", message_code, message);
+  log_error(LOG_SOURCE, "[vulkan][%s] code %d: %s", layer_prefix ? layer_prefix : "unknown", message_code, message);
   fflush(stderr);
   return VK_FALSE; // do not abort
 }
@@ -88,7 +88,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(VkDebugUtilsMessageSe
     break;
   }
 
-  log_error(LOG_SOURCE, "[vulkan][%s] %s\n", severity_str, callback_data && callback_data->pMessage ? callback_data->pMessage : "(null)");
+  log_error(LOG_SOURCE, "[vulkan][%s] %s", severity_str, callback_data && callback_data->pMessage ? callback_data->pMessage : "(null)");
   fflush(stderr);
   return VK_FALSE;
 }
@@ -807,7 +807,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
 
   VkResult err = vkCreateRenderPass(handler->g_device, &rp_info, handler->g_allocator, &handler->offscreen_render_pass);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "Failed to create offscreen render pass (%d)\n", err);
+    log_error(LOG_SOURCE, "Failed to create offscreen render pass (%d)", err);
     return 1;
   }
 
@@ -827,7 +827,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
 
   err = vkCreateFramebuffer(handler->g_device, &fb_info, handler->g_allocator, &handler->offscreen_framebuffer);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "Failed to create offscreen framebuffer (%d)\n", err);
+    log_error(LOG_SOURCE, "Failed to create offscreen framebuffer (%d)", err);
     vkDestroyRenderPass(handler->g_device, handler->offscreen_render_pass, handler->g_allocator);
     handler->offscreen_render_pass = VK_NULL_HANDLE;
     return 1;
@@ -841,7 +841,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
 
   handler->offscreen_texture = ImTextureRef_ImTextureRef_TextureID(id);
   handler->offscreen_initialized = true;
-  // log_info(LOG_SOURCE,"Offscreen resources created: %ux%u\n", width, height);
+  // log_info(LOG_SOURCE,"Offscreen resources created: %ux%u", width, height);
   return 0;
 }
 
@@ -880,7 +880,7 @@ static void destroy_offscreen_resources(gfx_handler_t *handler) {
   handler->offscreen_initialized = false;
   handler->offscreen_width = 0;
   handler->offscreen_height = 0;
-  // log_info(LOG_SOURCE, "Offscreen resources destroyed\n");
+  // log_info(LOG_SOURCE, "Offscreen resources destroyed");
 }
 
 static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, uint32_t height) {

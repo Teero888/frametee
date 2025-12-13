@@ -50,7 +50,7 @@ void render_menu_bar(struct ui_handler *ui) {
           on_map_load_path(ui->gfx_handler, out_path);
           NFD_FreePathU8(out_path);
         } else if (result == NFD_CANCEL) log_warn(LOG_SOURCE, "Canceled map load.");
-        else log_error(LOG_SOURCE, "Error: %s\n", NFD_GetError());
+        else log_error(LOG_SOURCE, "Error: %s", NFD_GetError());
       }
       igSeparator();
       if (igMenuItem_Bool("Open Project", "Ctrl+O", false, true)) {

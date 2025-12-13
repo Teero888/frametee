@@ -40,10 +40,10 @@ jobs:
         cache: true
 
     - name: Configure CMake
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
     - name: Build
-      run: cmake --build build --config Release --parallel
+      run: cmake --build build --config RelWithDebInfo --parallel
 
     - name: Prepare Artifact
       run: |
@@ -79,10 +79,10 @@ jobs:
         cache: true
 
     - name: Configure CMake
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
     - name: Build
-      run: cmake --build build --config Release --parallel
+      run: cmake --build build --config RelWithDebInfo --parallel
 
     - name: Prepare Artifact
       shell: bash
@@ -98,6 +98,9 @@ jobs:
           exit 1
         fi
         
+        # Find and copy PDBs (debug symbols)
+        find build -name "*.pdb" -exec cp {} artifact/frametee-windows/ \;
+
         # Find and copy all DLLs (runtime dependencies)
         find build -name "*.dll" -exec cp {} artifact/frametee-windows/ \;
         
