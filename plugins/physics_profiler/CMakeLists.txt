@@ -51,10 +51,15 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${HOST_APP_DIR}/libs/cglm/include"
 )
 
-set(CMAKE_C_FLAGS_DEBUG "-g -ffast-math -DDEBUG -fsanitize=address,undefined")
-set(CMAKE_C_FLAGS_RELEASE "-g -O3 -ffast-math -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -ffast-math -DDEBUG -fsanitize=address,undefined")
-set(CMAKE_CXX_FLAGS_RELEASE "-g -O3 -ffast-math -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros")
+target_compile_options(${PROJECT_NAME} PRIVATE
+    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-Wall -Wextra -pedantic>
+    $<$<C_COMPILER_ID:MSVC>:/W4>
+    
+    $<$<AND:$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-g -DDEBUG>
+    $<$<AND:$<CONFIG:Release>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-g -O3 -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros>
+
+    $<$<AND:$<BOOL:${ENABLE_SANITIZERS}>,$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-fsanitize=address,undefined>
+)
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE
