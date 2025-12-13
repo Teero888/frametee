@@ -20,7 +20,7 @@
 ## Features
 
 ### Core & Rendering
-*   **Custom Physics:** Integrated [ddnet_physics](https://github.com/Teero888/ddnet_physics) for accuracy and cheat prevention.
+*   **Custom Physics:** Using [ddnet_physics](https://github.com/Teero888/ddnet_physics) for cheat prevention.
 *   **Vulkan Renderer:** High-performance rendering pipeline.
 *   **DDNet Support:** Full compatibility with DDNet maps and skins.
 
