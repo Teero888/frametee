@@ -320,8 +320,8 @@ player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
     player_track_t *new_track = &ts->player_tracks[old_count + i];
     memset(new_track, 0, sizeof(player_track_t));
     new_track->dummy_copy_flags = COPY_ALL;
-    new_track->allow_dummy_hammer = true;
-    new_track->dummy_hammer_aimbot = true;
+    new_track->allow_dummy_fire = true;
+    new_track->dummy_fire_aimbot = true;
   }
 
   ts->player_track_count = new_count;

@@ -35,7 +35,7 @@
 
 ### Advanced Control
 *   **Dummy Handling:** Dedicated controls for dummy tees with input mirroring and copying.
-*   **Deepfly Support:** Dummy hammer mechanics similar to the standard [deepfly bind](https://wiki.ddnet.org/wiki/Binds#Deepfly).
+*   **Deepfly Support:** Dummy fire mechanics similar to the standard [deepfly bind](https://wiki.ddnet.org/wiki/Binds#Deepfly).
 
 ### Tools & Extensibility
 *   **Demo Export:** Export directly to DDNet-compatible demo files.

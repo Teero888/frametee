@@ -50,8 +50,8 @@ typedef struct {
   player_info_t player_info;
   bool is_dummy;
   int dummy_copy_flags;
-  bool allow_dummy_hammer;
-  bool dummy_hammer_aimbot;
+  bool allow_dummy_fire;
+  bool dummy_fire_aimbot;
 } player_track_t;
 
 typedef struct {

@@ -21,6 +21,15 @@ static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_
 
 // Helper to apply a single tick of input to a dummy track's recording buffer
 static void apply_input_to_recording_buffer(timeline_state_t *ts, player_track_t *track, int tick, const SPlayerInput *dummy_input) {
+  // Check if we can overwrite an existing recording snippet
+  for (int i = 0; i < track->recording_snippet_count; ++i) {
+    input_snippet_t *snip = &track->recording_snippets[i];
+    if (tick >= snip->start_tick && tick < snip->end_tick) {
+      snip->inputs[tick - snip->start_tick] = *dummy_input;
+      return;
+    }
+  }
+
   // Find a recording snippet to extend
   input_snippet_t *extend_target = NULL;
   for (int i = 0; i < track->recording_snippet_count; ++i) {
@@ -61,7 +70,7 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
 
   SCharacterCore *recording_char = &world.m_pCharacters[ts->selected_player_track_index];
   mvec2 recording_pos = recording_char->m_Pos;
-  int tick = ts->current_tick;
+  int tick = ts->current_tick + 1;
 
   bool dummy_fire_active = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_DUMMY_FIRE].combo);
 
@@ -115,9 +124,9 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
         if (track->dummy_copy_flags & COPY_MIRROR_Y) {
           final_input.m_TargetY = -final_input.m_TargetY;
         }
-      } else if (action == DUMMY_ACTION_FIRE && dummy_fire_active && track->allow_dummy_hammer) {
+      } else if (action == DUMMY_ACTION_FIRE && dummy_fire_active && track->allow_dummy_fire) {
         final_input.m_Fire = 1;
-        if (track->dummy_hammer_aimbot) {
+        if (track->dummy_fire_aimbot) {
           final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
           final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
         }
@@ -761,9 +770,10 @@ SPlayerInput interaction_predict_input(struct ui_handler *ui, SWorldCore *world,
       if (track->dummy_copy_flags & COPY_MIRROR_Y) {
         final_input.m_TargetY = -final_input.m_TargetY;
       }
-    } else if (action == DUMMY_ACTION_FIRE && dummy_fire_active && track->allow_dummy_hammer) {
-      final_input.m_Fire = 1;
-      if (track->dummy_hammer_aimbot) {
+    } else if (action == DUMMY_ACTION_FIRE && dummy_fire_active && track->allow_dummy_fire) {
+      final_input.m_Fire = (world->m_GameTick % 2) == 0;
+      final_input.m_WantedWeapon = WEAPON_HAMMER;
+      if (track->dummy_fire_aimbot) {
         final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
         final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
       }
