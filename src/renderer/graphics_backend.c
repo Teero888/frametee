@@ -1158,23 +1158,15 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
 }
 */
 
-/*
-static void frame_present(gfx_handler_t *handler) {
-  if (handler->g_swap_chain_rebuild) return;
-  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
-  VkSemaphore render_complete_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
-  VkPresentInfoKHR info = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-                           .waitSemaphoreCount = 1,
-                           .pWaitSemaphores = &render_complete_semaphore,
-                           .swapchainCount = 1,
-                           .pSwapchains = &wd->Swapchain,
-                           .pImageIndices = &wd->FrameIndex};
-  VkResult err = vkQueuePresentKHR(handler->g_queue, &info);
-  if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
-    handler->g_swap_chain_rebuild = true;
+void gfx_toggle_fullscreen(gfx_handler_t *handler) {
+  GLFWmonitor *monitor = glfwGetWindowMonitor(handler->window);
+  if (monitor) {
+    // Switch to windowed mode
+    glfwSetWindowMonitor(handler->window, NULL, 100, 100, 1280, 720, 0);
   } else {
-    check_vk_result(err);
+    // Switch to fullscreen mode
+    monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode *mode = glfwGetVideoMode(monitor);
+    glfwSetWindowMonitor(handler->window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
   }
-  wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount;
 }
-*/

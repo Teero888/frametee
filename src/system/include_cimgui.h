@@ -10,7 +10,7 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
-#include "cimgui.h"
+#include "cimgui.h" // NOLINT
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #elif defined(__GNUC__)

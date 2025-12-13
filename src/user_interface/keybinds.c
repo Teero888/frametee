@@ -1,4 +1,5 @@
 #include "keybinds.h"
+#include <renderer/graphics_backend.h>
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
@@ -72,6 +73,8 @@ void keybinds_init(keybind_manager_t *manager) {
       (keybind_t){"toggle_snippet_active", "Toggle Snippet Active", "Timeline", {ImGuiKey_A, false, false, false}};
 
   // General
+  manager->bindings[ACTION_TOGGLE_FULLSCREEN] =
+      (keybind_t){"toggle_fullscreen", "Toggle Fullscreen", "General", {ImGuiKey_F11, false, false, false}};
   manager->bindings[ACTION_UNDO] = (keybind_t){"undo", "Undo", "General", {ImGuiKey_Z, true, false, false}};
   manager->bindings[ACTION_REDO] = (keybind_t){"redo", "Redo", "General", {ImGuiKey_Y, true, false, false}};
 
@@ -204,6 +207,10 @@ void keybinds_process_inputs(struct ui_handler *ui) {
         model_recalc_physics(ts, earliest_tick_to_recalc);
       }
     }
+  }
+
+  if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_FULLSCREEN].combo, false)) {
+    gfx_toggle_fullscreen(ui->gfx_handler);
   }
 
   if (is_key_combo_pressed(&kb->bindings[ACTION_UNDO].combo, false)) undo_manager_undo(&ui->undo_manager, ts);

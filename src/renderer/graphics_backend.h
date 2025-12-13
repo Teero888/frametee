@@ -30,6 +30,7 @@ int init_gfx_handler(struct gfx_handler_t *handler);
 int gfx_begin_frame(struct gfx_handler_t *handler);
 bool gfx_end_frame(struct gfx_handler_t *handler);
 void gfx_cleanup(struct gfx_handler_t *handler);
+void gfx_toggle_fullscreen(struct gfx_handler_t *handler);
 
 typedef struct {
   double x, y;   // last cursor pos

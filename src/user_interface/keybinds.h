@@ -21,6 +21,7 @@ typedef enum {
   ACTION_TOGGLE_SNIPPET_ACTIVE,
 
   // general application
+  ACTION_TOGGLE_FULLSCREEN,
   ACTION_UNDO,
   ACTION_REDO,
 
