@@ -8,8 +8,7 @@
 #pragma clang diagnostic ignored "-Wtypedef-redefinition"
 #elif defined(__GNUC__)
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wc11-extensions"
-#pragma GCC diagnostic ignored "-Wtypedef-redefinition"
+#pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 #include "cimgui.h"
 #if defined(__clang__)

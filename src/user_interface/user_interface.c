@@ -571,7 +571,7 @@ void render_players(struct ui_handler *ui) {
       vec2 head_size = {(float)head_sprite_def->w / 64.0f, (float)head_sprite_def->h / 64.0f};
       renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, hook_pos, head_size, angle, GAMESKIN_HOOK_HEAD, false);
     }
-    if (!core->m_FreezeTime && core->m_ActiveWeapon >= WEAPON_HAMMER && core->m_ActiveWeapon < NUM_WEAPONS) {
+    if (!core->m_FreezeTime && core->m_ActiveWeapon < NUM_WEAPONS) {
       const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
       float fire_delay_ticks = spec->firedelay * (float)GAME_TICK_SPEED / 1000.0f;
       float attack_ticks_passed = (world.m_GameTick - core->m_AttackTick) + intra;

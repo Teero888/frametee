@@ -23,7 +23,7 @@ static const char *LOG_SOURCE = "Config";
 
 static void get_config_path(char *buffer, size_t size) {
   char *config_home = NULL;
-  char dir_path[1024];
+  char dir_path[1034];// 1024 + 10 to allow the "frametee"
   dir_path[0] = '\0';
 
 #ifdef _WIN32
@@ -39,7 +39,7 @@ static void get_config_path(char *buffer, size_t size) {
   } else {
     config_home = getenv("HOME");
     if (config_home) {
-      char base_dir[1024];
+      char base_dir[1024]; 
       snprintf(base_dir, sizeof(base_dir), "%s%c.config", config_home, PATH_SEP);
       MKDIR(base_dir);
       snprintf(dir_path, sizeof(dir_path), "%s%cframetee", base_dir, PATH_SEP);

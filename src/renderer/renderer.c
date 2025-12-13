@@ -10,7 +10,15 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
 #include "stb_image_resize2.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 static const char *LOG_SOURCE = "Renderer";
 
 #include <assert.h>

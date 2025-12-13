@@ -6,6 +6,10 @@
 #include <GLFW/glfw3.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 int main(void) {
   logger_init();
 
@@ -23,10 +27,14 @@ int main(void) {
       while (glfwGetTime() - last_time < target_dt) {
         double remaining = target_dt - (glfwGetTime() - last_time);
         if (remaining > 0.001) {
+#ifdef _WIN32
+          Sleep((DWORD)((remaining - 0.0005) * 1000));
+#else
           struct timespec ts;
           ts.tv_sec = 0;
           ts.tv_nsec = (long)((remaining - 0.0005) * 1e9);
           nanosleep(&ts, NULL);
+#endif
         }
       }
     }

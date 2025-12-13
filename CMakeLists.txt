@@ -142,19 +142,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
-    -Wall -Wextra -pedantic
-    $<$<CONFIG:Debug>:-g>
-    $<$<CONFIG:Debug>:-DDEBUG>
-    $<$<CONFIG:Debug>:-ffast-math>
-
-    $<$<CONFIG:Release>:-g>
-    $<$<CONFIG:Release>:-O3>
-    $<$<CONFIG:Release>:-ffast-math>
-    $<$<CONFIG:Release>:-funroll-loops>
-    $<$<CONFIG:Release>:-mfpmath=sse>
-    $<$<CONFIG:Release>:-fomit-frame-pointer>
-    $<$<CONFIG:Release>:-fno-trapping-math>
-    $<$<CONFIG:Release>:-fno-signed-zeros>
+    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-Wall -Wextra -pedantic>
+    $<$<C_COMPILER_ID:MSVC>:/W4>
+    
+    $<$<AND:$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-g -DDEBUG -ffast-math>
+    $<$<AND:$<CONFIG:Release>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-g -O3 -ffast-math -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros>
 
     $<$<AND:$<BOOL:${ENABLE_SANITIZERS}>,$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-fsanitize=address,undefined>
 )
