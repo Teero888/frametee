@@ -7,11 +7,7 @@ set(CMAKE_C_STANDARD_REQUIRED TRUE)
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 
 # source files
-project(ddnet_frametee)
-
-if(UNIX AND CMAKE_C_COMPILER_ID MATCHES "MSVC")
-    message(WARNING "It looks like you are using clang-cl (MSVC compatible) on Linux. This might be unintended. Consider setting CC=clang before running cmake.")
-endif()
+project(frametee)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 	message(STATUS "No build type selected, defaulting to Release")
@@ -142,11 +138,14 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
-    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-Wall -Wextra -pedantic>
-    $<$<C_COMPILER_ID:MSVC>:/W4>
+    $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>: -Wall -Wextra -pedantic>
+    $<$<C_COMPILER_ID:MSVC>: /W4>
     
-    $<$<AND:$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-g -DDEBUG>
-    $<$<AND:$<CONFIG:Release>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-g -O3 -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros>
+    $<$<AND:$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>: -g -DDEBUG>
+    $<$<AND:$<CONFIG:Debug>,$<C_COMPILER_ID:MSVC>>: /Zi /Od /DDEBUG>
+
+    $<$<AND:$<CONFIG:Release>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>: -g -O3 -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros>
+    $<$<AND:$<CONFIG:Release>,$<C_COMPILER_ID:MSVC>>: /Ox /Ob2 /Oi /GL /DNDEBUG>
 
     $<$<AND:$<BOOL:${ENABLE_SANITIZERS}>,$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-fsanitize=address,undefined>
 )
@@ -186,15 +185,15 @@ if(ENABLE_SANITIZERS)
             "leak:*FcLangSetCopy*\n"
         )
         # create wrapper script to set lsan_options
-        set(WRAPPER_SCRIPT "${CMAKE_BINARY_DIR}/ddnet_frametee.sh")
+        set(WRAPPER_SCRIPT "${CMAKE_BINARY_DIR}/frametee.sh")
         file(WRITE ${WRAPPER_SCRIPT}
             "#!/bin/sh\n"
             "export LSAN_OPTIONS=suppressions=${CMAKE_BINARY_DIR}/asan_suppressions.txt\n"
-            "exec ${CMAKE_BINARY_DIR}/ddnet_frametee \"$@\"\n"
+            "exec ${CMAKE_BINARY_DIR}/frametee \"$@\"\n"
         )
         # make the wrapper script executable
         execute_process(COMMAND chmod +x ${WRAPPER_SCRIPT})
-        message(STATUS "Sanitizer wrapper script created at ${WRAPPER_SCRIPT}. Use './ddnet_frametee.sh' to run with suppressions.")
+        message(STATUS "Sanitizer wrapper script created at ${WRAPPER_SCRIPT}. Use './frametee.sh' to run with suppressions.")
     else()
         message(WARNING "Sanitizers are only supported for GCC and Clang compilers.")
     endif()

@@ -48,7 +48,7 @@ jobs:
     - name: Prepare Artifact
       run: |
         mkdir -p artifact/frametee-linux
-        find build -type f -name "ddnet_frametee" -exec cp {} artifact/frametee-linux \;
+        find build -type f -name "frametee" -exec cp {} artifact/frametee-linux \;
         find build -type f -name "*.so" -exec cp {} artifact/frametee-linux \;
         
         cp -r build/data artifact/frametee-linux
@@ -90,7 +90,7 @@ jobs:
         mkdir -p artifact/frametee-windows
         
         # Find and copy executable
-        EXE_PATH=$(find build -name "ddnet_frametee.exe" -print -quit)
+        EXE_PATH=$(find build -name "frametee.exe" -print -quit)
         if [ -n "$EXE_PATH" ]; then
           cp "$EXE_PATH" artifact/frametee-windows/
         else
@@ -110,5 +110,5 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ddnet_frametee-windows
+        name: frametee-windows
         path: artifact/
