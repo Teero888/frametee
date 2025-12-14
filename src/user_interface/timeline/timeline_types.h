@@ -53,8 +53,6 @@ typedef struct {
   player_info_t player_info;
   bool is_dummy;
   int dummy_copy_flags;
-  bool allow_dummy_fire;
-  bool dummy_fire_aimbot;
 } player_track_t;
 
 typedef struct {
@@ -86,7 +84,7 @@ typedef struct {
   int capacity;
 } recording_snippet_vector_t;
 
-typedef enum { DUMMY_ACTION_COPY, DUMMY_ACTION_FIRE, DUMMY_ACTION_COUNT } dummy_action_type_t;
+typedef enum { DUMMY_ACTION_COPY, DUMMY_ACTION_INPUTS, DUMMY_ACTION_COUNT } dummy_action_type_t;
 
 typedef struct timeline_state {
   // View State

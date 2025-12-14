@@ -36,7 +36,13 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
   mvec2 recording_pos = recording_char->m_Pos;
 
   SPlayerInput source_input = ts->player_tracks[ts->selected_player_track_index].current_input;
-  bool dummy_fire_active = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_FIRE);
+
+  bool dummy_left = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_LEFT);
+  bool dummy_right = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_RIGHT);
+  bool dummy_jump = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_JUMP);
+  bool dummy_fire = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_FIRE);
+  bool dummy_hook = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_HOOK);
+  bool dummy_aim = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_AIM);
 
   for (int i = 0; i < ts->player_track_count; ++i) {
     if (i == ts->selected_player_track_index) continue;
@@ -47,7 +53,7 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
     SCharacterCore *dummy_char = &world.m_pCharacters[i];
     mvec2 dummy_pos = dummy_char->m_Pos;
 
-    SPlayerInput final_input = {0};
+    SPlayerInput final_input = track->current_input;
 
     for (int action_idx = 0; action_idx < DUMMY_ACTION_COUNT; ++action_idx) {
       dummy_action_type_t action = ts->dummy_action_priority[action_idx];
@@ -70,9 +76,13 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
         if (track->dummy_copy_flags & COPY_MIRROR_Y) {
           final_input.m_TargetY = -final_input.m_TargetY;
         }
-      } else if (action == DUMMY_ACTION_FIRE && dummy_fire_active && track->allow_dummy_fire) {
-        final_input.m_Fire = 1;
-        if (track->dummy_fire_aimbot) {
+      } else if (action == DUMMY_ACTION_INPUTS) {
+        final_input.m_Direction = dummy_right - dummy_left;
+        final_input.m_Jump = dummy_jump;
+        final_input.m_Fire = dummy_fire;
+        final_input.m_Hook = dummy_hook;
+
+        if (dummy_aim) {
           final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
           final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
         }
@@ -88,8 +98,8 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   ts->playback_speed = ts->gui_playback_speed;
 
   // Detect rewind (press or hold)
-  bool reverse_down = keybinds_is_action_down(&ts->ui->keybinds, ACTION_REWIND_HOLD) ||
-                      keybinds_is_action_pressed(&ts->ui->keybinds, ACTION_REWIND_HOLD, false);
+  bool reverse_down =
+      keybinds_is_action_down(&ts->ui->keybinds, ACTION_REWIND_HOLD) || keybinds_is_action_pressed(&ts->ui->keybinds, ACTION_REWIND_HOLD, false);
 
   if (reverse_down && !ts->is_reversing) ts->last_update_time = igGetTime();
   if (!reverse_down && ts->is_reversing) ts->last_update_time = igGetTime();
@@ -300,12 +310,12 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
           }
         }
       }
-      
+
       if (igIsItemHovered(0) && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
         // Ensure the clicked snippet is selected (should be handled by single click, but safe to ensure)
         if (!interaction_is_snippet_selected(ts, snippet->id)) {
-            interaction_clear_selection(ts);
-            interaction_add_snippet_to_selection(ts, snippet->id);
+          interaction_clear_selection(ts);
+          interaction_add_snippet_to_selection(ts, snippet->id);
         }
         undo_command_t *cmd = commands_create_toggle_selected_snippets_active(ts->ui);
         if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
@@ -556,7 +566,7 @@ void interaction_toggle_recording(timeline_state_t *ts) {
     if (cmd) {
       undo_manager_register_command(&ts->ui->undo_manager, cmd);
     }
-    
+
     model_clear_all_recording_buffers(ts);
     ts->recording_snippets.count = 0;
   }
@@ -609,7 +619,9 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
 
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
-    if (track->recording_snippet_count == 0) continue;
+    
+    bool should_record = (i == ts->selected_player_track_index) || track->is_dummy;
+    if (!should_record && track->recording_snippet_count == 0) continue;
 
     input_snippet_t *target = NULL;
 

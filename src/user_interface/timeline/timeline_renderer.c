@@ -267,10 +267,6 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
           if (igCheckbox("Mirror Aim Y", &mirror_y)) flags ^= COPY_MIRROR_Y;
 
           track->dummy_copy_flags = flags;
-
-          igSeparator();
-          igCheckbox("Allow Dummy Fire", &track->allow_dummy_fire);
-          igCheckbox("Dummy Fire Aimbot", &track->dummy_fire_aimbot);
         } else {
           igTextDisabled("Not a dummy track");
           igTextDisabled("Double-click header to toggle");

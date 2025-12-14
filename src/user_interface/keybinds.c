@@ -173,7 +173,12 @@ void keybinds_init(keybind_manager_t *manager) {
   set_action_info(manager, ACTION_GRENADE, "grenade", "Switch to grenade", "Recording");
   set_action_info(manager, ACTION_LASER, "laser", "Switch to laser", "Recording");
 
+  set_action_info(manager, ACTION_DUMMY_LEFT, "dummy_left", "Dummy Left", "Dummy");
+  set_action_info(manager, ACTION_DUMMY_RIGHT, "dummy_right", "Dummy Right", "Dummy");
+  set_action_info(manager, ACTION_DUMMY_JUMP, "dummy_jump", "Dummy Jump", "Dummy");
   set_action_info(manager, ACTION_DUMMY_FIRE, "dummy_fire", "Dummy Fire", "Dummy");
+  set_action_info(manager, ACTION_DUMMY_HOOK, "dummy_hook", "Dummy Hook", "Dummy");
+  set_action_info(manager, ACTION_DUMMY_AIM, "dummy_aim", "Dummy Aim at Recorder", "Dummy");
   set_action_info(manager, ACTION_TOGGLE_DUMMY_COPY, "toggle_dummy_copy", "Toggle dummy copy", "Dummy");
 
   set_action_info(manager, ACTION_ZOOM_IN, "zoom_in", "Zoom in", "Camera");
@@ -221,7 +226,6 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_GRENADE, (key_combo_t){ImGuiKey_4, false, false, false});
   keybinds_add(manager, ACTION_LASER, (key_combo_t){ImGuiKey_5, false, false, false});
 
-  keybinds_add(manager, ACTION_DUMMY_FIRE, (key_combo_t){ImGuiKey_V, false, false, false});
   keybinds_add(manager, ACTION_TOGGLE_DUMMY_COPY, (key_combo_t){ImGuiKey_R, false, false, false});
 
   keybinds_add(manager, ACTION_ZOOM_IN, (key_combo_t){ImGuiKey_W, false, false, false});
@@ -465,7 +469,7 @@ void keybinds_render_settings_window(struct ui_handler *ui) {
             for (int i = 0; i < DUMMY_ACTION_COUNT; ++i) {
                 igPushID_Int(1000 + i);
                 dummy_action_type_t action = ui->timeline.dummy_action_priority[i];
-                const char *name = (action == DUMMY_ACTION_COPY) ? "Copy Input" : "Dummy Fire";
+                const char *name = (action == DUMMY_ACTION_COPY) ? "Copy Input" : "Dummy Inputs";
                 igText("  %d. %s", i + 1, name);
                 igSameLine(0, 10);
                 if (i > 0 && igArrowButton("##up", ImGuiDir_Up)) {

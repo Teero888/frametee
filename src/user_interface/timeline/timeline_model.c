@@ -39,7 +39,7 @@ void model_init(timeline_state_t *ts, struct ui_handler *ui) {
   ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
 
   ts->dummy_action_priority[0] = DUMMY_ACTION_COPY;
-  ts->dummy_action_priority[1] = DUMMY_ACTION_FIRE;
+  ts->dummy_action_priority[1] = DUMMY_ACTION_INPUTS;
 
   snippet_id_vector_init(&ts->selected_snippets);
 }
@@ -312,8 +312,6 @@ player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
     player_track_t *new_track = &ts->player_tracks[old_count + i];
     memset(new_track, 0, sizeof(player_track_t));
     new_track->dummy_copy_flags = COPY_ALL;
-    new_track->allow_dummy_fire = true;
-    new_track->dummy_fire_aimbot = true;
   }
 
   ts->player_track_count = new_count;
