@@ -400,7 +400,12 @@ void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_l
         float preview_min_y = target_track_top + preview_snip->layer * sub_lane_height + 2.0f;
         float preview_max_y = preview_min_y + sub_lane_height - 4.0f;
 
-        ImU32 fill = IM_COL32(100, 150, 240, 90);
+        ImU32 fill;
+        if (igGetIO_Nil()->KeyAlt) {
+          fill = IM_COL32(100, 240, 150, 90); // Green
+        } else {
+          fill = IM_COL32(100, 150, 240, 90); // Blue
+        }
         ImDrawList_AddRectFilled(overlay_draw_list, (ImVec2){preview_min_x, preview_min_y}, (ImVec2){preview_max_x, preview_max_y}, fill, 4.0f,
                                  ImDrawFlags_RoundCornersAll);
       }

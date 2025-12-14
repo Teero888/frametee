@@ -20,6 +20,7 @@ struct undo_command_t *commands_create_delete_selected(struct ui_handler *ui);
 struct undo_command_t *commands_create_split_selected(struct ui_handler *ui);
 struct undo_command_t *commands_create_merge_selected(struct ui_handler *ui);
 struct undo_command_t *commands_create_move_snippets(struct ui_handler *ui, const MoveSnippetInfo *infos, int count);
+struct undo_command_t *commands_create_duplicate_snippets(struct ui_handler *ui, const MoveSnippetInfo *infos, int count);
 struct undo_command_t *commands_create_remove_track(struct ui_handler *ui, int track_index);
 
 // Special command for the snippet editor

@@ -367,7 +367,12 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
       }
 
       if (valid_moves > 0) {
-        undo_command_t *cmd = commands_create_move_snippets(ts->ui, infos, valid_moves);
+        undo_command_t *cmd = NULL;
+        if (io->KeyAlt) {
+          cmd = commands_create_duplicate_snippets(ts->ui, infos, valid_moves);
+        } else {
+          cmd = commands_create_move_snippets(ts->ui, infos, valid_moves);
+        }
         if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
       }
       free(infos);
