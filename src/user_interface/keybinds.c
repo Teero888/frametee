@@ -1,14 +1,15 @@
 #include "keybinds.h"
-#include <renderer/graphics_backend.h>
+#include <system/include_cimgui.h>
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
 #include "user_interface.h"
-#include <symbols.h>
-#include <logger/logger.h>
 #include <limits.h>
-#include <string.h>
+#include <logger/logger.h>
+#include <renderer/graphics_backend.h>
 #include <stdlib.h>
+#include <string.h>
+#include <symbols.h>
 
 // check if a key combination is pressed for single-press actions
 bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
@@ -132,9 +133,9 @@ int keybinds_get_global_index_for_action(keybind_manager_t *kb, action_t action,
 }
 
 static void set_action_info(keybind_manager_t *kb, action_t action, const char *id, const char *name, const char *cat) {
-    kb->action_infos[action].identifier = id;
-    kb->action_infos[action].name = name;
-    kb->action_infos[action].category = cat;
+  kb->action_infos[action].identifier = id;
+  kb->action_infos[action].name = name;
+  kb->action_infos[action].category = cat;
 }
 
 void keybinds_init(keybind_manager_t *manager) {
@@ -198,7 +199,9 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_PLAY_PAUSE, (key_combo_t){ImGuiKey_X, false, false, false});
   keybinds_add(manager, ACTION_REWIND_HOLD, (key_combo_t){ImGuiKey_C, false, false, false});
   keybinds_add(manager, ACTION_PREV_FRAME, (key_combo_t){ImGuiKey_MouseX1, false, false, false});
+  keybinds_add(manager, ACTION_PREV_FRAME, (key_combo_t){ImGuiKey_LeftArrow, false, false, false});
   keybinds_add(manager, ACTION_NEXT_FRAME, (key_combo_t){ImGuiKey_MouseX2, false, false, false});
+  keybinds_add(manager, ACTION_NEXT_FRAME, (key_combo_t){ImGuiKey_RightArrow, false, false, false});
   keybinds_add(manager, ACTION_INC_TPS, (key_combo_t){ImGuiKey_UpArrow, false, false, false});
   keybinds_add(manager, ACTION_DEC_TPS, (key_combo_t){ImGuiKey_DownArrow, false, false, false});
 
@@ -334,12 +337,12 @@ static bool has_perfect_duplicate(keybind_manager_t *kb, action_t action, key_co
 // Render logic for a single action in the settings window
 static void render_keybind_entry(keybind_manager_t *manager, action_t action_id) {
   int count = keybinds_get_count_for_action(manager, action_id);
-  
+
   // Show all existing bindings
   for (int i = 0; i < count; i++) {
     int global_idx = keybinds_get_global_index_for_action(manager, action_id, i);
     keybind_entry_t *binding = &manager->bindings[global_idx];
-    
+
     igPushID_Int(action_id * 1000 + i);
 
     const char *button_label;
@@ -357,12 +360,12 @@ static void render_keybind_entry(keybind_manager_t *manager, action_t action_id)
 
     igSameLine(0, 6.0f);
     if (igButton(ICON_KI_TRASH, (ImVec2){0, 0})) {
-        keybinds_remove(manager, global_idx);
-        // We removed an item, so we must stop iterating since indices shifted
-        igPopID();
-        break; 
+      keybinds_remove(manager, global_idx);
+      // We removed an item, so we must stop iterating since indices shifted
+      igPopID();
+      break;
     }
-    
+
     // Only put on same line if not the last one, wrapping handled by table or layout
     igSameLine(0, 6.0f);
     igPopID();
@@ -372,15 +375,15 @@ static void render_keybind_entry(keybind_manager_t *manager, action_t action_id)
   igPushID_Int(action_id * 1000 + 999);
   if (manager->is_waiting_for_input && manager->action_to_rebind == action_id && manager->rebind_index == -1) {
     if (igButton("[ press key ]", (ImVec2){100.0f, 0})) {
-        // Cancel add
-        manager->is_waiting_for_input = false;
-        manager->rebind_index = -2;
+      // Cancel add
+      manager->is_waiting_for_input = false;
+      manager->rebind_index = -2;
     }
   } else {
     if (igButton("+", (ImVec2){30.0f, 0})) {
-        manager->is_waiting_for_input = true;
-        manager->action_to_rebind = action_id;
-        manager->rebind_index = -1; // New binding
+      manager->is_waiting_for_input = true;
+      manager->action_to_rebind = action_id;
+      manager->rebind_index = -1; // New binding
     }
   }
   igPopID();
@@ -397,11 +400,9 @@ void keybinds_render_settings_window(struct ui_handler *ui) {
     if (manager->is_waiting_for_input) igOpenPopup_Str("RebindKeyPopup", ImGuiPopupFlags_AnyPopupLevel);
 
     if (igBeginPopupModal("RebindKeyPopup", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-      if (manager->rebind_index == -1)
-        igText("Press keys to add binding for '%s'", manager->action_infos[manager->action_to_rebind].name);
-      else
-        igText("Press keys to replace binding for '%s'", manager->action_infos[manager->action_to_rebind].name);
-        
+      if (manager->rebind_index == -1) igText("Press keys to add binding for '%s'", manager->action_infos[manager->action_to_rebind].name);
+      else igText("Press keys to replace binding for '%s'", manager->action_infos[manager->action_to_rebind].name);
+
       igSeparator();
       igText("Press ESC to cancel.");
 
@@ -418,20 +419,20 @@ void keybinds_render_settings_window(struct ui_handler *ui) {
             new_combo.ctrl = io->KeyCtrl;
             new_combo.alt = io->KeyAlt;
             new_combo.shift = io->KeyShift;
-            
+
             // Check for perfect duplicate
             if (has_perfect_duplicate(manager, manager->action_to_rebind, new_combo)) {
-                 log_warn("Keybinds", "Duplicate binding added.");
+              log_warn("Keybinds", "Duplicate binding added.");
             }
-            
+
             if (manager->rebind_index == -1) {
-                // Add new
-                keybinds_add(manager, manager->action_to_rebind, new_combo);
+              // Add new
+              keybinds_add(manager, manager->action_to_rebind, new_combo);
             } else {
-                // Replace
-                manager->bindings[manager->rebind_index].combo = new_combo;
+              // Replace
+              manager->bindings[manager->rebind_index].combo = new_combo;
             }
-            
+
             manager->is_waiting_for_input = false;
             igCloseCurrentPopup();
             break;
@@ -467,23 +468,23 @@ void keybinds_render_settings_window(struct ui_handler *ui) {
             igTableSetColumnIndex(0);
             igText("Action Priority (Top = First, Bottom = Last/Overwrites)");
             for (int i = 0; i < DUMMY_ACTION_COUNT; ++i) {
-                igPushID_Int(1000 + i);
-                dummy_action_type_t action = ui->timeline.dummy_action_priority[i];
-                const char *name = (action == DUMMY_ACTION_COPY) ? "Copy Input" : "Dummy Inputs";
-                igText("  %d. %s", i + 1, name);
-                igSameLine(0, 10);
-                if (i > 0 && igArrowButton("##up", ImGuiDir_Up)) {
-                    dummy_action_type_t temp = ui->timeline.dummy_action_priority[i];
-                    ui->timeline.dummy_action_priority[i] = ui->timeline.dummy_action_priority[i - 1];
-                    ui->timeline.dummy_action_priority[i - 1] = temp;
-                }
-                igSameLine(0, 10);
-                if (i < DUMMY_ACTION_COUNT - 1 && igArrowButton("##down", ImGuiDir_Down)) {
-                    dummy_action_type_t temp = ui->timeline.dummy_action_priority[i];
-                    ui->timeline.dummy_action_priority[i] = ui->timeline.dummy_action_priority[i + 1];
-                    ui->timeline.dummy_action_priority[i + 1] = temp;
-                }
-                igPopID();
+              igPushID_Int(1000 + i);
+              dummy_action_type_t action = ui->timeline.dummy_action_priority[i];
+              const char *name = (action == DUMMY_ACTION_COPY) ? "Copy Input" : "Dummy Inputs";
+              igText("  %d. %s", i + 1, name);
+              igSameLine(0, 10);
+              if (i > 0 && igArrowButton("##up", ImGuiDir_Up)) {
+                dummy_action_type_t temp = ui->timeline.dummy_action_priority[i];
+                ui->timeline.dummy_action_priority[i] = ui->timeline.dummy_action_priority[i - 1];
+                ui->timeline.dummy_action_priority[i - 1] = temp;
+              }
+              igSameLine(0, 10);
+              if (i < DUMMY_ACTION_COUNT - 1 && igArrowButton("##down", ImGuiDir_Down)) {
+                dummy_action_type_t temp = ui->timeline.dummy_action_priority[i];
+                ui->timeline.dummy_action_priority[i] = ui->timeline.dummy_action_priority[i + 1];
+                ui->timeline.dummy_action_priority[i + 1] = temp;
+              }
+              igPopID();
             }
             igSeparator();
           }

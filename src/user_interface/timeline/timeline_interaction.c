@@ -20,6 +20,8 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
 static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id);
 static void interaction_start_recording_on_track(timeline_state_t *ts, int track_index);
 
+// TODO: Make this faster. Performance is kind of horrible since we're doing this for every frame and every dummy for the prediction rendering.
+// Or we should probably just keep track of prediction worlds instead of recalculating everything every frame.
 void interaction_apply_dummy_inputs(struct ui_handler *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (!ts->recording || ts->selected_player_track_index == -1) return;
@@ -49,11 +51,9 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
 
     player_track_t *track = &ts->player_tracks[i];
     if (!track->is_dummy || i >= world.m_NumCharacters) continue;
+    mvec2 dummy_pos = world.m_pCharacters[i].m_Pos;
 
-    SCharacterCore *dummy_char = &world.m_pCharacters[i];
-    mvec2 dummy_pos = dummy_char->m_Pos;
-
-    SPlayerInput final_input = track->current_input;
+    SPlayerInput final_input = {.m_TargetX = track->current_input.m_TargetX, .m_TargetY = track->current_input.m_TargetY};
 
     for (int action_idx = 0; action_idx < DUMMY_ACTION_COUNT; ++action_idx) {
       dummy_action_type_t action = ts->dummy_action_priority[action_idx];
@@ -77,10 +77,10 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
           final_input.m_TargetY = -final_input.m_TargetY;
         }
       } else if (action == DUMMY_ACTION_INPUTS) {
-        final_input.m_Direction = dummy_right - dummy_left;
-        final_input.m_Jump = dummy_jump;
-        final_input.m_Fire = dummy_fire;
-        final_input.m_Hook = dummy_hook;
+        if (dummy_left || dummy_right) final_input.m_Direction = dummy_right - dummy_left;
+        if (dummy_jump) final_input.m_Jump = dummy_jump;
+        if (dummy_fire) final_input.m_Fire = dummy_fire;
+        if (dummy_hook) final_input.m_Hook = dummy_hook;
 
         if (dummy_aim) {
           final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
@@ -619,7 +619,7 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
 
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
-    
+
     bool should_record = (i == ts->selected_player_track_index) || track->is_dummy;
     if (!should_record && track->recording_snippet_count == 0) continue;
 
@@ -647,7 +647,9 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
 void interaction_switch_recording_target(timeline_state_t *ts, int new_track_index) {
   if (ts->recording && new_track_index >= 0 && new_track_index < ts->player_track_count) {
     ts->selected_player_track_index = new_track_index;
-    interaction_start_recording_on_track(ts, new_track_index);
+    if (!ts->player_tracks[new_track_index].is_dummy) {
+      interaction_start_recording_on_track(ts, new_track_index);
+    }
   }
 }
 
@@ -694,8 +696,7 @@ SPlayerInput interaction_predict_input(struct ui_handler *ui, SWorldCore *world,
       // or we could extract specific logic. Calling the bulk update is safer.
       interaction_apply_dummy_inputs(ui);
     }
-
-    return ts->player_tracks[track_idx].current_input;
+    if (track_idx == ts->selected_player_track_index) return ts->player_tracks[track_idx].current_input;
   }
 
   return model_get_input_at_tick(ts, track_idx, world->m_GameTick);

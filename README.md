@@ -89,8 +89,8 @@
 | :--- | :--- | :--- |
 | **Playback** | Play/Pause | `X` |
 | | Rewind (Hold) | `C` |
-| | Previous Frame | `Mouse Button 4` |
-| | Next Frame | `Mouse Button 5` |
+| | Previous Frame | `Left Arrow`, `Mouse Button 4` |
+| | Next Frame | `Right Arrow`, `Mouse Button 5` |
 | | Adjust TPS | `Up` / `Down` Arrows |
 | **Timeline** | Select All Snippets | `Ctrl + A` |
 | | Delete Snippet | `Delete` |

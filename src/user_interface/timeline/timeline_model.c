@@ -542,6 +542,7 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
   if (ts->recording) {
     for (int i = 0; i < ts->player_track_count; ++i) {
       player_track_t *track = &ts->player_tracks[i];
+      if (i != ts->selected_player_track_index && !track->is_dummy) continue;
       input_snippet_t *active_rec_snip = NULL;
 
       if (track->recording_snippet_count > 0) {
