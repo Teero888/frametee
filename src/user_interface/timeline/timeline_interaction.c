@@ -130,12 +130,6 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     interaction_cancel_recording(ts);
   }
 
-  // Undo / Redo
-  if (igIsKeyDown_Nil(ImGuiKey_LeftCtrl) || igIsKeyDown_Nil(ImGuiKey_RightCtrl)) {
-    if (igIsKeyPressed_Bool(ImGuiKey_Z, false)) undo_manager_undo(&ts->ui->undo_manager, ts);
-    if (igIsKeyPressed_Bool(ImGuiKey_Y, false)) undo_manager_redo(&ts->ui->undo_manager, ts);
-  }
-
   // Trim shortcut (explicit trigger only)
   bool trim_pressed = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_TRIM_SNIPPET].combo);
   if (trim_pressed) interaction_trim_recording_snippet(ts);
@@ -306,6 +300,17 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
           }
         }
       }
+      
+      if (igIsItemHovered(0) && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
+        // Ensure the clicked snippet is selected (should be handled by single click, but safe to ensure)
+        if (!interaction_is_snippet_selected(ts, snippet->id)) {
+            interaction_clear_selection(ts);
+            interaction_add_snippet_to_selection(ts, snippet->id);
+        }
+        undo_command_t *cmd = commands_create_toggle_selected_snippets_active(ts->ui);
+        if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
+      }
+
       if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Left, DRAG_THRESHOLD_PX) && !ts->drag_state.active) {
         start_drag(ts, snippet->id, timeline_bb);
       }
@@ -546,17 +551,12 @@ void interaction_toggle_recording(timeline_state_t *ts) {
       return;
     }
   } else {
-    // STOP RECORDING: Merge recording buffers into main snippets
-    for (int i = 0; i < ts->player_track_count; ++i) {
-      player_track_t *track = &ts->player_tracks[i];
-      for (int j = 0; j < track->recording_snippet_count; ++j) {
-        input_snippet_t *rec_snip = &track->recording_snippets[j];
-        for (int k = 0; k < rec_snip->input_count; ++k) {
-          int tick = rec_snip->start_tick + k;
-          model_apply_input_to_main_buffer(ts, track, tick, &rec_snip->inputs[k]);
-        }
-      }
+    // STOP RECORDING
+    undo_command_t *cmd = commands_create_commit_recording(ts->ui);
+    if (cmd) {
+      undo_manager_register_command(&ts->ui->undo_manager, cmd);
     }
+    
     model_clear_all_recording_buffers(ts);
     ts->recording_snippets.count = 0;
   }

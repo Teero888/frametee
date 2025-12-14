@@ -104,6 +104,7 @@ void render_menu_bar(struct ui_handler *ui) {
     if (igBeginMenu("View", true)) {
       igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
       igMenuItem_BoolPtr("Controls", NULL, &ui->keybinds.show_settings_window, true);
+      igMenuItem_BoolPtr("Undo History", NULL, &ui->undo_manager.show_history_window, true);
       igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_browser, true);
       igEndMenu();
@@ -896,6 +897,7 @@ void ui_render(struct ui_handler *ui) {
   render_demo_window(ui);
 
   keybinds_render_settings_window(ui);
+  undo_manager_render_history_window(&ui->undo_manager);
   if (ui->show_skin_browser) render_skin_browser(ui->gfx_handler);
 }
 

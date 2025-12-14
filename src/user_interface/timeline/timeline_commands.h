@@ -21,6 +21,7 @@ struct undo_command_t *commands_create_split_selected(struct ui_handler *ui);
 struct undo_command_t *commands_create_merge_selected(struct ui_handler *ui);
 struct undo_command_t *commands_create_move_snippets(struct ui_handler *ui, const MoveSnippetInfo *infos, int count);
 struct undo_command_t *commands_create_duplicate_snippets(struct ui_handler *ui, const MoveSnippetInfo *infos, int count);
+struct undo_command_t *commands_create_toggle_selected_snippets_active(struct ui_handler *ui);
 struct undo_command_t *commands_create_remove_track(struct ui_handler *ui, int track_index);
 
 // Special command for the snippet editor
@@ -32,5 +33,7 @@ struct undo_command_t *timeline_api_create_track(struct ui_handler *ui, const pl
 struct undo_command_t *timeline_api_create_snippet(struct ui_handler *ui, int track_index, int start_tick, int duration, int *out_snippet_id);
 struct undo_command_t *timeline_api_set_snippet_inputs(struct ui_handler *ui, int snippet_id, int tick_offset, int count,
                                                        const SPlayerInput *new_inputs);
+
+struct undo_command_t *commands_create_commit_recording(struct ui_handler *ui);
 
 #endif // UI_TIMELINE_COMMANDS_H

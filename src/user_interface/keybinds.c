@@ -138,10 +138,6 @@ void keybinds_process_inputs(struct ui_handler *ui) {
     }
   }
 
-  if (cmd) {
-    undo_manager_register_command(&ui->undo_manager, cmd);
-  }
-
   // actions that can be held down (repeating)
   if (is_key_combo_pressed(&kb->bindings[ACTION_PREV_FRAME].combo, true)) {
     ts->is_playing = false;
@@ -179,34 +175,7 @@ void keybinds_process_inputs(struct ui_handler *ui) {
   if (is_key_combo_pressed(&kb->bindings[ACTION_MERGE_SNIPPETS].combo, false)) cmd = commands_create_merge_selected(ui);
 
   if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_SNIPPET_ACTIVE].combo, false)) {
-    if (ts->selected_snippets.count > 0) {
-      int earliest_tick_to_recalc = INT_MAX;
-      bool changed = false;
-
-      for (int i = 0; i < ts->selected_snippets.count; ++i) {
-        int snippet_id = ts->selected_snippets.ids[i];
-        int track_idx;
-        input_snippet_t *snippet = model_find_snippet_by_id(ts, snippet_id, &track_idx);
-
-        if (snippet) {
-          if (snippet->start_tick < earliest_tick_to_recalc) {
-            earliest_tick_to_recalc = snippet->start_tick;
-          }
-          changed = true;
-
-          if (snippet->is_active) {
-            snippet->is_active = false;
-          } else {
-            // This function correctly deactivates conflicting snippets on the same track.
-            model_activate_snippet(ts, track_idx, snippet_id);
-          }
-        }
-      }
-
-      if (changed && earliest_tick_to_recalc != INT_MAX) {
-        model_recalc_physics(ts, earliest_tick_to_recalc);
-      }
-    }
+    cmd = commands_create_toggle_selected_snippets_active(ui);
   }
 
   if (is_key_combo_pressed(&kb->bindings[ACTION_TOGGLE_FULLSCREEN].combo, false)) {
@@ -215,6 +184,10 @@ void keybinds_process_inputs(struct ui_handler *ui) {
 
   if (is_key_combo_pressed(&kb->bindings[ACTION_UNDO].combo, false)) undo_manager_undo(&ui->undo_manager, ts);
   if (is_key_combo_pressed(&kb->bindings[ACTION_REDO].combo, false)) undo_manager_redo(&ui->undo_manager, ts);
+
+  if (cmd) {
+    undo_manager_register_command(&ui->undo_manager, cmd);
+  }
 }
 
 static bool is_modifier_key(ImGuiKey key) {

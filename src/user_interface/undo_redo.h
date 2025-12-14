@@ -5,6 +5,7 @@
 
 typedef struct undo_command_t undo_command_t;
 struct undo_command_t {
+  char description[64];
   // A function to reverse the action.
   void (*undo)(void *cmd, void *ts);
   // A function to re-apply the action.
@@ -21,6 +22,7 @@ typedef struct {
   int redo_count;
   int undo_capacity;
   int redo_capacity;
+  bool show_history_window;
 } undo_manager_t;
 
 // Public API
@@ -38,5 +40,7 @@ void undo_manager_redo(undo_manager_t *manager, void *ts);
 // Check if undo/redo is possible.
 bool undo_manager_can_undo(const undo_manager_t *manager);
 bool undo_manager_can_redo(const undo_manager_t *manager);
+
+void undo_manager_render_history_window(undo_manager_t *manager);
 
 #endif // UNDO_REDO_H

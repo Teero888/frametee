@@ -1,5 +1,6 @@
 #include "undo_redo.h"
 #include "timeline/timeline_model.h"
+#include <system/include_cimgui.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -69,4 +70,33 @@ void undo_manager_redo(undo_manager_t *manager, void *ts) {
     push_to_stack(&manager->undo_stack, &manager->undo_count, &manager->undo_capacity, command);
     model_recalc_physics((timeline_state_t *)ts, 0); // Recalculate physics to be safe
   }
+}
+
+void undo_manager_render_history_window(undo_manager_t *manager) {
+  if (!manager->show_history_window) return;
+
+  igSetNextWindowSize((ImVec2){300, 400}, ImGuiCond_FirstUseEver);
+  if (igBegin("Undo History", &manager->show_history_window, 0)) {
+    if (igButton("Clear History", (ImVec2){0, 0})) {
+      clear_stack(&manager->undo_stack, &manager->undo_count, &manager->undo_capacity);
+      clear_stack(&manager->redo_stack, &manager->redo_count, &manager->redo_capacity);
+    }
+    igSeparator();
+
+    igText("Undo Stack:");
+    igBeginChild_Str("UndoStack", (ImVec2){0, 150}, true, 0);
+    for (int i = manager->undo_count - 1; i >= 0; i--) {
+      igText("%d. %s", i + 1, manager->undo_stack[i]->description);
+    }
+    igEndChild();
+
+    igSeparator();
+    igText("Redo Stack:");
+    igBeginChild_Str("RedoStack", (ImVec2){0, 150}, true, 0);
+    for (int i = manager->redo_count - 1; i >= 0; i--) {
+      igText("%d. %s", i + 1, manager->redo_stack[i]->description);
+    }
+    igEndChild();
+  }
+  igEnd();
 }

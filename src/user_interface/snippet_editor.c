@@ -132,9 +132,6 @@ static void end_action(struct ui_handler *ui, input_snippet_t *snippet) {
                                                    editor_state.action_before_states, after_states);
   undo_manager_register_command(&ui->undo_manager, cmd);
 
-  // We only free the temporary 'after_states' buffer.
-  free(after_states);
-
   editor_state.action_before_states = NULL; // Null out pointers to prevent double-free
   editor_state.action_changed_indices = NULL;
   editor_state.action_in_progress = false;
@@ -286,6 +283,20 @@ static void render_bulk_edit_panel(struct ui_handler *ui, input_snippet_t *snipp
       model_recalc_physics(ts, snippet->start_tick + earliest_tick);
     }
   }
+}
+
+static void commit_single_edit(struct ui_handler *ui, input_snippet_t *snippet, int index, SPlayerInput before, SPlayerInput after) {
+  int *indices = malloc(sizeof(int));
+  *indices = index;
+
+  SPlayerInput *before_arr = malloc(sizeof(SPlayerInput));
+  *before_arr = before;
+
+  SPlayerInput *after_arr = malloc(sizeof(SPlayerInput));
+  *after_arr = after;
+
+  undo_command_t *cmd = create_edit_inputs_command(snippet, indices, 1, before_arr, after_arr);
+  undo_manager_register_command(&ui->undo_manager, cmd);
 }
 
 void render_snippet_editor_panel(struct ui_handler *ui) {
@@ -479,8 +490,7 @@ void render_snippet_editor_panel(struct ui_handler *ui) {
           }
           if (igIsItemDeactivatedAfterEdit()) {
             if (editor_state.text_edit_in_progress && editor_state.text_edit_index == i) {
-              undo_command_t *cmd = create_edit_inputs_command(snippet, &editor_state.text_edit_index, 1, &editor_state.before_text_edit_state, inp);
-              undo_manager_register_command(&ui->undo_manager, cmd);
+              commit_single_edit(ui, snippet, editor_state.text_edit_index, editor_state.before_text_edit_state, *inp);
             }
             editor_state.text_edit_in_progress = false;
           }
@@ -501,8 +511,7 @@ void render_snippet_editor_panel(struct ui_handler *ui) {
           }
           if (igIsItemDeactivatedAfterEdit()) {
             if (editor_state.text_edit_in_progress && editor_state.text_edit_index == i) {
-              undo_command_t *cmd = create_edit_inputs_command(snippet, &editor_state.text_edit_index, 1, &editor_state.before_text_edit_state, inp);
-              undo_manager_register_command(&ui->undo_manager, cmd);
+              commit_single_edit(ui, snippet, editor_state.text_edit_index, editor_state.before_text_edit_state, *inp);
             }
             editor_state.text_edit_in_progress = false;
           }
@@ -581,8 +590,7 @@ void render_snippet_editor_panel(struct ui_handler *ui) {
           }
           if (igIsItemDeactivatedAfterEdit()) {
             if (editor_state.text_edit_in_progress && editor_state.text_edit_index == i) {
-              undo_command_t *cmd = create_edit_inputs_command(snippet, &editor_state.text_edit_index, 1, &editor_state.before_text_edit_state, inp);
-              undo_manager_register_command(&ui->undo_manager, cmd);
+              commit_single_edit(ui, snippet, editor_state.text_edit_index, editor_state.before_text_edit_state, *inp);
             }
             editor_state.text_edit_in_progress = false;
           }
