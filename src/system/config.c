@@ -117,12 +117,26 @@ void config_load(struct ui_handler *ui) {
   toml_datum_t keybinds = toml_get(res.toptab, "keybinds");
   if (keybinds.type == TOML_TABLE) {
     for (int i = 0; i < ACTION_COUNT; ++i) {
-      keybind_t *bind = &ui->keybinds.bindings[i];
-      if (!bind->identifier) continue;
+      const char *id = ui->keybinds.action_infos[i].identifier;
+      if (!id) continue;
 
-      toml_datum_t val = toml_get(keybinds, bind->identifier);
+      toml_datum_t val = toml_get(keybinds, id);
       if (val.type == TOML_STRING) {
-        parse_keybind_string(val.u.str.ptr, &bind->combo);
+        keybinds_clear_action(&ui->keybinds, i);
+        key_combo_t combo;
+        parse_keybind_string(val.u.str.ptr, &combo);
+        keybinds_add(&ui->keybinds, i, combo);
+      } else if (val.type == TOML_ARRAY) {
+        keybinds_clear_action(&ui->keybinds, i);
+        int count = val.u.arr.size;
+        for (int j = 0; j < count; j++) {
+            toml_datum_t elem = val.u.arr.elem[j];
+            if (elem.type == TOML_STRING) {
+                key_combo_t combo;
+                parse_keybind_string(elem.u.str.ptr, &combo);
+                keybinds_add(&ui->keybinds, i, combo);
+            }
+        }
       }
     }
   }
@@ -188,21 +202,56 @@ void config_save(struct ui_handler *ui) {
   keybinds_init(&defaults);
 
   for (int i = 0; i < ACTION_COUNT; ++i) {
-    keybind_t *bind = &ui->keybinds.bindings[i];
-    keybind_t *def = &defaults.bindings[i];
-    if (!bind->identifier) continue;
+    const char *id = ui->keybinds.action_infos[i].identifier;
+    if (!id) continue;
 
-    // Check if the binding is the default
-    if (bind->combo.key == def->combo.key && bind->combo.ctrl == def->combo.ctrl && bind->combo.alt == def->combo.alt &&
-        bind->combo.shift == def->combo.shift) {
-      continue;
+    int count = keybinds_get_count_for_action(&ui->keybinds, i);
+    
+    // Check if customized
+    bool is_default = false;
+    int def_count = keybinds_get_count_for_action(&defaults, i);
+    if (count == def_count) {
+        bool all_match = true;
+        // Simple comparison: check if all bindings match exactly in order (not perfect but acceptable)
+        // Or check if every binding in UI exists in default.
+        // Given that init adds them in order, if user hasn't changed, order matches.
+        for (int k = 0; k < count; k++) {
+            keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, k);
+            keybind_entry_t *def = keybinds_get_binding_for_action(&defaults, i, k);
+            if (!def || bind->combo.key != def->combo.key || bind->combo.ctrl != def->combo.ctrl || 
+                bind->combo.alt != def->combo.alt || bind->combo.shift != def->combo.shift) {
+                all_match = false;
+                break;
+            }
+        }
+        if (all_match) is_default = true;
     }
 
-    const char *combo_str = keybind_get_combo_string(&bind->combo);
-    if (strcmp(combo_str, "Not Bound") != 0 && strcmp(combo_str, "Unknown") != 0) {
-      fprintf(fp, "%s = \"%s\"\n", bind->identifier, combo_str);
+    if (!is_default) {
+        if (count == 1) {
+            keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, 0);
+            const char *combo_str = keybind_get_combo_string(&bind->combo);
+            fprintf(fp, "%s = \"%s\"\n", id, combo_str);
+        } else if (count > 1) {
+            fprintf(fp, "%s = [", id);
+            for (int k = 0; k < count; k++) {
+                keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, k);
+                const char *combo_str = keybind_get_combo_string(&bind->combo);
+                fprintf(fp, "\"%s\"%s", combo_str, (k < count - 1) ? ", " : "");
+            }
+            fprintf(fp, "]\n");
+        } else {
+            // Count 0, maybe explicitly unbound? 
+            // If default had > 0, we should save empty list to override default.
+            // But tomlc17 writer might need care.
+            if (def_count > 0) {
+                fprintf(fp, "%s = []\n", id);
+            }
+        }
     }
   }
+  
+  if (defaults.bindings) free(defaults.bindings);
 
   fprintf(fp, "\n[mouse]\n");
   fprintf(fp, "sensitivity = %.2f\n", ui->mouse_sens);

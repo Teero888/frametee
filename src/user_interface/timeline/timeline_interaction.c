@@ -36,7 +36,7 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
   mvec2 recording_pos = recording_char->m_Pos;
 
   SPlayerInput source_input = ts->player_tracks[ts->selected_player_track_index].current_input;
-  bool dummy_fire_active = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_DUMMY_FIRE].combo);
+  bool dummy_fire_active = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_FIRE);
 
   for (int i = 0; i < ts->player_track_count; ++i) {
     if (i == ts->selected_player_track_index) continue;
@@ -88,8 +88,8 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   ts->playback_speed = ts->gui_playback_speed;
 
   // Detect rewind (press or hold)
-  bool reverse_down = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo) ||
-                      is_key_combo_pressed(&ts->ui->keybinds.bindings[ACTION_REWIND_HOLD].combo, false);
+  bool reverse_down = keybinds_is_action_down(&ts->ui->keybinds, ACTION_REWIND_HOLD) ||
+                      keybinds_is_action_pressed(&ts->ui->keybinds, ACTION_REWIND_HOLD, false);
 
   if (reverse_down && !ts->is_reversing) ts->last_update_time = igGetTime();
   if (!reverse_down && ts->is_reversing) ts->last_update_time = igGetTime();
@@ -126,12 +126,12 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) && ts->recording) interaction_toggle_recording(ts);
 
   // Cancel recording
-  if (is_key_combo_pressed(&ts->ui->keybinds.bindings[ACTION_CANCEL_RECORDING].combo, false) && ts->recording) {
+  if (keybinds_is_action_pressed(&ts->ui->keybinds, ACTION_CANCEL_RECORDING, false) && ts->recording) {
     interaction_cancel_recording(ts);
   }
 
   // Trim shortcut (explicit trigger only)
-  bool trim_pressed = is_key_combo_down(&ts->ui->keybinds.bindings[ACTION_TRIM_SNIPPET].combo);
+  bool trim_pressed = keybinds_is_action_down(&ts->ui->keybinds, ACTION_TRIM_SNIPPET);
   if (trim_pressed) interaction_trim_recording_snippet(ts);
 }
 
@@ -648,17 +648,17 @@ void interaction_update_recording_input(struct ui_handler *ui) {
 
   SPlayerInput *input = &ts->player_tracks[ts->selected_player_track_index].current_input;
 
-  input->m_Direction = is_key_combo_down(&kb->bindings[ACTION_RIGHT].combo) - is_key_combo_down(&kb->bindings[ACTION_LEFT].combo);
-  input->m_Jump = is_key_combo_down(&kb->bindings[ACTION_JUMP].combo);
-  input->m_Fire = is_key_combo_down(&kb->bindings[ACTION_FIRE].combo);
-  input->m_Hook = is_key_combo_down(&kb->bindings[ACTION_HOOK].combo);
-  set_flag_kill(input, is_key_combo_down(&kb->bindings[ACTION_KILL].combo));
+  input->m_Direction = keybinds_is_action_down(kb, ACTION_RIGHT) - keybinds_is_action_down(kb, ACTION_LEFT);
+  input->m_Jump = keybinds_is_action_down(kb, ACTION_JUMP);
+  input->m_Fire = keybinds_is_action_down(kb, ACTION_FIRE);
+  input->m_Hook = keybinds_is_action_down(kb, ACTION_HOOK);
+  set_flag_kill(input, keybinds_is_action_down(kb, ACTION_KILL));
 
-  if (is_key_combo_pressed(&kb->bindings[ACTION_HAMMER].combo, false)) input->m_WantedWeapon = WEAPON_HAMMER;
-  if (is_key_combo_pressed(&kb->bindings[ACTION_GUN].combo, false)) input->m_WantedWeapon = WEAPON_GUN;
-  if (is_key_combo_pressed(&kb->bindings[ACTION_SHOTGUN].combo, false)) input->m_WantedWeapon = WEAPON_SHOTGUN;
-  if (is_key_combo_pressed(&kb->bindings[ACTION_GRENADE].combo, false)) input->m_WantedWeapon = WEAPON_GRENADE;
-  if (is_key_combo_pressed(&kb->bindings[ACTION_LASER].combo, false)) input->m_WantedWeapon = WEAPON_LASER;
+  if (keybinds_is_action_pressed(kb, ACTION_HAMMER, false)) input->m_WantedWeapon = WEAPON_HAMMER;
+  if (keybinds_is_action_pressed(kb, ACTION_GUN, false)) input->m_WantedWeapon = WEAPON_GUN;
+  if (keybinds_is_action_pressed(kb, ACTION_SHOTGUN, false)) input->m_WantedWeapon = WEAPON_SHOTGUN;
+  if (keybinds_is_action_pressed(kb, ACTION_GRENADE, false)) input->m_WantedWeapon = WEAPON_GRENADE;
+  if (keybinds_is_action_pressed(kb, ACTION_LASER, false)) input->m_WantedWeapon = WEAPON_LASER;
 
   input->m_TargetX = (int)ui->recording_mouse_pos[0];
   input->m_TargetY = (int)ui->recording_mouse_pos[1];

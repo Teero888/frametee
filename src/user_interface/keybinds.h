@@ -73,16 +73,28 @@ typedef struct {
   const char *identifier;
   const char *name;
   const char *category;
-  key_combo_t combo;
-} keybind_t;
+} action_info_t;
 
 typedef struct {
-  keybind_t bindings[ACTION_COUNT];
+  action_t action_id;
+  key_combo_t combo;
+} keybind_entry_t;
+
+typedef struct {
+  // Static info about actions
+  action_info_t action_infos[ACTION_COUNT];
+
+  // Dynamic list of bindings
+  keybind_entry_t *bindings;
+  int bind_count;
+  int bind_capacity;
+
   bool show_settings_window;
 
   // state for the ui when re-binding a key
   bool is_waiting_for_input;
   action_t action_to_rebind;
+  int rebind_index; // -1 if adding new, otherwise index in global list (or logic specific index)
 } keybind_manager_t;
 
 struct ui_handler;
@@ -94,4 +106,14 @@ const char *keybind_get_combo_string(const key_combo_t *combo);
 
 bool is_key_combo_pressed(const key_combo_t *combo, bool repeat);
 bool is_key_combo_down(const key_combo_t *combo);
+
+// Helper functions for multiple bindings
+void keybinds_add(keybind_manager_t *kb, action_t action, key_combo_t combo);
+void keybinds_remove(keybind_manager_t *kb, int index); // Index in the global array
+void keybinds_clear_action(keybind_manager_t *kb, action_t action);
+bool keybinds_is_action_pressed(keybind_manager_t *kb, action_t action, bool repeat);
+bool keybinds_is_action_down(keybind_manager_t *kb, action_t action);
+int keybinds_get_count_for_action(keybind_manager_t *kb, action_t action);
+keybind_entry_t *keybinds_get_binding_for_action(keybind_manager_t *kb, action_t action, int n); // Get n-th binding for action
+int keybinds_get_global_index_for_action(keybind_manager_t *kb, action_t action, int n);
 #endif // KEYBINDS_H

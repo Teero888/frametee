@@ -312,8 +312,8 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
 
   float scroll_y = !hovered ? 0.0f : io->MouseWheel;
   if (!igIsAnyItemActive()) { // Prevent shortcuts while typing in a text field
-    if (is_key_combo_pressed(&handler->user_interface.keybinds.bindings[ACTION_ZOOM_IN].combo, true)) scroll_y = 1.0f;
-    if (is_key_combo_pressed(&handler->user_interface.keybinds.bindings[ACTION_ZOOM_OUT].combo, true)) scroll_y = -1.0f;
+    if (keybinds_is_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_IN, true)) scroll_y = 1.0f;
+    if (keybinds_is_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_OUT, true)) scroll_y = -1.0f;
   }
   if (scroll_y != 0.0f) {
     float zoom_factor = 1.0f + scroll_y * 0.1f;
