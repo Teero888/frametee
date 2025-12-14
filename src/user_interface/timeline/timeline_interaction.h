@@ -24,6 +24,7 @@ void interaction_switch_recording_target(timeline_state_t *ts, int new_track_ind
 void interaction_apply_dummy_inputs(struct ui_handler *ui);
 void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timeline_bb, float scroll_y, int *out_snapped_tick, int *out_base_track);
 void interaction_update_recording_input(struct ui_handler *ui);
+void interaction_update_mouse(timeline_state_t *ts);
 
 SPlayerInput interaction_predict_input(struct ui_handler *ui, SWorldCore *world, int track_idx);
 

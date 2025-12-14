@@ -564,11 +564,6 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
           for (int s = old_count; s < needed; ++s) {
             active_rec_snip->inputs[s] = track->current_input;
           }
-
-          if (i == ts->selected_player_track_index) {
-            ts->ui->recording_mouse_pos[0] = track->current_input.m_TargetX;
-            ts->ui->recording_mouse_pos[1] = track->current_input.m_TargetY;
-          }
         }
       }
     }

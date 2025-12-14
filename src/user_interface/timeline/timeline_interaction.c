@@ -1,7 +1,9 @@
 #include "timeline_interaction.h"
+#include "cglm/util.h"
 #include "timeline_commands.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
+#include "user_interface/timeline/timeline_types.h"
 #include <GLFW/glfw3.h>
 #include <ddnet_physics/gamecore.h>
 #include <math.h>
@@ -93,6 +95,22 @@ void interaction_apply_dummy_inputs(struct ui_handler *ui) {
   wc_free(&world);
 }
 
+void interaction_update_mouse(timeline_state_t *ts) {
+  if (ts->recording) {
+    player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
+    input_snippet_t *active_rec_snip = active_rec_snip = &track->recording_snippets[track->recording_snippet_count - 1];
+    if (ts->current_tick < active_rec_snip->end_tick) {
+      float speed_scale = ts->is_reversing ? 2.0f : 1.0f;
+      float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
+      if (ts->ui->timeline.is_reversing) intra = 1.f - intra;
+      ts->ui->recording_mouse_pos[0] = glm_lerp(model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick - 1).m_TargetX,
+                                                model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick).m_TargetX, intra);
+      ts->ui->recording_mouse_pos[1] = glm_lerp(model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick - 1).m_TargetY,
+                                                model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick).m_TargetY, intra);
+    }
+  }
+}
+
 // Main Interaction Handlers
 void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   ts->playback_speed = ts->gui_playback_speed;
@@ -124,14 +142,14 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     int steps = (int)floor(elapsed / tick_interval);
     int dir = ts->is_reversing ? -1 : 1;
     if (steps > 0) {
-      for (int i = 0; i < steps; ++i) {
-        // model_advance_tick now uses the already-updated current_input values
+      for (int i = 0; i < steps; ++i)
         model_advance_tick(ts, dir);
-      }
       ts->last_update_time += (double)steps * tick_interval;
     }
   }
 
+  if (ts->is_playing || ts->is_reversing) interaction_update_mouse(ts);
+  
   // Abort recording
   if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) && ts->recording) interaction_toggle_recording(ts);
 

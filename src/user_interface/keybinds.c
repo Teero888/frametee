@@ -1,5 +1,4 @@
 #include "keybinds.h"
-#include <system/include_cimgui.h>
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
@@ -10,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <symbols.h>
+#include <system/include_cimgui.h>
 
 // check if a key combination is pressed for single-press actions
 bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
@@ -266,11 +266,13 @@ void keybinds_process_inputs(struct ui_handler *ui) {
 
   if (keybinds_is_action_pressed(kb, ACTION_PREV_FRAME, true)) {
     ts->is_playing = false;
+    interaction_update_mouse(ts);
     model_advance_tick(ts, -1);
   }
   if (keybinds_is_action_pressed(kb, ACTION_NEXT_FRAME, true)) {
     ts->is_playing = false;
     interaction_apply_dummy_inputs(ui);
+    interaction_update_mouse(ts);
     model_advance_tick(ts, 1);
   }
   if (keybinds_is_action_pressed(kb, ACTION_INC_TPS, true)) {
