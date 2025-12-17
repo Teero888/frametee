@@ -797,6 +797,40 @@ void render_players(struct ui_handler *ui) {
       SPlayerInput input = interaction_predict_input(ui, &world, i);
       cc_on_input(&world.m_pCharacters[i], &input);
     }
+
+    for (SProjectile *ent = (SProjectile *)world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
+         ent = (SProjectile *)ent->m_Base.m_pNextTypeEntity) {
+      float pt = (world.m_GameTick - ent->m_StartTick) / (float)GAME_TICK_SPEED;
+      float ct = (world.m_GameTick - ent->m_StartTick + 1) / (float)GAME_TICK_SPEED;
+      mvec2 prev_pos = prj_get_pos(ent, pt);
+      mvec2 cur_pos = prj_get_pos(ent, ct);
+
+      mvec2 col;
+      mvec2 new;
+      bool collide = intersect_line(ent->m_Base.m_pCollision, prev_pos, cur_pos, &col, &new);
+
+      vec2 pp = {vgetx(prev_pos) / 32.f, vgety(prev_pos) / 32.f};
+      vec2 p;
+      if (collide) {
+        p[0] = vgetx(col) / 32.f;
+        p[1] = vgety(col) / 32.f;
+      } else {
+        p[0] = vgetx(cur_pos) / 32.f;
+        p[1] = vgety(cur_pos) / 32.f;
+      }
+
+      vec4 color = {1.0f, 0.5f, 0.5f, 0.8f};
+      renderer_draw_line(gfx, pp, p, color, 0.05f);
+    }
+
+    for (SLaser *ent = (SLaser *)world.m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent; ent = (SLaser *)ent->m_Base.m_pNextTypeEntity) {
+      vec2 p1 = {vgetx(ent->m_Base.m_Pos) / 32.f, vgety(ent->m_Base.m_Pos) / 32.f};
+      vec2 p0 = {vgetx(ent->m_From) / 32.f, vgety(ent->m_From) / 32.f};
+
+      vec4 color = {0.5f, 0.5f, 1.0f, 0.8f};
+      renderer_draw_line(gfx, p0, p1, color, 0.05f);
+    }
+
     wc_tick(&world);
 
     for (int i = 0; i < world.m_NumCharacters; ++i) {
