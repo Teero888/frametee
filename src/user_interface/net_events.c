@@ -90,7 +90,7 @@ static const int team_count = sizeof(team_names) / sizeof(team_names[0]);
 static int team_idx_to_val(int idx) { return idx - 2; }
 static int team_val_to_idx(int val) { return val + 2; }
 
-void render_net_events_window(struct ui_handler *ui) {
+void render_net_events_window(ui_handler_t *ui) {
   if (!ui->show_net_events_window) return;
 
   timeline_state_t *ts = &ui->timeline;

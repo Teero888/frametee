@@ -2,23 +2,24 @@
 #define PLUGIN_MANAGER_H
 
 #include "plugin_api.h"
+#include <types.h>
 
-typedef struct {
+struct loaded_plugin_t {
   void *handle; // DLL/SO handle
   plugin_info_t info;
   plugin_init_func init;
   plugin_update_func update;
   plugin_shutdown_func shutdown;
   void *data; // plugin-specific data
-} loaded_plugin_t;
+};
 
-typedef struct {
+struct plugin_manager_t {
   loaded_plugin_t *plugins;
   int count;
   int capacity;
   tas_context_t *context;
   tas_api_t *api;
-} plugin_manager_t;
+};
 
 void plugin_manager_init(plugin_manager_t *manager, tas_context_t *context, tas_api_t *api);
 void plugin_manager_load_all(plugin_manager_t *manager, const char *directory);

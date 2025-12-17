@@ -8,14 +8,14 @@
 
 // Public API Implementation
 
-void timeline_init(struct ui_handler *ui) {
+void timeline_init(ui_handler_t *ui) {
   ui->timeline = (timeline_state_t){0};
   model_init(&ui->timeline, ui);
 }
 
 void timeline_cleanup(timeline_state_t *ts) { model_cleanup(ts); }
 
-void render_timeline(struct ui_handler *ui) {
+void render_timeline(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
 
   igSetNextWindowClass(&((ImGuiWindowClass){.DockingAllowUnclassed = false}));

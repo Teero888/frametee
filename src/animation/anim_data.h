@@ -4,9 +4,10 @@
 #include "anim_system.h"
 #include "cglm/types.h"
 #include <ddnet_physics/gamecore.h>
+#include <types.h>
 
 // Based on content.py
-typedef struct {
+struct weapon_spec_t {
   int firedelay;
   float offsetx;
   float offsety;
@@ -17,15 +18,15 @@ typedef struct {
   vec2 body_size;
   vec2 muzzle_size;
   float visual_size;
-} weapon_spec_t;
+};
 
-typedef struct {
+struct weapon_specs_t {
   weapon_spec_t id[NUM_WEAPONS];
-} weapon_specs_t;
+};
 
-typedef struct {
+struct data_container_t {
   weapon_specs_t weapons;
-} data_container_t;
+};
 
 extern const data_container_t game_data;
 

@@ -23,7 +23,7 @@ static int compare_snippets_by_start_tick_p(const void *a, const void *b) {
 
 // Initialization and Cleanup
 
-void model_init(timeline_state_t *ts, struct ui_handler *ui) {
+void model_init(timeline_state_t *ts, ui_handler_t *ui) {
   ts->ui = ui;
   v_init(&ts->vec);
   ts->previous_world = wc_empty();
@@ -305,7 +305,7 @@ void model_snippet_clone(input_snippet_t *dest, const input_snippet_t *src) {
   }
 }
 
-player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num) {
+player_track_t *model_add_new_track(timeline_state_t *ts, physics_handler_t *ph, int num) {
   if (num <= 0) return NULL;
 
   if (wc_add_character(&ts->vec.data[0], num) == NULL) return NULL;

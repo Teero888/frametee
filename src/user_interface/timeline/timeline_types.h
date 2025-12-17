@@ -4,18 +4,19 @@
 #include <physics/physics.h>
 #include <stdbool.h>
 #include <system/include_cimgui.h>
+#include <types.h>
 #include <user_interface/player_info.h>
 
 #define MAX_SNIPPETS_PER_PLAYER 64
 #define MAX_SNIPPET_LAYERS 8
 
-typedef struct {
+struct physics_v_t {
   SWorldCore *data;
   uint32_t current_size;
   uint32_t max_size;
-} physics_v_t;
+};
 
-typedef struct {
+struct input_snippet_t {
   int id;
   int start_tick;
   int end_tick;
@@ -23,15 +24,15 @@ typedef struct {
   int layer;
   SPlayerInput *inputs;
   int input_count;
-} input_snippet_t;
+};
 
-typedef struct {
+struct starting_config_t {
   vec2 position;
   vec2 velocity;
   int active_weapon;
   bool has_weapons[NUM_WEAPONS];
   bool enabled;
-} starting_config_t;
+};
 
 typedef enum {
   COPY_DIRECTION = 1 << 0,
@@ -45,7 +46,7 @@ typedef enum {
   COPY_ALL = 0xFFFF & ~COPY_MIRROR_X & ~COPY_MIRROR_Y
 } dummy_copy_flags_t;
 
-typedef struct {
+struct player_track_t {
   input_snippet_t *snippets;
   int snippet_count;
   int snippet_capacity;
@@ -62,36 +63,36 @@ typedef struct {
   starting_config_t starting_config;
   bool is_dummy;
   int dummy_copy_flags;
-} player_track_t;
+};
 
-typedef struct {
+struct dragged_snippet_info_t {
   int snippet_id;
   int track_offset;
   int layer_offset;
-} DraggedSnippetInfo;
+};
 
-typedef struct {
+struct timeline_drag_state_t {
   bool active;
   int source_track_index;
   int dragged_snippet_id;
   int drag_offset_ticks;
   float drag_offset_y;
   ImVec2 initial_mouse_pos;
-  DraggedSnippetInfo *drag_infos;
+  dragged_snippet_info_t *drag_infos;
   int drag_info_count;
-} timeline_drag_state_t;
+};
 
-typedef struct {
+struct snippet_id_vector_t {
   int *ids;
   int count;
   int capacity;
-} snippet_id_vector_t;
+};
 
-typedef struct {
+struct recording_snippet_vector_t {
   input_snippet_t **snippets;
   int count;
   int capacity;
-} recording_snippet_vector_t;
+};
 
 typedef enum { DUMMY_ACTION_COPY, DUMMY_ACTION_INPUTS, DUMMY_ACTION_COUNT } dummy_action_type_t;
 
@@ -108,7 +109,7 @@ typedef enum {
   NET_EVENT_COUNT
 } net_event_type_t;
 
-typedef struct {
+struct net_event_t {
   int tick;
   net_event_type_t type;
   int team;
@@ -142,9 +143,9 @@ typedef struct {
   // Record
   int server_time_best;
   int player_time_best;
-} net_event_t;
+};
 
-typedef struct timeline_state {
+struct timeline_state {
   // View State
   float zoom;
   int view_start_tick;
@@ -191,7 +192,7 @@ typedef struct timeline_state {
   SWorldCore previous_world;
 
   // Back-pointer to parent UI handler
-  struct ui_handler *ui;
-} timeline_state_t;
+  ui_handler_t *ui;
+};
 
 #endif // UI_TIMELINE_TYPES_H

@@ -331,7 +331,7 @@ void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_l
   // 1. Determine which tracks are affected by the drag operation.
   bool affected_tracks[256] = {false};
   for (int i = 0; i < ts->drag_state.drag_info_count; ++i) {
-    DraggedSnippetInfo *d_info = &ts->drag_state.drag_infos[i];
+    dragged_snippet_info_t *d_info = &ts->drag_state.drag_infos[i];
     int s_track_idx;
     input_snippet_t *s = model_find_snippet_by_id(ts, d_info->snippet_id, &s_track_idx);
     if (!s) continue;
@@ -355,7 +355,7 @@ void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_l
       }
     }
     for (int i = 0; i < ts->drag_state.drag_info_count; ++i) {
-      DraggedSnippetInfo *d_info = &ts->drag_state.drag_infos[i];
+      dragged_snippet_info_t *d_info = &ts->drag_state.drag_infos[i];
       int new_track_idx = base_track_index + d_info->track_offset;
       if (new_track_idx == track_idx) hypothetical_count++;
     }
@@ -382,7 +382,7 @@ void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_l
     }
     // Add dragged snippets with their new proposed times.
     for (int i = 0; i < ts->drag_state.drag_info_count; ++i) {
-      DraggedSnippetInfo *d_info = &ts->drag_state.drag_infos[i];
+      dragged_snippet_info_t *d_info = &ts->drag_state.drag_infos[i];
       int new_track_idx = base_track_index + d_info->track_offset;
       if (new_track_idx == track_idx) {
         input_snippet_t *original = model_find_snippet_by_id(ts, d_info->snippet_id, NULL);

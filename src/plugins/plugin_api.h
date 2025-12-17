@@ -1,6 +1,7 @@
 #ifndef PLUGIN_API_H
 #define PLUGIN_API_H
 
+#include <types.h>
 #include <user_interface/timeline/timeline.h>
 
 // forward declare ImGuiContext to avoid plugins needing to include cimgui.h if they don't have a UI.
@@ -9,15 +10,15 @@ struct ImGuiContext;
 struct undo_command_t;
 
 // passed to plugins to provide read-only access to high-level application state.
-typedef struct {
-  struct ui_handler *ui_handler;
+struct tas_context_t {
+  ui_handler_t *ui_handler;
   timeline_state_t *timeline;
   gfx_handler_t *gfx_handler;
   struct ImGuiContext *imgui_context;
-} tas_context_t;
+};
 
 // api functions provided to plugins for interacting with the host application.
-typedef struct {
+struct tas_api_t {
   // Timeline & Input API
   int (*get_current_tick)(void);
   int (*get_track_count)(void);
@@ -40,19 +41,14 @@ typedef struct {
   void (*log_info)(const char *plugin_name, const char *message);
   void (*log_warning)(const char *plugin_name, const char *message);
   void (*log_error)(const char *plugin_name, const char *message);
-} tas_api_t;
+};
 
-typedef struct {
+struct plugin_info_t {
   const char *name;
   const char *author;
   const char *version;
   const char *description;
-} plugin_info_t;
-
-typedef void *(*plugin_init_func)(tas_context_t *context, const tas_api_t *api);
-typedef void (*plugin_update_func)(void *plugin_data);
-typedef void (*plugin_shutdown_func)(void *plugin_data);
-typedef plugin_info_t (*get_plugin_info_func)(void);
+};
 
 #define GET_PLUGIN_INFO_FUNC_NAME "get_plugin_info"
 #define GET_PLUGIN_INIT_FUNC_NAME "plugin_init"

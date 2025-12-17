@@ -4,7 +4,7 @@
 #include "timeline_types.h"
 
 // Initialization and Cleanup
-void model_init(timeline_state_t *ts, struct ui_handler *ui);
+void model_init(timeline_state_t *ts, ui_handler_t *ui);
 void model_cleanup(timeline_state_t *ts);
 
 // Snippet ID Vector Helpers
@@ -28,7 +28,7 @@ bool model_remove_snippet_from_track(timeline_state_t *ts, player_track_t *track
 void model_resize_snippet_inputs(timeline_state_t *ts, input_snippet_t *snippet, int new_duration);
 void model_snippet_clone(input_snippet_t *dest, const input_snippet_t *src);
 void model_free_snippet_inputs(input_snippet_t *snippet);
-player_track_t *model_add_new_track(timeline_state_t *ts, ph_t *ph, int num);
+player_track_t *model_add_new_track(timeline_state_t *ts, physics_handler_t *ph, int num);
 void model_remove_track_logic(timeline_state_t *ts, int track_index);
 void model_insert_track_physics(timeline_state_t *ts, int track_index);
 void model_compact_layers_for_track(player_track_t *track);

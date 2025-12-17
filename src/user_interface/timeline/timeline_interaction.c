@@ -24,7 +24,7 @@ static void interaction_start_recording_on_track(timeline_state_t *ts, int track
 
 // TODO: Make this faster. Performance is kind of horrible since we're doing this for every frame and every dummy for the prediction rendering.
 // Or we should probably just keep track of prediction worlds instead of recalculating everything every frame.
-void interaction_apply_dummy_inputs(struct ui_handler *ui) {
+void interaction_apply_dummy_inputs(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (!ts->recording || ts->selected_player_track_index == -1) return;
 
@@ -251,7 +251,7 @@ static void start_drag(timeline_state_t *ts, int snippet_id, ImRect timeline_bb)
   }
 
   ts->drag_state.drag_info_count = ts->selected_snippets.count;
-  ts->drag_state.drag_infos = realloc(ts->drag_state.drag_infos, sizeof(DraggedSnippetInfo) * ts->drag_state.drag_info_count);
+  ts->drag_state.drag_infos = realloc(ts->drag_state.drag_infos, sizeof(dragged_snippet_info_t) * ts->drag_state.drag_info_count);
 
   int clicked_track_idx = -1;
   model_find_snippet_by_id(ts, ts->drag_state.dragged_snippet_id, &clicked_track_idx);
@@ -378,7 +378,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
       int valid_moves = 0;
 
       for (int i = 0; i < ts->drag_state.drag_info_count; ++i) {
-        DraggedSnippetInfo *d_info = &ts->drag_state.drag_infos[i];
+        dragged_snippet_info_t *d_info = &ts->drag_state.drag_infos[i];
         int s_track_idx;
         input_snippet_t *s = model_find_snippet_by_id(ts, d_info->snippet_id, &s_track_idx);
         if (!s) continue;
@@ -671,7 +671,7 @@ void interaction_switch_recording_target(timeline_state_t *ts, int new_track_ind
   }
 }
 
-void interaction_update_recording_input(struct ui_handler *ui) {
+void interaction_update_recording_input(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   keybind_manager_t *kb = &ui->keybinds;
 
@@ -696,7 +696,7 @@ void interaction_update_recording_input(struct ui_handler *ui) {
   input->m_TargetY = (int)ui->recording_mouse_pos[1];
 }
 
-SPlayerInput interaction_predict_input(struct ui_handler *ui, SWorldCore *world, int track_idx) {
+SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int track_idx) {
   timeline_state_t *ts = &ui->timeline;
 
   if (ts->recording) {

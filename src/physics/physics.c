@@ -1,7 +1,7 @@
 #include "physics.h"
 #include <string.h>
 
-void physics_init_from_memory(ph_t *h, const unsigned char *map_buffer, size_t size) {
+void physics_init_from_memory(physics_handler_t *h, const unsigned char *map_buffer, size_t size) {
   physics_free(h);
   map_data_t map = load_map_from_memory((unsigned char *)map_buffer, size);
   if (!init_collision(&h->collision, &map)) {
@@ -16,7 +16,7 @@ void physics_init_from_memory(ph_t *h, const unsigned char *map_buffer, size_t s
   h->loaded = true;
 }
 
-void physics_init(ph_t *h, const char *path) {
+void physics_init(physics_handler_t *h, const char *path) {
   physics_free(h);
   map_data_t map = load_map(path);
   if (!init_collision(&h->collision, &map)) {
@@ -30,15 +30,15 @@ void physics_init(ph_t *h, const char *path) {
   h->loaded = true;
 }
 
-void physics_tick(ph_t *h) {
+void physics_tick(physics_handler_t *h) {
   for (int i = 0; i < h->world.m_NumCharacters; ++i)
     cc_on_input(&h->world.m_pCharacters[i], &h->world.m_pCharacters[i].m_Input);
   wc_tick(&h->world);
 }
 
-void physics_free(ph_t *h) {
+void physics_free(physics_handler_t *h) {
   tg_destroy(&h->grid);
   wc_free(&h->world);
   free_collision(&h->collision);
-  memset(h, 0, sizeof(ph_t));
+  memset(h, 0, sizeof(physics_handler_t));
 }
