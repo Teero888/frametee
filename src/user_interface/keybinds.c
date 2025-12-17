@@ -239,7 +239,7 @@ void keybinds_init(keybind_manager_t *manager) {
   }
 }
 
-void keybinds_process_inputs(struct ui_handler *ui) {
+void keybinds_process_inputs(ui_handler_t *ui) {
   if (igIsAnyItemActive()) return;
 
   timeline_state_t *ts = &ui->timeline;
@@ -391,7 +391,7 @@ static void render_keybind_entry(keybind_manager_t *manager, action_t action_id)
   igPopID();
 }
 
-void keybinds_render_settings_window(struct ui_handler *ui) {
+void keybinds_render_settings_window(ui_handler_t *ui) {
   keybind_manager_t *manager = &ui->keybinds;
   if (!manager->show_settings_window) return;
 

@@ -2,8 +2,8 @@
 #define UNDO_REDO_H
 
 #include <stdbool.h>
+#include <types.h>
 
-typedef struct undo_command_t undo_command_t;
 struct undo_command_t {
   char description[64];
   // A function to reverse the action.
@@ -15,7 +15,7 @@ struct undo_command_t {
 };
 
 // The manager holds separate stacks for undo and redo commands.
-typedef struct {
+struct undo_manager_t {
   undo_command_t **undo_stack;
   undo_command_t **redo_stack;
   int undo_count;
@@ -23,7 +23,7 @@ typedef struct {
   int undo_capacity;
   int redo_capacity;
   bool show_history_window;
-} undo_manager_t;
+};
 
 // Public API
 

@@ -36,7 +36,7 @@
 
 static const char *LOG_SOURCE = "UI";
 
-void render_menu_bar(struct ui_handler *ui) {
+void render_menu_bar(ui_handler_t *ui) {
   bool open_export_popup = false;
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
@@ -230,9 +230,9 @@ void setup_docking(void) {
 static bool g_remove_confirm_needed = true;
 static int g_pending_remove_index = -1;
 
-void render_player_manager(struct ui_handler *ui) {
+void render_player_manager(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
-  ph_t *ph = &ui->gfx_handler->physics_handler;
+  physics_handler_t *ph = &ui->gfx_handler->physics_handler;
   if (igBegin("Players", NULL, 0)) {
     static int num_to_add = 1;
     igPushItemWidth(50);
@@ -359,7 +359,7 @@ void camera_init(camera_t *camera) {
   camera->zoom_wanted = 5.0f;
 }
 
-void ui_init_config(struct ui_handler *ui) {
+void ui_init_config(ui_handler_t *ui) {
   ui->mouse_sens = 80.f;
   ui->mouse_max_distance = 400.f;
   ui->vsync = true;
@@ -373,7 +373,7 @@ void ui_init_config(struct ui_handler *ui) {
   config_load(ui);
 }
 
-void ui_init(struct ui_handler *ui, gfx_handler_t *gfx_handler) {
+void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ImGuiIO *io = igGetIO_Nil();
   ImFontAtlas *atlas = io->Fonts;
 
@@ -429,7 +429,7 @@ static void lerp(vec2 a, vec2 b, float f, vec2 out) {
 //   return -1;
 // }
 
-void render_players(struct ui_handler *ui) {
+void render_players(ui_handler_t *ui) {
   gfx_handler_t *gfx = ui->gfx_handler;
   physics_handler_t *ph = &gfx->physics_handler;
   if (!ph->loaded) return;
@@ -846,7 +846,7 @@ void render_players(struct ui_handler *ui) {
   wc_free(&world);
 }
 
-void render_pickups(struct ui_handler *ui) {
+void render_pickups(ui_handler_t *ui) {
   gfx_handler_t *h = ui->gfx_handler;
   for (int i = 0; i < ui->num_pickups; ++i) {
     vec2 pos = {vgetx(ui->pickup_positions[i]) / 32.f, vgety(ui->pickup_positions[i]) / 32.f};
@@ -904,7 +904,7 @@ void render_pickups(struct ui_handler *ui) {
   }
 }
 
-void render_cursor(struct ui_handler *ui) {
+void render_cursor(ui_handler_t *ui) {
   if (!ui->timeline.recording) return;
 
   gfx_handler_t *handler = ui->gfx_handler;
@@ -917,7 +917,7 @@ void render_cursor(struct ui_handler *ui) {
   }
 }
 
-void ui_render(struct ui_handler *ui) {
+void ui_render(ui_handler_t *ui) {
   interaction_update_recording_input(ui);
   render_menu_bar(ui);
 
@@ -945,7 +945,7 @@ void ui_render(struct ui_handler *ui) {
 }
 
 // render viewport and related things
-bool ui_render_late(struct ui_handler *ui) {
+bool ui_render_late(ui_handler_t *ui) {
   bool hovered = false;
   // igShowDemoWindow(NULL);
   if (ui->gfx_handler->offscreen_initialized && ui->gfx_handler->offscreen_texture != NULL) {
@@ -1057,7 +1057,7 @@ bool ui_render_late(struct ui_handler *ui) {
   return hovered;
 }
 
-void ui_post_map_load(struct ui_handler *ui) {
+void ui_post_map_load(ui_handler_t *ui) {
   // by default they are NULL so this should be fine
   free(ui->pickups);
   free(ui->pickup_positions);
@@ -1094,7 +1094,7 @@ void ui_post_map_load(struct ui_handler *ui) {
   }
 }
 
-void ui_cleanup(struct ui_handler *ui) {
+void ui_cleanup(ui_handler_t *ui) {
   config_save(ui);
   plugin_manager_shutdown(&ui->plugin_manager);
   timeline_cleanup(&ui->timeline);

@@ -3,6 +3,7 @@
 #include "renderer.h"
 #include <ddnet_physics/libs/ddnet_map_loader/ddnet_map_loader.h>
 #include <physics/physics.h>
+#include <types.h>
 #include <user_interface/user_interface.h>
 #include <vulkan/vulkan_core.h>
 
@@ -18,9 +19,6 @@
 #include <cimgui_impl.h>
 // -------------
 
-// forward declaration
-struct gfx_handler_t;
-
 enum { FRAME_OK = 0, FRAME_SKIP, FRAME_EXIT };
 
 // public api
@@ -32,10 +30,10 @@ bool gfx_end_frame(struct gfx_handler_t *handler);
 void gfx_cleanup(struct gfx_handler_t *handler);
 void gfx_toggle_fullscreen(struct gfx_handler_t *handler);
 
-typedef struct {
+struct raw_mouse_t {
   double x, y;   // last cursor pos
   double dx, dy; // delta since last poll
-} raw_mouse_t;
+};
 
 struct gfx_handler_t {
   // Backend Stuffs
@@ -58,7 +56,7 @@ struct gfx_handler_t {
   VkCommandBuffer current_frame_command_buffer;
 
   // App Stuffs
-  struct ui_handler user_interface;
+  ui_handler_t user_interface;
   renderer_state_t renderer;
   physics_handler_t physics_handler;
   map_data_t *map_data; // ptr to ^ collision data for quick typing

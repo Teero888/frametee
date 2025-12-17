@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <system/include_cimgui.h>
+#include <types.h>
 
 typedef enum {
   // playback controls
@@ -67,25 +68,25 @@ typedef enum {
   ACTION_COUNT
 } action_t;
 
-typedef struct {
+struct key_combo_t {
   ImGuiKey key;
   bool ctrl;
   bool alt;
   bool shift;
-} key_combo_t;
+};
 
-typedef struct {
+struct action_info_t {
   const char *identifier;
   const char *name;
   const char *category;
-} action_info_t;
+};
 
-typedef struct {
+struct keybind_entry_t {
   action_t action_id;
   key_combo_t combo;
-} keybind_entry_t;
+};
 
-typedef struct {
+struct keybind_manager_t {
   // Static info about actions
   action_info_t action_infos[ACTION_COUNT];
 
@@ -100,13 +101,11 @@ typedef struct {
   bool is_waiting_for_input;
   action_t action_to_rebind;
   int rebind_index; // -1 if adding new, otherwise index in global list (or logic specific index)
-} keybind_manager_t;
-
-struct ui_handler;
+};
 
 void keybinds_init(keybind_manager_t *manager);
-void keybinds_process_inputs(struct ui_handler *ui);
-void keybinds_render_settings_window(struct ui_handler *ui);
+void keybinds_process_inputs(ui_handler_t *ui);
+void keybinds_render_settings_window(ui_handler_t *ui);
 const char *keybind_get_combo_string(const key_combo_t *combo);
 
 bool is_key_combo_pressed(const key_combo_t *combo, bool repeat);

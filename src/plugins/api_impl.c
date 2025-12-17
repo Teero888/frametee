@@ -13,7 +13,7 @@
 
 // this global pointer allows the static API functions to access the application's state.
 // it is set once by api_init() and is internal to this file.
-static struct ui_handler *g_ui_handler_for_api = NULL;
+static ui_handler_t *g_ui_handler_for_api = NULL;
 
 static int api_get_current_tick(void) { return g_ui_handler_for_api->timeline.current_tick; }
 
@@ -79,7 +79,7 @@ static void api_draw_line_world(vec2 start, vec2 end, vec4 color, float thicknes
   renderer_draw_line(g_ui_handler_for_api->gfx_handler, start, end, color, thickness);
 }
 
-tas_api_t api_init(struct ui_handler *ui_handler) {
+tas_api_t api_init(ui_handler_t *ui_handler) {
   g_ui_handler_for_api = ui_handler;
 
   return (tas_api_t){

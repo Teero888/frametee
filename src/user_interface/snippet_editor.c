@@ -112,7 +112,7 @@ static void record_change_if_new(input_snippet_t *snippet, int index) {
 }
 
 // Finishes the action, creates the undo command, and registers it.
-static void end_action(struct ui_handler *ui, input_snippet_t *snippet) {
+static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
   if (!editor_state.action_in_progress || editor_state.action_changed_count == 0) {
     editor_state.action_in_progress = false; // Ensure state is reset
     return;
@@ -140,7 +140,7 @@ static void end_action(struct ui_handler *ui, input_snippet_t *snippet) {
 static const char *weapon_options[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
 
 // Bulk Edit Panel
-static void render_bulk_edit_panel(struct ui_handler *ui, input_snippet_t *snippet) {
+static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
   timeline_state_t *ts = &ui->timeline;
 
   // Use a collapsing header for the entire panel
@@ -285,7 +285,7 @@ static void render_bulk_edit_panel(struct ui_handler *ui, input_snippet_t *snipp
   }
 }
 
-static void commit_single_edit(struct ui_handler *ui, input_snippet_t *snippet, int index, SPlayerInput before, SPlayerInput after) {
+static void commit_single_edit(ui_handler_t *ui, input_snippet_t *snippet, int index, SPlayerInput before, SPlayerInput after) {
   int *indices = malloc(sizeof(int));
   *indices = index;
 
@@ -299,7 +299,7 @@ static void commit_single_edit(struct ui_handler *ui, input_snippet_t *snippet, 
   undo_manager_register_command(&ui->undo_manager, cmd);
 }
 
-void render_snippet_editor_panel(struct ui_handler *ui) {
+void render_snippet_editor_panel(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (igBegin("Snippet Editor", NULL, 0)) {
     // Check the number of selected snippets first

@@ -5,6 +5,7 @@
 #include <cglm/cglm.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <types.h>
 #include <vulkan/vulkan_core.h>
 
 #define MAX_SHADERS 16
@@ -24,16 +25,14 @@
 #define VLA_FREE(name) (void)0
 #endif
 
-typedef struct gfx_handler_t gfx_handler_t;
-
-typedef struct {
+struct buffer_t {
   VkBuffer buffer;
   VkDeviceMemory memory;
   VkDeviceSize size;
   void *mapped_memory;
-} buffer_t;
+};
 
-typedef struct {
+struct texture_t {
   uint32_t id;
   bool active;
   VkImage image;
@@ -46,38 +45,38 @@ typedef struct {
   uint32_t layer_count;
   char path[256];
   uint8_t gs_org; // ddnet grayscale shit for coloring skins
-} texture_t;
+};
 
-typedef struct {
+struct mesh_t {
   uint32_t id;
   bool active;
   buffer_t vertex_buffer;
   buffer_t index_buffer;
   uint32_t vertex_count;
   uint32_t index_count;
-} mesh_t;
+};
 
-typedef struct {
+struct shader_t {
   uint32_t id;
   bool active;
   VkShaderModule vert_shader_module;
   VkShaderModule frag_shader_module;
   char vert_path[256];
   char frag_path[256];
-} shader_t;
+};
 
-typedef struct {
+struct vertex_t {
   vec2 pos;
   vec3 color;
   vec2 tex_coord;
-} vertex_t;
+};
 
-typedef struct {
+struct primitive_vertex_t {
   vec2 pos;
   vec4 color;
-} primitive_vertex_t;
+};
 
-typedef struct {
+struct primitive_ubo_t {
   vec2 camPos; // normalized [0..1] camera center
   float zoom;
   float aspect;
@@ -85,15 +84,15 @@ typedef struct {
   mat4 proj;
   vec2 mapSize; // width, height
   float lod_bias;
-} primitive_ubo_t;
+};
 
-typedef struct {
+struct map_buffer_object_t {
   vec3 transform; // x, y, zoom
   float aspect;
   float lod_bias;
-} map_buffer_object_t;
+};
 
-typedef struct {
+struct pipeline_cache_entry_t {
   bool initialized;
   VkPipeline pipeline;
   VkPipelineLayout pipeline_layout;
@@ -101,17 +100,17 @@ typedef struct {
   VkRenderPass render_pass;
   uint32_t ubo_count;
   uint32_t texture_count;
-} pipeline_cache_entry_t;
+};
 
-typedef struct {
+struct camera_t {
   vec2 pos;
   vec2 drag_start_pos;
   float zoom;
   float zoom_wanted;
   bool is_dragging;
-} camera_t;
+};
 
-typedef struct {
+struct skin_instance_t {
   vec2 pos;
   float scale;
   int skin_index;
@@ -127,26 +126,26 @@ typedef struct {
   vec3 col_feet;
   int col_custom;
   int col_gs;
-} skin_instance_t;
+};
 
-typedef struct {
+struct skin_renderer_t {
   shader_t *skin_shader;
   buffer_t instance_buffer;
   skin_instance_t *instance_ptr;
   uint32_t instance_count;
-} skin_renderer_t;
+};
 
 #define MAX_SKINS 128
-typedef struct {
+struct skin_atlas_manager_t {
   texture_t *atlas_array; // giant 2D array texture for all skins
   bool layer_used[MAX_SKINS];
-} skin_atlas_manager_t;
+};
 
-typedef struct {
+struct sprite_definition_t {
   uint32_t x, y, w, h;
-} sprite_definition_t;
+};
 
-typedef struct {
+struct atlas_instance_t {
   vec2 pos;         // World-space center position
   vec2 size;        // World-space size (width, height)
   float rotation;   // Rotation in radians
@@ -154,10 +153,10 @@ typedef struct {
   vec2 uv_scale;    // Scaling factor (sprite size / layer size)
   vec2 uv_offset;   // Offset (padding / layer size)
   vec2 tiling;      // Texture repetition factor
-} atlas_instance_t;
+};
 
 #define MAX_ATLAS_SPRITES 512
-typedef struct {
+struct atlas_renderer_t {
   shader_t *shader;
   texture_t *atlas_texture;
   VkSampler sampler;
@@ -169,9 +168,9 @@ typedef struct {
   uint32_t max_instances;
   uint32_t layer_width;  // Max width of a sprite, used for UV scaling
   uint32_t layer_height; // Max height of a sprite, used for UV scaling
-} atlas_renderer_t;
+};
 
-typedef struct {
+struct renderer_state_t {
   shader_t shaders[MAX_SHADERS];
   uint32_t shader_count;
 
@@ -206,7 +205,7 @@ typedef struct {
   skin_renderer_t skin_renderer;
   atlas_renderer_t gameskin_renderer;
   atlas_renderer_t cursor_renderer;
-} renderer_state_t;
+};
 
 void check_vk_result(VkResult err);
 int renderer_init(gfx_handler_t *handler);
@@ -261,11 +260,9 @@ void renderer_begin_atlas_instances(atlas_renderer_t *ar);
 void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv);
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar, bool screen_space);
 
-// gameskin spire enum
+typedef enum { CURSOR_HAMMER, CURSOR_GUN, CURSOR_SHOTGUN, CURSOR_GRENADE, CURSOR_LASER, CURSOR_NINJA, CURSOR_SPRITE_COUNT } cursor_type_t;
 
-enum { CURSOR_HAMMER, CURSOR_GUN, CURSOR_SHOTGUN, CURSOR_GRENADE, CURSOR_LASER, CURSOR_NINJA, CURSOR_SPRITE_COUNT };
-
-enum {
+typedef enum {
   GAMESKIN_HAMMER_BODY,
   GAMESKIN_GUN_BODY,
   GAMESKIN_GUN_PROJ,
@@ -318,6 +315,6 @@ enum {
   GAMESKIN_FLAG_BLUE,
   GAMESKIN_FLAG_RED,
   GAMESKIN_SPRITE_COUNT
-};
+} gameskin_sprite_t;
 
 #endif // RENDERER_H

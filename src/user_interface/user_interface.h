@@ -3,13 +3,13 @@
 
 #include "demo.h"
 #include "keybinds.h"
-#include "player_info.h"
 #include "undo_redo.h"
 #include <plugins/plugin_manager.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <types.h>
 
-struct ui_handler {
+struct ui_handler_t {
   struct gfx_handler_t *gfx_handler;
   ImFont *font;
 
@@ -56,15 +56,15 @@ struct ui_handler {
 };
 
 void on_camera_update(struct gfx_handler_t *handler, bool hovered);
-void render_players(struct ui_handler *ui);
-void render_pickups(struct ui_handler *ui);
-void render_cursor(struct ui_handler *ui);
+void render_players(ui_handler_t *ui);
+void render_pickups(ui_handler_t *ui);
+void render_cursor(ui_handler_t *ui);
 
-void ui_init_config(struct ui_handler *ui);
-void ui_init(struct ui_handler *ui, struct gfx_handler_t *gfx_handler);
-void ui_render(struct ui_handler *ui);
-bool ui_render_late(struct ui_handler *ui);
-void ui_post_map_load(struct ui_handler *ui);
-void ui_cleanup(struct ui_handler *ui);
+void ui_init_config(ui_handler_t *ui);
+void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);
+void ui_render(ui_handler_t *ui);
+bool ui_render_late(ui_handler_t *ui);
+void ui_post_map_load(ui_handler_t *ui);
+void ui_cleanup(ui_handler_t *ui);
 
 #endif
