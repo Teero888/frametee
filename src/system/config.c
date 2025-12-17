@@ -179,6 +179,16 @@ void config_load(struct ui_handler *ui) {
     if (lod_bias.type == TOML_FP64) {
       ui->lod_bias = (float)lod_bias.u.fp64;
     }
+
+    toml_datum_t bg_color = toml_get(graphics_settings, "bg_color");
+    if (bg_color.type == TOML_ARRAY && bg_color.u.arr.size == 3) {
+      for (int i = 0; i < 3; ++i) {
+        toml_datum_t val = bg_color.u.arr.elem[i];
+        if (val.type == TOML_FP64) {
+          ui->bg_color[i] = (float)val.u.fp64;
+        }
+      }
+    }
   }
 
   toml_free(res);
@@ -262,6 +272,7 @@ void config_save(struct ui_handler *ui) {
   fprintf(fp, "show_fps = %s\n", ui->show_fps ? "true" : "false");
   fprintf(fp, "fps_limit = %d\n", ui->fps_limit);
   fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
+  fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);
 
   fclose(fp);
   log_info(LOG_SOURCE, "Config saved to %s.", config_path);

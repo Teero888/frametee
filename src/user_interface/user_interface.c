@@ -126,6 +126,8 @@ void render_menu_bar(struct ui_handler *ui) {
         if (igDragFloat("LOD Bias", &ui->lod_bias, 0.1f, -5.0f, 5.0f, "%.1f", 0)) {
           ui->gfx_handler->renderer.lod_bias = ui->lod_bias;
         }
+
+        igColorEdit3("Background Color", ui->bg_color, ImGuiColorEditFlags_NoInputs);
         igEndMenu();
       }
       igEndMenu();
@@ -363,6 +365,9 @@ void ui_init_config(struct ui_handler *ui) {
   ui->vsync = true;
   ui->fps_limit = 0;
   ui->lod_bias = -0.5f;
+  ui->bg_color[0] = 30.f / 255.f;
+  ui->bg_color[1] = 35.f / 255.f;
+  ui->bg_color[2] = 40.f / 255.f;
 
   keybinds_init(&ui->keybinds);
   config_load(ui);

@@ -300,7 +300,8 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
   // Begin offscreen render pass (for game rendering)
   if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE && handler->offscreen_framebuffer != VK_NULL_HANDLE) {
-    VkClearValue clear = {.color = {.float32 = {30.f / 255.f, 35.f / 255.f, 40.f / 255.f, 1.0f}}};
+    VkClearValue clear = {.color = {.float32 = {handler->user_interface.bg_color[0], handler->user_interface.bg_color[1],
+                                                handler->user_interface.bg_color[2], 1.0f}}};
     VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                                      .renderPass = handler->offscreen_render_pass,
                                      .framebuffer = handler->offscreen_framebuffer,
@@ -484,13 +485,15 @@ void on_map_load(gfx_handler_t *handler) {
   // entities texture
   handler->map_textures[handler->map_texture_count++] = handler->entities_array ? handler->entities_array : handler->renderer.default_texture;
 
-  uint8_t *map[2][3] = {
+  uint8_t *map[3][3] = {
       {handler->map_data->game_layer.data, handler->map_data->front_layer.data, handler->map_data->tele_layer.type},
       {handler->map_data->tune_layer.type, handler->map_data->speedup_layer.type, handler->map_data->switch_layer.type},
+      {handler->map_data->game_layer.flags, handler->map_data->front_layer.flags, handler->map_data->switch_layer.flags}, // rotation flags
   };
   // collision textures
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[0], handler->map_data->width, handler->map_data->height);
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[1], handler->map_data->width, handler->map_data->height);
+  handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[2], handler->map_data->width, handler->map_data->height);
 
   // update physics data
   wc_copy_world(&handler->user_interface.timeline.vec.data[0], &handler->physics_handler.world);

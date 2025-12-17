@@ -44,6 +44,7 @@ struct ui_handler {
   float mouse_sens;
   float mouse_max_distance;
   float lod_bias;
+  float bg_color[3];
 
   bool show_timeline;
   bool show_prediction;
