@@ -7,6 +7,7 @@
 #include <ddnet_physics/gamecore.h>
 #include <logger/logger.h>
 #include <renderer/graphics_backend.h>
+#include <stdio.h>
 #include <string.h>
 
 #define DDNET_DEMO_IMPLEMENTATION
@@ -357,11 +358,12 @@ static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore
         nhs->m_SoundId = c_cur->m_ActiveWeapon == WEAPON_HAMMER ? DD_SOUND_HAMMER_FIRE : DD_SOUND_GUN_FIRE;
       }
     }
-    for (int i = 0; i < ts->ui->demo_exporter.num_hammerhits; ++i) {
-      dd_netevent_hammer_hit *nhh = demo_sb_add_item(sb, DD_NETEVENTTYPE_HAMMERHIT, next_item_id++, sizeof(dd_netevent_hammer_hit));
-      nhh->common.m_X = vgetx(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
-      nhh->common.m_Y = vgety(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
-    }
+  }
+
+  for (int i = 0; i < ts->ui->demo_exporter.num_hammerhits; ++i) {
+    dd_netevent_hammer_hit *nhh = demo_sb_add_item(sb, DD_NETEVENTTYPE_HAMMERHIT, next_item_id++, sizeof(dd_netevent_hammer_hit));
+    nhh->common.m_X = vgetx(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
+    nhh->common.m_Y = vgety(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
   }
 
   // do entities
@@ -513,23 +515,24 @@ int export_to_demo(struct ui_handler *ui, const char *path, const char *map_name
       net_event_t *ev = &ui->timeline.net_events[i];
       if (ev->tick == t) {
         if (ev->type == NET_EVENT_CHAT) {
-          demo_w_write_msg_sv_chat(writer, ev->tick, ev->team, ev->client_id, ev->message);
+          demo_w_write_msg_sv_chat(writer, ev->team, ev->client_id, ev->message);
+          log_info("what", "Id: %d, team: %d, msg: %s", ev->client_id, ev->team, ev->message);
         } else if (ev->type == NET_EVENT_BROADCAST) {
-          demo_w_write_msg_sv_broadcast(writer, ev->tick, ev->message);
+          demo_w_write_msg_sv_broadcast(writer, ev->message);
         } else if (ev->type == NET_EVENT_KILLMSG) {
-          demo_w_write_msg_sv_killmsg(writer, ev->tick, ev->killer, ev->victim, ev->weapon, ev->mode_special);
+          demo_w_write_msg_sv_killmsg(writer, ev->killer, ev->victim, ev->weapon, ev->mode_special);
         } else if (ev->type == NET_EVENT_SOUND_GLOBAL) {
-          demo_w_write_msg_sv_sound_global(writer, ev->tick, ev->sound_id);
+          demo_w_write_msg_sv_sound_global(writer, ev->sound_id);
         } else if (ev->type == NET_EVENT_EMOTICON) {
-          demo_w_write_msg_sv_emoticon(writer, ev->tick, ev->client_id, ev->emoticon);
+          demo_w_write_msg_sv_emoticon(writer, ev->client_id, ev->emoticon);
         } else if (ev->type == NET_EVENT_VOTE_SET) {
-          demo_w_write_msg_sv_vote_set(writer, ev->tick, ev->vote_timeout, ev->message, ev->reason);
+          demo_w_write_msg_sv_vote_set(writer, ev->vote_timeout, ev->message, ev->reason);
         } else if (ev->type == NET_EVENT_VOTE_STATUS) {
-          demo_w_write_msg_sv_vote_status(writer, ev->tick, ev->vote_yes, ev->vote_no, ev->vote_pass, ev->vote_total);
+          demo_w_write_msg_sv_vote_status(writer, ev->vote_yes, ev->vote_no, ev->vote_pass, ev->vote_total);
         } else if (ev->type == NET_EVENT_DDRACE_TIME) {
-          demo_w_write_msg_sv_ddrace_time_legacy(writer, ev->tick, ev->time, ev->check, ev->finish);
+          demo_w_write_msg_sv_ddrace_time_legacy(writer, ev->time, ev->check, ev->finish);
         } else if (ev->type == NET_EVENT_RECORD) {
-          demo_w_write_msg_sv_record_legacy(writer, ev->tick, ev->server_time_best, ev->player_time_best);
+          demo_w_write_msg_sv_record_legacy(writer, ev->server_time_best, ev->player_time_best);
         }
       }
     }
