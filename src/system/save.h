@@ -4,7 +4,7 @@
 #include <user_interface/user_interface.h>
 
 #define TAS_PROJECT_FILE_MAGIC "TASP"
-#define TAS_PROJECT_FILE_VERSION 2
+#define TAS_PROJECT_FILE_VERSION 3
 
 // main header for the project file
 typedef struct tas_project_header_t {

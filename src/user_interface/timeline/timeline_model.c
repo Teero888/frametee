@@ -41,6 +41,10 @@ void model_init(timeline_state_t *ts, struct ui_handler *ui) {
   ts->dummy_action_priority[0] = DUMMY_ACTION_COPY;
   ts->dummy_action_priority[1] = DUMMY_ACTION_INPUTS;
 
+  ts->net_events = NULL;
+  ts->net_event_count = 0;
+  ts->net_event_capacity = 0;
+
   snippet_id_vector_init(&ts->selected_snippets);
 }
 
@@ -60,6 +64,10 @@ void model_cleanup(timeline_state_t *ts) {
 
   if (ts->drag_state.drag_infos) {
     free(ts->drag_state.drag_infos);
+  }
+
+  if (ts->net_events) {
+    free(ts->net_events);
   }
 
   v_destroy(&ts->vec);

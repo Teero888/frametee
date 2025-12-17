@@ -222,7 +222,9 @@ static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore
     SCharacterCore *c_prev = &prev->m_pCharacters[p];
 
     dd_netobj_client_info *ci = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, p, sizeof(dd_netobj_client_info));
-    str_to_ints(ci->m_aName, 4, ts->player_tracks[p].player_info.name);
+    const char *name = ts->player_tracks[p].player_info.name;
+    if (name[0] == '\0') name = "nameless tee";
+    str_to_ints(ci->m_aName, 4, name);
     str_to_ints(ci->m_aClan, 3, ts->player_tracks[p].player_info.clan);
 
     // 3 offset to get the correct name
@@ -502,8 +504,35 @@ int export_to_demo(struct ui_handler *ui, const char *path, const char *map_name
     wc_copy_world(&prev, &cur);
     ui->demo_exporter.num_hammerhits = 0;
     wc_tick(&cur);
+
     int snap_size = demo_sb_finish(sb, snap_buf);
     if (snap_size > 0) demo_w_write_snap(writer, t, snap_buf, snap_size);
+
+    // Write Net Events
+    for (int i = 0; i < ui->timeline.net_event_count; ++i) {
+      net_event_t *ev = &ui->timeline.net_events[i];
+      if (ev->tick == t) {
+        if (ev->type == NET_EVENT_CHAT) {
+          demo_w_write_msg_sv_chat(writer, ev->tick, ev->team, ev->client_id, ev->message);
+        } else if (ev->type == NET_EVENT_BROADCAST) {
+          demo_w_write_msg_sv_broadcast(writer, ev->tick, ev->message);
+        } else if (ev->type == NET_EVENT_KILLMSG) {
+          demo_w_write_msg_sv_killmsg(writer, ev->tick, ev->killer, ev->victim, ev->weapon, ev->mode_special);
+        } else if (ev->type == NET_EVENT_SOUND_GLOBAL) {
+          demo_w_write_msg_sv_sound_global(writer, ev->tick, ev->sound_id);
+        } else if (ev->type == NET_EVENT_EMOTICON) {
+          demo_w_write_msg_sv_emoticon(writer, ev->tick, ev->client_id, ev->emoticon);
+        } else if (ev->type == NET_EVENT_VOTE_SET) {
+          demo_w_write_msg_sv_vote_set(writer, ev->tick, ev->vote_timeout, ev->message, ev->reason);
+        } else if (ev->type == NET_EVENT_VOTE_STATUS) {
+          demo_w_write_msg_sv_vote_status(writer, ev->tick, ev->vote_yes, ev->vote_no, ev->vote_pass, ev->vote_total);
+        } else if (ev->type == NET_EVENT_DDRACE_TIME) {
+          demo_w_write_msg_sv_ddrace_time_legacy(writer, ev->tick, ev->time, ev->check, ev->finish);
+        } else if (ev->type == NET_EVENT_RECORD) {
+          demo_w_write_msg_sv_record_legacy(writer, ev->tick, ev->server_time_best, ev->player_time_best);
+        }
+      }
+    }
   }
   demo_w_finish(writer);
   demo_w_destroy(&writer);

@@ -31,6 +31,7 @@ set(SRCS
 	src/user_interface/keybinds.c
 	src/user_interface/player_info.c
 	src/user_interface/snippet_editor.c
+	src/user_interface/net_events.c
 	src/user_interface/undo_redo.c
 	src/user_interface/user_interface.c
 	src/user_interface/widgets/hsl_colorpicker.c

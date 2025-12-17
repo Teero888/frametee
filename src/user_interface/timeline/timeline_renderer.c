@@ -168,6 +168,30 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
     ImDrawList_AddText_Vec2(draw_list, text_pos, tick_text_col, label, NULL);
   }
 
+  // Draw markers for net events
+  ImU32 event_marker_col = IM_COL32(255, 200, 0, 255);
+  for (int i = 0; i < ts->net_event_count; ++i) {
+    net_event_t *ev = &ts->net_events[i];
+    float x = renderer_tick_to_screen_x(ts, ev->tick, header_bb.Min.x);
+    if (x >= header_bb.Min.x && x <= header_bb.Max.x) {
+      ImVec2 p1 = {x - 4, header_bb.Max.y - 12};
+      ImVec2 p2 = {x + 4, header_bb.Max.y - 12};
+      ImVec2 p3 = {x, header_bb.Max.y - 4};
+      ImDrawList_AddTriangleFilled(draw_list, p1, p2, p3, event_marker_col);
+      
+      // Optional: Hover tooltip for the event
+      if (igIsMouseHoveringRect((ImVec2){x-4, header_bb.Max.y-12}, (ImVec2){x+4, header_bb.Max.y-4}, true)) {
+        igBeginTooltip();
+        if (ev->type == NET_EVENT_KILLMSG) {
+          igText("KillMsg: %d killed %d with %d", ev->killer, ev->victim, ev->weapon);
+        } else {
+          igText("%s: %s", ev->type == NET_EVENT_CHAT ? "Chat" : "Broadcast", ev->message);
+        }
+        igEndTooltip();
+      }
+    }
+  }
+
   ImDrawList_PopClipRect(draw_list);
 }
 

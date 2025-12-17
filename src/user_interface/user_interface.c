@@ -5,6 +5,7 @@
 #include "player_info.h"
 #include "skin_browser.h"
 #include "snippet_editor.h"
+#include "net_events.h"
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
@@ -107,6 +108,7 @@ void render_menu_bar(struct ui_handler *ui) {
       igMenuItem_BoolPtr("Undo History", NULL, &ui->undo_manager.show_history_window, true);
       igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_browser, true);
+      igMenuItem_BoolPtr("Show net events", NULL, &ui->show_net_events_window, true);
       igEndMenu();
     }
 
@@ -386,6 +388,7 @@ void ui_init(struct ui_handler *ui, gfx_handler_t *gfx_handler) {
   ui->show_prediction = true;
   ui->prediction_length = 100;
   ui->show_skin_browser = false;
+  ui->show_net_events_window = false;
   timeline_init(ui);
   camera_init(&gfx_handler->renderer.camera);
   undo_manager_init(&ui->undo_manager);
@@ -899,6 +902,7 @@ void ui_render(struct ui_handler *ui) {
   keybinds_render_settings_window(ui);
   undo_manager_render_history_window(&ui->undo_manager);
   if (ui->show_skin_browser) render_skin_browser(ui->gfx_handler);
+  render_net_events_window(ui);
 }
 
 // render viewport and related things

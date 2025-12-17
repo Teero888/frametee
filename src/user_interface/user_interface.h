@@ -48,6 +48,7 @@ struct ui_handler {
   bool show_timeline;
   bool show_prediction;
   bool show_skin_browser;
+  bool show_net_events_window;
   bool vsync;
   bool show_fps;
   bool weapons[NUM_WEAPONS];

@@ -86,6 +86,55 @@ typedef struct {
 
 typedef enum { DUMMY_ACTION_COPY, DUMMY_ACTION_INPUTS, DUMMY_ACTION_COUNT } dummy_action_type_t;
 
+typedef enum {
+  NET_EVENT_CHAT,
+  NET_EVENT_BROADCAST,
+  NET_EVENT_KILLMSG,
+  NET_EVENT_SOUND_GLOBAL,
+  NET_EVENT_EMOTICON,
+  NET_EVENT_VOTE_SET,
+  NET_EVENT_VOTE_STATUS,
+  NET_EVENT_DDRACE_TIME,
+  NET_EVENT_RECORD,
+  NET_EVENT_COUNT
+} net_event_type_t;
+
+typedef struct {
+  int tick;
+  net_event_type_t type;
+  int team;
+  int client_id;
+  char message[256];
+
+  // KillMsg
+  int killer;
+  int victim;
+  int weapon;
+  int mode_special;
+
+  int sound_id;
+  int emoticon;
+
+  // Vote Set
+  int vote_timeout;
+  char reason[256]; // description is stored in message
+
+  // Vote Status
+  int vote_yes;
+  int vote_no;
+  int vote_pass;
+  int vote_total;
+
+  // DDRace Time
+  int time;
+  int check;
+  int finish;
+
+  // Record
+  int server_time_best;
+  int player_time_best;
+} net_event_t;
+
 typedef struct timeline_state {
   // View State
   float zoom;
@@ -108,6 +157,11 @@ typedef struct timeline_state {
   player_track_t *player_tracks;
   int player_track_count;
   int next_snippet_id;
+
+  // Net Events
+  net_event_t *net_events;
+  int net_event_count;
+  int net_event_capacity;
 
   // Interaction State
   snippet_id_vector_t selected_snippets;

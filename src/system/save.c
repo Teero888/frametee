@@ -3,6 +3,7 @@
 #include <renderer/graphics_backend.h>
 #include <renderer/renderer.h>
 #include <user_interface/timeline/timeline_model.h>
+#include <user_interface/net_events.h>
 #include <ddnet_physics/gamecore.h>
 
 #include <stdbool.h>
@@ -18,7 +19,7 @@ static bool write_timeline_data(FILE *f, timeline_state_t *ts);
 
 static bool read_and_load_map(FILE *f, struct ui_handler *ui, uint32_t map_data_size);
 static bool read_and_load_skins(FILE *f, struct ui_handler *ui, uint32_t num_skins);
-static bool read_and_load_timeline(FILE *f, struct ui_handler *ui);
+static bool read_and_load_timeline(FILE *f, struct ui_handler *ui, uint32_t version);
 
 // Saving {{{
 bool save_project(struct ui_handler *ui, const char *path) {
@@ -140,6 +141,13 @@ static bool write_timeline_data(FILE *f, timeline_state_t *ts) {
       if (snippet->input_count > 0) fwrite(snippet->inputs, sizeof(SPlayerInput) * snippet->input_count, 1, f);
     }
   }
+
+  // write net events (version 3+)
+  fwrite(&ts->net_event_count, sizeof(int), 1, f);
+  if (ts->net_event_count > 0) {
+    fwrite(ts->net_events, sizeof(net_event_t), ts->net_event_count, f);
+  }
+
   return true;
 }
 //}}}
@@ -159,7 +167,7 @@ bool load_project(struct ui_handler *ui, const char *path) {
     return false;
   }
 
-  if (strncmp(header.magic, TAS_PROJECT_FILE_MAGIC, 4) != 0 || header.version != TAS_PROJECT_FILE_VERSION) {
+  if (strncmp(header.magic, TAS_PROJECT_FILE_MAGIC, 4) != 0 || header.version > TAS_PROJECT_FILE_VERSION) {
     log_error(LOG_SOURCE, "Invalid or unsupported TAS project file: '%s'", path);
     fclose(f);
     return false;
@@ -193,7 +201,7 @@ bool load_project(struct ui_handler *ui, const char *path) {
     ui->timeline.player_tracks = NULL;
   }
 
-  if (!read_and_load_timeline(f, ui)) {
+  if (!read_and_load_timeline(f, ui, header.version)) {
     fclose(f);
     return false;
   }
@@ -266,7 +274,7 @@ static bool read_and_load_skins(FILE *f, struct ui_handler *ui, uint32_t num_ski
   return true;
 }
 
-static bool read_and_load_timeline(FILE *f, struct ui_handler *ui) {
+static bool read_and_load_timeline(FILE *f, struct ui_handler *ui, uint32_t version) {
   timeline_state_t *ts = &ui->timeline;
 
   // read player info
@@ -310,6 +318,17 @@ static bool read_and_load_timeline(FILE *f, struct ui_handler *ui) {
   }
 
   ts->next_snippet_id = max_id + 1;
+
+  if (version >= 3) {
+    int count = 0;
+    if (fread(&count, sizeof(int), 1, f) != 1) return false;
+    for (int i = 0; i < count; ++i) {
+      net_event_t ev;
+      if (fread(&ev, sizeof(net_event_t), 1, f) != 1) return false;
+      net_events_add(ts, ev);
+    }
+  }
+
   return true;
 }
 //}}}
