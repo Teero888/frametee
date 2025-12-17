@@ -1,4 +1,6 @@
 #include "timeline_model.h"
+#include "ddnet_physics/gamecore.h"
+#include "ddnet_physics/vmath.h"
 #include <limits.h>
 #include <renderer/graphics_backend.h>
 #include <stdlib.h>
@@ -509,6 +511,10 @@ void model_recalc_physics(timeline_state_t *ts, int tick) {
   if (ts->previous_world.m_GameTick > tick) {
     ts->previous_world.m_GameTick = INT_MAX;
   }
+  if (!tick) {
+    wc_copy_world(&ts->previous_world, &ts->ui->gfx_handler->physics_handler.world);
+    wc_copy_world(&ts->vec.data[0], &ts->ui->gfx_handler->physics_handler.world);
+  }
 }
 
 SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
@@ -623,6 +629,28 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
     }
   }
   wc_copy_world(&ts->previous_world, out_world);
+}
+
+void model_apply_starting_config(timeline_state_t *ts, int track_index) {
+  if (track_index < 0 || track_index >= ts->player_track_count) return;
+
+  player_track_t *track = &ts->player_tracks[track_index];
+  starting_config_t *sc = &track->starting_config;
+
+  // Update the initial world state
+  SCharacterCore *core = &ts->ui->gfx_handler->physics_handler.world.m_pCharacters[track_index];
+  core->m_Pos = vec2_init(sc->position[0], sc->position[1]);
+  core->m_PrevPos = vec2_init(sc->position[0], sc->position[1]);
+  core->m_Vel = vec2_init(sc->velocity[0], sc->velocity[1]);
+  core->m_ActiveWeapon = sc->active_weapon;
+  for (int i = 0; i < NUM_WEAPONS; ++i)
+    core->m_aWeaponGot[i] = sc->has_weapons[i];
+  if (core->m_aWeaponGot[WEAPON_NINJA]) {
+    core->m_Ninja.m_ActivationTick = core->m_pWorld->m_GameTick;
+    core->m_ActiveWeapon = WEAPON_NINJA;
+  }
+  cc_calc_indices(core);
+  model_recalc_physics(ts, 0);
 }
 
 // Static Physics Vector Helpers

@@ -25,6 +25,14 @@ typedef struct {
   int input_count;
 } input_snippet_t;
 
+typedef struct {
+  vec2 position;
+  vec2 velocity;
+  int active_weapon;
+  bool has_weapons[NUM_WEAPONS];
+  bool enabled;
+} starting_config_t;
+
 typedef enum {
   COPY_DIRECTION = 1 << 0,
   COPY_TARGET = 1 << 1,
@@ -51,6 +59,7 @@ typedef struct {
   SPlayerInput current_input;
 
   player_info_t player_info;
+  starting_config_t starting_config;
   bool is_dummy;
   int dummy_copy_flags;
 } player_track_t;

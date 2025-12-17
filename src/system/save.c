@@ -1,10 +1,10 @@
 #include "save.h"
+#include <ddnet_physics/gamecore.h>
 #include <logger/logger.h>
 #include <renderer/graphics_backend.h>
 #include <renderer/renderer.h>
-#include <user_interface/timeline/timeline_model.h>
 #include <user_interface/net_events.h>
-#include <ddnet_physics/gamecore.h>
+#include <user_interface/timeline/timeline_model.h>
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -124,6 +124,7 @@ static bool write_timeline_data(FILE *f, timeline_state_t *ts) {
     fwrite(&ts->player_tracks[i].player_info, sizeof(player_info_t), 1, f);
     fwrite(&ts->player_tracks[i].is_dummy, sizeof(bool), 1, f);
     fwrite(&ts->player_tracks[i].dummy_copy_flags, sizeof(int), 1, f);
+    fwrite(&ts->player_tracks[i].starting_config, sizeof(starting_config_t), 1, f);
   }
 
   // write snippet data
@@ -206,11 +207,16 @@ bool load_project(struct ui_handler *ui, const char *path) {
     return false;
   }
 
+  // Apply starting configurations
+  for (int i = 0; i < ui->timeline.player_track_count; i++) {
+    if (ui->timeline.player_tracks[i].starting_config.enabled) {
+      model_apply_starting_config(&ui->timeline, i);
+    }
+  }
+
   fclose(f);
   log_info(LOG_SOURCE, "Project loaded successfully from '%s'", path);
 
-  wc_copy_world(&ui->timeline.previous_world, &ui->gfx_handler->physics_handler.world);
-  wc_copy_world(&ui->timeline.vec.data[0], &ui->gfx_handler->physics_handler.world);
   model_recalc_physics(&ui->timeline, 0); // recalculate physics from the start
   return true;
 }
@@ -254,7 +260,7 @@ static bool read_and_load_skins(FILE *f, struct ui_handler *ui, uint32_t num_ski
 
     skin_info_t info = {0};
     int loaded_id = renderer_load_skin_from_memory(ui->gfx_handler, texture_data, skin_header.texture_data_size, &info.preview_texture_res);
-    
+
     // Store the data in the info structure for future saves
     info.data = texture_data;
     info.data_size = skin_header.texture_data_size;
@@ -268,7 +274,7 @@ static bool read_and_load_skins(FILE *f, struct ui_handler *ui, uint32_t num_ski
       }
       skin_manager_add(&ui->skin_manager, &info);
     } else {
-        free(texture_data);
+      free(texture_data);
     }
   }
   return true;
@@ -282,6 +288,9 @@ static bool read_and_load_timeline(FILE *f, struct ui_handler *ui, uint32_t vers
     if (fread(&ts->player_tracks[i].player_info, sizeof(player_info_t), 1, f) != 1) return false;
     if (fread(&ts->player_tracks[i].is_dummy, sizeof(bool), 1, f) != 1) return false;
     if (fread(&ts->player_tracks[i].dummy_copy_flags, sizeof(int), 1, f) != 1) return false;
+    if (version >= 4) {
+      if (fread(&ts->player_tracks[i].starting_config, sizeof(starting_config_t), 1, f) != 1) return false;
+    }
     // add characters to the physics world
     if (!wc_add_character(&ui->gfx_handler->physics_handler.world, 1)) {
       log_error(LOG_SOURCE, "Failed to add character '%s'", ts->player_tracks[i].player_info.name);

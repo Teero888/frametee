@@ -141,7 +141,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>: -Wall -Wextra -pedantic>
     $<$<C_COMPILER_ID:MSVC>: /W4>
-    
     $<$<AND:$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>: -g -DDEBUG>
     $<$<AND:$<CONFIG:Debug>,$<C_COMPILER_ID:MSVC>>: /Zi /Od /DDEBUG>
 

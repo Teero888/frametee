@@ -1,16 +1,19 @@
 #include "player_info.h"
-#include <renderer/renderer.h>
-#include <renderer/graphics_backend.h>
-#include <system/include_cimgui.h>
 #include "widgets/hsl_colorpicker.h"
+#include <ddnet_physics/gamecore.h>
+#include <ddnet_physics/vmath.h>
+#include <renderer/graphics_backend.h>
+#include <renderer/renderer.h>
 #include <string.h>
+#include <system/include_cimgui.h>
+#include <user_interface/timeline/timeline_model.h>
 
 // static const char *LOG_SOURCE = "SkinManager";
 
 void render_player_info(gfx_handler_t *h) {
   timeline_state_t *ts = &h->user_interface.timeline;
   if (ts->selected_player_track_index < 0 || ts->selected_player_track_index >= ts->player_track_count) {
-    if (igBegin("Player Info", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing)) {
+    if (igBegin("Player Info", NULL, ImGuiWindowFlags_NoFocusOnAppearing)) {
       igTextDisabled("No player track selected.");
     }
     igEnd();
@@ -19,7 +22,7 @@ void render_player_info(gfx_handler_t *h) {
 
   player_info_t *player_info = &ts->player_tracks[ts->selected_player_track_index].player_info;
 
-  if (igBegin("Player Info", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing)) {
+  if (igBegin("Player Info", NULL, ImGuiWindowFlags_NoFocusOnAppearing)) {
     igInputText("Name", player_info->name, 16, 0, NULL, NULL);
     igInputText("Clan", player_info->clan, 12, 0, NULL, NULL);
     igInputInt("Skin Id", &player_info->skin, 1, 1, 0);
@@ -32,6 +35,93 @@ void render_player_info(gfx_handler_t *h) {
     if (igButton("Apply info to all players", (ImVec2){0}))
       for (int i = 0; i < h->user_interface.timeline.player_track_count; ++i)
         memcpy(&h->user_interface.timeline.player_tracks[i].player_info, player_info, sizeof(player_info_t));
+
+    igSeparator();
+    igText("Starting Configuration");
+    starting_config_t *sc = &ts->player_tracks[ts->selected_player_track_index].starting_config;
+    // TODO: somehow reset to default values when turning off, idk how to cleanly do that yet
+    if (igCheckbox("Override Start", &sc->enabled)) {
+    }
+    if (sc->enabled) {
+      static const char *weapon_names[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
+      static const int weapon_count = sizeof(weapon_names) / sizeof(weapon_names[0]);
+
+      igPushMultiItemsWidths(2, igCalcItemWidth());
+      float pos[2] = {sc->position[0], sc->position[1]};
+      if (igDragFloat("##UnitX", &pos[0], 1.0f, 1, ts->ui->gfx_handler->map_data->width * 32 - 1, "%.0f", 0)) {
+        sc->position[0] = fclamp(pos[0], 1, ts->ui->gfx_handler->map_data->width * 32 - 1);
+      }
+      igPopItemWidth();
+      igSameLine(0.0f, igGetStyle()->ItemInnerSpacing.x);
+      if (igDragFloat("Position##UnitY", &pos[1], 1.0f, 1, ts->ui->gfx_handler->map_data->height * 32 - 1, "%.0f", 0)) {
+        sc->position[1] = fclamp(pos[1], 1, ts->ui->gfx_handler->map_data->height * 32 - 1);
+      }
+      igPopItemWidth();
+
+      igPushMultiItemsWidths(2, igCalcItemWidth());
+      float block_pos[2] = {sc->position[0] / 32.0f, sc->position[1] / 32.0f};
+      if (igDragFloat("##BlockX", &block_pos[0], 1.0f, 0.5, ts->ui->gfx_handler->map_data->width - 1, "%.3f", 0)) {
+        sc->position[0] = fclamp(block_pos[0], 0.5, ts->ui->gfx_handler->map_data->width - 1) * 32.0f;
+      }
+      igPopItemWidth();
+      igSameLine(0.0f, igGetStyle()->ItemInnerSpacing.x);
+      if (igDragFloat("Position##BlockY", &block_pos[1], 1.0f, 0.5, ts->ui->gfx_handler->map_data->height - 1, "%.3f", 0)) {
+        sc->position[1] = fclamp(block_pos[1], 0.5, ts->ui->gfx_handler->map_data->height - 1) * 32.0f;
+      }
+      igPopItemWidth();
+
+      float vel[2] = {sc->velocity[0], sc->velocity[1]};
+      igPushMultiItemsWidths(2, igCalcItemWidth());
+      if (igDragFloat("##UnitVelX", &vel[0], 1.0f, -128, 128, "%.3f", 0)) {
+        sc->velocity[0] = (float)((int)(fclamp(vel[0], -128, 128) * 256.f)) / 256.f;
+      }
+      igPopItemWidth();
+      igSameLine(0.0f, igGetStyle()->ItemInnerSpacing.x);
+      if (igDragFloat("Velocity##UnitVelY", &vel[1], 1.0f, -128, 128, "%.3f", 0)) {
+        sc->velocity[1] = (float)((int)(fclamp(vel[1], -128, 128) * 256.f)) / 256.f;
+      }
+      igPopItemWidth();
+
+      float bps_vel[2] = {sc->velocity[0] * (32.f / 50.f), sc->velocity[1] * (32.f / 50.f)};
+      igPushMultiItemsWidths(2, igCalcItemWidth());
+      if (igDragFloat("##BlockVelX", &bps_vel[0], 1.0f, -75, 75, "%.3f", 0)) {
+        sc->velocity[0] = (float)((int)((fclamp(bps_vel[0], -75, 75) / (32.f / 50.f)) * 256.f)) / 256.f;
+      }
+      igPopItemWidth();
+      igSameLine(0.0f, igGetStyle()->ItemInnerSpacing.x);
+      if (igDragFloat("Velocity###BlockVelY", &bps_vel[1], 1.0f, -75, 75, "%.3f", 0)) {
+        sc->velocity[1] = (float)((int)((fclamp(bps_vel[1], -75, 75) / (32.f / 50.f)) * 256.f)) / 256.f;
+      }
+      igPopItemWidth();
+
+      igCombo_Str_arr("Active Weapon", &sc->active_weapon, weapon_names, weapon_count, 0);
+
+      igText("Weapons:");
+      for (int i = 0; i < NUM_WEAPONS; ++i) {
+        if (i > 0 && i % 3 != 0) igSameLine(0, 5);
+        igCheckbox(weapon_names[i], &sc->has_weapons[i]);
+      }
+
+      if (igButton("Take from Current State", (ImVec2){0})) {
+        SWorldCore world = wc_empty();
+        model_get_world_state_at_tick(ts, ts->current_tick, &world);
+        if (ts->selected_player_track_index < world.m_NumCharacters) {
+          SCharacterCore *chr = &world.m_pCharacters[ts->selected_player_track_index];
+          sc->position[0] = vgetx(chr->m_Pos);
+          sc->position[1] = vgety(chr->m_Pos);
+          sc->velocity[0] = vgetx(chr->m_Vel);
+          sc->velocity[1] = vgety(chr->m_Vel);
+          sc->active_weapon = chr->m_ActiveWeapon;
+          for (int i = 0; i < NUM_WEAPONS; ++i)
+            sc->has_weapons[i] = chr->m_aWeaponGot[i];
+        }
+        wc_free(&world);
+      }
+
+      if (igButton("Apply", (ImVec2){0, 0})) {
+        model_apply_starting_config(ts, ts->selected_player_track_index);
+      }
+    }
   }
   igEnd();
 }
