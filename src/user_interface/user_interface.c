@@ -1062,6 +1062,7 @@ void ui_post_map_load(ui_handler_t *ui) {
   free(ui->pickups);
   free(ui->pickup_positions);
   // function might return early leaving them dangling so reset them
+  ui->num_pickups = 0;
   ui->pickups = NULL;
   ui->pickup_positions = NULL;
 
