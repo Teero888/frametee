@@ -40,6 +40,7 @@ set(SRCS
 	src/user_interface/timeline/timeline_interaction.c
 	src/user_interface/timeline/timeline_model.c
 	src/user_interface/timeline/timeline_renderer.c
+	src/particles/particle_system.c
 )
 
 # find dependencies

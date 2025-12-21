@@ -29,7 +29,7 @@ void interaction_apply_dummy_inputs(ui_handler_t *ui) {
   if (!ts->recording || ts->selected_player_track_index == -1) return;
 
   SWorldCore world = wc_empty();
-  model_get_world_state_at_tick(ts, ts->current_tick, &world);
+  model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
 
   if (ts->selected_player_track_index >= world.m_NumCharacters) {
     wc_free(&world);
@@ -144,12 +144,17 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     if (steps > 0) {
       for (int i = 0; i < steps; ++i)
         model_advance_tick(ts, dir);
+      if (dir > 0) {
+        SWorldCore world = wc_empty();
+        model_get_world_state_at_tick(ts, ts->current_tick, &world, true);
+        wc_free(&world);
+      }
       ts->last_update_time += (double)steps * tick_interval;
     }
   }
 
   if (ts->is_playing || ts->is_reversing) interaction_update_mouse(ts);
-  
+
   // Abort recording
   if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) && ts->recording) interaction_toggle_recording(ts);
 

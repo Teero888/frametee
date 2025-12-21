@@ -32,6 +32,8 @@ typedef struct skin_atlas_manager_t skin_atlas_manager_t;
 typedef struct sprite_definition_t sprite_definition_t;
 typedef struct map_buffer_object_t map_buffer_object_t;
 typedef struct primitive_vertex_t primitive_vertex_t;
+typedef struct render_command_t render_command_t;
+typedef struct render_queue_t render_queue_t;
 typedef struct renderer_state_t renderer_state_t;
 typedef struct atlas_renderer_t atlas_renderer_t;
 typedef struct atlas_instance_t atlas_instance_t;

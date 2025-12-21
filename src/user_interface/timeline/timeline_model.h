@@ -43,7 +43,7 @@ void model_recalc_physics(timeline_state_t *ts, int tick);
 SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
 void model_advance_tick(timeline_state_t *ts, int steps);
 void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_id_to_activate);
-void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *out_world);
+void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *out_world, bool effects);
 void model_apply_starting_config(timeline_state_t *ts, int track_index);
 
 #endif // UI_TIMELINE_MODEL_H

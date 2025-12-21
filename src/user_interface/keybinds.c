@@ -274,6 +274,10 @@ void keybinds_process_inputs(ui_handler_t *ui) {
     interaction_apply_dummy_inputs(ui);
     interaction_update_mouse(ts);
     model_advance_tick(ts, 1);
+    // update effects at least
+    SWorldCore world = wc_empty();
+    model_get_world_state_at_tick(ts, ts->current_tick, &world, true);
+    wc_free(&world);
   }
   if (keybinds_is_action_pressed(kb, ACTION_INC_TPS, true)) {
     ++ts->gui_playback_speed;

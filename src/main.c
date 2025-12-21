@@ -2,8 +2,8 @@
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
 #include "user_interface/user_interface.h"
-
 #include <GLFW/glfw3.h>
+#include <particles/particle_system.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -13,19 +13,20 @@
 int main(void) {
   logger_init();
 
-  gfx_handler_t handler;
+  struct gfx_handler_t handler;
   if (init_gfx_handler(&handler) != 0) return 1;
   handler.map_data = &handler.physics_handler.collision.m_MapData;
 
   bool viewport_hovered = false;
-
   double last_time = glfwGetTime();
 
   while (1) {
+    double now = glfwGetTime();
+
     if (handler.user_interface.fps_limit > 0) {
       double target_dt = 1.0 / (double)handler.user_interface.fps_limit;
-      while (glfwGetTime() - last_time < target_dt) {
-        double remaining = target_dt - (glfwGetTime() - last_time);
+      while (now - last_time < target_dt) {
+        double remaining = target_dt - (now - last_time);
         if (remaining > 0.001) {
 #ifdef _WIN32
           Sleep((DWORD)((remaining - 0.0005) * 1000));
@@ -36,9 +37,10 @@ int main(void) {
           nanosleep(&ts, NULL);
 #endif
         }
+        now = glfwGetTime();
       }
     }
-    last_time = glfwGetTime();
+    last_time = now;
 
     int frame_result = gfx_begin_frame(&handler);
     if (frame_result == FRAME_EXIT) break;
@@ -46,33 +48,33 @@ int main(void) {
 
     on_camera_update(&handler, viewport_hovered);
 
-    // render players and weapons
-    renderer_begin_skins(&handler);
-    renderer_begin_atlas_instances(&handler.renderer.gameskin_renderer);
+    float speed_scale = handler.user_interface.timeline.is_reversing ? 2.0f : 1.0f;
+    float intra = fminf((igGetTime() - handler.user_interface.timeline.last_update_time) / (1.f / (handler.user_interface.timeline.playback_speed * speed_scale)), 1.f);
+    if (handler.user_interface.timeline.is_reversing) intra = 1.f - intra;
+    handler.user_interface.particle_system.current_time = (double)(handler.user_interface.timeline.current_tick + intra) * 0.02;
+
+    renderer_submit_map(&handler, Z_LAYER_MAP);
     render_pickups(&handler.user_interface);
     render_players(&handler.user_interface);
-    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.gameskin_renderer, false);
-    renderer_flush_skins(&handler, handler.current_frame_command_buffer, handler.renderer.skin_manager.atlas_array);
-    
-    // draw ui
+
+    particle_system_render(&handler.user_interface.particle_system, &handler, 0);
+    particle_system_render(&handler.user_interface.particle_system, &handler, 1);
+
+    render_cursor(&handler.user_interface);
+
+    renderer_flush_queue(&handler, handler.current_frame_command_buffer);
+
     ui_render(&handler.user_interface);
 
-    // lock mouse when recording
+    // Mouse locking logic for recording
     ImGuiIO *io = igGetIO_Nil();
     if (handler.user_interface.timeline.recording) {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-      io->ConfigFlags |= ImGuiConfigFlags_NoMouse; // completely ignore mouse
+      io->ConfigFlags |= ImGuiConfigFlags_NoMouse;
     } else {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-      io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse; // turn mouse back on
+      io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     }
-
-    renderer_draw_map(&handler);
-
-    // render cursor
-    renderer_begin_atlas_instances(&handler.renderer.cursor_renderer);
-    render_cursor(&handler.user_interface);
-    renderer_flush_atlas_instances(&handler, handler.current_frame_command_buffer, &handler.renderer.cursor_renderer, true);
 
     viewport_hovered = gfx_end_frame(&handler);
   }

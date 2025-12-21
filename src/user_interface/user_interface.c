@@ -2,10 +2,10 @@
 #include "cglm/vec2.h"
 #include "ddnet_physics/collision.h"
 #include "demo.h"
+#include "net_events.h"
 #include "player_info.h"
 #include "skin_browser.h"
 #include "snippet_editor.h"
-#include "net_events.h"
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
@@ -408,6 +408,8 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   plugin_manager_init(&ui->plugin_manager, &ui->plugin_context, &ui->plugin_api);
   plugin_manager_load_all(&ui->plugin_manager, "plugins");
 
+  particle_system_init(&ui->particle_system);
+
   ui->num_pickups = 0;
   ui->pickups = NULL;
   ui->pickup_positions = NULL;
@@ -419,15 +421,28 @@ static void lerp(vec2 a, vec2 b, float f, vec2 out) {
   out[1] = lint2(a[1], b[1], f);
 }
 
-// static int find_snapshot_index_le(const physics_v_t *vec, int target_tick) {
-//   // returns index of the last snapshot with m_GameTick <= target_tick
-//   // returns -1 if none found
-//   if (vec->current_size == 0) return -1;
-//   for (int i = vec->current_size - 1; i >= 0; --i) {
-//     if (vec->data[i].m_GameTick <= target_tick) return i;
-//   }
-//   return -1;
-// }
+static void process_net_events(ui_handler_t *ui) {
+  timeline_state_t *ts = &ui->timeline;
+
+  if (ts->current_tick < ts->last_event_scan_tick)
+    ts->last_event_scan_tick = ts->current_tick;
+
+  // Only process if playing and not skipping too much
+  if (!ts->is_playing || abs(ts->current_tick - ts->last_event_scan_tick) > 100) {
+    ts->last_event_scan_tick = ts->current_tick;
+    return;
+  }
+
+  // Iterate events in range [last_scan + 1, current_tick]
+  /*   for (int i = 0; i < ts->net_event_count; ++i) {
+      net_event_t *ev = &ts->net_events[i];
+      if (ev->tick > ts->last_event_scan_tick && ev->tick <= ts->current_tick) {
+        if (ev->type == NET_EVENT_SOUND_GLOBAL) {
+        }
+      }
+    } */
+  ts->last_event_scan_tick = ts->current_tick;
+}
 
 void render_players(ui_handler_t *ui) {
   gfx_handler_t *gfx = ui->gfx_handler;
@@ -437,7 +452,7 @@ void render_players(ui_handler_t *ui) {
   SWorldCore world = wc_empty();
 
   // Get the world state at the current tick. The model handles caching internally.
-  model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world);
+  model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world, true);
 
   if (ui->timeline.player_track_count != world.m_NumCharacters) {
     wc_free(&world);
@@ -528,7 +543,7 @@ void render_players(ui_handler_t *ui) {
       }
     }
 
-    renderer_push_skin_instance(gfx, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
+    renderer_submit_skin(gfx, Z_LAYER_SKINS, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
 
     if (!ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
       // vec2 box_size = {2.0f, 2.0f};
@@ -574,11 +589,11 @@ void render_players(ui_handler_t *ui) {
         center_pos[0] = p[0] + direction[0] * (length - 1.0) * 0.5f;
         center_pos[1] = p[1] + direction[1] * (length - 1.0) * 0.5f;
         vec2 chain_size = {-length, 0.5};
-        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, center_pos, chain_size, angle, GAMESKIN_HOOK_CHAIN, true);
+        renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_HOOK, center_pos, chain_size, angle, GAMESKIN_HOOK_CHAIN, true, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
       }
       sprite_definition_t *head_sprite_def = &gfx->renderer.gameskin_renderer.sprite_definitions[GAMESKIN_HOOK_HEAD];
       vec2 head_size = {(float)head_sprite_def->w / 64.0f, (float)head_sprite_def->h / 64.0f};
-      renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, hook_pos, head_size, angle, GAMESKIN_HOOK_HEAD, false);
+      renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_HOOK, hook_pos, head_size, angle, GAMESKIN_HOOK_HEAD, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
     }
     if (!core->m_FreezeTime && core->m_ActiveWeapon < NUM_WEAPONS) {
       const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
@@ -656,7 +671,7 @@ void render_players(ui_handler_t *ui) {
           vec2 muzzle_size = {160.0f * scaleX / 32.0f, 160.0f * scaleY / 32.0f};
 
           vec2 render_pos = {muzzle_phys_pos[0] / 32.0f, muzzle_phys_pos[1] / 32.0f};
-          renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size, hadoken_angle, muzzle_sprite_id, false);
+          renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_WEAPONS, render_pos, muzzle_size, hadoken_angle, muzzle_sprite_id, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
         }
       } else {
         switch (core->m_ActiveWeapon) {
@@ -708,7 +723,7 @@ void render_players(ui_handler_t *ui) {
             muzzle_size[1] *= flip_factor;
 
             vec2 render_pos = {muzzle_phys_pos[0] / 32.0f, muzzle_phys_pos[1] / 32.0f};
-            renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, muzzle_size, weapon_angle, muzzle_sprite_id, false);
+            renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_WEAPONS, render_pos, muzzle_size, weapon_angle, muzzle_sprite_id, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
           }
         }
       }
@@ -726,7 +741,7 @@ void render_players(ui_handler_t *ui) {
 
         vec2 render_pos = {weapon_pos[0] / 32.0f, weapon_pos[1] / 32.0f};
 
-        renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, render_pos, weapon_size, weapon_angle, weapon_sprite_id, false);
+        renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_WEAPONS, render_pos, weapon_size, weapon_angle, weapon_sprite_id, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
       }
     }
   }
@@ -743,8 +758,8 @@ void render_players(ui_handler_t *ui) {
     vec2 p;
     lerp(ppp, pp, intra, p);
 
-    renderer_push_atlas_instance(&gfx->renderer.gameskin_renderer, p, (vec2){1, 1}, -((world.m_GameTick + intra) / 50.f) * 4 * M_PI + id,
-                                 GAMESKIN_GRENADE_PROJ, false);
+    renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_PROJECTILES, p, (vec2){1, 1}, -((world.m_GameTick + intra) / 50.f) * 4 * M_PI + id, GAMESKIN_GRENADE_PROJ, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
+
     ++id;
   }
   (void)id;
@@ -852,8 +867,10 @@ void render_pickups(ui_handler_t *ui) {
     vec2 pos = {vgetx(ui->pickup_positions[i]) / 32.f, vgety(ui->pickup_positions[i]) / 32.f};
     vec2 size = {1.0f, 1.0f};
     SPickup pickup = ui->pickups[i];
-    uint32_t idx;
-    if (pickup.m_Type != POWERUP_WEAPON && pickup.m_Type != POWERUP_NINJA) {
+    int idx = -1;
+
+    // render health/armor
+    if (pickup.m_Type == POWERUP_HEALTH || pickup.m_Type == POWERUP_ARMOR) {
       idx = GAMESKIN_PICKUP_HEALTH + pickup.m_Type;
       sprite_definition_t *sprite_def = &h->renderer.gameskin_renderer.sprite_definitions[idx];
       float w = sprite_def->w;
@@ -863,7 +880,17 @@ void render_pickups(ui_handler_t *ui) {
       float scaleY = h / f;
       size[0] = 1.f / scaleX;
       size[1] = 1.f / scaleY;
-    } else if (pickup.m_Type != POWERUP_NINJA) {
+    } else if (pickup.m_Type >= POWERUP_ARMOR_SHOTGUN) { // render weapon armor
+      idx = GAMESKIN_PICKUP_ARMOR_SHOTGUN + pickup.m_Type - POWERUP_ARMOR_SHOTGUN;
+      sprite_definition_t *sprite_def = &h->renderer.gameskin_renderer.sprite_definitions[idx];
+      float w = sprite_def->w;
+      float h = sprite_def->h;
+      float f = sqrtf(w * w + h * h);
+      float scaleX = w / f;
+      float scaleY = h / f;
+      size[0] = 1.f / scaleX;
+      size[1] = 1.f / scaleY;
+    } else if (pickup.m_Type == POWERUP_WEAPON) { // render weapon pickup
       idx = GAMESKIN_PICKUP_HAMMER + pickup.m_Subtype;
       const weapon_spec_t *spec = &game_data.weapons.id[pickup.m_Subtype];
       sprite_definition_t *sprite_def = &h->renderer.gameskin_renderer.sprite_definitions[idx];
@@ -875,9 +902,8 @@ void render_pickups(ui_handler_t *ui) {
 
       size[0] = spec->visual_size * scaleX / 32.0f;
       size[1] = spec->visual_size * scaleY / 32.0f;
-    } else {
+    } else if (pickup.m_Type == POWERUP_NINJA) { // render ninja pickup
       idx = GAMESKIN_PICKUP_NINJA;
-      // const weapon_spec_t *spec = &game_data.weapons.id[pickup.m_Subtype];
       sprite_definition_t *sprite_def = &h->renderer.gameskin_renderer.sprite_definitions[idx];
       float w = sprite_def->w;
       float h = sprite_def->h;
@@ -888,6 +914,10 @@ void render_pickups(ui_handler_t *ui) {
       size[0] = 4.f * scaleX;
       size[1] = 4.f * scaleY;
       pos[0] -= 10.f / 32.f;
+    }
+    if (idx == -1) {
+      log_warn("pickups", "Unknown pickup type %d encountered in render_pickups\n", pickup.m_Type);
+      continue;
     }
 
     // animation
@@ -900,7 +930,7 @@ void render_pickups(ui_handler_t *ui) {
     pos[0] += (cos((intra / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
     pos[1] += (sin((intra / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
 
-    renderer_push_atlas_instance(&h->renderer.gameskin_renderer, pos, size, 0.0f, idx, false);
+    renderer_submit_atlas(h, &h->renderer.gameskin_renderer, Z_LAYER_PICKUPS, pos, size, 0.0f, idx, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
   }
 }
 
@@ -910,14 +940,12 @@ void render_cursor(ui_handler_t *ui) {
   gfx_handler_t *handler = ui->gfx_handler;
 
   if (handler->user_interface.timeline.recording) {
-    renderer_push_atlas_instance(
-        &handler->renderer.cursor_renderer,
-        (vec2){ui->gfx_handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0], ui->gfx_handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1]},
-        (vec2){64.f, 64.f}, 0.0f, handler->user_interface.weapon, false);
+    renderer_submit_atlas(handler, &handler->renderer.cursor_renderer, Z_LAYER_CURSOR, (vec2){ui->gfx_handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0], ui->gfx_handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1]}, (vec2){64.f, 64.f}, 0.0f, handler->user_interface.weapon, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, true);
   }
 }
 
 void ui_render(ui_handler_t *ui) {
+  process_net_events(ui);
   interaction_update_recording_input(ui);
   render_menu_bar(ui);
 
@@ -970,7 +998,7 @@ bool ui_render_late(ui_handler_t *ui) {
       screen_to_world(ui->gfx_handler, mx, my, &wx, &wy);
 
       SWorldCore world = wc_empty();
-      model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world);
+      model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world, false);
 
       float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
       float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
@@ -1042,10 +1070,10 @@ bool ui_render_late(ui_handler_t *ui) {
       igText("WantedWeapon: %d", Input.m_WantedWeapon);
       igText("TeleOut: %d", Input.m_TeleOut);
 #define WORD_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c"
-#define WORD_TO_BINARY(word)                                                                                                                         \
-  ((word) & 0x8000 ? '1' : '0'), ((word) & 0x4000 ? '1' : '0'), ((word) & 0x2000 ? '1' : '0'), ((word) & 0x1000 ? '1' : '0'),                        \
-      ((word) & 0x0800 ? '1' : '0'), ((word) & 0x0400 ? '1' : '0'), ((word) & 0x0200 ? '1' : '0'), ((word) & 0x0100 ? '1' : '0'),                    \
-      ((word) & 0x0080 ? '1' : '0'), ((word) & 0x0040 ? '1' : '0'), ((word) & 0x0020 ? '1' : '0'), ((word) & 0x0010 ? '1' : '0'),                    \
+#define WORD_TO_BINARY(word)                                                                                                      \
+  ((word) & 0x8000 ? '1' : '0'), ((word) & 0x4000 ? '1' : '0'), ((word) & 0x2000 ? '1' : '0'), ((word) & 0x1000 ? '1' : '0'),     \
+      ((word) & 0x0800 ? '1' : '0'), ((word) & 0x0400 ? '1' : '0'), ((word) & 0x0200 ? '1' : '0'), ((word) & 0x0100 ? '1' : '0'), \
+      ((word) & 0x0080 ? '1' : '0'), ((word) & 0x0040 ? '1' : '0'), ((word) & 0x0020 ? '1' : '0'), ((word) & 0x0010 ? '1' : '0'), \
       ((word) & 0x0008 ? '1' : '0'), ((word) & 0x0004 ? '1' : '0'), ((word) & 0x0002 ? '1' : '0'), ((word) & 0x0001 ? '1' : '0')
       igText("Flags: " WORD_TO_BINARY_PATTERN, WORD_TO_BINARY(Input.m_Flags));
 #undef WORD_TO_BINARY

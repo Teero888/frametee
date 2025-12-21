@@ -11,9 +11,10 @@ layout(location = 4) in int instance_sprite_index;
 layout(location = 5) in vec2 instance_uv_scale;
 layout(location = 6) in vec2 instance_uv_offset;
 layout(location = 7) in vec2 instance_tiling;
+layout(location = 8) in vec4 instance_color;
 
 // UBO for camera transforms
-layout(binding = 0) uniform primitive_ubo {
+layout(std140, binding = 0) uniform primitive_ubo {
   vec2 cam_pos;
   float zoom;
   float aspect;
@@ -29,6 +30,7 @@ layout(location = 1) flat out int frag_sprite_index;
 layout(location = 2) flat out vec4 frag_uv_limits;
 layout(location = 3) out vec2 frag_size;
 layout(location = 4) flat out float frag_lod_bias;
+layout(location = 5) out vec4 frag_color;
 
 mat2 rot(float a) {
   float s = sin(a);
@@ -50,4 +52,5 @@ void main() {
   frag_uv_limits = vec4(instance_uv_offset, instance_uv_scale);
   frag_size = instance_size;
   frag_lod_bias = ubo.lod_bias;
+  frag_color = instance_color;
 }

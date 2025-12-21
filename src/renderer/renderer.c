@@ -1,7 +1,7 @@
 #include "renderer.h"
-#include <logger/logger.h>
 #include "graphics_backend.h"
 #include <cglm/cglm.h>
+#include <logger/logger.h>
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
 
@@ -44,10 +44,10 @@ static char *read_file(const char *filename, size_t *length);
 static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *code, size_t code_size);
 static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t base_layer,
                           uint32_t layer_count);
-static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count,
-                                                      const VkVertexInputBindingDescription *binding_descs, uint32_t binding_desc_count,
-                                                      const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count);
 static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer);
+static void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path, const sprite_definition_t *sprites,
+                                         uint32_t sprite_count, uint32_t max_instances);
+void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 
 // vertex description helpers
 static VkVertexInputBindingDescription primitive_binding_description;
@@ -447,6 +447,10 @@ int renderer_init(gfx_handler_t *handler) {
   memset(renderer, 0, sizeof(renderer_state_t));
   renderer->gfx = handler;
 
+  // Initialize the render queue
+  renderer->queue.commands = malloc(sizeof(render_command_t) * MAX_RENDER_COMMANDS);
+  renderer->queue.count = 0;
+
   setup_vertex_descriptions();
 
   VkPhysicalDeviceProperties properties;
@@ -504,6 +508,7 @@ int renderer_init(gfx_handler_t *handler) {
 
   renderer->skin_renderer.instance_count = 0;
 
+  // Game Skin Sprites (32x16 grid, 32px unit)
   static sprite_definition_t gameskin_sprites[GAMESKIN_SPRITE_COUNT] = {[GAMESKIN_HAMMER_BODY] = {64, 32, 128, 96},
                                                                         [GAMESKIN_GUN_BODY] = {64, 128, 128, 64},
                                                                         [GAMESKIN_GUN_PROJ] = {192, 128, 64, 64},
@@ -558,9 +563,33 @@ int renderer_init(gfx_handler_t *handler) {
 
   renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png", gameskin_sprites, GAMESKIN_SPRITE_COUNT, 100000);
 
+  // Particles Sprites (8x8 grid, 64px unit)
+  static sprite_definition_t particle_sprites[PARTICLE_SPRITE_COUNT] = {
+      [PARTICLE_SLICE] = {0, 0, 64, 64},         // 0,0
+      [PARTICLE_BALL] = {64, 0, 64, 64},         // 1,0
+      [PARTICLE_SPLAT01] = {128, 0, 64, 64},     // 2,0
+      [PARTICLE_SPLAT02] = {192, 0, 64, 64},     // 3,0
+      [PARTICLE_SPLAT03] = {256, 0, 64, 64},     // 4,0
+      [PARTICLE_SMOKE] = {0, 64, 64, 64},        // 0,1
+      [PARTICLE_SHELL] = {0, 128, 128, 128},     // 0,2 2x2
+      [PARTICLE_EXPL01] = {0, 256, 256, 256},    // 0,4 4x4
+      [PARTICLE_AIRJUMP] = {128, 128, 128, 128}, // 2,2 2x2
+      [PARTICLE_HIT01] = {256, 64, 128, 128}     // 4,1 2x2
+  };
+  renderer_init_atlas_renderer(handler, &renderer->particle_renderer, "data/textures/particles.png", particle_sprites, PARTICLE_SPRITE_COUNT, 10000);
+
+  // Extras Sprites (16x16 grid, 32px unit)
+  static sprite_definition_t extra_sprites[EXTRA_SPRITE_COUNT] = {
+      [EXTRA_SNOWFLAKE] = {0, 0, 64, 64}, // 0,0 2x2
+      [EXTRA_SPARKLE] = {64, 0, 64, 64},  // 2,0 2x2
+      [EXTRA_PULLEY] = {128, 0, 32, 32},  // 4,0 1x1
+      [EXTRA_HECTAGON] = {192, 0, 64, 64} // 6,0 2x2
+  };
+  renderer_init_atlas_renderer(handler, &renderer->extras_renderer, "data/textures/extras.png", extra_sprites, EXTRA_SPRITE_COUNT, 10000);
+
+  // Initialize cursor renderer (using gameskin)
   static sprite_definition_t cursor_sprites[CURSOR_SPRITE_COUNT + 1] = {
-      [CURSOR_HAMMER] = {0, 0, 64, 64},    [CURSOR_GUN] = {0, 128, 64, 64},   [CURSOR_SHOTGUN] = {0, 192, 64, 64},
-      [CURSOR_GRENADE] = {0, 256, 64, 64}, [CURSOR_LASER] = {0, 384, 64, 64}, [CURSOR_NINJA] = {0, 320, 64, 64}};
+      [CURSOR_HAMMER] = {0, 0, 64, 64}, [CURSOR_GUN] = {0, 128, 64, 64}, [CURSOR_SHOTGUN] = {0, 192, 64, 64}, [CURSOR_GRENADE] = {0, 256, 64, 64}, [CURSOR_LASER] = {0, 384, 64, 64}, [CURSOR_NINJA] = {0, 320, 64, 64}};
   renderer_init_atlas_renderer(handler, &renderer->cursor_renderer, "data/textures/game.png", cursor_sprites, CURSOR_SPRITE_COUNT,
                                1); // we only render a single cursor
 
@@ -572,6 +601,11 @@ void renderer_cleanup(gfx_handler_t *handler) {
   renderer_state_t *renderer = &handler->renderer;
   VkDevice device = handler->g_device;
   VkAllocationCallbacks *allocator = handler->g_allocator;
+
+  if (renderer->queue.commands) {
+    free(renderer->queue.commands);
+    renderer->queue.commands = NULL;
+  }
 
   vkDeviceWaitIdle(device);
 
@@ -636,13 +670,13 @@ void renderer_cleanup(gfx_handler_t *handler) {
   }
   renderer_cleanup_atlas_renderer(handler, &renderer->gameskin_renderer);
   renderer_cleanup_atlas_renderer(handler, &renderer->cursor_renderer);
+  renderer_cleanup_atlas_renderer(handler, &renderer->particle_renderer);
+  renderer_cleanup_atlas_renderer(handler, &renderer->extras_renderer);
 
   log_info(LOG_SOURCE, "Renderer cleaned up successfully.");
 }
 
-static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count,
-                                                      const VkVertexInputBindingDescription *binding_descs, uint32_t binding_desc_count,
-                                                      const VkVertexInputAttributeDescription *attrib_descs, uint32_t attrib_desc_count) {
+static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count) {
   renderer_state_t *renderer = &handler->renderer;
   pipeline_cache_entry_t *entry = &renderer->pipeline_cache[shader->id];
 
@@ -663,92 +697,92 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
   entry->texture_count = texture_count;
   entry->render_pass = target_render_pass;
 
-  uint32_t binding_count = ubo_count + texture_count;
-  VLA(VkDescriptorSetLayoutBinding, bindings, binding_count);
+  // Internal Layout Selection Logic
+  VkVertexInputBindingDescription *binding_descs;
+  uint32_t b_desc_count;
+  VkVertexInputAttributeDescription *attrib_descs;
+  uint32_t a_desc_count;
 
-  // if (shader) {
-  //   log_info(LOG_SOURCE, "Creating descriptor set layout for %s: ubo_count=%u texture_count=%u",
-  //            shader->vert_path, ubo_count, texture_count);
-  // }
-
-  if (target_render_pass == VK_NULL_HANDLE) {
-    log_error(LOG_SOURCE, "Cannot create graphics pipeline without a valid render pass.");
-    entry->initialized = false;
-    VLA_FREE(bindings);
-    return NULL;
+  if (shader == renderer->skin_renderer.skin_shader) {
+    binding_descs = skin_binding_desc;
+    b_desc_count = 2;
+    attrib_descs = skin_attrib_descs;
+    a_desc_count = 14;
+  } else if (shader == renderer->gameskin_renderer.shader || shader == renderer->particle_renderer.shader ||
+             shader == renderer->extras_renderer.shader || shader == renderer->cursor_renderer.shader) {
+    binding_descs = atlas_binding_desc;
+    b_desc_count = 2;
+    attrib_descs = atlas_attrib_descs;
+    a_desc_count = 9;
+  } else if (shader == renderer->primitive_shader) {
+    binding_descs = &primitive_binding_description;
+    b_desc_count = 1;
+    attrib_descs = primitive_attribute_descriptions;
+    a_desc_count = 2;
+  } else {
+    binding_descs = &mesh_binding_description;
+    b_desc_count = 1;
+    attrib_descs = mesh_attribute_descriptions;
+    a_desc_count = 3;
   }
+
+  uint32_t total_bindings = ubo_count + texture_count;
+  VLA(VkDescriptorSetLayoutBinding, layout_bindings, total_bindings);
+
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
-    uint32_t binding_index = current_binding++;
-    bindings[binding_index] = (VkDescriptorSetLayoutBinding){.binding = binding_index,
-                                                             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                                             .descriptorCount = 1,
-                                                             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT};
+    uint32_t b_idx = current_binding++;
+    layout_bindings[b_idx] = (VkDescriptorSetLayoutBinding){
+        .binding = b_idx,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT};
   }
   for (uint32_t i = 0; i < texture_count; ++i) {
-    uint32_t binding_index = current_binding++;
-    bindings[binding_index] = (VkDescriptorSetLayoutBinding){.binding = binding_index,
-                                                             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                                             .descriptorCount = 1,
-                                                             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
+    uint32_t b_idx = current_binding++;
+    layout_bindings[b_idx] = (VkDescriptorSetLayoutBinding){
+        .binding = b_idx,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
   }
 
   VkDescriptorSetLayoutCreateInfo layout_info = {
-      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = binding_count, .pBindings = bindings};
-  VkResult err = vkCreateDescriptorSetLayout(handler->g_device, &layout_info, handler->g_allocator, &entry->descriptor_set_layout);
-  if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkCreateDescriptorSetLayout failed (shader=%s) err=%d", shader ? shader->vert_path : "<unknown>", err);
-  }
-  check_vk_result_line(err, __LINE__);
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = total_bindings, .pBindings = layout_bindings};
+  check_vk_result(vkCreateDescriptorSetLayout(handler->g_device, &layout_info, handler->g_allocator, &entry->descriptor_set_layout));
 
   VkPipelineLayoutCreateInfo pipeline_layout_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &entry->descriptor_set_layout};
-  err = vkCreatePipelineLayout(handler->g_device, &pipeline_layout_info, handler->g_allocator, &entry->pipeline_layout);
-  if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkCreatePipelineLayout failed (shader=%s) err=%d", shader ? shader->vert_path : "<unknown>", err);
-  }
-  check_vk_result_line(err, __LINE__);
+  check_vk_result(vkCreatePipelineLayout(handler->g_device, &pipeline_layout_info, handler->g_allocator, &entry->pipeline_layout));
 
-  VkPipelineShaderStageCreateInfo vert_shader_stage_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                                                            .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                                                            .module = shader->vert_shader_module,
-                                                            .pName = "main"};
-  VkPipelineShaderStageCreateInfo frag_shader_stage_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                                                            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                                                            .module = shader->frag_shader_module,
-                                                            .pName = "main"};
-  VkPipelineShaderStageCreateInfo shader_stages[] = {vert_shader_stage_info, frag_shader_stage_info};
+  VkPipelineShaderStageCreateInfo shader_stages[] = {
+      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = shader->vert_shader_module, .pName = "main"},
+      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = shader->frag_shader_module, .pName = "main"}};
 
-  VkPipelineVertexInputStateCreateInfo vertex_input_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-                                                            .vertexBindingDescriptionCount = binding_desc_count,
-                                                            .pVertexBindingDescriptions = binding_descs,
-                                                            .vertexAttributeDescriptionCount = attrib_desc_count,
-                                                            .pVertexAttributeDescriptions = attrib_descs};
+  VkPipelineVertexInputStateCreateInfo vertex_input_info = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+      .vertexBindingDescriptionCount = b_desc_count,
+      .pVertexBindingDescriptions = binding_descs,
+      .vertexAttributeDescriptionCount = a_desc_count,
+      .pVertexAttributeDescriptions = attrib_descs};
 
-  VkPipelineInputAssemblyStateCreateInfo input_assembly = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-                                                           .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-                                                           .primitiveRestartEnable = VK_FALSE};
+  VkPipelineInputAssemblyStateCreateInfo input_assembly = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
 
   VkPipelineViewportStateCreateInfo viewport_state = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
 
-  VkPipelineRasterizationStateCreateInfo rasterizer = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                                                       .depthClampEnable = VK_FALSE,
-                                                       .rasterizerDiscardEnable = VK_FALSE,
-                                                       .polygonMode = VK_POLYGON_MODE_FILL,
-                                                       .cullMode = VK_CULL_MODE_NONE,
-                                                       .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-                                                       .lineWidth = 1.0f};
+  VkPipelineRasterizationStateCreateInfo rasterizer = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE, .lineWidth = 1.0f};
 
-  VkPipelineMultisampleStateCreateInfo multisampling = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-                                                        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+  VkPipelineMultisampleStateCreateInfo multisampling = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
 
-  VkPipelineDepthStencilStateCreateInfo depth_stencil = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-                                                         .depthTestEnable = VK_FALSE,
-                                                         .depthWriteEnable = VK_FALSE,
-                                                         .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL};
+  VkPipelineDepthStencilStateCreateInfo depth_stencil = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, .depthTestEnable = VK_FALSE, .depthWriteEnable = VK_FALSE};
 
-  VkPipelineColorBlendAttachmentState color_blend_attachment = {
+  // CORRECTED: Standard Alpha Blending
+  VkPipelineColorBlendAttachmentState color_blend = {
       .blendEnable = VK_TRUE,
       .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
       .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
@@ -760,7 +794,7 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
   };
 
   VkPipelineColorBlendStateCreateInfo color_blending = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &color_blend_attachment};
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &color_blend};
 
   VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
   VkPipelineDynamicStateCreateInfo dynamic_state = {
@@ -781,15 +815,10 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
                                                 .renderPass = target_render_pass,
                                                 .subpass = 0};
 
-  err = vkCreateGraphicsPipelines(handler->g_device, handler->g_pipeline_cache, 1, &pipeline_info, handler->g_allocator, &entry->pipeline);
-  if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkCreateGraphicsPipelines failed (shader=%s, render_pass=%p, format=%d) err=%d", shader ? shader->vert_path : "<unknown>",
-              (void *)target_render_pass, (int)handler->g_main_window_data.SurfaceFormat.format, err);
-  }
-  check_vk_result_line(err, __LINE__);
+  check_vk_result(vkCreateGraphicsPipelines(handler->g_device, handler->g_pipeline_cache, 1, &pipeline_info, handler->g_allocator, &entry->pipeline));
 
+  VLA_FREE(layout_bindings);
   entry->initialized = true;
-  VLA_FREE(bindings);
   return entry;
 }
 
@@ -1167,14 +1196,12 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
   VkRect2D scissor = {{0.0, 0.0}, {handler->viewport[0], handler->viewport[1]}};
   vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 }
-
 void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh, shader_t *shader, texture_t **textures,
                         uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count) {
   if (!mesh || !shader || !mesh->active || !shader->active) return;
   renderer_state_t *renderer = &handler->renderer;
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, shader, ubo_count, texture_count, &mesh_binding_description, 1, // one binding
-                                                       mesh_attribute_descriptions, 3);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, shader, ubo_count, texture_count);
   if (!pso) return;
 
   // Allocate a descriptor set for this pipeline
@@ -1185,9 +1212,6 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &pso->descriptor_set_layout};
   VkResult err = vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set);
-  if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (shader=%s) err=%d", shader ? shader->vert_path : "<unknown>", err);
-  }
   check_vk_result_line(err, __LINE__);
 
   uint32_t binding_count = ubo_count + texture_count;
@@ -1198,13 +1222,12 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
 
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
-    // UBO RING BUFFER LOGIC
     VkDeviceSize aligned_size = (ubo_sizes[i] + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
     assert(renderer->ubo_buffer_offset + aligned_size <= DYNAMIC_UBO_BUFFER_SIZE);
 
     ubo_offsets[i] = renderer->ubo_buffer_offset;
     memcpy((char *)renderer->ubo_buffer_ptr + ubo_offsets[i], ubos[i], ubo_sizes[i]);
-    renderer->ubo_buffer_offset += aligned_size;
+    renderer->ubo_buffer_offset += (uint32_t)aligned_size;
 
     buffer_infos[i] = (VkDescriptorBufferInfo){.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = ubo_offsets[i], .range = ubo_sizes[i]};
     uint32_t binding_index = current_binding++;
@@ -1456,17 +1479,17 @@ static void setup_vertex_descriptions(void) {
       .binding = 1, .location = 6, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(atlas_instance_t, uv_offset)};
   atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){
       .binding = 1, .location = 7, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(atlas_instance_t, tiling)};
+  atlas_attrib_descs[i++] = (VkVertexInputAttributeDescription){
+      .binding = 1, .location = 8, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = offsetof(atlas_instance_t, color)};
 }
 
-// primitive drawing implementation
 static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &h->renderer;
   if (renderer->primitive_index_count == 0) {
     return;
   }
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive_shader, 1, 0, &primitive_binding_description, 1, // one binding
-                                                       primitive_attribute_descriptions, 2);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive_shader, 1, 0);
   if (!pso) return;
 
   primitive_ubo_t ubo;
@@ -1479,8 +1502,8 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   ubo.aspect = window_ratio / map_ratio;
 
   ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
-  ubo.mapSize[0] = h->map_data->width;
-  ubo.mapSize[1] = h->map_data->height;
+  ubo.mapSize[0] = (float)h->map_data->width;
+  ubo.mapSize[1] = (float)h->map_data->height;
   ubo.lod_bias = renderer->lod_bias;
 
   glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
@@ -1491,7 +1514,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
 
   uint32_t dynamic_offset = renderer->ubo_buffer_offset;
   memcpy((char *)renderer->ubo_buffer_ptr + dynamic_offset, &ubo, ubo_size);
-  renderer->ubo_buffer_offset += aligned_size;
+  renderer->ubo_buffer_offset += (uint32_t)aligned_size;
 
   VkDescriptorSet descriptor_set;
 
@@ -1659,8 +1682,6 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   renderer->primitive_index_count += 6;
 }
 
-
-
 void renderer_draw_map(gfx_handler_t *h) {
   if (!h->map_shader || !h->quad_mesh || h->map_texture_count <= 0) return;
 
@@ -1680,7 +1701,6 @@ void renderer_draw_map(gfx_handler_t *h) {
   VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
   renderer_draw_mesh(h, h->current_frame_command_buffer, h->quad_mesh, h->map_shader, h->map_textures, h->map_texture_count, ubos, ubo_sizes, 1);
 }
-
 
 static int skin_manager_alloc_layer(renderer_state_t *r) {
   for (int i = 0; i < MAX_SKINS; i++) {
@@ -1734,19 +1754,15 @@ void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int sk
   sr->instance_ptr[i].col_custom = use_custom_color;
   sr->instance_ptr[i].col_gs = h->renderer.skin_manager.atlas_array[skin_index].gs_org;
 }
-
 void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array) {
   renderer_state_t *renderer = &h->renderer;
   skin_renderer_t *sr = &renderer->skin_renderer;
-  if (sr->instance_count == 0) return;
+  if (sr->instance_count == 0 || !skin_array) return;
 
   mesh_t *quad = h->quad_mesh;
-
-  // pipeline: 1 UBO + 1 texture
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, sr->skin_shader, 1, 1, skin_binding_desc, 2, skin_attrib_descs, 14);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, sr->skin_shader, 1, 1);
   if (!pso) return;
 
-  // prepare camera UBO same as primitives
   primitive_ubo_t ubo;
   ubo.camPos[0] = renderer->camera.pos[0];
   ubo.camPos[1] = renderer->camera.pos[1];
@@ -1755,47 +1771,32 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
   ubo.aspect = window_ratio / map_ratio;
   ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
-  ubo.mapSize[0] = h->map_data->width;
-  ubo.mapSize[1] = h->map_data->height;
+  ubo.mapSize[0] = (float)h->map_data->width;
+  ubo.mapSize[1] = (float)h->map_data->height;
   ubo.lod_bias = renderer->lod_bias;
   glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
-  // copy into dynamic UBO ring
-  VkDeviceSize ubo_size = sizeof(ubo);
-  VkDeviceSize aligned = (ubo_size + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
-  assert(renderer->ubo_buffer_offset + aligned <= DYNAMIC_UBO_BUFFER_SIZE);
+  VkDeviceSize aligned = (sizeof(ubo) + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
+  if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) return;
   uint32_t dyn_offset = renderer->ubo_buffer_offset;
-  memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, ubo_size);
-  renderer->ubo_buffer_offset += aligned;
+  memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, sizeof(ubo));
+  renderer->ubo_buffer_offset += (uint32_t)aligned;
 
-  // Allocate descriptor set
+  // Descriptor Allocation
   uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
   VkDescriptorSet desc;
-  VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                    .descriptorPool = renderer->frame_descriptor_pools[pool_idx],
-                                    .descriptorSetCount = 1,
-                                    .pSetLayouts = &pso->descriptor_set_layout};
-  check_vk_result(vkAllocateDescriptorSets(h->g_device, &ai, &desc));
+  VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = renderer->frame_descriptor_pools[pool_idx], .descriptorSetCount = 1, .pSetLayouts = &pso->descriptor_set_layout};
+  if (vkAllocateDescriptorSets(h->g_device, &ai, &desc) != VK_SUCCESS) return;
 
-  // write UBO
-  VkDescriptorBufferInfo bufInfo = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
-  VkDescriptorImageInfo img = {
-      .sampler = skin_array->sampler, .imageView = skin_array->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-  VkWriteDescriptorSet writes[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                     .dstSet = desc,
-                                     .dstBinding = 0,
-                                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                     .descriptorCount = 1,
-                                     .pBufferInfo = &bufInfo},
-                                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                     .dstSet = desc,
-                                     .dstBinding = 1,
-                                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                     .descriptorCount = 1,
-                                     .pImageInfo = &img}};
+  VkDescriptorBufferInfo b_info = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
+  VkDescriptorImageInfo i_info = {.sampler = skin_array->sampler, .imageView = skin_array->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+  VkWriteDescriptorSet writes[2] = {
+      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .pBufferInfo = &b_info},
+      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &i_info}};
   vkUpdateDescriptorSets(h->g_device, 2, writes, 0, NULL);
 
-  // issue draw
+  // Bind and Draw
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
   VkBuffer bufs[2] = {quad->vertex_buffer.buffer, sr->instance_buffer.buffer};
   VkDeviceSize offs[2] = {0, 0};
@@ -1858,8 +1859,8 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
 
   int scale = tex_width / 256;
 
-#define COPY_PART(src_x, src_y, w, h, dst_x, dst_y)                                                                                                  \
-  stbir_resize_uint8_linear(pixels + ((src_y) * scale * tex_width + (src_x) * scale) * 4, (w) * scale, (h) * scale, tex_width * 4,                   \
+#define COPY_PART(src_x, src_y, w, h, dst_x, dst_y)                                                                                \
+  stbir_resize_uint8_linear(pixels + ((src_y) * scale * tex_width + (src_x) * scale) * 4, (w) * scale, (h) * scale, tex_width * 4, \
                             repacked_pixels + ((dst_y) * final_width + (dst_x)) * 4, (w) * 2, (h) * 2, final_width * 4, STBIR_RGBA)
 
   COPY_PART(0, 0, 96, 96, 8, 8);        // Body
@@ -1976,8 +1977,8 @@ void renderer_unload_skin(gfx_handler_t *h, int layer) {
   log_info(LOG_SOURCE, "Freed skin layer %d", layer);
 }
 
-void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path, const sprite_definition_t *sprites,
-                                  uint32_t sprite_count, uint32_t max_instances) {
+static void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path, const sprite_definition_t *sprites,
+                                         uint32_t sprite_count, uint32_t max_instances) {
   ar->shader = renderer_load_shader(h, "data/shaders/atlas.vert.spv", "data/shaders/atlas.frag.spv");
   ar->max_instances = max_instances;
 
@@ -2122,6 +2123,7 @@ void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const 
   vkMapMemory(h->g_device, ar->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&ar->instance_ptr);
   ar->instance_count = 0;
 }
+
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar) {
   if (ar->sampler) {
     vkDestroySampler(h->g_device, ar->sampler, h->g_allocator);
@@ -2139,7 +2141,7 @@ void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar) {
 
 void renderer_begin_atlas_instances(atlas_renderer_t *ar) { ar->instance_count = 0; }
 
-void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv) {
+void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv, vec4 color) {
   if (ar->instance_count >= ar->max_instances) {
     log_warn(LOG_SOURCE, "Max atlas instances reached for this renderer.");
     return;
@@ -2153,6 +2155,11 @@ void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, flo
   glm_vec2_copy(size, ar->instance_ptr[i].size);
   ar->instance_ptr[i].rotation = rotation;
   ar->instance_ptr[i].sprite_index = (int)sprite_index;
+  if (color) {
+    glm_vec4_copy(color, ar->instance_ptr[i].color);
+  } else {
+    glm_vec4_copy((vec4){1.0f, 1.0f, 1.0f, 1.0f}, ar->instance_ptr[i].color);
+  }
 
   // uv calc
   float layer_w = (float)ar->layer_width;
@@ -2181,13 +2188,12 @@ void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, flo
   }
 }
 
-void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar, bool screen_space) {
+void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar, uint32_t start_index, uint32_t count, bool screen_space) {
   renderer_state_t *renderer = &h->renderer;
-  if (ar->instance_count == 0 || !ar->shader || !ar->atlas_texture) return;
+  if (count == 0 || !ar->shader || !ar->atlas_texture) return;
 
   mesh_t *quad = h->quad_mesh;
-
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, ar->shader, 1, 1, atlas_binding_desc, 2, atlas_attrib_descs, 8);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, ar->shader, 1, 1);
   if (!pso) return;
 
   primitive_ubo_t ubo;
@@ -2197,8 +2203,8 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
     ubo.zoom = 2.0f;
     ubo.aspect = 1.0f;
     ubo.maxMapSize = 1.0f;
-    ubo.mapSize[0] = h->viewport[0];
-    ubo.mapSize[1] = h->viewport[1];
+    ubo.mapSize[0] = (float)h->viewport[0];
+    ubo.mapSize[1] = (float)h->viewport[1];
     ubo.lod_bias = 0.0f;
   } else {
     ubo.camPos[0] = renderer->camera.pos[0];
@@ -2207,53 +2213,225 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
     float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
     float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
     ubo.aspect = window_ratio / map_ratio;
-    ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
-    ubo.mapSize[0] = h->map_data->width;
-    ubo.mapSize[1] = h->map_data->height;
+    ubo.maxMapSize = fmaxf((float)h->map_data->width, (float)h->map_data->height) * 0.001f;
+    ubo.mapSize[0] = (float)h->map_data->width;
+    ubo.mapSize[1] = (float)h->map_data->height;
     ubo.lod_bias = renderer->lod_bias;
   }
   glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
-  VkDeviceSize ubo_size = sizeof(ubo);
-  VkDeviceSize aligned = (ubo_size + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
-  if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) return;
+  VkDeviceSize aligned = (sizeof(ubo) + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
+  if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) {
+    log_error(LOG_SOURCE, "UBO Ring Buffer Exhausted");
+    return;
+  }
   uint32_t dyn_offset = renderer->ubo_buffer_offset;
-  memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, ubo_size);
-  renderer->ubo_buffer_offset += aligned;
+  memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, sizeof(ubo));
+  renderer->ubo_buffer_offset += (uint32_t)aligned;
 
   uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
   VkDescriptorSet desc;
-  VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                    .descriptorPool = renderer->frame_descriptor_pools[pool_idx],
-                                    .descriptorSetCount = 1,
-                                    .pSetLayouts = &pso->descriptor_set_layout};
-  check_vk_result(vkAllocateDescriptorSets(h->g_device, &ai, &desc));
+  VkDescriptorSetAllocateInfo ai = {
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .descriptorPool = renderer->frame_descriptor_pools[pool_idx],
+      .descriptorSetCount = 1,
+      .pSetLayouts = &pso->descriptor_set_layout};
 
-  VkDescriptorBufferInfo bufInfo = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
-  VkDescriptorImageInfo imgInfo = {
-      .sampler = ar->sampler, .imageView = ar->atlas_texture->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  if (vkAllocateDescriptorSets(h->g_device, &ai, &desc) != VK_SUCCESS) {
+    log_error(LOG_SOURCE, "Descriptor allocation failed in atlas flush");
+    return;
+  }
 
-  VkWriteDescriptorSet writes[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                     .dstSet = desc,
-                                     .dstBinding = 0,
-                                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                     .descriptorCount = 1,
-                                     .pBufferInfo = &bufInfo},
-                                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                     .dstSet = desc,
-                                     .dstBinding = 1,
-                                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                     .descriptorCount = 1,
-                                     .pImageInfo = &imgInfo}};
+  VkDescriptorBufferInfo b_info = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
+  VkDescriptorImageInfo i_info = {.sampler = ar->sampler, .imageView = ar->atlas_texture->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+  VkWriteDescriptorSet writes[2] = {
+      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .pBufferInfo = &b_info},
+      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &i_info}};
   vkUpdateDescriptorSets(h->g_device, 2, writes, 0, NULL);
 
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
+
+  // Calculate the offset into the instance buffer for this specific batch
+  VkDeviceSize instance_offset = (VkDeviceSize)start_index * sizeof(atlas_instance_t);
+
   VkBuffer bufs[2] = {quad->vertex_buffer.buffer, ar->instance_buffer.buffer};
-  VkDeviceSize offs[2] = {0, 0};
+  VkDeviceSize offs[2] = {0, instance_offset}; // Bind at the correct memory location
+
   vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
   vkCmdBindIndexBuffer(cmd, quad->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0, NULL);
-  vkCmdDrawIndexed(cmd, quad->index_count, ar->instance_count, 0, 0, 0);
 
-  ar->instance_count = 0;
+  vkCmdDrawIndexed(cmd, quad->index_count, count, 0, 0, 0);
+
+  // NOTE: We do NOT reset ar->instance_count = 0 here.
+  // It is reset globally once at the start of renderer_flush_queue.
+}
+
+static int compare_render_commands(const void *a, const void *b) {
+  const render_command_t *cmd_a = (const render_command_t *)a;
+  const render_command_t *cmd_b = (const render_command_t *)b;
+  if (cmd_a->z < cmd_b->z) return -1;
+  if (cmd_a->z > cmd_b->z) return 1;
+  return 0;
+}
+
+void renderer_submit_map(struct gfx_handler_t *h, float z) {
+  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_MAP;
+  cmd->z = z;
+}
+
+void renderer_submit_skin(struct gfx_handler_t *h, float z, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet, bool custom) {
+  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_SKIN;
+  cmd->z = z;
+  glm_vec2_copy(pos, cmd->data.skin.pos);
+  cmd->data.skin.scale = scale;
+  cmd->data.skin.skin_index = skin_index;
+  cmd->data.skin.eye_state = eye_state;
+  glm_vec2_copy(dir, cmd->data.skin.dir);
+  cmd->data.skin.anim_state = *anim_state;
+  glm_vec3_copy(col_body, cmd->data.skin.col_body);
+  glm_vec3_copy(col_feet, cmd->data.skin.col_feet);
+  cmd->data.skin.custom_color = custom;
+}
+
+void renderer_submit_atlas(struct gfx_handler_t *h, struct atlas_renderer_t *ar, float z, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv, vec4 color, bool screen_space) {
+  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_ATLAS;
+  cmd->z = z;
+  cmd->data.atlas.ar = ar;
+  glm_vec2_copy(pos, cmd->data.atlas.pos);
+  glm_vec2_copy(size, cmd->data.atlas.size);
+  cmd->data.atlas.rotation = rotation;
+  cmd->data.atlas.sprite_index = sprite_index;
+  cmd->data.atlas.tile_uv = tile_uv;
+  cmd->data.atlas.screen_space = screen_space;
+  if (color) glm_vec4_copy(color, cmd->data.atlas.color);
+  else glm_vec4_fill(cmd->data.atlas.color, 1.0f);
+}
+
+void renderer_submit_rect_filled(struct gfx_handler_t *h, float z, vec2 pos, vec2 size, vec4 color) {
+  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_RECT_FILLED;
+  cmd->z = z;
+  glm_vec2_copy(pos, cmd->data.prim.p1);
+  glm_vec2_copy(size, cmd->data.prim.p2);
+  glm_vec4_copy(color, cmd->data.prim.color);
+}
+
+void renderer_submit_circle_filled(struct gfx_handler_t *h, float z, vec2 center, float radius, vec4 color, uint32_t segments) {
+  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_CIRCLE_FILLED;
+  cmd->z = z;
+  glm_vec2_copy(center, cmd->data.prim.p1);
+  cmd->data.prim.thickness = radius; // reuse thickness for radius
+  cmd->data.prim.segments = segments;
+  glm_vec4_copy(color, cmd->data.prim.color);
+}
+
+void renderer_submit_line(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec4 color, float thickness) {
+  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_LINE;
+  cmd->z = z;
+  glm_vec2_copy(p1, cmd->data.prim.p1);
+  glm_vec2_copy(p2, cmd->data.prim.p2);
+  cmd->data.prim.thickness = thickness;
+  glm_vec4_copy(color, cmd->data.prim.color);
+}
+// src/renderer/renderer.c
+
+void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
+  struct renderer_state_t *r = &h->renderer;
+  if (r->queue.count == 0) return;
+
+  qsort(r->queue.commands, r->queue.count, sizeof(render_command_t), compare_render_commands);
+
+  r->skin_renderer.instance_count = 0;
+  r->gameskin_renderer.instance_count = 0;
+  r->particle_renderer.instance_count = 0;
+  r->extras_renderer.instance_count = 0;
+  r->cursor_renderer.instance_count = 0;
+
+  struct atlas_renderer_t *active_ar = NULL;
+  bool ar_screen_space = false;
+  uint32_t batch_start_idx = 0;
+
+  for (uint32_t i = 0; i < r->queue.count; i++) {
+    render_command_t *q = &r->queue.commands[i];
+
+    // Atlas Change Detection
+    if (active_ar != NULL) {
+      if (q->type != RENDER_CMD_ATLAS || q->data.atlas.ar != active_ar || q->data.atlas.screen_space != ar_screen_space) {
+        uint32_t count = active_ar->instance_count - batch_start_idx;
+        renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
+        active_ar = NULL;
+      }
+    }
+
+    // Flush Skins if switching away
+    if (q->type != RENDER_CMD_SKIN && r->skin_renderer.instance_count > 0) {
+      renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+    }
+
+    switch (q->type) {
+    case RENDER_CMD_MAP:
+      renderer_draw_map(h);
+      break;
+
+    case RENDER_CMD_SKIN:
+      if (r->skin_renderer.instance_count >= 100000) renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+      renderer_push_skin_instance(h, q->data.skin.pos, q->data.skin.scale, q->data.skin.skin_index,
+                                  q->data.skin.eye_state, q->data.skin.dir, &q->data.skin.anim_state,
+                                  q->data.skin.col_body, q->data.skin.col_feet, q->data.skin.custom_color);
+      break;
+
+    case RENDER_CMD_ATLAS:
+      if (active_ar == NULL) {
+        active_ar = q->data.atlas.ar;
+        ar_screen_space = q->data.atlas.screen_space;
+        batch_start_idx = active_ar->instance_count;
+      }
+
+      if (active_ar->instance_count >= active_ar->max_instances) {
+        uint32_t count = active_ar->instance_count - batch_start_idx;
+        renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
+        batch_start_idx = active_ar->instance_count;
+      }
+
+      renderer_push_atlas_instance(active_ar, q->data.atlas.pos, q->data.atlas.size, q->data.atlas.rotation,
+                                   q->data.atlas.sprite_index, q->data.atlas.tile_uv, q->data.atlas.color);
+      break;
+
+    case RENDER_CMD_RECT_FILLED:
+      renderer_draw_rect_filled(h, q->data.prim.p1, q->data.prim.p2, q->data.prim.color);
+      break;
+
+    case RENDER_CMD_CIRCLE_FILLED:
+      renderer_draw_circle_filled(h, q->data.prim.p1, q->data.prim.thickness, q->data.prim.color, q->data.prim.segments);
+      break;
+
+    case RENDER_CMD_LINE:
+      renderer_draw_line(h, q->data.prim.p1, q->data.prim.p2, q->data.prim.color, q->data.prim.thickness);
+      break;
+    }
+  }
+
+  if (active_ar != NULL) {
+    uint32_t count = active_ar->instance_count - batch_start_idx;
+    renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
+  }
+
+  if (r->skin_renderer.instance_count > 0) {
+    renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+  }
+
+  r->queue.count = 0;
 }

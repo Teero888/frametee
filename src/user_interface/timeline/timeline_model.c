@@ -2,6 +2,7 @@
 #include "ddnet_physics/gamecore.h"
 #include "ddnet_physics/vmath.h"
 #include <limits.h>
+#include <particles/particle_system.h>
 #include <renderer/graphics_backend.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,25 @@
 static void v_init(physics_v_t *t);
 static void v_destroy(physics_v_t *t);
 static void v_push(physics_v_t *t, SWorldCore *world);
+
+static void ui_particle_callback(mvec2 pos, int type, void *user_data) {
+  ui_handler_t *ui = (ui_handler_t *)user_data;
+  vec2 p = {vgetx(pos), vgety(pos)};
+
+  vec2 zero_vel = {0, -1};
+  float default_alpha = 1.0f;
+  float time_passed = 0.0f;
+  int dummy_client_id = -1;
+
+  if (type == PARTICLE_TYPE_SMOKE) particles_create_smoke(&ui->particle_system, p, zero_vel, default_alpha, time_passed);
+  else if (type == PARTICLE_TYPE_PLAYER_SPAWN) particles_create_player_spawn(&ui->particle_system, p, default_alpha);
+  else if (type == PARTICLE_TYPE_PLAYER_DEATH) particles_create_player_death(&ui->particle_system, p, dummy_client_id, default_alpha);
+  else if (type == PARTICLE_TYPE_AIR_JUMP) particles_create_air_jump(&ui->particle_system, p, default_alpha);
+  else if (type == PARTICLE_TYPE_BULLET_TRAIL) particles_create_bullet_trail(&ui->particle_system, p, default_alpha, time_passed);
+  else if (type == PARTICLE_TYPE_BULLET_STARS) particles_create_star(&ui->particle_system, p);
+  else if (type == PARTICLE_TYPE_EXPLOSION) particles_create_explosion(&ui->particle_system, p);
+  else if (type == PARTICLE_TYPE_HAMMER_HIT) particles_create_hammer_hit(&ui->particle_system, p, default_alpha);
+}
 
 // New sorting helper for the compaction algorithm
 static int compare_snippets_by_start_tick_p(const void *a, const void *b) {
@@ -558,11 +578,7 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
       player_track_t *track = &ts->player_tracks[i];
       if (i != ts->selected_player_track_index && !track->is_dummy) continue;
       input_snippet_t *active_rec_snip = NULL;
-
-      if (track->recording_snippet_count > 0) {
-        active_rec_snip = &track->recording_snippets[track->recording_snippet_count - 1];
-      }
-
+      if (track->recording_snippet_count > 0) active_rec_snip = &track->recording_snippets[track->recording_snippet_count - 1];
       if (active_rec_snip) {
         // Calculate where the current tick is relative to the start of the snippet
         int relative_tick = ts->current_tick - active_rec_snip->start_tick;
@@ -602,32 +618,57 @@ void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_i
   model_recalc_physics(ts, target_snippet->start_tick);
 }
 
-void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *out_world) {
+void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *out_world, bool effects) {
   const int step = 50;
+  particle_system_t *ps = &ts->ui->particle_system;
 
-  if (tick < ts->previous_world.m_GameTick) {
+  // Jump or Rewind Logic
+  if (tick < ts->previous_world.m_GameTick || (tick - ts->previous_world.m_GameTick) > 100) {
     int base_index = imin((tick - 1) / step, ts->vec.current_size - 1);
     if (base_index < 0) base_index = 0;
     wc_copy_world(out_world, &ts->vec.data[base_index]);
+
+    if (effects) {
+      double snapshot_time = (double)out_world->m_GameTick / 50.0;
+      particle_system_prune_by_time(ps, snapshot_time);
+    }
   } else {
     wc_copy_world(out_world, &ts->previous_world);
   }
 
+  out_world->user_data = ts->ui;
+
   while (out_world->m_GameTick < tick) {
+    int current_sim_tick = out_world->m_GameTick;
+
+    bool is_new_logic_tick = (effects && current_sim_tick > ps->last_simulated_tick);
+
+    if (is_new_logic_tick) {
+      out_world->particle = ui_particle_callback;
+      ps->current_time = (double)current_sim_tick / 50.0;
+      srand(current_sim_tick);
+    } else {
+      out_world->particle = NULL;
+    }
+
     for (int p = 0; p < out_world->m_NumCharacters; ++p) {
-      SPlayerInput input = model_get_input_at_tick(ts, p, out_world->m_GameTick);
+      SPlayerInput input = model_get_input_at_tick(ts, p, current_sim_tick);
       cc_on_input(&out_world->m_pCharacters[p], &input);
     }
+
     wc_tick(out_world);
+
+    if (is_new_logic_tick)
+      ps->last_simulated_tick = current_sim_tick;
+
     if (out_world->m_GameTick % step == 0) {
       int cache_index = out_world->m_GameTick / step;
-      if ((uint32_t)cache_index >= ts->vec.current_size) {
-        v_push(&ts->vec, out_world);
-      } else {
-        wc_copy_world(&ts->vec.data[cache_index], out_world);
-      }
+      if ((uint32_t)cache_index >= ts->vec.current_size) v_push(&ts->vec, out_world);
+      else wc_copy_world(&ts->vec.data[cache_index], out_world);
     }
   }
+
+  out_world->particle = NULL;
   wc_copy_world(&ts->previous_world, out_world);
 }
 

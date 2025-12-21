@@ -104,7 +104,7 @@ void render_player_info(gfx_handler_t *h) {
 
       if (igButton("Take from Current State", (ImVec2){0})) {
         SWorldCore world = wc_empty();
-        model_get_world_state_at_tick(ts, ts->current_tick, &world);
+        model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
         if (ts->selected_player_track_index < world.m_NumCharacters) {
           SCharacterCore *chr = &world.m_pCharacters[ts->selected_player_track_index];
           sc->position[0] = vgetx(chr->m_Pos);

@@ -5,7 +5,7 @@ layout(location = 1) in vec4 inColor;
 
 layout(location = 0) out vec4 fragColor;
 
-layout(binding = 0) uniform PrimitiveUBO {
+layout(std140, binding = 0) uniform PrimitiveUBO {
   vec2 camPos;      // camera center, in normalized map coords
   float zoom;       // camera zoom
   float aspect;     // window_ratio / map_ratio

@@ -175,9 +175,10 @@ int round_to_int(float f) {
   else return (int)(f - 0.5f);
 }
 
-static void on_hammer_hit(mvec2 pos, void *data) {
+static void on_hammer_hit(mvec2 pos, int type, void *data) {
   demo_exporter_t *exporter = data;
-  if (exporter->num_hammerhits < MAX_HAMMERHITS_PER_TICK) exporter->hammerhits[exporter->num_hammerhits++] = pos;
+  if (type == PARTICLE_TYPE_HAMMER_HIT)
+    if (exporter->num_hammerhits < MAX_HAMMERHITS_PER_TICK) exporter->hammerhits[exporter->num_hammerhits++] = pos;
 }
 
 static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, SWorldCore *cur) {
@@ -491,10 +492,10 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
   SWorldCore cur = wc_empty();
 
   // get initial worlds
-  model_get_world_state_at_tick(&ui->timeline, 0, &cur);
+  model_get_world_state_at_tick(&ui->timeline, 0, &cur, false);
   wc_copy_world(&prev, &cur);
   cur.user_data = &ui->demo_exporter;
-  cur.eff_hammer = on_hammer_hit;
+  cur.particle = on_hammer_hit;
 
   for (int t = 0; t < ticks; ++t) {
     demo_sb_clear(sb);

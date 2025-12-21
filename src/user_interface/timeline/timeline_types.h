@@ -172,6 +172,7 @@ struct timeline_state {
   net_event_t *net_events;
   int net_event_count;
   int net_event_capacity;
+  int last_event_scan_tick;
 
   // Interaction State
   snippet_id_vector_t selected_snippets;
