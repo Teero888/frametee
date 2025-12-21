@@ -74,7 +74,7 @@ void particles_create_explosion(particle_system_t *ps, vec2 pos);
 void particles_create_smoke(particle_system_t *ps, vec2 pos, vec2 vel, float alpha, float time_passed);
 void particles_create_skid_trail(particle_system_t *ps, vec2 pos, vec2 vel, int direction, float alpha);
 void particles_create_bullet_trail(particle_system_t *ps, vec2 pos, float alpha, float time_passed);
-void particles_create_player_death(particle_system_t *ps, vec2 pos, int client_id, float alpha);
+void particles_create_player_death(particle_system_t *ps, vec2 pos, vec4 blood_color);
 void particles_create_star(particle_system_t *ps, vec2 pos);
 void particles_create_hammer_hit(particle_system_t *ps, vec2 pos, float alpha);
 void particles_create_air_jump(particle_system_t *ps, vec2 pos, float alpha);

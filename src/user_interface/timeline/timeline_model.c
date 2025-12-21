@@ -1,12 +1,14 @@
 #include "timeline_model.h"
 #include "ddnet_physics/gamecore.h"
 #include "ddnet_physics/vmath.h"
+#include "logger/logger.h"
 #include <limits.h>
 #include <particles/particle_system.h>
 #include <renderer/graphics_backend.h>
 #include <stdlib.h>
 #include <string.h>
 #include <user_interface/user_interface.h>
+#include <user_interface/widgets/hsl_colorpicker.h>
 
 #define DEFAULT_TRACK_HEIGHT 60.f
 
@@ -15,19 +17,24 @@ static void v_init(physics_v_t *t);
 static void v_destroy(physics_v_t *t);
 static void v_push(physics_v_t *t, SWorldCore *world);
 
-static void ui_particle_callback(mvec2 pos, int type, void *user_data) {
+static void ui_particle_callback(mvec2 pos, int type, int cid, void *user_data) {
   ui_handler_t *ui = (ui_handler_t *)user_data;
   vec2 p = {vgetx(pos), vgety(pos)};
 
   vec2 zero_vel = {0, -1};
   float default_alpha = 1.0f;
   float time_passed = 0.0f;
-  int dummy_client_id = -1;
 
   if (type == PARTICLE_TYPE_SMOKE) particles_create_smoke(&ui->particle_system, p, zero_vel, default_alpha, time_passed);
   else if (type == PARTICLE_TYPE_PLAYER_SPAWN) particles_create_player_spawn(&ui->particle_system, p, default_alpha);
-  else if (type == PARTICLE_TYPE_PLAYER_DEATH) particles_create_player_death(&ui->particle_system, p, dummy_client_id, default_alpha);
-  else if (type == PARTICLE_TYPE_AIR_JUMP) particles_create_air_jump(&ui->particle_system, p, default_alpha);
+  else if (type == PARTICLE_TYPE_PLAYER_DEATH) {
+    // TODO: the coloring is different on ddnet i can't figure it out
+    // TODO: this is also buggy since we don't re-push color when the player color changes
+    vec4 col = {1, 1, 1, 1};
+    if (ui->timeline.player_tracks[cid].player_info.use_custom_color)
+      packed_hsl_to_rgb(ui->timeline.player_tracks[cid].player_info.color_body, col);
+    particles_create_player_death(&ui->particle_system, p, col);
+  } else if (type == PARTICLE_TYPE_AIR_JUMP) particles_create_air_jump(&ui->particle_system, p, default_alpha);
   else if (type == PARTICLE_TYPE_BULLET_TRAIL) particles_create_bullet_trail(&ui->particle_system, p, default_alpha, time_passed);
   else if (type == PARTICLE_TYPE_BULLET_STARS) particles_create_star(&ui->particle_system, p);
   else if (type == PARTICLE_TYPE_EXPLOSION) particles_create_explosion(&ui->particle_system, p);
@@ -657,6 +664,18 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
     }
 
     wc_tick(out_world);
+
+    // other effects
+    if (effects) {
+      if (out_world->m_GameTick % 5 == 0)
+        for (int p = 0; p < out_world->m_NumCharacters; ++p) {
+          SCharacterCore *core = &out_world->m_pCharacters[p];
+          if (core->m_FreezeTime > 0) {
+            vec2 p = {vgetx(core->m_Pos), vgety(core->m_Pos)};
+            particles_create_freezing_flakes(ps, p, (vec2){32.0f, 32.0f}, 1.0f);
+          }
+        }
+    }
 
     if (is_new_logic_tick)
       ps->last_simulated_tick = current_sim_tick;

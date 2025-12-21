@@ -1,4 +1,5 @@
 #include "particle_system.h"
+#include "renderer/renderer.h"
 #include <ddnet_physics/collision.h>
 #include <logger/logger.h>
 #include <math.h>
@@ -163,7 +164,7 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
   for (int i = 0; i < MAX_PARTICLES; ++i) {
     particle_t *p = &ps->particles[i];
     if (p->life_span <= 0.0001f) continue;
-
+    if (p->spawn_time >= ps->current_time) continue;
     bool group_match = false;
     for (int g = 0; g < count; ++g)
       if (p->group == groups[g]) {
@@ -320,9 +321,7 @@ void particles_create_bullet_trail(particle_system_t *ps, vec2 pos, float alpha,
   particle_spawn(ps, GROUP_PROJECTILE_TRAIL, &p, time_passed);
 }
 
-void particles_create_player_death(particle_system_t *ps, vec2 pos, int client_id, float alpha) {
-  (void)client_id;
-  vec4 blood_color = {1, 1, 1, 1};
+void particles_create_player_death(particle_system_t *ps, vec2 pos, vec4 blood_color) {
   for (int i = 0; i < 64; ++i) {
     particle_t p = {0};
     glm_vec2_copy(pos, p.start_pos);
@@ -344,7 +343,7 @@ void particles_create_player_death(particle_system_t *ps, vec2 pos, int client_i
     p.color[0] = blood_color[0] * t;
     p.color[1] = blood_color[1] * t;
     p.color[2] = blood_color[2] * t;
-    p.color[3] = 0.75f * alpha;
+    p.color[3] = 0.75f * blood_color[3];
     particle_spawn(ps, GROUP_GENERAL, &p, 0);
   }
 }
@@ -462,7 +461,7 @@ void particles_create_freezing_flakes(particle_system_t *ps, vec2 pos, vec2 size
   p.start_size = frand_range(8, 24);
   p.end_size = p.start_size * 0.5f;
   p.use_alpha_fading = true;
-  p.start_alpha = 1.0;
+  p.start_alpha = alpha;
   p.end_alpha = 0.0;
   p.rot = frand01() * 2 * M_PI;
   p.rot_speed = M_PI;

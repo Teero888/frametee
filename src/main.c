@@ -56,12 +56,9 @@ int main(void) {
     renderer_submit_map(&handler, Z_LAYER_MAP);
     render_pickups(&handler.user_interface);
     render_players(&handler.user_interface);
-
     particle_system_render(&handler.user_interface.particle_system, &handler, 0);
     particle_system_render(&handler.user_interface.particle_system, &handler, 1);
-
     render_cursor(&handler.user_interface);
-
     renderer_flush_queue(&handler, handler.current_frame_command_buffer);
 
     ui_render(&handler.user_interface);

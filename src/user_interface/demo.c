@@ -24,8 +24,8 @@ typedef struct {
   uint32_t state[8];
 } SHA256_CTX;
 
-#define DBL_INT_ADD(a, b, c)                                                                                                                         \
-  if (a > 0xffffffff - (c)) ++b;                                                                                                                     \
+#define DBL_INT_ADD(a, b, c)     \
+  if (a > 0xffffffff - (c)) ++b; \
   a += c;
 #define ROTLEFT(a, b) (((a) << (b)) | ((a) >> (32 - (b))))
 #define ROTRIGHT(a, b) (((a) >> (b)) | ((a) << (32 - (b))))
@@ -175,7 +175,7 @@ int round_to_int(float f) {
   else return (int)(f - 0.5f);
 }
 
-static void on_hammer_hit(mvec2 pos, int type, void *data) {
+static void on_hammer_hit(mvec2 pos, int type, int cid, void *data) {
   demo_exporter_t *exporter = data;
   if (type == PARTICLE_TYPE_HAMMER_HIT)
     if (exporter->num_hammerhits < MAX_HAMMERHITS_PER_TICK) exporter->hammerhits[exporter->num_hammerhits++] = pos;
@@ -310,7 +310,8 @@ static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore
     dc->m_NinjaActivationTick = c_cur->m_Ninja.m_ActivationTick;
 
     dc->m_FreezeStart = c_cur->m_FreezeStart;
-    dc->m_FreezeEnd = c_cur->m_DeepFrozen ? -1 : c_cur->m_FreezeTime == 0 ? 0 : cur->m_GameTick + c_cur->m_FreezeTime;
+    dc->m_FreezeEnd = c_cur->m_DeepFrozen ? -1 : c_cur->m_FreezeTime == 0 ? 0
+                                                                          : cur->m_GameTick + c_cur->m_FreezeTime;
 
     if (c_cur->m_IsInFreeze) {
       dc->m_Flags |= DD_CHARACTERFLAG_IN_FREEZE;
