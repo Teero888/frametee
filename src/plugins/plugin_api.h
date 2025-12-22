@@ -33,7 +33,7 @@ struct tas_api_t {
   void (*register_undo_command)(struct undo_command_t *command);
 
   // Debug Drawing API
-  void (*draw_line_world)(vec2 start, vec2 end, vec4 color, float thickness);
+  void (*draw_line_world)(vec2 start, vec2 end, float z, vec4 color, float thickness);
   void (*draw_circle_world)(vec2 center, float radius, vec4 color);
   void (*draw_text_world)(vec2 pos, const char *text, vec4 color);
 

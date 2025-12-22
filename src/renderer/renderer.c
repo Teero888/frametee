@@ -1583,6 +1583,7 @@ void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4
   renderer->primitive_vertex_count += 4;
   renderer->primitive_index_count += 6;
 }
+
 void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color, uint32_t segments) {
   renderer_state_t *renderer = &handler->renderer;
   if (segments < 3) segments = 3;
@@ -2367,6 +2368,14 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   for (uint32_t i = 0; i < r->queue.count; i++) {
     render_command_t *q = &r->queue.commands[i];
 
+    // If the next command is NOT a primitive, and we have primitives pending, flush them now
+    if (q->type != RENDER_CMD_RECT_FILLED &&
+        q->type != RENDER_CMD_CIRCLE_FILLED &&
+        q->type != RENDER_CMD_LINE &&
+        r->primitive_index_count > 0) {
+      flush_primitives(h, cmd);
+    }
+
     // Atlas Change Detection
     if (active_ar != NULL) {
       if (q->type != RENDER_CMD_ATLAS || q->data.atlas.ar != active_ar || q->data.atlas.screen_space != ar_screen_space) {
@@ -2428,10 +2437,11 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     uint32_t count = active_ar->instance_count - batch_start_idx;
     renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
   }
-
-  if (r->skin_renderer.instance_count > 0) {
+  if (r->skin_renderer.instance_count > 0)
     renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
-  }
+
+  if (r->primitive_index_count > 0)
+    flush_primitives(h, cmd);
 
   r->queue.count = 0;
 }

@@ -3,6 +3,7 @@
 #include "../renderer/graphics_backend.h"
 #include "../user_interface/timeline/timeline_commands.h"
 #include "../user_interface/timeline/timeline_model.h"
+#include "renderer/renderer.h"
 #include <ddnet_physics/gamecore.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,8 +76,8 @@ static void api_register_undo_command(struct undo_command_t *command) {
   }
 }
 
-static void api_draw_line_world(vec2 start, vec2 end, vec4 color, float thickness) {
-  renderer_draw_line(g_ui_handler_for_api->gfx_handler, start, end, color, thickness);
+static void api_draw_line_world(vec2 start, vec2 end, float z, vec4 color, float thickness) {
+  renderer_submit_line(g_ui_handler_for_api->gfx_handler, z, start, end, color, thickness);
 }
 
 tas_api_t api_init(ui_handler_t *ui_handler) {

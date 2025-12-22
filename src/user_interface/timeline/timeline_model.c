@@ -1,7 +1,7 @@
 #include "timeline_model.h"
+#include "ddnet_physics/collision.h"
 #include "ddnet_physics/gamecore.h"
 #include "ddnet_physics/vmath.h"
-#include "logger/logger.h"
 #include <limits.h>
 #include <particles/particle_system.h>
 #include <renderer/graphics_backend.h>
@@ -667,7 +667,7 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
 
     // other effects
     if (effects) {
-      if (out_world->m_GameTick % 5 == 0)
+      if (out_world->m_GameTick % 5 == 0) {
         for (int p = 0; p < out_world->m_NumCharacters; ++p) {
           SCharacterCore *core = &out_world->m_pCharacters[p];
           if (core->m_FreezeTime > 0) {
@@ -675,6 +675,14 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
             particles_create_freezing_flakes(ps, p, (vec2){32.0f, 32.0f}, 1.0f);
           }
         }
+      }
+      for (int p = 0; p < ts->ui->num_pickups; ++p) {
+        SPickup pick = ts->ui->pickups[p];
+        if (pick.m_Type == POWERUP_NINJA) {
+          vec2 pos = {vgetx(ts->ui->pickup_positions[p]), vgety(ts->ui->pickup_positions[p])};
+          particles_create_powerup_shine(ps, pos, (vec2){96, 18}, 1.0f);
+        }
+      }
     }
 
     if (is_new_logic_tick)

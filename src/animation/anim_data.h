@@ -1,7 +1,6 @@
 #ifndef ANIM_DATA_H
 #define ANIM_DATA_H
 
-#include "anim_system.h"
 #include "cglm/types.h"
 #include <ddnet_physics/gamecore.h>
 #include <types.h>

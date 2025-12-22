@@ -34,6 +34,7 @@
 #define Z_LAYER_SKINS 6.f
 #define Z_LAYER_MAP 7.f
 #define Z_LAYER_PARTICLES_FRONT 8.0f
+#define Z_LAYER_PREDICTION_LINES 9.0f
 #define Z_LAYER_CURSOR 100.0f
 
 struct buffer_t {
@@ -291,11 +292,6 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
 void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
 void renderer_draw_map(gfx_handler_t *h);
-
-// primitive drawing api
-void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4 color);
-void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color, uint32_t segments);
-void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness);
 
 texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas, uint32_t tile_width, uint32_t tile_height, uint32_t num_tiles_x, uint32_t num_tiles_y);
 void screen_to_world(gfx_handler_t *handler, float screen_x, float screen_y, float *world_x, float *world_y);

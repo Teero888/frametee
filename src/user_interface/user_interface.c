@@ -449,12 +449,15 @@ void render_players(ui_handler_t *ui) {
   physics_handler_t *ph = &gfx->physics_handler;
   if (!ph->loaded) return;
 
+  SWorldCore prev_world = wc_empty();
   SWorldCore world = wc_empty();
 
   // Get the world state at the current tick. The model handles caching internally.
+  model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick - 1, &prev_world, true);
   model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world, true);
 
   if (ui->timeline.player_track_count != world.m_NumCharacters) {
+    wc_free(&prev_world);
     wc_free(&world);
     return;
   }
@@ -492,6 +495,8 @@ void render_players(ui_handler_t *ui) {
     bool inactive = get_flag_sit(&core->m_Input);
     bool in_air = !(core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) ||
                   !(check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16)));
+    float attack_ticks_passed = (world.m_GameTick - core->m_AttackTick) + intra;
+    float last_attack_time = attack_ticks_passed / (float)GAME_TICK_SPEED;
 
     float walk_time = fmod(p[0] * 32.f, 100.0f) / 100.0f;
     float run_time = fmod(p[0] * 32.f, 200.0f) / 200.0f;
@@ -506,6 +511,10 @@ void render_players(ui_handler_t *ui) {
       if (running) anim_state_add(&anim_state, vgetx(core->m_Vel) < 0.0f ? &anim_run_left : &anim_run_right, run_time, 1.0f);
       else anim_state_add(&anim_state, &anim_walk, walk_time, 1.0f);
     }
+    if (core->m_ActiveWeapon == WEAPON_HAMMER)
+      anim_state_add(&anim_state, &anim_hammer_swing, last_attack_time * 5.f, 1.0f);
+    if (core->m_ActiveWeapon == WEAPON_NINJA)
+      anim_state_add(&anim_state, &anim_ninja_swing, last_attack_time * 2.f, 1.0f);
 
     vec2 dir;
     if (ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
@@ -554,10 +563,10 @@ void render_players(ui_handler_t *ui) {
       vec2 p3 = {min_pos[0] + 2.0f, min_pos[1] + 2.0f};
       vec2 p4 = {min_pos[0], min_pos[1] + 2.0f};
 
-      renderer_draw_line(gfx, p1, p2, red_col, 0.05f);
-      renderer_draw_line(gfx, p2, p3, red_col, 0.05f);
-      renderer_draw_line(gfx, p3, p4, red_col, 0.05f);
-      renderer_draw_line(gfx, p4, p1, red_col, 0.05f);
+      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p1, p2, red_col, 0.05f);
+      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p2, p3, red_col, 0.05f);
+      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p3, p4, red_col, 0.05f);
+      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p4, p1, red_col, 0.05f);
     }
 
     // render hook
@@ -597,9 +606,7 @@ void render_players(ui_handler_t *ui) {
     }
     if (!core->m_FreezeTime && core->m_ActiveWeapon < NUM_WEAPONS) {
       const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
-      float fire_delay_ticks = spec->firedelay * (float)GAME_TICK_SPEED / 1000.0f;
-      float attack_ticks_passed = (world.m_GameTick - core->m_AttackTick) + intra;
-      float last_attack_time = attack_ticks_passed / (float)GAME_TICK_SPEED;
+      float fire_delay_ticks = (spec->firedelay / 1000.f) * (float)GAME_TICK_SPEED;
       float aim_angle = atan2f(-dir[1], dir[0]);
 
       bool is_sit = inactive && !in_air && stationary;
@@ -628,7 +635,6 @@ void render_players(ui_handler_t *ui) {
         if (is_sit) weapon_pos[1] += 3.0f;
 
         if (!inactive) {
-          anim_state_add(&anim_state, &anim_hammer_swing, last_attack_time * 5.f, 1.0f);
           anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
           weapon_angle = M_PI / 2.0f - flip_factor * anim_attach_angle_rad;
         } else {
@@ -640,17 +646,15 @@ void render_players(ui_handler_t *ui) {
         if (is_sit) weapon_pos[1] += 3.0f;
         if (dir[0] < 0.0f) weapon_pos[0] -= spec->offsetx;
 
-        if (attack_ticks_passed <= fire_delay_ticks) {
-          anim_state_add(&anim_state, &anim_ninja_swing, last_attack_time * 2.f, 1.0f);
-        }
-
         anim_attach_angle_rad = anim_state.attach.angle * (2.0f * M_PI);
         weapon_angle = -M_PI / 2.0f + flip_factor * anim_attach_angle_rad;
 
         float attack_time_sec = attack_ticks_passed / (float)GAME_TICK_SPEED;
         if (attack_time_sec <= 1.0f / 6.0f && spec->num_muzzles > 0) {
+          SCharacterCore *prev_core = &prev_world.m_pCharacters[i];
+
           int muzzle_idx = world.m_GameTick % spec->num_muzzles;
-          vec2 hadoken_dir = {vgetx(core->m_Vel), vgety(core->m_Vel)};
+          vec2 hadoken_dir = {vgetx(core->m_Pos) - vgetx(prev_core->m_Pos), vgety(core->m_Pos) - vgety(prev_core->m_Pos)};
           if (glm_vec2_norm2(hadoken_dir) < 0.0001f) {
             hadoken_dir[0] = 1.0f;
             hadoken_dir[1] = 0.0f;
@@ -770,8 +774,8 @@ void render_players(ui_handler_t *ui) {
     vec4 lsr_col = {0.f, 0.f, 1.f, 0.9f};
     vec4 sg_col = {0.570315f, 0.4140625f, 025.f, 0.9f};
 
-    renderer_draw_line(gfx, p0, p1, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 0.25f);
-    renderer_draw_circle_filled(gfx, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);
+    renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p0, p1, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 0.25f);
+    renderer_submit_circle_filled(gfx, Z_LAYER_PREDICTION_LINES, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);
   }
 
   if (ui->timeline.selected_player_track_index >= 0) {
@@ -790,6 +794,7 @@ void render_players(ui_handler_t *ui) {
   }
 
   if (ui->timeline.selected_player_track_index < 0 || !ui->show_prediction) {
+    wc_free(&prev_world);
     wc_free(&world);
     return;
   }
@@ -803,7 +808,7 @@ void render_players(ui_handler_t *ui) {
     vec4 color = {[3] = 0.8f};
     if (core->m_FreezeTime > 0) color[0] = 1.f;
     else color[1] = 1.f;
-    renderer_draw_line(gfx, pp, p, color, 0.05);
+    renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05);
   }
 
   // draw the rest of the lines
@@ -835,7 +840,7 @@ void render_players(ui_handler_t *ui) {
       }
 
       vec4 color = {1.0f, 0.5f, 0.5f, 0.8f};
-      renderer_draw_line(gfx, pp, p, color, 0.05f);
+      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05f);
     }
 
     for (SLaser *ent = (SLaser *)world.m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent; ent = (SLaser *)ent->m_Base.m_pNextTypeEntity) {
@@ -843,7 +848,7 @@ void render_players(ui_handler_t *ui) {
       vec2 p0 = {vgetx(ent->m_From) / 32.f, vgety(ent->m_From) / 32.f};
 
       vec4 color = {0.5f, 0.5f, 1.0f, 0.8f};
-      renderer_draw_line(gfx, p0, p1, color, 0.05f);
+      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p0, p1, color, 0.05f);
     }
 
     wc_tick(&world);
@@ -855,9 +860,10 @@ void render_players(ui_handler_t *ui) {
       vec4 color = {[3] = 0.8f};
       if (core->m_FreezeTime > 0) color[0] = 1.f;
       else color[1] = 1.f;
-      renderer_draw_line(gfx, pp, p, color, 0.05);
+      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05);
     }
   }
+  wc_free(&prev_world);
   wc_free(&world);
 }
 

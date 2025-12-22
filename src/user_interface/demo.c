@@ -2,7 +2,6 @@
 #include "ddnet_physics/vmath.h"
 #include "nfd.h"
 #include "timeline/timeline_model.h"
-#include "user_interface.h"
 #include <ddnet_physics/collision.h>
 #include <ddnet_physics/gamecore.h>
 #include <logger/logger.h>
@@ -176,6 +175,7 @@ int round_to_int(float f) {
 }
 
 static void on_hammer_hit(mvec2 pos, int type, int cid, void *data) {
+  (void)cid;
   demo_exporter_t *exporter = data;
   if (type == PARTICLE_TYPE_HAMMER_HIT)
     if (exporter->num_hammerhits < MAX_HAMMERHITS_PER_TICK) exporter->hammerhits[exporter->num_hammerhits++] = pos;
