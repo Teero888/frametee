@@ -533,11 +533,12 @@ void render_players(ui_handler_t *ui) {
     vec3 body_col = {0.0f, 0.0f, 0.0f};
     bool custom_col = info->use_custom_color;
 
-    if (core->m_FreezeTime > 0) {
+    if (core->m_FreezeTime > 0 || core->m_ActiveWeapon == WEAPON_NINJA) {
       skin = gfx->x_ninja_skin;
-      if (eye == 0) eye = EYE_BLINK;
+      if (core->m_FreezeTime > 0 && eye == 0) eye = EYE_BLINK;
       custom_col = false;
     }
+
     if (custom_col) {
       packed_hsl_to_rgb(info->color_body, body_col);
       packed_hsl_to_rgb(info->color_feet, feet_col);
@@ -808,6 +809,21 @@ void render_players(ui_handler_t *ui) {
     if (core->m_FreezeTime > 0) color[0] = 1.f;
     else color[1] = 1.f;
     renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05);
+  }
+
+  for (SProjectile *ent = (SProjectile *)world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
+       ent = (SProjectile *)ent->m_Base.m_pNextTypeEntity) {
+    float pt = (world.m_GameTick - ent->m_StartTick - 1) / (float)GAME_TICK_SPEED;
+    float ct = (world.m_GameTick - ent->m_StartTick) / (float)GAME_TICK_SPEED;
+    mvec2 prev_pos = prj_get_pos(ent, pt);
+    mvec2 cur_pos = prj_get_pos(ent, ct);
+    vec2 ppp = {vgetx(prev_pos) / 32.f, vgety(prev_pos) / 32.f};
+    vec2 pp = {vgetx(cur_pos) / 32.f, vgety(cur_pos) / 32.f};
+    vec2 p;
+    lerp(ppp, pp, intra, p);
+
+    vec4 color = {1.0f, 0.5f, 0.5f, 0.8f};
+    renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05f);
   }
 
   // draw the rest of the lines

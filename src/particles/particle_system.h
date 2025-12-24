@@ -43,6 +43,7 @@ typedef struct {
 
   int group;
   uint32_t seed;
+  int creation_tick;
 } particle_t;
 
 typedef struct {
@@ -50,6 +51,7 @@ typedef struct {
   vec2 pos;
   float strength;
   bool active;
+  int creation_tick;
 } flow_event_t;
 
 typedef struct {

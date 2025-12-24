@@ -41,21 +41,41 @@ void particle_system_init(particle_system_t *ps) {
 }
 
 void particle_system_prune_by_time(particle_system_t *ps, double min_time) {
-  // Use a small epsilon to protect particles spawned in the current tick
-  for (int i = 0; i < MAX_PARTICLES; ++i) {
-    if (ps->particles[i].life_span > 0.0001f && ps->particles[i].spawn_time > min_time + 0.001) {
-      memset(&ps->particles[i], 0, sizeof(particle_t));
-    }
-  }
-  for (int i = 0; i < MAX_FLOW_EVENTS; ++i) {
-    if (ps->flow_events[i].active && ps->flow_events[i].time > min_time + 0.001) {
-      memset(&ps->flow_events[i], 0, sizeof(flow_event_t));
-    }
-  }
-
   int target_tick = (int)(min_time * 50.0 + 0.1);
+
+  // Compact particles
+  int valid_count = 0;
+  for (int i = 0; i < MAX_PARTICLES; ++i) {
+    if (ps->particles[i].life_span > 0.0001f && ps->particles[i].creation_tick <= target_tick) {
+      if (i != valid_count) {
+        ps->particles[valid_count] = ps->particles[i];
+      }
+      valid_count++;
+    }
+  }
+  // Clear the rest
+  if (valid_count < MAX_PARTICLES) {
+    memset(&ps->particles[valid_count], 0, (MAX_PARTICLES - valid_count) * sizeof(particle_t));
+  }
+  ps->next_index = valid_count % MAX_PARTICLES;
+
+  // Compact flow events
+  int valid_flow = 0;
+  for (int i = 0; i < MAX_FLOW_EVENTS; ++i) {
+    if (ps->flow_events[i].active && ps->flow_events[i].creation_tick <= target_tick) {
+      if (i != valid_flow) {
+        ps->flow_events[valid_flow] = ps->flow_events[i];
+      }
+      valid_flow++;
+    }
+  }
+  if (valid_flow < MAX_FLOW_EVENTS) {
+    memset(&ps->flow_events[valid_flow], 0, (MAX_FLOW_EVENTS - valid_flow) * sizeof(flow_event_t));
+  }
+  ps->next_flow_index = valid_flow % MAX_FLOW_EVENTS;
+
   if (target_tick < ps->last_simulated_tick) {
-    ps->last_simulated_tick = target_tick - 1;
+    ps->last_simulated_tick = target_tick;
   }
 }
 
@@ -73,6 +93,7 @@ void particle_spawn(particle_system_t *ps, int group, particle_t *p_template, fl
   p->group = group;
   // Initialize deterministic seed for this particle
   p->seed = ps->rng_seed;
+  p->creation_tick = current_tick;
   ps_frand01(ps); // Advance the generator
 
   glm_vec2_copy(p_template->start_pos, p->start_pos);
@@ -85,6 +106,7 @@ static void flow_add(particle_system_t *ps, vec2 pos, float strength) {
   ps->flow_events[id].active = true;
   ps->flow_events[id].time = ps->current_time;
   ps->flow_events[id].strength = strength;
+  ps->flow_events[id].creation_tick = (int)(ps->current_time * 50.0 + 0.1);
   glm_vec2_copy(pos, ps->flow_events[id].pos);
 }
 

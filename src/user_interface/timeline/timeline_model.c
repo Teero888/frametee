@@ -666,7 +666,7 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
     wc_tick(out_world);
 
     // other effects
-    if (effects) {
+    if (is_new_logic_tick) {
       if (out_world->m_GameTick % 5 == 0) {
         for (int p = 0; p < out_world->m_NumCharacters; ++p) {
           SCharacterCore *core = &out_world->m_pCharacters[p];
