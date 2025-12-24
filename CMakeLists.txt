@@ -120,6 +120,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     CIMGUI_DEFINE_ENUMS_AND_STRUCTS=1
     CIMGUI_USE_GLFW=1
     CIMGUI_USE_VULKAN=1
+    # APP_USE_VULKAN_DEBUG_REPORT=1
 )
 
 # add and link libs

@@ -220,8 +220,8 @@ int init_gfx_handler(gfx_handler_t *handler) {
 
   int fb_width, fb_height;
   glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
-  handler->viewport[0] = fb_width;
-  handler->viewport[1] = fb_height;
+  handler->viewport[0] = (float)fb_width;
+  handler->viewport[1] = (float)fb_height;
 
   // initialize offscreen target to match the viewport size
   if (init_offscreen_resources(handler, (uint32_t)fb_width, (uint32_t)fb_height) != 0) {
@@ -266,6 +266,8 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
     int fb_width, fb_height;
     glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
+    handler->viewport[0] = (float)fb_width;
+    handler->viewport[1] = (float)fb_height;
     recreate_offscreen_if_needed(handler, (uint32_t)fb_width, (uint32_t)fb_height);
   }
 

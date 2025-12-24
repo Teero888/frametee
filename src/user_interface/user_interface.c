@@ -569,13 +569,14 @@ void render_players(ui_handler_t *ui) {
       renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p4, p1, red_col, 0.05f);
     }
 
+    SCharacterCore *prev_core = &prev_world.m_pCharacters[i];
     // render hook
     if (core->m_HookState >= 1) {
 
       // do interpolation
       vec2 hook_pos;
       {
-        vec2 __ = {vgetx(core->m_PrevHookPos) / 32.f, vgety(core->m_PrevHookPos) / 32.f};
+        vec2 __ = {vgetx(prev_core->m_HookPos) / 32.f, vgety(prev_core->m_HookPos) / 32.f};
         vec2 _ = {vgetx(core->m_HookPos) / 32.f, vgety(core->m_HookPos) / 32.f};
         if (core->m_HookedPlayer != -1) {
           SCharacterCore *hooked = &world.m_pCharacters[core->m_HookedPlayer];
@@ -595,9 +596,9 @@ void render_players(ui_handler_t *ui) {
 
       if (length > 0) {
         vec2 center_pos;
-        center_pos[0] = p[0] + direction[0] * (length - 1.0) * 0.5f;
-        center_pos[1] = p[1] + direction[1] * (length - 1.0) * 0.5f;
-        vec2 chain_size = {-length, 0.5};
+        center_pos[0] = p[0] + direction[0] * (length - 0.5f) * 0.5f;
+        center_pos[1] = p[1] + direction[1] * (length - 0.5f) * 0.5f;
+        vec2 chain_size = {-length + 0.5f, 0.5};
         renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_HOOK, center_pos, chain_size, angle, GAMESKIN_HOOK_CHAIN, true, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
       }
       sprite_definition_t *head_sprite_def = &gfx->renderer.gameskin_renderer.sprite_definitions[GAMESKIN_HOOK_HEAD];
@@ -606,7 +607,6 @@ void render_players(ui_handler_t *ui) {
     }
     if (!core->m_FreezeTime && core->m_ActiveWeapon < NUM_WEAPONS) {
       const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
-      float fire_delay_ticks = (spec->firedelay / 1000.f) * (float)GAME_TICK_SPEED;
       float aim_angle = atan2f(-dir[1], dir[0]);
 
       bool is_sit = inactive && !in_air && stationary;
@@ -651,7 +651,6 @@ void render_players(ui_handler_t *ui) {
 
         float attack_time_sec = attack_ticks_passed / (float)GAME_TICK_SPEED;
         if (attack_time_sec <= 1.0f / 6.0f && spec->num_muzzles > 0) {
-          SCharacterCore *prev_core = &prev_world.m_pCharacters[i];
 
           int muzzle_idx = world.m_GameTick % spec->num_muzzles;
           vec2 hadoken_dir = {vgetx(core->m_Pos) - vgetx(prev_core->m_Pos), vgety(core->m_Pos) - vgety(prev_core->m_Pos)};

@@ -2,6 +2,7 @@
 #define RENDERER_H
 
 #include <animation/anim_system.h>
+#define CGLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <cglm/cglm.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -193,7 +194,7 @@ typedef enum {
   RENDER_CMD_LINE
 } render_cmd_type_t;
 
-struct render_command_t{
+struct render_command_t {
   render_cmd_type_t type;
   float z; // Depth: lower is further back
   union {
@@ -253,6 +254,7 @@ struct renderer_state_t {
   uint32_t *index_buffer_ptr;
   uint32_t primitive_vertex_count;
   uint32_t primitive_index_count;
+  uint32_t primitive_index_offset_drawn;
   VkCommandBuffer current_command_buffer;
 
   buffer_t dynamic_ubo_buffer;

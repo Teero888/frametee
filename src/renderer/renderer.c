@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
 
-#define CGLM_FORCE_DEPTH_ZERO_TO_ONE
-
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -60,7 +58,7 @@ static VkVertexInputAttributeDescription skin_attrib_descs[14];
 
 // atlas things
 static VkVertexInputBindingDescription atlas_binding_desc[2];
-static VkVertexInputAttributeDescription atlas_attrib_descs[8];
+static VkVertexInputAttributeDescription atlas_attrib_descs[9];
 
 static void setup_vertex_descriptions(void);
 
@@ -1188,6 +1186,7 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
   check_vk_result(vkResetDescriptorPool(handler->g_device, renderer->frame_descriptor_pools[frame_pool_index], 0));
   renderer->primitive_vertex_count = 0;
   renderer->primitive_index_count = 0;
+  renderer->primitive_index_offset_drawn = 0;
   renderer->ubo_buffer_offset = 0;
   renderer->current_command_buffer = command_buffer;
 
@@ -1485,13 +1484,19 @@ static void setup_vertex_descriptions(void) {
 
 static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &h->renderer;
-  if (renderer->primitive_index_count == 0) {
+
+  if (renderer->primitive_index_count == 0 || renderer->primitive_index_count <= renderer->primitive_index_offset_drawn) {
     return;
   }
 
+  // Get or create the pipeline
   pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive_shader, 1, 0);
-  if (!pso) return;
+  if (!pso) {
+    log_error(LOG_SOURCE, "Failed to get primitive pipeline");
+    return;
+  }
 
+  // Setup UBO
   primitive_ubo_t ubo;
   ubo.camPos[0] = h->renderer.camera.pos[0];
   ubo.camPos[1] = h->renderer.camera.pos[1];
@@ -1506,73 +1511,111 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   ubo.mapSize[1] = (float)h->map_data->height;
   ubo.lod_bias = renderer->lod_bias;
 
-  glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
+  glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
+  // Allocate UBO space
   VkDeviceSize ubo_size = sizeof(ubo);
   VkDeviceSize aligned_size = (ubo_size + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
-  assert(renderer->ubo_buffer_offset + aligned_size <= DYNAMIC_UBO_BUFFER_SIZE);
+
+  if (renderer->ubo_buffer_offset + aligned_size > DYNAMIC_UBO_BUFFER_SIZE) {
+    log_error(LOG_SOURCE, "UBO buffer exhausted during primitive flush");
+    // Stop drawing new primitives this frame but don't reset
+    return;
+  }
 
   uint32_t dynamic_offset = renderer->ubo_buffer_offset;
   memcpy((char *)renderer->ubo_buffer_ptr + dynamic_offset, &ubo, ubo_size);
   renderer->ubo_buffer_offset += (uint32_t)aligned_size;
 
-  VkDescriptorSet descriptor_set;
-
+  // Allocate descriptor set
   uint32_t frame_pool_index = h->g_main_window_data.FrameIndex % 3;
-  VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                            .descriptorPool = renderer->frame_descriptor_pools[frame_pool_index],
-                                            .descriptorSetCount = 1,
-                                            .pSetLayouts = &pso->descriptor_set_layout};
+  VkDescriptorSet descriptor_set;
+  VkDescriptorSetAllocateInfo alloc_info = {
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .descriptorPool = renderer->frame_descriptor_pools[frame_pool_index],
+      .descriptorSetCount = 1,
+      .pSetLayouts = &pso->descriptor_set_layout};
 
   VkResult err = vkAllocateDescriptorSets(h->g_device, &alloc_info, &descriptor_set);
   if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "vkAllocateDescriptorSets failed (primitive shader) err=%d", err);
+    log_error(LOG_SOURCE, "Failed to allocate descriptor set for primitives (err=%d)", err);
+    return;
   }
-  check_vk_result_line(err, __LINE__);
 
-  VkDescriptorBufferInfo buffer_info = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dynamic_offset, .range = sizeof(primitive_ubo_t)};
-  VkWriteDescriptorSet descriptor_write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                           .dstSet = descriptor_set,
-                                           .dstBinding = 0,
-                                           .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                           .descriptorCount = 1,
-                                           .pBufferInfo = &buffer_info};
+  // Update descriptor set
+  VkDescriptorBufferInfo buffer_info = {
+      .buffer = renderer->dynamic_ubo_buffer.buffer,
+      .offset = dynamic_offset,
+      .range = sizeof(primitive_ubo_t)};
+
+  VkWriteDescriptorSet descriptor_write = {
+      .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      .dstSet = descriptor_set,
+      .dstBinding = 0,
+      .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      .descriptorCount = 1,
+      .pBufferInfo = &buffer_info};
+
   vkUpdateDescriptorSets(h->g_device, 1, &descriptor_write, 0, NULL);
 
+  // Draw
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
+
   VkDeviceSize offsets[] = {0};
   vkCmdBindVertexBuffers(command_buffer, 0, 1, &renderer->dynamic_vertex_buffer.buffer, offsets);
   vkCmdBindIndexBuffer(command_buffer, renderer->dynamic_index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
   vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &descriptor_set, 0, NULL);
-  vkCmdDrawIndexed(command_buffer, renderer->primitive_index_count, 1, 0, 0, 0);
 
-  renderer->primitive_vertex_count = 0;
-  renderer->primitive_index_count = 0;
+  uint32_t count_to_draw = renderer->primitive_index_count - renderer->primitive_index_offset_drawn;
+  vkCmdDrawIndexed(command_buffer, count_to_draw, 1, renderer->primitive_index_offset_drawn, 0, 0);
+
+  // Advance the drawn offset
+  renderer->primitive_index_offset_drawn = renderer->primitive_index_count;
+}
+
+static void ensure_primitive_space(gfx_handler_t *handler, uint32_t vertex_count, uint32_t index_count) {
+  renderer_state_t *renderer = &handler->renderer;
+  if (renderer->primitive_vertex_count + vertex_count > MAX_PRIMITIVE_VERTICES ||
+      renderer->primitive_index_count + index_count > MAX_PRIMITIVE_INDICES) {
+    // If full, flush what we have so far
+    flush_primitives(handler, renderer->current_command_buffer);
+    
+    // Check again. If still full (because we didn't reset), we are out of space for this frame.
+    if (renderer->primitive_vertex_count + vertex_count > MAX_PRIMITIVE_VERTICES ||
+      renderer->primitive_index_count + index_count > MAX_PRIMITIVE_INDICES) {
+        log_error(LOG_SOURCE, "Primitive buffer overflow! Increase MAX_PRIMITIVE_VERTICES/INDICES.");
+        // We can't safely reset here because previous draw calls depend on the data.
+        // Dropping geometry is the only safe fallback without ring buffering.
+    }
+  }
 }
 
 void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4 color) {
-  renderer_state_t *renderer = &handler->renderer;
-  if (renderer->primitive_vertex_count + 4 > MAX_PRIMITIVE_VERTICES || renderer->primitive_index_count + 6 > MAX_PRIMITIVE_INDICES) {
-    flush_primitives(handler, renderer->current_command_buffer);
-  }
+  ensure_primitive_space(handler, 4, 6);
 
+  renderer_state_t *renderer = &handler->renderer;
   uint32_t base_index = renderer->primitive_vertex_count;
   primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
   uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
 
-  glm_vec2_copy((vec2){pos[0], pos[1]}, vtx[0].pos);
+  // Define vertices in world space
+  vtx[0].pos[0] = pos[0];
+  vtx[0].pos[1] = pos[1];
   glm_vec4_copy(color, vtx[0].color);
-  glm_vec2_copy((vec2){pos[0] + size[0], pos[1]}, vtx[1].pos);
+
+  vtx[1].pos[0] = pos[0] + size[0];
+  vtx[1].pos[1] = pos[1];
   glm_vec4_copy(color, vtx[1].color);
-  glm_vec2_copy((vec2){pos[0] + size[0], pos[1] + size[1]}, vtx[2].pos);
+
+  vtx[2].pos[0] = pos[0] + size[0];
+  vtx[2].pos[1] = pos[1] + size[1];
   glm_vec4_copy(color, vtx[2].color);
-  glm_vec2_copy((vec2){pos[0], pos[1] + size[1]}, vtx[3].pos);
+
+  vtx[3].pos[0] = pos[0];
+  vtx[3].pos[1] = pos[1] + size[1];
   glm_vec4_copy(color, vtx[3].color);
 
-  // for (int i = 0; i < 4; i++) {
-  //   world_to_screen(handler, vtx[i].pos[0], vtx[i].pos[1], &vtx[i].pos[0], &vtx[i].pos[1]);
-  // }
-
+  // Triangle indices (two triangles)
   idx[0] = base_index + 0;
   idx[1] = base_index + 1;
   idx[2] = base_index + 2;
@@ -1585,37 +1628,32 @@ void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4
 }
 
 void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color, uint32_t segments) {
-  renderer_state_t *renderer = &handler->renderer;
   if (segments < 3) segments = 3;
 
-  // Ensure we have enough buffer space, flush if not.
-  if (renderer->primitive_vertex_count + segments + 1 > MAX_PRIMITIVE_VERTICES ||
-      renderer->primitive_index_count + segments * 3 > MAX_PRIMITIVE_INDICES) {
-    flush_primitives(handler, renderer->current_command_buffer);
-  }
+  ensure_primitive_space(handler, segments + 1, segments * 3);
 
+  renderer_state_t *renderer = &handler->renderer;
   uint32_t base_index = renderer->primitive_vertex_count;
   primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
   uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
 
-  // The center vertex
-  glm_vec2_copy(center, vtx[0].pos);
+  // Center vertex
+  vtx[0].pos[0] = center[0];
+  vtx[0].pos[1] = center[1];
   glm_vec4_copy(color, vtx[0].color);
 
-  // The outer vertices
-  float angle_step = 2.0f * (float)M_PI / segments;
+  // Outer vertices
+  float angle_step = 2.0f * M_PI / segments;
   for (uint32_t i = 0; i < segments; i++) {
     float angle = i * angle_step;
-    // Calculate vertex position relative to the center and add it
     vtx[i + 1].pos[0] = center[0] + cosf(angle) * radius;
     vtx[i + 1].pos[1] = center[1] + sinf(angle) * radius;
-
     glm_vec4_copy(color, vtx[i + 1].color);
   }
 
-  // Create the triangle fan indices
+  // Triangle fan indices
   for (uint32_t i = 0; i < segments; i++) {
-    idx[i * 3 + 0] = base_index; // Center point
+    idx[i * 3 + 0] = base_index;
     idx[i * 3 + 1] = base_index + i + 1;
     idx[i * 3 + 2] = base_index + ((i + 1) % segments) + 1;
   }
@@ -1623,26 +1661,35 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
   renderer->primitive_vertex_count += segments + 1;
   renderer->primitive_index_count += segments * 3;
 }
-
 // TODO: ensuring the width of the thing is atleast 1px is kinda expensive. think of another way to do this
 void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness) {
-  renderer_state_t *renderer = &handler->renderer;
-  if (renderer->primitive_vertex_count + 4 > MAX_PRIMITIVE_VERTICES || renderer->primitive_index_count + 6 > MAX_PRIMITIVE_INDICES) {
-    flush_primitives(handler, renderer->current_command_buffer);
-  }
+  ensure_primitive_space(handler, 4, 6);
 
+  renderer_state_t *renderer = &handler->renderer;
+  uint32_t base_index = renderer->primitive_vertex_count;
+  primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
+  uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
+
+  // Calculate perpendicular direction
   vec2 dir;
   glm_vec2_sub(p2, p1, dir);
-  glm_vec2_normalize(dir);
+  float len = glm_vec2_norm(dir);
+
+  if (len < 1e-6f) {
+    // Line is too short, skip
+    return;
+  }
+
+  glm_vec2_scale(dir, 1.0f / len, dir);
   vec2 normal = {-dir[1], dir[0]};
 
+  // Calculate minimum pixel thickness in world space
   const float MIN_PIXELS = 1.0f;
   float sx1, sy1, sx1n, sy1n;
   float sx2, sy2, sx2n, sy2n;
 
   world_to_screen(handler, p1[0], p1[1], &sx1, &sy1);
   world_to_screen(handler, p1[0] + normal[0], p1[1] + normal[1], &sx1n, &sy1n);
-
   world_to_screen(handler, p2[0], p2[1], &sx2, &sy2);
   world_to_screen(handler, p2[0] + normal[0], p2[1] + normal[1], &sx2n, &sy2n);
 
@@ -1659,19 +1706,24 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   float half_t1 = fmaxf(thickness * 0.5f, min_world_thickness_p1 * 0.5f);
   float half_t2 = fmaxf(thickness * 0.5f, min_world_thickness_p2 * 0.5f);
 
-  uint32_t base_index = renderer->primitive_vertex_count;
-  primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
-  uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
-
-  glm_vec2_copy((vec2){p1[0] - normal[0] * half_t1, p1[1] - normal[1] * half_t1}, vtx[0].pos);
+  // Create quad vertices
+  vtx[0].pos[0] = p1[0] - normal[0] * half_t1;
+  vtx[0].pos[1] = p1[1] - normal[1] * half_t1;
   glm_vec4_copy(color, vtx[0].color);
-  glm_vec2_copy((vec2){p2[0] - normal[0] * half_t2, p2[1] - normal[1] * half_t2}, vtx[1].pos);
+
+  vtx[1].pos[0] = p2[0] - normal[0] * half_t2;
+  vtx[1].pos[1] = p2[1] - normal[1] * half_t2;
   glm_vec4_copy(color, vtx[1].color);
-  glm_vec2_copy((vec2){p2[0] + normal[0] * half_t2, p2[1] + normal[1] * half_t2}, vtx[2].pos);
+
+  vtx[2].pos[0] = p2[0] + normal[0] * half_t2;
+  vtx[2].pos[1] = p2[1] + normal[1] * half_t2;
   glm_vec4_copy(color, vtx[2].color);
-  glm_vec2_copy((vec2){p1[0] + normal[0] * half_t1, p1[1] + normal[1] * half_t1}, vtx[3].pos);
+
+  vtx[3].pos[0] = p1[0] + normal[0] * half_t1;
+  vtx[3].pos[1] = p1[1] + normal[1] * half_t1;
   glm_vec4_copy(color, vtx[3].color);
 
+  // Triangle indices
   idx[0] = base_index + 0;
   idx[1] = base_index + 1;
   idx[2] = base_index + 2;
@@ -1682,7 +1734,6 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   renderer->primitive_vertex_count += 4;
   renderer->primitive_index_count += 6;
 }
-
 void renderer_draw_map(gfx_handler_t *h) {
   if (!h->map_shader || !h->quad_mesh || h->map_texture_count <= 0) return;
 
@@ -1775,7 +1826,7 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   ubo.mapSize[0] = (float)h->map_data->width;
   ubo.mapSize[1] = (float)h->map_data->height;
   ubo.lod_bias = renderer->lod_bias;
-  glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
+  glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
   VkDeviceSize aligned = (sizeof(ubo) + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
   if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) return;
@@ -1932,7 +1983,8 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
   stbi_image_free(pixels);
 
   transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, layer, 1);
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          r->skin_manager.atlas_array->mip_levels, layer, 1);
 
   VkCommandBuffer cmd = begin_single_time_commands(h, r->transfer_command_pool);
   VkBufferImageCopy region = {
@@ -2095,11 +2147,7 @@ static void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar,
                             ar->atlas_texture->layer_count);
   }
 
-  renderer_destroy_texture(h, source_atlas);
 
-  ar->atlas_texture->image_view = create_image_view(h, ar->atlas_texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-                                                    ar->atlas_texture->mip_levels, ar->atlas_texture->layer_count);
-  ar->atlas_texture->sampler = create_texture_sampler(h, ar->atlas_texture->mip_levels, VK_FILTER_LINEAR);
 
   VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                                       .magFilter = VK_FILTER_LINEAR,
@@ -2219,7 +2267,7 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
     ubo.mapSize[1] = (float)h->map_data->height;
     ubo.lod_bias = renderer->lod_bias;
   }
-  glm_ortho_rh_no(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
+  glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
   VkDeviceSize aligned = (sizeof(ubo) + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
   if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) {
@@ -2347,14 +2395,15 @@ void renderer_submit_line(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, ve
   cmd->data.prim.thickness = thickness;
   glm_vec4_copy(color, cmd->data.prim.color);
 }
-// src/renderer/renderer.c
 
 void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   struct renderer_state_t *r = &h->renderer;
   if (r->queue.count == 0) return;
 
+  // Sort by Z-order
   qsort(r->queue.commands, r->queue.count, sizeof(render_command_t), compare_render_commands);
 
+  // Reset all instance counters
   r->skin_renderer.instance_count = 0;
   r->gameskin_renderer.instance_count = 0;
   r->particle_renderer.instance_count = 0;
@@ -2368,15 +2417,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   for (uint32_t i = 0; i < r->queue.count; i++) {
     render_command_t *q = &r->queue.commands[i];
 
-    // If the next command is NOT a primitive, and we have primitives pending, flush them now
-    if (q->type != RENDER_CMD_RECT_FILLED &&
-        q->type != RENDER_CMD_CIRCLE_FILLED &&
-        q->type != RENDER_CMD_LINE &&
-        r->primitive_index_count > 0) {
-      flush_primitives(h, cmd);
-    }
-
-    // Atlas Change Detection
+    // Flush atlas if switching away
     if (active_ar != NULL) {
       if (q->type != RENDER_CMD_ATLAS || q->data.atlas.ar != active_ar || q->data.atlas.screen_space != ar_screen_space) {
         uint32_t count = active_ar->instance_count - batch_start_idx;
@@ -2385,9 +2426,17 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       }
     }
 
-    // Flush Skins if switching away
+    // Flush skins if switching away
     if (q->type != RENDER_CMD_SKIN && r->skin_renderer.instance_count > 0) {
       renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+    }
+
+    // Flush primitives if switching to non-primitive
+    if (q->type != RENDER_CMD_RECT_FILLED &&
+        q->type != RENDER_CMD_CIRCLE_FILLED &&
+        q->type != RENDER_CMD_LINE &&
+        r->primitive_index_count > r->primitive_index_offset_drawn) {
+      flush_primitives(h, cmd);
     }
 
     switch (q->type) {
@@ -2396,7 +2445,9 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       break;
 
     case RENDER_CMD_SKIN:
-      if (r->skin_renderer.instance_count >= 100000) renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+      if (r->skin_renderer.instance_count >= 100000) {
+        renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+      }
       renderer_push_skin_instance(h, q->data.skin.pos, q->data.skin.scale, q->data.skin.skin_index,
                                   q->data.skin.eye_state, q->data.skin.dir, &q->data.skin.anim_state,
                                   q->data.skin.col_body, q->data.skin.col_feet, q->data.skin.custom_color);
@@ -2420,6 +2471,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       break;
 
     case RENDER_CMD_RECT_FILLED:
+      // log_info(LOG_SOURCE, "Processing RECT_FILLED command");
       renderer_draw_rect_filled(h, q->data.prim.p1, q->data.prim.p2, q->data.prim.color);
       break;
 
@@ -2433,15 +2485,19 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     }
   }
 
+  // Final flushes
   if (active_ar != NULL) {
     uint32_t count = active_ar->instance_count - batch_start_idx;
     renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
   }
-  if (r->skin_renderer.instance_count > 0)
-    renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
 
-  if (r->primitive_index_count > 0)
+  if (r->skin_renderer.instance_count > 0) {
+    renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+  }
+
+  if (r->primitive_index_count > 0) {
     flush_primitives(h, cmd);
+  }
 
   r->queue.count = 0;
 }

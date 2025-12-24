@@ -19,7 +19,9 @@
 #include <cimgui_impl.h>
 // -------------
 
-enum { FRAME_OK = 0, FRAME_SKIP, FRAME_EXIT };
+enum { FRAME_OK = 0,
+       FRAME_SKIP,
+       FRAME_EXIT };
 
 // public api
 void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buffer, size_t size);

@@ -94,7 +94,9 @@ struct recording_snippet_vector_t {
   int capacity;
 };
 
-typedef enum { DUMMY_ACTION_COPY, DUMMY_ACTION_INPUTS, DUMMY_ACTION_COUNT } dummy_action_type_t;
+typedef enum { DUMMY_ACTION_COPY,
+               DUMMY_ACTION_INPUTS,
+               DUMMY_ACTION_COUNT } dummy_action_type_t;
 
 typedef enum {
   NET_EVENT_CHAT,
