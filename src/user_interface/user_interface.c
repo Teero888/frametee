@@ -779,8 +779,8 @@ void render_players(ui_handler_t *ui) {
 
   if (ui->timeline.selected_player_track_index >= 0) {
     SCharacterCore *p = &world.m_pCharacters[ui->timeline.selected_player_track_index];
-    ui->pos_x = vgetx(p->m_Pos);
-    ui->pos_y = vgety(p->m_Pos);
+    ui->pos_x = vgetx(p->m_Pos) - 200 * 32;
+    ui->pos_y = vgety(p->m_Pos) - 200 * 32;
     ui->vel_x = vgetx(p->m_Vel);
     ui->vel_y = vgety(p->m_Vel);
     ui->vel_m = p->m_VelMag;
@@ -986,9 +986,8 @@ bool ui_render_late(ui_handler_t *ui) {
     ImVec2 start;
     igGetCursorScreenPos(&start);
 
-    ImVec2 wpos;
-    igGetWindowPos(&wpos);
-    igSetCursorScreenPos(wpos);
+    igGetWindowPos(&ui->viewport_window_pos);
+    igSetCursorScreenPos(ui->viewport_window_pos);
     ImVec2 img_size = {(float)ui->gfx_handler->offscreen_width, (float)ui->gfx_handler->offscreen_height};
     igImage(*ui->gfx_handler->offscreen_texture, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
 
@@ -997,8 +996,8 @@ bool ui_render_late(ui_handler_t *ui) {
 
     if (hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
       ImGuiIO *io = igGetIO_Nil();
-      float mx = io->MousePos.x - wpos.x;
-      float my = io->MousePos.y - wpos.y;
+      float mx = io->MousePos.x - ui->viewport_window_pos.x;
+      float my = io->MousePos.y - ui->viewport_window_pos.y;
       float wx, wy;
       screen_to_world(ui->gfx_handler, mx, my, &wx, &wy);
 
@@ -1031,7 +1030,8 @@ bool ui_render_late(ui_handler_t *ui) {
       if (best_match != -1) {
         interaction_select_track(&ui->timeline, best_match);
       } else {
-        interaction_select_track(&ui->timeline, -1);
+        if (!ui->selecting_override_pos)
+          interaction_select_track(&ui->timeline, -1);
       }
       wc_free(&world);
     }

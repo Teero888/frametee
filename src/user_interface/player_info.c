@@ -1,4 +1,6 @@
 #include "player_info.h"
+#include "cglm/types.h"
+#include "ddnet_physics/collision.h"
 #include "widgets/hsl_colorpicker.h"
 #include <ddnet_physics/gamecore.h>
 #include <ddnet_physics/vmath.h>
@@ -41,6 +43,21 @@ void render_player_info(gfx_handler_t *h) {
     starting_config_t *sc = &ts->player_tracks[ts->selected_player_track_index].starting_config;
     // TODO: somehow reset to default values when turning off, idk how to cleanly do that yet
     if (igCheckbox("Override Start", &sc->enabled)) {
+      if (sc->enabled) {
+        SWorldCore world = wc_empty();
+        model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
+        if (ts->selected_player_track_index < world.m_NumCharacters) {
+          SCharacterCore *chr = &world.m_pCharacters[ts->selected_player_track_index];
+          sc->position[0] = vgetx(chr->m_Pos) - MAP_EXPAND * 32;
+          sc->position[1] = vgety(chr->m_Pos) - MAP_EXPAND * 32;
+          sc->velocity[0] = vgetx(chr->m_Vel);
+          sc->velocity[1] = vgety(chr->m_Vel);
+          sc->active_weapon = chr->m_ActiveWeapon;
+          for (int i = 0; i < NUM_WEAPONS; ++i)
+            sc->has_weapons[i] = chr->m_aWeaponGot[i];
+        }
+        wc_free(&world);
+      }
     }
     if (sc->enabled) {
       static const char *weapon_names[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
@@ -48,25 +65,25 @@ void render_player_info(gfx_handler_t *h) {
 
       igPushMultiItemsWidths(2, igCalcItemWidth());
       float pos[2] = {sc->position[0], sc->position[1]};
-      if (igDragFloat("##UnitX", &pos[0], 1.0f, 1, ts->ui->gfx_handler->map_data->width * 32 - 1, "%.0f", 0)) {
-        sc->position[0] = fclamp(pos[0], 1, ts->ui->gfx_handler->map_data->width * 32 - 1);
+      if (igDragFloat("##UnitX", &pos[0], 1.0f, (-MAP_EXPAND + 1) * 32, (ts->ui->gfx_handler->map_data->height - (MAP_EXPAND - 1)) * 32, "%.0f", 0)) {
+        sc->position[0] = fclamp(pos[0], (-MAP_EXPAND + 1) * 32, (ts->ui->gfx_handler->map_data->width - (MAP_EXPAND - 1)) * 32);
       }
       igPopItemWidth();
       igSameLine(0.0f, igGetStyle()->ItemInnerSpacing.x);
-      if (igDragFloat("Position##UnitY", &pos[1], 1.0f, 1, ts->ui->gfx_handler->map_data->height * 32 - 1, "%.0f", 0)) {
-        sc->position[1] = fclamp(pos[1], 1, ts->ui->gfx_handler->map_data->height * 32 - 1);
+      if (igDragFloat("Position##UnitY", &pos[1], 1.0f, (-MAP_EXPAND + 1) * 32, (ts->ui->gfx_handler->map_data->height - (MAP_EXPAND - 1)) * 32, "%.0f", 0)) {
+        sc->position[1] = fclamp(pos[1], (-MAP_EXPAND + 1) * 32, (ts->ui->gfx_handler->map_data->height - (MAP_EXPAND - 1)) * 32);
       }
       igPopItemWidth();
 
       igPushMultiItemsWidths(2, igCalcItemWidth());
       float block_pos[2] = {sc->position[0] / 32.0f, sc->position[1] / 32.0f};
-      if (igDragFloat("##BlockX", &block_pos[0], 1.0f, 0.5, ts->ui->gfx_handler->map_data->width - 1, "%.3f", 0)) {
-        sc->position[0] = fclamp(block_pos[0], 0.5, ts->ui->gfx_handler->map_data->width - 1) * 32.0f;
+      if (igDragFloat("##BlockX", &block_pos[0], 1.0f, (-MAP_EXPAND + 1), ts->ui->gfx_handler->map_data->width - (MAP_EXPAND - 1), "%.3f", 0)) {
+        sc->position[0] = fclamp(block_pos[0], (-MAP_EXPAND + 1), ts->ui->gfx_handler->map_data->width - (MAP_EXPAND - 1));
       }
       igPopItemWidth();
       igSameLine(0.0f, igGetStyle()->ItemInnerSpacing.x);
-      if (igDragFloat("Position##BlockY", &block_pos[1], 1.0f, 0.5, ts->ui->gfx_handler->map_data->height - 1, "%.3f", 0)) {
-        sc->position[1] = fclamp(block_pos[1], 0.5, ts->ui->gfx_handler->map_data->height - 1) * 32.0f;
+      if (igDragFloat("Position##BlockY", &block_pos[1], 1.0f, (-MAP_EXPAND + 1), ts->ui->gfx_handler->map_data->height - (MAP_EXPAND - 1), "%.3f", 0)) {
+        sc->position[1] = fclamp(block_pos[1], (-MAP_EXPAND + 1), ts->ui->gfx_handler->map_data->height - (MAP_EXPAND - 1));
       }
       igPopItemWidth();
 
@@ -107,8 +124,8 @@ void render_player_info(gfx_handler_t *h) {
         model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
         if (ts->selected_player_track_index < world.m_NumCharacters) {
           SCharacterCore *chr = &world.m_pCharacters[ts->selected_player_track_index];
-          sc->position[0] = vgetx(chr->m_Pos);
-          sc->position[1] = vgety(chr->m_Pos);
+          sc->position[0] = vgetx(chr->m_Pos) - MAP_EXPAND * 32;
+          sc->position[1] = vgety(chr->m_Pos) - MAP_EXPAND * 32;
           sc->velocity[0] = vgetx(chr->m_Vel);
           sc->velocity[1] = vgety(chr->m_Vel);
           sc->active_weapon = chr->m_ActiveWeapon;
@@ -117,6 +134,25 @@ void render_player_info(gfx_handler_t *h) {
         }
         wc_free(&world);
       }
+
+      igSameLine(0, 0);
+      if (ts->ui->selecting_override_pos) {
+        igTextColored((ImVec4){0.2f, 1.0f, 0.2f, 1.0f}, "Click on the map to select position...");
+        if (igIsMouseReleased_Nil(ImGuiMouseButton_Left)) {
+
+          ImGuiIO *io = igGetIO_Nil();
+          float mx = io->MousePos.x - ts->ui->viewport_window_pos.x;
+          float my = io->MousePos.y - ts->ui->viewport_window_pos.y;
+          float wx, wy;
+          screen_to_world(ts->ui->gfx_handler, mx, my, &wx, &wy);
+          sc->position[0] = (wx - MAP_EXPAND) * 32;
+          sc->position[1] = (wy - MAP_EXPAND) * 32;
+          ts->ui->selecting_override_pos = false;
+        }
+      } else if (igButton("Select position", (ImVec2){0, 0}))
+        ts->ui->selecting_override_pos = true;
+      vec2 cpos = {sc->position[0] / 32.f + MAP_EXPAND, sc->position[1] / 32.f + MAP_EXPAND};
+      renderer_submit_circle_filled(ts->ui->gfx_handler, 100.f, &cpos[0], 0.4f, (float[]){1.0f, 0.0f, 0.0f, 0.5f}, 32);
 
       if (igButton("Apply", (ImVec2){0, 0})) {
         model_apply_starting_config(ts, ts->selected_player_track_index);

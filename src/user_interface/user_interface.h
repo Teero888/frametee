@@ -28,6 +28,7 @@ struct ui_handler_t {
   SPickup *pickups;
   mvec2 *pickup_positions;
 
+  ImVec2 viewport_window_pos;
   vec2 last_render_pos;
   vec2 recording_mouse_pos;
 
@@ -56,6 +57,7 @@ struct ui_handler_t {
   bool vsync;
   bool show_fps;
   bool weapons[NUM_WEAPONS];
+  bool selecting_override_pos;
 };
 
 void on_camera_update(struct gfx_handler_t *handler, bool hovered);
