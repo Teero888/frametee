@@ -22,11 +22,11 @@ static float deterministic_frand(uint32_t *seed) {
   return (float)(*seed & 0xFFFFFF) / 16777216.0f;
 }
 
-static float frand01(void) { return (float)rand() / (float)RAND_MAX; }
-static float frand_range(float min, float max) { return min + frand01() * (max - min); }
+static float ps_frand01(particle_system_t *ps) { return deterministic_frand(&ps->rng_seed); }
+static float ps_frand_range(particle_system_t *ps, float min, float max) { return min + ps_frand01(ps) * (max - min); }
 
-static void random_direction(vec2 out) {
-  float angle = frand01() * 2.0f * M_PI;
+static void random_direction(particle_system_t *ps, vec2 out) {
+  float angle = ps_frand01(ps) * 2.0f * M_PI;
   out[0] = cosf(angle);
   out[1] = sinf(angle);
 }
@@ -53,14 +53,14 @@ void particle_system_prune_by_time(particle_system_t *ps, double min_time) {
     }
   }
 
-  int target_tick = (int)(min_time * 50.0);
+  int target_tick = (int)(min_time * 50.0 + 0.1);
   if (target_tick < ps->last_simulated_tick) {
     ps->last_simulated_tick = target_tick - 1;
   }
 }
 
 void particle_spawn(particle_system_t *ps, int group, particle_t *p_template, float time_passed) {
-  int current_tick = (int)(ps->current_time * 50.0);
+  int current_tick = (int)(ps->current_time * 50.0 + 0.1);
   if (current_tick <= ps->last_simulated_tick) return;
 
   int id = ps->next_index;
@@ -71,6 +71,9 @@ void particle_spawn(particle_system_t *ps, int group, particle_t *p_template, fl
 
   p->spawn_time = ps->current_time - (double)time_passed;
   p->group = group;
+  // Initialize deterministic seed for this particle
+  p->seed = ps->rng_seed;
+  ps_frand01(ps); // Advance the generator
 
   glm_vec2_copy(p_template->start_pos, p->start_pos);
   glm_vec2_copy(p_template->start_vel, p->start_vel);
@@ -137,12 +140,12 @@ static void move_point(map_data_t *map, vec2 *inout_pos, vec2 *inout_vel, float 
     }
     if (hit_x) {
       vel[0] *= -elasticity;
-      (*inout_vel)[0] = vel[0];
     } else {
       vel[1] *= -elasticity;
-      (*inout_vel)[1] = vel[1];
     }
     glm_vec2_scale(vel, 0.5f, vel);
+    (*inout_vel)[0] = vel[0];
+    (*inout_vel)[1] = vel[1];
   }
   glm_vec2_add(pos, vel, *inout_pos);
 }
@@ -164,7 +167,7 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
   for (int i = 0; i < MAX_PARTICLES; ++i) {
     particle_t *p = &ps->particles[i];
     if (p->life_span <= 0.0001f) continue;
-    if (p->spawn_time >= ps->current_time) continue;
+    if (p->spawn_time > ps->current_time) continue;
     bool group_match = false;
     for (int g = 0; g < count; ++g)
       if (p->group == groups[g]) {
@@ -176,22 +179,20 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
     double age = ps->current_time - p->spawn_time;
     if (age > p->life_span) continue;
 
-    union {
-      double d;
-      uint64_t u;
-    } bits;
-    bits.d = p->spawn_time;
-    uint32_t sim_seed = (uint32_t)bits.u ^ (uint32_t)(bits.u >> 32) ^ (uint32_t)i;
+    uint32_t sim_seed = p->seed;
 
-    vec2 pos, vel;
+    vec2 pos, vel, prev_pos;
     glm_vec2_copy(p->start_pos, pos);
     glm_vec2_copy(p->start_vel, vel);
+    glm_vec2_copy(pos, prev_pos);
+
     float rot = p->rot + p->rot_speed * (float)age;
-    float sim_time = 0.0f;
-    const float step = 0.02f;
+    double sim_time = 0.0;
+    const double step = 0.02;
 
     while (sim_time < age) {
-      float dt = (sim_time + step > age) ? (float)age - sim_time : step;
+      glm_vec2_copy(pos, prev_pos);
+      float dt = (float)step;
 
       vel[1] += p->gravity * dt;
 
@@ -221,6 +222,11 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
       sim_time += step;
     }
 
+    float t = (float)((age - (sim_time - step)) / step);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    glm_vec2_lerp(prev_pos, pos, t, pos);
+
     int atlas_type = (p->sprite_index < PARTICLE_SPRITE_OFFSET) ? 1 : (p->sprite_index < EXTRA_SPRITE_OFFSET ? 2 : 3);
     atlas_renderer_t *target_ar =
         (atlas_type == 1) ? &gfx->renderer.gameskin_renderer : (atlas_type == 2 ? &gfx->renderer.particle_renderer : &gfx->renderer.extras_renderer);
@@ -246,7 +252,7 @@ void particles_create_explosion(particle_system_t *ps, vec2 pos) {
   p.life_span = 0.4f;
   p.start_size = 150.0f;
   p.end_size = 0.0f;
-  p.rot = frand01() * 2 * M_PI;
+  p.rot = ps_frand01(ps) * 2 * M_PI;
   p.sprite_index = PARTICLE_EXPL01 + PARTICLE_SPRITE_OFFSET;
   glm_vec4_copy((vec4){1, 1, 1, 1}, p.color);
   particle_spawn(ps, GROUP_EXPLOSIONS, &p, 0);
@@ -255,19 +261,19 @@ void particles_create_explosion(particle_system_t *ps, vec2 pos) {
     memset(&p, 0, sizeof(p));
     glm_vec2_copy(pos, p.start_pos);
     vec2 dir;
-    random_direction(dir);
-    float speed = frand_range(1.0f, 1.2f) * 1000.0f;
+    random_direction(ps, dir);
+    float speed = ps_frand_range(ps, 1.0f, 1.2f) * 1000.0f;
     p.start_vel[0] = dir[0] * speed;
     p.start_vel[1] = dir[1] * speed;
-    p.life_span = frand_range(0.5f, 0.9f);
-    p.start_size = frand_range(32.0f, 40.0f);
+    p.life_span = ps_frand_range(ps, 0.5f, 0.9f);
+    p.start_size = ps_frand_range(ps, 32.0f, 40.0f);
     p.end_size = 0.0f;
-    p.gravity = frand_range(-800.0f, 0.0f);
+    p.gravity = ps_frand_range(ps, -800.0f, 0.0f);
     p.friction = 0.4f;
     p.sprite_index = PARTICLE_SMOKE + PARTICLE_SPRITE_OFFSET;
     p.collides = true;
     p.flow_affected = 1.0f;
-    mix_colors((vec4){0.75, 0.75, 0.75, 1}, (vec4){0.5, 0.5, 0.5, 1}, frand01(), p.color);
+    mix_colors((vec4){0.75, 0.75, 0.75, 1}, (vec4){0.5, 0.5, 0.5, 1}, ps_frand01(ps), p.color);
     particle_spawn(ps, GROUP_GENERAL, &p, 0);
   }
 }
@@ -276,14 +282,14 @@ void particles_create_smoke(particle_system_t *ps, vec2 pos, vec2 vel, float alp
   particle_t p = {0};
   glm_vec2_copy(pos, p.start_pos);
   vec2 dir;
-  random_direction(dir);
+  random_direction(ps, dir);
   p.start_vel[0] = vel[0] + dir[0] * 50.0f;
   p.start_vel[1] = vel[1] + dir[1] * 50.0f;
-  p.life_span = frand_range(0.5f, 1.0f);
-  p.start_size = frand_range(12, 20);
+  p.life_span = ps_frand_range(ps, 0.5f, 1.0f);
+  p.start_size = ps_frand_range(ps, 12, 20);
   p.end_size = 0;
   p.friction = 0.7f;
-  p.gravity = frand_range(-500, 0);
+  p.gravity = ps_frand_range(ps, -500, 0);
   p.flow_affected = 0.0f;
   p.sprite_index = PARTICLE_SMOKE + PARTICLE_SPRITE_OFFSET;
   glm_vec4_copy((vec4){1, 1, 1, alpha}, p.color);
@@ -296,15 +302,15 @@ void particles_create_skid_trail(particle_system_t *ps, vec2 pos, vec2 vel, int 
   p.start_pos[0] = pos[0] + (-direction * 6);
   p.start_pos[1] = pos[1] + 12;
   vec2 rdir;
-  random_direction(rdir);
+  random_direction(ps, rdir);
   float v_len = glm_vec2_norm(vel);
   p.start_vel[0] = (-direction * 100 * v_len) + rdir[0] * 50;
   p.start_vel[1] = -50 + rdir[1] * 50;
-  p.life_span = frand_range(0.5, 1);
-  p.start_size = frand_range(24, 36);
+  p.life_span = ps_frand_range(ps, 0.5, 1);
+  p.start_size = ps_frand_range(ps, 24, 36);
   p.end_size = 0;
   p.friction = 0.7f;
-  p.gravity = frand_range(-500, 0);
+  p.gravity = ps_frand_range(ps, -500, 0);
   glm_vec4_copy((vec4){0.75, 0.75, 0.75, alpha}, p.color);
   particle_spawn(ps, GROUP_GENERAL, &p, 0);
 }
@@ -312,7 +318,7 @@ void particles_create_skid_trail(particle_system_t *ps, vec2 pos, vec2 vel, int 
 void particles_create_bullet_trail(particle_system_t *ps, vec2 pos, float alpha, float time_passed) {
   particle_t p = {0};
   glm_vec2_copy(pos, p.start_pos);
-  p.life_span = frand_range(0.25, 0.5);
+  p.life_span = ps_frand_range(ps, 0.25, 0.5);
   p.start_size = 8;
   p.end_size = 0;
   p.friction = 0.7;
@@ -326,20 +332,20 @@ void particles_create_player_death(particle_system_t *ps, vec2 pos, vec4 blood_c
     particle_t p = {0};
     glm_vec2_copy(pos, p.start_pos);
     vec2 dir;
-    random_direction(dir);
-    float speed = frand_range(0.1, 1.1) * 900;
+    random_direction(ps, dir);
+    float speed = ps_frand_range(ps, 0.1, 1.1) * 900;
     p.start_vel[0] = dir[0] * speed;
     p.start_vel[1] = dir[1] * speed;
-    p.life_span = frand_range(0.3, 0.6);
-    p.start_size = frand_range(24, 40);
+    p.life_span = ps_frand_range(ps, 0.3, 0.6);
+    p.start_size = ps_frand_range(ps, 24, 40);
     p.end_size = 0;
     p.gravity = 800;
     p.friction = 0.8;
-    p.rot = frand01() * 2 * M_PI;
-    p.rot_speed = frand_range(-0.5, 0.5) * M_PI;
-    p.sprite_index = (PARTICLE_SPLAT01 + (rand() % 3)) + PARTICLE_SPRITE_OFFSET;
+    p.rot = ps_frand01(ps) * 2 * M_PI;
+    p.rot_speed = ps_frand_range(ps, -0.5, 0.5) * M_PI;
+    p.sprite_index = (PARTICLE_SPLAT01 + (int)(ps_frand01(ps) * 3)) + PARTICLE_SPRITE_OFFSET;
     p.collides = true;
-    float t = frand_range(0.75, 1);
+    float t = ps_frand_range(ps, 0.75, 1);
     p.color[0] = blood_color[0] * t;
     p.color[1] = blood_color[1] * t;
     p.color[2] = blood_color[2] * t;
@@ -353,19 +359,19 @@ void particles_create_confetti(particle_system_t *ps, vec2 pos, float alpha) {
   for (int i = 0; i < 64; ++i) {
     particle_t p = {0};
     glm_vec2_copy(pos, p.start_pos);
-    p.sprite_index = (PARTICLE_SPLAT01 + (rand() % 3)) + PARTICLE_SPRITE_OFFSET;
-    float a = -0.5 * M_PI + frand_range(-0.8, 0.8);
+    p.sprite_index = (PARTICLE_SPLAT01 + (int)(ps_frand01(ps) * 3)) + PARTICLE_SPRITE_OFFSET;
+    float a = -0.5 * M_PI + ps_frand_range(ps, -0.8, 0.8);
     vec2 d = {cosf(a), sinf(a)};
-    p.start_vel[0] = d[0] * frand_range(500, 2000);
-    p.start_vel[1] = d[1] * frand_range(500, 2000);
-    p.life_span = frand_range(0.8, 1.2);
-    p.start_size = frand_range(12, 24);
+    p.start_vel[0] = d[0] * ps_frand_range(ps, 500, 2000);
+    p.start_vel[1] = d[1] * ps_frand_range(ps, 500, 2000);
+    p.life_span = ps_frand_range(ps, 0.8, 1.2);
+    p.start_size = ps_frand_range(ps, 12, 24);
     p.end_size = 0;
-    p.rot = frand01() * 2 * M_PI;
-    p.rot_speed = frand_range(-0.5, 0.5) * M_PI;
+    p.rot = ps_frand01(ps) * 2 * M_PI;
+    p.rot_speed = ps_frand_range(ps, -0.5, 0.5) * M_PI;
     p.gravity = -700;
     p.friction = 0.6;
-    glm_vec4_copy(cols[rand() % 6], p.color);
+    glm_vec4_copy(cols[(int)(ps_frand01(ps) * 6)], p.color);
     p.color[3] = 0.75f * alpha;
     particle_spawn(ps, GROUP_GENERAL, &p, 0);
   }
@@ -388,7 +394,7 @@ void particles_create_hammer_hit(particle_system_t *ps, vec2 pos, float alpha) {
   glm_vec2_copy(pos, p.start_pos);
   p.life_span = 0.3f;
   p.start_size = 120;
-  p.rot = frand01() * 2 * M_PI;
+  p.rot = ps_frand01(ps) * 2 * M_PI;
   p.sprite_index = PARTICLE_HIT01 + PARTICLE_SPRITE_OFFSET;
   glm_vec4_copy((vec4){1, 1, 1, alpha}, p.color);
   particle_spawn(ps, GROUP_EXPLOSIONS, &p, 0);
@@ -406,7 +412,7 @@ void particles_create_air_jump(particle_system_t *ps, vec2 pos, float alpha) {
     p.end_size = 0;
     p.gravity = 500;
     p.friction = 0.7;
-    p.rot = frand01() * 2 * M_PI;
+    p.rot = ps_frand01(ps) * 2 * M_PI;
     p.rot_speed = 2 * M_PI;
     p.sprite_index = PARTICLE_AIRJUMP + PARTICLE_SPRITE_OFFSET;
     glm_vec4_copy((vec4){1, 1, 1, alpha}, p.color);
@@ -420,16 +426,16 @@ void particles_create_player_spawn(particle_system_t *ps, vec2 pos, float alpha)
     particle_t p = {0};
     glm_vec2_copy(pos, p.start_pos);
     vec2 d;
-    random_direction(d);
-    float s = powf(frand01(), 3) * 600;
+    random_direction(ps, d);
+    float s = powf(ps_frand01(ps), 3) * 600;
     p.start_vel[0] = d[0] * s;
     p.start_vel[1] = d[1] * s;
-    p.life_span = frand_range(0.3, 0.6);
-    p.start_size = frand_range(64, 96);
+    p.life_span = ps_frand_range(ps, 0.3, 0.6);
+    p.start_size = ps_frand_range(ps, 64, 96);
     p.end_size = 0;
-    p.gravity = frand_range(-400, 0);
+    p.gravity = ps_frand_range(ps, -400, 0);
     p.friction = 0.7;
-    p.rot = frand01() * 2 * M_PI;
+    p.rot = ps_frand01(ps) * 2 * M_PI;
     p.sprite_index = PARTICLE_SHELL + PARTICLE_SPRITE_OFFSET;
     glm_vec4_copy((vec4){181.f / 255.f, 80.f / 255.f, 203.f / 255.f, alpha}, p.color);
     particle_spawn(ps, GROUP_GENERAL, &p, 0);
@@ -439,12 +445,12 @@ void particles_create_player_spawn(particle_system_t *ps, vec2 pos, float alpha)
 void particles_create_powerup_shine(particle_system_t *ps, vec2 pos, vec2 size, float alpha) {
   particle_t p = {0};
   p.sprite_index = PARTICLE_SLICE + PARTICLE_SPRITE_OFFSET;
-  p.start_pos[0] = pos[0] + frand_range(-0.5, 0.5) * size[0];
-  p.start_pos[1] = pos[1] + frand_range(-0.5, 0.5) * size[1];
+  p.start_pos[0] = pos[0] + ps_frand_range(ps, -0.5, 0.5) * size[0];
+  p.start_pos[1] = pos[1] + ps_frand_range(ps, -0.5, 0.5) * size[1];
   p.life_span = 0.5;
   p.start_size = 16;
   p.end_size = 0;
-  p.rot = frand01() * 2 * M_PI;
+  p.rot = ps_frand01(ps) * 2 * M_PI;
   p.rot_speed = 2 * M_PI;
   p.gravity = 500;
   p.friction = 0.9;
@@ -455,17 +461,17 @@ void particles_create_powerup_shine(particle_system_t *ps, vec2 pos, vec2 size, 
 void particles_create_freezing_flakes(particle_system_t *ps, vec2 pos, vec2 size, float alpha) {
   particle_t p = {0};
   p.sprite_index = EXTRA_SNOWFLAKE + EXTRA_SPRITE_OFFSET;
-  p.start_pos[0] = pos[0] + frand_range(-0.5, 0.5) * size[0];
-  p.start_pos[1] = pos[1] + frand_range(-0.5, 0.5) * size[1];
+  p.start_pos[0] = pos[0] + ps_frand_range(ps, -0.5, 0.5) * size[0];
+  p.start_pos[1] = pos[1] + ps_frand_range(ps, -0.5, 0.5) * size[1];
   p.life_span = 1.5;
-  p.start_size = frand_range(8, 24);
+  p.start_size = ps_frand_range(ps, 8, 24);
   p.end_size = p.start_size * 0.5f;
   p.use_alpha_fading = true;
   p.start_alpha = alpha;
   p.end_alpha = 0.0;
-  p.rot = frand01() * 2 * M_PI;
+  p.rot = ps_frand01(ps) * 2 * M_PI;
   p.rot_speed = M_PI;
-  p.gravity = frand_range(0, 250);
+  p.gravity = ps_frand_range(ps, 0, 250);
   p.friction = 0.9;
   glm_vec4_copy((vec4){1, 1, 1, alpha}, p.color);
   particle_spawn(ps, GROUP_EXTRA, &p, 0);
@@ -475,13 +481,13 @@ void particles_create_sparkle(particle_system_t *ps, vec2 pos, float alpha) {
   particle_t p = {0};
   p.sprite_index = EXTRA_SPARKLE + EXTRA_SPRITE_OFFSET;
   vec2 d;
-  random_direction(d);
-  float dist = frand01() * 40;
+  random_direction(ps, d);
+  float dist = ps_frand01(ps) * 40;
   p.start_pos[0] = pos[0] + d[0] * dist;
   p.start_pos[1] = pos[1] + d[1] * dist;
   p.life_span = 0.5;
   p.start_size = 0;
-  p.end_size = frand_range(20, 30);
+  p.end_size = ps_frand_range(ps, 20, 30);
   p.use_alpha_fading = true;
   p.start_alpha = alpha;
   p.end_alpha = fminf(0.2f, alpha);
@@ -495,12 +501,12 @@ void particles_create_damage_ind(particle_system_t *ps, vec2 pos, vec2 dir, floa
     particle_t p = {0};
     glm_vec2_copy(pos, p.start_pos);
     vec2 rd;
-    random_direction(rd);
-    float s = 300 + frand01() * 300;
+    random_direction(ps, rd);
+    float s = 300 + ps_frand01(ps) * 300;
     p.start_vel[0] = rd[0] * s;
     p.start_vel[1] = rd[1] * s;
-    p.life_span = 0.5 + frand01() * 0.3;
-    p.start_size = 32 + frand01() * 16;
+    p.life_span = 0.5 + ps_frand01(ps) * 0.3;
+    p.start_size = 32 + ps_frand01(ps) * 16;
     p.end_size = 0;
     p.gravity = 500;
     p.friction = 0.8;

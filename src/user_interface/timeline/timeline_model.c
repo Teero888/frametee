@@ -653,7 +653,7 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
     if (is_new_logic_tick) {
       out_world->particle = ui_particle_callback;
       ps->current_time = (double)current_sim_tick / 50.0;
-      srand(current_sim_tick);
+      ps->rng_seed = current_sim_tick;
     } else {
       out_world->particle = NULL;
     }
@@ -707,8 +707,8 @@ void model_apply_starting_config(timeline_state_t *ts, int track_index) {
 
   // Update the initial world state
   SCharacterCore *core = &ts->ui->gfx_handler->physics_handler.world.m_pCharacters[track_index];
-  core->m_Pos = vec2_init(sc->position[0], sc->position[1]);
-  core->m_PrevPos = vec2_init(sc->position[0], sc->position[1]);
+  core->m_Pos = vec2_init(sc->position[0] + 200 * 32, sc->position[1] + 200 * 32);
+  core->m_PrevPos = vec2_init(sc->position[0] + 200 * 32, sc->position[1] + 200 * 32);
   core->m_Vel = vec2_init(sc->velocity[0], sc->velocity[1]);
   core->m_ActiveWeapon = sc->active_weapon;
   for (int i = 0; i < NUM_WEAPONS; ++i)

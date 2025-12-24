@@ -42,6 +42,7 @@ typedef struct {
   bool collides;
 
   int group;
+  uint32_t seed;
 } particle_t;
 
 typedef struct {
@@ -60,6 +61,7 @@ typedef struct {
 
   double current_time;
   int last_simulated_tick;
+  uint32_t rng_seed;
 } particle_system_t;
 
 void particle_system_init(particle_system_t *ps);
