@@ -71,12 +71,14 @@ vec4 get_part_color(part_info_t part, vec2 frag_uv, int skin_index, bool use_bod
   vec3 straight_rgb = src.rgb / src.a;
 
   if (frag_col_custom != 0) {
-    int v = int(luminance(straight_rgb) * 255.0 + 0.5);
+    float lum = clamp(luminance(straight_rgb), 0.0, 1.0);
+    int v = int(lum * 255.0 + 0.5);
+    
     if (apply_gs_contrast) {
       if (v <= frag_col_gs) {
-        v = int(float(v) / float(frag_col_gs) * 192.0 + 0.5);
+        v = int(float(v) / float(max(1, frag_col_gs)) * 192.0 + 0.5);
       } else {
-        v = int(float(v - frag_col_gs) / float(255 - frag_col_gs) * (255 - 192) + 192.0 + 0.5);
+        v = int(float(v - frag_col_gs) / float(max(1, 255 - frag_col_gs)) * (255 - 192) + 192.0 + 0.5);
       }
     }
 
@@ -89,7 +91,6 @@ vec4 get_part_color(part_info_t part, vec2 frag_uv, int skin_index, bool use_bod
     return src;
   }
 }
-
 void main() {
   part_info_t foot = part_info_t(ivec2(8, 208), ivec2(128, 64), vec2(0.0, 0.25), vec2(1.0, 0.5));
   part_info_t foot_shadow = part_info_t(ivec2(144, 208), ivec2(128, 64), vec2(0.0, 0.25), vec2(1.0, 0.5));
