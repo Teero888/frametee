@@ -1,6 +1,7 @@
 #include "user_interface.h"
 #include "cglm/vec2.h"
 #include "cimgui.h"
+#include "ddnet_map_loader.h"
 #include "ddnet_physics/collision.h"
 #include "demo.h"
 #include "net_events.h"
@@ -132,6 +133,7 @@ void render_menu_bar(ui_handler_t *ui) {
         igSeparator();
         igDragFloat("Prediction alpha own", &ui->prediction_alpha[0], 0.1f, 0.0f, 1.0f, "%.3f", 0);
         igDragFloat("Prediction alpha others", &ui->prediction_alpha[1], 0.1f, 0.0f, 1.0f, "%.3f", 0);
+        igCheckbox("Show center dot", &ui->center_dot);
 
         igEndMenu();
       }
@@ -375,6 +377,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->bg_color[2] = 40.f / 255.f;
   ui->prediction_alpha[0] = 1.0f;
   ui->prediction_alpha[1] = 1.0f;
+  ui->center_dot = 1;
 
   keybinds_init(&ui->keybinds);
   config_load(ui);
@@ -578,6 +581,13 @@ void render_players(ui_handler_t *ui) {
       renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p2, p3, red_col, 0.05f);
       renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p3, p4, red_col, 0.05f);
       renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p4, p1, red_col, 0.05f);
+    }
+    if (ui->center_dot) {
+      int idx = (int)p[1] * world.m_pCollision->m_MapData.width + (int)p[0];
+      bool freeze = world.m_pCollision->m_MapData.game_layer.data[idx] == TILE_FREEZE;
+      if (!freeze && world.m_pCollision->m_MapData.front_layer.data && world.m_pCollision->m_MapData.front_layer.data[idx] == TILE_FREEZE)
+        freeze = true;
+      renderer_submit_circle_filled(gfx, Z_LAYER_PREDICTION_LINES + 1.0f, p, 2.f / 32.f, freeze ? (vec4){0, 0, 1, 1} : (vec4){0, 1, 0, 1}, 4);
     }
 
     SCharacterCore *prev_core = &prev_world.m_pCharacters[i];

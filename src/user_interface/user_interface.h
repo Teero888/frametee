@@ -52,6 +52,7 @@ struct ui_handler_t {
   float lod_bias;
   float bg_color[3];
   float prediction_alpha[2]; // 0=own,1=others
+  bool center_dot;
 
   bool show_timeline;
   bool show_prediction;

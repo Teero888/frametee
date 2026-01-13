@@ -198,6 +198,10 @@ void config_load(ui_handler_t *ui) {
         }
       }
     }
+    toml_datum_t center_dot = toml_get(graphics_settings, "center_dot");
+    if (center_dot.type == TOML_BOOLEAN) {
+      ui->center_dot = (float)center_dot.u.boolean;
+    }
   }
 
   toml_free(res);
@@ -283,6 +287,7 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
   fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);
   fprintf(fp, "prediction_alpha = [%.3f, %.3f]\n", ui->prediction_alpha[0], ui->prediction_alpha[1]);
+  fprintf(fp, "center_dot = %s\n", ui->center_dot ? "true" : "false");
 
   fclose(fp);
   log_info(LOG_SOURCE, "Config saved to %s.", config_path);
