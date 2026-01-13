@@ -789,10 +789,15 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
   VkPipelineDepthStencilStateCreateInfo depth_stencil = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, .depthTestEnable = VK_FALSE, .depthWriteEnable = VK_FALSE};
 
+  VkBlendFactor src_color_factor = VK_BLEND_FACTOR_ONE;
+  if (shader == renderer->primitive_shader) {
+    src_color_factor = VK_BLEND_FACTOR_SRC_ALPHA;
+  }
+
   // CORRECTED: Standard Alpha Blending
   VkPipelineColorBlendAttachmentState color_blend = {
       .blendEnable = VK_TRUE,
-      .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+      .srcColorBlendFactor = src_color_factor,
       .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
       .colorBlendOp = VK_BLEND_OP_ADD,
       .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
@@ -1590,13 +1595,13 @@ static void ensure_primitive_space(gfx_handler_t *handler, uint32_t vertex_count
       renderer->primitive_index_count + index_count > MAX_PRIMITIVE_INDICES) {
     // If full, flush what we have so far
     flush_primitives(handler, renderer->current_command_buffer);
-    
+
     // Check again. If still full (because we didn't reset), we are out of space for this frame.
     if (renderer->primitive_vertex_count + vertex_count > MAX_PRIMITIVE_VERTICES ||
-      renderer->primitive_index_count + index_count > MAX_PRIMITIVE_INDICES) {
-        log_error(LOG_SOURCE, "Primitive buffer overflow! Increase MAX_PRIMITIVE_VERTICES/INDICES.");
-        // We can't safely reset here because previous draw calls depend on the data.
-        // Dropping geometry is the only safe fallback without ring buffering.
+        renderer->primitive_index_count + index_count > MAX_PRIMITIVE_INDICES) {
+      log_error(LOG_SOURCE, "Primitive buffer overflow! Increase MAX_PRIMITIVE_VERTICES/INDICES.");
+      // We can't safely reset here because previous draw calls depend on the data.
+      // Dropping geometry is the only safe fallback without ring buffering.
     }
   }
 }
@@ -2158,8 +2163,6 @@ static void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar,
                             ar->atlas_texture->layer_count);
   }
 
-
-
   VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                                       .magFilter = VK_FILTER_LINEAR,
                                       .minFilter = VK_FILTER_LINEAR,
@@ -2521,8 +2524,8 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
         batch_start_idx = active_ar->instance_count;
         // Check if we are still full (should not happen if we reset logic, but we don't reset instance_count global)
         if (active_ar->instance_count >= active_ar->max_instances) {
-            // Buffer full for this frame. Drop.
-            break;
+          // Buffer full for this frame. Drop.
+          break;
         }
       }
 
@@ -2543,12 +2546,12 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
         uint32_t count = active_ar->instance_count - batch_start_idx;
         renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
         batch_start_idx = active_ar->instance_count;
-        
+
         // If still no space, we can't draw this batch.
         if (active_ar->instance_count + q->data.atlas_batch.count > active_ar->max_instances) {
-             log_error(LOG_SOURCE, "Atlas batch too large for buffer! (Req: %d, Max: %d, Cur: %d)", 
-                q->data.atlas_batch.count, active_ar->max_instances, active_ar->instance_count);
-             break;
+          log_error(LOG_SOURCE, "Atlas batch too large for buffer! (Req: %d, Max: %d, Cur: %d)",
+                    q->data.atlas_batch.count, active_ar->max_instances, active_ar->instance_count);
+          break;
         }
       }
 

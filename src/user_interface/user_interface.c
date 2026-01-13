@@ -1,5 +1,6 @@
 #include "user_interface.h"
 #include "cglm/vec2.h"
+#include "cimgui.h"
 #include "ddnet_physics/collision.h"
 #include "demo.h"
 #include "net_events.h"
@@ -128,6 +129,10 @@ void render_menu_bar(ui_handler_t *ui) {
         }
 
         igColorEdit3("Background Color", ui->bg_color, ImGuiColorEditFlags_NoInputs);
+        igSeparator();
+        igDragFloat("Prediction alpha own", &ui->prediction_alpha[0], 0.1f, 0.0f, 1.0f, "%.3f", 0);
+        igDragFloat("Prediction alpha others", &ui->prediction_alpha[1], 0.1f, 0.0f, 1.0f, "%.3f", 0);
+
         igEndMenu();
       }
       igEndMenu();
@@ -368,6 +373,8 @@ void ui_init_config(ui_handler_t *ui) {
   ui->bg_color[0] = 30.f / 255.f;
   ui->bg_color[1] = 35.f / 255.f;
   ui->bg_color[2] = 40.f / 255.f;
+  ui->prediction_alpha[0] = 1.0f;
+  ui->prediction_alpha[1] = 1.0f;
 
   keybinds_init(&ui->keybinds);
   config_load(ui);
@@ -808,7 +815,7 @@ void render_players(ui_handler_t *ui) {
     vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
     vec2 p;
     lerp(ppp, pp, intra, p);
-    vec4 color = {[3] = 0.8f};
+    vec4 color = {[3] = ui->prediction_alpha[i != ui->timeline.selected_player_track_index]};
     if (core->m_FreezeTime > 0) color[0] = 1.f;
     else color[1] = 1.f;
     renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05);
@@ -875,7 +882,7 @@ void render_players(ui_handler_t *ui) {
       SCharacterCore *core = &world.m_pCharacters[i];
       vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
       vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-      vec4 color = {[3] = 0.8f};
+      vec4 color = {[3] = ui->prediction_alpha[i != ui->timeline.selected_player_track_index]};
       if (core->m_FreezeTime > 0) color[0] = 1.f;
       else color[1] = 1.f;
       renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05);

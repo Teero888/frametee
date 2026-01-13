@@ -23,7 +23,7 @@ static const char *LOG_SOURCE = "Config";
 
 static void get_config_path(char *buffer, size_t size) {
   char *config_home = NULL;
-  char dir_path[1034];// 1024 + 10 to allow the "frametee"
+  char dir_path[1034]; // 1024 + 10 to allow the "frametee"
   dir_path[0] = '\0';
 
 #ifdef _WIN32
@@ -39,7 +39,7 @@ static void get_config_path(char *buffer, size_t size) {
   } else {
     config_home = getenv("HOME");
     if (config_home) {
-      char base_dir[1024]; 
+      char base_dir[1024];
       snprintf(base_dir, sizeof(base_dir), "%s%c.config", config_home, PATH_SEP);
       MKDIR(base_dir);
       snprintf(dir_path, sizeof(dir_path), "%s%cframetee", base_dir, PATH_SEP);
@@ -130,12 +130,12 @@ void config_load(ui_handler_t *ui) {
         keybinds_clear_action(&ui->keybinds, i);
         int count = val.u.arr.size;
         for (int j = 0; j < count; j++) {
-            toml_datum_t elem = val.u.arr.elem[j];
-            if (elem.type == TOML_STRING) {
-                key_combo_t combo;
-                parse_keybind_string(elem.u.str.ptr, &combo);
-                keybinds_add(&ui->keybinds, i, combo);
-            }
+          toml_datum_t elem = val.u.arr.elem[j];
+          if (elem.type == TOML_STRING) {
+            key_combo_t combo;
+            parse_keybind_string(elem.u.str.ptr, &combo);
+            keybinds_add(&ui->keybinds, i, combo);
+          }
         }
       }
     }
@@ -189,6 +189,15 @@ void config_load(ui_handler_t *ui) {
         }
       }
     }
+    toml_datum_t prediction_alpha = toml_get(graphics_settings, "prediction_alpha");
+    if (prediction_alpha.type == TOML_ARRAY && prediction_alpha.u.arr.size == 3) {
+      for (int i = 0; i < 2; ++i) {
+        toml_datum_t val = prediction_alpha.u.arr.elem[i];
+        if (val.type == TOML_FP64) {
+          ui->prediction_alpha[i] = (float)val.u.fp64;
+        }
+      }
+    }
   }
 
   toml_free(res);
@@ -216,51 +225,51 @@ void config_save(ui_handler_t *ui) {
     if (!id) continue;
 
     int count = keybinds_get_count_for_action(&ui->keybinds, i);
-    
+
     // Check if customized
     bool is_default = false;
     int def_count = keybinds_get_count_for_action(&defaults, i);
     if (count == def_count) {
-        bool all_match = true;
-        // Simple comparison: check if all bindings match exactly in order (not perfect but acceptable)
-        // Or check if every binding in UI exists in default.
-        // Given that init adds them in order, if user hasn't changed, order matches.
-        for (int k = 0; k < count; k++) {
-            keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, k);
-            keybind_entry_t *def = keybinds_get_binding_for_action(&defaults, i, k);
-            if (!def || bind->combo.key != def->combo.key || bind->combo.ctrl != def->combo.ctrl || 
-                bind->combo.alt != def->combo.alt || bind->combo.shift != def->combo.shift) {
-                all_match = false;
-                break;
-            }
+      bool all_match = true;
+      // Simple comparison: check if all bindings match exactly in order (not perfect but acceptable)
+      // Or check if every binding in UI exists in default.
+      // Given that init adds them in order, if user hasn't changed, order matches.
+      for (int k = 0; k < count; k++) {
+        keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, k);
+        keybind_entry_t *def = keybinds_get_binding_for_action(&defaults, i, k);
+        if (!def || bind->combo.key != def->combo.key || bind->combo.ctrl != def->combo.ctrl ||
+            bind->combo.alt != def->combo.alt || bind->combo.shift != def->combo.shift) {
+          all_match = false;
+          break;
         }
-        if (all_match) is_default = true;
+      }
+      if (all_match) is_default = true;
     }
 
     if (!is_default) {
-        if (count == 1) {
-            keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, 0);
-            const char *combo_str = keybind_get_combo_string(&bind->combo);
-            fprintf(fp, "%s = \"%s\"\n", id, combo_str);
-        } else if (count > 1) {
-            fprintf(fp, "%s = [", id);
-            for (int k = 0; k < count; k++) {
-                keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, k);
-                const char *combo_str = keybind_get_combo_string(&bind->combo);
-                fprintf(fp, "\"%s\"%s", combo_str, (k < count - 1) ? ", " : "");
-            }
-            fprintf(fp, "]\n");
-        } else {
-            // Count 0, maybe explicitly unbound? 
-            // If default had > 0, we should save empty list to override default.
-            // But tomlc17 writer might need care.
-            if (def_count > 0) {
-                fprintf(fp, "%s = []\n", id);
-            }
+      if (count == 1) {
+        keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, 0);
+        const char *combo_str = keybind_get_combo_string(&bind->combo);
+        fprintf(fp, "%s = \"%s\"\n", id, combo_str);
+      } else if (count > 1) {
+        fprintf(fp, "%s = [", id);
+        for (int k = 0; k < count; k++) {
+          keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, k);
+          const char *combo_str = keybind_get_combo_string(&bind->combo);
+          fprintf(fp, "\"%s\"%s", combo_str, (k < count - 1) ? ", " : "");
         }
+        fprintf(fp, "]\n");
+      } else {
+        // Count 0, maybe explicitly unbound?
+        // If default had > 0, we should save empty list to override default.
+        // But tomlc17 writer might need care.
+        if (def_count > 0) {
+          fprintf(fp, "%s = []\n", id);
+        }
+      }
     }
   }
-  
+
   if (defaults.bindings) free(defaults.bindings);
 
   fprintf(fp, "\n[mouse]\n");
@@ -273,6 +282,7 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "fps_limit = %d\n", ui->fps_limit);
   fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
   fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);
+  fprintf(fp, "prediction_alpha = [%.3f, %.3f]\n", ui->prediction_alpha[0], ui->prediction_alpha[1]);
 
   fclose(fp);
   log_info(LOG_SOURCE, "Config saved to %s.", config_path);
