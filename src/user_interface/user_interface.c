@@ -394,6 +394,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->prediction_length = 100;
   ui->show_skin_browser = false;
   ui->show_net_events_window = false;
+  particle_system_init(&ui->particle_system);
   timeline_init(ui);
   camera_init(&gfx_handler->renderer.camera);
   undo_manager_init(&ui->undo_manager);
@@ -883,7 +884,20 @@ void render_players(ui_handler_t *ui) {
 }
 
 void render_pickups(ui_handler_t *ui) {
+  if (ui->num_pickups <= 0) return;
   gfx_handler_t *h = ui->gfx_handler;
+  atlas_renderer_t *ar = &h->renderer.gameskin_renderer;
+
+  atlas_instance_t *instances = malloc(sizeof(atlas_instance_t) * ui->num_pickups);
+  if (!instances) return;
+
+  uint32_t count = 0;
+
+  float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
+  float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
+  if (ui->timeline.is_reversing) intra = 1.f - intra;
+  intra += h->user_interface.timeline.current_tick;
+
   for (int i = 0; i < ui->num_pickups; ++i) {
     vec2 pos = {vgetx(ui->pickup_positions[i]) / 32.f, vgety(ui->pickup_positions[i]) / 32.f};
     vec2 size = {1.0f, 1.0f};
@@ -893,7 +907,7 @@ void render_pickups(ui_handler_t *ui) {
     // render health/armor
     if (pickup.m_Type == POWERUP_HEALTH || pickup.m_Type == POWERUP_ARMOR) {
       idx = GAMESKIN_PICKUP_HEALTH + pickup.m_Type;
-      sprite_definition_t *sprite_def = &h->renderer.gameskin_renderer.sprite_definitions[idx];
+      sprite_definition_t *sprite_def = &ar->sprite_definitions[idx];
       float w = sprite_def->w;
       float h = sprite_def->h;
       float f = sqrtf(w * w + h * h);
@@ -903,7 +917,7 @@ void render_pickups(ui_handler_t *ui) {
       size[1] = 1.f / scaleY;
     } else if (pickup.m_Type >= POWERUP_ARMOR_SHOTGUN) { // render weapon armor
       idx = GAMESKIN_PICKUP_ARMOR_SHOTGUN + pickup.m_Type - POWERUP_ARMOR_SHOTGUN;
-      sprite_definition_t *sprite_def = &h->renderer.gameskin_renderer.sprite_definitions[idx];
+      sprite_definition_t *sprite_def = &ar->sprite_definitions[idx];
       float w = sprite_def->w;
       float h = sprite_def->h;
       float f = sqrtf(w * w + h * h);
@@ -914,7 +928,7 @@ void render_pickups(ui_handler_t *ui) {
     } else if (pickup.m_Type == POWERUP_WEAPON) { // render weapon pickup
       idx = GAMESKIN_PICKUP_HAMMER + pickup.m_Subtype;
       const weapon_spec_t *spec = &game_data.weapons.id[pickup.m_Subtype];
-      sprite_definition_t *sprite_def = &h->renderer.gameskin_renderer.sprite_definitions[idx];
+      sprite_definition_t *sprite_def = &ar->sprite_definitions[idx];
       float w = sprite_def->w;
       float h = sprite_def->h;
       float f = sqrtf(w * w + h * h);
@@ -925,7 +939,7 @@ void render_pickups(ui_handler_t *ui) {
       size[1] = spec->visual_size * scaleY / 32.0f;
     } else if (pickup.m_Type == POWERUP_NINJA) { // render ninja pickup
       idx = GAMESKIN_PICKUP_NINJA;
-      sprite_definition_t *sprite_def = &h->renderer.gameskin_renderer.sprite_definitions[idx];
+      sprite_definition_t *sprite_def = &ar->sprite_definitions[idx];
       float w = sprite_def->w;
       float h = sprite_def->h;
       float f = sqrtf(w * w + h * h);
@@ -936,23 +950,31 @@ void render_pickups(ui_handler_t *ui) {
       size[1] = 4.f * scaleY;
       pos[0] -= 10.f / 32.f;
     }
-    if (idx == -1) {
+
+    if (idx != -1) {
+      float Offset = pos[1] + pos[0];
+      pos[0] += (cos((intra / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
+      pos[1] += (sin((intra / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
+
+      glm_vec2_copy(pos, instances[count].pos);
+      glm_vec2_copy(size, instances[count].size);
+      instances[count].rotation = 0.0f;
+      instances[count].sprite_index = idx;
+      glm_vec4_copy((vec4){1.0f, 1.0f, 1.0f, 1.0f}, instances[count].color);
+      instances[count].tiling[0] = 1.0f;
+      instances[count].tiling[1] = 1.0f;
+
+      renderer_calculate_atlas_uvs(ar, idx, &instances[count]);
+      count++;
+    } else {
       log_warn("pickups", "Unknown pickup type %d encountered in render_pickups\n", pickup.m_Type);
-      continue;
     }
-
-    // animation
-    float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
-    float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
-    if (ui->timeline.is_reversing) intra = 1.f - intra;
-    intra += h->user_interface.timeline.current_tick;
-
-    float Offset = pos[1] + pos[0];
-    pos[0] += (cos((intra / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
-    pos[1] += (sin((intra / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
-
-    renderer_submit_atlas(h, &h->renderer.gameskin_renderer, Z_LAYER_PICKUPS, pos, size, 0.0f, idx, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
   }
+
+  if (count > 0) {
+    renderer_submit_atlas_batch(h, ar, Z_LAYER_PICKUPS, instances, count, false);
+  }
+  free(instances);
 }
 
 void render_cursor(ui_handler_t *ui) {
@@ -1110,10 +1132,13 @@ void ui_post_map_load(ui_handler_t *ui) {
   // by default they are NULL so this should be fine
   free(ui->pickups);
   free(ui->pickup_positions);
+  free(ui->ninja_pickup_indices);
   // function might return early leaving them dangling so reset them
   ui->num_pickups = 0;
   ui->pickups = NULL;
   ui->pickup_positions = NULL;
+  ui->ninja_pickup_indices = NULL;
+  ui->num_ninja_pickups = 0;
 
   gfx_handler_t *h = ui->gfx_handler;
   int width = h->physics_handler.collision.m_MapData.width;
@@ -1129,24 +1154,39 @@ void ui_post_map_load(ui_handler_t *ui) {
   ui->num_pickups = num;
   ui->pickups = malloc(sizeof(SPickup) * num);
   ui->pickup_positions = malloc(sizeof(mvec2) * num);
+  ui->ninja_pickup_indices = malloc(sizeof(int) * num);
+  ui->num_ninja_pickups = 0;
+
   num = 0;
   for (int i = 0; i < width * height; ++i) {
     const SPickup pickup = h->physics_handler.collision.m_pPickups[i];
     if (pickup.m_Type >= 0) {
       ui->pickup_positions[num] = vec2_init((i % width) * 32.f + 16.f, (int)(i / width) * 32.f + 16.f);
-      ui->pickups[num++] = pickup;
+      ui->pickups[num] = pickup;
+      if (pickup.m_Type == POWERUP_NINJA) {
+        ui->ninja_pickup_indices[ui->num_ninja_pickups++] = num;
+      }
+      num++;
     }
     const SPickup fpickup = h->physics_handler.collision.m_pFrontPickups[i];
     if (fpickup.m_Type >= 0) {
       ui->pickup_positions[num] = vec2_init((i % width) * 32.f + 16.f, (int)(i / width) * 32.f + 16.f);
-      ui->pickups[num++] = fpickup;
+      ui->pickups[num] = fpickup;
+      if (fpickup.m_Type == POWERUP_NINJA) {
+        ui->ninja_pickup_indices[ui->num_ninja_pickups++] = num;
+      }
+      num++;
     }
   }
 }
 
 void ui_cleanup(ui_handler_t *ui) {
+  free(ui->pickups);
+  free(ui->pickup_positions);
+  free(ui->ninja_pickup_indices);
   config_save(ui);
   plugin_manager_shutdown(&ui->plugin_manager);
+  particle_system_cleanup(&ui->particle_system);
   timeline_cleanup(&ui->timeline);
   undo_manager_cleanup(&ui->undo_manager);
   skin_manager_free(&ui->skin_manager);

@@ -458,6 +458,11 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->camera.zoom_wanted = 5.0f;
   renderer->lod_bias = -0.5f; // Default bias
 
+  // Initialize transient memory (128 MB)
+  renderer->transient_capacity = 128 * 1024 * 1024;
+  renderer->transient_memory = malloc(renderer->transient_capacity);
+  renderer->transient_offset = 0;
+
   VkCommandPoolCreateInfo pool_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
                                        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
                                        .queueFamilyIndex = handler->g_queue_family};
@@ -500,7 +505,7 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->skin_renderer.skin_shader = renderer_load_shader(handler, "data/shaders/skin.vert.spv", "data/shaders/skin.frag.spv");
 
   // allocate big instance buffer
-  create_buffer(handler, sizeof(skin_instance_t) * 100000, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  create_buffer(handler, sizeof(skin_instance_t) * MAX_SKIN_INSTANCES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->skin_renderer.instance_buffer);
   vkMapMemory(handler->g_device, renderer->skin_renderer.instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->skin_renderer.instance_ptr);
 
@@ -559,7 +564,7 @@ int renderer_init(gfx_handler_t *handler) {
                                                                         [GAMESKIN_FLAG_BLUE] = {384, 256, 128, 256},
                                                                         [GAMESKIN_FLAG_RED] = {512, 256, 128, 256}};
 
-  renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png", gameskin_sprites, GAMESKIN_SPRITE_COUNT, 100000);
+  renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png", gameskin_sprites, GAMESKIN_SPRITE_COUNT, MAX_ATLAS_INSTANCES);
 
   // Particles Sprites (8x8 grid, 64px unit)
   static sprite_definition_t particle_sprites[PARTICLE_SPRITE_COUNT] = {
@@ -574,7 +579,7 @@ int renderer_init(gfx_handler_t *handler) {
       [PARTICLE_AIRJUMP] = {128, 128, 128, 128}, // 2,2 2x2
       [PARTICLE_HIT01] = {256, 64, 128, 128}     // 4,1 2x2
   };
-  renderer_init_atlas_renderer(handler, &renderer->particle_renderer, "data/textures/particles.png", particle_sprites, PARTICLE_SPRITE_COUNT, 10000);
+  renderer_init_atlas_renderer(handler, &renderer->particle_renderer, "data/textures/particles.png", particle_sprites, PARTICLE_SPRITE_COUNT, MAX_ATLAS_INSTANCES);
 
   // Extras Sprites (16x16 grid, 32px unit)
   static sprite_definition_t extra_sprites[EXTRA_SPRITE_COUNT] = {
@@ -583,7 +588,7 @@ int renderer_init(gfx_handler_t *handler) {
       [EXTRA_PULLEY] = {128, 0, 32, 32},  // 4,0 1x1
       [EXTRA_HECTAGON] = {192, 0, 64, 64} // 6,0 2x2
   };
-  renderer_init_atlas_renderer(handler, &renderer->extras_renderer, "data/textures/extras.png", extra_sprites, EXTRA_SPRITE_COUNT, 10000);
+  renderer_init_atlas_renderer(handler, &renderer->extras_renderer, "data/textures/extras.png", extra_sprites, EXTRA_SPRITE_COUNT, MAX_ATLAS_INSTANCES);
 
   // Initialize cursor renderer (using gameskin)
   static sprite_definition_t cursor_sprites[CURSOR_SPRITE_COUNT + 1] = {
@@ -670,6 +675,11 @@ void renderer_cleanup(gfx_handler_t *handler) {
   renderer_cleanup_atlas_renderer(handler, &renderer->cursor_renderer);
   renderer_cleanup_atlas_renderer(handler, &renderer->particle_renderer);
   renderer_cleanup_atlas_renderer(handler, &renderer->extras_renderer);
+
+  if (renderer->transient_memory) {
+    free(renderer->transient_memory);
+    renderer->transient_memory = NULL;
+  }
 
   log_info(LOG_SOURCE, "Renderer cleaned up successfully.");
 }
@@ -1189,6 +1199,7 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
   renderer->primitive_index_offset_drawn = 0;
   renderer->ubo_buffer_offset = 0;
   renderer->current_command_buffer = command_buffer;
+  renderer->transient_offset = 0;
 
   VkViewport viewport = {0.f, 0.f, handler->viewport[0], handler->viewport[1], 0.0f, 1.0f};
   vkCmdSetViewport(command_buffer, 0, 1, &viewport);
@@ -2396,6 +2407,45 @@ void renderer_submit_line(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, ve
   glm_vec4_copy(color, cmd->data.prim.color);
 }
 
+void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, atlas_instance_t *out_inst) {
+  if (sprite_index >= ar->sprite_count) return;
+  float layer_w = (float)ar->layer_width;
+  float layer_h = (float)ar->layer_height;
+  float sprite_w = (float)ar->sprite_definitions[sprite_index].w;
+  float sprite_h = (float)ar->sprite_definitions[sprite_index].h;
+  float padding = 1.0f;
+
+  out_inst->uv_scale[0] = sprite_w / layer_w;
+  out_inst->uv_scale[1] = sprite_h / layer_h;
+  out_inst->uv_offset[0] = padding / layer_w;
+  out_inst->uv_offset[1] = padding / layer_h;
+}
+
+void renderer_submit_atlas_batch(struct gfx_handler_t *h, struct atlas_renderer_t *ar, float z, const atlas_instance_t *instances,
+                                 uint32_t count, bool screen_space) {
+  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  if (count == 0) return;
+
+  // Allocate from transient memory
+  size_t size = count * sizeof(atlas_instance_t);
+  if (h->renderer.transient_offset + size > h->renderer.transient_capacity) {
+    log_error(LOG_SOURCE, "Transient memory exhausted! Cannot submit atlas batch.");
+    return;
+  }
+
+  void *dest = h->renderer.transient_memory + h->renderer.transient_offset;
+  memcpy(dest, instances, size);
+  h->renderer.transient_offset += size;
+
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_ATLAS_BATCH;
+  cmd->z = z;
+  cmd->data.atlas_batch.ar = ar;
+  cmd->data.atlas_batch.instances = (atlas_instance_t *)dest;
+  cmd->data.atlas_batch.count = count;
+  cmd->data.atlas_batch.screen_space = screen_space;
+}
+
 void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   struct renderer_state_t *r = &h->renderer;
   if (r->queue.count == 0) return;
@@ -2417,9 +2467,17 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   for (uint32_t i = 0; i < r->queue.count; i++) {
     render_command_t *q = &r->queue.commands[i];
 
-    // Flush atlas if switching away
+    // Check if we need to flush atlas buffer
+    bool is_atlas = (q->type == RENDER_CMD_ATLAS || q->type == RENDER_CMD_ATLAS_BATCH);
     if (active_ar != NULL) {
-      if (q->type != RENDER_CMD_ATLAS || q->data.atlas.ar != active_ar || q->data.atlas.screen_space != ar_screen_space) {
+      bool flush = !is_atlas;
+      if (is_atlas) {
+        atlas_renderer_t *next_ar = (q->type == RENDER_CMD_ATLAS) ? q->data.atlas.ar : q->data.atlas_batch.ar;
+        bool next_ss = (q->type == RENDER_CMD_ATLAS) ? q->data.atlas.screen_space : q->data.atlas_batch.screen_space;
+        if (next_ar != active_ar || next_ss != ar_screen_space) flush = true;
+      }
+
+      if (flush) {
         uint32_t count = active_ar->instance_count - batch_start_idx;
         renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
         active_ar = NULL;
@@ -2432,9 +2490,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     }
 
     // Flush primitives if switching to non-primitive
-    if (q->type != RENDER_CMD_RECT_FILLED &&
-        q->type != RENDER_CMD_CIRCLE_FILLED &&
-        q->type != RENDER_CMD_LINE &&
+    if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_CIRCLE_FILLED && q->type != RENDER_CMD_LINE &&
         r->primitive_index_count > r->primitive_index_offset_drawn) {
       flush_primitives(h, cmd);
     }
@@ -2445,12 +2501,11 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       break;
 
     case RENDER_CMD_SKIN:
-      if (r->skin_renderer.instance_count >= 100000) {
+      if (r->skin_renderer.instance_count >= MAX_SKIN_INSTANCES) {
         renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
       }
-      renderer_push_skin_instance(h, q->data.skin.pos, q->data.skin.scale, q->data.skin.skin_index,
-                                  q->data.skin.eye_state, q->data.skin.dir, &q->data.skin.anim_state,
-                                  q->data.skin.col_body, q->data.skin.col_feet, q->data.skin.custom_color);
+      renderer_push_skin_instance(h, q->data.skin.pos, q->data.skin.scale, q->data.skin.skin_index, q->data.skin.eye_state, q->data.skin.dir,
+                                  &q->data.skin.anim_state, q->data.skin.col_body, q->data.skin.col_feet, q->data.skin.custom_color);
       break;
 
     case RENDER_CMD_ATLAS:
@@ -2464,10 +2519,42 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
         uint32_t count = active_ar->instance_count - batch_start_idx;
         renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
         batch_start_idx = active_ar->instance_count;
+        // Check if we are still full (should not happen if we reset logic, but we don't reset instance_count global)
+        if (active_ar->instance_count >= active_ar->max_instances) {
+            // Buffer full for this frame. Drop.
+            break;
+        }
       }
 
-      renderer_push_atlas_instance(active_ar, q->data.atlas.pos, q->data.atlas.size, q->data.atlas.rotation,
-                                   q->data.atlas.sprite_index, q->data.atlas.tile_uv, q->data.atlas.color);
+      renderer_push_atlas_instance(active_ar, q->data.atlas.pos, q->data.atlas.size, q->data.atlas.rotation, q->data.atlas.sprite_index,
+                                   q->data.atlas.tile_uv, q->data.atlas.color);
+      break;
+
+    case RENDER_CMD_ATLAS_BATCH:
+      if (active_ar == NULL) {
+        active_ar = q->data.atlas_batch.ar;
+        ar_screen_space = q->data.atlas_batch.screen_space;
+        batch_start_idx = active_ar->instance_count;
+      }
+
+      // Check for space
+      if (active_ar->instance_count + q->data.atlas_batch.count > active_ar->max_instances) {
+        // Flush current batch
+        uint32_t count = active_ar->instance_count - batch_start_idx;
+        renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
+        batch_start_idx = active_ar->instance_count;
+        
+        // If still no space, we can't draw this batch.
+        if (active_ar->instance_count + q->data.atlas_batch.count > active_ar->max_instances) {
+             log_error(LOG_SOURCE, "Atlas batch too large for buffer! (Req: %d, Max: %d, Cur: %d)", 
+                q->data.atlas_batch.count, active_ar->max_instances, active_ar->instance_count);
+             break;
+        }
+      }
+
+      memcpy(&active_ar->instance_ptr[active_ar->instance_count], q->data.atlas_batch.instances,
+             q->data.atlas_batch.count * sizeof(atlas_instance_t));
+      active_ar->instance_count += q->data.atlas_batch.count;
       break;
 
     case RENDER_CMD_RECT_FILLED:

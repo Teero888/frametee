@@ -35,9 +35,20 @@ static void mix_colors(vec4 c1, vec4 c2, float t, vec4 out) { glm_vec4_lerp(c1, 
 
 void particle_system_init(particle_system_t *ps) {
   memset(ps, 0, sizeof(particle_system_t));
-  ps->next_index = 0;
+  ps->particles = calloc(MAX_PARTICLES, sizeof(particle_t));
+  if (!ps->particles) {
+    log_error("ParticleSystem", "Failed to allocate particles");
+  }
+  ps->active_count = 0;
   ps->next_flow_index = 0;
   ps->last_simulated_tick = -1;
+}
+
+void particle_system_cleanup(particle_system_t *ps) {
+  if (ps->particles) {
+    free(ps->particles);
+    ps->particles = NULL;
+  }
 }
 
 void particle_system_prune_by_time(particle_system_t *ps, double min_time) {
@@ -45,7 +56,7 @@ void particle_system_prune_by_time(particle_system_t *ps, double min_time) {
 
   // Compact particles
   int valid_count = 0;
-  for (int i = 0; i < MAX_PARTICLES; ++i) {
+  for (int i = 0; i < ps->active_count; ++i) {
     if (ps->particles[i].life_span > 0.0001f && ps->particles[i].creation_tick <= target_tick) {
       if (i != valid_count) {
         ps->particles[valid_count] = ps->particles[i];
@@ -53,11 +64,7 @@ void particle_system_prune_by_time(particle_system_t *ps, double min_time) {
       valid_count++;
     }
   }
-  // Clear the rest
-  if (valid_count < MAX_PARTICLES) {
-    memset(&ps->particles[valid_count], 0, (MAX_PARTICLES - valid_count) * sizeof(particle_t));
-  }
-  ps->next_index = valid_count % MAX_PARTICLES;
+  ps->active_count = valid_count;
 
   // Compact flow events
   int valid_flow = 0;
@@ -83,9 +90,9 @@ void particle_spawn(particle_system_t *ps, int group, particle_t *p_template, fl
   int current_tick = (int)(ps->current_time * 50.0 + 0.1);
   if (current_tick <= ps->last_simulated_tick) return;
 
-  int id = ps->next_index;
-  ps->next_index = (ps->next_index + 1) % MAX_PARTICLES;
+  if (ps->active_count >= MAX_PARTICLES) return;
 
+  int id = ps->active_count++;
   particle_t *p = &ps->particles[id];
   *p = *p_template;
 
@@ -93,11 +100,16 @@ void particle_spawn(particle_system_t *ps, int group, particle_t *p_template, fl
   p->group = group;
   // Initialize deterministic seed for this particle
   p->seed = ps->rng_seed;
+  p->current_seed = p->seed;
   p->creation_tick = current_tick;
   ps_frand01(ps); // Advance the generator
 
   glm_vec2_copy(p_template->start_pos, p->start_pos);
   glm_vec2_copy(p_template->start_vel, p->start_vel);
+
+  glm_vec2_copy(p->start_pos, p->current_pos);
+  glm_vec2_copy(p->start_vel, p->current_vel);
+  p->last_sim_time = p->spawn_time;
 }
 
 static void flow_add(particle_system_t *ps, vec2 pos, float strength) {
@@ -172,6 +184,87 @@ static void move_point(map_data_t *map, vec2 *inout_pos, vec2 *inout_vel, float 
   glm_vec2_add(pos, vel, *inout_pos);
 }
 
+static void particle_simulate_step(particle_system_t *ps, particle_t *p, vec2 pos, vec2 vel, uint32_t *seed, double sim_time, float dt, map_data_t *map) {
+  vel[1] += p->gravity * dt;
+
+  if (p->flow_affected > 0.0f) {
+    vec2 flow_vel;
+    flow_get(ps, sim_time, pos, flow_vel);
+    vel[0] += flow_vel[0] * p->flow_affected * dt;
+    vel[1] += flow_vel[1] * p->flow_affected * dt;
+  }
+
+  if (p->friction > 0.0f) {
+    glm_vec2_scale(vel, powf(p->friction, dt / 0.05f), vel);
+  }
+
+  vec2 move;
+  glm_vec2_scale(vel, dt, move);
+  if (p->collides && map) {
+    float elasticity = 0.1f + 0.9f * deterministic_frand(seed);
+    move_point(map, (vec2 *)pos, &move, elasticity);
+    if (dt > 0.0001f) {
+      glm_vec2_scale(move, 1.0f / dt, vel);
+    }
+  } else {
+    glm_vec2_add(pos, move, pos);
+  }
+}
+
+void particle_system_update_sim(particle_system_t *ps, map_data_t *map) {
+  // We perform simulation AND compaction here.
+  // Iterate active particles.
+  const double step = 0.02;
+  double sim_target = ps->current_time;
+
+  for (int i = 0; i < ps->active_count; ++i) {
+    particle_t *p = &ps->particles[i];
+
+    // Check life
+    double age = sim_target - p->spawn_time;
+    if (age > p->life_span || age < -0.001) { // Dead or future (shouldn't happen if spawned correctly)
+      // Swap with last
+      if (i != ps->active_count - 1) {
+        ps->particles[i] = ps->particles[ps->active_count - 1];
+      }
+      ps->active_count--;
+      i--; // Recheck this slot
+      continue;
+    }
+
+    // Incremental Simulation
+    if (p->last_sim_time > sim_target + 0.001) {
+      // Rewind detected?
+      // Use tolerance to prevent killing particles that are just on the boundary due to float jitter
+      if (sim_target < p->spawn_time - 0.001) {
+         // Should have been pruned. Kill it.
+         if (i != ps->active_count - 1) ps->particles[i] = ps->particles[ps->active_count - 1];
+         ps->active_count--;
+         i--;
+         continue;
+      }
+      
+      // If significant rewind, reset. Otherwise ignore (pause).
+      if (sim_target < p->last_sim_time - 0.05) {
+         glm_vec2_copy(p->start_pos, p->current_pos);
+         glm_vec2_copy(p->start_vel, p->current_vel);
+         p->last_sim_time = p->spawn_time;
+         p->current_seed = p->seed;
+      }
+    }
+
+    while (p->last_sim_time < sim_target) {
+      double next_step_time = p->last_sim_time + step;
+      if (next_step_time > sim_target + 0.001) {
+        if (next_step_time > sim_target) break;
+      }
+
+      particle_simulate_step(ps, p, p->current_pos, p->current_vel, &p->current_seed, p->last_sim_time, (float)step, map);
+      p->last_sim_time += step;
+    }
+  }
+}
+
 void particle_system_update(particle_system_t *ps, float dt, map_data_t *map) {
   (void)ps;
   (void)dt;
@@ -186,68 +279,43 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
   int current_atlas_type = -1;
   atlas_renderer_t *current_ar = NULL;
 
-  for (int i = 0; i < MAX_PARTICLES; ++i) {
+  const double step = 0.02;
+
+  for (int i = 0; i < ps->active_count; ++i) {
     particle_t *p = &ps->particles[i];
-    if (p->life_span <= 0.0001f) continue;
-    if (p->spawn_time > ps->current_time) continue;
+    
+    // Group filter
     bool group_match = false;
-    for (int g = 0; g < count; ++g)
+    for (int g = 0; g < count; ++g) {
       if (p->group == groups[g]) {
         group_match = true;
         break;
       }
+    }
     if (!group_match) continue;
 
     double age = ps->current_time - p->spawn_time;
-    if (age > p->life_span) continue;
+    if (age < 0) continue; // Future
 
-    uint32_t sim_seed = p->seed;
+    // Simulation is done in update_sim. We just interpolate.
+    
+    vec2 pos;
+    glm_vec2_copy(p->current_pos, pos);
 
-    vec2 pos, vel, prev_pos;
-    glm_vec2_copy(p->start_pos, pos);
-    glm_vec2_copy(p->start_vel, vel);
-    glm_vec2_copy(pos, prev_pos);
+    // Interpolation for smooth movement
+    // Predict next step without modifying state
+    float t = (float)((ps->current_time - p->last_sim_time) / step);
+    if (t > 0.001f && t <= 1.0f) {
+      vec2 next_pos, next_vel;
+      glm_vec2_copy(p->current_pos, next_pos);
+      glm_vec2_copy(p->current_vel, next_vel);
+      uint32_t temp_seed = p->current_seed;
 
-    float rot = p->rot + p->rot_speed * (float)age;
-    double sim_time = 0.0;
-    const double step = 0.02;
-
-    while (sim_time < age) {
-      glm_vec2_copy(pos, prev_pos);
-      float dt = (float)step;
-
-      vel[1] += p->gravity * dt;
-
-      if (p->flow_affected > 0.0f) {
-        vec2 flow_vel;
-        flow_get(ps, p->spawn_time + sim_time, pos, flow_vel);
-        vel[0] += flow_vel[0] * p->flow_affected * dt;
-        vel[1] += flow_vel[1] * p->flow_affected * dt;
-      }
-
-      if (p->friction > 0.0f) {
-        glm_vec2_scale(vel, powf(p->friction, dt / 0.05f), vel);
-      }
-
-      vec2 move;
-      glm_vec2_scale(vel, dt, move);
-      if (p->collides && gfx->map_data) {
-        float elasticity = 0.1f + 0.9f * deterministic_frand(&sim_seed);
-        move_point(gfx->map_data, &pos, &move, elasticity);
-        if (dt > 0.0001f) {
-          glm_vec2_scale(move, 1.0f / dt, vel);
-        }
-      } else {
-        glm_vec2_add(pos, move, pos);
-      }
-
-      sim_time += step;
+      particle_simulate_step(ps, p, next_pos, next_vel, &temp_seed, p->last_sim_time, (float)step, gfx->map_data);
+      glm_vec2_lerp(p->current_pos, next_pos, t, pos);
     }
 
-    float t = (float)((age - (sim_time - step)) / step);
-    if (t < 0.0f) t = 0.0f;
-    if (t > 1.0f) t = 1.0f;
-    glm_vec2_lerp(prev_pos, pos, t, pos);
+    float rot = p->rot + p->rot_speed * (float)age;
 
     int atlas_type = (p->sprite_index < PARTICLE_SPRITE_OFFSET) ? 1 : (p->sprite_index < EXTRA_SPRITE_OFFSET ? 2 : 3);
     atlas_renderer_t *target_ar =

@@ -16,7 +16,9 @@
 #define MAX_UBOS_PER_DRAW 2
 #define MAX_PRIMITIVE_VERTICES 100000
 #define MAX_PRIMITIVE_INDICES 200000
-#define MAX_RENDER_COMMANDS 32768
+#define MAX_RENDER_COMMANDS 65536
+#define MAX_ATLAS_INSTANCES 1000000
+#define MAX_SKIN_INSTANCES 1000000
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <malloc.h>
@@ -189,6 +191,7 @@ typedef enum {
   RENDER_CMD_MAP,
   RENDER_CMD_SKIN,
   RENDER_CMD_ATLAS,
+  RENDER_CMD_ATLAS_BATCH,
   RENDER_CMD_RECT_FILLED,
   RENDER_CMD_CIRCLE_FILLED,
   RENDER_CMD_LINE
@@ -219,6 +222,12 @@ struct render_command_t {
       vec4 color;
       bool screen_space;
     } atlas;
+    struct {
+      atlas_renderer_t *ar;
+      const atlas_instance_t *instances;
+      uint32_t count;
+      bool screen_space;
+    } atlas_batch;
     struct {
       vec2 p1;
       vec2 p2;
@@ -273,6 +282,10 @@ struct renderer_state_t {
   atlas_renderer_t particle_renderer;
   atlas_renderer_t extras_renderer;
 
+  uint8_t *transient_memory;
+  size_t transient_offset;
+  size_t transient_capacity;
+
   render_queue_t queue; // The new Render Queue
 };
 
@@ -314,6 +327,8 @@ VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, Vk
 void renderer_submit_map(gfx_handler_t *h, float z);
 void renderer_submit_skin(gfx_handler_t *h, float z, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet, bool custom);
 void renderer_submit_atlas(gfx_handler_t *h, atlas_renderer_t *ar, float z, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv, vec4 color, bool screen_space);
+void renderer_submit_atlas_batch(gfx_handler_t *h, atlas_renderer_t *ar, float z, const atlas_instance_t *instances, uint32_t count, bool screen_space);
+void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, atlas_instance_t *out_inst);
 void renderer_submit_rect_filled(gfx_handler_t *h, float z, vec2 pos, vec2 size, vec4 color);
 void renderer_submit_circle_filled(gfx_handler_t *h, float z, vec2 center, float radius, vec4 color, uint32_t segments);
 void renderer_submit_line(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec4 color, float thickness);

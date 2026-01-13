@@ -6,7 +6,7 @@
 #include <renderer/renderer.h>
 #include <stdbool.h>
 
-#define MAX_PARTICLES (1024 * 8)
+#define MAX_PARTICLES (1024 * 1024)
 #define MAX_FLOW_EVENTS 64
 
 typedef enum { GROUP_PROJECTILE_TRAIL = 0,
@@ -44,6 +44,12 @@ typedef struct {
   int group;
   uint32_t seed;
   int creation_tick;
+
+  // State for incremental simulation
+  vec2 current_pos;
+  vec2 current_vel;
+  double last_sim_time;
+  uint32_t current_seed;
 } particle_t;
 
 typedef struct {
@@ -55,8 +61,8 @@ typedef struct {
 } flow_event_t;
 
 typedef struct {
-  particle_t particles[MAX_PARTICLES];
-  int next_index;
+  particle_t *particles;
+  int active_count;
 
   flow_event_t flow_events[MAX_FLOW_EVENTS];
   int next_flow_index;
@@ -67,6 +73,8 @@ typedef struct {
 } particle_system_t;
 
 void particle_system_init(particle_system_t *ps);
+void particle_system_cleanup(particle_system_t *ps);
+void particle_system_update_sim(particle_system_t *ps, map_data_t *map);
 void particle_system_update(particle_system_t *ps, float dt, map_data_t *map);
 void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer);
 

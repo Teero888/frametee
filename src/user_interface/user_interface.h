@@ -27,6 +27,8 @@ struct ui_handler_t {
 
   SPickup *pickups;
   mvec2 *pickup_positions;
+  int *ninja_pickup_indices;
+  int num_ninja_pickups;
 
   ImVec2 viewport_window_pos;
   vec2 last_render_pos;

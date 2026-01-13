@@ -13,7 +13,7 @@
 int main(void) {
   logger_init();
 
-  struct gfx_handler_t handler;
+  static struct gfx_handler_t handler;
   if (init_gfx_handler(&handler) != 0) return 1;
   handler.map_data = &handler.physics_handler.collision.m_MapData;
 
@@ -57,6 +57,7 @@ int main(void) {
     render_players(&handler.user_interface);
 
     handler.user_interface.particle_system.current_time = (double)(handler.user_interface.timeline.current_tick + intra) * 0.02;
+    particle_system_update_sim(&handler.user_interface.particle_system, handler.map_data);
     particle_system_render(&handler.user_interface.particle_system, &handler, 0);
     particle_system_render(&handler.user_interface.particle_system, &handler, 1);
     render_cursor(&handler.user_interface);

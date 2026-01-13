@@ -676,12 +676,10 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
           }
         }
       }
-      for (int p = 0; p < ts->ui->num_pickups; ++p) {
-        SPickup pick = ts->ui->pickups[p];
-        if (pick.m_Type == POWERUP_NINJA) {
-          vec2 pos = {vgetx(ts->ui->pickup_positions[p]), vgety(ts->ui->pickup_positions[p])};
-          particles_create_powerup_shine(ps, pos, (vec2){96, 18}, 1.0f);
-        }
+      for (int i = 0; i < ts->ui->num_ninja_pickups; ++i) {
+        int p = ts->ui->ninja_pickup_indices[i];
+        vec2 pos = {vgetx(ts->ui->pickup_positions[p]), vgety(ts->ui->pickup_positions[p])};
+        particles_create_powerup_shine(ps, pos, (vec2){96, 18}, 1.0f);
       }
     }
 
