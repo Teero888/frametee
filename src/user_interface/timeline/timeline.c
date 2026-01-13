@@ -1,9 +1,9 @@
 #include "timeline.h"
 #include "../user_interface.h"
+#include "renderer/graphics_backend.h"
 #include "timeline_interaction.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
-#include "renderer/graphics_backend.h"
 #include <string.h>
 #include <system/include_cimgui.h>
 

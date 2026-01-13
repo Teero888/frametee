@@ -343,6 +343,7 @@ static bool has_perfect_duplicate(keybind_manager_t *kb, action_t action, key_co
 // Render logic for a single action in the settings window
 static void render_keybind_entry(keybind_manager_t *manager, action_t action_id) {
   int count = keybinds_get_count_for_action(manager, action_id);
+  float dpi_scale = gfx_get_ui_scale();
 
   // Show all existing bindings
   for (int i = 0; i < count; i++) {
@@ -358,14 +359,14 @@ static void render_keybind_entry(keybind_manager_t *manager, action_t action_id)
       button_label = keybind_get_combo_string(&binding->combo);
     }
 
-    if (igButton(button_label, (ImVec2){120.0f, 0})) {
+    if (igButton(button_label, (ImVec2){120.0f * dpi_scale, 0})) {
       manager->is_waiting_for_input = true;
       manager->action_to_rebind = action_id;
       manager->rebind_index = global_idx;
     }
 
-    igSameLine(0, 6.0f);
-    if (igButton(ICON_KI_TRASH, (ImVec2){0, 0})) {
+    igSameLine(0, 6.0f * dpi_scale);
+    if (igButton(ICON_KI_TRASH, (ImVec2){30.f * dpi_scale, 0})) {
       keybinds_remove(manager, global_idx);
       // We removed an item, so we must stop iterating since indices shifted
       igPopID();
@@ -373,20 +374,20 @@ static void render_keybind_entry(keybind_manager_t *manager, action_t action_id)
     }
 
     // Only put on same line if not the last one, wrapping handled by table or layout
-    igSameLine(0, 6.0f);
+    igSameLine(0, 6.0f * dpi_scale);
     igPopID();
   }
 
   // "Add" button
   igPushID_Int(action_id * 1000 + 999);
   if (manager->is_waiting_for_input && manager->action_to_rebind == action_id && manager->rebind_index == -1) {
-    if (igButton("[ press key ]", (ImVec2){100.0f, 0})) {
+    if (igButton("[ press key ]", (ImVec2){100.0f * dpi_scale, 0})) {
       // Cancel add
       manager->is_waiting_for_input = false;
       manager->rebind_index = -2;
     }
   } else {
-    if (igButton("+", (ImVec2){30.0f, 0})) {
+    if (igButton("+", (ImVec2){30.0f * dpi_scale, 0})) {
       manager->is_waiting_for_input = true;
       manager->action_to_rebind = action_id;
       manager->rebind_index = -1; // New binding

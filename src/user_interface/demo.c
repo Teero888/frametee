@@ -548,6 +548,7 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
 
 void render_demo_window(ui_handler_t *ui) {
   demo_exporter_t *dx = &ui->demo_exporter;
+  float dpi_scale = gfx_get_ui_scale();
 
   // Center the popup on first appearance
   ImGuiViewport *viewport = igGetMainViewport();
@@ -559,7 +560,7 @@ void render_demo_window(ui_handler_t *ui) {
     // Path
     igText("Export Path");
     igInputText("##Path", dx->export_path, sizeof(dx->export_path), 0, NULL, NULL);
-    igSameLine(0, 5.0f);
+    igSameLine(0, 5.0f * dpi_scale);
     if (igButton("Browse...", (ImVec2){0, 0})) {
       nfdu8char_t *save_path;
       nfdu8filteritem_t filters[] = {{"DDNet Demo", "demo"}};
@@ -578,7 +579,7 @@ void render_demo_window(ui_handler_t *ui) {
     // Ticks
     igText("Number of Ticks");
     igInputInt("##Ticks", &dx->num_ticks, 1, 100, 0);
-    igSameLine(0, 5.0f);
+    igSameLine(0, 5.0f * dpi_scale);
     if (igButton("Max Ticks", (ImVec2){0, 0})) {
       dx->num_ticks = model_get_max_timeline_tick(&ui->timeline);
     }
@@ -586,7 +587,7 @@ void render_demo_window(ui_handler_t *ui) {
     igSeparator();
     igSpacing();
 
-    if (igButton("Export", (ImVec2){120, 0})) {
+    if (igButton("Export", (ImVec2){120 * dpi_scale, 0})) {
       if (strlen(dx->export_path) > 0) {
         const char *map_name_to_use = (strlen(dx->map_name) > 0) ? dx->map_name : "unnamed_map";
         int result = export_to_demo(ui, dx->export_path, map_name_to_use, dx->num_ticks);
@@ -602,9 +603,9 @@ void render_demo_window(ui_handler_t *ui) {
     }
 
     igSetItemDefaultFocus();
-    igSameLine(0, 10.0f);
+    igSameLine(0, 10.0f * dpi_scale);
 
-    if (igButton("Cancel", (ImVec2){120, 0})) {
+    if (igButton("Cancel", (ImVec2){120 * dpi_scale, 0})) {
       igCloseCurrentPopup();
     }
 

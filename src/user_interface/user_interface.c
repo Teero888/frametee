@@ -240,15 +240,16 @@ static int g_pending_remove_index = -1;
 void render_player_manager(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   physics_handler_t *ph = &ui->gfx_handler->physics_handler;
+  float dpi_scale = gfx_get_ui_scale();
   if (igBegin("Players", NULL, 0)) {
     static int num_to_add = 1;
-    igPushItemWidth(50);
+    igPushItemWidth(50 * dpi_scale);
     igDragInt("##NumToAdd", &num_to_add, 1, 1, 1000, "%d", ImGuiSliderFlags_None);
     // igInputInt("##NumToAdd", &num_to_add, 0, 0, 0);
     igPopItemWidth();
     if (num_to_add < 1) num_to_add = 1;
 
-    igSameLine(0, 5.0f);
+    igSameLine(0, 5.0f * dpi_scale);
 
     char aLabel[16];
     snprintf(aLabel, 16, "Add Player%s", num_to_add > 1 ? "s" : "");
@@ -262,7 +263,7 @@ void render_player_manager(ui_handler_t *ui) {
     // if (ph->world.m_pCollision && igButton("Add 1000 Players", (ImVec2){0, 0})) {
     //   add_new_track(ts, ph, 1000);
     // }
-    igSameLine(0, 10.f);
+    igSameLine(0, 10.f * dpi_scale);
     igText("Players: %d", ts->player_track_count);
 
     igSeparator();
