@@ -212,8 +212,6 @@ static void particle_simulate_step(particle_system_t *ps, particle_t *p, vec2 po
 }
 
 void particle_system_update_sim(particle_system_t *ps, map_data_t *map) {
-  // We perform simulation AND compaction here.
-  // Iterate active particles.
   const double step = 0.02;
   double sim_target = ps->current_time;
 
@@ -222,49 +220,35 @@ void particle_system_update_sim(particle_system_t *ps, map_data_t *map) {
 
     // Check life
     double age = sim_target - p->spawn_time;
-    if (age > p->life_span || age < -0.001) { // Dead or future (shouldn't happen if spawned correctly)
-      // Swap with last
+    if (age > p->life_span || age < -0.001) {
       if (i != ps->active_count - 1) {
         ps->particles[i] = ps->particles[ps->active_count - 1];
       }
       ps->active_count--;
-      i--; // Recheck this slot
+      i--;
       continue;
     }
 
-    // Incremental Simulation
+    // Incremental Simulation / Rewind Handling
+    // If the particle's last simulation time is in the future compared to target,
+    // we must reset it to its spawn state to re-simulate it forward.
     if (p->last_sim_time > sim_target + 0.001) {
-      // Rewind detected?
-      // Use tolerance to prevent killing particles that are just on the boundary due to float jitter
-      if (sim_target < p->spawn_time - 0.001) {
-        // Should have been pruned. Kill it.
-        if (i != ps->active_count - 1) ps->particles[i] = ps->particles[ps->active_count - 1];
-        ps->active_count--;
-        i--;
-        continue;
-      }
-
-      // If significant rewind, reset. Otherwise ignore (pause).
-      if (sim_target < p->last_sim_time - 0.05) {
-        glm_vec2_copy(p->start_pos, p->current_pos);
-        glm_vec2_copy(p->start_vel, p->current_vel);
-        p->last_sim_time = p->spawn_time;
-        p->current_seed = p->seed;
-      }
+      glm_vec2_copy(p->start_pos, p->current_pos);
+      glm_vec2_copy(p->start_vel, p->current_vel);
+      p->last_sim_time = p->spawn_time;
+      p->current_seed = p->seed;
     }
 
     while (p->last_sim_time < sim_target) {
       double next_step_time = p->last_sim_time + step;
-      if (next_step_time > sim_target + 0.001) {
-        if (next_step_time > sim_target) break;
-      }
+      // Ensure we don't overshoot the current global system time
+      if (next_step_time > sim_target + 0.0001) break;
 
       particle_simulate_step(ps, p, p->current_pos, p->current_vel, &p->current_seed, p->last_sim_time, (float)step, map);
       p->last_sim_time += step;
     }
   }
 }
-
 void particle_system_update(particle_system_t *ps, float dt, map_data_t *map) {
   (void)ps;
   (void)dt;

@@ -631,13 +631,21 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
 
   // Jump or Rewind Logic
   if (tick < ts->previous_world.m_GameTick || (tick - ts->previous_world.m_GameTick) > 100) {
-    int base_index = imin((tick - 1) / step, ts->vec.current_size - 1);
+    int raw_index = (tick - 1) / step;
+    // Go back one extra snapshot to ensure we re-simulate recent particles
+    // that might have expired in the future state we are rewinding from.
+    // TODO: this doesnt solve the real issue of long lasting particles not being rendered when reversing
+    if (effects && raw_index > 0) raw_index--;
+    int base_index = imin(raw_index, ts->vec.current_size - 1);
     if (base_index < 0) base_index = 0;
     wc_copy_world(out_world, &ts->vec.data[base_index]);
 
     if (effects) {
       double snapshot_time = (double)out_world->m_GameTick / 50.0;
       particle_system_prune_by_time(ps, snapshot_time);
+
+      ps->current_time = snapshot_time;
+      ps->last_simulated_tick = out_world->m_GameTick - 1;
     }
   } else {
     wc_copy_world(out_world, &ts->previous_world);
