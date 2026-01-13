@@ -249,7 +249,7 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
 
       igPushID_Int(i);
 
-      // Draw track name. Add a prefix for dummy tracks for visual feedback.
+      // Draw track name. Add a prefix for dummy tracks
       igSetCursorScreenPos((ImVec2){row_start_pos.x + 8.0f * dpi_scale, row_start_pos.y + ((ts->track_height * dpi_scale) - igGetTextLineHeight()) * 0.5f});
       if (track->is_dummy) {
         igTextDisabled("[D]");

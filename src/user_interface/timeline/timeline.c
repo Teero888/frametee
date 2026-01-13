@@ -3,6 +3,7 @@
 #include "timeline_interaction.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
+#include "renderer/graphics_backend.h"
 #include <string.h>
 #include <system/include_cimgui.h>
 
@@ -32,7 +33,8 @@ void render_timeline(ui_handler_t *ui) {
 
     // Calculate layout for header and tracks area
     float header_height = igGetTextLineHeightWithSpacing() * 2.0f;
-    float track_header_width = 120.0f;
+    float dpi_scale = gfx_get_ui_scale();
+    float track_header_width = 120.0f * dpi_scale;
     ImVec2 content_start_pos;
     igGetCursorScreenPos(&content_start_pos);
     ImVec2 available_space;
