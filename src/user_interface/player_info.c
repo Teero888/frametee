@@ -78,12 +78,12 @@ void render_player_info(gfx_handler_t *h) {
       igPushMultiItemsWidths(2, igCalcItemWidth());
       float block_pos[2] = {sc->position[0] / 32.0f, sc->position[1] / 32.0f};
       if (igDragFloat("##BlockX", &block_pos[0], 1.0f, (-MAP_EXPAND + 1), ts->ui->gfx_handler->map_data->width - (MAP_EXPAND - 1), "%.3f", 0)) {
-        sc->position[0] = fclamp(block_pos[0], (-MAP_EXPAND + 1), ts->ui->gfx_handler->map_data->width - (MAP_EXPAND - 1));
+        sc->position[0] = fclamp(block_pos[0] * 32.0f, (-MAP_EXPAND + 1) * 32, (ts->ui->gfx_handler->map_data->width - (MAP_EXPAND - 1)) * 32);
       }
       igPopItemWidth();
       igSameLine(0.0f, igGetStyle()->ItemInnerSpacing.x);
       if (igDragFloat("Position##BlockY", &block_pos[1], 1.0f, (-MAP_EXPAND + 1), ts->ui->gfx_handler->map_data->height - (MAP_EXPAND - 1), "%.3f", 0)) {
-        sc->position[1] = fclamp(block_pos[1], (-MAP_EXPAND + 1), ts->ui->gfx_handler->map_data->height - (MAP_EXPAND - 1));
+        sc->position[1] = fclamp(block_pos[1] * 32.0f, (-MAP_EXPAND + 1) * 32, (ts->ui->gfx_handler->map_data->width - (MAP_EXPAND - 1)) * 32);
       }
       igPopItemWidth();
 
@@ -135,7 +135,7 @@ void render_player_info(gfx_handler_t *h) {
         wc_free(&world);
       }
 
-      igSameLine(0, 0);
+      igSameLine(0, 10);
       if (ts->ui->selecting_override_pos) {
         igTextColored((ImVec4){0.2f, 1.0f, 0.2f, 1.0f}, "Click on the map to select position...");
         if (igIsMouseReleased_Nil(ImGuiMouseButton_Left)) {

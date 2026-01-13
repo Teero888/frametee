@@ -272,7 +272,7 @@ void render_player_manager(ui_handler_t *ui) {
 
       ImVec2 vMin;
       igGetContentRegionAvail(&vMin);
-      igSameLine(vMin.x - 20.f, -1.0f); // shift right
+      igSameLine(vMin.x - 20.f * gfx_get_ui_scale(), -1.0f); // shift right
       if (igSmallButton(ICON_KI_TRASH)) {
         if (g_remove_confirm_needed && ts->player_tracks[i].snippet_count > 0) {
           g_pending_remove_index = i;
@@ -377,14 +377,16 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ImGuiIO *io = igGetIO_Nil();
   ImFontAtlas *atlas = io->Fonts;
 
-  ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/Roboto-SemiBold.ttf", 19.f, NULL, NULL);
+  float scale = gfx_get_ui_scale();
+
+  ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/Roboto-SemiBold.ttf", 19.f * scale, NULL, NULL);
 
   ImFontConfig *config = ImFontConfig_ImFontConfig();
   config->MergeMode = true;
   config->GlyphMinAdvanceX = 13.0f;
   config->GlyphOffset = (ImVec2){0.0f, 1.0f};
 
-  ImFontAtlas_AddFontFromFileTTF(atlas, "data/fonts/kenney-icon-font.ttf", 14.0f, config, NULL);
+  ImFontAtlas_AddFontFromFileTTF(atlas, "data/fonts/kenney-icon-font.ttf", 14.0f * scale, config, NULL);
 
   ImFontConfig_destroy(config);
 
@@ -1090,7 +1092,7 @@ bool ui_render_late(ui_handler_t *ui) {
     }
 
     if (ui->timeline.selected_player_track_index >= 0) {
-      igPushFont(ui->font, 25.f);
+      igPushFont(ui->font, 25.f * gfx_get_ui_scale());
       igSetCursorScreenPos(start);
       igText("Character:");
       igText("Pos: %d, %d; (%.4f, %.4f)", ui->pos_x, ui->pos_y, ui->pos_x / 32.f, ui->pos_y / 32.f);

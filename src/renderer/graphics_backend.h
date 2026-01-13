@@ -24,13 +24,14 @@ enum { FRAME_OK = 0,
        FRAME_EXIT };
 
 // public api
-void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buffer, size_t size);
-void on_map_load_path(struct gfx_handler_t *handler, const char *map_path);
-int init_gfx_handler(struct gfx_handler_t *handler);
-int gfx_begin_frame(struct gfx_handler_t *handler);
-bool gfx_end_frame(struct gfx_handler_t *handler);
-void gfx_cleanup(struct gfx_handler_t *handler);
-void gfx_toggle_fullscreen(struct gfx_handler_t *handler);
+void on_map_load_mem(gfx_handler_t *handler, const unsigned char *map_buffer, size_t size);
+void on_map_load_path(gfx_handler_t *handler, const char *map_path);
+int init_gfx_handler(gfx_handler_t *handler);
+int gfx_begin_frame(gfx_handler_t *handler);
+bool gfx_end_frame(gfx_handler_t *handler);
+void gfx_cleanup(gfx_handler_t *handler);
+void gfx_toggle_fullscreen(gfx_handler_t *handler);
+float gfx_get_ui_scale(void);
 
 struct raw_mouse_t {
   double x, y;   // last cursor pos

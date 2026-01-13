@@ -535,6 +535,7 @@ static int init_window(gfx_handler_t *handler) {
   if (!glfwInit()) return 1;
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
   handler->window = glfwCreateWindow(1920, 1080, "frametee", NULL, NULL);
   if (!handler->window) {
     glfwTerminate();
@@ -604,7 +605,7 @@ void ayu_dark(void) {
   ImVec4 shadow = hex_vec4("000000", 0.5f);
 
   // Accent & Syntax
-  ImVec4 accent_yellow = hex_vec4("E6B450", 1.0f);
+  ImVec4 accent_yellow = hex_vec4("D61430", 1.0f);
   ImVec4 accent_orange = hex_vec4("FF8F40", 1.0f);
   ImVec4 accent_green = hex_vec4("AAD94C", 1.0f);
   ImVec4 accent_blue = hex_vec4("39BAE6", 1.0f);
@@ -614,12 +615,12 @@ void ayu_dark(void) {
   style->FramePadding = (ImVec2){6, 4};
   style->ItemSpacing = (ImVec2){8, 4};
   style->ScrollbarSize = 14;
-  style->GrabMinSize = 12;
+  style->GrabMinSize = 20;
 
-  style->WindowRounding = 3;
-  style->FrameRounding = 3;
-  style->TabRounding = 3;
-  style->ScrollbarRounding = 8;
+  style->WindowRounding = 10;
+  style->FrameRounding = 10;
+  style->TabRounding = 10;
+  style->ScrollbarRounding = 6;
 
   ImVec4 *colors = style->Colors;
 
@@ -683,11 +684,34 @@ void ayu_dark(void) {
   colors[ImGuiCol_ModalWindowDimBg] = shadow;
 }
 
+float gfx_get_ui_scale(void) {
+  static float dpi = -1.f;
+  if (dpi != -1.f)
+    return dpi;
+#define UI_DIV 5.0
+  GLFWmonitor *mon = glfwGetPrimaryMonitor();
+  int width_mm, height_mm;
+  glfwGetMonitorPhysicalSize(mon, &width_mm, &height_mm);
+  float dia_inch = sqrtf(width_mm * width_mm + height_mm * height_mm) * UI_DIV;
+  int p0, p1;
+  int width_px, height_px;
+  glfwGetMonitorWorkarea(mon, &p0, &p1, &width_px, &height_px);
+  float dia_px = sqrtf(width_px * width_px + height_px * height_px);
+  printf("scale: %.2f\n", dia_px / dia_inch);
+  dpi = dia_px / dia_inch;
+  return dpi;
+}
+
 static int init_imgui(gfx_handler_t *handler) {
   ImGuiIO *io = igGetIO_Nil();
   io->ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   // io->ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+  io->ConfigDpiScaleFonts = true;
+  io->ConfigDpiScaleViewports = true;
   ayu_dark();
+
+  ImGuiStyle *style = igGetStyle();
+  ImGuiStyle_ScaleAllSizes(style, gfx_get_ui_scale() * 0.5);
 
   ImGui_ImplGlfw_InitForVulkan(handler->window, true);
   ImGui_ImplVulkan_InitInfo init_info = {.Instance = handler->g_instance,

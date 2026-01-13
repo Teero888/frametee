@@ -73,7 +73,7 @@ vec4 get_part_color(part_info_t part, vec2 frag_uv, int skin_index, bool use_bod
   if (frag_col_custom != 0) {
     float lum = clamp(luminance(straight_rgb), 0.0, 1.0);
     int v = int(lum * 255.0 + 0.5);
-    
+
     if (apply_gs_contrast) {
       if (v <= frag_col_gs) {
         v = int(float(v) / float(max(1, frag_col_gs)) * 192.0 + 0.5);

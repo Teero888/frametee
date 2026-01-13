@@ -1,5 +1,6 @@
 #include "timeline_interaction.h"
 #include "cglm/util.h"
+#include "renderer/graphics_backend.h"
 #include "timeline_commands.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
@@ -291,6 +292,7 @@ void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timelin
 }
 
 static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_bb, float tracks_scroll_y) {
+  float dpi_scale = gfx_get_ui_scale();
   ImGuiIO *io = igGetIO_Nil();
 
   // bool any_item_hovered_before = igIsAnyItemHovered();
@@ -309,14 +311,14 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
 
       // Mirror rendering logic to get correct hitbox for stacked snippets
       int stack_size = model_get_stack_size_at_tick_range(track, snippet->start_tick, snippet->end_tick);
-      float sub_lane_height = ts->track_height / (float)fmax(1, stack_size);
+      float sub_lane_height = (ts->track_height * dpi_scale) / (float)fmax(1, stack_size);
 
       float snippet_y_pos = track_top + snippet->layer * sub_lane_height;
       float snippet_height = sub_lane_height;
 
       // Add a small margin to match rendering
-      snippet_y_pos += 2.0f;
-      snippet_height -= 4.0f;
+      snippet_y_pos += 2.0f * dpi_scale;
+      snippet_height -= 4.0f * dpi_scale;
 
       igSetCursorScreenPos((ImVec2){start_x, snippet_y_pos});
       igPushID_Int(snippet->id);
@@ -344,7 +346,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
         if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
       }
 
-      if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Left, DRAG_THRESHOLD_PX) && !ts->drag_state.active) {
+      if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Left, DRAG_THRESHOLD_PX * dpi_scale) && !ts->drag_state.active) {
         start_drag(ts, snippet->id, timeline_bb);
       }
       igPopID();
@@ -443,6 +445,7 @@ static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb, float
 }
 
 static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb, float scroll_y) {
+  float dpi_scale = gfx_get_ui_scale();
   ImGuiIO *io = igGetIO_Nil();
   if (!io->KeyShift) {
     interaction_clear_selection(ts);
@@ -456,7 +459,7 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
     float track_top = renderer_get_track_screen_y(ts, timeline_bb, i, scroll_y);
 
     // If the entire track is outside the selection box, we can skip it
-    if (track_top + ts->track_height < rect.Min.y || track_top > rect.Max.y) {
+    if (track_top + (ts->track_height * dpi_scale) < rect.Min.y || track_top > rect.Max.y) {
       continue;
     }
 
@@ -468,10 +471,10 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
       float end_x = renderer_tick_to_screen_x(ts, snip->end_tick, timeline_bb.Min.x);
 
       int stack_size = model_get_stack_size_at_tick_range(track, snip->start_tick, snip->end_tick);
-      float sub_lane_height = ts->track_height / (float)fmax(1, stack_size);
+      float sub_lane_height = (ts->track_height * dpi_scale) / (float)fmax(1, stack_size);
 
-      float snippet_y_pos = track_top + snip->layer * sub_lane_height + 2.0f;
-      float snippet_height = sub_lane_height - 4.0f;
+      float snippet_y_pos = track_top + snip->layer * sub_lane_height + 2.0f * dpi_scale;
+      float snippet_height = sub_lane_height - 4.0f * dpi_scale;
 
       ImRect snippet_bb = {{start_x, snippet_y_pos}, {end_x, snippet_y_pos + snippet_height}};
 
@@ -487,8 +490,9 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
 }
 
 static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id) {
+  float dpi_scale = gfx_get_ui_scale();
   int snapped_tick = desired_start_tick;
-  float min_dist_px = SNAP_THRESHOLD_PX;
+  float min_dist_px = SNAP_THRESHOLD_PX * dpi_scale;
 
   // Snap to playhead
   float dist_to_playhead_px = fabsf((float)(desired_start_tick - ts->current_tick) * ts->zoom);
