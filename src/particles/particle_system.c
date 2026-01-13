@@ -237,19 +237,19 @@ void particle_system_update_sim(particle_system_t *ps, map_data_t *map) {
       // Rewind detected?
       // Use tolerance to prevent killing particles that are just on the boundary due to float jitter
       if (sim_target < p->spawn_time - 0.001) {
-         // Should have been pruned. Kill it.
-         if (i != ps->active_count - 1) ps->particles[i] = ps->particles[ps->active_count - 1];
-         ps->active_count--;
-         i--;
-         continue;
+        // Should have been pruned. Kill it.
+        if (i != ps->active_count - 1) ps->particles[i] = ps->particles[ps->active_count - 1];
+        ps->active_count--;
+        i--;
+        continue;
       }
-      
+
       // If significant rewind, reset. Otherwise ignore (pause).
       if (sim_target < p->last_sim_time - 0.05) {
-         glm_vec2_copy(p->start_pos, p->current_pos);
-         glm_vec2_copy(p->start_vel, p->current_vel);
-         p->last_sim_time = p->spawn_time;
-         p->current_seed = p->seed;
+        glm_vec2_copy(p->start_pos, p->current_pos);
+        glm_vec2_copy(p->start_vel, p->current_vel);
+        p->last_sim_time = p->spawn_time;
+        p->current_seed = p->seed;
       }
     }
 
@@ -283,7 +283,7 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
 
   for (int i = 0; i < ps->active_count; ++i) {
     particle_t *p = &ps->particles[i];
-    
+
     // Group filter
     bool group_match = false;
     for (int g = 0; g < count; ++g) {
@@ -298,7 +298,7 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
     if (age < 0) continue; // Future
 
     // Simulation is done in update_sim. We just interpolate.
-    
+
     vec2 pos;
     glm_vec2_copy(p->current_pos, pos);
 

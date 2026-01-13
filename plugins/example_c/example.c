@@ -62,7 +62,7 @@ FT_API void plugin_update(void *plugin_data) {
         if (igButton("Create Snippet via API", (ImVec2){0, 0})) {
           int current_tick = state->api->get_current_tick();
           undo_command_t *cmd = state->api->do_create_snippet(selected_track, current_tick,
-                                                             state->snippet_duration, NULL);
+                                                              state->snippet_duration, NULL);
           state->api->register_undo_command(cmd);
         }
       }

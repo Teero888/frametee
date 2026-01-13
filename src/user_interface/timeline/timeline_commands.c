@@ -1,11 +1,11 @@
 #include "timeline_commands.h"
-#include <renderer/graphics_backend.h>
-#include <user_interface/user_interface.h>
 #include "timeline_interaction.h"
 #include "timeline_model.h"
 #include <limits.h>
+#include <renderer/graphics_backend.h>
 #include <stdlib.h>
 #include <string.h>
+#include <user_interface/user_interface.h>
 
 // Define a reasonable max number of tracks to handle for batch operations
 #define MAX_MODIFIED_TRACKS_PER_COMMAND 256
@@ -149,7 +149,7 @@ undo_command_t *commands_create_add_snippet(ui_handler_t *ui, int track_idx, int
   snip.layer = new_layer;
   snip.input_count = duration;
   snip.inputs = calloc(duration, sizeof(SPlayerInput));
-  
+
   AddSnippetCommand *cmd = calloc(1, sizeof(AddSnippetCommand));
   snprintf(cmd->base.description, sizeof(cmd->base.description), "Add Snippet");
   cmd->base.undo = undo_add_snippet;
@@ -263,12 +263,12 @@ undo_command_t *commands_create_duplicate_snippets(ui_handler_t *ui, const MoveS
   // Assign IDs immediately and deactivate overlapping snippets
   for (int i = 0; i < count; ++i) {
     cmd->created_ids[i] = ts->next_snippet_id++;
-    
+
     // Check overlaps
     const MoveSnippetInfo *info = &infos[i];
     player_track_t *target_track = &ts->player_tracks[info->new_track_index];
     int start = info->new_start_tick;
-    // We need to find the duration. The 'infos' struct doesn't have duration directly, 
+    // We need to find the duration. The 'infos' struct doesn't have duration directly,
     // but we can find the source snippet to get it.
     input_snippet_t *src_snippet = model_find_snippet_by_id(ts, info->snippet_id, NULL);
     if (src_snippet) {
@@ -472,21 +472,21 @@ static void undo_add_snippet(void *cmd, void *ts_void) {
   AddSnippetCommand *c = (AddSnippetCommand *)cmd;
   struct timeline_state *ts = (struct timeline_state *)ts_void;
   player_track_t *track = &ts->player_tracks[c->track_index];
-  
+
   model_remove_snippet_from_track(ts, track, c->snippet_copy.id);
-  
+
   for (int i = 0; i < c->deactivated_count; ++i) {
     input_snippet_t *s = model_find_snippet_in_track(track, c->deactivated_ids[i]);
     if (s) s->is_active = true;
   }
-  
+
   model_compact_layers_for_track(track);
 }
 static void redo_add_snippet(void *cmd, void *ts_void) {
   AddSnippetCommand *c = (AddSnippetCommand *)cmd;
   struct timeline_state *ts = (struct timeline_state *)ts_void;
   player_track_t *track = &ts->player_tracks[c->track_index];
-  
+
   for (int i = 0; i < c->deactivated_count; ++i) {
     input_snippet_t *s = model_find_snippet_in_track(track, c->deactivated_ids[i]);
     if (s) s->is_active = false;
@@ -595,7 +595,7 @@ static void undo_move_snippets(void *cmd, void *ts_void) {
     if (info->new_track_index < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[info->new_track_index] = true;
     if (info->old_track_index < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[info->old_track_index] = true;
   }
-  
+
   // Reactivate snippets
   for (int i = 0; i < c->deactivated_count; ++i) {
     int track_idx;
@@ -614,7 +614,7 @@ static void redo_move_snippets(void *cmd, void *ts_void) {
   MoveSnippetsCommand *c = (MoveSnippetsCommand *)cmd;
   struct timeline_state *ts = (struct timeline_state *)ts_void;
   bool modified_tracks[MAX_MODIFIED_TRACKS_PER_COMMAND] = {false};
-  
+
   // Deactivate snippets
   for (int i = 0; i < c->deactivated_count; ++i) {
     int track_idx;
@@ -657,7 +657,7 @@ static void undo_duplicate_snippets(void *cmd, void *ts_void) {
     model_remove_snippet_from_track(ts, track, c->created_ids[i]);
     if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
   }
-  
+
   // Reactivate snippets
   for (int i = 0; i < c->deactivated_count; ++i) {
     int track_idx;
@@ -680,7 +680,7 @@ static void redo_duplicate_snippets(void *cmd, void *ts_void) {
 
   // Clear current selection so we can select the newly created duplicates
   interaction_clear_selection(ts);
-  
+
   // Deactivate snippets
   for (int i = 0; i < c->deactivated_count; ++i) {
     int track_idx;
@@ -869,7 +869,7 @@ static void undo_toggle_snippets(void *cmd, void *ts_void) {
     ToggleSnippetInfo *info = &c->infos[i];
     if (info->track_index < 0 || info->track_index >= ts->player_track_count) continue;
     player_track_t *track = &ts->player_tracks[info->track_index];
-    
+
     input_snippet_t *target = model_find_snippet_in_track(track, info->snippet_id);
     if (!target) continue;
 
@@ -942,7 +942,7 @@ undo_command_t *commands_create_toggle_selected_snippets_active(ui_handler_t *ui
     int sid = ts->selected_snippets.ids[i];
     int track_idx;
     input_snippet_t *snippet = model_find_snippet_by_id(ts, sid, &track_idx);
-    
+
     if (!snippet) continue;
 
     if (snippet->start_tick < earliest_tick) earliest_tick = snippet->start_tick;
@@ -957,9 +957,9 @@ undo_command_t *commands_create_toggle_selected_snippets_active(ui_handler_t *ui
       player_track_t *track = &ts->player_tracks[track_idx];
       for (int j = 0; j < track->snippet_count; ++j) {
         input_snippet_t *other = &track->snippets[j];
-        if (other->id != sid && other->is_active && 
+        if (other->id != sid && other->is_active &&
             snippet->start_tick < other->end_tick && snippet->end_tick > other->start_tick) {
-          
+
           info->overlapping_ids = realloc(info->overlapping_ids, sizeof(int) * (info->overlapping_count + 1));
           info->overlapping_ids[info->overlapping_count++] = other->id;
         }
@@ -969,7 +969,7 @@ undo_command_t *commands_create_toggle_selected_snippets_active(ui_handler_t *ui
 
   // Apply changes immediately (Redo logic)
   redo_toggle_snippets(&cmd->base, ts);
-  
+
   if (earliest_tick != INT_MAX) {
     model_recalc_physics(ts, earliest_tick);
   }
@@ -1236,7 +1236,7 @@ static void cleanup_commit_recording_cmd(void *cmd) {
 
 undo_command_t *commands_create_commit_recording(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
-  
+
   // Identify affected tracks
   int affected_count = 0;
   int *affected_indices = NULL;

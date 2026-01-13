@@ -6,7 +6,7 @@ import os
 
 def format_files():
     files_to_format = []
-    extensions = ["**/*.cpp", "**/*.h", "**/*.glsl"]
+    extensions = ["**/*.cpp", "**/*.c", "**/*.h", "**/*.glsl"]
     excluded_dirs = ["libs", "build"]
 
     for ext in extensions:

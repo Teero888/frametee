@@ -1,8 +1,8 @@
 #include "undo_redo.h"
 #include "timeline/timeline_model.h"
-#include <system/include_cimgui.h>
 #include <stdlib.h>
 #include <string.h>
+#include <system/include_cimgui.h>
 
 static void clear_stack(undo_command_t ***stack, int *count, int *capacity) {
   if (!*stack) return;

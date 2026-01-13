@@ -1,10 +1,10 @@
 #include "timeline.h"
 #include "../user_interface.h"
-#include <system/include_cimgui.h>
 #include "timeline_interaction.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
 #include <string.h>
+#include <system/include_cimgui.h>
 
 // Public API Implementation
 
@@ -89,17 +89,17 @@ void render_timeline(ui_handler_t *ui) {
     // Horizontal Scrollbar
     static int last_view_start_tick = -1;
     int max_tick = model_get_max_timeline_tick(ts);
-    float total_width = max_tick * ts->zoom + available_space.x; 
+    float total_width = max_tick * ts->zoom + available_space.x;
 
     if (ts->view_start_tick != last_view_start_tick) {
-        igSetNextWindowScroll((ImVec2){(float)ts->view_start_tick * ts->zoom, 0.0f});
+      igSetNextWindowScroll((ImVec2){(float)ts->view_start_tick * ts->zoom, 0.0f});
     }
 
     igBeginChild_Str("TimelineScrollbar", (ImVec2){available_space.x, scrollbar_height}, false, ImGuiWindowFlags_HorizontalScrollbar);
     igDummy((ImVec2){total_width, 1.0f});
     if (igIsWindowHovered(0) || igIsWindowFocused(0)) {
-        ts->view_start_tick = (int)(igGetScrollX() / ts->zoom);
-        if (ts->view_start_tick < 0) ts->view_start_tick = 0;
+      ts->view_start_tick = (int)(igGetScrollX() / ts->zoom);
+      if (ts->view_start_tick < 0) ts->view_start_tick = 0;
     }
     last_view_start_tick = ts->view_start_tick;
     igEndChild();

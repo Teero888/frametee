@@ -1,13 +1,13 @@
 #include "snippet_editor.h"
-#include <system/include_cimgui.h>
-#include <user_interface/timeline/timeline_commands.h>
-#include <user_interface/timeline/timeline_model.h>
-#include <user_interface/user_interface.h>
 #include <float.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <system/include_cimgui.h>
+#include <user_interface/timeline/timeline_commands.h>
+#include <user_interface/timeline/timeline_model.h>
+#include <user_interface/user_interface.h>
 
 #define MAX_INPUTS 8192
 
@@ -523,7 +523,8 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
             int current_column = 4 + j;
             igTableSetColumnIndex(current_column);
             igPushID_Int(i * 10 + current_column);
-            uint8_t *val = (j == 0) ? &inp->m_Jump : (j == 1) ? &inp->m_Fire : &inp->m_Hook;
+            uint8_t *val = (j == 0) ? &inp->m_Jump : (j == 1) ? &inp->m_Fire
+                                                              : &inp->m_Hook;
             ImU32 c_on = (j == 0)   ? igGetColorU32_Vec4((ImVec4){0.4f, 0.7f, 1.0f, 1.0f})
                          : (j == 1) ? igGetColorU32_Vec4((ImVec4){1.0f, 0.4f, 0.4f, 1.0f})
                                     : igGetColorU32_Vec4((ImVec4){0.8f, 0.8f, 0.8f, 1.0f});

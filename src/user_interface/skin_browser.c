@@ -1,15 +1,15 @@
 #include "skin_browser.h"
-#include <renderer/renderer.h>
-#include <symbols.h>
-#include <system/include_cimgui.h>
 #include "nfd.h"
 #include "player_info.h"
 #include "stb_image.h"
 #include "stb_image_resize2.h"
 #include "widgets/imcol.h"
+#include <renderer/renderer.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <symbols.h>
+#include <system/include_cimgui.h>
 
 // // // static const char *LOG_SOURCE = "SkinBrowser";
 static int g_skin_to_delete = -1;
