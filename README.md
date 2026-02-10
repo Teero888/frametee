@@ -1,6 +1,3 @@
-# dont use this trash
-
-
 # FrameTee
 
 **FrameTee** is a Tool-Assisted Speedrun (TAS) editor for [DDNet](https://github.com/ddnet/ddnet), built with C99, Vulkan, and ImGui.
