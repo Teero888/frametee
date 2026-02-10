@@ -1,6 +1,5 @@
 #include "user_interface.h"
 #include "cglm/vec2.h"
-#include "cimgui.h"
 #include "ddnet_map_loader.h"
 #include "ddnet_physics/collision.h"
 #include "demo.h"

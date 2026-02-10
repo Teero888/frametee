@@ -2,9 +2,12 @@
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
 #include "user_interface/user_interface.h"
-#include <GLFW/glfw3.h>
 #include <particles/particle_system.h>
 #include <time.h>
+
+#define GLFW_INCLUDE_NONE
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
 
 #ifdef _WIN32
 #include <windows.h>

@@ -713,7 +713,7 @@ static int init_imgui(gfx_handler_t *handler) {
   ImGuiStyle *style = igGetStyle();
   ImGuiStyle_ScaleAllSizes(style, gfx_get_ui_scale() * 0.5);
 
-  ImGui_ImplGlfw_InitForVulkan(handler->window, true);
+  ImGui_ImplGlfw_InitForVulkan((void *)handler->window, true);
   ImGui_ImplVulkan_InitInfo init_info = {.Instance = handler->g_instance,
                                          .PhysicalDevice = handler->g_physical_device,
                                          .Device = handler->g_device,

@@ -7,17 +7,22 @@
 #include <user_interface/user_interface.h>
 #include <vulkan/vulkan_core.h>
 
-#define GLFW_INCLUDE_NONE
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
 #include <stdbool.h>
 #include <stdint.h>
 
 // These have to be in this order
 #include <system/include_cimgui.h>
 // -------------
+// we are doing this so we dont get redefinition of structs errors. they are illegal in C99
+#define GLFWwindow INVALID_TYPE_DONT_EVER_USE_WINDOW
+#define GLFWmonitor INVALID_TYPE_DONT_EVER_USE_MONITOR
 #include <cimgui_impl.h>
-// -------------
+#undef GLFWwindow
+#undef GLFWmonitor
+
+#define GLFW_INCLUDE_NONE
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
 
 enum { FRAME_OK = 0,
        FRAME_SKIP,
