@@ -84,9 +84,9 @@ int main(int argc, char **argv) {
     render_pickups(&handler.user_interface);
     render_players(&handler.user_interface);
 
-    handler.user_interface.particle_system.current_time = (double)(handler.user_interface.timeline.current_tick + intra) * 0.02;
-    particle_system_update_sim(&handler.user_interface.particle_system, handler.map_data);
     if (handler.user_interface.render_particles) {
+      handler.user_interface.particle_system.current_time = (double)(handler.user_interface.timeline.current_tick + intra) * 0.02;
+      particle_system_update_sim(&handler.user_interface.particle_system, handler.map_data);
       particle_system_render(&handler.user_interface.particle_system, &handler, 0);
       particle_system_render(&handler.user_interface.particle_system, &handler, 1);
     }

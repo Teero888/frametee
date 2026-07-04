@@ -987,7 +987,13 @@ void render_pickups(ui_handler_t *ui) {
   gfx_handler_t *h = ui->gfx_handler;
   atlas_renderer_t *ar = &h->renderer.gameskin_renderer;
 
-  atlas_instance_t *instances = malloc(sizeof(atlas_instance_t) * ui->num_pickups);
+  static atlas_instance_t *instances = NULL;
+  static int instances_capacity = 0;
+
+  if (ui->num_pickups > instances_capacity) {
+    instances_capacity = ui->num_pickups + 64;
+    instances = realloc(instances, sizeof(atlas_instance_t) * instances_capacity);
+  }
   if (!instances) return;
 
   uint32_t count = 0;
@@ -1084,7 +1090,6 @@ void render_pickups(ui_handler_t *ui) {
   if (count > 0) {
     renderer_submit_atlas_batch(h, ar, Z_LAYER_PICKUPS, instances, count, false);
   }
-  free(instances);
 }
 
 void render_cursor(ui_handler_t *ui) {
