@@ -552,6 +552,16 @@ void render_players(ui_handler_t *ui) {
     ui->gfx_handler->renderer.camera.pos[1] = (p[1]) / ui->gfx_handler->map_data->height;
   }
 
+  float min_wx, min_wy, max_wx, max_wy;
+  screen_to_world(gfx, 0, 0, &min_wx, &min_wy);
+  screen_to_world(gfx, gfx->viewport[0], gfx->viewport[1], &max_wx, &max_wy);
+
+  float margin_tiles = 6.0f;
+  float cam_min_x = min_wx - margin_tiles;
+  float cam_max_x = max_wx + margin_tiles;
+  float cam_min_y = min_wy - margin_tiles;
+  float cam_max_y = max_wy + margin_tiles;
+
   for (int i = 0; i < world.m_NumCharacters; ++i) {
     SCharacterCore *core = &world.m_pCharacters[i];
 
@@ -559,6 +569,12 @@ void render_players(ui_handler_t *ui) {
     vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
     vec2 p;
     lerp(ppp, pp, intra, p);
+
+    if (p[0] < cam_min_x || p[0] > cam_max_x || p[1] < cam_min_y || p[1] > cam_max_y) {
+      if (!(ui->timeline.recording && i == ui->timeline.selected_player_track_index)) {
+        continue;
+      }
+    }
 
     anim_state_t anim_state;
     anim_state_set(&anim_state, &anim_base, 0.0f);
@@ -981,57 +997,68 @@ void render_pickups(ui_handler_t *ui) {
   if (ui->timeline.is_reversing) intra = 1.f - intra;
   intra += h->user_interface.timeline.current_tick;
 
+  float min_wx, min_wy, max_wx, max_wy;
+  screen_to_world(h, 0, 0, &min_wx, &min_wy);
+  screen_to_world(h, h->viewport[0], h->viewport[1], &max_wx, &max_wy);
+
+  float margin_tiles = 4.0f;
+  float cam_min_x = min_wx - margin_tiles;
+  float cam_max_x = max_wx + margin_tiles;
+  float cam_min_y = min_wy - margin_tiles;
+  float cam_max_y = max_wy + margin_tiles;
+
+  static vec2 s_pickup_scale_cache[128];
+  static bool s_pickup_scale_valid[128] = {false};
+
   for (int i = 0; i < ui->num_pickups; ++i) {
     vec2 pos = {vgetx(ui->pickup_positions[i]) / 32.f, vgety(ui->pickup_positions[i]) / 32.f};
+    if (pos[0] < cam_min_x || pos[0] > cam_max_x || pos[1] < cam_min_y || pos[1] > cam_max_y) {
+      continue;
+    }
     vec2 size = {1.0f, 1.0f};
     SPickup pickup = ui->pickups[i];
     int idx = -1;
 
-    // render health/armor
     if (pickup.m_Type == POWERUP_HEALTH || pickup.m_Type == POWERUP_ARMOR) {
       idx = GAMESKIN_PICKUP_HEALTH + pickup.m_Type;
-      sprite_definition_t *sprite_def = &ar->sprite_definitions[idx];
-      float w = sprite_def->w;
-      float h = sprite_def->h;
-      float f = sqrtf(w * w + h * h);
-      float scaleX = w / f;
-      float scaleY = h / f;
-      size[0] = 1.f / scaleX;
-      size[1] = 1.f / scaleY;
-    } else if (pickup.m_Type >= POWERUP_ARMOR_SHOTGUN) { // render weapon armor
+    } else if (pickup.m_Type >= POWERUP_ARMOR_SHOTGUN) {
       idx = GAMESKIN_PICKUP_ARMOR_SHOTGUN + pickup.m_Type - POWERUP_ARMOR_SHOTGUN;
-      sprite_definition_t *sprite_def = &ar->sprite_definitions[idx];
-      float w = sprite_def->w;
-      float h = sprite_def->h;
-      float f = sqrtf(w * w + h * h);
-      float scaleX = w / f;
-      float scaleY = h / f;
-      size[0] = 1.f / scaleX;
-      size[1] = 1.f / scaleY;
-    } else if (pickup.m_Type == POWERUP_WEAPON) { // render weapon pickup
+    } else if (pickup.m_Type == POWERUP_WEAPON && pickup.m_Subtype < NUM_WEAPONS) {
       idx = GAMESKIN_PICKUP_HAMMER + pickup.m_Subtype;
-      const weapon_spec_t *spec = &game_data.weapons.id[pickup.m_Subtype];
-      sprite_definition_t *sprite_def = &ar->sprite_definitions[idx];
-      float w = sprite_def->w;
-      float h = sprite_def->h;
-      float f = sqrtf(w * w + h * h);
-      float scaleX = w / f;
-      float scaleY = h / f;
-
-      size[0] = spec->visual_size * scaleX / 32.0f;
-      size[1] = spec->visual_size * scaleY / 32.0f;
-    } else if (pickup.m_Type == POWERUP_NINJA) { // render ninja pickup
+    } else if (pickup.m_Type == POWERUP_NINJA) {
       idx = GAMESKIN_PICKUP_NINJA;
-      sprite_definition_t *sprite_def = &ar->sprite_definitions[idx];
-      float w = sprite_def->w;
-      float h = sprite_def->h;
-      float f = sqrtf(w * w + h * h);
-      float scaleX = w / f;
-      float scaleY = h / f;
+    }
 
-      size[0] = 4.f * scaleX;
-      size[1] = 4.f * scaleY;
-      pos[0] -= 10.f / 32.f;
+    if (idx >= 0 && idx < 128) {
+      if (!s_pickup_scale_valid[idx]) {
+        sprite_definition_t *sprite_def = &ar->sprite_definitions[idx];
+        float w = sprite_def->w;
+        float h = sprite_def->h;
+        if (w > 0.0001f && h > 0.0001f) {
+          float f = sqrtf(w * w + h * h);
+          s_pickup_scale_cache[idx][0] = w / f;
+          s_pickup_scale_cache[idx][1] = h / f;
+          s_pickup_scale_valid[idx] = true;
+        }
+      }
+
+      if (s_pickup_scale_valid[idx]) {
+        float scaleX = s_pickup_scale_cache[idx][0];
+        float scaleY = s_pickup_scale_cache[idx][1];
+
+        if (pickup.m_Type == POWERUP_HEALTH || pickup.m_Type == POWERUP_ARMOR || pickup.m_Type >= POWERUP_ARMOR_SHOTGUN) {
+          size[0] = 1.f / scaleX;
+          size[1] = 1.f / scaleY;
+        } else if (pickup.m_Type == POWERUP_WEAPON) {
+          const weapon_spec_t *spec = &game_data.weapons.id[pickup.m_Subtype];
+          size[0] = spec->visual_size * scaleX / 32.0f;
+          size[1] = spec->visual_size * scaleY / 32.0f;
+        } else if (pickup.m_Type == POWERUP_NINJA) {
+          size[0] = 4.f * scaleX;
+          size[1] = 4.f * scaleY;
+          pos[0] -= 10.f / 32.f;
+        }
+      }
     }
 
     if (idx != -1) {
@@ -1382,6 +1409,7 @@ void ui_post_map_load(ui_handler_t *ui) {
     const SPickup fpickup = h->physics_handler.collision.m_pFrontPickups[i];
     if (fpickup.m_Type >= 0) ++num;
   }
+  log_info(LOG_SOURCE, "ui_post_map_load: map size %dx%d, found %d pickups", width, height, num);
   if (!num) return;
   ui->num_pickups = num;
   ui->pickups = malloc(sizeof(SPickup) * num);
