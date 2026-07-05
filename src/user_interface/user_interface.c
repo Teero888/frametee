@@ -1,5 +1,6 @@
 #include "user_interface.h"
 #include "cglm/vec2.h"
+#include "cimgui.h"
 #include "ddnet_map_loader.h"
 #include "ddnet_physics/collision.h"
 #include "demo.h"
@@ -372,7 +373,7 @@ void camera_init(camera_t *camera) {
 }
 
 void ui_init_config(ui_handler_t *ui) {
-  ui->mouse_sens = 80.f;
+  ui->mouse_sens = 200.f;
   ui->mouse_max_distance = 400.f;
   ui->vsync = true;
   ui->fps_limit = 0;
@@ -402,59 +403,59 @@ void ui_init_config(ui_handler_t *ui) {
 }
 
 static void ui_apply_theme() {
-  ImGuiStyle* style = igGetStyle();
-  
+  ImGuiStyle *style = igGetStyle();
+
   style->WindowPadding = (ImVec2){12.0f, 12.0f};
   style->FramePadding = (ImVec2){8.0f, 4.0f};
   style->ItemSpacing = (ImVec2){8.0f, 8.0f};
   style->ItemInnerSpacing = (ImVec2){6.0f, 6.0f};
-  
+
   style->WindowRounding = 8.0f;
   style->ChildRounding = 4.0f;
   style->FrameRounding = 4.0f;
   style->ScrollbarRounding = 4.0f;
   style->FrameBorderSize = 1.0f;
   style->WindowBorderSize = 1.0f;
-  
-  ImVec4* colors = style->Colors;
-  
-  colors[ImGuiCol_WindowBg]       = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
-  colors[ImGuiCol_PopupBg]        = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
-  colors[ImGuiCol_ChildBg]        = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
-  
-  colors[ImGuiCol_FrameBg]        = (ImVec4){0.15f, 0.16f, 0.17f, 1.00f};
+
+  ImVec4 *colors = style->Colors;
+
+  colors[ImGuiCol_WindowBg] = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
+  colors[ImGuiCol_PopupBg] = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
+  colors[ImGuiCol_ChildBg] = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
+
+  colors[ImGuiCol_FrameBg] = (ImVec4){0.15f, 0.16f, 0.17f, 1.00f};
   colors[ImGuiCol_FrameBgHovered] = (ImVec4){0.20f, 0.22f, 0.23f, 1.00f};
-  colors[ImGuiCol_FrameBgActive]  = (ImVec4){0.12f, 0.13f, 0.14f, 1.00f};
-  
-  colors[ImGuiCol_Border]         = (ImVec4){0.23f, 0.25f, 0.27f, 1.00f};
-  colors[ImGuiCol_BorderShadow]   = (ImVec4){0.00f, 0.00f, 0.00f, 0.00f};
-  
-  colors[ImGuiCol_Button]         = (ImVec4){0.16f, 0.45f, 0.85f, 1.00f};
-  colors[ImGuiCol_ButtonHovered]  = (ImVec4){0.26f, 0.55f, 0.95f, 1.00f};
-  colors[ImGuiCol_ButtonActive]   = (ImVec4){0.11f, 0.35f, 0.75f, 1.00f};
-  
-  colors[ImGuiCol_Text]           = (ImVec4){0.88f, 0.89f, 0.91f, 1.00f};
-  colors[ImGuiCol_TextDisabled]   = (ImVec4){0.54f, 0.57f, 0.60f, 1.00f};
+  colors[ImGuiCol_FrameBgActive] = (ImVec4){0.12f, 0.13f, 0.14f, 1.00f};
 
-  colors[ImGuiCol_TitleBg]        = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
-  colors[ImGuiCol_TitleBgActive]  = (ImVec4){0.15f, 0.16f, 0.17f, 1.00f};
-  colors[ImGuiCol_TitleBgCollapsed]= (ImVec4){0.05f, 0.06f, 0.07f, 1.00f};
+  colors[ImGuiCol_Border] = (ImVec4){0.23f, 0.25f, 0.27f, 1.00f};
+  colors[ImGuiCol_BorderShadow] = (ImVec4){0.00f, 0.00f, 0.00f, 0.00f};
 
-  colors[ImGuiCol_Header]         = (ImVec4){0.16f, 0.45f, 0.85f, 0.50f};
-  colors[ImGuiCol_HeaderHovered]  = (ImVec4){0.16f, 0.45f, 0.85f, 0.80f};
-  colors[ImGuiCol_HeaderActive]   = (ImVec4){0.16f, 0.45f, 0.85f, 1.00f};
+  colors[ImGuiCol_Button] = (ImVec4){0.16f, 0.45f, 0.85f, 1.00f};
+  colors[ImGuiCol_ButtonHovered] = (ImVec4){0.26f, 0.55f, 0.95f, 1.00f};
+  colors[ImGuiCol_ButtonActive] = (ImVec4){0.11f, 0.35f, 0.75f, 1.00f};
 
-  colors[ImGuiCol_SliderGrab]     = (ImVec4){0.16f, 0.45f, 0.85f, 1.00f};
-  colors[ImGuiCol_SliderGrabActive]= (ImVec4){0.26f, 0.55f, 0.95f, 1.00f};
-  
-  colors[ImGuiCol_CheckMark]      = (ImVec4){0.88f, 0.89f, 0.91f, 1.00f};
+  colors[ImGuiCol_Text] = (ImVec4){0.88f, 0.89f, 0.91f, 1.00f};
+  colors[ImGuiCol_TextDisabled] = (ImVec4){0.54f, 0.57f, 0.60f, 1.00f};
 
-  colors[ImGuiCol_Tab]            = (ImVec4){0.15f, 0.16f, 0.17f, 1.00f};
-  colors[ImGuiCol_TabHovered]     = (ImVec4){0.26f, 0.55f, 0.95f, 0.80f};
-  colors[ImGuiCol_TabSelected]      = (ImVec4){0.16f, 0.45f, 0.85f, 1.00f};
-  colors[ImGuiCol_TabDimmed]   = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
+  colors[ImGuiCol_TitleBg] = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
+  colors[ImGuiCol_TitleBgActive] = (ImVec4){0.15f, 0.16f, 0.17f, 1.00f};
+  colors[ImGuiCol_TitleBgCollapsed] = (ImVec4){0.05f, 0.06f, 0.07f, 1.00f};
+
+  colors[ImGuiCol_Header] = (ImVec4){0.16f, 0.45f, 0.85f, 0.50f};
+  colors[ImGuiCol_HeaderHovered] = (ImVec4){0.16f, 0.45f, 0.85f, 0.80f};
+  colors[ImGuiCol_HeaderActive] = (ImVec4){0.16f, 0.45f, 0.85f, 1.00f};
+
+  colors[ImGuiCol_SliderGrab] = (ImVec4){0.16f, 0.45f, 0.85f, 1.00f};
+  colors[ImGuiCol_SliderGrabActive] = (ImVec4){0.26f, 0.55f, 0.95f, 1.00f};
+
+  colors[ImGuiCol_CheckMark] = (ImVec4){0.88f, 0.89f, 0.91f, 1.00f};
+
+  colors[ImGuiCol_Tab] = (ImVec4){0.15f, 0.16f, 0.17f, 1.00f};
+  colors[ImGuiCol_TabHovered] = (ImVec4){0.26f, 0.55f, 0.95f, 0.80f};
+  colors[ImGuiCol_TabSelected] = (ImVec4){0.16f, 0.45f, 0.85f, 1.00f};
+  colors[ImGuiCol_TabDimmed] = (ImVec4){0.10f, 0.11f, 0.12f, 1.00f};
   colors[ImGuiCol_TabDimmedSelected] = (ImVec4){0.15f, 0.16f, 0.17f, 1.00f};
-  
+
   colors[ImGuiCol_DockingPreview] = (ImVec4){0.16f, 0.45f, 0.85f, 0.70f};
 }
 
@@ -466,7 +467,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
 
   ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/Roboto-SemiBold.ttf", 19.f * scale, NULL, NULL);
 
-  static const ImWchar icons_ranges[] = { ICON_MIN_FA, ICON_MAX_16_FA, 0 };
+  static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
   ImFontConfig *icons_config = ImFontConfig_ImFontConfig();
   icons_config->MergeMode = true;
   icons_config->PixelSnapH = true;
@@ -478,7 +479,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   icon_cfg->PixelSnapH = true;
   ui->icon_font = ImFontAtlas_AddFontFromFileTTF(atlas, "data/fonts/fa-solid-900.ttf", 15.0f * scale, icon_cfg, icons_ranges);
   ImFontConfig_destroy(icon_cfg);
-  
+
   ui_apply_theme();
 
   ui->gfx_handler = gfx_handler;
@@ -510,7 +511,6 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->plugin_context.is_headless = g_is_headless;
   plugin_manager_init(&ui->plugin_manager, &ui->plugin_context, &ui->plugin_api);
   plugin_manager_load_all(&ui->plugin_manager, "plugins");
-
 
   ui->num_pickups = 0;
   ui->pickups = NULL;
@@ -1126,7 +1126,9 @@ void render_cursor(ui_handler_t *ui) {
   gfx_handler_t *handler = ui->gfx_handler;
 
   if (handler->user_interface.timeline.recording) {
-    renderer_submit_atlas(handler, &handler->renderer.cursor_renderer, Z_LAYER_CURSOR, (vec2){ui->gfx_handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0], ui->gfx_handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1]}, (vec2){64.f, 64.f}, 0.0f, handler->user_interface.weapon, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, true);
+
+    float div = (1.0f / (handler->user_interface.gfx_handler->viewport[1] / 2.f)) * 402.f;
+    renderer_submit_atlas(handler, &handler->renderer.cursor_renderer, Z_LAYER_CURSOR, (vec2){ui->gfx_handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0] / div, ui->gfx_handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1] / div}, (vec2){64.f, 64.f}, 0.0f, handler->user_interface.weapon, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, true);
   }
 }
 
@@ -1195,7 +1197,7 @@ static void render_splash_screen(ui_handler_t *ui) {
       igTextColored((ImVec4){0.35f, 0.75f, 1.00f, 1.00f}, "%s", "FrameTee");
       igPopFont();
       igTextDisabled("Teeworlds & DDNet TAS Tool");
-      
+
       igSpacing();
       igSeparator();
       igSpacing();
@@ -1237,7 +1239,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         igSpacing();
         igSeparator();
         igSpacing();
-        
+
         igTextColored((ImVec4){0.70f, 0.75f, 0.85f, 1.00f}, "%s", ICON_FA_CLOCK " Recent Projects");
         igSpacing();
 
@@ -1292,7 +1294,7 @@ static void render_splash_screen(ui_handler_t *ui) {
 
     igEndPopup();
   }
-  
+
   igPopStyleVar(4);
 }
 
@@ -1300,8 +1302,6 @@ void ui_render(ui_handler_t *ui) {
   process_net_events(ui);
   interaction_update_recording_input(ui);
   render_menu_bar(ui);
-
-
 
   // render menu bar first so the plugin can add menu items
   plugin_manager_update_all(&ui->plugin_manager);
@@ -1327,129 +1327,158 @@ void ui_render(ui_handler_t *ui) {
   }
 }
 
-// render viewport and related things
-bool ui_render_late(ui_handler_t *ui) {
-  bool hovered = false;
-  // igShowDemoWindow(NULL);
-  if (ui->gfx_handler->offscreen_initialized && ui->gfx_handler->offscreen_texture != NULL) {
-    igBegin("Viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    ImVec2 start;
-    igGetCursorScreenPos(&start);
-
-    igGetWindowPos(&ui->viewport_window_pos);
-    igSetCursorScreenPos(ui->viewport_window_pos);
-    ImVec2 img_size = {(float)ui->gfx_handler->offscreen_width, (float)ui->gfx_handler->offscreen_height};
-    igImage(*ui->gfx_handler->offscreen_texture, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
-
-    igGetWindowSize((ImVec2 *)&ui->gfx_handler->viewport[0]);
-    hovered = igIsWindowHovered(0);
-
-    if (hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
-      ImGuiIO *io = igGetIO_Nil();
-      float mx = io->MousePos.x - ui->viewport_window_pos.x;
-      float my = io->MousePos.y - ui->viewport_window_pos.y;
-      float wx, wy;
-      screen_to_world(ui->gfx_handler, mx, my, &wx, &wy);
-
-      SWorldCore world = wc_empty();
-      model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world, false);
-
-      float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
-      float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
-      if (ui->timeline.is_reversing) intra = 1.f - intra;
-
-      int best_match = -1;
-      float best_dist = 1.5f;
-
-      for (int i = 0; i < world.m_NumCharacters; ++i) {
-        SCharacterCore *core = &world.m_pCharacters[i];
-        vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
-        vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-        vec2 p;
-        lerp(ppp, pp, intra, p);
-
-        float dx = p[0] - wx;
-        float dy = p[1] - wy;
-        float dist = sqrtf(dx * dx + dy * dy);
-        if (dist < best_dist) {
-          best_dist = dist;
-          best_match = i;
-        }
-      }
-
-      if (best_match != -1) {
-        interaction_select_track(&ui->timeline, best_match);
-      } else {
-        if (!ui->selecting_override_pos)
-          interaction_select_track(&ui->timeline, -1);
-      }
-      wc_free(&world);
-    }
-
-    if (ui->timeline.recording) {
-      const char *text = "Recording... (ESC to Stop, F4 to Discard)";
-      ImVec2 text_size;
-      igCalcTextSize(&text_size, text, NULL, false, 0.0f);
-      ImVec2 avail;
-      igGetContentRegionAvail(&avail);
-      ImVec2 text_pos = {start.x + avail.x - text_size.x - 10.0f, start.y};
-      igGetWindowDrawList(); // Ensure draw list is active
-      ImDrawList_AddText_Vec2(igGetWindowDrawList(), text_pos, IM_COL32(255, 50, 50, 255), text, NULL);
-    }
-
-    if ((hovered || ui->timeline.recording) && igIsKeyPressed_Bool(ImGuiKey_Tab, false)) {
-      ui->show_timeline = !ui->show_timeline;
-    }
-
-    if (ui->timeline.selected_player_track_index >= 0) {
-      igPushFont(ui->font, 25.f * gfx_get_ui_scale());
-      igSetCursorScreenPos(start);
-      igText("Character:");
-      igText("Pos: %d, %d; (%.4f, %.4f)", ui->pos_x, ui->pos_y, ui->pos_x / 32.f, ui->pos_y / 32.f);
-      igText("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", ui->vel_x * ui->vel_r, ui->vel_y, ui->vel_x * ui->vel_r * (50.f / 32.f), ui->vel_y * (50.f / 32.f));
-      igText("Freeze: %d", ui->freezetime);
-      igText("Reload: %d", ui->reloadtime);
-      igText("Weapon: %d", ui->weapon);
-      igText("Weapons: [ %d, %d, %d, %d, %d, %d ]", ui->weapons[0], ui->weapons[1], ui->weapons[2], ui->weapons[3], ui->weapons[4], ui->weapons[5]);
-      if (ui->finish_tick >= 0) {
-        int ticks = ui->finish_tick - ui->start_tick;
-        float time = (float)ticks / 50.f;
-        int m = (int)time / 60;
-        float s = time - (m * 60);
-        igText("Finish Time: %02d:%05.2f", m, s);
-      } else if (ui->start_tick >= 0) {
-        int ticks = ui->current_tick - ui->start_tick;
-        float time = (float)ticks / 50.f;
-        int m = (int)time / 60;
-        float s = time - (m * 60);
-        igText("Time: %02d:%05.2f", m, s);
-      }
-      SPlayerInput Input = ui->timeline.player_tracks[ui->timeline.selected_player_track_index].current_input;
-      if (!ui->timeline.recording)
-        Input = model_get_input_at_tick(&ui->timeline, ui->timeline.selected_player_track_index, ui->timeline.current_tick);
-      igText("");
-      igText("Input:");
-      igText("Direction: %d", Input.m_Direction);
-      igText("TargetX: %d", Input.m_TargetX);
-      igText("TargetY: %d", Input.m_TargetY);
-      igText("Jump: %d", Input.m_Jump);
-      igText("Fire: %d", Input.m_Fire);
-      igText("Hook: %d", Input.m_Hook);
-      igText("WantedWeapon: %d", Input.m_WantedWeapon);
-      igText("TeleOut: %d", Input.m_TeleOut);
 #define WORD_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c"
 #define WORD_TO_BINARY(word)                                                                                                      \
   ((word) & 0x8000 ? '1' : '0'), ((word) & 0x4000 ? '1' : '0'), ((word) & 0x2000 ? '1' : '0'), ((word) & 0x1000 ? '1' : '0'),     \
       ((word) & 0x0800 ? '1' : '0'), ((word) & 0x0400 ? '1' : '0'), ((word) & 0x0200 ? '1' : '0'), ((word) & 0x0100 ? '1' : '0'), \
       ((word) & 0x0080 ? '1' : '0'), ((word) & 0x0040 ? '1' : '0'), ((word) & 0x0020 ? '1' : '0'), ((word) & 0x0010 ? '1' : '0'), \
       ((word) & 0x0008 ? '1' : '0'), ((word) & 0x0004 ? '1' : '0'), ((word) & 0x0002 ? '1' : '0'), ((word) & 0x0001 ? '1' : '0')
-      igText("Flags: " WORD_TO_BINARY_PATTERN, WORD_TO_BINARY(Input.m_Flags));
-#undef WORD_TO_BINARY
-#undef WORD_TO_BINARY_PATTERN
-      igPopFont();
-    }
-    igEnd();
+
+// draw the recording overlay text in the top-right corner
+static void draw_recording_overlay(ImVec2 start) {
+  const char *text = "Recording... (ESC to Stop, F4 to Discard)";
+  ImVec2 text_size, avail;
+
+  igCalcTextSize(&text_size, text, NULL, false, 0.0f);
+  igGetContentRegionAvail(&avail);
+
+  ImVec2 text_pos = {start.x + avail.x - text_size.x - 20.0f, start.y};
+  ImDrawList_AddText_Vec2(igGetWindowDrawList(), text_pos, IM_COL32(255, 50, 50, 255), text, NULL);
+}
+
+// draw the telemetry text (character stats and input state)
+static void draw_character_inspector(ui_handler_t *ui, ImVec2 start) {
+  igPushFont(ui->font, 25.f * gfx_get_ui_scale());
+
+  // set the absolute y position, but let imgui handle x boundaries
+  igSetCursorScreenPos((ImVec2){start.x, start.y});
+
+  // push a 10px layout margin for the left side
+  igIndent(10.0f);
+
+  // character physics & state
+  igText("Character:");
+  igText("Pos: %d, %d; (%.4f, %.4f)", ui->pos_x, ui->pos_y, ui->pos_x / 32.f, ui->pos_y / 32.f);
+  igText("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", ui->vel_x * ui->vel_r, ui->vel_y, ui->vel_x * ui->vel_r * (50.f / 32.f), ui->vel_y * (50.f / 32.f));
+  igText("Freeze: %d", ui->freezetime);
+  igText("Reload: %d", ui->reloadtime);
+  igText("Weapon: %d", ui->weapon);
+  igText("Weapons: [ %d, %d, %d, %d, %d, %d ]", ui->weapons[0], ui->weapons[1], ui->weapons[2], ui->weapons[3], ui->weapons[4], ui->weapons[5]);
+
+  // timer
+  if (ui->finish_tick >= 0) {
+    int ticks = ui->finish_tick - ui->start_tick;
+    float time = (float)ticks / 50.f;
+    igText("Finish Time: %02d:%05.2f", (int)time / 60, time - ((int)time / 60 * 60));
+  } else if (ui->start_tick >= 0) {
+    int ticks = ui->current_tick - ui->start_tick;
+    float time = (float)ticks / 50.f;
+    igText("Time: %02d:%05.2f", (int)time / 60, time - ((int)time / 60 * 60));
   }
+
+  // input state
+  SPlayerInput Input = ui->timeline.player_tracks[ui->timeline.selected_player_track_index].current_input;
+  if (!ui->timeline.recording) {
+    Input = model_get_input_at_tick(&ui->timeline, ui->timeline.selected_player_track_index, ui->timeline.current_tick);
+  }
+
+  igText("");
+  igText("Input:");
+  igText("Direction: %d", Input.m_Direction);
+  igText("TargetX: %d", Input.m_TargetX);
+  igText("TargetY: %d", Input.m_TargetY);
+  igText("Jump: %d", Input.m_Jump);
+  igText("Fire: %d", Input.m_Fire);
+  igText("Hook: %d", Input.m_Hook);
+  igText("WantedWeapon: %d", Input.m_WantedWeapon);
+  igText("TeleOut: %d", Input.m_TeleOut);
+  igText("Flags: " WORD_TO_BINARY_PATTERN, WORD_TO_BINARY(Input.m_Flags));
+
+  // restore layout defaults
+  igUnindent(10.0f);
+  igPopFont();
+}
+
+bool ui_render_late(ui_handler_t *ui) {
+  bool hovered = false;
+
+  if (!ui->gfx_handler->offscreen_initialized || ui->gfx_handler->offscreen_texture == NULL)
+    return false;
+
+  igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0, 0});
+  igBegin("Viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+  // render the main game viewport texture
+  ImVec2 start;
+  igGetCursorScreenPos(&start);
+  igGetContentRegionAvail((ImVec2 *)&ui->gfx_handler->viewport[0]);
+
+  ImVec2 img_size = {(float)ui->gfx_handler->offscreen_width, (float)ui->gfx_handler->offscreen_height};
+  igImage(*ui->gfx_handler->offscreen_texture, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
+  igPopStyleVar(1);
+
+  igGetWindowPos(&ui->viewport_window_pos);
+  hovered = igIsWindowHovered(0);
+
+  start.x += 10.0f;
+  start.y += 10.0f;
+
+  // handle raycast/click interaction
+  if (hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
+    ImGuiIO *io = igGetIO_Nil();
+    float mx = io->MousePos.x - ui->viewport_window_pos.x;
+    float my = io->MousePos.y - ui->viewport_window_pos.y;
+    float wx, wy;
+    screen_to_world(ui->gfx_handler, mx, my, &wx, &wy);
+
+    SWorldCore world = wc_empty();
+    model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world, false);
+
+    float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
+    float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
+    if (ui->timeline.is_reversing) intra = 1.f - intra;
+
+    int best_match = -1;
+    float best_dist = 1.5f;
+
+    for (int i = 0; i < world.m_NumCharacters; ++i) {
+      SCharacterCore *core = &world.m_pCharacters[i];
+      vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+      vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+      vec2 p;
+      lerp(ppp, pp, intra, p);
+
+      float dx = p[0] - wx;
+      float dy = p[1] - wy;
+      float dist = sqrtf(dx * dx + dy * dy);
+      if (dist < best_dist) {
+        best_dist = dist;
+        best_match = i;
+      }
+    }
+
+    if (best_match != -1) {
+      interaction_select_track(&ui->timeline, best_match);
+    } else if (!ui->selecting_override_pos) {
+      interaction_select_track(&ui->timeline, -1);
+    }
+    wc_free(&world);
+  }
+
+  // draw overlays & menus
+  if (ui->timeline.recording) {
+    draw_recording_overlay(start);
+  }
+
+  if ((hovered || ui->timeline.recording) && igIsKeyPressed_Bool(ImGuiKey_Tab, false)) {
+    ui->show_timeline = !ui->show_timeline;
+  }
+
+  if (ui->timeline.selected_player_track_index >= 0) {
+    draw_character_inspector(ui, start);
+  }
+
+  igEnd();
   return hovered;
 }
 
@@ -1586,8 +1615,7 @@ bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size) {
       icon,
       NULL,
       0.0f,
-      NULL
-  );
+      NULL);
 
   return pressed;
 }

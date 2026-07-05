@@ -105,8 +105,6 @@ void renderer_draw_controls(timeline_state_t *ts) {
   if (igButton(ts->recording ? "Stop Recording" : "Record", (ImVec2){125 * dpi_scale, 0})) {
     interaction_toggle_recording(ts);
   }
-
-  if (igIsItemHovered(0)) igSetTooltip("Toggle live input recording");
 }
 
 static double choose_nice_tick_step(double pixels_per_tick, double min_label_spacing) {

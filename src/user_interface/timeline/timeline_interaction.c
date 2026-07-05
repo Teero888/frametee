@@ -703,6 +703,10 @@ void interaction_update_recording_input(ui_handler_t *ui) {
 
   input->m_TargetX = (int)ui->recording_mouse_pos[0];
   input->m_TargetY = (int)ui->recording_mouse_pos[1];
+  if (!input->m_TargetX && !input->m_TargetY) {
+    input->m_TargetX = 1;
+    ui->recording_mouse_pos[0] = 1;
+  }
 }
 
 SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int track_idx) {
