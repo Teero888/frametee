@@ -1,4 +1,5 @@
 #include "undo_redo.h"
+#include "user_interface.h"
 #include "timeline/timeline_model.h"
 #include <stdlib.h>
 #include <string.h>
@@ -42,12 +43,23 @@ void undo_manager_cleanup(undo_manager_t *manager) {
   clear_stack(&manager->redo_stack, &manager->redo_count, &manager->redo_capacity);
 }
 
+#include <stddef.h>
+
+static inline void mark_ui_unsaved(undo_manager_t *manager) {
+  if (!manager) return;
+  ui_handler_t *ui = (ui_handler_t *)((char *)manager - offsetof(ui_handler_t, undo_manager));
+  if (ui) {
+    ui->has_unsaved_changes = true;
+  }
+}
+
 void undo_manager_register_command(undo_manager_t *manager, undo_command_t *command) {
   if (!command) return;
   // Push the new action to the undo stack
   push_to_stack(&manager->undo_stack, &manager->undo_count, &manager->undo_capacity, command);
   // A new action clears the redo history
   clear_stack(&manager->redo_stack, &manager->redo_count, &manager->redo_capacity);
+  mark_ui_unsaved(manager);
 }
 
 bool undo_manager_can_undo(const undo_manager_t *manager) { return manager->undo_count > 0; }
@@ -60,6 +72,7 @@ void undo_manager_undo(undo_manager_t *manager, void *ts) {
     command->undo(command, ts);
     push_to_stack(&manager->redo_stack, &manager->redo_count, &manager->redo_capacity, command);
     model_recalc_physics((timeline_state_t *)ts, 0); // Recalculate physics to be safe
+    mark_ui_unsaved(manager);
   }
 }
 
@@ -69,6 +82,7 @@ void undo_manager_redo(undo_manager_t *manager, void *ts) {
     command->redo(command, ts);
     push_to_stack(&manager->undo_stack, &manager->undo_count, &manager->undo_capacity, command);
     model_recalc_physics((timeline_state_t *)ts, 0); // Recalculate physics to be safe
+    mark_ui_unsaved(manager);
   }
 }
 

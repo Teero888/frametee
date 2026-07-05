@@ -25,6 +25,7 @@ typedef enum {
   ACTION_TOGGLE_FULLSCREEN,
   ACTION_UNDO,
   ACTION_REDO,
+  ACTION_SAVE_PROJECT,
 
   // track switching
   ACTION_SWITCH_TRACK_1,

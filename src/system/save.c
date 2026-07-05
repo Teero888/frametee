@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
 #include <system/skin/skin_fetch.h>
 
 static const char *LOG_SOURCE = "SaveFile";
@@ -25,11 +27,13 @@ static bool read_and_load_timeline(FILE *f, ui_handler_t *ui, uint32_t version);
 
 // Saving {{{
 bool save_project(ui_handler_t *ui, const char *path) {
+  double t0 = glfwGetTime();
   FILE *f = fs_open(path, "wb");
   if (!f) {
     log_error(LOG_SOURCE, "Failed to open file for writing: '%s'", path);
     return false;
   }
+  setvbuf(f, NULL, _IOFBF, 64 * 1024);
 
   // write a placeholder header, we'll come back and fill it in later
   tas_project_header_t header = {0};
@@ -67,7 +71,13 @@ bool save_project(ui_handler_t *ui, const char *path) {
   fwrite(&header, sizeof(tas_project_header_t), 1, f);
 
   fclose(f);
-  log_info(LOG_SOURCE, "Project saved successfully to '%s'", path);
+  double elapsed_ms = (glfwGetTime() - t0) * 1000.0;
+  log_info(LOG_SOURCE, "Project saved successfully to '%s' (%.2f ms)", path, elapsed_ms);
+
+  strncpy(ui->current_project_path, path, sizeof(ui->current_project_path) - 1);
+  ui->current_project_path[sizeof(ui->current_project_path) - 1] = '\0';
+  ui->has_unsaved_changes = false;
+
   ui_add_recent_project(ui, path);
   return true;
 }
@@ -224,6 +234,10 @@ bool load_project(ui_handler_t *ui, const char *path) {
 
   fclose(f);
   log_info(LOG_SOURCE, "Project loaded successfully from '%s'", path);
+  strncpy(ui->current_project_path, path, sizeof(ui->current_project_path) - 1);
+  ui->current_project_path[sizeof(ui->current_project_path) - 1] = '\0';
+  ui->has_unsaved_changes = false;
+
   ui_add_recent_project(ui, path);
 
   model_recalc_physics(&ui->timeline, 0); // recalculate physics from the start

@@ -76,12 +76,22 @@ struct ui_handler_t {
   char recent_projects[10][1024];
   int num_recent_projects;
   char loaded_map_name[128];
+  char current_project_path[1024];
+  bool has_unsaved_changes;
+  bool auto_save_enabled;
+  int auto_save_interval_sec;
+  double last_auto_save_time;
 };
 
 void on_camera_update(struct gfx_handler_t *handler, bool hovered);
 void render_players(ui_handler_t *ui);
 void render_pickups(ui_handler_t *ui);
 void render_cursor(ui_handler_t *ui);
+bool ui_quick_save(ui_handler_t *ui);
+void ui_check_auto_save(ui_handler_t *ui);
+struct timeline_state;
+void ui_mark_unsaved(ui_handler_t *ui);
+void timeline_mark_unsaved(struct timeline_state *ts);
 
 void ui_init_config(ui_handler_t *ui);
 void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);

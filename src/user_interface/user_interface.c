@@ -37,10 +37,52 @@
 
 static const char *LOG_SOURCE = "UI";
 
+static void render_save_status_badge(ui_handler_t *ui) {
+  bool unsaved = ui->has_unsaved_changes;
+
+  igPushStyleVar_Vec2(ImGuiStyleVar_FramePadding, (ImVec2){8.0f, 3.0f});
+  igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 10.0f);
+  igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, 1.0f);
+
+  if (unsaved) {
+    igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.80f, 0.40f, 0.05f, 0.25f});
+    igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.95f, 0.50f, 0.08f, 0.45f});
+    igPushStyleColor_Vec4(ImGuiCol_ButtonActive, (ImVec4){1.00f, 0.55f, 0.10f, 0.60f});
+    igPushStyleColor_Vec4(ImGuiCol_Border, (ImVec4){0.95f, 0.50f, 0.10f, 0.55f});
+    igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){1.00f, 0.78f, 0.30f, 1.00f});
+
+    if (igButton("● Unsaved", (ImVec2){0, 0})) {
+      ui_quick_save(ui);
+    }
+    if (igIsItemHovered(0)) {
+      igSetTooltip("Unsaved Changes\nClick or press Ctrl+S to save project.");
+    }
+  } else {
+    igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.10f, 0.45f, 0.20f, 0.18f});
+    igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.15f, 0.55f, 0.25f, 0.30f});
+    igPushStyleColor_Vec4(ImGuiCol_ButtonActive, (ImVec4){0.20f, 0.65f, 0.30f, 0.45f});
+    igPushStyleColor_Vec4(ImGuiCol_Border, (ImVec4){0.20f, 0.65f, 0.30f, 0.35f});
+    igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){0.45f, 0.85f, 0.55f, 0.85f});
+
+    if (igButton("✓ Saved", (ImVec2){0, 0})) {
+      // no action
+    }
+    if (igIsItemHovered(0)) {
+      igSetTooltip("All changes saved.");
+    }
+  }
+
+  igPopStyleColor(5);
+  igPopStyleVar(3);
+}
+
 void render_menu_bar(ui_handler_t *ui) {
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
-      if (igMenuItem_Bool("Save Project As...", "Ctrl+S", false, true)) {
+      if (igMenuItem_Bool("Save Project", "Ctrl+S", false, true)) {
+        ui_quick_save(ui);
+      }
+      if (igMenuItem_Bool("Save Project As...", "Ctrl+Shift+S", false, true)) {
         nfdu8char_t *save_path;
         nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
         nfdresult_t result = NFD_SaveDialogU8(&save_path, filters, 1, NULL, "unnamed.tasp");
@@ -84,31 +126,39 @@ void render_menu_bar(ui_handler_t *ui) {
       if (igBeginMenu("Graphics", true)) {
         if (igCheckbox("VSync", &ui->vsync)) {
           ui->gfx_handler->g_swap_chain_rebuild = true;
+          config_save(ui);
         }
 
-        igCheckbox("Show FPS", &ui->show_fps);
+        if (igCheckbox("Show FPS", &ui->show_fps)) config_save(ui);
 
-        igSliderInt("FPS Limit", &ui->fps_limit, 0, 1000, "%d", 0);
+        if (igSliderInt("FPS Limit", &ui->fps_limit, 0, 1000, "%d", 0)) config_save(ui);
         if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("0 = Unlimited");
 
         if (igDragFloat("LOD Bias", &ui->lod_bias, 0.1f, -5.0f, 5.0f, "%.1f", 0)) {
           ui->gfx_handler->renderer.lod_bias = ui->lod_bias;
+          config_save(ui);
         }
 
-        igColorEdit3("Background Color", ui->bg_color, ImGuiColorEditFlags_NoInputs);
+        if (igColorEdit3("Background Color", ui->bg_color, ImGuiColorEditFlags_NoInputs)) config_save(ui);
         igSeparator();
         igText("Render Elements");
-        igCheckbox("Map", &ui->render_map);
-        igCheckbox("Players", &ui->render_players);
-        igCheckbox("Weapons", &ui->render_weapons);
-        igCheckbox("Particles", &ui->render_particles);
-        igCheckbox("Pickups", &ui->render_pickups);
-        igCheckbox("HUD / Crosshair", &ui->render_hud);
+        if (igCheckbox("Map", &ui->render_map)) config_save(ui);
+        if (igCheckbox("Players", &ui->render_players)) config_save(ui);
+        if (igCheckbox("Weapons", &ui->render_weapons)) config_save(ui);
+        if (igCheckbox("Particles", &ui->render_particles)) config_save(ui);
+        if (igCheckbox("Pickups", &ui->render_pickups)) config_save(ui);
+        if (igCheckbox("HUD / Crosshair", &ui->render_hud)) config_save(ui);
         igSeparator();
-        igDragFloat("Prediction alpha own", &ui->prediction_alpha[0], 0.1f, 0.0f, 1.0f, "%.3f", 0);
-        igDragFloat("Prediction alpha others", &ui->prediction_alpha[1], 0.1f, 0.0f, 1.0f, "%.3f", 0);
-        igCheckbox("Show center dot", &ui->center_dot);
+        if (igDragFloat("Prediction alpha own", &ui->prediction_alpha[0], 0.1f, 0.0f, 1.0f, "%.3f", 0)) config_save(ui);
+        if (igDragFloat("Prediction alpha others", &ui->prediction_alpha[1], 0.1f, 0.0f, 1.0f, "%.3f", 0)) config_save(ui);
+        if (igCheckbox("Show center dot", &ui->center_dot)) config_save(ui);
 
+        igEndMenu();
+      }
+      if (igBeginMenu("Auto-Save", true)) {
+        if (igCheckbox("Enable Auto-Save", &ui->auto_save_enabled)) config_save(ui);
+        if (igSliderInt("Interval (sec)", &ui->auto_save_interval_sec, 15, 600, "%d s", 0)) config_save(ui);
+        if (igIsItemHovered(0)) igSetTooltip("Auto-save triggers only when the project has been saved to a file at least once.");
         igEndMenu();
       }
       igEndMenu();
@@ -131,7 +181,12 @@ void render_menu_bar(ui_handler_t *ui) {
       fps_width = fps_size.x;
     }
 
-    igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x - fps_width);
+    ImVec2 badge_size = {85.0f, 0.0f};
+
+    igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x - fps_width - badge_size.x - 12.0f);
+
+    render_save_status_badge(ui);
+    igSameLine(0, 8.0f);
 
     if (ui->show_fps) {
       igText("%s", fps_text);
@@ -372,6 +427,12 @@ void ui_init_config(ui_handler_t *ui) {
   ui->render_pickups = true;
   ui->render_hud = true;
 
+  ui->auto_save_enabled = true;
+  ui->auto_save_interval_sec = 60;
+  ui->last_auto_save_time = 0.0;
+  ui->render_pickups = true;
+  ui->render_hud = true;
+
   keybinds_init(&ui->keybinds);
   config_load(ui);
 }
@@ -458,6 +519,8 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
 
   ui->gfx_handler = gfx_handler;
   strncpy(ui->loaded_map_name, "unnamed_map", sizeof(ui->loaded_map_name) - 1);
+  ui->current_project_path[0] = '\0';
+  ui->has_unsaved_changes = false;
   ui->show_timeline = true;
   ui->show_prediction = true;
   ui->prediction_length = 100;
@@ -1528,4 +1591,50 @@ bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size) {
   );
 
   return pressed;
+}
+
+bool ui_quick_save(ui_handler_t *ui) {
+  if (ui->current_project_path[0] != '\0') {
+    return save_project(ui, ui->current_project_path);
+  } else {
+    nfdu8char_t *save_path = NULL;
+    nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
+    nfdresult_t result = NFD_SaveDialogU8(&save_path, filters, 1, NULL, "unnamed.tasp");
+    if (result == NFD_OKAY) {
+      bool ok = save_project(ui, save_path);
+      NFD_FreePathU8(save_path);
+      return ok;
+    }
+    return false;
+  }
+}
+
+void ui_mark_unsaved(ui_handler_t *ui) {
+  if (ui) {
+    ui->has_unsaved_changes = true;
+  }
+}
+
+void timeline_mark_unsaved(timeline_state_t *ts) {
+  if (ts && ts->ui) {
+    ts->ui->has_unsaved_changes = true;
+  }
+}
+
+void ui_check_auto_save(ui_handler_t *ui) {
+  if (!ui->auto_save_enabled) return;
+  if (ui->current_project_path[0] == '\0') return;
+  if (!ui->has_unsaved_changes) return;
+
+  double now = glfwGetTime();
+  if (ui->last_auto_save_time <= 0.0) {
+    ui->last_auto_save_time = now;
+    return;
+  }
+
+  if (now - ui->last_auto_save_time >= (double)ui->auto_save_interval_sec) {
+    log_info(LOG_SOURCE, "Auto-saving project to '%s'...", ui->current_project_path);
+    save_project(ui, ui->current_project_path);
+    ui->last_auto_save_time = now;
+  }
 }

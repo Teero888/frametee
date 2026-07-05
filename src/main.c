@@ -93,6 +93,7 @@ int main(int argc, char **argv) {
     render_cursor(&handler.user_interface);
     renderer_flush_queue(&handler, handler.current_frame_command_buffer);
 
+    ui_check_auto_save(&handler.user_interface);
     ui_render(&handler.user_interface);
 
     // Mouse locking logic for recording

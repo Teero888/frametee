@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <symbols.h>
+#include <system/config.h>
 #include <system/include_cimgui.h>
 
 // check if a key combination is pressed for single-press actions
@@ -159,6 +160,7 @@ void keybinds_init(keybind_manager_t *manager) {
   set_action_info(manager, ACTION_TOGGLE_FULLSCREEN, "toggle_fullscreen", "Toggle Fullscreen", "General");
   set_action_info(manager, ACTION_UNDO, "undo", "Undo", "General");
   set_action_info(manager, ACTION_REDO, "redo", "Redo", "General");
+  set_action_info(manager, ACTION_SAVE_PROJECT, "save_project", "Quick Save Project", "General");
 
   set_action_info(manager, ACTION_TRIM_SNIPPET, "trim_snippet", "Trim Recording", "Recording");
   set_action_info(manager, ACTION_CANCEL_RECORDING, "cancel_recording", "Cancel Recording", "Recording");
@@ -214,6 +216,7 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_TOGGLE_FULLSCREEN, (key_combo_t){ImGuiKey_F11, false, false, false});
   keybinds_add(manager, ACTION_UNDO, (key_combo_t){ImGuiKey_Z, true, false, false});
   keybinds_add(manager, ACTION_REDO, (key_combo_t){ImGuiKey_Y, true, false, false});
+  keybinds_add(manager, ACTION_SAVE_PROJECT, (key_combo_t){ImGuiKey_S, true, false, false});
 
   keybinds_add(manager, ACTION_TRIM_SNIPPET, (key_combo_t){ImGuiKey_F, false, false, false});
   keybinds_add(manager, ACTION_CANCEL_RECORDING, (key_combo_t){ImGuiKey_F4, false, false, false});
@@ -314,6 +317,7 @@ void keybinds_process_inputs(ui_handler_t *ui) {
 
   if (keybinds_is_action_pressed(kb, ACTION_UNDO, false)) undo_manager_undo(&ui->undo_manager, ts);
   if (keybinds_is_action_pressed(kb, ACTION_REDO, false)) undo_manager_redo(&ui->undo_manager, ts);
+  if (keybinds_is_action_pressed(kb, ACTION_SAVE_PROJECT, false)) ui_quick_save(ui);
 
   if (cmd) {
     undo_manager_register_command(&ui->undo_manager, cmd);
@@ -368,6 +372,7 @@ static void render_keybind_entry(ui_handler_t *ui, keybind_manager_t *manager, a
     igSameLine(0, 6.0f * dpi_scale);
     if (ui_icon_button(ui, ICON_FA_TRASH, (ImVec2){30.f * dpi_scale, 0})) {
       keybinds_remove(manager, global_idx);
+      config_save(ui);
       // We removed an item, so we must stop iterating since indices shifted
       igPopID();
       break;
@@ -440,6 +445,7 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
               // Replace
               manager->bindings[manager->rebind_index].combo = new_combo;
             }
+            config_save(ui);
 
             manager->is_waiting_for_input = false;
             igCloseCurrentPopup();
@@ -454,8 +460,8 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
     igSeparator();
 
     if (igCollapsingHeader_TreeNodeFlags("Mouse Settings", 0)) {
-      igDragFloat("Sensitivity", &ui->mouse_sens, 0.5f, 1.0f, 1000.0f, "%.1f", 0);
-      igDragFloat("Max Distance", &ui->mouse_max_distance, 1.0f, 0.0f, 2000.0f, "%.1f", 0);
+      if (igDragFloat("Sensitivity", &ui->mouse_sens, 0.5f, 1.0f, 1000.0f, "%.1f", 0)) config_save(ui);
+      if (igDragFloat("Max Distance", &ui->mouse_max_distance, 1.0f, 0.0f, 2000.0f, "%.1f", 0)) config_save(ui);
     }
 
     const char *categories[] = {"Playback", "Timeline", "General", "Recording", "Dummy", "Camera", "Tracks"};

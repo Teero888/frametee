@@ -239,6 +239,15 @@ void config_load(ui_handler_t *ui) {
     }
   }
 
+  toml_datum_t auto_save = toml_get(res.toptab, "auto_save");
+  if (auto_save.type == TOML_TABLE) {
+    toml_datum_t enabled = toml_get(auto_save, "enabled");
+    if (enabled.type == TOML_BOOLEAN) ui->auto_save_enabled = enabled.u.boolean;
+
+    toml_datum_t interval = toml_get(auto_save, "interval_sec");
+    if (interval.type == TOML_INT64) ui->auto_save_interval_sec = (int)interval.u.int64;
+  }
+
   toml_free(res);
   log_info(LOG_SOURCE, "Config loaded successfully from %s.", config_path);
 }
@@ -335,7 +344,9 @@ void config_save(ui_handler_t *ui) {
   for (int i = 0; i < ui->num_recent_projects; ++i) {
     fprintf(fp, "  \"%s\"%s\n", ui->recent_projects[i], (i < ui->num_recent_projects - 1) ? "," : "");
   }
-  fprintf(fp, "]\n");
+  fprintf(fp, "\n[auto_save]\n");
+  fprintf(fp, "enabled = %s\n", ui->auto_save_enabled ? "true" : "false");
+  fprintf(fp, "interval_sec = %d\n", ui->auto_save_interval_sec);
 
   fclose(fp);
   log_info(LOG_SOURCE, "Config saved to %s.", config_path);
