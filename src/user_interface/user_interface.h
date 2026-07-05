@@ -4,6 +4,7 @@
 #include "demo.h"
 #include "keybinds.h"
 #include "undo_redo.h"
+#include "online_maps.h"
 #include <ddnet_physics/gamecore.h>
 #include <particles/particle_system.h>
 #include <plugins/plugin_manager.h>
@@ -25,6 +26,7 @@ struct ui_handler_t {
   tas_context_t plugin_context;
   tas_api_t plugin_api;
   particle_system_t particle_system;
+  online_map_manager_t online_maps;
 
   SPickup *pickups;
   mvec2 *pickup_positions;

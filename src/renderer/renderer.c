@@ -1140,7 +1140,7 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, mip_levels, 1);
   texture->sampler = create_texture_sampler(handler, mip_levels, VK_FILTER_LINEAR);
 
-  log_info(LOG_SOURCE, "Loaded texture: %s", image_path);
+  // log_info(LOG_SOURCE, "Loaded texture: %s", image_path);
   return texture;
 }
 

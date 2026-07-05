@@ -37,45 +37,6 @@
 
 static const char *LOG_SOURCE = "UI";
 
-static void render_save_status_badge(ui_handler_t *ui) {
-  bool unsaved = ui->has_unsaved_changes;
-
-  igPushStyleVar_Vec2(ImGuiStyleVar_FramePadding, (ImVec2){8.0f, 3.0f});
-  igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 10.0f);
-  igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, 1.0f);
-
-  if (unsaved) {
-    igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.80f, 0.40f, 0.05f, 0.25f});
-    igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.95f, 0.50f, 0.08f, 0.45f});
-    igPushStyleColor_Vec4(ImGuiCol_ButtonActive, (ImVec4){1.00f, 0.55f, 0.10f, 0.60f});
-    igPushStyleColor_Vec4(ImGuiCol_Border, (ImVec4){0.95f, 0.50f, 0.10f, 0.55f});
-    igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){1.00f, 0.78f, 0.30f, 1.00f});
-
-    if (igButton("● Unsaved", (ImVec2){0, 0})) {
-      ui_quick_save(ui);
-    }
-    if (igIsItemHovered(0)) {
-      igSetTooltip("Unsaved Changes\nClick or press Ctrl+S to save project.");
-    }
-  } else {
-    igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.10f, 0.45f, 0.20f, 0.18f});
-    igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.15f, 0.55f, 0.25f, 0.30f});
-    igPushStyleColor_Vec4(ImGuiCol_ButtonActive, (ImVec4){0.20f, 0.65f, 0.30f, 0.45f});
-    igPushStyleColor_Vec4(ImGuiCol_Border, (ImVec4){0.20f, 0.65f, 0.30f, 0.35f});
-    igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){0.45f, 0.85f, 0.55f, 0.85f});
-
-    if (igButton("✓ Saved", (ImVec2){0, 0})) {
-      // no action
-    }
-    if (igIsItemHovered(0)) {
-      igSetTooltip("All changes saved.");
-    }
-  }
-
-  igPopStyleColor(5);
-  igPopStyleVar(3);
-}
-
 void render_menu_bar(ui_handler_t *ui) {
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
@@ -157,11 +118,19 @@ void render_menu_bar(ui_handler_t *ui) {
       }
       if (igBeginMenu("Auto-Save", true)) {
         if (igCheckbox("Enable Auto-Save", &ui->auto_save_enabled)) config_save(ui);
-        if (igSliderInt("Interval (sec)", &ui->auto_save_interval_sec, 15, 600, "%d s", 0)) config_save(ui);
-        if (igIsItemHovered(0)) igSetTooltip("Auto-save triggers only when the project has been saved to a file at least once.");
+        if (igSliderInt("Interval", &ui->auto_save_interval_sec, 15, 600, "%d s", 0)) config_save(ui);
         igEndMenu();
       }
       igEndMenu();
+    }
+
+    if (ui->has_unsaved_changes) {
+      igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){1.0f, 0.70f, 0.20f, 1.0f});
+      igText("*");
+      igPopStyleColor(1);
+      if (igIsItemHovered(0)) {
+        igSetTooltip("Unsaved Changes (Ctrl+S to save)");
+      }
     }
 
     const char *button_text = "Reload Plugins";
@@ -181,12 +150,7 @@ void render_menu_bar(ui_handler_t *ui) {
       fps_width = fps_size.x;
     }
 
-    ImVec2 badge_size = {85.0f, 0.0f};
-
-    igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x - fps_width - badge_size.x - 12.0f);
-
-    render_save_status_badge(ui);
-    igSameLine(0, 8.0f);
+    igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x - fps_width);
 
     if (ui->show_fps) {
       igText("%s", fps_text);
@@ -531,6 +495,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   camera_init(&gfx_handler->renderer.camera);
   undo_manager_init(&ui->undo_manager);
   skin_manager_init(&ui->skin_manager);
+  online_map_manager_init(&ui->online_maps);
   extern bool g_is_headless;
   if (!g_is_headless) {
     NFD_Init();
@@ -1201,101 +1166,134 @@ static void render_splash_screen(ui_handler_t *ui) {
   center.x = viewport->WorkPos.x + viewport->WorkSize.x * 0.5f;
   center.y = viewport->WorkPos.y + viewport->WorkSize.y * 0.5f;
   igSetNextWindowPos(center, ImGuiCond_Always, (ImVec2){0.5f, 0.5f});
-  
-  ImGuiWindowFlags window_flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings;
 
-  igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){40.0f, 40.0f});
-  igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){8.0f, 16.0f});
+  float win_w = viewport->WorkSize.x * 0.88f;
+  if (win_w < 920.0f) win_w = 920.0f;
+  if (win_w > 1220.0f) win_w = 1220.0f;
+
+  float win_h = viewport->WorkSize.y * 0.86f;
+  if (win_h < 660.0f) win_h = 660.0f;
+  if (win_h > 780.0f) win_h = 780.0f;
+
+  igSetNextWindowSize((ImVec2){win_w, win_h}, ImGuiCond_Always);
+
+  ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize;
+
+  igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){24.0f, 24.0f});
+  igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){14.0f, 14.0f});
+  igPushStyleVar_Float(ImGuiStyleVar_WindowRounding, 12.0f);
+  igPushStyleVar_Float(ImGuiStyleVar_WindowBorderSize, 1.5f);
 
   if (igBeginPopupModal("Splash Screen", NULL, window_flags)) {
-    float avail_x = 350.0f; // Desired width
+    float sidebar_w = 250.0f;
 
-    const char *title = "Frametee";
-    ImVec2 title_size;
-    igCalcTextSize(&title_size, title, NULL, false, -1.0f);
-    igSetCursorPosX(igGetCursorPosX() + (avail_x - title_size.x) * 0.5f);
-    
-    igText("%s", title);
-    
-    igSpacing();
-    igSeparator();
-    igSpacing();
-
-    if (igButton("Load Map (New Project)", (ImVec2){avail_x, 45})) {
-      nfdu8char_t *out_path;
-      nfdu8filteritem_t filters[] = {{"map files", "map"}};
-      nfdopendialogu8args_t args = {0};
-      args.filterList = filters;
-      args.filterCount = 1;
-      nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
-      if (result == NFD_OKAY) {
-        on_map_load_path(ui->gfx_handler, out_path);
-        NFD_FreePathU8(out_path);
-        igCloseCurrentPopup();
-      }
-    }
-
-    if (igButton("Load Project", (ImVec2){avail_x, 45})) {
-      nfdu8char_t *out_path;
-      nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
-      nfdopendialogu8args_t args = {0};
-      args.filterList = filters;
-      args.filterCount = 1;
-      nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
-      if (result == NFD_OKAY) {
-        load_project(ui, out_path);
-        NFD_FreePathU8(out_path);
-        igCloseCurrentPopup();
-      }
-    }
-
-    if (ui->num_recent_projects > 0) {
+    // Left sidebar column
+    igBeginChild_Str("SplashSidebar", (ImVec2){sidebar_w, 0}, false, 0);
+    {
       igSpacing();
+      igPushFont(ui->font, 0.0f);
+      igTextColored((ImVec4){0.35f, 0.75f, 1.00f, 1.00f}, "%s", "FrameTee");
+      igPopFont();
+      igTextDisabled("Teeworlds & DDNet TAS Tool");
+      
       igSpacing();
       igSeparator();
       igSpacing();
-      
-      const char *recent_title = "Recent Projects";
-      ImVec2 rtitle_size;
-      igCalcTextSize(&rtitle_size, recent_title, NULL, false, -1.0f);
-      igSetCursorPosX(igGetCursorPosX() + (avail_x - rtitle_size.x) * 0.5f);
-      igTextDisabled("%s", recent_title);
-      
-      igSpacing();
 
-      igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, 1.0f);
-      igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0, 0, 0, 0});
-      igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.05f, 0.5f});
+      igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.10f, 0.5f});
+      igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f);
 
-      for (int i = 0; i < ui->num_recent_projects; i++) {
-        const char *path = ui->recent_projects[i];
-        const char *filename = strrchr(path, '/');
-        if (!filename) filename = strrchr(path, '\\');
-        if (!filename) filename = path;
-        else filename++;
-
-        if (igButton(filename, (ImVec2){avail_x, 30})) {
-          load_project(ui, path);
+      if (igButton(ICON_FA_MAP "  Load Local Map (.map)", (ImVec2){sidebar_w, 42})) {
+        nfdu8char_t *out_path;
+        nfdu8filteritem_t filters[] = {{"map files", "map"}};
+        nfdopendialogu8args_t args = {0};
+        args.filterList = filters;
+        args.filterCount = 1;
+        nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
+        if (result == NFD_OKAY) {
+          on_map_load_path(ui->gfx_handler, out_path);
+          NFD_FreePathU8(out_path);
           igCloseCurrentPopup();
         }
-        if (igIsItemHovered(ImGuiHoveredFlags_None)) {
-          if (igBeginTooltip()) {
-            igPushTextWrapPos(400.0f);
-            igTextUnformatted(path, NULL);
-            igPopTextWrapPos();
-            igEndTooltip();
-          }
+      }
+
+      if (igButton(ICON_FA_FOLDER_OPEN "  Load Project (.tasp)", (ImVec2){sidebar_w, 42})) {
+        nfdu8char_t *out_path;
+        nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
+        nfdopendialogu8args_t args = {0};
+        args.filterList = filters;
+        args.filterCount = 1;
+        nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
+        if (result == NFD_OKAY) {
+          load_project(ui, out_path);
+          NFD_FreePathU8(out_path);
+          igCloseCurrentPopup();
         }
       }
 
       igPopStyleVar(2);
-      igPopStyleColor(1);
+
+      if (ui->num_recent_projects > 0) {
+        igSpacing();
+        igSeparator();
+        igSpacing();
+        
+        igTextColored((ImVec4){0.70f, 0.75f, 0.85f, 1.00f}, "%s", ICON_FA_CLOCK " Recent Projects");
+        igSpacing();
+
+        igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, 1.0f);
+        igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 5.0f);
+        igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.12f, 0.14f, 0.18f, 0.60f});
+        igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.22f, 0.28f, 0.38f, 0.85f});
+        igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.05f, 0.5f});
+
+        for (int i = 0; i < ui->num_recent_projects; i++) {
+          const char *path = ui->recent_projects[i];
+          const char *filename = strrchr(path, '/');
+          if (!filename) filename = strrchr(path, '\\');
+          if (!filename) filename = path;
+          else filename++;
+
+          char item_lbl[1050];
+          snprintf(item_lbl, sizeof(item_lbl), "%s  %s", ICON_FA_FILE, filename);
+
+          if (igButton(item_lbl, (ImVec2){sidebar_w, 32})) {
+            load_project(ui, path);
+            igCloseCurrentPopup();
+          }
+          if (igIsItemHovered(ImGuiHoveredFlags_None)) {
+            if (igBeginTooltip()) {
+              igPushTextWrapPos(380.0f);
+              igTextUnformatted(path, NULL);
+              igPopTextWrapPos();
+              igEndTooltip();
+            }
+          }
+        }
+
+        igPopStyleVar(3);
+        igPopStyleColor(2);
+      }
     }
+    igEndChild();
+
+    igSameLine(0, 18.0f);
+
+    // Right main panel column (Online Maps Browser)
+    igBeginChild_Str("SplashMainPanel", (ImVec2){0, 0}, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    {
+      ImVec2 avail;
+      igGetContentRegionAvail(&avail);
+      if (render_online_map_browser(ui, &ui->online_maps, avail.x, avail.y)) {
+        igCloseCurrentPopup();
+      }
+    }
+    igEndChild();
 
     igEndPopup();
   }
   
-  igPopStyleVar(2);
+  igPopStyleVar(4);
 }
 
 void ui_render(ui_handler_t *ui) {
@@ -1519,6 +1517,7 @@ void ui_cleanup(ui_handler_t *ui) {
   undo_manager_cleanup(&ui->undo_manager);
   skin_manager_free(&ui->skin_manager, ui->gfx_handler);
   skin_browser_cleanup(ui->gfx_handler);
+  online_map_manager_cleanup(&ui->online_maps, ui->gfx_handler);
   extern bool g_is_headless;
   if (!g_is_headless) {
     NFD_Quit();

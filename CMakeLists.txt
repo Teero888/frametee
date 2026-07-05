@@ -37,6 +37,7 @@ set(SRCS
 	src/user_interface/net_events.c
 	src/user_interface/undo_redo.c
 	src/user_interface/user_interface.c
+	src/user_interface/online_maps.c
 	src/user_interface/widgets/hsl_colorpicker.c
 	src/user_interface/timeline/timeline.c
 	src/user_interface/timeline/timeline_commands.c
@@ -44,6 +45,7 @@ set(SRCS
 	src/user_interface/timeline/timeline_model.c
 	src/user_interface/timeline/timeline_renderer.c
 	src/particles/particle_system.c
+	libs/cjson/cJSON.c
 )
 
 # find dependencies
@@ -159,6 +161,7 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/libs)
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/libs/cjson)
 
 # sanitizer options
 if(ENABLE_SANITIZERS)

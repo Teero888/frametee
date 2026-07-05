@@ -344,10 +344,12 @@ void config_save(ui_handler_t *ui) {
   for (int i = 0; i < ui->num_recent_projects; ++i) {
     fprintf(fp, "  \"%s\"%s\n", ui->recent_projects[i], (i < ui->num_recent_projects - 1) ? "," : "");
   }
+  fprintf(fp, "]\n");
+
   fprintf(fp, "\n[auto_save]\n");
   fprintf(fp, "enabled = %s\n", ui->auto_save_enabled ? "true" : "false");
   fprintf(fp, "interval_sec = %d\n", ui->auto_save_interval_sec);
 
   fclose(fp);
-  log_info(LOG_SOURCE, "Config saved to %s.", config_path);
+  // log_info(LOG_SOURCE, "Config saved to %s.", config_path);
 }
