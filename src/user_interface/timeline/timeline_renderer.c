@@ -177,8 +177,21 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
 
   // Draw markers for net events
   ImU32 event_marker_col = IM_COL32(255, 200, 0, 255);
-  for (int i = 0; i < ts->net_event_count; ++i) {
+  int start_idx = ts->net_event_count;
+  int low = 0, high = ts->net_event_count - 1;
+  while (low <= high) {
+    int mid = low + (high - low) / 2;
+    if (ts->net_events[mid].tick >= start_tick) {
+      start_idx = mid;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+
+  for (int i = start_idx; i < ts->net_event_count; ++i) {
     net_event_t *ev = &ts->net_events[i];
+    if (ev->tick > end_tick) break;
     float x = renderer_tick_to_screen_x(ts, ev->tick, header_bb.Min.x);
     if (x >= header_bb.Min.x && x <= header_bb.Max.x) {
       ImVec2 p1 = {x - 4 * dpi_scale, header_bb.Max.y - 12 * dpi_scale};

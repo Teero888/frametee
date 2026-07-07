@@ -67,7 +67,7 @@ bool save_project(ui_handler_t *ui, const char *path) {
   fseek(f, 0, SEEK_SET);
   memcpy(header.magic, TAS_PROJECT_FILE_MAGIC, 4);
   header.version = TAS_PROJECT_FILE_VERSION;
-  strncpy(header.map_name, ui->loaded_map_name, sizeof(header.map_name) - 1);
+  snprintf(header.map_name, sizeof(header.map_name), "%.*s", (int)(sizeof(header.map_name) - 1), ui->loaded_map_name);
   fwrite(&header, sizeof(tas_project_header_t), 1, f);
 
   fclose(f);
@@ -105,7 +105,7 @@ static bool write_skin_data(FILE *f, ui_handler_t *ui) {
 
     skin_file_header_t skin_header;
     skin_header.id = skin_info->id;
-    strncpy(skin_header.name, skin_info->name, sizeof(skin_header.name) - 1);
+    snprintf(skin_header.name, sizeof(skin_header.name), "%s", skin_info->name);
     skin_header.texture_data_size = 0; // We no longer save raw png data
 
     fwrite(&skin_header, sizeof(skin_file_header_t), 1, f);
@@ -289,7 +289,7 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
       if (fetch_skin(skin_header.name, skin_path, sizeof(skin_path))) {
         loaded_id = renderer_load_skin_from_file(ui->gfx_handler, skin_path, &info.preview_texture_res);
         if (loaded_id >= 0) {
-          strncpy(info.path, skin_path, sizeof(info.path) - 1);
+          snprintf(info.path, sizeof(info.path), "%s", skin_path);
           // Load data into memory for skin_manager
           FILE *f_skin = fs_open(skin_path, "rb");
           if (f_skin) {
@@ -311,7 +311,7 @@ static bool read_and_load_skins(FILE *f, ui_handler_t *ui, uint32_t num_skins) {
 
     if (loaded_id >= 0) {
       info.id = loaded_id;
-      strncpy(info.name, skin_header.name, sizeof(info.name) - 1);
+      snprintf(info.name, sizeof(info.name), "%s", skin_header.name);
       if (info.preview_texture_res) {
         info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
             info.preview_texture_res->sampler, info.preview_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));

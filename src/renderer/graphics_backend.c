@@ -636,11 +636,6 @@ static int init_vulkan(gfx_handler_t *handler) {
   return 0;
 }
 
-static ImVec4 hex_vec4(const char *hex, float alpha) {
-  unsigned int r, g, b;
-  sscanf(hex, "%02x%02x%02x", &r, &g, &b);
-  return (ImVec4){(float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f, alpha};
-}
 
 /*
 void ayu_dark(void) {

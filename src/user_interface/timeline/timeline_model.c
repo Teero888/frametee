@@ -633,6 +633,10 @@ void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_i
 }
 
 void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *out_world, bool effects) {
+  if (ts->cached_tick == tick) {
+    wc_copy_world(out_world, &ts->world_cached);
+    return;
+  }
   const int step = 50;
   particle_system_t *ps = &ts->ui->particle_system;
 

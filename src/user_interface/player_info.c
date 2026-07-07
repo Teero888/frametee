@@ -73,7 +73,7 @@ static void start_skin_fetch(player_info_t* info) {
     g_fetch_tasks[i].target = info;
     g_fetch_tasks[i].done = false;
     g_fetch_tasks[i].success = false;
-    strncpy(g_fetch_tasks[i].skin_name, info->skin_name, sizeof(g_fetch_tasks[i].skin_name) - 1);
+    snprintf(g_fetch_tasks[i].skin_name, sizeof(g_fetch_tasks[i].skin_name), "%s", info->skin_name);
     
     pthread_create(&g_fetch_threads[i], NULL, fetch_skin_thread, &g_fetch_tasks[i]);
     break;
@@ -135,8 +135,8 @@ void render_player_info(gfx_handler_t *h) {
               info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
                   unused_preview->sampler, unused_preview->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
             }
-            strncpy(info.name, g_fetch_tasks[i].skin_name, sizeof(info.name) - 1);
-            strncpy(info.path, g_fetch_tasks[i].fetched_path, sizeof(info.path) - 1);
+            snprintf(info.name, sizeof(info.name), "%.*s", (int)(sizeof(info.name) - 1), g_fetch_tasks[i].skin_name);
+            snprintf(info.path, sizeof(info.path), "%.*s", (int)(sizeof(info.path) - 1), g_fetch_tasks[i].fetched_path);
             skin_manager_add(&h->user_interface.skin_manager, &info);
             player_info->skin = info.id;
           }

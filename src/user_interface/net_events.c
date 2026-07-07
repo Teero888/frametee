@@ -178,7 +178,7 @@ void render_net_events_window(ui_handler_t *ui) {
       ev.type = (net_event_type_t)new_type;
 
       if (uses_message) {
-        strncpy(ev.message, new_message, sizeof(ev.message) - 1);
+        snprintf(ev.message, sizeof(ev.message), "%s", new_message);
       }
 
       if (new_type == NET_EVENT_CHAT) {
@@ -196,7 +196,7 @@ void render_net_events_window(ui_handler_t *ui) {
         ev.emoticon = new_emoticon;
       } else if (new_type == NET_EVENT_VOTE_SET) {
         ev.vote_timeout = new_vote_timeout;
-        strncpy(ev.reason, new_vote_reason, sizeof(ev.reason) - 1);
+        snprintf(ev.reason, sizeof(ev.reason), "%s", new_vote_reason);
       } else if (new_type == NET_EVENT_VOTE_STATUS) {
         ev.vote_yes = new_vote_yes;
         ev.vote_no = new_vote_no;
@@ -226,109 +226,118 @@ void render_net_events_window(ui_handler_t *ui) {
 
       bool sort_needed = false;
 
-      for (int i = 0; i < ts->net_event_count; ++i) {
-        net_event_t *ev = &ts->net_events[i];
-        igPushID_Int(i);
-        igTableNextRow(0, 0.0f);
+      ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
+      ImGuiListClipper_Begin(clipper, ts->net_event_count, -1.0f);
 
-        igTableSetColumnIndex(0);
-        igPushItemWidth(-FLT_MIN);
-        if (igDragInt("##tick", &ev->tick, 1.0f, 0, 0, "%d", 0)) {
-          // just updated value
-        }
-        if (igIsItemDeactivatedAfterEdit()) sort_needed = true;
-        igPopItemWidth();
+      while (ImGuiListClipper_Step(clipper)) {
+        for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; i++) {
+          if (i < 0 || i >= ts->net_event_count) break;
 
-        igTableSetColumnIndex(1);
-        igPushItemWidth(-FLT_MIN);
-        int type_idx = (int)ev->type;
-        if (igCombo_Str("##type", &type_idx, "Chat\0Broadcast\0KillMsg\0SoundGlobal\0Emoticon\0VoteSet\0VoteStatus\0DDRaceTime\0Record\0\0", 0)) {
-          ev->type = (net_event_type_t)type_idx;
-        }
-        igPopItemWidth();
+          net_event_t *ev = &ts->net_events[i];
+          igPushID_Int(i);
+          igTableNextRow(0, 0.0f);
 
-        igTableSetColumnIndex(2);
-        if (ev->type == NET_EVENT_CHAT || ev->type == NET_EVENT_BROADCAST || ev->type == NET_EVENT_VOTE_SET) {
+          igTableSetColumnIndex(0);
           igPushItemWidth(-FLT_MIN);
-          igInputText("##msg", ev->message, sizeof(ev->message), 0, NULL, NULL);
+          if (igDragInt("##tick", &ev->tick, 1.0f, 0, 0, "%d", 0)) {
+            // just updated value
+          }
+          if (igIsItemDeactivatedAfterEdit()) sort_needed = true;
           igPopItemWidth();
-        } else if (ev->type == NET_EVENT_VOTE_STATUS) {
-          igText("Status: Y:%d N:%d P:%d T:%d", ev->vote_yes, ev->vote_no, ev->vote_pass, ev->vote_total);
-        } else if (ev->type == NET_EVENT_DDRACE_TIME) {
-          igText("Time: %d", ev->time);
-        } else if (ev->type == NET_EVENT_RECORD) {
-          igText("Rec: S:%d P:%d", ev->server_time_best, ev->player_time_best);
-        } else {
-          igTextDisabled("-");
-        }
 
-        igTableSetColumnIndex(3);
-        if (ev->type == NET_EVENT_CHAT) {
-          igPushItemWidth(40);
-          igInputInt("##cid", &ev->client_id, 0, 0, 0);
-          igSameLine(0, 2);
-          int team_idx = team_val_to_idx(ev->team);
-          igPushItemWidth(80);
-          if (igCombo_Str_arr("##team", &team_idx, team_names, team_count, 0)) {
-            ev->team = team_idx_to_val(team_idx);
+          igTableSetColumnIndex(1);
+          igPushItemWidth(-FLT_MIN);
+          int type_idx = (int)ev->type;
+          if (igCombo_Str("##type", &type_idx, "Chat\0Broadcast\0KillMsg\0SoundGlobal\0Emoticon\0VoteSet\0VoteStatus\0DDRaceTime\0Record\0\0", 0)) {
+            ev->type = (net_event_type_t)type_idx;
           }
           igPopItemWidth();
-          igPopItemWidth();
-          if (igIsItemHovered(0)) igSetTooltip("Client ID / Team");
-        } else if (ev->type == NET_EVENT_KILLMSG) {
-          igPushItemWidth(30);
-          igInputInt("##k", &ev->killer, 0, 0, 0);
-          igSameLine(0, 2);
-          igInputInt("##v", &ev->victim, 0, 0, 0);
-          igSameLine(0, 2);
-          igPushItemWidth(80);
-          igCombo_Str_arr("##w", &ev->weapon, weapon_names, weapon_count, 0);
-          igPopItemWidth();
-          igSameLine(0, 2);
-          igInputInt("##m", &ev->mode_special, 0, 0, 0);
-          igPopItemWidth();
-        } else if (ev->type == NET_EVENT_SOUND_GLOBAL) {
-          igPushItemWidth(150);
-          igCombo_Str_arr("##snd", &ev->sound_id, sound_names, sound_count, 20);
-          igPopItemWidth();
-        } else if (ev->type == NET_EVENT_EMOTICON) {
-          igPushItemWidth(40);
-          igInputInt("##cid", &ev->client_id, 0, 0, 0);
-          igSameLine(0, 2);
-          igPushItemWidth(100);
-          igCombo_Str_arr("##emo", &ev->emoticon, emote_names, emote_count, 0);
-          igPopItemWidth();
-          igPopItemWidth();
-        } else if (ev->type == NET_EVENT_VOTE_SET) {
-          igPushItemWidth(40);
-          igInputInt("##tm", &ev->vote_timeout, 0, 0, 0);
-          igSameLine(0, 2);
-          igPushItemWidth(80);
-          igInputText("##rsn", ev->reason, sizeof(ev->reason), 0, NULL, NULL);
-          igPopItemWidth();
-          igPopItemWidth();
-        } else if (ev->type == NET_EVENT_VOTE_STATUS) {
-          // Allow editing details
-          igPushItemWidth(30);
-          igInputInt("##y", &ev->vote_yes, 0, 0, 0);
-          igSameLine(0, 2);
-          igInputInt("##n", &ev->vote_no, 0, 0, 0);
-          igSameLine(0, 2);
-          igInputInt("##p", &ev->vote_pass, 0, 0, 0);
-          igSameLine(0, 2);
-          igInputInt("##t", &ev->vote_total, 0, 0, 0);
-          igPopItemWidth();
-        } else {
-          igTextDisabled("-");
-        }
 
-        igTableSetColumnIndex(4);
-        if (igButton("Del", (ImVec2){0, 0})) {
-          net_events_remove(ts, i);
-          i--;
+          igTableSetColumnIndex(2);
+          if (ev->type == NET_EVENT_CHAT || ev->type == NET_EVENT_BROADCAST || ev->type == NET_EVENT_VOTE_SET) {
+            igPushItemWidth(-FLT_MIN);
+            igInputText("##msg", ev->message, sizeof(ev->message), 0, NULL, NULL);
+            igPopItemWidth();
+          } else if (ev->type == NET_EVENT_VOTE_STATUS) {
+            igText("Status: Y:%d N:%d P:%d T:%d", ev->vote_yes, ev->vote_no, ev->vote_pass, ev->vote_total);
+          } else if (ev->type == NET_EVENT_DDRACE_TIME) {
+            igText("Time: %d", ev->time);
+          } else if (ev->type == NET_EVENT_RECORD) {
+            igText("Rec: S:%d P:%d", ev->server_time_best, ev->player_time_best);
+          } else {
+            igTextDisabled("-");
+          }
+
+          igTableSetColumnIndex(3);
+          if (ev->type == NET_EVENT_CHAT) {
+            igPushItemWidth(40);
+            igInputInt("##cid", &ev->client_id, 0, 0, 0);
+            igSameLine(0, 2);
+            int team_idx = team_val_to_idx(ev->team);
+            igPushItemWidth(80);
+            if (igCombo_Str_arr("##team", &team_idx, team_names, team_count, 0)) {
+              ev->team = team_idx_to_val(team_idx);
+            }
+            igPopItemWidth();
+            igPopItemWidth();
+            if (igIsItemHovered(0)) igSetTooltip("Client ID / Team");
+          } else if (ev->type == NET_EVENT_KILLMSG) {
+            igPushItemWidth(30);
+            igInputInt("##k", &ev->killer, 0, 0, 0);
+            igSameLine(0, 2);
+            igInputInt("##v", &ev->victim, 0, 0, 0);
+            igSameLine(0, 2);
+            igPushItemWidth(80);
+            igCombo_Str_arr("##w", &ev->weapon, weapon_names, weapon_count, 0);
+            igPopItemWidth();
+            igSameLine(0, 2);
+            igInputInt("##m", &ev->mode_special, 0, 0, 0);
+            igPopItemWidth();
+          } else if (ev->type == NET_EVENT_SOUND_GLOBAL) {
+            igPushItemWidth(150);
+            igCombo_Str_arr("##snd", &ev->sound_id, sound_names, sound_count, 20);
+            igPopItemWidth();
+          } else if (ev->type == NET_EVENT_EMOTICON) {
+            igPushItemWidth(40);
+            igInputInt("##cid", &ev->client_id, 0, 0, 0);
+            igSameLine(0, 2);
+            igPushItemWidth(100);
+            igCombo_Str_arr("##emo", &ev->emoticon, emote_names, emote_count, 0);
+            igPopItemWidth();
+            igPopItemWidth();
+          } else if (ev->type == NET_EVENT_VOTE_SET) {
+            igPushItemWidth(40);
+            igInputInt("##tm", &ev->vote_timeout, 0, 0, 0);
+            igSameLine(0, 2);
+            igPushItemWidth(80);
+            igInputText("##rsn", ev->reason, sizeof(ev->reason), 0, NULL, NULL);
+            igPopItemWidth();
+            igPopItemWidth();
+          } else if (ev->type == NET_EVENT_VOTE_STATUS) {
+            // Allow editing details
+            igPushItemWidth(30);
+            igInputInt("##y", &ev->vote_yes, 0, 0, 0);
+            igSameLine(0, 2);
+            igInputInt("##n", &ev->vote_no, 0, 0, 0);
+            igSameLine(0, 2);
+            igInputInt("##p", &ev->vote_pass, 0, 0, 0);
+            igSameLine(0, 2);
+            igInputInt("##t", &ev->vote_total, 0, 0, 0);
+            igPopItemWidth();
+          } else {
+            igTextDisabled("-");
+          }
+
+          igTableSetColumnIndex(4);
+          if (igButton("Del", (ImVec2){0, 0})) {
+            net_events_remove(ts, i);
+            i--;
+          }
+          igPopID();
         }
-        igPopID();
       }
+      ImGuiListClipper_End(clipper);
+      ImGuiListClipper_destroy(clipper);
       igEndTable();
 
       if (sort_needed) net_events_sort(ts);

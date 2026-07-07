@@ -35,6 +35,7 @@ typedef struct {
     
     bool map_downloading;
     bool map_download_failed;
+    bool map_downloaded;
 } online_map_item_t;
 
 typedef struct {

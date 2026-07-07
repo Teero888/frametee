@@ -1,6 +1,7 @@
 #include "online_maps.h"
 #include "user_interface.h"
 #include "widgets/imcol.h"
+#include <stb_image.h>
 #include <symbols.h>
 #include <renderer/graphics_backend.h>
 #include <system/fs.h>
@@ -198,6 +199,14 @@ static void parse_category_json(cJSON *arr, online_map_category_t *cat, const ch
         snprintf(item.local_map_path, sizeof(item.local_map_path), "%s/cache/maps/%s/%s", config_dir, item.repo, item.map_path);
         snprintf(item.local_thumb_path, sizeof(item.local_thumb_path), "%s/cache/thumbs/%s", config_dir, item.thumbnail_path);
         
+        FILE *f_check = fs_open(item.local_map_path, "rb");
+        if (f_check) {
+            item.map_downloaded = true;
+            fclose(f_check);
+        } else {
+            item.map_downloaded = false;
+        }
+        
         add_item_to_category(cat, &item);
     }
 }
@@ -378,6 +387,9 @@ typedef struct {
     bool in_use;
     bool done;
     bool success;
+    unsigned char *decoded_pixels;
+    int img_width;
+    int img_height;
 } thumb_load_task_t;
 
 static thumb_load_task_t g_thumb_tasks[MAX_THUMB_LOAD_TASKS];
@@ -385,7 +397,29 @@ static pthread_t g_thumb_threads[MAX_THUMB_LOAD_TASKS];
 
 static void *thumb_load_worker(void *arg) {
     thumb_load_task_t *task = (thumb_load_task_t *)arg;
-    task->success = http_download_to_file(task->url, task->dest_path);
+    task->decoded_pixels = NULL;
+    task->img_width = 0;
+    task->img_height = 0;
+
+    if (task->url[0] != '\0') {
+        task->success = http_download_to_file(task->url, task->dest_path);
+    } else {
+        task->success = true; // loading local file
+    }
+
+    if (task->success) {
+        FILE *f = fs_open(task->dest_path, "rb");
+        if (f) {
+            int channels;
+            task->decoded_pixels = stbi_load_from_file(f, &task->img_width, &task->img_height, &channels, STBI_rgb_alpha);
+            fclose(f);
+            if (!task->decoded_pixels) {
+                task->success = false;
+            }
+        } else {
+            task->success = false;
+        }
+    }
     task->done = true;
     return NULL;
 }
@@ -449,8 +483,8 @@ void online_map_manager_init(online_map_manager_t *mgr) {
     // 2. Launch background thread to update maps.json & category icons
     json_fetch_args_t *args = malloc(sizeof(json_fetch_args_t));
     args->mgr = mgr;
-    strncpy(args->config_dir, config_dir, sizeof(args->config_dir) - 1);
-    strncpy(args->json_file_path, json_file_path, sizeof(args->json_file_path) - 1);
+    snprintf(args->config_dir, sizeof(args->config_dir), "%.*s", (int)(sizeof(args->config_dir) - 1), config_dir);
+    snprintf(args->json_file_path, sizeof(args->json_file_path), "%.*s", (int)(sizeof(args->json_file_path) - 1), json_file_path);
     
     mgr->json_fetching = true;
     pthread_t thread;
@@ -518,8 +552,22 @@ void online_map_manager_update(online_map_manager_t *mgr, gfx_handler_t *gfx) {
             online_map_item_t *item = g_thumb_tasks[i].target;
             if (item) {
                 item->thumb_fetching = false;
-                if (!g_thumb_tasks[i].success) {
+                if (!g_thumb_tasks[i].success || !g_thumb_tasks[i].decoded_pixels) {
                     item->thumb_failed = true;
+                } else {
+                    item->thumb_texture_res = renderer_create_texture_from_rgba(gfx, g_thumb_tasks[i].decoded_pixels, g_thumb_tasks[i].img_width, g_thumb_tasks[i].img_height);
+                    if (item->thumb_texture_res) {
+                        item->thumb_preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
+                            item->thumb_texture_res->sampler, item->thumb_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+                        item->thumb_loaded = true;
+                    } else {
+                        item->thumb_failed = true;
+                    }
+                }
+                
+                if (g_thumb_tasks[i].decoded_pixels) {
+                    stbi_image_free(g_thumb_tasks[i].decoded_pixels);
+                    g_thumb_tasks[i].decoded_pixels = NULL;
                 }
             }
             g_thumb_tasks[i].in_use = false;
@@ -534,6 +582,8 @@ void online_map_manager_update(online_map_manager_t *mgr, gfx_handler_t *gfx) {
             item->map_downloading = false;
             if (!g_map_task.success) {
                 item->map_download_failed = true;
+            } else {
+                item->map_downloaded = true;
             }
         }
         g_map_task.in_use = false;
@@ -579,7 +629,7 @@ static online_map_category_t *get_active_category(online_map_manager_t *mgr) {
     return &mgr->ddnet;
 }
 
-static void trigger_thumbnail_download(online_map_item_t *item) {
+static void trigger_thumbnail_load(online_map_item_t *item, bool download) {
     if (item->thumb_fetching || item->thumb_loaded || item->thumb_failed) return;
     
     for (int i = 0; i < MAX_THUMB_LOAD_TASKS; i++) {
@@ -588,12 +638,18 @@ static void trigger_thumbnail_download(online_map_item_t *item) {
             g_thumb_tasks[i].done = false;
             g_thumb_tasks[i].target = item;
             g_thumb_tasks[i].dest_path[0] = '\0';
+            g_thumb_tasks[i].url[0] = '\0';
+            g_thumb_tasks[i].decoded_pixels = NULL;
+            g_thumb_tasks[i].img_width = 0;
+            g_thumb_tasks[i].img_height = 0;
             
-            strncpy(g_thumb_tasks[i].dest_path, item->local_thumb_path, sizeof(g_thumb_tasks[i].dest_path) - 1);
+            snprintf(g_thumb_tasks[i].dest_path, sizeof(g_thumb_tasks[i].dest_path), "%.*s", (int)(sizeof(g_thumb_tasks[i].dest_path) - 1), item->local_thumb_path);
             
-            char encoded_thumb[512];
-            url_encode_path(item->thumbnail_path, encoded_thumb, sizeof(encoded_thumb));
-            snprintf(g_thumb_tasks[i].url, sizeof(g_thumb_tasks[i].url), "https://raw.githubusercontent.com/Teero888/tw-thumbs/refs/heads/master/%s", encoded_thumb);
+            if (download) {
+                char encoded_thumb[512];
+                url_encode_path(item->thumbnail_path, encoded_thumb, sizeof(encoded_thumb));
+                snprintf(g_thumb_tasks[i].url, sizeof(g_thumb_tasks[i].url), "https://raw.githubusercontent.com/Teero888/tw-thumbs/refs/heads/master/%s", encoded_thumb);
+            }
             
             item->thumb_fetching = true;
             pthread_create(&g_thumb_threads[i], NULL, thumb_load_worker, &g_thumb_tasks[i]);
@@ -610,7 +666,7 @@ static void trigger_map_download(online_map_item_t *item) {
     g_map_task.target = item;
     g_map_task.dest_path[0] = '\0';
     
-    strncpy(g_map_task.dest_path, item->local_map_path, sizeof(g_map_task.dest_path) - 1);
+    snprintf(g_map_task.dest_path, sizeof(g_map_task.dest_path), "%.*s", (int)(sizeof(g_map_task.dest_path) - 1), item->local_map_path);
     
     char encoded_map[512];
     url_encode_path(item->map_path, encoded_map, sizeof(encoded_map));
@@ -947,9 +1003,7 @@ bool render_online_map_browser(ui_handler_t *ui, online_map_manager_t *mgr, floa
         
         // Downloaded Only filter or Offline Mode
         if (mgr->downloaded_only || mgr->is_offline) {
-            FILE *f_check = fs_open(item->local_map_path, "rb");
-            if (!f_check) continue;
-            fclose(f_check);
+            if (!item->map_downloaded) continue;
         }
         
         // Category specific filters
@@ -1025,20 +1079,13 @@ bool render_online_map_browser(ui_handler_t *ui, online_map_manager_t *mgr, floa
                         item->visible_this_frame = true;
                         
                         // Check local thumbnail file existence and load texture if needed
-                        if (!item->thumb_loaded && !item->thumb_fetching) {
+                        if (!item->thumb_loaded && !item->thumb_fetching && !item->thumb_failed) {
                             FILE *tf = fs_open(item->local_thumb_path, "rb");
                             if (tf) {
                                 fclose(tf);
-                                item->thumb_texture_res = renderer_load_texture(ui->gfx_handler, item->local_thumb_path);
-                                if (item->thumb_texture_res) {
-                                    item->thumb_preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
-                                        item->thumb_texture_res->sampler, item->thumb_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
-                                    item->thumb_loaded = true;
-                                } else {
-                                    item->thumb_failed = true;
-                                }
+                                trigger_thumbnail_load(item, false); // load local file async
                             } else {
-                                trigger_thumbnail_download(item);
+                                trigger_thumbnail_load(item, true);  // download and load async
                             }
                         }
                         
@@ -1153,15 +1200,17 @@ bool render_online_map_browser(ui_handler_t *ui, online_map_manager_t *mgr, floa
                         }
                         
                         // If map download just finished in background, load it automatically!
-                        FILE *check_mf = fs_open(item->local_map_path, "rb");
-                        if (check_mf && !item->map_downloading && item->map_download_failed == false) {
-                            fseek(check_mf, 0, SEEK_END);
-                            long fsize = ftell(check_mf);
-                            fclose(check_mf);
-                            if (fsize > 0 && item == g_map_task.target && g_map_task.done) {
-                                on_map_load_path(ui->gfx_handler, item->local_map_path);
-                                map_loaded = true;
-                                g_map_task.target = NULL;
+                        if (g_map_task.done && item == g_map_task.target) {
+                            FILE *check_mf = fs_open(item->local_map_path, "rb");
+                            if (check_mf && !item->map_downloading && item->map_download_failed == false) {
+                                fseek(check_mf, 0, SEEK_END);
+                                long fsize = ftell(check_mf);
+                                fclose(check_mf);
+                                if (fsize > 0) {
+                                    on_map_load_path(ui->gfx_handler, item->local_map_path);
+                                    map_loaded = true;
+                                    g_map_task.target = NULL;
+                                }
                             }
                         }
                         

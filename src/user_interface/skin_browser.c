@@ -82,8 +82,8 @@ static void add_browser_skin(const char *name, const char *path) {
   }
   browser_skin_t *s = &g_browser_skins[g_browser_skins_count++];
   memset(s, 0, sizeof(browser_skin_t));
-  strncpy(s->name, name, sizeof(s->name) - 1);
-  strncpy(s->path, path, sizeof(s->path) - 1);
+  snprintf(s->name, sizeof(s->name), "%.*s", (int)(sizeof(s->name) - 1), name);
+  snprintf(s->path, sizeof(s->path), "%.*s", (int)(sizeof(s->path) - 1), path);
   s->skin_id = -1;
   s->loaded = false;
 }
@@ -279,8 +279,8 @@ void render_skin_browser(gfx_handler_t *h) {
               if (info.id >= 0 && info.preview_texture_res) {
                 info.data = buffer;
                 info.data_size = file_size;
-                strncpy(info.name, skin_name_buf, sizeof(info.name) - 1);
-                strncpy(info.path, skin_path, sizeof(info.path) - 1);
+                snprintf(info.name, sizeof(info.name), "%.*s", (int)(sizeof(info.name) - 1), skin_name_buf);
+                snprintf(info.path, sizeof(info.path), "%.*s", (int)(sizeof(info.path) - 1), skin_path);
                 
                 info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
                     info.preview_texture_res->sampler, info.preview_texture_res->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
@@ -289,8 +289,7 @@ void render_skin_browser(gfx_handler_t *h) {
                 if (t->selected_player_track_index >= 0) {
                   player_info_t *pi = &t->player_tracks[t->selected_player_track_index].player_info;
                   pi->skin = info.id;
-                  strncpy(pi->skin_name, info.name, sizeof(pi->skin_name) - 1);
-                  pi->skin_name[sizeof(pi->skin_name) - 1] = '\0';
+                  snprintf(pi->skin_name, sizeof(pi->skin_name), "%.*s", (int)(sizeof(pi->skin_name) - 1), info.name);
                 }
                 refresh_skins(h);
               } else {
@@ -386,7 +385,7 @@ void render_skin_browser(gfx_handler_t *h) {
                 g_browser_load_tasks[i].done = false;
                 g_browser_load_tasks[i].target = bs;
                 g_browser_load_tasks[i].h = h;
-                strncpy(g_browser_load_tasks[i].path, bs->path, sizeof(g_browser_load_tasks[i].path) - 1);
+                snprintf(g_browser_load_tasks[i].path, sizeof(g_browser_load_tasks[i].path), "%.*s", (int)(sizeof(g_browser_load_tasks[i].path) - 1), bs->path);
                 bs->fetching = true;
                 pthread_create(&g_browser_load_threads[i], NULL, browser_load_thread, &g_browser_load_tasks[i]);
                 break;
@@ -417,13 +416,12 @@ void render_skin_browser(gfx_handler_t *h) {
                     info.preview_texture = ImTextureRef_ImTextureRef_TextureID((ImTextureID)ImGui_ImplVulkan_AddTexture(
                         unused_preview->sampler, unused_preview->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
                   }
-                  strncpy(info.name, bs->name, sizeof(info.name) - 1);
-                  strncpy(info.path, bs->path, sizeof(info.path) - 1);
+                  snprintf(info.name, sizeof(info.name), "%.*s", (int)(sizeof(info.name) - 1), bs->name);
+                  snprintf(info.path, sizeof(info.path), "%.*s", (int)(sizeof(info.path) - 1), bs->path);
                   
                   skin_manager_add(m, &info);
                   pi->skin = info.id;
-                  strncpy(pi->skin_name, bs->name, sizeof(pi->skin_name) - 1);
-                  pi->skin_name[sizeof(pi->skin_name) - 1] = '\0';
+                   snprintf(pi->skin_name, sizeof(pi->skin_name), "%.*s", (int)(sizeof(pi->skin_name) - 1), bs->name);
                 } else if (unused_preview) {
                   renderer_destroy_texture(h, unused_preview);
                 }
