@@ -1127,8 +1127,13 @@ void render_cursor(ui_handler_t *ui) {
 
   if (handler->user_interface.timeline.recording) {
 
-    float div = (1.0f / (handler->user_interface.gfx_handler->viewport[1] / 2.f)) * 402.f;
-    renderer_submit_atlas(handler, &handler->renderer.cursor_renderer, Z_LAYER_CURSOR, (vec2){ui->gfx_handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0] / div, ui->gfx_handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1] / div}, (vec2){64.f, 64.f}, 0.0f, handler->user_interface.weapon, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, true);
+    float div = (1.0f / (handler->viewport[1] / 2.f)) * 402.f;
+    float cursor_scale = handler->viewport[1] / 1080.f;
+    renderer_submit_atlas(handler, &handler->renderer.cursor_renderer, Z_LAYER_CURSOR,
+                          (vec2){handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0] / div,
+                                 handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1] / div},
+                          (vec2){64.f * cursor_scale, 64.f * cursor_scale},
+                          0.0f, handler->user_interface.weapon, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, true);
   }
 }
 
