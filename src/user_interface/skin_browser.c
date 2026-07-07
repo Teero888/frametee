@@ -12,7 +12,7 @@
 #include <symbols.h>
 #include <system/include_cimgui.h>
 #include <system/skin/skin_fetch.h>
-#include <pthread.h>
+#include <system/compat_threads.h>
 #include <stdatomic.h>
 #include <dirent.h>
 #include <math.h>

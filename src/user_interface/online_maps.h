@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <pthread.h>
+#include <system/compat_threads.h>
 #include <renderer/renderer.h>
 #include <system/include_cimgui.h>
 

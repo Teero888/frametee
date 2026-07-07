@@ -402,7 +402,7 @@ void ui_init_config(ui_handler_t *ui) {
   config_load(ui);
 }
 
-static void ui_apply_theme() {
+static void ui_apply_theme(void) {
   ImGuiStyle *style = igGetStyle();
 
   style->WindowPadding = (ImVec2){12.0f, 12.0f};

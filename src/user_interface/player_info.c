@@ -10,7 +10,7 @@
 #include <system/include_cimgui.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <system/skin/skin_fetch.h>
-#include <pthread.h>
+#include <system/compat_threads.h>
 #include <stdatomic.h>
 #include <symbols.h>
 #include <math.h>

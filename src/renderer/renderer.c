@@ -7,7 +7,7 @@
 #include <logger/logger.h>
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
-#include <pthread.h>
+#include <system/compat_threads.h>
 
 static pthread_mutex_t g_vulkan_mutex;
 static pthread_once_t g_vulkan_mutex_once = PTHREAD_ONCE_INIT;
