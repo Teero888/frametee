@@ -522,12 +522,12 @@ int renderer_init(gfx_handler_t *handler) {
                                        .queueFamilyIndex = handler->g_queue_family};
   check_vk_result(vkCreateCommandPool(handler->g_device, &pool_info, handler->g_allocator, &renderer->transfer_command_pool));
 
-  VkDescriptorPoolSize pool_sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 100},
-                                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100 * MAX_TEXTURES_PER_DRAW}};
+  VkDescriptorPoolSize pool_sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096},
+                                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096 * MAX_TEXTURES_PER_DRAW}};
   for (int i = 0; i < 3; i++) { // triple buffering
     VkDescriptorPoolCreateInfo pool_create_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                                    .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
-                                                   .maxSets = 100,
+                                                   .maxSets = 4096,
                                                    .poolSizeCount = sizeof(pool_sizes) / sizeof(pool_sizes[0]),
                                                    .pPoolSizes = pool_sizes};
     check_vk_result(vkCreateDescriptorPool(handler->g_device, &pool_create_info, handler->g_allocator, &renderer->frame_descriptor_pools[i]));
@@ -2695,6 +2695,23 @@ static int compare_render_commands(const void *a, const void *b) {
   const render_command_t *cmd_b = (const render_command_t *)b;
   if (cmd_a->z < cmd_b->z) return -1;
   if (cmd_a->z > cmd_b->z) return 1;
+
+  if (cmd_a->type < cmd_b->type) return -1;
+  if (cmd_a->type > cmd_b->type) return 1;
+
+  if (cmd_a->type == RENDER_CMD_ATLAS) {
+    if (cmd_a->data.atlas.ar < cmd_b->data.atlas.ar) return -1;
+    if (cmd_a->data.atlas.ar > cmd_b->data.atlas.ar) return 1;
+    if (cmd_a->data.atlas.screen_space != cmd_b->data.atlas.screen_space) {
+      return cmd_a->data.atlas.screen_space ? 1 : -1;
+    }
+  } else if (cmd_a->type == RENDER_CMD_ATLAS_BATCH) {
+    if (cmd_a->data.atlas_batch.ar < cmd_b->data.atlas_batch.ar) return -1;
+    if (cmd_a->data.atlas_batch.ar > cmd_b->data.atlas_batch.ar) return 1;
+    if (cmd_a->data.atlas_batch.screen_space != cmd_b->data.atlas_batch.screen_space) {
+      return cmd_a->data.atlas_batch.screen_space ? 1 : -1;
+    }
+  }
   return 0;
 }
 

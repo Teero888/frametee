@@ -2,7 +2,9 @@
 
 #include <atomic>
 #include <chrono>
+#if defined(_OPENMP)
 #include <omp.h>
+#endif
 #include <thread>
 
 #define CIMGUI_INCLUDED

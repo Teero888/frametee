@@ -48,6 +48,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${HOST_APP_DIR}/libs/cimgui"
     "${HOST_APP_DIR}/libs/cimgui/imgui"
     "${HOST_APP_DIR}/libs/ddnet_physics/include"
+    "${HOST_APP_DIR}/libs/ddnet_physics/include/ddnet_physics"
+    "${HOST_APP_DIR}/libs/ddnet_physics/libs/ddnet_map_loader"
     "${HOST_APP_DIR}/libs/cglm/include"
 )
 
@@ -71,10 +73,12 @@ else()
     target_link_libraries(${PROJECT_NAME} PRIVATE Tracy::TracyClient)
 endif()
 
-get_filename_component(HOST_APP_ABS_DIR ${HOST_APP_DIR} REALPATH BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:${PROJECT_NAME}>
-        "${HOST_APP_ABS_DIR}/build/plugins"
-    VERBATIM
-)
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    get_filename_component(HOST_APP_ABS_DIR ${HOST_APP_DIR} REALPATH BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            $<TARGET_FILE:${PROJECT_NAME}>
+            "${HOST_APP_ABS_DIR}/build/plugins"
+        VERBATIM
+    )
+endif()

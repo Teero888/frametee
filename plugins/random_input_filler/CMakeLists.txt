@@ -31,6 +31,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${HOST_APP_DIR}/libs/cimgui"
     "${HOST_APP_DIR}/libs/cimgui/imgui"
     "${HOST_APP_DIR}/libs/ddnet_physics/include"
+    "${HOST_APP_DIR}/libs/ddnet_physics/libs/ddnet_map_loader"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -49,9 +50,11 @@ install(TARGETS ${PROJECT_NAME}
     LIBRARY DESTINATION "${HOST_APP_DIR}/build/plugins"
 )
 
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}> "${HOST_APP_DIR}/build/plugins/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
-)
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}> "${HOST_APP_DIR}/build/plugins/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
+    )
+endif()
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE

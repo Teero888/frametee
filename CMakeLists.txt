@@ -290,3 +290,38 @@ add_custom_command(
         ${CMAKE_SOURCE_DIR}/data/shaders/
     COMMENT "Copying compiled shaders to build directory"
 )
+
+# =================================================================================================
+# PLUGINS INTEGRATION
+# =================================================================================================
+option(BUILD_PLUGINS "Build all default plugins" ON)
+if(BUILD_PLUGINS)
+    set(HOST_APP_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH "Path to the root of the ddnet_frametee project" FORCE)
+    add_subdirectory(plugins/example_c)
+    add_subdirectory(plugins/example_cpp)
+    add_subdirectory(plugins/physics_profiler)
+    add_subdirectory(plugins/random_input_filler)
+    add_subdirectory(plugins/ultraforce)
+
+    # Set output directory for all plugin targets so they build directly in the build's plugins directory
+    set_target_properties(api_example_c_plugin PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    )
+    set_target_properties(api_example_cpp_plugin PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    )
+    set_target_properties(physics_profiler_plugin PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    )
+    set_target_properties(random_input_filler_plugin PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    )
+    set_target_properties(ultraforce_plugin PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    )
+endif()

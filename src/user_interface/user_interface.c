@@ -81,6 +81,31 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_browser, true);
       igMenuItem_BoolPtr("Show net events", NULL, &ui->show_net_events_window, true);
+      igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);
+      igEndMenu();
+    }
+
+    // plugins menu
+    if (igBeginMenu("Plugins", true)) {
+      igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);
+      igSeparator();
+      if (ui->plugin_manager.count == 0) {
+        igTextDisabled("No plugins found");
+      } else {
+        for (int i = 0; i < ui->plugin_manager.count; ++i) {
+          loaded_plugin_t *p = &ui->plugin_manager.plugins[i];
+          bool is_loaded = (p->status == PLUGIN_STATUS_LOADED);
+          char label[256];
+          snprintf(label, sizeof(label), "%s##menu_%d", (p->info.name && p->info.name[0]) ? p->info.name : p->key, i);
+          if (igMenuItem_Bool(label, NULL, is_loaded, true)) {
+            plugin_manager_toggle_plugin(&ui->plugin_manager, i);
+          }
+        }
+      }
+      igSeparator();
+      if (igMenuItem_Bool("Reload All", NULL, false, true)) {
+        plugin_manager_reload_all(&ui->plugin_manager, ui->plugin_manager.directory);
+      }
       igEndMenu();
     }
 
@@ -134,7 +159,7 @@ void render_menu_bar(ui_handler_t *ui) {
       }
     }
 
-    const char *button_text = "Reload Plugins";
+    const char *button_text = "Plugins...";
     ImVec2 button_size = igCalcTextSize(button_text, NULL, false, 0.0f);
     button_size.x += igGetStyle()->FramePadding.x * 2.0f;
     ImVec2 region_avail = igGetContentRegionAvail();
@@ -155,7 +180,7 @@ void render_menu_bar(ui_handler_t *ui) {
       igSameLine(0, 0);
     }
 
-    if (igButton(button_text, (ImVec2){0, 0})) plugin_manager_reload_all(&ui->plugin_manager, "plugins");
+    if (igButton(button_text, (ImVec2){0, 0})) ui->show_plugin_manager = !ui->show_plugin_manager;
 
     igEndMainMenuBar();
   }
@@ -486,6 +511,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->prediction_length = 100;
   ui->show_skin_browser = false;
   ui->show_net_events_window = false;
+  ui->show_plugin_manager = false;
   particle_system_init(&ui->particle_system);
   timeline_init(ui);
   camera_init(&gfx_handler->renderer.camera);
@@ -1319,6 +1345,9 @@ void ui_render(ui_handler_t *ui) {
   undo_manager_render_history_window(&ui->undo_manager);
   if (ui->show_skin_browser) render_skin_browser(ui->gfx_handler);
   render_net_events_window(ui);
+  if (ui->show_plugin_manager) {
+    plugin_manager_render_ui(&ui->plugin_manager, &ui->show_plugin_manager);
+  }
 
   if (!ui->gfx_handler->physics_handler.loaded) {
     render_splash_screen(ui);
