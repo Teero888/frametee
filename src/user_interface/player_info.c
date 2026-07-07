@@ -11,7 +11,7 @@
 #include <user_interface/timeline/timeline_model.h>
 #include <system/skin/skin_fetch.h>
 #include <system/compat_threads.h>
-#include <stdatomic.h>
+
 #include <symbols.h>
 #include <math.h>
 
@@ -41,8 +41,8 @@ static void draw_spinning_icon(ImVec2 center, const char* icon_text) {
 typedef struct {
   char skin_name[64];
   char fetched_path[512];
-  atomic_bool done;
-  atomic_bool success;
+  volatile bool done;
+  volatile bool success;
   player_info_t* target;
 } skin_fetch_task_t;
 

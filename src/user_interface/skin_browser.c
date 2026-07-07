@@ -13,7 +13,7 @@
 #include <system/include_cimgui.h>
 #include <system/skin/skin_fetch.h>
 #include <system/compat_threads.h>
-#include <stdatomic.h>
+
 #include <dirent.h>
 #include <math.h>
 #include <ctype.h>
@@ -117,8 +117,8 @@ static bool g_do_not_ask_again = false;
 #define MAX_BROWSER_LOAD_TASKS 4
 typedef struct {
   char path[512];
-  atomic_bool in_use;
-  atomic_bool done;
+  volatile bool in_use;
+  volatile bool done;
   browser_skin_t* target;
   texture_t* texture_res;
   int temp_skin_id;
