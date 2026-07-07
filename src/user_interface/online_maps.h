@@ -26,7 +26,7 @@ typedef struct {
     char local_thumb_path[512];
     
     texture_t *thumb_texture_res;
-    struct ImTextureRef *thumb_preview_texture;
+    struct ImTextureRef_c *thumb_preview_texture;
     
     bool thumb_loaded;
     bool thumb_fetching;
@@ -104,13 +104,13 @@ typedef struct {
     
     // Category PNG Icon Textures
     texture_t *icon_ddnet_res;
-    struct ImTextureRef *icon_ddnet_tex;
+    struct ImTextureRef_c *icon_ddnet_tex;
     
     texture_t *icon_unique_res;
-    struct ImTextureRef *icon_unique_tex;
+    struct ImTextureRef_c *icon_unique_tex;
     
     texture_t *icon_kog_res;
-    struct ImTextureRef *icon_kog_tex;
+    struct ImTextureRef_c *icon_kog_tex;
     
     // Background download worker management
     pthread_mutex_t mutex;

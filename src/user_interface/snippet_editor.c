@@ -462,9 +462,8 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
             editor_state.painting_value = inp->m_Direction;
             needs_recalc = true;
           }
-          ImVec2 dir_min, dir_max;
-          igGetItemRectMin(&dir_min);
-          igGetItemRectMax(&dir_max);
+          ImVec2 dir_min = igGetItemRectMin();
+          ImVec2 dir_max = igGetItemRectMax();
           if (editor_state.is_painting && editor_state.painting_column == 1 && igIsMouseHoveringRect(dir_min, dir_max, false)) {
             if (inp->m_Direction != editor_state.painting_value) {
               record_change_if_new(snippet, i);
@@ -532,9 +531,8 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
             igSetNextItemAllowOverlap();
             // This was already correct, using -1 for width.
             igInvisibleButton("##bool_interaction", (ImVec2){-1, igGetFrameHeight()}, 0);
-            ImVec2 r_min, r_max;
-            igGetItemRectMin(&r_min);
-            igGetItemRectMax(&r_max);
+            ImVec2 r_min = igGetItemRectMin();
+            ImVec2 r_max = igGetItemRectMax();
             ImDrawList_AddRectFilled(igGetWindowDrawList(), r_min, r_max, *val ? c_on : c_off, 2.0f, 0);
             if (igIsItemClicked(ImGuiMouseButton_Left)) {
               begin_action();

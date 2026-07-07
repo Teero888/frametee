@@ -16,8 +16,7 @@
 #include <math.h>
 
 static void draw_spinning_icon(ImVec2 center, const char* icon_text) {
-    ImVec2 text_size;
-    igCalcTextSize(&text_size, icon_text, NULL, false, -1.0f);
+    ImVec2 text_size = igCalcTextSize(icon_text, NULL, false, -1.0f);
     ImVec2 top_left = {center.x - text_size.x * 0.5f, center.y - text_size.y * 0.5f};
 
     ImDrawList* draw_list = igGetWindowDrawList();
@@ -115,8 +114,7 @@ void render_player_info(gfx_handler_t *h) {
       igSameLine(0, 10.0f);
       igText("Fetching");
       igSameLine(0, 10.0f);
-      ImVec2 pos;
-      igGetCursorScreenPos(&pos);
+      ImVec2 pos = igGetCursorScreenPos();
       draw_spinning_icon(pos, ICON_FA_ROTATE);
     }
     

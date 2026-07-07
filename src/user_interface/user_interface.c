@@ -135,19 +135,16 @@ void render_menu_bar(ui_handler_t *ui) {
     }
 
     const char *button_text = "Reload Plugins";
-    ImVec2 button_size;
-    igCalcTextSize(&button_size, button_text, NULL, false, 0.0f);
+    ImVec2 button_size = igCalcTextSize(button_text, NULL, false, 0.0f);
     button_size.x += igGetStyle()->FramePadding.x * 2.0f;
-    ImVec2 region_avail;
-    igGetContentRegionAvail(&region_avail);
+    ImVec2 region_avail = igGetContentRegionAvail();
 
     float fps_width = 0.0f;
     char fps_text[64];
     if (ui->show_fps) {
       ImGuiIO *io = igGetIO_Nil();
       snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms) | ", io->Framerate, 1000.0f / io->Framerate);
-      ImVec2 fps_size;
-      igCalcTextSize(&fps_size, fps_text, NULL, false, 0.0f);
+      ImVec2 fps_size = igCalcTextSize(fps_text, NULL, false, 0.0f);
       fps_width = fps_size.x;
     }
 
@@ -347,14 +344,12 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
   } else if (hovered && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
     if (!camera->is_dragging) {
       camera->is_dragging = true;
-      ImVec2 mouse_pos;
-      igGetMousePos(&mouse_pos);
+      ImVec2 mouse_pos = igGetMousePos();
       camera->drag_start_pos[0] = mouse_pos.x;
       camera->drag_start_pos[1] = mouse_pos.y;
     }
 
-    ImVec2 drag_delta;
-    igGetMouseDragDelta(&drag_delta, ImGuiMouseButton_Right, 0.0f);
+    ImVec2 drag_delta = igGetMouseDragDelta(ImGuiMouseButton_Right, 0.0f);
     float dx = drag_delta.x / (handler->viewport[0] * camera->zoom);
     float dy = drag_delta.y / (handler->viewport[1] * camera->zoom * aspect);
     float max_map_size = fmax(handler->map_data->width, handler->map_data->height) * 0.001;
@@ -1288,8 +1283,7 @@ static void render_splash_screen(ui_handler_t *ui) {
     // Right main panel column (Online Maps Browser)
     igBeginChild_Str("SplashMainPanel", (ImVec2){0, 0}, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     {
-      ImVec2 avail;
-      igGetContentRegionAvail(&avail);
+      ImVec2 avail = igGetContentRegionAvail();
       if (render_online_map_browser(ui, &ui->online_maps, avail.x, avail.y)) {
         igCloseCurrentPopup();
       }
@@ -1341,10 +1335,8 @@ void ui_render(ui_handler_t *ui) {
 // draw the recording overlay text in the top-right corner
 static void draw_recording_overlay(ImVec2 start) {
   const char *text = "Recording... (ESC to Stop, F4 to Discard)";
-  ImVec2 text_size, avail;
-
-  igCalcTextSize(&text_size, text, NULL, false, 0.0f);
-  igGetContentRegionAvail(&avail);
+  ImVec2 text_size = igCalcTextSize(text, NULL, false, 0.0f);
+  ImVec2 avail = igGetContentRegionAvail();
 
   ImVec2 text_pos = {start.x + avail.x - text_size.x - 20.0f, start.y};
   ImDrawList_AddText_Vec2(igGetWindowDrawList(), text_pos, IM_COL32(255, 50, 50, 255), text, NULL);
@@ -1413,15 +1405,14 @@ bool ui_render_late(ui_handler_t *ui) {
   igBegin("Viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
   // render the main game viewport texture
-  ImVec2 start;
-  igGetCursorScreenPos(&start);
-  igGetContentRegionAvail((ImVec2 *)&ui->gfx_handler->viewport[0]);
+  ImVec2 start = igGetCursorScreenPos();
+  *(ImVec2_c *)&ui->gfx_handler->viewport[0] = igGetContentRegionAvail();
 
   ImVec2 img_size = {(float)ui->gfx_handler->offscreen_width, (float)ui->gfx_handler->offscreen_height};
   igImage(*ui->gfx_handler->offscreen_texture, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
   igPopStyleVar(1);
 
-  igGetWindowPos(&ui->viewport_window_pos);
+  *(ImVec2_c *)&ui->viewport_window_pos = igGetWindowPos();
   hovered = igIsWindowHovered(0);
 
   start.x += 10.0f;
@@ -1595,11 +1586,11 @@ bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size) {
     font_size = max_font_size;
   }
 
-  ImVec2 text_size;
+  ImVec2 text_size = {0};
   if (font) {
-    ImFont_CalcTextSizeA(&text_size, font, font_size, 3.402823466e+38F, -1.0f, icon, NULL, NULL);
+    text_size = ImFont_CalcTextSizeA(font, font_size, 3.402823466e+38F, -1.0f, icon, NULL, NULL);
   } else {
-    igCalcTextSize(&text_size, icon, NULL, false, -1.0f);
+    text_size = igCalcTextSize(icon, NULL, false, -1.0f);
   }
 
   if (ui && ui->icon_font) {

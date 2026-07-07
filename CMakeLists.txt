@@ -111,6 +111,10 @@ set(IMGUI_SOURCES
 )
 add_executable(${PROJECT_NAME} ${SRCS} ${IMGUI_SOURCES})
 
+set_source_files_properties(libs/cimgui/imgui/backends/imgui_impl_glfw.cpp PROPERTIES
+    COMPILE_DEFINITIONS "glfwGetMonitors=mock_glfwGetMonitors;glfwGetMonitorPos=mock_glfwGetMonitorPos;glfwGetVideoMode=mock_glfwGetVideoMode;glfwGetMonitorWorkarea=mock_glfwGetMonitorWorkarea;glfwGetMonitorContentScale=mock_glfwGetMonitorContentScale"
+)
+
 if(UNIX)
     # On Linux/macOS, this flag adds all symbols to the dynamic symbol table
     target_link_options(${PROJECT_NAME} PRIVATE -rdynamic)

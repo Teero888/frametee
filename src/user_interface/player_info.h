@@ -25,7 +25,7 @@ struct skin_info_t {
   size_t data_size;
   int id;
   texture_t *preview_texture_res;
-  struct ImTextureRef *preview_texture;
+  struct ImTextureRef_c *preview_texture;
 };
 
 struct skin_manager_t {

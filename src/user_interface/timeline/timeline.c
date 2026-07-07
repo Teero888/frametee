@@ -35,10 +35,8 @@ void render_timeline(ui_handler_t *ui) {
     float header_height = igGetTextLineHeightWithSpacing() * 2.0f;
     float dpi_scale = gfx_get_ui_scale();
     float track_header_width = 120.0f * dpi_scale;
-    ImVec2 content_start_pos;
-    igGetCursorScreenPos(&content_start_pos);
-    ImVec2 available_space;
-    igGetContentRegionAvail(&available_space);
+    ImVec2 content_start_pos = igGetCursorScreenPos();
+    ImVec2 available_space = igGetContentRegionAvail();
 
     float scrollbar_height = igGetStyle()->ScrollbarSize;
     if (available_space.y > scrollbar_height) available_space.y -= scrollbar_height;

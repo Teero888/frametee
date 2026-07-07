@@ -20,7 +20,7 @@
 #undef GLFWwindow
 #undef GLFWmonitor
 
-static inline void destroy_imgui_texture_ref(struct ImTextureRef **tex_ref_ptr) {
+static inline void destroy_imgui_texture_ref(struct ImTextureRef_c **tex_ref_ptr) {
   if (tex_ref_ptr && *tex_ref_ptr) {
     ImTextureID tex_id = ImTextureRef_GetTexID(*tex_ref_ptr);
     if (tex_id) {

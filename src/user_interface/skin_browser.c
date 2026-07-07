@@ -34,8 +34,7 @@ static bool contains_case_insensitive(const char *haystack, const char *needle) 
 }
 
 static void draw_spinning_icon(ImVec2 center, const char* icon_text) {
-    ImVec2 text_size;
-    igCalcTextSize(&text_size, icon_text, NULL, false, -1.0f);
+    ImVec2 text_size = igCalcTextSize(icon_text, NULL, false, -1.0f);
     ImVec2 top_left = {center.x - text_size.x * 0.5f, center.y - text_size.y * 0.5f};
 
     ImDrawList* draw_list = igGetWindowDrawList();
@@ -60,7 +59,7 @@ typedef struct {
   char name[128];
   char path[512];
   texture_t *texture_res;
-  struct ImTextureRef *preview_texture;
+  struct ImTextureRef_c *preview_texture;
   int skin_id;
   bool loaded;
   bool fetching;
@@ -248,8 +247,7 @@ void render_skin_browser(gfx_handler_t *h) {
   }
 
   static char skin_name_buf[256] = "";
-  ImVec2 avail;
-  igGetContentRegionAvail(&avail);
+  ImVec2 avail = igGetContentRegionAvail();
   float dpi = gfx_get_ui_scale();
   
   float btn_width = 110.0f * dpi;
@@ -312,7 +310,7 @@ void render_skin_browser(gfx_handler_t *h) {
 
   igSeparator();
 
-  igGetContentRegionAvail(&avail);
+  avail = igGetContentRegionAvail();
   float window_visible_x = avail.x;
   float item_width = 114.0f * dpi;
   float item_spacing = 12.0f;
@@ -392,8 +390,7 @@ void render_skin_browser(gfx_handler_t *h) {
           }
 
           igPushID_Int(skin_idx);
-          ImVec2 cursor_pos;
-          igGetCursorScreenPos(&cursor_pos);
+          ImVec2 cursor_pos = igGetCursorScreenPos();
           float card_height = 92.0f * dpi;
           ImVec2 card_min = cursor_pos;
           ImVec2 card_max = {cursor_pos.x + item_width, cursor_pos.y + card_height};
@@ -454,8 +451,7 @@ void render_skin_browser(gfx_handler_t *h) {
             ImVec2 img_max = {cursor_pos.x + item_width * 0.5f + 26.0f, cursor_pos.y + 56.0f};
             ImDrawList_AddImage(draw_list, *bs->preview_texture, img_min, img_max, (ImVec2){0,0}, (ImVec2){1,1}, IM_COL32_WHITE);
 
-            ImVec2 text_size;
-            igCalcTextSize(&text_size, bs->name, NULL, false, item_width - 6.0f);
+            ImVec2 text_size = igCalcTextSize(bs->name, NULL, false, item_width - 6.0f);
             igSetCursorScreenPos((ImVec2){cursor_pos.x + (item_width - text_size.x) * 0.5f, cursor_pos.y + 58.0f});
             igTextWrapped(bs->name);
           } else {

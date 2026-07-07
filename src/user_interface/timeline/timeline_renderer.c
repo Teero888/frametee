@@ -168,8 +168,7 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
       snprintf(label, sizeof(label), "%d:%02d", mins, secs);
     }
 
-    ImVec2 text_size;
-    igCalcTextSize(&text_size, label, NULL, false, 0);
+    ImVec2 text_size = igCalcTextSize(label, NULL, false, 0);
     ImVec2 text_pos = {x - text_size.x * 0.5f, header_bb.Min.y + 2.0f * dpi_scale};
 
     ImDrawList_AddText_Vec2(draw_list, text_pos, tick_text_col, label, NULL);
@@ -249,8 +248,7 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   ImGuiListClipper_Begin(clipper, ts->player_track_count, total_row_height);
   while (ImGuiListClipper_Step(clipper)) {
     for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; i++) {
-      ImVec2 row_start_pos;
-      igGetCursorScreenPos(&row_start_pos);
+      ImVec2 row_start_pos = igGetCursorScreenPos();
       player_track_t *track = &ts->player_tracks[i];
 
       // Render Track Info Panel (Left)
@@ -329,8 +327,7 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
       render_player_track(ts, i, draw_list, timeline_bb, track_top, track_bottom, is_track_selected);
 
       igSetCursorScreenPos(row_start_pos);
-      ImVec2 avail;
-      igGetContentRegionAvail(&avail);
+      ImVec2 avail = igGetContentRegionAvail();
       igDummy((ImVec2){avail.x, ts->track_height * dpi_scale});
     }
   }

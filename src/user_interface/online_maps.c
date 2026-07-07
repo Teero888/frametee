@@ -508,7 +508,7 @@ static void update_category_textures(online_map_category_t *cat, gfx_handler_t *
     }
 }
 
-static void load_icon_texture_if_needed(gfx_handler_t *gfx, const char *file_path, texture_t **out_res, struct ImTextureRef **out_tex) {
+static void load_icon_texture_if_needed(gfx_handler_t *gfx, const char *file_path, texture_t **out_res, struct ImTextureRef_c **out_tex) {
     if (*out_tex != NULL) return;
     FILE *f = fs_open(file_path, "rb");
     if (!f) return;
@@ -677,8 +677,7 @@ static void trigger_map_download(online_map_item_t *item) {
 }
 
 static void draw_spinning_icon(ImVec2 center, const char* icon_text) {
-    ImVec2 text_size;
-    igCalcTextSize(&text_size, icon_text, NULL, false, -1.0f);
+    ImVec2 text_size = igCalcTextSize(icon_text, NULL, false, -1.0f);
     ImVec2 top_left = {center.x - text_size.x * 0.5f, center.y - text_size.y * 0.5f};
 
     ImDrawList* draw_list = igGetWindowDrawList();
@@ -735,7 +734,7 @@ static int cmp_items_ptr(const void *a, const void *b) {
 }
 
 // Helper to draw custom tab button displaying ONLY the PNG icon (preserving 2:1 aspect ratio)
-static bool render_custom_tab_icon_only(int tab_index, int active_tab, struct ImTextureRef *icon_tex, const char *fallback_text, float btn_w) {
+static bool render_custom_tab_icon_only(int tab_index, int active_tab, struct ImTextureRef_c *icon_tex, const char *fallback_text, float btn_w) {
     igPushID_Int(tab_index);
     bool is_active = (active_tab == tab_index);
     
@@ -747,8 +746,7 @@ static bool render_custom_tab_icon_only(int tab_index, int active_tab, struct Im
     igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f);
     igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, is_active ? 1.5f : 1.0f);
     
-    ImVec2 cursor_pos;
-    igGetCursorScreenPos(&cursor_pos);
+    ImVec2 cursor_pos = igGetCursorScreenPos();
     
     bool clicked = igButton("##tab_btn", (ImVec2){btn_w, 40.0f});
     
@@ -774,8 +772,7 @@ static bool render_custom_tab_icon_only(int tab_index, int active_tab, struct Im
     if (icon_tex) {
         ImDrawList_AddImage(draw_list, *icon_tex, (ImVec2){start_x, start_y}, (ImVec2){start_x + icon_w, start_y + icon_h}, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xFFFFFFFF);
     } else {
-        ImVec2 txt_sz;
-        igCalcTextSize(&txt_sz, fallback_text, NULL, false, -1.0f);
+        ImVec2 txt_sz = igCalcTextSize(fallback_text, NULL, false, -1.0f);
         ImVec2 txt_pos = {p_min.x + (btn_w - txt_sz.x) * 0.5f, p_min.y + (40.0f - txt_sz.y) * 0.5f};
         ImU32 txt_col = is_active ? IM_COL32(240, 245, 255, 255) : IM_COL32(160, 175, 200, 255);
         ImDrawList_AddText_Vec2(draw_list, txt_pos, txt_col, fallback_text, NULL);
@@ -1038,13 +1035,11 @@ bool render_online_map_browser(ui_handler_t *ui, online_map_manager_t *mgr, floa
         igTextDisabled(ICON_FA_FILTER " Showing %d of %d maps", filtered_count, cat->count);
     }
     
-    ImVec2 content_avail;
-    igGetContentRegionAvail(&content_avail);
+    ImVec2 content_avail = igGetContentRegionAvail();
     
     // Dedicated scrollable region for ONLY the map grid / images
     if (igBeginChild_Str("MapImagesScrollRegion", (ImVec2){0, content_avail.y}, false, 0)) {
-        ImVec2 grid_avail;
-        igGetContentRegionAvail(&grid_avail);
+        ImVec2 grid_avail = igGetContentRegionAvail();
         
         float card_width = 195.0f;
         float card_margin = 5.0f; // Equal horizontal and vertical margin
@@ -1082,8 +1077,7 @@ bool render_online_map_browser(ui_handler_t *ui, online_map_manager_t *mgr, floa
                         
                         igPushID_Int(idx);
                         
-                        ImVec2 cursor_pos;
-                        igGetCursorScreenPos(&cursor_pos);
+                        ImVec2 cursor_pos = igGetCursorScreenPos();
                         
                         float actual_card_w = igGetColumnWidth(-1) - 4.0f;
                         if (actual_card_w < 110.0f) actual_card_w = card_width;
@@ -1120,8 +1114,7 @@ bool render_online_map_browser(ui_handler_t *ui, online_map_manager_t *mgr, floa
                                 draw_spinning_icon(center, ICON_FA_ROTATE);
                             } else {
                                 const char *status_txt = "No Image";
-                                ImVec2 txt_sz;
-                                igCalcTextSize(&txt_sz, status_txt, NULL, false, -1.0f);
+                                ImVec2 txt_sz = igCalcTextSize(status_txt, NULL, false, -1.0f);
                                 ImVec2 txt_pos = {center.x - txt_sz.x * 0.5f, center.y - txt_sz.y * 0.5f};
                                 ImDrawList_AddText_Vec2(draw_list, txt_pos, IM_COL32(140, 150, 170, 255), status_txt, NULL);
                             }

@@ -124,13 +124,11 @@ bool PackedHSLPicker(const char *label, uint32_t *packed_hsl) {
 
   igPushID_Str(label);
 
-  ImVec2 avail;
-  igGetContentRegionAvail(&avail);
+  ImVec2 avail = igGetContentRegionAvail();
   float hue_px = 12.0f;
   float sv_px = avail.x * 0.5 - (hue_px + 12.0f);
 
-  ImVec2 pos;
-  igGetCursorScreenPos(&pos);
+  ImVec2 pos = igGetCursorScreenPos();
   ImVec2 hue_pos = (ImVec2){pos.x + sv_px + 8, pos.y};
   uint32_t in = *packed_hsl;
   float h = (float)((in >> 16) & 0xFF) / 255.0f;

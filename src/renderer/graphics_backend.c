@@ -274,7 +274,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
     ImGui_ImplVulkan_SetMinImageCount(handler->g_min_image_count);
     ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, &handler->g_main_window_data,
-                                           handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count);
+                                           handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
     handler->g_main_window_data.FrameIndex = 0;
     handler->g_swap_chain_rebuild = false;
 
@@ -774,11 +774,13 @@ static int init_imgui(gfx_handler_t *handler) {
                                          .Queue = handler->g_queue,
                                          .PipelineCache = handler->g_pipeline_cache,
                                          .DescriptorPool = handler->g_descriptor_pool,
-                                         .RenderPass = handler->g_main_window_data.RenderPass,
-                                         .Subpass = 0,
+                                         .PipelineInfoMain = {
+                                             .RenderPass = handler->g_main_window_data.RenderPass,
+                                             .Subpass = 0,
+                                             .MSAASamples = VK_SAMPLE_COUNT_1_BIT
+                                         },
                                          .MinImageCount = handler->g_min_image_count,
                                          .ImageCount = handler->g_main_window_data.ImageCount,
-                                         .MSAASamples = VK_SAMPLE_COUNT_1_BIT,
                                          .Allocator = handler->g_allocator,
                                          .CheckVkResultFn = check_vk_result};
   ImGui_ImplVulkan_Init(&init_info);
@@ -1151,7 +1153,7 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
 
   assert(handler->g_min_image_count >= 2);
   ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, wd, handler->g_queue_family,
-                                         handler->g_allocator, width, height, handler->g_min_image_count);
+                                         handler->g_allocator, width, height, handler->g_min_image_count, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 }
 
 // frame rendering and presentation
@@ -1255,4 +1257,111 @@ void gfx_toggle_fullscreen(gfx_handler_t *handler) {
     const GLFWvidmode *mode = glfwGetVideoMode(monitor);
     glfwSetWindowMonitor(handler->window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
   }
+}
+
+// Mock GLFW monitor functions to avoid excessive X11 polling in ImGui_ImplGlfw_UpdateMonitors()
+typedef struct {
+  GLFWmonitor *monitor;
+  int x, y;
+  GLFWvidmode vid_mode;
+  int work_x, work_y, work_w, work_h;
+  float scale_x, scale_y;
+} cached_monitor_info_t;
+
+static GLFWmonitor **g_cached_monitors = NULL;
+static int g_cached_monitors_count = 0;
+static cached_monitor_info_t *g_cached_infos = NULL;
+static int g_cached_infos_count = 0;
+static int g_last_update_frame = -1000;
+
+static void update_cached_monitors(void) {
+  int count = 0;
+  GLFWmonitor **monitors = glfwGetMonitors(&count);
+  if (count <= 0) return;
+
+  g_cached_monitors = monitors;
+  g_cached_monitors_count = count;
+
+  cached_monitor_info_t *new_infos = realloc(g_cached_infos, count * sizeof(cached_monitor_info_t));
+  if (new_infos) {
+    g_cached_infos = new_infos;
+    g_cached_infos_count = count;
+  }
+
+  for (int i = 0; i < count; i++) {
+    g_cached_infos[i].monitor = monitors[i];
+    glfwGetMonitorPos(monitors[i], &g_cached_infos[i].x, &g_cached_infos[i].y);
+    
+    const GLFWvidmode *vm = glfwGetVideoMode(monitors[i]);
+    if (vm) {
+      g_cached_infos[i].vid_mode = *vm;
+    } else {
+      memset(&g_cached_infos[i].vid_mode, 0, sizeof(GLFWvidmode));
+    }
+
+    glfwGetMonitorWorkarea(monitors[i], &g_cached_infos[i].work_x, &g_cached_infos[i].work_y, &g_cached_infos[i].work_w, &g_cached_infos[i].work_h);
+    glfwGetMonitorContentScale(monitors[i], &g_cached_infos[i].scale_x, &g_cached_infos[i].scale_y);
+  }
+}
+
+static void check_monitor_cache(void) {
+  int current_frame = igGetFrameCount();
+  if (!g_cached_monitors || (current_frame - g_last_update_frame) >= 65536 || (current_frame < g_last_update_frame)) {
+    update_cached_monitors();
+    g_last_update_frame = current_frame;
+  }
+}
+
+GLFWmonitor **mock_glfwGetMonitors(int *count) {
+  check_monitor_cache();
+  if (count) *count = g_cached_monitors_count;
+  return g_cached_monitors;
+}
+
+void mock_glfwGetMonitorPos(GLFWmonitor *monitor, int *xpos, int *ypos) {
+  check_monitor_cache();
+  for (int i = 0; i < g_cached_infos_count; i++) {
+    if (g_cached_infos[i].monitor == monitor) {
+      if (xpos) *xpos = g_cached_infos[i].x;
+      if (ypos) *ypos = g_cached_infos[i].y;
+      return;
+    }
+  }
+  glfwGetMonitorPos(monitor, xpos, ypos);
+}
+
+const GLFWvidmode *mock_glfwGetVideoMode(GLFWmonitor *monitor) {
+  check_monitor_cache();
+  for (int i = 0; i < g_cached_infos_count; i++) {
+    if (g_cached_infos[i].monitor == monitor) {
+      return &g_cached_infos[i].vid_mode;
+    }
+  }
+  return glfwGetVideoMode(monitor);
+}
+
+void mock_glfwGetMonitorWorkarea(GLFWmonitor *monitor, int *xpos, int *ypos, int *width, int *height) {
+  check_monitor_cache();
+  for (int i = 0; i < g_cached_infos_count; i++) {
+    if (g_cached_infos[i].monitor == monitor) {
+      if (xpos) *xpos = g_cached_infos[i].work_x;
+      if (ypos) *ypos = g_cached_infos[i].work_y;
+      if (width) *width = g_cached_infos[i].work_w;
+      if (height) *height = g_cached_infos[i].work_h;
+      return;
+    }
+  }
+  glfwGetMonitorWorkarea(monitor, xpos, ypos, width, height);
+}
+
+void mock_glfwGetMonitorContentScale(GLFWmonitor *monitor, float *xscale, float *yscale) {
+  check_monitor_cache();
+  for (int i = 0; i < g_cached_infos_count; i++) {
+    if (g_cached_infos[i].monitor == monitor) {
+      if (xscale) *xscale = g_cached_infos[i].scale_x;
+      if (yscale) *yscale = g_cached_infos[i].scale_y;
+      return;
+    }
+  }
+  glfwGetMonitorContentScale(monitor, xscale, yscale);
 }
