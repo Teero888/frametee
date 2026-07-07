@@ -14,15 +14,6 @@
 #include <math.h>
 #include <sys/stat.h>
 
-#ifndef _WIN32
-#include <unistd.h>
-#include <sys/types.h>
-#define MKDIR(path) mkdir(path, 0755)
-#else
-#include <direct.h>
-#define MKDIR(path) _mkdir(path)
-#endif
-
 static bool contains_case_insensitive(const char *haystack, const char *needle) {
     if (!needle || !needle[0]) return true;
     if (!haystack) return false;
@@ -46,7 +37,7 @@ static void ensure_parent_dirs_exist(const char *filepath) {
         if (*p == '/' || *p == '\\') {
             char ch = *p;
             *p = '\0';
-            MKDIR(tmp);
+            fs_mkdir(tmp);
             *p = ch;
         }
     }

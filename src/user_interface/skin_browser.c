@@ -14,7 +14,7 @@
 #include <system/skin/skin_fetch.h>
 #include <system/compat_threads.h>
 
-#include <dirent.h>
+#include <system/fs.h>
 #include <math.h>
 #include <ctype.h>
 
@@ -89,25 +89,23 @@ static void add_browser_skin(const char *name, const char *path) {
 }
 
 static void scan_directory_for_skins(const char *path) {
-  DIR *d = opendir(path);
+  fs_dir_t *d = fs_opendir(path);
   if (!d) return;
-  struct dirent *dir;
-  while ((dir = readdir(d)) != NULL) {
-    if (dir->d_type == DT_REG || dir->d_type == DT_LNK || dir->d_type == DT_UNKNOWN) {
-      int len = strlen(dir->d_name);
-      if (len > 4 && strcasecmp(dir->d_name + len - 4, ".png") == 0) {
+  fs_dirent_t *dir;
+  while ((dir = fs_readdir(d)) != NULL) {
+    if (!dir->is_directory) {
+      int len = strlen(dir->name);
+      if (len > 4 && strcasecmp(dir->name + len - 4, ".png") == 0) {
         char skin_name[128];
-        strncpy(skin_name, dir->d_name, sizeof(skin_name) - 1);
-        skin_name[sizeof(skin_name) - 1] = '\0';
-        skin_name[len - 4] = '\0';
+        snprintf(skin_name, sizeof(skin_name), "%.*s", (int)(len - 4 < (int)sizeof(skin_name) ? len - 4 : (int)sizeof(skin_name) - 1), dir->name);
 
         char full_path[1024];
-        snprintf(full_path, sizeof(full_path), "%s/%s", path, dir->d_name);
+        snprintf(full_path, sizeof(full_path), "%s/%s", path, dir->name);
         add_browser_skin(skin_name, full_path);
       }
     }
   }
-  closedir(d);
+  fs_closedir(d);
 }
 
 static bool g_skins_initialized = false;

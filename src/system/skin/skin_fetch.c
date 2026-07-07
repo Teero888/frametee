@@ -5,26 +5,7 @@
 #include <string.h>
 #include <curl/curl.h>
 
-#ifdef _WIN32
-#include <direct.h>
-#include <wchar.h>
-#define MKDIR(path) _mkdir(path)
-#define PATH_SEP '\\'
-static void fs_remove(const char *path) {
-    wchar_t wpath[1024];
-    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, 1024) > 0) {
-        _wremove(wpath);
-    }
-}
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#define MKDIR(path) mkdir(path, 0755)
-#define PATH_SEP '/'
-static void fs_remove(const char *path) {
-    remove(path);
-}
-#endif
+
 
 // Helper to copy a file
 static bool copy_file(const char *src_path, const char *dst_path) {
@@ -60,11 +41,11 @@ bool fetch_skin(const char *skin_name, char *out_path, size_t out_path_size) {
     }
     
     // Create config dir if it doesn't exist
-    MKDIR(config_dir);
+    fs_mkdir(config_dir);
     
     char skins_dir[1024];
-    snprintf(skins_dir, sizeof(skins_dir), "%s%cskins", config_dir, PATH_SEP);
-    MKDIR(skins_dir);
+    snprintf(skins_dir, sizeof(skins_dir), "%.*s%cskins", (int)(sizeof(skins_dir) - 8), config_dir, PATH_SEP);
+    fs_mkdir(skins_dir);
     
     // 1. Check if it already exists
     snprintf(out_path, out_path_size, "%s%c%s.png", skins_dir, PATH_SEP, skin_name);
