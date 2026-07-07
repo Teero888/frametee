@@ -459,7 +459,7 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
     igText("Click '+' to add a binding. Click trash icon to remove.");
     igSeparator();
 
-    if (igCollapsingHeader_TreeNodeFlags("Mouse Settings", 0)) {
+    if (igCollapsingHeader_TreeNodeFlags("Mouse Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
       if (igDragFloat("Sensitivity", &ui->mouse_sens, 0.5f, 1.0f, 1000.0f, "%.1f", 0)) config_save(ui);
       if (igDragFloat("Max Distance", &ui->mouse_max_distance, 1.0f, 0.0f, 2000.0f, "%.1f", 0)) config_save(ui);
     }

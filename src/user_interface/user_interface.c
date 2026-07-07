@@ -383,7 +383,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->bg_color[2] = 40.f / 255.f;
   ui->prediction_alpha[0] = 1.0f;
   ui->prediction_alpha[1] = 1.0f;
-  ui->center_dot = 1;
+  ui->center_dot = 0;
 
   ui->render_map = true;
   ui->render_players = true;
@@ -1127,11 +1127,10 @@ void render_cursor(ui_handler_t *ui) {
 
   if (handler->user_interface.timeline.recording) {
 
-    float div = (1.0f / (handler->viewport[1] / 2.f)) * 402.f;
     float cursor_scale = handler->viewport[1] / 1080.f;
     renderer_submit_atlas(handler, &handler->renderer.cursor_renderer, Z_LAYER_CURSOR,
-                          (vec2){handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0] / div,
-                                 handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1] / div},
+                          (vec2){handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0],
+                                 handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1]},
                           (vec2){64.f * cursor_scale, 64.f * cursor_scale},
                           0.0f, handler->user_interface.weapon, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, true);
   }

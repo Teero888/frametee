@@ -701,12 +701,11 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   if (keybinds_is_action_pressed(kb, ACTION_GRENADE, false)) input->m_WantedWeapon = WEAPON_GRENADE;
   if (keybinds_is_action_pressed(kb, ACTION_LASER, false)) input->m_WantedWeapon = WEAPON_LASER;
 
-  input->m_TargetX = (int)ui->recording_mouse_pos[0];
-  input->m_TargetY = (int)ui->recording_mouse_pos[1];
-  if (!input->m_TargetX && !input->m_TargetY) {
+  float div = (1.0f / (ui->gfx_handler->viewport[1] / 2.f)) * 402.f;
+  input->m_TargetX = (int)ui->recording_mouse_pos[0] * div;
+  input->m_TargetY = (int)ui->recording_mouse_pos[1] * div;
+  if (!input->m_TargetX && !input->m_TargetY)
     input->m_TargetX = 1;
-    ui->recording_mouse_pos[0] = 1;
-  }
 }
 
 SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int track_idx) {

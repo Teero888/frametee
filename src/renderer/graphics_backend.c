@@ -108,15 +108,16 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   handler->raw_mouse.dy += diff_y;
   handler->raw_mouse.x = xpos;
   handler->raw_mouse.y = ypos;
+    float div = (1.0f / (handler->viewport[1] / 2.f)) * 402.f;
 
   // used by recording
   handler->user_interface.recording_mouse_pos[0] += diff_x * (handler->user_interface.mouse_sens * 0.01f);
   handler->user_interface.recording_mouse_pos[1] += diff_y * (handler->user_interface.mouse_sens * 0.01f);
   if (vlength(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1])) >
-      handler->user_interface.mouse_max_distance) {
+      handler->user_interface.mouse_max_distance / div) {
     mvec2 n = vnormalize(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1]));
-    handler->user_interface.recording_mouse_pos[0] = vgetx(n) * handler->user_interface.mouse_max_distance;
-    handler->user_interface.recording_mouse_pos[1] = vgety(n) * handler->user_interface.mouse_max_distance;
+    handler->user_interface.recording_mouse_pos[1] = vgety(n) * (handler->user_interface.mouse_max_distance / div);
+    handler->user_interface.recording_mouse_pos[0] = vgetx(n) * (handler->user_interface.mouse_max_distance / div);
   }
 }
 
