@@ -159,28 +159,23 @@ void render_menu_bar(ui_handler_t *ui) {
       }
     }
 
-    const char *button_text = "Plugins...";
-    ImVec2 button_size = igCalcTextSize(button_text, NULL, false, 0.0f);
-    button_size.x += igGetStyle()->FramePadding.x * 2.0f;
     ImVec2 region_avail = igGetContentRegionAvail();
 
     float fps_width = 0.0f;
     char fps_text[64];
     if (ui->show_fps) {
       ImGuiIO *io = igGetIO_Nil();
-      snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms) | ", io->Framerate, 1000.0f / io->Framerate);
+      snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms)", io->Framerate, 1000.0f / io->Framerate);
       ImVec2 fps_size = igCalcTextSize(fps_text, NULL, false, 0.0f);
       fps_width = fps_size.x;
     }
 
-    igSetCursorPosX(igGetCursorPosX() + region_avail.x - button_size.x - fps_width);
+    igSetCursorPosX(igGetCursorPosX() + region_avail.x - fps_width);
 
     if (ui->show_fps) {
       igText("%s", fps_text);
       igSameLine(0, 0);
     }
-
-    if (igButton(button_text, (ImVec2){0, 0})) ui->show_plugin_manager = !ui->show_plugin_manager;
 
     igEndMainMenuBar();
   }
