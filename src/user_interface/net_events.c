@@ -79,7 +79,7 @@ static const int sound_count = sizeof(sound_names) / sizeof(sound_names[0]);
 static const char *weapon_names[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
 static const int weapon_count = sizeof(weapon_names) / sizeof(weapon_names[0]);
 
-static const char *emote_names[] = {"Normal", "Pain", "Happy", "Surprise", "Angry", "Blink"};
+static const char *emote_names[] = {"oop", "exclamation", "hearts", "drop", "dotdot", "music", "sorry", "ghost", "sushi", "splattee", "deviltee", "zomg", "zzz", "wtf", "eyes", "question"};
 static const int emote_count = sizeof(emote_names) / sizeof(emote_names[0]);
 
 static const char *team_names[] = {"All", "Spectators", "Red", "Blue", "Whisper Send", "Whisper Receive"};
@@ -108,7 +108,7 @@ void render_net_events_window(ui_handler_t *ui) {
     igSameLine(0, 5);
     igDragInt("Tick", &new_tick, 1.0f, 0, 0, "%d", 0);
 
-    igCombo_Str("Type", &new_type, "Chat\0Broadcast\0KillMsg\0SoundGlobal\0Emoticon\0VoteSet\0VoteStatusDDRaceTime\0Record\0\0", 0);
+    igCombo_Str("Type", &new_type, "Chat\0Broadcast\0KillMsg\0SoundGlobal\0Emoticon\0VoteSet\0VoteStatus\0DDRaceTime\0Record\0\0", 0);
 
     // Common message field for types that use it
     bool uses_message = (new_type == NET_EVENT_CHAT || new_type == NET_EVENT_BROADCAST || new_type == NET_EVENT_VOTE_SET);
@@ -272,57 +272,95 @@ void render_net_events_window(ui_handler_t *ui) {
           if (ev->type == NET_EVENT_CHAT) {
             igPushItemWidth(40);
             igInputInt("##cid", &ev->client_id, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Client ID");
             igSameLine(0, 2);
             int team_idx = team_val_to_idx(ev->team);
             igPushItemWidth(80);
             if (igCombo_Str_arr("##team", &team_idx, team_names, team_count, 0)) {
               ev->team = team_idx_to_val(team_idx);
             }
+            if (igIsItemHovered(0)) igSetTooltip("Team");
             igPopItemWidth();
             igPopItemWidth();
-            if (igIsItemHovered(0)) igSetTooltip("Client ID / Team");
           } else if (ev->type == NET_EVENT_KILLMSG) {
             igPushItemWidth(30);
             igInputInt("##k", &ev->killer, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Killer ID");
             igSameLine(0, 2);
             igInputInt("##v", &ev->victim, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Victim ID");
             igSameLine(0, 2);
             igPushItemWidth(80);
-            igCombo_Str_arr("##w", &ev->weapon, weapon_names, weapon_count, 0);
+            if (igCombo_Str_arr("##w", &ev->weapon, weapon_names, weapon_count, 0)) {
+              // weapon combo
+            }
+            if (igIsItemHovered(0)) igSetTooltip("Weapon");
             igPopItemWidth();
             igSameLine(0, 2);
             igInputInt("##m", &ev->mode_special, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Mode Special");
             igPopItemWidth();
           } else if (ev->type == NET_EVENT_SOUND_GLOBAL) {
             igPushItemWidth(150);
-            igCombo_Str_arr("##snd", &ev->sound_id, sound_names, sound_count, 20);
+            if (igCombo_Str_arr("##snd", &ev->sound_id, sound_names, sound_count, 20)) {
+              // sound combo
+            }
+            if (igIsItemHovered(0)) igSetTooltip("Sound Effect");
             igPopItemWidth();
           } else if (ev->type == NET_EVENT_EMOTICON) {
             igPushItemWidth(40);
             igInputInt("##cid", &ev->client_id, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Client ID");
             igSameLine(0, 2);
             igPushItemWidth(100);
-            igCombo_Str_arr("##emo", &ev->emoticon, emote_names, emote_count, 0);
+            if (igCombo_Str_arr("##emo", &ev->emoticon, emote_names, emote_count, 0)) {
+              // emoticon combo
+            }
+            if (igIsItemHovered(0)) igSetTooltip("Emoticon");
             igPopItemWidth();
             igPopItemWidth();
           } else if (ev->type == NET_EVENT_VOTE_SET) {
             igPushItemWidth(40);
             igInputInt("##tm", &ev->vote_timeout, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Timeout (seconds)");
             igSameLine(0, 2);
             igPushItemWidth(80);
             igInputText("##rsn", ev->reason, sizeof(ev->reason), 0, NULL, NULL);
+            if (igIsItemHovered(0)) igSetTooltip("Reason");
             igPopItemWidth();
             igPopItemWidth();
           } else if (ev->type == NET_EVENT_VOTE_STATUS) {
-            // Allow editing details
             igPushItemWidth(30);
             igInputInt("##y", &ev->vote_yes, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Vote Yes");
             igSameLine(0, 2);
             igInputInt("##n", &ev->vote_no, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Vote No");
             igSameLine(0, 2);
             igInputInt("##p", &ev->vote_pass, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Vote Pass");
             igSameLine(0, 2);
             igInputInt("##t", &ev->vote_total, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Vote Total");
+            igPopItemWidth();
+          } else if (ev->type == NET_EVENT_DDRACE_TIME) {
+            igPushItemWidth(40);
+            igInputInt("##time", &ev->time, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Time");
+            igSameLine(0, 2);
+            igInputInt("##check", &ev->check, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Check");
+            igSameLine(0, 2);
+            igInputInt("##finish", &ev->finish, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Finish");
+            igPopItemWidth();
+          } else if (ev->type == NET_EVENT_RECORD) {
+            igPushItemWidth(60);
+            igInputInt("##sbest", &ev->server_time_best, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Server Best");
+            igSameLine(0, 2);
+            igInputInt("##pbest", &ev->player_time_best, 0, 0, 0);
+            if (igIsItemHovered(0)) igSetTooltip("Player Best");
             igPopItemWidth();
           } else {
             igTextDisabled("-");
@@ -344,4 +382,99 @@ void render_net_events_window(ui_handler_t *ui) {
     }
   }
   igEnd();
+}
+
+void net_event_tooltip_draw(const net_event_t *ev) {
+  if (!ev) return;
+  switch (ev->type) {
+    case NET_EVENT_CHAT: {
+      igText("Chat Event");
+      igSeparator();
+      igText("Client ID: %d", ev->client_id);
+      int team_idx = team_val_to_idx(ev->team);
+      if (team_idx >= 0 && team_idx < team_count) {
+        igText("Team: %s", team_names[team_idx]);
+      } else {
+        igText("Team: %d", ev->team);
+      }
+      igText("Message: %s", ev->message);
+      break;
+    }
+    case NET_EVENT_BROADCAST: {
+      igText("Broadcast Event");
+      igSeparator();
+      igText("Message: %s", ev->message);
+      break;
+    }
+    case NET_EVENT_KILLMSG: {
+      igText("Kill Event");
+      igSeparator();
+      igText("Killer ID: %d", ev->killer);
+      igText("Victim ID: %d", ev->victim);
+      if (ev->weapon >= 0 && ev->weapon < weapon_count) {
+        igText("Weapon: %s", weapon_names[ev->weapon]);
+      } else {
+        igText("Weapon ID: %d", ev->weapon);
+      }
+      igText("Mode Special: %d", ev->mode_special);
+      break;
+    }
+    case NET_EVENT_SOUND_GLOBAL: {
+      igText("Sound Global Event");
+      igSeparator();
+      if (ev->sound_id >= 0 && ev->sound_id < sound_count) {
+        igText("Sound: %s", sound_names[ev->sound_id]);
+      } else {
+        igText("Sound ID: %d", ev->sound_id);
+      }
+      break;
+    }
+    case NET_EVENT_EMOTICON: {
+      igText("Emoticon Event");
+      igSeparator();
+      igText("Client ID: %d", ev->client_id);
+      if (ev->emoticon >= 0 && ev->emoticon < emote_count) {
+        igText("Emoticon: %s", emote_names[ev->emoticon]);
+      } else {
+        igText("Emoticon ID: %d", ev->emoticon);
+      }
+      break;
+    }
+    case NET_EVENT_VOTE_SET: {
+      igText("Vote Set Event");
+      igSeparator();
+      igText("Description: %s", ev->message);
+      igText("Reason: %s", ev->reason);
+      igText("Timeout: %d seconds", ev->vote_timeout);
+      break;
+    }
+    case NET_EVENT_VOTE_STATUS: {
+      igText("Vote Status Event");
+      igSeparator();
+      igText("Yes: %d", ev->vote_yes);
+      igText("No: %d", ev->vote_no);
+      igText("Pass: %d", ev->vote_pass);
+      igText("Total: %d", ev->vote_total);
+      break;
+    }
+    case NET_EVENT_DDRACE_TIME: {
+      igText("DDRace Time Event");
+      igSeparator();
+      igText("Time: %d", ev->time);
+      igText("Check: %d", ev->check);
+      igText("Finish: %d", ev->finish);
+      break;
+    }
+    case NET_EVENT_RECORD: {
+      igText("Record Event");
+      igSeparator();
+      igText("Server Best: %d", ev->server_time_best);
+      igText("Player Best: %d", ev->player_time_best);
+      break;
+    }
+    default: {
+      igText("Unknown Event");
+      break;
+    }
+  }
 }

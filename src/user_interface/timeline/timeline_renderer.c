@@ -2,6 +2,7 @@
 #include "renderer/graphics_backend.h"
 #include "timeline_interaction.h"
 #include "timeline_model.h"
+#include "../net_events.h"
 #include <math.h>
 #include <stdio.h>
 #include <symbols.h>
@@ -201,11 +202,7 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
       // Optional: Hover tooltip for the event
       if (igIsMouseHoveringRect((ImVec2){x - 4 * dpi_scale, header_bb.Max.y - 12 * dpi_scale}, (ImVec2){x + 4 * dpi_scale, header_bb.Max.y - 4 * dpi_scale}, true)) {
         igBeginTooltip();
-        if (ev->type == NET_EVENT_KILLMSG) {
-          igText("Kill: %d -> %d", ev->killer, ev->victim);
-        } else {
-          igText("%s: %s", ev->type == NET_EVENT_CHAT ? "Chat" : "Broadcast", ev->message);
-        }
+        net_event_tooltip_draw(ev);
         igEndTooltip();
       }
     }
