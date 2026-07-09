@@ -301,7 +301,6 @@ if(BUILD_PLUGINS)
     add_subdirectory(plugins/example_cpp)
     add_subdirectory(plugins/physics_profiler)
     add_subdirectory(plugins/random_input_filler)
-    add_subdirectory(plugins/ultraforce)
 
     # Set output directory for all plugin targets so they build directly in the build's plugins directory
     set_target_properties(api_example_c_plugin PROPERTIES
