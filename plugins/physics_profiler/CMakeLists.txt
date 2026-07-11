@@ -64,11 +64,19 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        "${HOST_APP_DIR}/build/$<IF:$<BOOL:${CMAKE_CONFIGURATION_TYPES}>,$<CONFIG>,${CMAKE_BUILD_TYPE}>/ddnet_frametee.lib"
-        DbgHelp
-        Tracy::TracyClient
-    )
+    if(TARGET frametee)
+        target_link_libraries(${PROJECT_NAME} PRIVATE
+            frametee
+            DbgHelp
+            Tracy::TracyClient
+        )
+    else()
+        target_link_libraries(${PROJECT_NAME} PRIVATE
+            "${HOST_APP_DIR}/build/$<IF:$<BOOL:${CMAKE_CONFIGURATION_TYPES}>,$<CONFIG>,${CMAKE_BUILD_TYPE}>/frametee.lib"
+            DbgHelp
+            Tracy::TracyClient
+        )
+    endif()
 else()
     target_link_libraries(${PROJECT_NAME} PRIVATE Tracy::TracyClient)
 endif()

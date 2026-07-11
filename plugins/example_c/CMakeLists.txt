@@ -60,7 +60,11 @@ endif()
 if(WIN32)
     # On Windows, we must explicitly link against the host executable's
     # import library (.lib) to resolve the ImGui symbols at link-time.
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        "${HOST_APP_DIR}/build/$<IF:$<BOOL:${CMAKE_CONFIGURATION_TYPES}>,$<CONFIG>,${CMAKE_BUILD_TYPE}>/ddnet_frametee.lib"
-    )
+    if(TARGET frametee)
+        target_link_libraries(${PROJECT_NAME} PRIVATE frametee)
+    else()
+        target_link_libraries(${PROJECT_NAME} PRIVATE
+            "${HOST_APP_DIR}/build/$<IF:$<BOOL:${CMAKE_CONFIGURATION_TYPES}>,$<CONFIG>,${CMAKE_BUILD_TYPE}>/frametee.lib"
+        )
+    endif()
 endif()
