@@ -39,6 +39,7 @@ static SWorldCore *api_get_world_state_at(int tick) {
 
   SWorldCore *world_copy = (SWorldCore *)malloc(sizeof(SWorldCore));
   if (!world_copy) return NULL;
+  *world_copy = wc_empty();
 
   const int step = 50;
   int snapshot_index = (tick - 1) / step;

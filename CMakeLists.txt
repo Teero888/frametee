@@ -321,26 +321,18 @@ add_custom_command(
 option(BUILD_PLUGINS "Build all default plugins" ON)
 if(BUILD_PLUGINS)
     set(HOST_APP_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH "Path to the root of the ddnet_frametee project" FORCE)
-    add_subdirectory(plugins/example_c)
-    add_subdirectory(plugins/example_cpp)
-    add_subdirectory(plugins/physics_profiler)
-    add_subdirectory(plugins/random_input_filler)
+    file(GLOB PLUGIN_ENTRIES "${CMAKE_SOURCE_DIR}/plugins/*")
+    foreach(PLUGIN_DIR ${PLUGIN_ENTRIES})
+        if(IS_DIRECTORY "${PLUGIN_DIR}" AND EXISTS "${PLUGIN_DIR}/CMakeLists.txt")
+            add_subdirectory("${PLUGIN_DIR}")
+            get_property(PLUGIN_TARGETS DIRECTORY "${PLUGIN_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
+            foreach(TARGET ${PLUGIN_TARGETS})
+                set_target_properties(${TARGET} PROPERTIES
+                    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+                    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+                )
+            endforeach()
 
-    # Set output directory for all plugin targets so they build directly in the build's plugins directory
-    set_target_properties(api_example_c_plugin PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
-    )
-    set_target_properties(api_example_cpp_plugin PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
-    )
-    set_target_properties(physics_profiler_plugin PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
-    )
-    set_target_properties(random_input_filler_plugin PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
-    )
+        endif()
+    endforeach()
 endif()

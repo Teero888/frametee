@@ -8,6 +8,6 @@ imgui.ini
 *.xml
 *.tasp
 *.spv
-plugins/u*
+#plugins/u*
 \#*\#
 todo.txt
