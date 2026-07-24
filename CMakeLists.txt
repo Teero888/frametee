@@ -146,6 +146,20 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 # add and link libs
 add_subdirectory(libs/cglm)
 add_subdirectory(libs/ddnet_physics)
+if(WIN32)
+    get_target_property(DDNET_PHYSICS_TYPE ddnet_physics TYPE)
+    if(DDNET_PHYSICS_TYPE STREQUAL "SHARED_LIBRARY")
+        target_compile_definitions(ddnet_physics PRIVATE "DDNET_PHYSICS_API=__declspec(dllexport)")
+        target_compile_definitions(ddnet_physics INTERFACE "DDNET_PHYSICS_API=__declspec(dllimport)")
+    else()
+        # On Windows, when building statically, we override DDNET_PHYSICS_API to __declspec(dllexport)
+        # for ddnet_physics and targets linking it (the host app frametee).
+        # This tells the compiler to mark all library symbols for export in the host executable.
+        # Meanwhile, plugins (which don't link ddnet_physics) will naturally fall back to __declspec(dllimport).
+        set_target_properties(ddnet_physics PROPERTIES COMPILE_DEFINITIONS "")
+        target_compile_definitions(ddnet_physics PUBLIC "DDNET_PHYSICS_API=__declspec(dllexport)")
+    endif()
+endif()
 add_subdirectory(libs/nfd)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -163,7 +177,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 
 target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>: -Wall -Wextra -pedantic>
-    $<$<C_COMPILER_ID:MSVC>: /W4>
+    $<$<C_COMPILER_ID:MSVC>: /W4 /wd4324>
     $<$<AND:$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>: -g -DDEBUG>
     $<$<AND:$<CONFIG:Debug>,$<C_COMPILER_ID:MSVC>>: /Zi /Od /DDEBUG>
 

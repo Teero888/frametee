@@ -27,13 +27,13 @@ static inline unsigned int fast_rand_u32(unsigned int *state) {
 static inline int fast_rand_range(unsigned int *state, int min, int max) { return min + (fast_rand_u32(state) % (max - min + 1)); }
 
 static inline void generate_random_input(SPlayerInput *pInput, unsigned int *seed) {
-  pInput->m_Direction = fast_rand_range(seed, -1, 1);
-  pInput->m_Jump = fast_rand_range(seed, 0, 1);
-  pInput->m_Fire = fast_rand_range(seed, 0, 1);
-  pInput->m_Hook = fast_rand_range(seed, 0, 1);
-  pInput->m_TargetX = fast_rand_range(seed, -1000, 1000);
-  pInput->m_TargetY = fast_rand_range(seed, -1000, 1000);
-  pInput->m_WantedWeapon = fast_rand_range(seed, 0, NUM_WEAPONS - 1);
+  pInput->m_Direction = static_cast<int8_t>(fast_rand_range(seed, -1, 1));
+  pInput->m_Jump = static_cast<uint8_t>(fast_rand_range(seed, 0, 1));
+  pInput->m_Fire = static_cast<uint8_t>(fast_rand_range(seed, 0, 1));
+  pInput->m_Hook = static_cast<uint8_t>(fast_rand_range(seed, 0, 1));
+  pInput->m_TargetX = static_cast<int16_t>(fast_rand_range(seed, -1000, 1000));
+  pInput->m_TargetY = static_cast<int16_t>(fast_rand_range(seed, -1000, 1000));
+  pInput->m_WantedWeapon = static_cast<uint8_t>(fast_rand_range(seed, 0, NUM_WEAPONS - 1));
 }
 
 class PhysicsProfilerPlugin {

@@ -43,7 +43,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
-    $<$<COMPILE_LANGUAGE:C>:-Wall;-pedantic-errors>
+    $<$<AND:$<COMPILE_LANGUAGE:C>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-Wall;-pedantic-errors>
+    $<$<C_COMPILER_ID:MSVC>:/W4>
 )
 
 install(TARGETS ${PROJECT_NAME}
