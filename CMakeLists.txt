@@ -121,6 +121,7 @@ if(UNIX)
 elseif(WIN32)
     # On Windows, this enables the executable to export symbols like a DLL
     set_target_properties(${PROJECT_NAME} PROPERTIES ENABLE_EXPORTS ON)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE IMGUI_API=__declspec(dllexport))
 endif()
 
 set(IMGUI_STATIC "yes" CACHE STRING "Build as a static library" FORCE)
