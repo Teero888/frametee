@@ -112,7 +112,10 @@ set(IMGUI_SOURCES
 add_executable(${PROJECT_NAME} ${SRCS} ${IMGUI_SOURCES})
 
 set_source_files_properties(libs/cimgui/imgui/backends/imgui_impl_glfw.cpp PROPERTIES
-    COMPILE_DEFINITIONS "glfwGetMonitors=mock_glfwGetMonitors;glfwGetMonitorPos=mock_glfwGetMonitorPos;glfwGetVideoMode=mock_glfwGetVideoMode;glfwGetMonitorWorkarea=mock_glfwGetMonitorWorkarea;glfwGetMonitorContentScale=mock_glfwGetMonitorContentScale"
+    COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\";glfwGetMonitors=mock_glfwGetMonitors;glfwGetMonitorPos=mock_glfwGetMonitorPos;glfwGetVideoMode=mock_glfwGetVideoMode;glfwGetMonitorWorkarea=mock_glfwGetMonitorWorkarea;glfwGetMonitorContentScale=mock_glfwGetMonitorContentScale"
+)
+set_source_files_properties(libs/cimgui/imgui/backends/imgui_impl_vulkan.cpp PROPERTIES
+    COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\""
 )
 
 if(UNIX)
@@ -121,16 +124,22 @@ if(UNIX)
 elseif(WIN32)
     # On Windows, this enables the executable to export symbols like a DLL
     set_target_properties(${PROJECT_NAME} PROPERTIES ENABLE_EXPORTS ON)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE IMGUI_API=__declspec(dllexport))
+    set_property(SOURCE ${IMGUI_SOURCES} PROPERTY COMPILE_DEFINITIONS "IMGUI_API=__declspec(dllexport)")
+    set_property(SOURCE libs/cimgui/imgui/backends/imgui_impl_glfw.cpp APPEND PROPERTY COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\";glfwGetMonitors=mock_glfwGetMonitors;glfwGetMonitorPos=mock_glfwGetMonitorPos;glfwGetVideoMode=mock_glfwGetVideoMode;glfwGetMonitorWorkarea=mock_glfwGetMonitorWorkarea;glfwGetMonitorContentScale=mock_glfwGetMonitorContentScale")
+    set_property(SOURCE libs/cimgui/imgui/backends/imgui_impl_vulkan.cpp APPEND PROPERTY COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\"")
 endif()
 
 set(IMGUI_STATIC "yes" CACHE STRING "Build as a static library" FORCE)
 # cimgui configuration
 add_subdirectory(libs/cimgui)
+# Override cimgui's interface compile definitions so it doesn't leak escaped quotes to C files
+set_target_properties(cimgui PROPERTIES INTERFACE_COMPILE_DEFINITIONS "IMGUI_DISABLE_OBSOLETE_FUNCTIONS=1")
+
 target_compile_definitions(${PROJECT_NAME} PRIVATE 
     CIMGUI_DEFINE_ENUMS_AND_STRUCTS=1
     CIMGUI_USE_GLFW=1
     CIMGUI_USE_VULKAN=1
+    CIMGUI_NO_EXPORT=1
     # APP_USE_VULKAN_DEBUG_REPORT=1
 )
 

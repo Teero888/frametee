@@ -337,23 +337,10 @@ static void *fetch_json_thread(void *arg) {
     bool success = http_download_to_file(url, args->json_file_path);
     
     if (success) {
-        FILE *f = fs_open(args->json_file_path, "rb");
-        if (f) {
-            fseek(f, 0, SEEK_END);
-            long sz = ftell(f);
-            fseek(f, 0, SEEK_SET);
-            if (sz > 0) {
-                char *buf = malloc(sz + 1);
-                if (buf) {
-                    size_t n = fread(buf, 1, sz, f);
-                    buf[n] = '\0';
-                    load_maps_from_json_string(args->mgr, buf, args->config_dir);
-                    free(buf);
-                }
-            }
-            fclose(f);
-        }
+        pthread_mutex_lock(&args->mgr->mutex);
         args->mgr->is_offline = false;
+        args->mgr->needs_reload = true;
+        pthread_mutex_unlock(&args->mgr->mutex);
     } else {
         pthread_mutex_lock(&args->mgr->mutex);
         if (!args->mgr->json_loaded) {
@@ -524,8 +511,43 @@ static void load_icon_texture_if_needed(gfx_handler_t *gfx, const char *file_pat
 void online_map_manager_update(online_map_manager_t *mgr, gfx_handler_t *gfx) {
     if (!mgr->initialized) return;
     
+    pthread_mutex_lock(&mgr->mutex);
+    bool should_reload = mgr->needs_reload;
+    pthread_mutex_unlock(&mgr->mutex);
+    
     char config_dir[512];
-    if (fs_get_config_dir(config_dir, sizeof(config_dir))) {
+    bool has_config_dir = fs_get_config_dir(config_dir, sizeof(config_dir));
+    
+    if (should_reload && has_config_dir) {
+        // Safe to clear and destroy previous textures/references on the main thread
+        clear_category(&mgr->ddnet, gfx);
+        clear_category(&mgr->kog, gfx);
+        clear_category(&mgr->unique, gfx);
+        
+        char json_file_path[1024];
+        snprintf(json_file_path, sizeof(json_file_path), "%s/cache/maps.json", config_dir);
+        FILE *f = fs_open(json_file_path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (sz > 0) {
+                char *buf = malloc(sz + 1);
+                if (buf) {
+                    size_t n = fread(buf, 1, sz, f);
+                    buf[n] = '\0';
+                    load_maps_from_json_string(mgr, buf, config_dir);
+                    free(buf);
+                }
+            }
+            fclose(f);
+        }
+        pthread_mutex_lock(&mgr->mutex);
+        mgr->needs_reload = false;
+        pthread_mutex_unlock(&mgr->mutex);
+    }
+    
+    if (has_config_dir) {
         char p1[1024], p2[1024], p3[1024];
         snprintf(p1, sizeof(p1), "%s/cache/icons/ddnet.png", config_dir);
         snprintf(p2, sizeof(p2), "%s/cache/icons/unique.png", config_dir);
@@ -589,6 +611,10 @@ void online_map_manager_cleanup(online_map_manager_t *mgr, gfx_handler_t *gfx) {
     for (int i = 0; i < MAX_THUMB_LOAD_TASKS; i++) {
         if (g_thumb_tasks[i].in_use) {
             pthread_join(g_thumb_threads[i], NULL);
+            if (g_thumb_tasks[i].decoded_pixels) {
+                stbi_image_free(g_thumb_tasks[i].decoded_pixels);
+                g_thumb_tasks[i].decoded_pixels = NULL;
+            }
             g_thumb_tasks[i].in_use = false;
         }
     }

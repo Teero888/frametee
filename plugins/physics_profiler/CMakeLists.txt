@@ -24,9 +24,14 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(tracy)
 
 find_package(OpenMP)
+find_package(Vulkan REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
     physics_profiler.cpp
+)
+
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    Vulkan::Vulkan
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
@@ -64,7 +69,9 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 )
 
 if(WIN32)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE IMGUI_API=__declspec(dllimport))
+    set_source_files_properties(physics_profiler.cpp PROPERTIES
+        COMPILE_DEFINITIONS "IMGUI_API=__declspec(dllimport)"
+    )
     if(TARGET frametee)
         target_link_libraries(${PROJECT_NAME} PRIVATE
             frametee

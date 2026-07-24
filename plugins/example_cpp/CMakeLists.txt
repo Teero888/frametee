@@ -45,7 +45,9 @@ endif()
 if(WIN32)
     # On Windows, we must explicitly link against the host executable's
     # import library (.lib) to resolve the ImGui symbols at link-time.
-    target_compile_definitions(${PROJECT_NAME} PRIVATE IMGUI_API=__declspec(dllimport))
+    set_source_files_properties(example.cpp PROPERTIES
+        COMPILE_DEFINITIONS "IMGUI_API=__declspec(dllimport)"
+    )
     if(TARGET frametee)
         target_link_libraries(${PROJECT_NAME} PRIVATE frametee)
     else()

@@ -80,6 +80,7 @@ typedef struct {
     bool json_loaded;
     bool json_error;
     bool is_offline;
+    bool needs_reload;
     char error_msg[256];
     
     int active_tab; // 0: ddnet, 1: kog, 2: unique
