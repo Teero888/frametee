@@ -9,3 +9,5 @@ imgui.ini
 *.tasp
 *.spv
 plugins/u*
+\#*\#
+todo.txt

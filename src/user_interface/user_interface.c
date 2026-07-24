@@ -1153,9 +1153,13 @@ void render_cursor(ui_handler_t *ui) {
 }
 
 void ui_add_recent_project(ui_handler_t *ui, const char *path) {
+  char path_copy[1024];
+  strncpy(path_copy, path, sizeof(path_copy) - 1);
+  path_copy[sizeof(path_copy) - 1] = '\0';
+
   int found_idx = -1;
   for (int i = 0; i < ui->num_recent_projects; i++) {
-    if (strcmp(ui->recent_projects[i], path) == 0) {
+    if (strcmp(ui->recent_projects[i], path_copy) == 0) {
       found_idx = i;
       break;
     }
@@ -1173,7 +1177,7 @@ void ui_add_recent_project(ui_handler_t *ui, const char *path) {
       strcpy(ui->recent_projects[i], ui->recent_projects[i - 1]);
     }
   }
-  strncpy(ui->recent_projects[0], path, 1023);
+  strncpy(ui->recent_projects[0], path_copy, 1023);
   ui->recent_projects[0][1023] = '\0';
   config_save(ui);
 }

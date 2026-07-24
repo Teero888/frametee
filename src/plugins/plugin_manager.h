@@ -29,7 +29,7 @@ struct loaded_plugin_t {
   void *data; // plugin-specific data
   plugin_status_t status;
   bool enabled;
-  char error_msg[256];
+  char error_msg[1048];
 };
 
 struct plugin_manager_t {
