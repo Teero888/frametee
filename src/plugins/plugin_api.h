@@ -36,6 +36,7 @@ struct tas_api_t {
   // Debug Drawing API
   void (*draw_line_world)(vec2 start, vec2 end, float z, vec4 color, float thickness);
   void (*draw_circle_world)(vec2 center, float radius, vec4 color);
+  void (*draw_rect_filled_world)(vec2 pos, vec2 size, float z, vec4 color);
   void (*draw_text_world)(vec2 pos, const char *text, vec4 color);
 
   void (*screen_to_world)(float screen_x, float screen_y, float *world_x, float *world_y);

@@ -359,7 +359,8 @@ static void *fetch_json_thread(void *arg) {
 // Thumbnail worker pool
 #define MAX_THUMB_LOAD_TASKS 6
 typedef struct {
-    online_map_item_t *target;
+    char target_name[128];
+    char target_repo[16];
     char url[1024];
     char dest_path[512];
     bool in_use;
@@ -404,7 +405,8 @@ static void *thumb_load_worker(void *arg) {
 
 // Map file download task
 typedef struct {
-    online_map_item_t *target;
+    char target_name[128];
+    char target_repo[16];
     char url[1024];
     char dest_path[512];
     bool in_use;
@@ -508,6 +510,20 @@ static void load_icon_texture_if_needed(gfx_handler_t *gfx, const char *file_pat
     }
 }
 
+static online_map_item_t *find_map_item(online_map_manager_t *mgr, const char *name, const char *repo) {
+    online_map_category_t *cats[] = { &mgr->ddnet, &mgr->kog, &mgr->unique };
+    for (int c = 0; c < 3; c++) {
+        online_map_category_t *cat = cats[c];
+        if (!cat->items) continue;
+        for (int i = 0; i < cat->count; i++) {
+            if (strcmp(cat->items[i].name, name) == 0 && strcmp(cat->items[i].repo, repo) == 0) {
+                return &cat->items[i];
+            }
+        }
+    }
+    return NULL;
+}
+
 void online_map_manager_update(online_map_manager_t *mgr, gfx_handler_t *gfx) {
     if (!mgr->initialized) return;
     
@@ -562,7 +578,7 @@ void online_map_manager_update(online_map_manager_t *mgr, gfx_handler_t *gfx) {
     for (int i = 0; i < MAX_THUMB_LOAD_TASKS; i++) {
         if (g_thumb_tasks[i].in_use && g_thumb_tasks[i].done) {
             pthread_join(g_thumb_threads[i], NULL);
-            online_map_item_t *item = g_thumb_tasks[i].target;
+            online_map_item_t *item = find_map_item(mgr, g_thumb_tasks[i].target_name, g_thumb_tasks[i].target_repo);
             if (item) {
                 item->thumb_fetching = false;
                 if (!g_thumb_tasks[i].success || !g_thumb_tasks[i].decoded_pixels) {
@@ -577,11 +593,11 @@ void online_map_manager_update(online_map_manager_t *mgr, gfx_handler_t *gfx) {
                         item->thumb_failed = true;
                     }
                 }
-                
-                if (g_thumb_tasks[i].decoded_pixels) {
-                    stbi_image_free(g_thumb_tasks[i].decoded_pixels);
-                    g_thumb_tasks[i].decoded_pixels = NULL;
-                }
+            }
+            
+            if (g_thumb_tasks[i].decoded_pixels) {
+                stbi_image_free(g_thumb_tasks[i].decoded_pixels);
+                g_thumb_tasks[i].decoded_pixels = NULL;
             }
             g_thumb_tasks[i].in_use = false;
         }
@@ -590,7 +606,7 @@ void online_map_manager_update(online_map_manager_t *mgr, gfx_handler_t *gfx) {
     // Process finished map download task
     if (g_map_task.in_use && g_map_task.done) {
         pthread_join(g_map_thread, NULL);
-        online_map_item_t *item = g_map_task.target;
+        online_map_item_t *item = find_map_item(mgr, g_map_task.target_name, g_map_task.target_repo);
         if (item) {
             item->map_downloading = false;
             if (!g_map_task.success) {
@@ -653,7 +669,8 @@ static void trigger_thumbnail_load(online_map_item_t *item, bool download) {
         if (!g_thumb_tasks[i].in_use) {
             g_thumb_tasks[i].in_use = true;
             g_thumb_tasks[i].done = false;
-            g_thumb_tasks[i].target = item;
+            snprintf(g_thumb_tasks[i].target_name, sizeof(g_thumb_tasks[i].target_name), "%s", item->name);
+            snprintf(g_thumb_tasks[i].target_repo, sizeof(g_thumb_tasks[i].target_repo), "%s", item->repo);
             g_thumb_tasks[i].dest_path[0] = '\0';
             g_thumb_tasks[i].url[0] = '\0';
             g_thumb_tasks[i].decoded_pixels = NULL;
@@ -680,7 +697,8 @@ static void trigger_map_download(online_map_item_t *item) {
     
     g_map_task.in_use = true;
     g_map_task.done = false;
-    g_map_task.target = item;
+    snprintf(g_map_task.target_name, sizeof(g_map_task.target_name), "%s", item->name);
+    snprintf(g_map_task.target_repo, sizeof(g_map_task.target_repo), "%s", item->repo);
     g_map_task.dest_path[0] = '\0';
     
     snprintf(g_map_task.dest_path, sizeof(g_map_task.dest_path), "%.*s", (int)(sizeof(g_map_task.dest_path) - 1), item->local_map_path);
@@ -1210,7 +1228,7 @@ bool render_online_map_browser(ui_handler_t *ui, online_map_manager_t *mgr, floa
                         }
                         
                         // If map download just finished in background, load it automatically!
-                        if (g_map_task.done && item == g_map_task.target) {
+                        if (g_map_task.done && g_map_task.target_name[0] != '\0' && strcmp(item->name, g_map_task.target_name) == 0 && strcmp(item->repo, g_map_task.target_repo) == 0) {
                             FILE *check_mf = fs_open(item->local_map_path, "rb");
                             if (check_mf && !item->map_downloading && item->map_download_failed == false) {
                                 fseek(check_mf, 0, SEEK_END);
@@ -1219,7 +1237,7 @@ bool render_online_map_browser(ui_handler_t *ui, online_map_manager_t *mgr, floa
                                 if (fsize > 0) {
                                     on_map_load_path(ui->gfx_handler, item->local_map_path);
                                     map_loaded = true;
-                                    g_map_task.target = NULL;
+                                    g_map_task.target_name[0] = '\0';
                                 }
                             }
                         }

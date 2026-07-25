@@ -94,17 +94,46 @@ static void api_draw_circle_world(vec2 center, float radius, vec4 color) {
   renderer_submit_circle_filled(g_ui_handler_for_api->gfx_handler, 10.0f, center, radius, color, 16);
 }
 
+static void api_draw_rect_filled_world(vec2 pos, vec2 size, float z, vec4 color) {
+  extern bool g_is_headless;
+  if (g_is_headless) return;
+  renderer_submit_rect_filled(g_ui_handler_for_api->gfx_handler, z + 10.0f, pos, size, color);
+}
+
 static void api_draw_text_world(vec2 pos, const char *text, vec4 color) {
   // Not implemented yet in renderer, but we should have a stub to avoid NULL call
   (void)pos; (void)text; (void)color;
 }
 
 static void api_screen_to_world(float screen_x, float screen_y, float *world_x, float *world_y) {
-  screen_to_world(g_ui_handler_for_api->gfx_handler, screen_x, screen_y, world_x, world_y);
+  float lx = screen_x - g_ui_handler_for_api->viewport_window_pos.x;
+  float ly = screen_y - g_ui_handler_for_api->viewport_window_pos.y;
+  
+  static ImGuiWindow *s_viewport_window = NULL;
+  if (!s_viewport_window) {
+    s_viewport_window = igFindWindowByName("Viewport");
+  }
+  if (s_viewport_window) {
+    lx -= s_viewport_window->DecoOuterSizeX1;
+    ly -= s_viewport_window->DecoOuterSizeY1;
+  }
+  
+  screen_to_world(g_ui_handler_for_api->gfx_handler, lx, ly, world_x, world_y);
 }
 
 static void api_world_to_screen(float world_x, float world_y, float *screen_x, float *screen_y) {
   world_to_screen(g_ui_handler_for_api->gfx_handler, world_x, world_y, screen_x, screen_y);
+  *screen_x += g_ui_handler_for_api->viewport_window_pos.x;
+  *screen_y += g_ui_handler_for_api->viewport_window_pos.y;
+  
+  static ImGuiWindow *s_viewport_window = NULL;
+  if (!s_viewport_window) {
+    s_viewport_window = igFindWindowByName("Viewport");
+  }
+  if (s_viewport_window) {
+    *screen_x += s_viewport_window->DecoOuterSizeX1;
+    *screen_y += s_viewport_window->DecoOuterSizeY1;
+  }
 }
 
 static double api_get_time(void) {
@@ -130,6 +159,7 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .do_set_inputs = api_do_set_inputs,
       .draw_line_world = api_draw_line_world,
       .draw_circle_world = api_draw_circle_world,
+      .draw_rect_filled_world = api_draw_rect_filled_world,
       .draw_text_world = api_draw_text_world,
       .screen_to_world = api_screen_to_world,
       .world_to_screen = api_world_to_screen,
