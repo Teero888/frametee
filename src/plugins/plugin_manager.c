@@ -212,7 +212,7 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
   } else {
     strncpy(config_path, "config.toml", sizeof(config_path) - 1);
   }
-
+  log_info(LOG_SOURCE, "Loading config from path: %s", config_path);
   FILE *fp = fs_open(config_path, "r");
   toml_result_t res = {0};
   bool has_toml = false;

@@ -4,6 +4,8 @@
 #include <system/include_cimgui.h>
 #include <tomlc17.h>
 #include <user_interface/keybinds.h>
+#include <plugins/plugin_manager.h>
+#include <user_interface/user_interface.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -349,6 +351,11 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "\n[auto_save]\n");
   fprintf(fp, "enabled = %s\n", ui->auto_save_enabled ? "true" : "false");
   fprintf(fp, "interval_sec = %d\n", ui->auto_save_interval_sec);
+
+  fprintf(fp, "\n[plugins]\n");
+  for (int i = 0; i < ui->plugin_manager.count; ++i) {
+    fprintf(fp, "%s = %s\n", ui->plugin_manager.plugins[i].key, ui->plugin_manager.plugins[i].enabled ? "true" : "false");
+  }
 
   fclose(fp);
   // log_info(LOG_SOURCE, "Config saved to %s.", config_path);
