@@ -99,6 +99,7 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
     plugin_init_func init;
     plugin_update_func update;
     plugin_shutdown_func shutdown;
+    plugin_show_ui_func show_ui;
   } u;
 
   u.sym = fs_get_symbol(handle, GET_PLUGIN_INFO_FUNC_NAME);
@@ -112,6 +113,9 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
 
   u.sym = fs_get_symbol(handle, GET_PLUGIN_SHUTDOWN_FUNC_NAME);
   p->shutdown = u.shutdown;
+
+  u.sym = fs_get_symbol(handle, "plugin_show_ui");
+  p->show_ui = u.show_ui;
 
   if (!get_info || !p->init) {
     p->status = PLUGIN_STATUS_ERROR;
@@ -269,8 +273,8 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
           }
           index = manager->count++;
           memset(&manager->plugins[index], 0, sizeof(loaded_plugin_t));
-          strncpy(manager->plugins[index].path, full_path, sizeof(manager->plugins[index].path) - 1);
-          strncpy(manager->plugins[index].key, key, sizeof(manager->plugins[index].key) - 1);
+          snprintf(manager->plugins[index].path, sizeof(manager->plugins[index].path), "%s", full_path);
+          snprintf(manager->plugins[index].key, sizeof(manager->plugins[index].key), "%s", key);
           manager->plugins[index].status = PLUGIN_STATUS_UNLOADED;
         }
 
@@ -478,6 +482,12 @@ void plugin_manager_render_ui(plugin_manager_t *manager, bool *p_open) {
             igSameLine(0, 5);
             if (igButton("Reload", (ImVec2){0, 0})) {
               plugin_manager_reload_plugin(manager, selected_index);
+            }
+            if (p->show_ui) {
+              igSameLine(0, 5);
+              if (igButton("Open Settings", (ImVec2){0, 0})) {
+                p->show_ui(p->data);
+              }
             }
           } else if (p->status == PLUGIN_STATUS_UNLOADED) {
             if (igButton("Enable Plugin", (ImVec2){0, 0})) {

@@ -26,6 +26,7 @@ struct loaded_plugin_t {
   plugin_init_func init;
   plugin_update_func update;
   plugin_shutdown_func shutdown;
+  plugin_show_ui_func show_ui;
   void *data; // plugin-specific data
   plugin_status_t status;
   bool enabled;

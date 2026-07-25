@@ -98,7 +98,11 @@ void render_menu_bar(ui_handler_t *ui) {
           char label[256];
           snprintf(label, sizeof(label), "%s##menu_%d", (p->info.name && p->info.name[0]) ? p->info.name : p->key, i);
           if (igMenuItem_Bool(label, NULL, is_loaded, true)) {
-            plugin_manager_toggle_plugin(&ui->plugin_manager, i);
+            if (!is_loaded) {
+              plugin_manager_toggle_plugin(&ui->plugin_manager, i);
+            } else if (p->show_ui) {
+              p->show_ui(p->data);
+            }
           }
         }
       }
@@ -1441,7 +1445,9 @@ bool ui_render_late(ui_handler_t *ui) {
   igPopStyleVar(1);
 
   *(ImVec2_c *)&ui->viewport_window_pos = igGetWindowPos();
-  hovered = igIsWindowHovered(0);
+  ui->viewport_hovered = igIsWindowHovered(0);
+  ui->viewport_focused = igIsWindowFocused(0);
+  hovered = ui->viewport_hovered;
 
   start.x += 10.0f;
   start.y += 10.0f;

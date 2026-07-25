@@ -36,6 +36,8 @@ struct ui_handler_t {
   ImVec2 viewport_window_pos;
   vec2 last_render_pos;
   vec2 recording_mouse_pos;
+  bool viewport_focused;
+  bool viewport_hovered;
 
   int prediction_length;
   int pos_x;

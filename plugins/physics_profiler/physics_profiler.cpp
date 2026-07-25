@@ -68,6 +68,8 @@ public:
     m_pAPI->log_info("Physics Profiler", "Plugin shutting down.");
   }
 
+  void ToggleWindow() { m_ShowWindow = !m_ShowWindow; }
+
   void Benchmark() {
     if (!m_pAPI->get_initial_world()) return;
     ZoneScopedN("Benchmark Execution"); // Tracy Zone for the whole benchmark
@@ -206,4 +208,6 @@ FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) { return 
 FT_API void plugin_update(void *plugin_data) { static_cast<PhysicsProfilerPlugin *>(plugin_data)->Update(); }
 
 FT_API void plugin_shutdown(void *plugin_data) { delete static_cast<PhysicsProfilerPlugin *>(plugin_data); }
+
+FT_API void plugin_show_ui(void *plugin_data) { static_cast<PhysicsProfilerPlugin *>(plugin_data)->ToggleWindow(); }
 }

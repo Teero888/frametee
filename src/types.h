@@ -24,6 +24,7 @@ typedef struct tas_api_t tas_api_t;
 typedef void *(*plugin_init_func)(tas_context_t *context, const tas_api_t *api);
 typedef void (*plugin_shutdown_func)(void *plugin_data);
 typedef void (*plugin_update_func)(void *plugin_data);
+typedef void (*plugin_show_ui_func)(void *plugin_data);
 typedef plugin_info_t (*get_plugin_info_func)(void);
 
 // Renderer
