@@ -9,6 +9,7 @@
 #include <string.h>
 #include <user_interface/user_interface.h>
 #include <user_interface/widgets/hsl_colorpicker.h>
+#include <user_interface/net_events.h>
 
 #define DEFAULT_TRACK_HEIGHT 60.f
 
@@ -683,6 +684,17 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
     }
 
     wc_tick(out_world);
+
+    // Auto-generate finish events during recording if option is enabled
+    if (ts->recording && ts->ui->auto_generate_finish_events) {
+      for (int p = 0; p < out_world->m_NumCharacters; ++p) {
+        SCharacterCore *pChar = &out_world->m_pCharacters[p];
+        if (pChar->m_StartTick != -1 && pChar->m_FinishTick == out_world->m_GameTick) {
+          timeline_add_finish_events_for_character(ts, out_world->m_GameTick, pChar, p);
+          timeline_mark_unsaved(ts);
+        }
+      }
+    }
 
     // other effects
     if (is_new_logic_tick) {

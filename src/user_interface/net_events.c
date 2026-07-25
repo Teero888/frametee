@@ -2,7 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <system/include_cimgui.h>
+#include "timeline/timeline_model.h"
 
 static int compare_net_events(const void *a, const void *b) {
   const net_event_t *ev_a = (const net_event_t *)a;
@@ -101,6 +103,13 @@ void render_net_events_window(ui_handler_t *ui) {
     static char new_message[256] = "";
     static int new_team_idx = 0; // Default to All
     static int new_client_id = 0;
+
+    igCheckbox("Auto-generate finish events when recording", &ui->auto_generate_finish_events);
+    igSameLine(0, 10);
+    if (igButton("Generate Finish Net Events", (ImVec2){0, 0})) {
+      timeline_generate_finish_events(ts);
+    }
+    igSeparator();
 
     if (igButton("Set to Current Tick", (ImVec2){0, 0})) {
       new_tick = ts->current_tick;
@@ -477,4 +486,96 @@ void net_event_tooltip_draw(const net_event_t *ev) {
       break;
     }
   }
+}
+
+bool timeline_has_net_event(const timeline_state_t *ts, int tick, net_event_type_t type) {
+  for (int i = 0; i < ts->net_event_count; ++i) {
+    if (ts->net_events[i].tick == tick && ts->net_events[i].type == type) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, const SCharacterCore *pChar, int track_index) {
+  const int FinishTimeTicks = pChar->m_FinishTick - pChar->m_StartTick;
+  if (FinishTimeTicks <= 0) return;
+
+  const char *player_name = ts->player_tracks[track_index].player_info.name;
+  if (!player_name || player_name[0] == '\0') {
+    player_name = "nameless tee";
+  }
+
+  // 1. Chat event
+  if (!timeline_has_net_event(ts, tick, NET_EVENT_CHAT)) {
+    net_event_t ev = {0};
+    ev.tick = tick;
+    ev.type = NET_EVENT_CHAT;
+    ev.team = 0;
+    ev.client_id = -1;
+    double seconds = fmod((double)FinishTimeTicks / 50.0, 60.0);
+    int minutes = FinishTimeTicks / 3000;
+    snprintf(ev.message, sizeof(ev.message), "%s finished in: %d minute(s) %.2f second(s)", player_name, minutes, seconds);
+    net_events_add(ts, ev);
+  }
+
+  // 2. DDRace Time event
+  if (!timeline_has_net_event(ts, tick, NET_EVENT_DDRACE_TIME)) {
+    net_event_t ev = {0};
+    ev.tick = tick;
+    ev.type = NET_EVENT_DDRACE_TIME;
+    ev.time = (int)((FinishTimeTicks / 50.f) * 1000.f);
+    ev.check = 0;
+    ev.finish = 1;
+    net_events_add(ts, ev);
+  }
+
+  // 3. Record event
+  if (!timeline_has_net_event(ts, tick, NET_EVENT_RECORD)) {
+    net_event_t ev = {0};
+    ev.tick = tick;
+    ev.type = NET_EVENT_RECORD;
+    ev.player_time_best = (int)((FinishTimeTicks / 50.f) * 100);
+    ev.server_time_best = (int)((FinishTimeTicks / 50.f) * 100);
+    net_events_add(ts, ev);
+  }
+
+  // Confetti effect
+  if (ts->ui) {
+    vec2 p = {vgetx(pChar->m_Pos), vgety(pChar->m_Pos)};
+    particles_create_confetti(&ts->ui->particle_system, p, 1.0f);
+  }
+}
+
+void timeline_generate_finish_events(timeline_state_t *ts) {
+  int max_ticks = model_get_max_timeline_tick(ts);
+  if (max_ticks <= 0) return;
+
+  SWorldCore cur = wc_empty();
+  model_get_world_state_at_tick(ts, 0, &cur, false);
+
+  bool generated_any = false;
+
+  for (int t = 0; t < max_ticks; ++t) {
+    for (int i = 0; i < cur.m_NumCharacters; ++i) {
+      SPlayerInput input = model_get_input_at_tick(ts, i, cur.m_GameTick);
+      cc_on_input(&cur.m_pCharacters[i], &input);
+    }
+
+    wc_tick(&cur);
+
+    for (int i = 0; i < cur.m_NumCharacters; ++i) {
+      SCharacterCore *pChar = &cur.m_pCharacters[i];
+      if (pChar->m_StartTick != -1 && pChar->m_FinishTick == cur.m_GameTick) {
+        timeline_add_finish_events_for_character(ts, cur.m_GameTick, pChar, i);
+        generated_any = true;
+      }
+    }
+  }
+
+  if (generated_any) {
+    timeline_mark_unsaved(ts);
+  }
+
+  wc_free(&cur);
 }

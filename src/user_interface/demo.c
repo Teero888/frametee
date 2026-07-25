@@ -340,6 +340,13 @@ static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore
       nd->common.m_Y = vgety(c_prev->m_Pos) - MAP_EXPAND32;
       nd->m_ClientId = c_cur->m_Id;
     }
+    if (c_cur->m_StartTick != -1 && c_prev->m_FinishTick == -1 && c_cur->m_FinishTick != -1) {
+      dd_netevent_finish *nf = demo_sb_add_item(sb, DD_NETEVENTTYPE_FINISH, next_item_id++, sizeof(dd_netevent_finish));
+      if (nf) {
+        nf->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
+        nf->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
+      }
+    }
     if (c_prev->m_HookState != HOOK_GRABBED && c_cur->m_HookState == HOOK_GRABBED) {
       dd_netevent_sound_world *nhs = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
       nhs->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
@@ -519,7 +526,7 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
       if (ev->tick == t) {
         if (ev->type == NET_EVENT_CHAT) {
           demo_w_write_msg_sv_chat(writer, ev->team, ev->client_id, ev->message);
-          log_info("what", "Id: %d, team: %d, msg: %s", ev->client_id, ev->team, ev->message);
+          // log_info("what", "Id: %d, team: %d, msg: %s", ev->client_id, ev->team, ev->message);
         } else if (ev->type == NET_EVENT_BROADCAST) {
           demo_w_write_msg_sv_broadcast(writer, ev->message);
         } else if (ev->type == NET_EVENT_KILLMSG) {
@@ -534,8 +541,10 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
           demo_w_write_msg_sv_vote_status(writer, ev->vote_yes, ev->vote_no, ev->vote_pass, ev->vote_total);
         } else if (ev->type == NET_EVENT_DDRACE_TIME) {
           demo_w_write_msg_sv_ddrace_time_legacy(writer, ev->time, ev->check, ev->finish);
+          demo_w_write_msg_sv_racefinish(writer, 0, ev->time, 0, 1, 1);
         } else if (ev->type == NET_EVENT_RECORD) {
           demo_w_write_msg_sv_record_legacy(writer, ev->server_time_best, ev->player_time_best);
+          demo_w_write_msg_sv_record(writer, ev->server_time_best, ev->player_time_best);
         }
       }
     }

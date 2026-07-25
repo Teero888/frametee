@@ -250,6 +250,14 @@ void config_load(ui_handler_t *ui) {
     if (interval.type == TOML_INT64) ui->auto_save_interval_sec = (int)interval.u.int64;
   }
 
+  toml_datum_t recording_settings = toml_get(res.toptab, "recording");
+  if (recording_settings.type == TOML_TABLE) {
+    toml_datum_t auto_generate = toml_get(recording_settings, "auto_generate_finish_events");
+    if (auto_generate.type == TOML_BOOLEAN) {
+      ui->auto_generate_finish_events = auto_generate.u.boolean;
+    }
+  }
+
   toml_free(res);
   log_info(LOG_SOURCE, "Config loaded successfully from %s.", config_path);
 }
@@ -351,6 +359,9 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "\n[auto_save]\n");
   fprintf(fp, "enabled = %s\n", ui->auto_save_enabled ? "true" : "false");
   fprintf(fp, "interval_sec = %d\n", ui->auto_save_interval_sec);
+
+  fprintf(fp, "\n[recording]\n");
+  fprintf(fp, "auto_generate_finish_events = %s\n", ui->auto_generate_finish_events ? "true" : "false");
 
   fprintf(fp, "\n[plugins]\n");
   for (int i = 0; i < ui->plugin_manager.count; ++i) {

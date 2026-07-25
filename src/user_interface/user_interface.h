@@ -86,6 +86,7 @@ struct ui_handler_t {
   int auto_save_interval_sec;
   double last_auto_save_time;
   bool show_plugin_manager;
+  bool auto_generate_finish_events;
 };
 
 void on_camera_update(struct gfx_handler_t *handler, bool hovered);

@@ -416,6 +416,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->last_auto_save_time = 0.0;
   ui->render_pickups = true;
   ui->render_hud = true;
+  ui->auto_generate_finish_events = true;
 
   keybinds_init(&ui->keybinds);
   config_load(ui);

@@ -10,4 +10,9 @@ void net_events_remove(timeline_state_t *ts, int index);
 void net_events_sort(timeline_state_t *ts);
 void net_event_tooltip_draw(const net_event_t *ev);
 
+bool timeline_has_net_event(const timeline_state_t *ts, int tick, net_event_type_t type);
+struct CharacterCore;
+void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, const struct CharacterCore *pChar, int track_index);
+void timeline_generate_finish_events(timeline_state_t *ts);
+
 #endif // NET_EVENTS_H
