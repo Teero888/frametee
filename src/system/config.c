@@ -241,6 +241,14 @@ void config_load(ui_handler_t *ui) {
     }
   }
 
+  toml_datum_t gameplay_settings = toml_get(res.toptab, "gameplay");
+  if (gameplay_settings.type == TOML_TABLE) {
+    toml_datum_t game_mode = toml_get(gameplay_settings, "game_mode");
+    if (game_mode.type == TOML_INT64 && game_mode.u.int64 >= GAME_MODE_DDRACE && game_mode.u.int64 < NUM_GAME_MODES) {
+      ui->game_mode = (EGameMode)game_mode.u.int64;
+    }
+  }
+
   toml_datum_t auto_save = toml_get(res.toptab, "auto_save");
   if (auto_save.type == TOML_TABLE) {
     toml_datum_t enabled = toml_get(auto_save, "enabled");
@@ -355,6 +363,9 @@ void config_save(ui_handler_t *ui) {
     fprintf(fp, "  \"%s\"%s\n", ui->recent_projects[i], (i < ui->num_recent_projects - 1) ? "," : "");
   }
   fprintf(fp, "]\n");
+
+  fprintf(fp, "\n[gameplay]\n");
+  fprintf(fp, "game_mode = %d\n", (int)ui->game_mode);
 
   fprintf(fp, "\n[auto_save]\n");
   fprintf(fp, "enabled = %s\n", ui->auto_save_enabled ? "true" : "false");

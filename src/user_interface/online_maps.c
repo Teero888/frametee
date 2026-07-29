@@ -721,12 +721,7 @@ static void trigger_map_download(online_map_item_t *item) {
 }
 
 static void load_online_map(ui_handler_t *ui, const online_map_item_t *item) {
-    const bool is_fastcap = strcmp(item->repo, "unique") == 0 && strcasecmp(item->category, "Fastcap") == 0;
-    if (is_fastcap) {
-        on_map_load_path_fastcap(ui->gfx_handler, item->local_map_path);
-    } else {
-        on_map_load_path(ui->gfx_handler, item->local_map_path);
-    }
+    on_map_load_path(ui->gfx_handler, item->local_map_path);
 }
 
 static void draw_spinning_icon(ImVec2 center, const char* icon_text) {

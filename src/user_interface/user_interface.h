@@ -52,6 +52,7 @@ struct ui_handler_t {
   int armor;
   int ammo;
   int weapon;
+  EGameMode game_mode;
   int num_pickups;
   int fps_limit;
 

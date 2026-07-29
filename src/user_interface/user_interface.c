@@ -423,6 +423,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->last_auto_save_time = 0.0;
   ui->render_pickups = true;
   ui->render_hud = true;
+  ui->game_mode = GAME_MODE_DDRACE;
   ui->auto_generate_finish_events = true;
 
   keybinds_init(&ui->keybinds);
@@ -1305,6 +1306,18 @@ static void render_splash_screen(ui_handler_t *ui) {
       igTextColored((ImVec4){0.35f, 0.75f, 1.00f, 1.00f}, "%s", "FrameTee");
       igPopFont();
       igTextDisabled("Teeworlds & DDNet TAS Tool");
+
+      igSpacing();
+      igSeparator();
+      igSpacing();
+
+      igTextColored((ImVec4){0.70f, 0.75f, 0.85f, 1.00f}, "%s", "Game Mode");
+      igSetNextItemWidth(sidebar_w);
+      int game_mode = (int)ui->game_mode;
+      if (igCombo_Str("##SplashGameMode", &game_mode, "DDRace\0Race\0FastCap\0FastCapNoWpns\0\0", 4)) {
+        ui->game_mode = (EGameMode)game_mode;
+        config_save(ui);
+      }
 
       igSpacing();
       igSeparator();

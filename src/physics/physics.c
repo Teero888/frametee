@@ -1,48 +1,24 @@
 #include "physics.h"
 #include <string.h>
 
-void physics_init_from_memory(physics_handler_t *h, const unsigned char *map_buffer, size_t size) {
+static void physics_finish_init(physics_handler_t *h, map_data_t *pMap, EGameMode game_mode) {
+  if (!init_game_mode(&h->world, &h->collision, &h->grid, &h->config, pMap, game_mode)) {
+    free_map_data(pMap);
+    return;
+  }
+  h->loaded = true;
+}
+
+void physics_init_from_memory(physics_handler_t *h, const unsigned char *map_buffer, size_t size, EGameMode game_mode) {
   physics_free(h);
   map_data_t map = load_map_from_memory((unsigned char *)map_buffer, size);
-  if (!init_collision(&h->collision, &map)) {
-    // if init fails, free_map_data will free the layer data and the map_buffer.
-    free_map_data(&map);
-    return;
-  }
-  init_config(&h->config);
-  h->grid = tg_empty();
-  tg_init(&h->grid, h->collision.m_MapData.width, h->collision.m_MapData.height);
-  wc_init(&h->world, &h->collision, &h->grid, &h->config);
-  h->loaded = true;
+  physics_finish_init(h, &map, game_mode);
 }
 
-void physics_init(physics_handler_t *h, const char *path) {
+void physics_init(physics_handler_t *h, const char *path, EGameMode game_mode) {
   physics_free(h);
   map_data_t map = load_map(path);
-  if (!init_collision(&h->collision, &map)) {
-    free_map_data(&map);
-    return;
-  }
-  init_config(&h->config);
-  h->grid = tg_empty();
-  tg_init(&h->grid, h->collision.m_MapData.width, h->collision.m_MapData.height);
-  wc_init(&h->world, &h->collision, &h->grid, &h->config);
-  h->loaded = true;
-}
-
-void physics_enable_fastcap(physics_handler_t *h) {
-  if (!h->loaded) return;
-
-  h->config.m_SvFastcap = 1;
-  h->config.m_SvHealthAndAmmo = 1;
-  h->config.m_SvDestroyBulletsOnDeath = 1;
-  h->config.m_SvSoloServer = 1;
-  h->world.m_UniqueRace = true;
-
-  for (int zone = 0; zone < NUM_TUNE_ZONES; ++zone) {
-    h->collision.m_aTuningList[zone].m_PlayerCollision = 0.0f;
-    h->collision.m_aTuningList[zone].m_PlayerHooking = 0.0f;
-  }
+  physics_finish_init(h, &map, game_mode);
 }
 
 void physics_tick(physics_handler_t *h) {

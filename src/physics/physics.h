@@ -13,9 +13,8 @@ struct physics_handler_t {
   bool loaded;
 };
 
-void physics_init(physics_handler_t *h, const char *path);
-void physics_init_from_memory(physics_handler_t *h, const unsigned char *map_buffer, size_t size);
-void physics_enable_fastcap(physics_handler_t *h);
+void physics_init(physics_handler_t *h, const char *path, EGameMode game_mode);
+void physics_init_from_memory(physics_handler_t *h, const unsigned char *map_buffer, size_t size, EGameMode game_mode);
 void physics_tick(physics_handler_t *h);
 void physics_free(physics_handler_t *h);
 float physics_character_race_time(const SCharacterCore *character, float game_tick);

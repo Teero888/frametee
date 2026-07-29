@@ -68,6 +68,7 @@ bool save_project(ui_handler_t *ui, const char *path) {
   memcpy(header.magic, TAS_PROJECT_FILE_MAGIC, 4);
   header.version = TAS_PROJECT_FILE_VERSION;
   snprintf(header.map_name, sizeof(header.map_name), "%.*s", (int)(sizeof(header.map_name) - 1), ui->loaded_map_name);
+  header.game_mode = (uint32_t)ui->game_mode;
   fwrite(&header, sizeof(tas_project_header_t), 1, f);
 
   fclose(f);
@@ -182,14 +183,26 @@ bool load_project(ui_handler_t *ui, const char *path) {
   memcpy(&header, &base_header, sizeof(base_header));
 
   if (base_header.version >= 5) {
-    if (fread(header.map_name, sizeof(header.map_name), 1, f) == 1) {
-      strncpy(ui->loaded_map_name, header.map_name, sizeof(ui->loaded_map_name) - 1);
-      ui->loaded_map_name[sizeof(ui->loaded_map_name) - 1] = '\0';
+    if (fread(header.map_name, sizeof(header.map_name), 1, f) != 1) {
+      log_error(LOG_SOURCE, "Failed to read project map name from: '%s'", path);
+      fclose(f);
+      return false;
     }
+    strncpy(ui->loaded_map_name, header.map_name, sizeof(ui->loaded_map_name) - 1);
+    ui->loaded_map_name[sizeof(ui->loaded_map_name) - 1] = '\0';
   } else {
     if (ui->loaded_map_name[0] == '\0') {
       strncpy(ui->loaded_map_name, "unnamed_map", sizeof(ui->loaded_map_name) - 1);
     }
+  }
+
+  if (base_header.version >= 6) {
+    if (fread(&header.game_mode, sizeof(header.game_mode), 1, f) != 1 || header.game_mode >= NUM_GAME_MODES) {
+      log_error(LOG_SOURCE, "Invalid or missing project game mode in: '%s'", path);
+      fclose(f);
+      return false;
+    }
+    ui->game_mode = (EGameMode)header.game_mode;
   }
 
   // clean up existing state before loading
