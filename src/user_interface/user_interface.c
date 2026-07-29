@@ -512,6 +512,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
 
   ui->gfx_handler = gfx_handler;
   strncpy(ui->loaded_map_name, "unnamed_map", sizeof(ui->loaded_map_name) - 1);
+  ui->loaded_map_path[0] = '\0';
   ui->current_project_path[0] = '\0';
   ui->has_unsaved_changes = false;
   ui->show_timeline = true;

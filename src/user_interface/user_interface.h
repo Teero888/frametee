@@ -89,6 +89,8 @@ struct ui_handler_t {
   char recent_projects[10][1024];
   int num_recent_projects;
   char loaded_map_name[128];
+  // full path the current map was loaded from, empty when it did not come from a file on disk
+  char loaded_map_path[1024];
   char current_project_path[1024];
   bool has_unsaved_changes;
   bool auto_save_enabled;

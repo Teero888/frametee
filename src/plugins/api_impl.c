@@ -6,8 +6,10 @@
 #include "../scripting/script_engine.h"
 #include "renderer/renderer.h"
 #include <ddnet_physics/gamecore.h>
+#include <nfd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 //=================================================================================================
 // API IMPLEMENTATION
@@ -140,6 +142,30 @@ static double api_get_time(void) {
   return glfwGetTime();
 }
 
+static bool api_save_file_dialog(const char *filter_name, const char *filter_ext, const char *default_name, char *out_path, int out_path_size) {
+  if (!out_path || out_path_size <= 0) return false;
+  out_path[0] = '\0';
+
+  extern bool g_is_headless;
+  if (g_is_headless) {
+    log_warn("PluginAPI", "save_file_dialog is unavailable in headless mode");
+    return false;
+  }
+
+  nfdu8filteritem_t filter = {filter_name, filter_ext};
+  nfdu8char_t *save_path = NULL;
+  nfdresult_t result = NFD_SaveDialogU8(&save_path, (filter_name && filter_ext) ? &filter : NULL,
+                                        (filter_name && filter_ext) ? 1 : 0, NULL, default_name);
+  if (result != NFD_OKAY || !save_path) {
+    if (result == NFD_ERROR) log_error("PluginAPI", "Save dialog failed: %s", NFD_GetError());
+    return false;
+  }
+
+  snprintf(out_path, (size_t)out_path_size, "%s", save_path);
+  NFD_FreePathU8(save_path);
+  return true;
+}
+
 static void api_get_camera_info(vec2 pos, float *zoom) {
   glm_vec2_copy(g_ui_handler_for_api->gfx_handler->renderer.camera.pos, pos);
   *zoom = g_ui_handler_for_api->gfx_handler->renderer.camera.zoom;
@@ -169,5 +195,6 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .log_warning = api_log_warning,
       .log_error = api_log_error,
       .register_script_command = api_register_script_command,
+      .save_file_dialog = api_save_file_dialog,
   };
 }

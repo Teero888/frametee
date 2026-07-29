@@ -51,6 +51,11 @@ struct tas_api_t {
   void (*log_error)(const char *plugin_name, const char *message);
 
   void (*register_script_command)(const char *name, void (*callback)(int argc, const char **argv));
+
+  // opens the native "save file" dialog and writes the chosen path into out_path.
+  // filter_name/filter_ext describe a single file type (e.g. "FrameTee Script", "ftee"), both may be NULL.
+  // returns false when the user cancelled, the dialog failed, or the app runs headless.
+  bool (*save_file_dialog)(const char *filter_name, const char *filter_ext, const char *default_name, char *out_path, int out_path_size);
 };
 
 struct plugin_info_t {

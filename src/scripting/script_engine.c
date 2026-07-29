@@ -9,6 +9,7 @@
 #include <system/fs.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <user_interface/net_events.h>
+#include <types.h>
 
 #define LOG_SOURCE "ScriptEngine"
 
@@ -32,6 +33,26 @@ void script_engine_register_command(const char *name, script_command_cb callback
   g_commands[g_num_commands].name = strdup(name);
   g_commands[g_num_commands].callback = callback;
   g_num_commands++;
+}
+
+static void cmd_set_gamemode(int argc, const char **argv) {
+  if (argc < 2) {
+    log_warn(LOG_SOURCE, "Usage: set_gamemode <mode>");
+    return;
+  }
+  log_info(LOG_SOURCE, "Setting game mode to %s", argv[1]);
+  if(strcmp(argv[1], "ddrace") == 0) {
+    g_ctx->ui_handler->game_mode = GAME_MODE_DDRACE;
+  } else if(strcmp(argv[1], "race") == 0) {
+    g_ctx->ui_handler->game_mode = GAME_MODE_RACE;
+  } else if(strcmp(argv[1], "fastcap") == 0) {
+    g_ctx->ui_handler->game_mode = GAME_MODE_FASTCAP;
+  } else if(strcmp(argv[1], "fastcap_no_wpns") == 0) {
+    g_ctx->ui_handler->game_mode = GAME_MODE_FASTCAP_NO_WPNS;
+  } else {
+    log_warn(LOG_SOURCE, "Unknown game mode: %s", argv[1]);
+    log_warn(LOG_SOURCE, "Valid modes are: ddrace, race, fastcap, fastcap_no_wpns");
+  }
 }
 
 static void cmd_load_map(int argc, const char **argv) {
@@ -110,6 +131,7 @@ static void cmd_tick(int argc, const char **argv) {
 
 void script_engine_run(const char *script_path) {
   // Register built-ins
+  script_engine_register_command("set_gamemode", cmd_set_gamemode);
   script_engine_register_command("load_map", cmd_load_map);
   script_engine_register_command("spawn_character", cmd_spawn_character);
   script_engine_register_command("tick", cmd_tick);

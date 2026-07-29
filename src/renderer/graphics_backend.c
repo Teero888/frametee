@@ -553,6 +553,7 @@ static void extract_map_name(const char *path, char *out_name, size_t out_size) 
 
 void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
   extract_map_name(map_path, handler->user_interface.loaded_map_name, sizeof(handler->user_interface.loaded_map_name));
+  snprintf(handler->user_interface.loaded_map_path, sizeof(handler->user_interface.loaded_map_path), "%s", map_path);
   timeline_cleanup(&handler->user_interface.timeline);
   timeline_init(&handler->user_interface);
   physics_free(&handler->physics_handler);
@@ -569,6 +570,7 @@ void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
 }
 
 void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buffer, size_t size) {
+  handler->user_interface.loaded_map_path[0] = '\0';
   physics_free(&handler->physics_handler);
   physics_init_from_memory(&handler->physics_handler, map_buffer, size, handler->user_interface.game_mode);
   if (!handler->physics_handler.collision.m_MapData.game_layer.data) {
