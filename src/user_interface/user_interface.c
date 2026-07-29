@@ -186,7 +186,7 @@ void render_menu_bar(ui_handler_t *ui) {
 }
 
 // docking setup
-void setup_docking(void) {
+void setup_docking(ui_handler_t *ui) {
   ImGuiID main_dockspace_id = igGetID_Str("MainDockSpace");
 
   // Ensure the dockspace covers the entire viewport initially
@@ -242,6 +242,14 @@ void setup_docking(void) {
     igDockBuilderDockWindow("Skin manager", dock_id_left);
 
     igDockBuilderDockWindow("Snippet Editor", dock_id_right);
+
+    for (int i = 0; i < ui->plugin_manager.count; ++i) {
+      loaded_plugin_t *p = &ui->plugin_manager.plugins[i];
+      if (p->info.name) {
+        igDockBuilderDockWindow(p->info.name, dock_id_right);
+      }
+    }
+
     igDockBuilderFinish(main_dockspace_id);
   }
 }
@@ -1331,12 +1339,10 @@ void ui_render(ui_handler_t *ui) {
   interaction_update_recording_input(ui);
   render_menu_bar(ui);
 
-  // render menu bar first so the plugin can add menu items
-  plugin_manager_update_all(&ui->plugin_manager);
-
   keybinds_process_inputs(ui);
   interaction_handle_playback_and_shortcuts(&ui->timeline);
-  setup_docking();
+  setup_docking(ui);
+  plugin_manager_update_all(&ui->plugin_manager);
   if (ui->show_timeline) {
     if (!ui->timeline.ui) ui->timeline.ui = ui;
     render_timeline(ui);
@@ -1441,8 +1447,14 @@ bool ui_render_late(ui_handler_t *ui) {
   ImVec2 start = igGetCursorScreenPos();
   *(ImVec2_c *)&ui->gfx_handler->viewport[0] = igGetContentRegionAvail();
 
-  ImVec2 img_size = {(float)ui->gfx_handler->offscreen_width, (float)ui->gfx_handler->offscreen_height};
-  igImage(*ui->gfx_handler->offscreen_texture, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
+  ImVec2 img_size = {ui->gfx_handler->viewport[0], ui->gfx_handler->viewport[1]};
+  ImVec2 uv0 = {0, 0};
+  ImVec2 uv1 = {1.0f, 1.0f};
+  if (ui->gfx_handler->offscreen_width > 0 && ui->gfx_handler->offscreen_height > 0) {
+    uv1.x = (float)ui->gfx_handler->viewport[0] / ui->gfx_handler->offscreen_width;
+    uv1.y = (float)ui->gfx_handler->viewport[1] / ui->gfx_handler->offscreen_height;
+  }
+  igImage(*ui->gfx_handler->offscreen_texture, img_size, uv0, uv1);
   igPopStyleVar(1);
 
   *(ImVec2_c *)&ui->viewport_window_pos = igGetWindowPos();

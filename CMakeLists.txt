@@ -1,5 +1,26 @@
 cmake_minimum_required(VERSION 3.14)
 
+# Prefer Clang for a default build when both C and C++ drivers are available.
+# Explicit compiler selections and toolchain files always take precedence.
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE
+   AND NOT DEFINED ENV{CMAKE_TOOLCHAIN_FILE}
+   AND NOT DEFINED CMAKE_C_COMPILER
+   AND NOT DEFINED CMAKE_CXX_COMPILER
+   AND NOT DEFINED ENV{CC}
+   AND NOT DEFINED ENV{CXX})
+    find_program(FRAMETEE_CLANG_C_COMPILER NAMES clang)
+    find_program(FRAMETEE_CLANG_CXX_COMPILER NAMES clang++)
+
+    if(FRAMETEE_CLANG_C_COMPILER AND FRAMETEE_CLANG_CXX_COMPILER)
+        set(CMAKE_C_COMPILER "${FRAMETEE_CLANG_C_COMPILER}" CACHE FILEPATH "C compiler")
+        set(CMAKE_CXX_COMPILER "${FRAMETEE_CLANG_CXX_COMPILER}" CACHE FILEPATH "C++ compiler")
+        message(STATUS "Clang found; using it as the default FrameTee compiler")
+    endif()
+
+    unset(FRAMETEE_CLANG_C_COMPILER CACHE)
+    unset(FRAMETEE_CLANG_CXX_COMPILER CACHE)
+endif()
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED TRUE)
 
