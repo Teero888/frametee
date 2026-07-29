@@ -1053,25 +1053,38 @@ static void render_fastcap_flag(ui_handler_t *ui, int team, vec2 pos) {
                         team == 0 ? GAMESKIN_FLAG_RED : GAMESKIN_FLAG_BLUE, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
 }
 
-static void render_fastcap_flags(ui_handler_t *ui, const SWorldCore *world, const SCharacterCore *view_character, float intra) {
+static void render_fastcap_flags(ui_handler_t *ui, const SWorldCore *world, float intra) {
   if (!world->m_pConfig->m_SvFastcap) return;
 
   const SCollision *collision = world->m_pCollision;
-  const bool show_stand_flags = !view_character || view_character->m_FinishTick < 0;
-  for (int team = 0; team < 2; ++team) {
-    if (!collision->m_aFastcapFlagPresent[team]) continue;
-    if (show_stand_flags && (!view_character || !view_character->m_aGotFastcapFlag[team])) {
-      vec2 pos = {
-          vgetx(collision->m_aFastcapFlagPositions[team]) / 32.0f,
-          vgety(collision->m_aFastcapFlagPositions[team]) / 32.0f,
-      };
-      render_fastcap_flag(ui, team, pos);
+  // FastCap progress is encoded per character: no flags means unstarted,
+  // exactly one means carrying, and both means finished.
+  bool flag_at_stand[2] = {
+      collision->m_aFastcapFlagPresent[0],
+      collision->m_aFastcapFlagPresent[1],
+  };
+  for (int character_index = 0; character_index < world->m_NumCharacters; ++character_index) {
+    const SCharacterCore *character = &world->m_pCharacters[character_index];
+    for (int team = 0; team < 2; ++team) {
+      if (character->m_aGotFastcapFlag[team]) flag_at_stand[team] = false;
     }
+  }
+
+  for (int team = 0; team < 2; ++team) {
+    if (!flag_at_stand[team]) continue;
+    vec2 pos = {
+        vgetx(collision->m_aFastcapFlagPositions[team]) / 32.0f,
+        vgety(collision->m_aFastcapFlagPositions[team]) / 32.0f,
+    };
+    render_fastcap_flag(ui, team, pos);
   }
 
   for (int character_index = 0; character_index < world->m_NumCharacters; ++character_index) {
     const SCharacterCore *character = &world->m_pCharacters[character_index];
     if (character->m_FinishTick >= 0) continue;
+
+    const int held_flags = character->m_aGotFastcapFlag[0] + character->m_aGotFastcapFlag[1];
+    if (held_flags != 1) continue;
 
     for (int team = 0; team < 2; ++team) {
       if (!collision->m_aFastcapFlagPresent[team] || !character->m_aGotFastcapFlag[team]) continue;
@@ -1216,7 +1229,7 @@ void render_pickups(ui_handler_t *ui) {
     renderer_submit_atlas_batch(h, ar, Z_LAYER_PICKUPS, instances, count, false);
   }
   if (unique_race) {
-    render_fastcap_flags(ui, &world, view_character, render_intra);
+    render_fastcap_flags(ui, &world, render_intra);
     wc_free(&world);
   }
 }

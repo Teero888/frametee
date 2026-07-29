@@ -285,10 +285,6 @@ int gfx_begin_frame(gfx_handler_t *handler) {
     recreate_offscreen_if_needed(handler, (uint32_t)fb_width, (uint32_t)fb_height);
   }
 
-  if (handler->offscreen_initialized && handler->viewport[0] > 0 && handler->viewport[1] > 0) {
-    recreate_offscreen_if_needed(handler, (uint32_t)handler->viewport[0], (uint32_t)handler->viewport[1]);
-  }
-
   // Acquire Image and Begin Command Buffer
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
