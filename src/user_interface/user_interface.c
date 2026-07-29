@@ -520,6 +520,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->show_skin_browser = false;
   ui->show_net_events_window = false;
   ui->show_plugin_manager = false;
+  entity_inspector_clear(&ui->entity_inspector);
   particle_system_init(&ui->particle_system);
   timeline_init(ui);
   camera_init(&gfx_handler->renderer.camera);
@@ -933,6 +934,8 @@ void render_players(ui_handler_t *ui) {
     renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p0, p1, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 0.25f);
     renderer_submit_circle_filled(gfx, Z_LAYER_PREDICTION_LINES, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);
   }
+
+  entity_inspector_render_highlight(&ui->entity_inspector, gfx);
 
   ui->current_tick = world.m_GameTick;
   if (ui->timeline.selected_player_track_index >= 0) {
@@ -1455,6 +1458,7 @@ void ui_render(ui_handler_t *ui) {
   if (ui->show_plugin_manager) {
     plugin_manager_render_ui(&ui->plugin_manager, &ui->show_plugin_manager);
   }
+  entity_inspector_render(&ui->entity_inspector);
 
   if (!ui->gfx_handler->physics_handler.loaded) {
     render_splash_screen(ui);
@@ -1543,6 +1547,7 @@ bool ui_render_late(ui_handler_t *ui) {
 
   // render the main game viewport texture
   ImVec2 start = igGetCursorScreenPos();
+  const ImVec2 viewport_content_pos = start;
   *(ImVec2_c *)&ui->gfx_handler->viewport[0] = igGetContentRegionAvail();
 
   ImVec2 img_size = {ui->gfx_handler->viewport[0], ui->gfx_handler->viewport[1]};
@@ -1566,8 +1571,8 @@ bool ui_render_late(ui_handler_t *ui) {
   // handle raycast/click interaction
   if (hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
     ImGuiIO *io = igGetIO_Nil();
-    float mx = io->MousePos.x - ui->viewport_window_pos.x;
-    float my = io->MousePos.y - ui->viewport_window_pos.y;
+    float mx = io->MousePos.x - viewport_content_pos.x;
+    float my = io->MousePos.y - viewport_content_pos.y;
     float wx, wy;
     screen_to_world(ui->gfx_handler, mx, my, &wx, &wy);
 
@@ -1578,29 +1583,35 @@ bool ui_render_late(ui_handler_t *ui) {
     float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
     if (ui->timeline.is_reversing) intra = 1.f - intra;
 
-    int best_match = -1;
-    float best_dist = 1.5f;
+    const bool selected_entity =
+        !ui->selecting_override_pos &&
+        entity_inspector_pick(&ui->entity_inspector, &world, ui->gfx_handler, intra, mx, my, ui->timeline.current_tick);
 
-    for (int i = 0; i < world.m_NumCharacters; ++i) {
-      SCharacterCore *core = &world.m_pCharacters[i];
-      vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
-      vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-      vec2 p;
-      lerp(ppp, pp, intra, p);
+    if (!selected_entity) {
+      int best_match = -1;
+      float best_dist = 1.5f;
 
-      float dx = p[0] - wx;
-      float dy = p[1] - wy;
-      float dist = sqrtf(dx * dx + dy * dy);
-      if (dist < best_dist) {
-        best_dist = dist;
-        best_match = i;
+      for (int i = 0; i < world.m_NumCharacters; ++i) {
+        SCharacterCore *core = &world.m_pCharacters[i];
+        vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+        vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+        vec2 p;
+        lerp(ppp, pp, intra, p);
+
+        float dx = p[0] - wx;
+        float dy = p[1] - wy;
+        float dist = sqrtf(dx * dx + dy * dy);
+        if (dist < best_dist) {
+          best_dist = dist;
+          best_match = i;
+        }
       }
-    }
 
-    if (best_match != -1) {
-      interaction_select_track(&ui->timeline, best_match);
-    } else if (!ui->selecting_override_pos) {
-      interaction_select_track(&ui->timeline, -1);
+      if (best_match != -1) {
+        interaction_select_track(&ui->timeline, best_match);
+      } else if (!ui->selecting_override_pos) {
+        interaction_select_track(&ui->timeline, -1);
+      }
     }
     wc_free(&world);
   }
@@ -1623,6 +1634,8 @@ bool ui_render_late(ui_handler_t *ui) {
 }
 
 void ui_post_map_load(ui_handler_t *ui) {
+  entity_inspector_clear(&ui->entity_inspector);
+
   // by default they are NULL so this should be fine
   free(ui->pickups);
   free(ui->pickup_positions);

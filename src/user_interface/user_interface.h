@@ -2,6 +2,7 @@
 #define USER_INTERFACE_H
 
 #include "demo.h"
+#include "entity_inspector.h"
 #include "keybinds.h"
 #include "undo_redo.h"
 #include "online_maps.h"
@@ -27,6 +28,7 @@ struct ui_handler_t {
   tas_api_t plugin_api;
   particle_system_t particle_system;
   online_map_manager_t online_maps;
+  entity_inspector_t entity_inspector;
 
   SPickup *pickups;
   mvec2 *pickup_positions;
