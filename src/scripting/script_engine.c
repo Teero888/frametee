@@ -73,9 +73,10 @@ static void cmd_export_demo(int argc, const char **argv) {
   SWorldCore world = wc_empty();
   model_get_world_state_at_tick(&g_ctx->ui_handler->timeline, max_ticks, &world, false);
   SCharacterCore *p = &world.m_pCharacters[0];
-  int ticks = p->m_FinishTick - p->m_StartTick;
+  float race_time = p->m_RaceTime;
   wc_free(&world);
-  snprintf(save_path, sizeof(save_path), "%s_%.3f_%s.demo", map_name, (float)ticks / 50.f, g_ctx->timeline->player_tracks[0].player_info.name[0] ? g_ctx->timeline->player_tracks[0].player_info.name : "nameless tee");
+  snprintf(save_path, sizeof(save_path), "%s_%.3f_%s.demo", map_name, race_time,
+           g_ctx->timeline->player_tracks[0].player_info.name[0] ? g_ctx->timeline->player_tracks[0].player_info.name : "nameless tee");
   int res = export_to_demo(g_ctx->ui_handler, save_path, map_name, max_ticks);
   if (res == 0) {
     log_info(LOG_SOURCE, "Demo exported successfully to '%s'", save_path);

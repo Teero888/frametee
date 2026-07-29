@@ -311,15 +311,35 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
     double age = ps->current_time - p->spawn_time;
     if (age < 0 || age > p->life_span) continue;
 
-    // Linear sub-step extrapolation for smooth rendering
-    float dt = (float)(ps->current_time - p->last_sim_time);
     vec2 pos;
-    if (dt > 0.0001f) {
-      pos[0] = p->current_pos[0] + p->current_vel[0] * dt;
-      pos[1] = p->current_pos[1] + p->current_vel[1] * dt;
+    float rot;
+    float size;
+    vec4 col;
+    if (p->sprite_index == GAMESKIN_STAR_0) {
+      const float remaining_life = p->life_span - (float)age;
+      const float move_mix = fminf(fmaxf((remaining_life - 0.60f) / 0.15f, 0.0f), 1.0f);
+      pos[0] = p->start_pos[0] + p->start_vel[0] * 75.0f * (1.0f - move_mix);
+      pos[1] = p->start_pos[1] + p->start_vel[1] * 75.0f * (1.0f - move_mix);
+      rot = p->rot + remaining_life * 2.0f;
+      size = p->start_size;
+      glm_vec4_copy(p->color, col);
+      col[3] *= fminf(fmaxf(remaining_life / 0.1f, 0.0f), 1.0f);
     } else {
-      pos[0] = p->current_pos[0];
-      pos[1] = p->current_pos[1];
+      // Linear sub-step extrapolation for smooth rendering
+      float dt = (float)(ps->current_time - p->last_sim_time);
+      if (dt > 0.0001f) {
+        pos[0] = p->current_pos[0] + p->current_vel[0] * dt;
+        pos[1] = p->current_pos[1] + p->current_vel[1] * dt;
+      } else {
+        pos[0] = p->current_pos[0];
+        pos[1] = p->current_pos[1];
+      }
+
+      rot = p->rot + p->rot_speed * (float)age;
+      float life_frac = (float)age / p->life_span;
+      size = p->start_size * (1.0f - life_frac) + p->end_size * life_frac;
+      glm_vec4_copy(p->color, col);
+      if (p->use_alpha_fading) col[3] = p->start_alpha * (1.0f - life_frac) + p->end_alpha * life_frac;
     }
 
     // Camera frustum culling
@@ -327,17 +347,9 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
       continue;
     }
 
-    float rot = p->rot + p->rot_speed * (float)age;
-
     int atlas_type = (p->sprite_index < PARTICLE_SPRITE_OFFSET) ? 1 : (p->sprite_index < EXTRA_SPRITE_OFFSET ? 2 : 3);
     atlas_renderer_t *target_ar = (atlas_type == 1) ? ar_gameskin : (atlas_type == 2 ? ar_particle : ar_extras);
     int render_sprite_idx = p->sprite_index - (atlas_type == 1 ? 0 : (atlas_type == 2 ? PARTICLE_SPRITE_OFFSET : EXTRA_SPRITE_OFFSET));
-
-    float life_frac = (float)age / p->life_span;
-    float size = p->start_size * (1.0f - life_frac) + p->end_size * life_frac;
-    vec4 col;
-    glm_vec4_copy(p->color, col);
-    if (p->use_alpha_fading) col[3] = p->start_alpha * (1.0f - life_frac) + p->end_alpha * life_frac;
 
     renderer_submit_atlas(gfx, target_ar, z_layer, (vec2){pos[0] / 32.f, pos[1] / 32.f}, (vec2){size / 32.f, size / 32.f}, rot, render_sprite_idx, false, col, false);
   }
@@ -595,22 +607,14 @@ void particles_create_sparkle(particle_system_t *ps, vec2 pos, float alpha) {
 }
 
 void particles_create_damage_ind(particle_system_t *ps, vec2 pos, vec2 dir, float alpha) {
-  (void)dir;
-  for (int i = 0; i < 6; ++i) {
-    particle_t p = {0};
-    glm_vec2_copy(pos, p.start_pos);
-    vec2 rd;
-    random_direction(ps, rd);
-    float s = 300 + ps_frand01(ps) * 300;
-    p.start_vel[0] = rd[0] * s;
-    p.start_vel[1] = rd[1] * s;
-    p.life_span = 0.5 + ps_frand01(ps) * 0.3;
-    p.start_size = 32 + ps_frand01(ps) * 16;
-    p.end_size = 0;
-    p.gravity = 500;
-    p.friction = 0.8;
-    p.sprite_index = GAMESKIN_STAR_1;
-    glm_vec4_copy((vec4){1, 1, 1, alpha}, p.color);
-    particle_spawn(ps, GROUP_GENERAL, &p, 0);
-  }
+  particle_t p = {0};
+  glm_vec2_copy(pos, p.start_pos);
+  glm_vec2_negate_to(dir, p.start_vel);
+  p.life_span = 0.75f;
+  p.start_size = 48.0f / sqrtf(2.0f);
+  p.end_size = p.start_size;
+  p.rot = -ps_frand_range(ps, 0.0f, 2.0f * M_PI);
+  p.sprite_index = GAMESKIN_STAR_0;
+  glm_vec4_copy((vec4){1, 1, 1, alpha}, p.color);
+  particle_spawn(ps, GROUP_GENERAL, &p, 0);
 }

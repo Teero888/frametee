@@ -98,11 +98,10 @@ void render_player_info(gfx_handler_t *h) {
     igInputText("Clan", player_info->clan, 12, 0, NULL, NULL);
 
     if (h->user_interface.finish_tick > 0) {
-      int ticks = h->user_interface.finish_tick - h->user_interface.start_tick;
-      float time = (float)ticks / 50.f;
+      float time = h->user_interface.race_time;
       int m = (int)time / 60;
-      float s = time - (m * 60);
-      igText("Finish Time: %02d:%05.2f", m, s);
+      float s = fmodf(time, 60.0f);
+      igText("Finish Time: %02d:%06.3f", m, s);
     }
 
     bool name_changed = igInputText("Skin Name", player_info->skin_name, sizeof(player_info->skin_name), ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);

@@ -81,8 +81,8 @@ int main(int argc, char **argv) {
     if (handler.user_interface.render_map) {
       renderer_submit_map(&handler, Z_LAYER_MAP);
     }
-    render_pickups(&handler.user_interface);
     render_players(&handler.user_interface);
+    render_pickups(&handler.user_interface);
 
     if (handler.user_interface.render_particles) {
       handler.user_interface.particle_system.current_time = (double)(handler.user_interface.timeline.current_tick + intra) * 0.02;

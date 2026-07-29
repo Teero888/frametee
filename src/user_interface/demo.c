@@ -175,20 +175,43 @@ int round_to_int(float f) {
   else return (int)(f - 0.5f);
 }
 
-static void on_hammer_hit(mvec2 pos, int type, int cid, void *data) {
+static void on_world_particle(mvec2 pos, int type, int cid, void *data) {
   (void)cid;
   demo_exporter_t *exporter = data;
-  if (type == PARTICLE_TYPE_HAMMER_HIT)
+  if (type == PARTICLE_TYPE_HAMMER_HIT) {
     if (exporter->num_hammerhits < MAX_HAMMERHITS_PER_TICK) exporter->hammerhits[exporter->num_hammerhits++] = pos;
+  }
+}
+
+static void on_damage_indicator(mvec2 pos, float angle, int amount, int cid, void *data) {
+  (void)cid;
+  demo_exporter_t *exporter = data;
+  const float center = 3.0f * M_PI / 2.0f + angle;
+  const float start = center - M_PI / 3.0f;
+  const float end = center + M_PI / 3.0f;
+  for (int i = 0; i < amount && exporter->num_damage_indicators < MAX_DAMAGE_INDICATORS_PER_TICK; ++i) {
+    const int index = exporter->num_damage_indicators++;
+    exporter->damage_indicator_positions[index] = pos;
+    exporter->damage_indicator_angles[index] = start + (end - start) * (float)(i + 1) / (float)(amount + 1);
+  }
 }
 
 static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore *prev, SWorldCore *cur) {
-  int next_item_id = cur->m_NumCharacters; // start after reserved player ids
+  int next_item_id = cur->m_NumCharacters + ts->ui->num_pickups; // start after reserved player and static pickup ids
 
   // do pickups first since they have static ids basically
   for (int i = 0; i < ts->ui->num_pickups; ++i) {
     const SPickup pickup = ts->ui->pickups[i];
-    dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, next_item_id++, sizeof(dd_netobj_ddnet_pickup));
+    if (cur->m_UniqueRace &&
+        ((pickup.m_Type == POWERUP_WEAPON && pickup.m_Subtype != WEAPON_GRENADE) || pickup.m_Type == POWERUP_NINJA)) {
+      continue;
+    }
+    if (cur->m_pConfig->m_SvHealthAndAmmo && cur->m_NumCharacters > 0 &&
+        physics_pickup_on_cooldown(cur, 0, ts->ui->pickup_cooldown_keys[i])) {
+      continue;
+    }
+    dd_netobj_ddnet_pickup *p =
+        demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, cur->m_NumCharacters + i, sizeof(dd_netobj_ddnet_pickup));
     if (p) {
       p->m_X = vgetx(ts->ui->pickup_positions[i]) - MAP_EXPAND32;
       p->m_Y = vgety(ts->ui->pickup_positions[i]) - MAP_EXPAND32;
@@ -206,7 +229,7 @@ static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore
   if (cur->m_NumCharacters > 0) {
     SCharacterCore *c = &cur->m_pCharacters[0];
     if (c->m_StartTick != -1) {
-      game_info->m_WarmupTimer = -c->m_StartTick;
+      game_info->m_WarmupTimer = -c->m_StartTime;
       game_info->m_GameStateFlags = DD_GAMESTATEFLAG_RACETIME;
     }
   }
@@ -219,6 +242,34 @@ static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore
                           DD_GAMEINFOFLAG_PREDICT_DDRACE_TILES | DD_GAMEINFOFLAG_ENTITIES_DDNET | DD_GAMEINFOFLAG_ENTITIES_DDRACE |
                           DD_GAMEINFOFLAG_ENTITIES_RACE | DD_GAMEINFOFLAG_RACE;
   game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_DDRACE;
+  if (cur->m_pConfig->m_SvHealthAndAmmo) {
+    game_info_ex->m_Flags &=
+        ~(DD_GAMEINFOFLAG_UNLIMITED_AMMO | DD_GAMEINFOFLAG_GAMETYPE_DDNET | DD_GAMEINFOFLAG_GAMETYPE_DDRACE | DD_GAMEINFOFLAG_PREDICT_DDRACE);
+    game_info_ex->m_Flags |= DD_GAMEINFOFLAG_GAMETYPE_VANILLA | DD_GAMEINFOFLAG_PREDICT_VANILLA;
+    game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_HEALTH_ARMOR | DD_GAMEINFOFLAG2_HUD_AMMO;
+  }
+  if (cur->m_pConfig->m_SvFastcap) {
+    game_info_ex->m_Flags |= DD_GAMEINFOFLAG_GAMETYPE_FASTCAP | DD_GAMEINFOFLAG_FLAG_STARTS_RACE;
+
+    dd_netobj_game_data *game_data = demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEDATA, 0, sizeof(dd_netobj_game_data));
+    if (game_data) {
+      *game_data = (dd_netobj_game_data){.m_FlagCarrierRed = -3, .m_FlagCarrierBlue = -3};
+      const SCharacterCore *view_character = cur->m_NumCharacters > 0 ? &cur->m_pCharacters[0] : NULL;
+      if (!view_character || view_character->m_FinishTick < 0) {
+        for (int team = 0; team < 2; ++team) {
+          if (!cur->m_pCollision->m_aFastcapFlagPresent[team]) continue;
+          dd_netobj_flag *flag = demo_sb_add_item(sb, DD_NETOBJTYPE_FLAG, team, sizeof(dd_netobj_flag));
+          if (!flag) continue;
+          flag->m_X = vgetx(cur->m_pCollision->m_aFastcapFlagPositions[team]) - MAP_EXPAND32;
+          flag->m_Y = vgety(cur->m_pCollision->m_aFastcapFlagPositions[team]) - MAP_EXPAND32;
+          flag->m_Team = team;
+          int carrier = view_character && view_character->m_aGotFastcapFlag[team] ? 0 : -2;
+          if (team == 0) game_data->m_FlagCarrierRed = carrier;
+          else game_data->m_FlagCarrierBlue = carrier;
+        }
+      }
+    }
+  }
 
   for (int p = 0; p < cur->m_NumCharacters; ++p) {
     SCharacterCore *c_cur = &cur->m_pCharacters[p];
@@ -271,14 +322,15 @@ static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore
     else ch->core.m_Angle = (int)(tmp_angle * 256.0f);
 
     ch->core.m_Tick = cur->m_GameTick;
-    ch->m_Emote = 2;
+    const int damage_age = cur->m_GameTick - c_cur->m_DamageTick;
+    ch->m_Emote = damage_age >= 0 && damage_age < GAME_TICK_SPEED / 2 ? DD_EMOTE_PAIN : DD_EMOTE_HAPPY;
 
     ch->m_AttackTick = c_cur->m_AttackTick;
     ch->core.m_Direction = c_cur->m_Input.m_Direction;
     ch->m_Weapon = (c_cur->m_DeepFrozen || c_cur->m_FreezeTime > 0 || c_cur->m_LiveFrozen) ? WEAPON_NINJA : c_cur->m_ActiveWeapon;
-    ch->m_AmmoCount = 0;
-    ch->m_Health = 10;
-    ch->m_Armor = 10;
+    ch->m_AmmoCount = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_aWeaponAmmo[c_cur->m_ActiveWeapon] : 0;
+    ch->m_Health = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_Health : 10;
+    ch->m_Armor = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_Armor : 10;
     ch->m_PlayerFlags = 0;
 
     dd_netobj_ddnet_character *dc = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETCHARACTER, p, sizeof(dd_netobj_ddnet_character));
@@ -374,6 +426,13 @@ static void snap_world(dd_snapshot_builder *sb, timeline_state_t *ts, SWorldCore
     dd_netevent_hammer_hit *nhh = demo_sb_add_item(sb, DD_NETEVENTTYPE_HAMMERHIT, next_item_id++, sizeof(dd_netevent_hammer_hit));
     nhh->common.m_X = vgetx(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
     nhh->common.m_Y = vgety(ts->ui->demo_exporter.hammerhits[i]) - MAP_EXPAND32;
+  }
+  for (int i = 0; i < ts->ui->demo_exporter.num_damage_indicators; ++i) {
+    dd_netevent_damage_ind *damage =
+        demo_sb_add_item(sb, DD_NETEVENTTYPE_DAMAGEIND, next_item_id++, sizeof(dd_netevent_damage_ind));
+    damage->common.m_X = vgetx(ts->ui->demo_exporter.damage_indicator_positions[i]) - MAP_EXPAND32;
+    damage->common.m_Y = vgety(ts->ui->demo_exporter.damage_indicator_positions[i]) - MAP_EXPAND32;
+    damage->m_Angle = (int)(ts->ui->demo_exporter.damage_indicator_angles[i] * 256.0f);
   }
 
   // do entities
@@ -504,7 +563,8 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
   model_get_world_state_at_tick(&ui->timeline, 0, &cur, false);
   wc_copy_world(&prev, &cur);
   cur.user_data = &ui->demo_exporter;
-  cur.particle = on_hammer_hit;
+  cur.particle = on_world_particle;
+  cur.damage_indicator = on_damage_indicator;
 
   for (int t = 0; t < ticks; ++t) {
     demo_sb_clear(sb);
@@ -515,6 +575,7 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
     snap_world(sb, &ui->timeline, &prev, &cur);
     wc_copy_world(&prev, &cur);
     ui->demo_exporter.num_hammerhits = 0;
+    ui->demo_exporter.num_damage_indicators = 0;
     wc_tick(&cur);
 
     int snap_size = demo_sb_finish(sb, snap_buf);
@@ -541,7 +602,7 @@ int export_to_demo(ui_handler_t *ui, const char *path, const char *map_name, int
           demo_w_write_msg_sv_vote_status(writer, ev->vote_yes, ev->vote_no, ev->vote_pass, ev->vote_total);
         } else if (ev->type == NET_EVENT_DDRACE_TIME) {
           demo_w_write_msg_sv_ddrace_time_legacy(writer, ev->time, ev->check, ev->finish);
-          demo_w_write_msg_sv_racefinish(writer, 0, ev->time, 0, 1, 1);
+          demo_w_write_msg_sv_racefinish(writer, 0, ev->time * 10, 0, 1, 1);
         } else if (ev->type == NET_EVENT_RECORD) {
           demo_w_write_msg_sv_record_legacy(writer, ev->server_time_best, ev->player_time_best);
           demo_w_write_msg_sv_record(writer, ev->server_time_best, ev->player_time_best);

@@ -498,8 +498,8 @@ bool timeline_has_net_event(const timeline_state_t *ts, int tick, net_event_type
 }
 
 void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, const SCharacterCore *pChar, int track_index) {
-  const int FinishTimeTicks = pChar->m_FinishTick - pChar->m_StartTick;
-  if (FinishTimeTicks <= 0) return;
+  const float finish_time = pChar->m_RaceTime;
+  if (finish_time <= 0.0f) return;
 
   const char *player_name = ts->player_tracks[track_index].player_info.name;
   if (!player_name || player_name[0] == '\0') {
@@ -513,9 +513,9 @@ void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, co
     ev.type = NET_EVENT_CHAT;
     ev.team = 0;
     ev.client_id = -1;
-    double seconds = fmod((double)FinishTimeTicks / 50.0, 60.0);
-    int minutes = FinishTimeTicks / 3000;
-    snprintf(ev.message, sizeof(ev.message), "%s finished in: %d minute(s) %.2f second(s)", player_name, minutes, seconds);
+    float seconds = fmodf(finish_time, 60.0f);
+    int minutes = (int)finish_time / 60;
+    snprintf(ev.message, sizeof(ev.message), "%s finished in: %d minute(s) %.3f second(s)", player_name, minutes, seconds);
     net_events_add(ts, ev);
   }
 
@@ -524,7 +524,7 @@ void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, co
     net_event_t ev = {0};
     ev.tick = tick;
     ev.type = NET_EVENT_DDRACE_TIME;
-    ev.time = (int)((FinishTimeTicks / 50.f) * 1000.f);
+    ev.time = (int)roundf(finish_time * 100.0f);
     ev.check = 0;
     ev.finish = 1;
     net_events_add(ts, ev);
@@ -535,8 +535,8 @@ void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, co
     net_event_t ev = {0};
     ev.tick = tick;
     ev.type = NET_EVENT_RECORD;
-    ev.player_time_best = (int)((FinishTimeTicks / 50.f) * 100);
-    ev.server_time_best = (int)((FinishTimeTicks / 50.f) * 100);
+    ev.player_time_best = (int)roundf(finish_time * 100.0f);
+    ev.server_time_best = (int)roundf(finish_time * 100.0f);
     net_events_add(ts, ev);
   }
 

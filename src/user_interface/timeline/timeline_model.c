@@ -3,6 +3,7 @@
 #include "ddnet_physics/gamecore.h"
 #include "ddnet_physics/vmath.h"
 #include <limits.h>
+#include <math.h>
 #include <particles/particle_system.h>
 #include <renderer/graphics_backend.h>
 #include <stdlib.h>
@@ -41,6 +42,22 @@ static void ui_particle_callback(mvec2 pos, int type, int cid, void *user_data) 
   else if (type == PARTICLE_TYPE_EXPLOSION) particles_create_explosion(&ui->particle_system, p);
   else if (type == PARTICLE_TYPE_HAMMER_HIT) particles_create_hammer_hit(&ui->particle_system, p, default_alpha);
   else if (type == PARTICLE_TYPE_CONFETTI) particles_create_confetti(&ui->particle_system, p, default_alpha);
+}
+
+static void ui_damage_indicator_callback(mvec2 pos, float angle, int amount, int cid, void *user_data) {
+  (void)cid;
+  ui_handler_t *ui = (ui_handler_t *)user_data;
+  particle_system_t *ps = &ui->particle_system;
+  vec2 p = {vgetx(pos), vgety(pos)};
+  const float pi = 3.14159265358979323846f;
+  const float center = 3.0f * pi / 2.0f + angle;
+  const float start = center - pi / 3.0f;
+  const float end = center + pi / 3.0f;
+  for (int i = 0; i < amount; ++i) {
+    const float indicator_angle = start + (end - start) * (float)(i + 1) / (float)(amount + 1);
+    vec2 dir = {cosf(indicator_angle), sinf(indicator_angle)};
+    particles_create_damage_ind(ps, p, dir, 1.0f);
+  }
 }
 
 // New sorting helper for the compaction algorithm
@@ -672,10 +689,12 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
 
     if (is_new_logic_tick) {
       out_world->particle = ui_particle_callback;
+      out_world->damage_indicator = ui_damage_indicator_callback;
       ps->current_time = (double)current_sim_tick / 50.0;
       ps->rng_seed = current_sim_tick;
     } else {
       out_world->particle = NULL;
+      out_world->damage_indicator = NULL;
     }
 
     for (int p = 0; p < out_world->m_NumCharacters; ++p) {
@@ -707,10 +726,12 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
           }
         }
       }
-      for (int i = 0; i < ts->ui->num_ninja_pickups; ++i) {
-        int p = ts->ui->ninja_pickup_indices[i];
-        vec2 pos = {vgetx(ts->ui->pickup_positions[p]), vgety(ts->ui->pickup_positions[p])};
-        particles_create_powerup_shine(ps, pos, (vec2){96, 18}, 1.0f);
+      if (!out_world->m_UniqueRace) {
+        for (int i = 0; i < ts->ui->num_ninja_pickups; ++i) {
+          int p = ts->ui->ninja_pickup_indices[i];
+          vec2 pos = {vgetx(ts->ui->pickup_positions[p]), vgety(ts->ui->pickup_positions[p])};
+          particles_create_powerup_shine(ps, pos, (vec2){96, 18}, 1.0f);
+        }
       }
     }
 
@@ -725,6 +746,7 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
   }
 
   out_world->particle = NULL;
+  out_world->damage_indicator = NULL;
   wc_copy_world(&ts->previous_world, out_world);
 }
 
@@ -756,10 +778,12 @@ void model_get_world_state_pair(timeline_state_t *ts, int tick, SWorldCore *out_
     bool is_new_logic_tick = (effects && current_sim_tick > ps->last_simulated_tick);
     if (is_new_logic_tick) {
       ts->world_cached.particle = ui_particle_callback;
+      ts->world_cached.damage_indicator = ui_damage_indicator_callback;
       ps->current_time = (double)current_sim_tick / 50.0;
       ps->rng_seed = current_sim_tick;
     } else {
       ts->world_cached.particle = NULL;
+      ts->world_cached.damage_indicator = NULL;
     }
 
     for (int p = 0; p < ts->world_cached.m_NumCharacters; ++p) {
@@ -779,15 +803,18 @@ void model_get_world_state_pair(timeline_state_t *ts, int tick, SWorldCore *out_
           }
         }
       }
-      for (int i = 0; i < ts->ui->num_ninja_pickups; ++i) {
-        int p = ts->ui->ninja_pickup_indices[i];
-        vec2 pos = {vgetx(ts->ui->pickup_positions[p]), vgety(ts->ui->pickup_positions[p])};
-        particles_create_powerup_shine(ps, pos, (vec2){96, 18}, 1.0f);
+      if (!ts->world_cached.m_UniqueRace) {
+        for (int i = 0; i < ts->ui->num_ninja_pickups; ++i) {
+          int p = ts->ui->ninja_pickup_indices[i];
+          vec2 pos = {vgetx(ts->ui->pickup_positions[p]), vgety(ts->ui->pickup_positions[p])};
+          particles_create_powerup_shine(ps, pos, (vec2){96, 18}, 1.0f);
+        }
       }
       ps->last_simulated_tick = current_sim_tick;
     }
 
     ts->world_cached.particle = NULL;
+    ts->world_cached.damage_indicator = NULL;
     wc_copy_world(out_world, &ts->world_cached);
     ts->cached_tick = tick;
     return;

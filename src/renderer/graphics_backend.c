@@ -555,7 +555,7 @@ static void extract_map_name(const char *path, char *out_name, size_t out_size) 
   }
 }
 
-void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
+static void on_map_load_path_with_options(gfx_handler_t *handler, const char *map_path, bool force_fastcap) {
   extract_map_name(map_path, handler->user_interface.loaded_map_name, sizeof(handler->user_interface.loaded_map_name));
   timeline_cleanup(&handler->user_interface.timeline);
   timeline_init(&handler->user_interface);
@@ -566,10 +566,20 @@ void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
     log_error(LOG_SOURCE, "Failed to load map data from '%s'", map_path);
     return;
   }
+  if (force_fastcap) {
+    physics_enable_fastcap(&handler->physics_handler);
+    log_info(LOG_SOURCE, "Enabled FastCap settings from online map metadata");
+  }
   log_info(LOG_SOURCE, "Loaded map '%s' (%ux%u)", map_path, handler->map_data->width, handler->map_data->height);
 
   on_map_load(handler);
   ui_post_map_load(&handler->user_interface);
+}
+
+void on_map_load_path(gfx_handler_t *handler, const char *map_path) { on_map_load_path_with_options(handler, map_path, false); }
+
+void on_map_load_path_fastcap(gfx_handler_t *handler, const char *map_path) {
+  on_map_load_path_with_options(handler, map_path, true);
 }
 
 void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buffer, size_t size) {

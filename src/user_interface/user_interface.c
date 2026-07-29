@@ -317,12 +317,11 @@ void render_player_manager(ui_handler_t *ui) {
       }
 
       if (i < world.m_NumCharacters && world.m_pCharacters[i].m_FinishTick > 0) {
-        int ticks = world.m_pCharacters[i].m_FinishTick - world.m_pCharacters[i].m_StartTick;
-        float time = (float)ticks / 50.f;
+        float time = physics_character_race_time(&world.m_pCharacters[i], (float)world.m_GameTick);
         int m = (int)time / 60;
-        float s = time - (m * 60);
+        float s = fmodf(time, 60.0f);
         igSameLine(0, 10.f * dpi_scale);
-        igTextDisabled("%02d:%05.2f", m, s);
+        igTextDisabled("%02d:%06.3f", m, s);
       }
 
       igPopID();
@@ -685,6 +684,8 @@ void render_players(ui_handler_t *ui) {
       if (core->m_FreezeTime > 0 && eye == 0) eye = EYE_BLINK;
       custom_col = false;
     }
+    const int damage_age = world.m_GameTick - core->m_DamageTick;
+    if (damage_age >= 0 && damage_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
 
     if (custom_col) {
       packed_hsl_to_rgb(info->color_body, body_col);
@@ -945,6 +946,11 @@ void render_players(ui_handler_t *ui) {
     ui->reloadtime = p->m_ReloadTimer;
     ui->start_tick = p->m_StartTick;
     ui->finish_tick = p->m_FinishTick;
+    ui->race_time = physics_character_race_time(p, (float)world.m_GameTick + intra);
+    ui->health = p->m_Health;
+    ui->armor = p->m_Armor;
+    ui->ammo = p->m_aWeaponAmmo[p->m_ActiveWeapon];
+    ui->health_and_ammo_hud = world.m_pConfig->m_SvHealthAndAmmo != 0;
     ui->weapon = p->m_ActiveWeapon;
     for (int i = 0; i < NUM_WEAPONS; ++i)
       ui->weapons[i] = p->m_aWeaponGot[i];
@@ -1039,10 +1045,59 @@ void render_players(ui_handler_t *ui) {
   wc_free(&world);
 }
 
+static void render_fastcap_flag(ui_handler_t *ui, int team, vec2 pos) {
+  gfx_handler_t *gfx = ui->gfx_handler;
+  pos[1] -= 31.5f / 32.0f;
+  renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_PICKUPS, pos, (vec2){42.0f / 32.0f, 84.0f / 32.0f}, 0.0f,
+                        team == 0 ? GAMESKIN_FLAG_RED : GAMESKIN_FLAG_BLUE, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
+}
+
+static void render_fastcap_flags(ui_handler_t *ui, const SWorldCore *world, const SCharacterCore *view_character, float intra) {
+  if (!world->m_pConfig->m_SvFastcap) return;
+
+  const SCollision *collision = world->m_pCollision;
+  const bool show_stand_flags = !view_character || view_character->m_FinishTick < 0;
+  for (int team = 0; team < 2; ++team) {
+    if (!collision->m_aFastcapFlagPresent[team]) continue;
+    if (show_stand_flags && (!view_character || !view_character->m_aGotFastcapFlag[team])) {
+      vec2 pos = {
+          vgetx(collision->m_aFastcapFlagPositions[team]) / 32.0f,
+          vgety(collision->m_aFastcapFlagPositions[team]) / 32.0f,
+      };
+      render_fastcap_flag(ui, team, pos);
+    }
+  }
+
+  for (int character_index = 0; character_index < world->m_NumCharacters; ++character_index) {
+    const SCharacterCore *character = &world->m_pCharacters[character_index];
+    if (character->m_FinishTick >= 0) continue;
+
+    for (int team = 0; team < 2; ++team) {
+      if (!collision->m_aFastcapFlagPresent[team] || !character->m_aGotFastcapFlag[team]) continue;
+      vec2 prev_pos = {vgetx(character->m_PrevPos) / 32.0f, vgety(character->m_PrevPos) / 32.0f};
+      vec2 current_pos = {vgetx(character->m_Pos) / 32.0f, vgety(character->m_Pos) / 32.0f};
+      vec2 pos;
+      lerp(prev_pos, current_pos, intra, pos);
+      render_fastcap_flag(ui, team, pos);
+    }
+  }
+}
+
 void render_pickups(ui_handler_t *ui) {
-  if (!ui->render_pickups || ui->num_pickups <= 0) return;
+  if (!ui->render_pickups) return;
   gfx_handler_t *h = ui->gfx_handler;
+  physics_handler_t *physics = &h->physics_handler;
+  if (!physics->loaded) return;
+
   atlas_renderer_t *ar = &h->renderer.gameskin_renderer;
+  SWorldCore world = wc_empty();
+  const SCharacterCore *view_character = NULL;
+  const bool unique_race = physics->world.m_UniqueRace;
+  const int selected = ui->timeline.selected_player_track_index;
+  if (unique_race) {
+    model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world, false);
+    if (selected >= 0 && selected < world.m_NumCharacters) view_character = &world.m_pCharacters[selected];
+  }
 
   static atlas_instance_t *instances = NULL;
   static int instances_capacity = 0;
@@ -1051,14 +1106,17 @@ void render_pickups(ui_handler_t *ui) {
     instances_capacity = ui->num_pickups + 64;
     instances = realloc(instances, sizeof(atlas_instance_t) * instances_capacity);
   }
-  if (!instances) return;
+  if (ui->num_pickups > 0 && !instances) {
+    wc_free(&world);
+    return;
+  }
 
   uint32_t count = 0;
 
   float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
-  float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
-  if (ui->timeline.is_reversing) intra = 1.f - intra;
-  intra += h->user_interface.timeline.current_tick;
+  float render_intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
+  if (ui->timeline.is_reversing) render_intra = 1.f - render_intra;
+  float animation_time = render_intra + h->user_interface.timeline.current_tick;
 
   float min_wx, min_wy, max_wx, max_wy;
   screen_to_world(h, 0, 0, &min_wx, &min_wy);
@@ -1081,6 +1139,15 @@ void render_pickups(ui_handler_t *ui) {
     vec2 size = {1.0f, 1.0f};
     SPickup pickup = ui->pickups[i];
     int idx = -1;
+
+    if (unique_race &&
+        ((pickup.m_Type == POWERUP_WEAPON && pickup.m_Subtype != WEAPON_GRENADE) || pickup.m_Type == POWERUP_NINJA)) {
+      continue;
+    }
+    if (view_character && world.m_pConfig->m_SvHealthAndAmmo &&
+        physics_pickup_on_cooldown(&world, selected, ui->pickup_cooldown_keys[i])) {
+      continue;
+    }
 
     if (pickup.m_Type == POWERUP_HEALTH || pickup.m_Type == POWERUP_ARMOR) {
       idx = GAMESKIN_PICKUP_HEALTH + pickup.m_Type;
@@ -1126,8 +1193,8 @@ void render_pickups(ui_handler_t *ui) {
 
     if (idx != -1) {
       float Offset = pos[1] + pos[0];
-      pos[0] += (cos((intra / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
-      pos[1] += (sin((intra / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
+      pos[0] += (cos((animation_time / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
+      pos[1] += (sin((animation_time / GAME_TICK_SPEED) * 2.0f + Offset) * 2.5f) / 32.f;
 
       glm_vec2_copy(pos, instances[count].pos);
       glm_vec2_copy(size, instances[count].size);
@@ -1146,6 +1213,10 @@ void render_pickups(ui_handler_t *ui) {
 
   if (count > 0) {
     renderer_submit_atlas_batch(h, ar, Z_LAYER_PICKUPS, instances, count, false);
+  }
+  if (unique_race) {
+    render_fastcap_flags(ui, &world, view_character, render_intra);
+    wc_free(&world);
   }
 }
 
@@ -1399,16 +1470,17 @@ static void draw_character_inspector(ui_handler_t *ui, ImVec2 start) {
   igText("Reload: %d", ui->reloadtime);
   igText("Weapon: %d", ui->weapon);
   igText("Weapons: [ %d, %d, %d, %d, %d, %d ]", ui->weapons[0], ui->weapons[1], ui->weapons[2], ui->weapons[3], ui->weapons[4], ui->weapons[5]);
+  if (ui->health_and_ammo_hud) {
+    igText("Health: %d", ui->health);
+    igText("Shield: %d", ui->armor);
+    igText("Ammo: %d", ui->ammo);
+  }
 
   // timer
-  if (ui->finish_tick >= 0) {
-    int ticks = ui->finish_tick - ui->start_tick;
-    float time = (float)ticks / 50.f;
-    igText("Finish Time: %02d:%05.2f", (int)time / 60, time - ((int)time / 60 * 60));
-  } else if (ui->start_tick >= 0) {
-    int ticks = ui->current_tick - ui->start_tick;
-    float time = (float)ticks / 50.f;
-    igText("Time: %02d:%05.2f", (int)time / 60, time - ((int)time / 60 * 60));
+  if (ui->race_time >= 0.0f) {
+    const int minutes = (int)ui->race_time / 60;
+    const float seconds = fmodf(ui->race_time, 60.0f);
+    igText(ui->finish_tick >= 0 ? "Finish Time: %02d:%06.3f" : "Time: %02d:%06.3f", minutes, seconds);
   }
 
   // input state
@@ -1528,11 +1600,13 @@ void ui_post_map_load(ui_handler_t *ui) {
   // by default they are NULL so this should be fine
   free(ui->pickups);
   free(ui->pickup_positions);
+  free(ui->pickup_cooldown_keys);
   free(ui->ninja_pickup_indices);
   // function might return early leaving them dangling so reset them
   ui->num_pickups = 0;
   ui->pickups = NULL;
   ui->pickup_positions = NULL;
+  ui->pickup_cooldown_keys = NULL;
   ui->ninja_pickup_indices = NULL;
   ui->num_ninja_pickups = 0;
 
@@ -1551,6 +1625,7 @@ void ui_post_map_load(ui_handler_t *ui) {
   ui->num_pickups = num;
   ui->pickups = malloc(sizeof(SPickup) * num);
   ui->pickup_positions = malloc(sizeof(mvec2) * num);
+  ui->pickup_cooldown_keys = malloc(sizeof(int) * num);
   ui->ninja_pickup_indices = malloc(sizeof(int) * num);
   ui->num_ninja_pickups = 0;
 
@@ -1560,6 +1635,7 @@ void ui_post_map_load(ui_handler_t *ui) {
     if (pickup.m_Type >= 0) {
       ui->pickup_positions[num] = vec2_init((i % width) * 32.f + 16.f, (int)(i / width) * 32.f + 16.f);
       ui->pickups[num] = pickup;
+      ui->pickup_cooldown_keys[num] = i * 2;
       if (pickup.m_Type == POWERUP_NINJA) {
         ui->ninja_pickup_indices[ui->num_ninja_pickups++] = num;
       }
@@ -1569,6 +1645,7 @@ void ui_post_map_load(ui_handler_t *ui) {
     if (fpickup.m_Type >= 0) {
       ui->pickup_positions[num] = vec2_init((i % width) * 32.f + 16.f, (int)(i / width) * 32.f + 16.f);
       ui->pickups[num] = fpickup;
+      ui->pickup_cooldown_keys[num] = i * 2 + 1;
       if (fpickup.m_Type == POWERUP_NINJA) {
         ui->ninja_pickup_indices[ui->num_ninja_pickups++] = num;
       }
@@ -1580,6 +1657,7 @@ void ui_post_map_load(ui_handler_t *ui) {
 void ui_cleanup(ui_handler_t *ui) {
   free(ui->pickups);
   free(ui->pickup_positions);
+  free(ui->pickup_cooldown_keys);
   free(ui->ninja_pickup_indices);
   config_save(ui);
   plugin_manager_shutdown(&ui->plugin_manager);

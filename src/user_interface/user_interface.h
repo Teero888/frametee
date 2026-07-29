@@ -30,6 +30,7 @@ struct ui_handler_t {
 
   SPickup *pickups;
   mvec2 *pickup_positions;
+  int *pickup_cooldown_keys;
   int *ninja_pickup_indices;
   int num_ninja_pickups;
 
@@ -47,6 +48,9 @@ struct ui_handler_t {
   int finish_tick;
   int freezetime;
   int reloadtime;
+  int health;
+  int armor;
+  int ammo;
   int weapon;
   int num_pickups;
   int fps_limit;
@@ -55,6 +59,7 @@ struct ui_handler_t {
   float vel_y;
   float vel_m;
   float vel_r;
+  float race_time;
   float mouse_sens;
   float mouse_max_distance;
   float lod_bias;
@@ -74,6 +79,7 @@ struct ui_handler_t {
   bool render_particles;
   bool render_pickups;
   bool render_hud;
+  bool health_and_ammo_hud;
   bool weapons[NUM_WEAPONS];
   bool selecting_override_pos;
 

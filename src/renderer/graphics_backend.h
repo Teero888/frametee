@@ -42,6 +42,7 @@ enum { FRAME_OK = 0,
 // public api
 void on_map_load_mem(gfx_handler_t *handler, const unsigned char *map_buffer, size_t size);
 void on_map_load_path(gfx_handler_t *handler, const char *map_path);
+void on_map_load_path_fastcap(gfx_handler_t *handler, const char *map_path);
 int init_gfx_handler(gfx_handler_t *handler);
 int gfx_begin_frame(gfx_handler_t *handler);
 bool gfx_end_frame(gfx_handler_t *handler);
