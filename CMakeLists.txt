@@ -245,7 +245,7 @@ if(ENABLE_SANITIZERS)
             "leak:*FcLangSetCopy*\n"
         )
         # create wrapper script to set lsan_options
-        set(WRAPPER_SCRIPT "${CMAKE_BINARY_DIR}/frametee.sh")
+        set(WRAPPER_SCRIPT "${CMAKE_BINARY_DIR}/scripts/frametee.sh")
         file(WRITE ${WRAPPER_SCRIPT}
             "#!/bin/sh\n"
             "export LSAN_OPTIONS=suppressions=${CMAKE_BINARY_DIR}/asan_suppressions.txt\n"

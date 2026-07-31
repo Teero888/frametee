@@ -1,14 +1,14 @@
 build
 release
-compile_commands.json
+build-bench
 .cache
+compile_commands.json
 imgui.ini
 .vscode
 *.diff
 *.xml
 *.tasp
 *.spv
-#plugins/u*
 \#*\#
 todo.txt
-build-bench
+.claude
