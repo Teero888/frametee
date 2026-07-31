@@ -32,10 +32,6 @@ static SWorldCore *api_get_initial_world(void) {
   return g_ui_handler_for_api->gfx_handler->physics_handler.loaded ? &g_ui_handler_for_api->gfx_handler->physics_handler.world : NULL;
 }
 
-static void api_log_info(const char *plugin_name, const char *message) { log_info(plugin_name, "%s", message); }
-static void api_log_warning(const char *plugin_name, const char *message) { log_warn(plugin_name, "%s", message); }
-static void api_log_error(const char *plugin_name, const char *message) { log_error(plugin_name, "%s", message); }
-
 static SWorldCore *api_get_world_state_at(int tick) {
   timeline_state_t *ts = &g_ui_handler_for_api->timeline;
 
@@ -191,9 +187,6 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .world_to_screen = api_world_to_screen,
       .get_time = api_get_time,
       .get_camera_info = api_get_camera_info,
-      .log_info = api_log_info,
-      .log_warning = api_log_warning,
-      .log_error = api_log_error,
       .register_script_command = api_register_script_command,
       .save_file_dialog = api_save_file_dialog,
   };

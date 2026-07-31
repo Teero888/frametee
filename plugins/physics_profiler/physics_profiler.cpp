@@ -10,6 +10,7 @@
 #define CIMGUI_INCLUDED
 #include "imgui.h"
 #include "plugin_api.h"
+#include <logger/logger.h>
 
 extern "C" {
 #include <gamecore.h>
@@ -58,14 +59,14 @@ public:
       : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_Iterations(200), m_TicksPerIteration(500), m_UseMultiThreading(true),
         m_IsRunning(false), m_Progress(0), m_LastElapsedTime(0.0) {
 
-    m_pAPI->log_info("Physics Profiler", "Plugin initialized.");
+    log_info("Physics Profiler", "Plugin initialized.");
   }
 
   ~PhysicsProfilerPlugin() {
     if (m_BenchmarkThread.joinable()) {
       m_BenchmarkThread.join();
     }
-    m_pAPI->log_info("Physics Profiler", "Plugin shutting down.");
+    log_info("Physics Profiler", "Plugin shutting down.");
   }
 
   void ToggleWindow() { m_ShowWindow = !m_ShowWindow; }

@@ -8,11 +8,14 @@
 typedef enum { LOG_LEVEL_INFO,
                LOG_LEVEL_WARNING,
                LOG_LEVEL_ERROR } log_level_t;
-
+#ifdef __cplusplus
+extern "C" {
+#endif
 void logger_init(void);
-
 void logger_log(log_level_t level, const char *source, const char *format, ...);
-
+#ifdef __cplusplus
+}
+#endif
 #define log_info(source, ...) logger_log(LOG_LEVEL_INFO, source, __VA_ARGS__)
 #define log_warn(source, ...) logger_log(LOG_LEVEL_WARNING, source, __VA_ARGS__)
 #define log_error(source, ...) logger_log(LOG_LEVEL_ERROR, source, __VA_ARGS__)

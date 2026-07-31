@@ -3,6 +3,7 @@
 
 #include "imgui.h"
 #include "plugin_api.h"
+#include <logger/logger.h>
 
 class CppPlugin {
 private:
@@ -13,10 +14,10 @@ private:
 
 public:
   CppPlugin(tas_context_t *pContext, const tas_api_t *pAPI) : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_SnippetDuration(100) {
-    m_pAPI->log_info("Native C++ ImGui Plugin", "Plugin instance created!");
+    log_info("Native C++ ImGui Plugin", "Plugin instance created!");
   }
 
-  ~CppPlugin() { m_pAPI->log_info("Native C++ ImGui Plugin", "Plugin instance destroyed."); }
+  ~CppPlugin() { log_info("Native C++ ImGui Plugin", "Plugin instance destroyed."); }
 
   void update() {
     ImGui::SetCurrentContext(m_pContext->imgui_context);

@@ -6,6 +6,7 @@
 
 #include "cimgui.h"
 #include "plugin_api.h"
+#include <logger/logger.h>
 
 typedef struct {
   const tas_api_t *api;
@@ -49,7 +50,7 @@ static void fill_tracks_with_random_inputs(random_input_state_t *state) {
       if (create_cmd) {
         state->api->register_undo_command(create_cmd);
         track_count = state->api->get_track_count();
-        state->api->log_info("Random Input Filler", "Created a new track because none existed.");
+        log_info("Random Input Filler", "Created a new track because none existed.");
       }
     }
     if (track_count <= 0) {
@@ -87,7 +88,7 @@ static void fill_tracks_with_random_inputs(random_input_state_t *state) {
         }
       }
       if (!target_snippet) {
-        state->api->log_warning("Random Input Filler",
+        log_warn("Random Input Filler",
                                 "Could not create snippet due to overlap and no suitable snippet exists.");
         failed_tracks++;
         continue;
@@ -96,14 +97,14 @@ static void fill_tracks_with_random_inputs(random_input_state_t *state) {
       tick_offset = state->start_tick - target_snippet->start_tick;
       int available = target_snippet->input_count - tick_offset;
       if (available <= 0) {
-        state->api->log_warning("Random Input Filler",
+        log_warn("Random Input Filler",
                                 "Target snippet does not extend past the requested start tick.");
         failed_tracks++;
         continue;
       }
       if (fill_count > available) {
         fill_count = available;
-        state->api->log_warning("Random Input Filler",
+        log_warn("Random Input Filler",
                                 "Snippet shorter than requested length; filling available portion only.");
       }
       updated_snippets++;
@@ -116,7 +117,7 @@ static void fill_tracks_with_random_inputs(random_input_state_t *state) {
 
     SPlayerInput *buffer = (SPlayerInput *)malloc(sizeof(SPlayerInput) * (size_t)fill_count);
     if (!buffer) {
-      state->api->log_error("Random Input Filler", "Failed to allocate input buffer.");
+      log_error("Random Input Filler", "Failed to allocate input buffer.");
       failed_tracks++;
       continue;
     }
@@ -159,7 +160,7 @@ static void fill_tracks_with_random_inputs(random_input_state_t *state) {
       state->api->register_undo_command(set_cmd);
       total_ticks_written += fill_count;
     } else {
-      state->api->log_warning("Random Input Filler", "Failed to apply random inputs to a snippet.");
+      log_warn("Random Input Filler", "Failed to apply random inputs to a snippet.");
       failed_tracks++;
     }
 
@@ -257,6 +258,6 @@ FT_API void plugin_shutdown(void *plugin_data) {
   if (!state)
     return;
 
-  state->api->log_info("Random Input Filler", "Plugin shutting down.");
+  log_info("Random Input Filler", "Plugin shutting down.");
   free(state);
 }

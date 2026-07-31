@@ -163,20 +163,13 @@ void render_menu_bar(ui_handler_t *ui) {
       }
     }
 
-    ImVec2 region_avail = igGetContentRegionAvail();
-
-    float fps_width = 0.0f;
-    char fps_text[64];
     if (ui->show_fps) {
+      ImVec2 region_avail = igGetContentRegionAvail();
       ImGuiIO *io = igGetIO_Nil();
+      char fps_text[64];
       snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms)", io->Framerate, 1000.0f / io->Framerate);
       ImVec2 fps_size = igCalcTextSize(fps_text, NULL, false, 0.0f);
-      fps_width = fps_size.x;
-    }
-
-    igSetCursorPosX(igGetCursorPosX() + region_avail.x - fps_width);
-
-    if (ui->show_fps) {
+      igSetCursorPosX(igGetCursorPosX() + region_avail.x - fps_size.x);
       igText("%s", fps_text);
       igSameLine(0, 0);
     }

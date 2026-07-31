@@ -45,11 +45,6 @@ struct tas_api_t {
   double (*get_time)(void);
   void (*get_camera_info)(vec2 pos, float *zoom);
 
-  // Utility API
-  void (*log_info)(const char *plugin_name, const char *message);
-  void (*log_warning)(const char *plugin_name, const char *message);
-  void (*log_error)(const char *plugin_name, const char *message);
-
   void (*register_script_command)(const char *name, void (*callback)(int argc, const char **argv));
 
   // opens the native "save file" dialog and writes the chosen path into out_path.

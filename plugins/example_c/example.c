@@ -2,6 +2,7 @@
 
 #include "cimgui.h"
 #include "plugin_api.h"
+#include <logger/logger.h>
 
 typedef struct {
   const tas_api_t *api;
@@ -28,7 +29,7 @@ FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
   state->show_example_window = true;
   state->snippet_duration = 100;
 
-  api->log_info("C API Example", "Plugin initialized successfully!");
+  log_info("C API Example", "Plugin initialized successfully!");
   return state;
 }
 
@@ -73,6 +74,6 @@ FT_API void plugin_update(void *plugin_data) {
 
 FT_API void plugin_shutdown(void *plugin_data) {
   plugin_state_t *state = (plugin_state_t *)plugin_data;
-  state->api->log_info("C API Example", "Plugin is shutting down.");
+  log_info("C API Example", "Plugin is shutting down.");
   free(state);
 }
