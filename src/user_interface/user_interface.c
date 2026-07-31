@@ -98,11 +98,7 @@ void render_menu_bar(ui_handler_t *ui) {
           char label[256];
           snprintf(label, sizeof(label), "%s##menu_%d", (p->info.name && p->info.name[0]) ? p->info.name : p->key, i);
           if (igMenuItem_Bool(label, NULL, is_loaded, true)) {
-            if (!is_loaded) {
-              plugin_manager_toggle_plugin(&ui->plugin_manager, i);
-            } else if (p->show_ui) {
-              p->show_ui(p->data);
-            }
+            plugin_manager_toggle_plugin(&ui->plugin_manager, i);
           }
         }
       }
