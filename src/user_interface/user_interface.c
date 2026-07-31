@@ -159,17 +159,7 @@ void render_menu_bar(ui_handler_t *ui) {
       }
     }
 
-    if (ui->show_fps) {
-      ImVec2 region_avail = igGetContentRegionAvail();
-      ImGuiIO *io = igGetIO_Nil();
-      char fps_text[64];
-      snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms)", io->Framerate, 1000.0f / io->Framerate);
-      ImVec2 fps_size = igCalcTextSize(fps_text, NULL, false, 0.0f);
-      igSetCursorPosX(igGetCursorPosX() + region_avail.x - fps_size.x);
-      igText("%s", fps_text);
-      igSameLine(0, 0);
-    }
-
+    igSeparator();
     igEndMainMenuBar();
   }
 }
@@ -1305,10 +1295,10 @@ static void render_splash_screen(ui_handler_t *ui) {
     float sidebar_w = 250.0f;
 
     // Left sidebar column
-    igBeginChild_Str("SplashSidebar", (ImVec2){sidebar_w, 0}, false, 0);
+    igBeginChild_Str("SplashSidebar", (ImVec2){sidebar_w, 0}, false, ImGuiWindowFlags_NoScrollbar);
     {
       igSpacing();
-      igPushFont(ui->font, 0.0f);
+      igPushFont(ui->font, 48.0f);
       igTextColored((ImVec4){0.35f, 0.75f, 1.00f, 1.00f}, "%s", "FrameTee");
       igPopFont();
       igTextDisabled("Teeworlds & DDNet TAS Tool");
@@ -1318,7 +1308,7 @@ static void render_splash_screen(ui_handler_t *ui) {
       igSpacing();
 
       igTextColored((ImVec4){0.70f, 0.75f, 0.85f, 1.00f}, "%s", "Game Mode");
-      igSetNextItemWidth(sidebar_w);
+      igSetNextItemWidth(igGetContentRegionAvail().x);
       int game_mode = (int)ui->game_mode;
       if (igCombo_Str("##SplashGameMode", &game_mode, "DDRace\0Race\0FastCap\0FastCapNoWpns\0\0", 4)) {
         ui->game_mode = (EGameMode)game_mode;
@@ -1332,7 +1322,7 @@ static void render_splash_screen(ui_handler_t *ui) {
       igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.10f, 0.5f});
       igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f);
 
-      if (igButton(ICON_FA_MAP "  Load Local Map (.map)", (ImVec2){sidebar_w, 42})) {
+      if (igButton(ICON_FA_MAP "  Load Local Map", (ImVec2){170, 42})) {
         nfdu8char_t *out_path;
         nfdu8filteritem_t filters[] = {{"map files", "map"}};
         nfdopendialogu8args_t args = {0};
@@ -1346,7 +1336,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         }
       }
 
-      if (igButton(ICON_FA_FOLDER_OPEN "  Load Project (.tasp)", (ImVec2){sidebar_w, 42})) {
+      if (igButton(ICON_FA_FOLDER_OPEN "  Load Project", (ImVec2){170, 42})) {
         nfdu8char_t *out_path;
         nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
         nfdopendialogu8args_t args = {0};
@@ -1376,29 +1366,37 @@ static void render_splash_screen(ui_handler_t *ui) {
         igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.22f, 0.28f, 0.38f, 0.85f});
         igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.05f, 0.5f});
 
-        for (int i = 0; i < ui->num_recent_projects; i++) {
-          const char *path = ui->recent_projects[i];
-          const char *filename = strrchr(path, '/');
-          if (!filename) filename = strrchr(path, '\\');
-          if (!filename) filename = path;
-          else filename++;
+        igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0.0f, 0.0f});
+        igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){0.0f, 6.0f});
+        if (igBeginChild_Str("RecentProjectsList", (ImVec2){0.0f, 0.0f}, false, ImGuiWindowFlags_None)) {
+          for (int i = 0; i < ui->num_recent_projects; i++) {
+            const char *path = ui->recent_projects[i];
+            const char *filename = strrchr(path, '/');
+            if (!filename) filename = strrchr(path, '\\');
+            if (!filename) filename = path;
+            else filename++;
 
-          char item_lbl[1050];
-          snprintf(item_lbl, sizeof(item_lbl), "%s  %s", ICON_FA_FILE, filename);
+            char item_lbl[1050];
+            snprintf(item_lbl, sizeof(item_lbl), "%s  %s", ICON_FA_FILE, filename);
 
-          if (igButton(item_lbl, (ImVec2){sidebar_w, 32})) {
-            load_project(ui, path);
-            igCloseCurrentPopup();
-          }
-          if (igIsItemHovered(ImGuiHoveredFlags_None)) {
-            if (igBeginTooltip()) {
-              igPushTextWrapPos(380.0f);
-              igTextUnformatted(path, NULL);
-              igPopTextWrapPos();
-              igEndTooltip();
+            if (igButton(item_lbl, (ImVec2){0.0f, 32.0f})) {
+              load_project(ui, path);
+              igCloseCurrentPopup();
+            }
+            if (igIsItemHovered(ImGuiHoveredFlags_None)) {
+              igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8.0f, 6.0f});
+              if (igBeginTooltip()) {
+                igPushTextWrapPos(380.0f);
+                igTextUnformatted(path, NULL);
+                igPopTextWrapPos();
+                igEndTooltip();
+              }
+              igPopStyleVar(1);
             }
           }
         }
+        igEndChild();
+        igPopStyleVar(2);
 
         igPopStyleVar(3);
         igPopStyleColor(2);
@@ -1433,6 +1431,20 @@ void ui_render(ui_handler_t *ui) {
   interaction_handle_playback_and_shortcuts(&ui->timeline);
   setup_docking(ui);
   plugin_manager_update_all(&ui->plugin_manager);
+
+  if (ui->show_fps) {
+    if (igBeginMainMenuBar()) {
+      ImVec2 region_avail = igGetContentRegionAvail();
+      ImGuiIO *io = igGetIO_Nil();
+      char fps_text[64];
+      snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms)", io->Framerate, 1000.0f / io->Framerate);
+      ImVec2 fps_size = igCalcTextSize(fps_text, NULL, false, 0.0f);
+      igSetCursorPosX(igGetCursorPosX() + region_avail.x - fps_size.x);
+      igText("%s", fps_text);
+      igEndMainMenuBar();
+    }
+  }
+
   if (ui->show_timeline) {
     if (!ui->timeline.ui) ui->timeline.ui = ui;
     render_timeline(ui);
