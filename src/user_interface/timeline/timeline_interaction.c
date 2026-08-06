@@ -159,10 +159,14 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   if (ts->is_playing || ts->is_reversing) interaction_update_mouse(ts);
 
   // Abort recording
-  if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) && ts->recording) interaction_toggle_recording(ts);
+  if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) && ts->recording) {
+    ts->is_playing = 0;
+    interaction_toggle_recording(ts);
+  }
 
   // Cancel recording
   if (keybinds_is_action_pressed(&ts->ui->keybinds, ACTION_CANCEL_RECORDING, false) && ts->recording) {
+    ts->is_playing = 0;
     interaction_cancel_recording(ts);
   }
 
