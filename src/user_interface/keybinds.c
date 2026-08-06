@@ -196,6 +196,8 @@ void keybinds_init(keybind_manager_t *manager) {
   set_action_info(manager, ACTION_SWITCH_TRACK_7, "switch_track_7", "Switch to Track 7", "Tracks");
   set_action_info(manager, ACTION_SWITCH_TRACK_8, "switch_track_8", "Switch to Track 8", "Tracks");
   set_action_info(manager, ACTION_SWITCH_TRACK_9, "switch_track_9", "Switch to Track 9", "Tracks");
+  set_action_info(manager, ACTION_CYCLE_TRACK_UP, "cycle_track_up", "Cycle Track Up", "Tracks");
+  set_action_info(manager, ACTION_CYCLE_TRACK_DOWN, "cycle_track_down", "Cycle Track Down", "Tracks");
 
   // Default Bindings
   keybinds_add(manager, ACTION_PLAY_PAUSE, (key_combo_t){ImGuiKey_X, false, false, false});
@@ -240,6 +242,12 @@ void keybinds_init(keybind_manager_t *manager) {
   for (int i = 0; i < 9; ++i) {
     keybinds_add(manager, ACTION_SWITCH_TRACK_1 + i, (key_combo_t){ImGuiKey_1 + i, false, true, false});
   }
+
+  // default track cycling binds (both PageUp/Down and Alt+Up/Down)
+  keybinds_add(manager, ACTION_CYCLE_TRACK_UP, (key_combo_t){ImGuiKey_PageUp, false, false, false});
+  keybinds_add(manager, ACTION_CYCLE_TRACK_UP, (key_combo_t){ImGuiKey_UpArrow, false, true, false});
+  keybinds_add(manager, ACTION_CYCLE_TRACK_DOWN, (key_combo_t){ImGuiKey_PageDown, false, false, false});
+  keybinds_add(manager, ACTION_CYCLE_TRACK_DOWN, (key_combo_t){ImGuiKey_DownArrow, false, true, false});
 }
 
 void keybinds_process_inputs(ui_handler_t *ui) {
@@ -264,6 +272,35 @@ void keybinds_process_inputs(ui_handler_t *ui) {
       }
       ts->selected_player_track_index = new_index;
       break;
+    }
+  }
+
+  if (keybinds_is_action_pressed(kb, ACTION_CYCLE_TRACK_UP, false)) {
+    if (ts->player_track_count > 0) {
+      int cur = ts->selected_player_track_index;
+      if (cur < 0) cur = 0;
+      int new_index = cur - 1;
+      if (new_index < 0) {
+        new_index = ts->player_track_count - 1;
+      }
+      if (ts->recording && ts->selected_player_track_index != new_index) {
+        timeline_switch_recording_target(ts, new_index);
+      }
+      ts->selected_player_track_index = new_index;
+    }
+  }
+  if (keybinds_is_action_pressed(kb, ACTION_CYCLE_TRACK_DOWN, false)) {
+    if (ts->player_track_count > 0) {
+      int cur = ts->selected_player_track_index;
+      if (cur < 0) cur = 0;
+      int new_index = cur + 1;
+      if (new_index >= ts->player_track_count) {
+        new_index = 0;
+      }
+      if (ts->recording && ts->selected_player_track_index != new_index) {
+        timeline_switch_recording_target(ts, new_index);
+      }
+      ts->selected_player_track_index = new_index;
     }
   }
 
