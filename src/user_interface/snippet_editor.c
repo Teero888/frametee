@@ -397,7 +397,6 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           // will correctly span the entire row thanks to the SpanAllColumns flag.
           if (igSelectable_Bool(selectable_id, editor_state.selected_rows[i], ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
                                 (ImVec2){0, igGetFrameHeight()})) {
-            // ... (selection logic remains exactly the same)
             ImGuiIO *io = igGetIO_Nil();
             if (io->KeyCtrl) {
               editor_state.selected_rows[i] = !editor_state.selected_rows[i];

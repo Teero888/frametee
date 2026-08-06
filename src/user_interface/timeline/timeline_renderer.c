@@ -122,7 +122,7 @@ void renderer_draw_controls(timeline_state_t *ts) {
 
   igSameLine(0, btn_gap);
 
-  if (igButton(ts->recording ? "Stop Recording" : "Record", (ImVec2){125 * dpi_scale, 0})) {
+  if (igButton(ts->recording ? "Recording..." : "Record", (ImVec2){125 * dpi_scale, 0})) {
     interaction_toggle_recording(ts);
   }
 }
