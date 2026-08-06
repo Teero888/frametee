@@ -462,6 +462,15 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
             editor_state.painting_value = inp->m_Direction;
             needs_recalc = true;
           }
+          if (igIsItemClicked(ImGuiMouseButton_Right)) {
+            begin_action();
+            editor_state.is_painting = true;
+            editor_state.painting_column = 1;
+            record_change_if_new(snippet, i);
+            inp->m_Direction = (inp->m_Direction + 3) % 3 - 1;
+            editor_state.painting_value = inp->m_Direction;
+            needs_recalc = true;
+          }
           ImVec2 dir_min = igGetItemRectMin();
           ImVec2 dir_max = igGetItemRectMax();
           if (editor_state.is_painting && editor_state.painting_column == 1 && igIsMouseHoveringRect(dir_min, dir_max, false)) {
