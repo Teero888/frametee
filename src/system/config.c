@@ -201,6 +201,11 @@ void config_load(ui_handler_t *ui) {
         }
       }
     }
+    toml_datum_t show_prediction = toml_get(graphics_settings, "show_prediction");
+    if (show_prediction.type == TOML_BOOLEAN) {
+      ui->show_prediction = show_prediction.u.boolean;
+    }
+
     toml_datum_t center_dot = toml_get(graphics_settings, "center_dot");
     if (center_dot.type == TOML_BOOLEAN) {
       ui->center_dot = center_dot.u.boolean;
@@ -349,6 +354,7 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
   fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);
   fprintf(fp, "prediction_alpha = [%.3f, %.3f]\n", ui->prediction_alpha[0], ui->prediction_alpha[1]);
+  fprintf(fp, "show_prediction = %s\n", ui->show_prediction ? "true" : "false");
   fprintf(fp, "center_dot = %s\n", ui->center_dot ? "true" : "false");
   fprintf(fp, "render_map = %s\n", ui->render_map ? "true" : "false");
   fprintf(fp, "render_players = %s\n", ui->render_players ? "true" : "false");

@@ -78,7 +78,6 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
       igMenuItem_BoolPtr("Controls", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Undo History", NULL, &ui->undo_manager.show_history_window, true);
-      igMenuItem_BoolPtr("Show prediction", NULL, &ui->show_prediction, true);
       igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_browser, true);
       igMenuItem_BoolPtr("Show net events", NULL, &ui->show_net_events_window, true);
       igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);
@@ -136,6 +135,7 @@ void render_menu_bar(ui_handler_t *ui) {
         if (igCheckbox("Pickups", &ui->render_pickups)) config_save(ui);
         if (igCheckbox("HUD / Crosshair", &ui->render_hud)) config_save(ui);
         igSeparator();
+        if (igCheckbox("Show prediction", &ui->show_prediction)) config_save(ui);
         if (igDragFloat("Prediction alpha own", &ui->prediction_alpha[0], 0.1f, 0.0f, 1.0f, "%.3f", 0)) config_save(ui);
         if (igDragFloat("Prediction alpha others", &ui->prediction_alpha[1], 0.1f, 0.0f, 1.0f, "%.3f", 0)) config_save(ui);
         if (igCheckbox("Show center dot", &ui->center_dot)) config_save(ui);
@@ -940,19 +940,30 @@ void render_players(ui_handler_t *ui) {
       ui->weapons[i] = p->m_aWeaponGot[i];
   }
 
-  if (ui->timeline.selected_player_track_index < 0 || !ui->show_prediction) {
+  if (ui->timeline.selected_player_track_index < 0 || !ui->show_prediction || (ui->prediction_alpha[0] <= 0.0f && ui->prediction_alpha[1] <= 0.0f)) {
     wc_free(&prev_world);
     wc_free(&world);
     return;
   }
 
-  for (int i = 0; i < world.m_NumCharacters; ++i) {
+  int start_i = 0;
+  int end_i = world.m_NumCharacters;
+  if (ui->prediction_alpha[1] <= 0.0f) {
+    start_i = ui->timeline.selected_player_track_index;
+    end_i = start_i + 1;
+  }
+
+  for (int i = start_i; i < end_i; ++i) {
+    if (i < 0 || i >= world.m_NumCharacters) continue;
+    bool is_own = (i == ui->timeline.selected_player_track_index);
+    if (ui->prediction_alpha[!is_own] <= 0.0f) continue;
+
     SCharacterCore *core = &world.m_pCharacters[i];
     vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
     vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
     vec2 p;
     lerp(ppp, pp, intra, p);
-    vec4 color = {[3] = ui->prediction_alpha[i != ui->timeline.selected_player_track_index]};
+    vec4 color = {[3] = ui->prediction_alpha[!is_own]};
     if (core->m_FreezeTime > 0) color[0] = 1.f;
     else color[1] = 1.f;
     renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05);
@@ -975,7 +986,11 @@ void render_players(ui_handler_t *ui) {
 
   // draw the rest of the lines
   for (int t = 0; t < ui->prediction_length; ++t) {
-    for (int i = 0; i < world.m_NumCharacters; ++i) {
+    for (int i = start_i; i < end_i; ++i) {
+      if (i < 0 || i >= world.m_NumCharacters) continue;
+      bool is_own = (i == ui->timeline.selected_player_track_index);
+      if (ui->prediction_alpha[!is_own] <= 0.0f) continue;
+
       SPlayerInput input = interaction_predict_input(ui, &world, i);
       cc_on_input(&world.m_pCharacters[i], &input);
     }
@@ -1015,11 +1030,15 @@ void render_players(ui_handler_t *ui) {
 
     wc_tick(&world);
 
-    for (int i = 0; i < world.m_NumCharacters; ++i) {
+    for (int i = start_i; i < end_i; ++i) {
+      if (i < 0 || i >= world.m_NumCharacters) continue;
+      bool is_own = (i == ui->timeline.selected_player_track_index);
+      if (ui->prediction_alpha[!is_own] <= 0.0f) continue;
+
       SCharacterCore *core = &world.m_pCharacters[i];
       vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
       vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-      vec4 color = {[3] = ui->prediction_alpha[i != ui->timeline.selected_player_track_index]};
+      vec4 color = {[3] = ui->prediction_alpha[!is_own]};
       if (core->m_FreezeTime > 0) color[0] = 1.f;
       else color[1] = 1.f;
       renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05);
