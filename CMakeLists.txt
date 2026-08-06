@@ -35,6 +35,28 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type (default Release)" FORCE)
 endif()
 
+if(MSVC)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
+    add_compile_options(
+        /wd4018 # signed/unsigned mismatch
+        /wd4068 # unknown pragma
+        /wd4100 # unreferenced parameter
+        /wd4152 # function/data pointer conversion
+        /wd4201 # nameless struct/union
+        /wd4242 # conversion from type1 to type2, possible loss of data
+        /wd4244 # conversion from type1 to type2, possible loss of data
+        /wd4267 # conversion from size_t to type, possible loss of data
+        /wd4324 # structure padded due to alignment specifier
+        /wd4456 # declaration hides previous local declaration
+        /wd4710 # function not inlined
+        /wd4820 # padding added after data member
+        /wd4996 # deprecated functions
+        /wd5045 # Spectre mitigation info
+        /wd5287 # operands are different enum types
+    )
+endif()
+
+
 set(SRCS 
 	src/main.c
 	src/animation/anim_data.c

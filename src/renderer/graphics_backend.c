@@ -14,7 +14,9 @@ extern bool g_is_headless;
 #include <string.h>
 #include <vulkan/vulkan_core.h>
 
+#ifndef ARRAYSIZE
 #define ARRAYSIZE(_ARR) ((int)(sizeof(_ARR) / sizeof(*(_ARR))))
+#endif
 #define ENTITIES_PATH "data/textures/ddnet.png"
 
 static const char *LOG_SOURCE = "GfxBackend";
