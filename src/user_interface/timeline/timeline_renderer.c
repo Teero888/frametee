@@ -103,6 +103,25 @@ void renderer_draw_controls(timeline_state_t *ts) {
 
   igSameLine(0, 14 * dpi_scale);
 
+  camera_t *camera = &ts->ui->gfx_handler->renderer.camera;
+  bool follow_active = (camera->mode == CAMERA_MODE_FOLLOW);
+  if (follow_active) {
+    igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){1., 0.48f, 0.1f, 1.0f});
+    igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){1., 0.58f, 0.1f, 1.0f});
+    igPushStyleColor_Vec4(ImGuiCol_ButtonActive, (ImVec4){1., 0.68f, 0.1f, 1.0f});
+  }
+  if (ui_icon_button(ts->ui, ICON_FA_VIDEO, (ImVec2){30 * dpi_scale, 0})) {
+    camera->mode = follow_active ? CAMERA_MODE_FREEVIEW : CAMERA_MODE_FOLLOW;
+  }
+  if (igIsItemHovered(ImGuiHoveredFlags_None)) {
+    igSetTooltip(follow_active ? "Lock Camera to Player (Active)" : "Lock Camera to Player");
+  }
+  if (follow_active) {
+    igPopStyleColor(3);
+  }
+
+  igSameLine(0, btn_gap);
+
   if (igButton(ts->recording ? "Stop Recording" : "Record", (ImVec2){125 * dpi_scale, 0})) {
     interaction_toggle_recording(ts);
   }

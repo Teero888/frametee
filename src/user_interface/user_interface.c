@@ -78,8 +78,8 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
       igMenuItem_BoolPtr("Controls", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Undo History", NULL, &ui->undo_manager.show_history_window, true);
-      igMenuItem_BoolPtr("Show skin manager", NULL, &ui->show_skin_browser, true);
-      igMenuItem_BoolPtr("Show net events", NULL, &ui->show_net_events_window, true);
+      igMenuItem_BoolPtr("Skin Manager", NULL, &ui->show_skin_browser, true);
+      igMenuItem_BoolPtr("Network Events", NULL, &ui->show_net_events_window, true);
       igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);
       igEndMenu();
     }
@@ -350,24 +350,56 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
   float viewport_ratio = (float)handler->viewport[0] / (float)handler->viewport[1];
   float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
   float aspect = (float)viewport_ratio / (float)map_ratio;
-  if (handler->user_interface.timeline.recording) {
-  } else if (hovered && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
-    if (!camera->is_dragging) {
-      camera->is_dragging = true;
-      ImVec2 mouse_pos = igGetMousePos();
-      camera->drag_start_pos[0] = mouse_pos.x;
-      camera->drag_start_pos[1] = mouse_pos.y;
-    }
 
-    ImVec2 drag_delta = igGetMouseDragDelta(ImGuiMouseButton_Right, 0.0f);
-    float dx = drag_delta.x / (handler->viewport[0] * camera->zoom);
-    float dy = drag_delta.y / (handler->viewport[1] * camera->zoom * aspect);
-    float max_map_size = fmax(handler->map_data->width, handler->map_data->height) * 0.001;
-    camera->pos[0] -= (dx * 2) / max_map_size;
-    camera->pos[1] -= (dy * 2) / max_map_size;
-    igResetMouseDragDelta(ImGuiMouseButton_Right);
-  } else {
+  if (camera->mode == CAMERA_MODE_FOLLOW && hovered && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f) && handler->user_interface.timeline.selected_player_track_index >= 0) {
+    camera->mode = CAMERA_MODE_FREEVIEW;
+  }
+
+  if (camera->mode == CAMERA_MODE_FOLLOW && handler->user_interface.timeline.selected_player_track_index >= 0) {
+    timeline_state_t *ts = &handler->user_interface.timeline;
+    int char_idx = ts->selected_player_track_index;
+    if (char_idx >= 0) {
+      SWorldCore world = wc_empty();
+      model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
+      if (char_idx < world.m_NumCharacters) {
+        SCharacterCore *core = &world.m_pCharacters[char_idx];
+        float speed_scale = ts->is_reversing ? 2.0f : 1.0f;
+        float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
+        if (ts->is_reversing) intra = 1.f - intra;
+
+        vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+        vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+        vec2 p = {
+          ppp[0] + intra * (pp[0] - ppp[0]),
+          ppp[1] + intra * (pp[1] - ppp[1])
+        };
+
+        camera->pos[0] = p[0] / handler->map_data->width;
+        camera->pos[1] = p[1] / handler->map_data->height;
+      }
+      wc_free(&world);
+    }
     camera->is_dragging = false;
+  } else {
+    if (handler->user_interface.timeline.recording) {
+    } else if (hovered && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+      if (!camera->is_dragging) {
+        camera->is_dragging = true;
+        ImVec2 mouse_pos = igGetMousePos();
+        camera->drag_start_pos[0] = mouse_pos.x;
+        camera->drag_start_pos[1] = mouse_pos.y;
+      }
+
+      ImVec2 drag_delta = igGetMouseDragDelta(ImGuiMouseButton_Right, 0.0f);
+      float dx = drag_delta.x / (handler->viewport[0] * camera->zoom);
+      float dy = drag_delta.y / (handler->viewport[1] * camera->zoom * aspect);
+      float max_map_size = fmax(handler->map_data->width, handler->map_data->height) * 0.001;
+      camera->pos[0] -= (dx * 2) / max_map_size;
+      camera->pos[1] -= (dy * 2) / max_map_size;
+      igResetMouseDragDelta(ImGuiMouseButton_Right);
+    } else {
+      camera->is_dragging = false;
+    }
   }
 }
 
@@ -375,6 +407,7 @@ void camera_init(camera_t *camera) {
   memset(camera, 0, sizeof(camera_t));
   camera->zoom = 5.0f;
   camera->zoom_wanted = 5.0f;
+  camera->mode = CAMERA_MODE_FREEVIEW;
 }
 
 void ui_init_config(ui_handler_t *ui) {
@@ -1782,9 +1815,12 @@ bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size) {
     igPopFont();
   }
 
-  // Calculate top-left for AddText so icon text center matches button frame center
+  // Calculate top-left for AddText so icon visual center matches button frame center
   ImVec2 center = {(bb.Min.x + bb.Max.x) * 0.5f, (bb.Min.y + bb.Max.y) * 0.5f};
-  ImVec2 text_pos = {floorf(center.x - text_size.x * 0.5f), floorf(center.y - text_size.y * 0.5f)};
+  ImVec2 text_pos = {
+    roundf(center.x - text_size.x * 0.5f),
+    roundf(center.y - text_size.y * 0.5f)
+  };
 
   ImDrawList_AddText_FontPtr(
       igGetWindowDrawList(),

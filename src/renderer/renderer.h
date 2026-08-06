@@ -119,12 +119,18 @@ struct pipeline_cache_entry_t {
   uint32_t texture_count;
 };
 
+typedef enum {
+  CAMERA_MODE_FREEVIEW = 0,
+  CAMERA_MODE_FOLLOW
+} camera_mode_t;
+
 struct camera_t {
   vec2 pos;
   vec2 drag_start_pos;
   float zoom;
   float zoom_wanted;
   bool is_dragging;
+  camera_mode_t mode;
 };
 
 struct skin_instance_t {
