@@ -84,6 +84,7 @@ void model_init(timeline_state_t *ts, ui_handler_t *ui) {
   ts->selected_player_track_index = -1;
   ts->context_menu_snippet_id = -1;
   ts->active_snippet_id = -1;
+  ts->pending_single_select_id = -1;
   ts->next_snippet_id = 1;
 
   ts->drag_state.drag_infos = NULL;

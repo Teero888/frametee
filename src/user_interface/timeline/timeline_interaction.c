@@ -253,6 +253,8 @@ static void start_drag(timeline_state_t *ts, int snippet_id, ImRect timeline_bb)
   ts->drag_state.active = true;
   ts->drag_state.dragged_snippet_id = snippet_id;
   ts->drag_state.initial_mouse_pos = io->MousePos;
+  // the click turned into a drag, so the whole selection is being moved and must stay intact.
+  ts->pending_single_select_id = -1;
 
   int mouse_tick = renderer_screen_x_to_tick(ts, io->MousePos.x, timeline_bb.Min.x);
   ts->drag_state.drag_offset_ticks = mouse_tick - snippet->start_tick;
@@ -338,6 +340,9 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
           if (!interaction_is_snippet_selected(ts, snippet->id)) {
             interaction_clear_selection(ts);
             interaction_add_snippet_to_selection(ts, snippet->id);
+          } else if (ts->selected_snippets.count > 1) {
+            // keep the others selected for now, a group drag may still follow. Resolved on release.
+            ts->pending_single_select_id = snippet->id;
           }
         }
       }
@@ -376,6 +381,16 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
         }
       }
     }
+  }
+
+  // click on an already selected snippet that never became a drag collapses the selection onto it
+  if (igIsMouseReleased_Nil(ImGuiMouseButton_Left)) {
+    if (ts->pending_single_select_id != -1 && !ts->drag_state.active) {
+      int snippet_id = ts->pending_single_select_id;
+      interaction_clear_selection(ts);
+      interaction_add_snippet_to_selection(ts, snippet_id);
+    }
+    ts->pending_single_select_id = -1;
   }
 
   // End drag

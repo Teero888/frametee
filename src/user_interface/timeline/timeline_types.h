@@ -189,6 +189,10 @@ struct timeline_state {
   ImVec2 selection_box_end;
   timeline_drag_state_t drag_state;
   bool is_header_dragging;
+  // snippet that was clicked while it was already part of a multi-selection. clicking one of
+  // several selected snippets must keep the selection alive until release, so a group drag can
+  // still start; if the click ends without a drag, the selection collapses onto this snippet.
+  int pending_single_select_id;
 
   // Recording Targets
   recording_snippet_vector_t recording_snippets;
