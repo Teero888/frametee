@@ -86,7 +86,7 @@ static void begin_action(void) {
   editor_state.action_in_progress = true;
 }
 
-// Before changing an input at `index`, this function must be called to save its "before" state.
+// Before changing an input at index, this function must be called to save its "before" state.
 static void record_change_if_new(input_snippet_t *snippet, int index) {
   if (!editor_state.action_in_progress) return;
 
@@ -338,9 +338,13 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
     }
 
     igText("Editing Snippet ID: %d (%d inputs)", snippet->id, snippet->input_count);
-    igTextDisabled("Hint: Click+Drag to 'paint' inputs. Use Ctrl+Click and Shift+Click to select rows.");
+    igPushStyleColor_Vec4(ImGuiCol_Text, igGetStyle()->Colors[ImGuiCol_TextDisabled]);
+    igTextWrapped("Hint: Click+Drag to 'paint' inputs. Use Ctrl+Click and Shift+Click to select rows.");
+    igPopStyleColor(1);
 
     float footer_height = igGetStyle()->ItemSpacing.y + 220;
+    float max_footer_height = igGetContentRegionAvail().y * 0.5f;
+    if (footer_height > max_footer_height) footer_height = max_footer_height;
     igBeginChild_Str("InputsScroll", (ImVec2){0, -footer_height}, false, ImGuiWindowFlags_HorizontalScrollbar);
 
     ImGuiTableFlags flags =

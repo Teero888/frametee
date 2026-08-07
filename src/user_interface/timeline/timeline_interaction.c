@@ -736,7 +736,7 @@ SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int 
     if (track_idx < 0 || track_idx >= ts->player_track_count) return (SPlayerInput){0};
 
     // Force update of recording state to ensure smooth visuals at frame rate
-    // This is safe because it only updates the `current_input` struct,
+    // This is safe because it only updates the current_input struct,
     // it does not commit to the timeline buffer.
 
     if (track_idx == ts->selected_player_track_index) {
