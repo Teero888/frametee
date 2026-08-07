@@ -2705,6 +2705,7 @@ static int compare_render_commands(const void *a, const void *b) {
     if (cmd_a->data.atlas.screen_space != cmd_b->data.atlas.screen_space) {
       return cmd_a->data.atlas.screen_space ? 1 : -1;
     }
+    // Fall through to the submission order tiebreak below.
   } else if (cmd_a->type == RENDER_CMD_ATLAS_BATCH) {
     if (cmd_a->data.atlas_batch.ar < cmd_b->data.atlas_batch.ar) return -1;
     if (cmd_a->data.atlas_batch.ar > cmd_b->data.atlas_batch.ar) return 1;
@@ -2712,6 +2713,11 @@ static int compare_render_commands(const void *a, const void *b) {
       return cmd_a->data.atlas_batch.screen_space ? 1 : -1;
     }
   }
+
+  // Everything above can compare equal, and qsort is not stable, so without this the relative order
+  // of overlapping sprites is free to change from one frame to the next.
+  if (cmd_a->seq < cmd_b->seq) return -1;
+  if (cmd_a->seq > cmd_b->seq) return 1;
   return 0;
 }
 
@@ -2828,6 +2834,11 @@ void renderer_submit_atlas_batch(struct gfx_handler_t *h, struct atlas_renderer_
 void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   struct renderer_state_t *r = &h->renderer;
   if (r->queue.count == 0) return;
+
+  // Stamp submission order first: the array index before sorting is exactly the order the commands
+  // were queued in, and the comparator uses it to break ties.
+  for (uint32_t i = 0; i < r->queue.count; ++i)
+    r->queue.commands[i].seq = i;
 
   // Sort by Z-order
   qsort(r->queue.commands, r->queue.count, sizeof(render_command_t), compare_render_commands);

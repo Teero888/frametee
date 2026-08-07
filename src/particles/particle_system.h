@@ -6,7 +6,7 @@
 #include <renderer/renderer.h>
 #include <stdbool.h>
 
-#define MAX_PARTICLES (1024 * 1024)
+#define MAX_PARTICLES (1024 * 8)
 #define MAX_FLOW_EVENTS 64
 
 typedef enum { GROUP_PROJECTILE_TRAIL = 0,
@@ -17,10 +17,14 @@ typedef enum { GROUP_PROJECTILE_TRAIL = 0,
                NUM_PARTICLE_GROUPS } particle_group_t;
 
 typedef struct {
-  // Hot fields accessed on every simulation step
+  // Hot fields accessed on every simulation step.
+  // The simulation always stands one step ahead of the rendered time; prev_* holds the step before
+  // it so rendering can interpolate between two simulated states instead of extrapolating past one.
   vec2 current_pos;
   vec2 current_vel;
+  vec2 prev_pos;
   double last_sim_time;
+  double prev_sim_time;
   double spawn_time;
   float life_span;
   float gravity;

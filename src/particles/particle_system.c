@@ -109,7 +109,9 @@ void particle_spawn(particle_system_t *ps, int group, particle_t *p_template, fl
 
   glm_vec2_copy(p->start_pos, p->current_pos);
   glm_vec2_copy(p->start_vel, p->current_vel);
+  glm_vec2_copy(p->start_pos, p->prev_pos);
   p->last_sim_time = p->spawn_time;
+  p->prev_sim_time = p->spawn_time;
 }
 
 static void flow_add(particle_system_t *ps, vec2 pos, float strength) {
@@ -163,48 +165,47 @@ static void flow_get(particle_system_t *ps, double sim_time, vec2 pos, vec2 out_
   }
 }
 
-static void move_point(map_data_t *map, vec2 *inout_pos, vec2 *inout_vel, float elasticity) {
-  if (!map) {
+static bool point_is_solid(const map_data_t *map, float x, float y) {
+  const unsigned char *tiles = map->game_layer.data;
+  if (!tiles) return false;
+
+  int nx = (int)roundf(x) / 32;
+  int ny = (int)roundf(y) / 32;
+  nx = nx < 0 ? 0 : (nx > map->width - 1 ? map->width - 1 : nx);
+  ny = ny < 0 ? 0 : (ny > map->height - 1 ? map->height - 1 : ny);
+
+  unsigned char tile = tiles[ny * map->width + nx];
+  return tile == TILE_SOLID || tile == TILE_NOHOOK;
+}
+
+static void move_point(const map_data_t *map, vec2 *inout_pos, vec2 *inout_vel, float elasticity) {
+  if (!map || !map->game_layer.data) {
     glm_vec2_add(*inout_pos, *inout_vel, *inout_pos);
     return;
   }
+
   vec2 pos = {(*inout_pos)[0], (*inout_pos)[1]};
   vec2 vel = {(*inout_vel)[0], (*inout_vel)[1]};
-  if (vel[0] == 0.0f && vel[1] == 0.0f) return;
 
-  vec2 next_pos;
-  glm_vec2_add(pos, vel, next_pos);
-  int width = map->width, height = map->height;
-  unsigned char *game_layer_data = map->game_layer.data;
-  if (!game_layer_data) {
+  if (!point_is_solid(map, pos[0] + vel[0], pos[1] + vel[1])) {
     glm_vec2_add(pos, vel, *inout_pos);
     return;
   }
 
-  int tx = (int)(next_pos[0] / 32.0f), ty = (int)(next_pos[1] / 32.0f);
-  bool collision = (tx < 0 || tx >= width || ty < 0 || ty >= height)
-                       ? true
-                       : (game_layer_data[ty * width + tx] == 1 || game_layer_data[ty * width + tx] == 3);
-
-  if (collision) {
-    int curr_tx = (int)(pos[0] / 32.0f), curr_ty = (int)(pos[1] / 32.0f);
-    bool hit_x = false;
-    int check_tx = (int)((pos[0] + vel[0]) / 32.0f);
-    if (check_tx != curr_tx) {
-      if (check_tx >= 0 && check_tx < width && curr_ty >= 0 && curr_ty < height) {
-        if (game_layer_data[curr_ty * width + check_tx] == 1 || game_layer_data[curr_ty * width + check_tx] == 3) hit_x = true;
-      } else hit_x = true;
-    }
-    if (hit_x) {
-      vel[0] *= -elasticity;
-    } else {
-      vel[1] *= -elasticity;
-    }
-    glm_vec2_scale(vel, 0.5f, vel);
-    (*inout_vel)[0] = vel[0];
-    (*inout_vel)[1] = vel[1];
+  // Each axis is tested on its own, so a step into a corner reflects both instead of guessing one.
+  int affected = 0;
+  if (point_is_solid(map, pos[0] + vel[0], pos[1])) {
+    (*inout_vel)[0] *= -elasticity;
+    affected++;
   }
-  glm_vec2_add(pos, vel, *inout_pos);
+  if (point_is_solid(map, pos[0], pos[1] + vel[1])) {
+    (*inout_vel)[1] *= -elasticity;
+    affected++;
+  }
+  if (affected == 0) {
+    (*inout_vel)[0] *= -elasticity;
+    (*inout_vel)[1] *= -elasticity;
+  }
 }
 
 static void particle_simulate_step(particle_system_t *ps, particle_t *p, vec2 pos, vec2 vel, uint32_t *seed, double sim_time, float dt, map_data_t *map) {
@@ -238,36 +239,46 @@ void particle_system_update_sim(particle_system_t *ps, map_data_t *map) {
   const double step = 0.02;
   double sim_target = ps->current_time;
 
+  // Survivors are compacted forwards, keeping their relative order. Swapping the last particle into
+  // a dead one's slot instead would reshuffle the array every time a particle expired, and since
+  // particles are drawn in array order that made a surviving particle jump in front of or behind
+  // its neighbours on the tick any other particle died.
+  int write = 0;
+
   for (int i = 0; i < ps->active_count; ++i) {
     particle_t *p = &ps->particles[i];
 
     // Check life
     double age = sim_target - p->spawn_time;
-    if (age > p->life_span || age < -0.001) {
-      if (i != ps->active_count - 1) {
-        ps->particles[i] = ps->particles[ps->active_count - 1];
-      }
-      ps->active_count--;
-      i--;
-      continue;
-    }
+    if (age > p->life_span || age < -0.001) continue;
 
-    // Incremental Simulation / Rewind Handling
-    if (p->last_sim_time > sim_target + 0.001) {
+    // Incremental Simulation / Rewind Handling. The retained pair straddles the render time, so a
+    // rewind is when even the older of the two sits ahead of it.
+    if (p->prev_sim_time > sim_target + 0.001) {
       glm_vec2_copy(p->start_pos, p->current_pos);
       glm_vec2_copy(p->start_vel, p->current_vel);
+      glm_vec2_copy(p->start_pos, p->prev_pos);
       p->last_sim_time = p->spawn_time;
+      p->prev_sim_time = p->spawn_time;
       p->current_seed = p->seed;
     }
 
+    // Step until the simulation has passed the render time, keeping the state before it. Stopping
+    // short and extrapolating instead made every particle jump at each step boundary: a step also
+    // changes the velocity that would have been extrapolated with, by gravity, friction and bounces.
     while (p->last_sim_time < sim_target) {
-      double next_step_time = p->last_sim_time + step;
-      if (next_step_time > sim_target + 0.0001) break;
+      glm_vec2_copy(p->current_pos, p->prev_pos);
+      p->prev_sim_time = p->last_sim_time;
 
       particle_simulate_step(ps, p, p->current_pos, p->current_vel, &p->current_seed, p->last_sim_time, (float)step, map);
       p->last_sim_time += step;
     }
+
+    if (write != i) ps->particles[write] = *p;
+    write++;
   }
+
+  ps->active_count = write;
 }
 void particle_system_update(particle_system_t *ps, float dt, map_data_t *map) {
   (void)ps;
@@ -325,15 +336,14 @@ void particle_system_render(particle_system_t *ps, gfx_handler_t *gfx, int layer
       glm_vec4_copy(p->color, col);
       col[3] *= fminf(fmaxf(remaining_life / 0.1f, 0.0f), 1.0f);
     } else {
-      // Linear sub-step extrapolation for smooth rendering
-      float dt = (float)(ps->current_time - p->last_sim_time);
-      if (dt > 0.0001f) {
-        pos[0] = p->current_pos[0] + p->current_vel[0] * dt;
-        pos[1] = p->current_pos[1] + p->current_vel[1] * dt;
-      } else {
-        pos[0] = p->current_pos[0];
-        pos[1] = p->current_pos[1];
-      }
+      // Interpolate between the two simulated states straddling the render time. Never extrapolate
+      // past the newer one: that is what pushed particles into walls a step before the collision
+      // response ran, and what made them lurch whenever a step was taken.
+      double span = p->last_sim_time - p->prev_sim_time;
+      float alpha = span > 1e-9 ? (float)((ps->current_time - p->prev_sim_time) / span) : 1.0f;
+      alpha = fminf(fmaxf(alpha, 0.0f), 1.0f);
+      pos[0] = p->prev_pos[0] + (p->current_pos[0] - p->prev_pos[0]) * alpha;
+      pos[1] = p->prev_pos[1] + (p->current_pos[1] - p->prev_pos[1]) * alpha;
 
       rot = p->rot + p->rot_speed * (float)age;
       float life_frac = (float)age / p->life_span;

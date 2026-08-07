@@ -209,6 +209,10 @@ typedef enum {
 struct render_command_t {
   render_cmd_type_t type;
   float z; // Depth: lower is further back
+  // Submission index, used as the final sort key. Without it the queue sort leaves commands that
+  // compare equal (same z, type and atlas) in an arbitrary order that changes between frames, so
+  // overlapping sprites such as particles swap places at random.
+  uint32_t seq;
   union {
     struct {
       vec2 pos;
