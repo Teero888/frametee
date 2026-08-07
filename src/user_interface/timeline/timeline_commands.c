@@ -133,9 +133,10 @@ static void cleanup_edit_inputs_cmd(void *cmd);
 
 // Command Creation Functions
 
-undo_command_t *commands_create_add_snippet(ui_handler_t *ui, int track_idx, int start_tick, int duration) {
-  timeline_state_t *ts = &ui->timeline;
-  if (track_idx < 0 || track_idx >= ts->player_track_count) return NULL;
+// shared by every "add a snippet" entry point
+static undo_command_t *create_add_snippet_command(timeline_state_t *ts, int track_idx, int start_tick, int duration, const char *description,
+                                                  int *out_snippet_id) {
+  if (track_idx < 0 || track_idx >= ts->player_track_count || duration <= 0) return NULL;
 
   player_track_t *track = &ts->player_tracks[track_idx];
   int new_layer = model_find_available_layer(track, start_tick, start_tick + duration, -1);
@@ -150,11 +151,14 @@ undo_command_t *commands_create_add_snippet(ui_handler_t *ui, int track_idx, int
   snip.input_count = duration;
   snip.inputs = calloc(duration, sizeof(SPlayerInput));
 
+  if (out_snippet_id) *out_snippet_id = snip.id;
+
   AddSnippetCommand *cmd = calloc(1, sizeof(AddSnippetCommand));
-  snprintf(cmd->base.description, sizeof(cmd->base.description), "Add Snippet");
+  snprintf(cmd->base.description, sizeof(cmd->base.description), "%s", description);
   cmd->base.undo = undo_add_snippet;
   cmd->base.redo = redo_add_snippet;
   cmd->base.cleanup = cleanup_add_snippet_cmd;
+  cmd->track_index = track_idx;
   model_snippet_clone(&cmd->snippet_copy, &snip);
 
   // deactivate overlapping snippets
@@ -170,8 +174,13 @@ undo_command_t *commands_create_add_snippet(ui_handler_t *ui, int track_idx, int
   // Perform the action
   model_insert_snippet_into_track(track, &snip);
   model_compact_layers_for_track(track);
+  model_recalc_physics(ts, snip.start_tick);
 
   return &cmd->base;
+}
+
+undo_command_t *commands_create_add_snippet(ui_handler_t *ui, int track_idx, int start_tick, int duration) {
+  return create_add_snippet_command(&ui->timeline, track_idx, start_tick, duration, "Add Snippet", NULL);
 }
 
 undo_command_t *commands_create_delete_selected(ui_handler_t *ui) {
@@ -1057,34 +1066,7 @@ static void redo_add_track(void *cmd, void *ts_void) {
 static void cleanup_add_track_cmd(void *cmd) { free(cmd); }
 
 undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, int start_tick, int duration, int *out_snippet_id) {
-  timeline_state_t *ts = &ui->timeline;
-  if (track_index < 0 || track_index >= ts->player_track_count || duration <= 0) return NULL;
-
-  player_track_t *track = &ts->player_tracks[track_index];
-  int new_layer = model_find_available_layer(track, start_tick, start_tick + duration, -1);
-  if (new_layer == -1) return NULL;
-
-  input_snippet_t snippet;
-  snippet.id = ts->next_snippet_id++;
-  snippet.start_tick = start_tick;
-  snippet.end_tick = start_tick + duration;
-  snippet.is_active = true;
-  snippet.layer = new_layer;
-  snippet.input_count = duration;
-  snippet.inputs = calloc(duration, sizeof(SPlayerInput));
-
-  if (out_snippet_id) *out_snippet_id = snippet.id;
-
-  AddSnippetCommand *cmd = calloc(1, sizeof(AddSnippetCommand));
-  snprintf(cmd->base.description, sizeof(cmd->base.description), "Create Snippet (API)");
-  cmd->base.undo = undo_add_snippet;
-  cmd->base.redo = redo_add_snippet;
-  cmd->base.cleanup = cleanup_add_snippet_cmd;
-  model_snippet_clone(&cmd->snippet_copy, &snippet);
-
-  model_insert_snippet_into_track(track, &snippet);
-  model_compact_layers_for_track(track);
-  return &cmd->base;
+  return create_add_snippet_command(&ui->timeline, track_index, start_tick, duration, "Create Snippet (API)", out_snippet_id);
 }
 
 static void apply_input_states(timeline_state_t *ts, int snippet_id, int count, const int *indices, const SPlayerInput *states) {
@@ -1142,6 +1124,9 @@ undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id
     cmd->after[i] = new_inputs[i];
     snippet->inputs[idx] = new_inputs[i]; // Apply change immediately
   }
+
+  // The world simulated from these inputs is now stale.
+  model_recalc_physics(ts, snippet->start_tick + tick_offset);
 
   return &cmd->base;
 }
