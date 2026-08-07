@@ -81,6 +81,7 @@ typedef struct undo_manager_t undo_manager_t;
 // Timeline
 typedef struct recording_snippet_vector_t recording_snippet_vector_t;
 typedef struct timeline_drag_state_t timeline_drag_state_t;
+typedef struct timeline_trim_state_t timeline_trim_state_t;
 typedef struct snippet_id_vector_t snippet_id_vector_t;
 typedef struct dragged_snippet_info_t dragged_snippet_info_t;
 typedef struct starting_config_t starting_config_t;

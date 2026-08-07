@@ -16,14 +16,20 @@ struct physics_v_t {
   uint32_t max_size;
 };
 
+// A snippet is a window onto a source buffer, the way a clip is a window onto its media. Trimming
+// an edge or splitting a snippet only moves the window: `inputs` keeps holding every tick that was
+// ever recorded for it, so widening the window again brings the original inputs back.
+//   inputs[source_offset .. source_offset + input_count)  is what plays, starting at start_tick
 struct input_snippet_t {
   int id;
   int start_tick;
-  int end_tick;
+  int end_tick; // always start_tick + input_count
   bool is_active;
   int layer;
-  SPlayerInput *inputs;
-  int input_count;
+  SPlayerInput *inputs; // source buffer, may extend past the window on either side
+  int input_count;      // length of the visible window
+  int source_offset;    // index in `inputs` of the tick played at start_tick
+  int source_count;     // total ticks held in `inputs`
 };
 
 struct starting_config_t {
@@ -80,6 +86,14 @@ struct timeline_drag_state_t {
   ImVec2 initial_mouse_pos;
   dragged_snippet_info_t *drag_infos;
   int drag_info_count;
+};
+
+struct timeline_trim_state_t {
+  bool active;
+  int snippet_id;
+  bool left_edge;        // which edge is being dragged
+  int grab_offset_ticks; // mouse tick minus edge tick when the drag started
+  int preview_tick;      // where the dragged edge currently sits, after snapping
 };
 
 struct snippet_id_vector_t {
@@ -188,6 +202,7 @@ struct timeline_state {
   ImVec2 selection_box_start;
   ImVec2 selection_box_end;
   timeline_drag_state_t drag_state;
+  timeline_trim_state_t trim_state;
   bool is_header_dragging;
   // snippet that was clicked while it was already part of a multi-selection. clicking one of
   // several selected snippets must keep the selection alive until release, so a group drag can

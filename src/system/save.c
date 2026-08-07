@@ -135,7 +135,11 @@ static bool write_timeline_data(FILE *f, timeline_state_t *ts) {
       fwrite(&snippet->is_active, sizeof(bool), 1, f);
       fwrite(&snippet->layer, sizeof(int), 1, f);
       fwrite(&snippet->input_count, sizeof(int), 1, f);
-      if (snippet->input_count > 0) fwrite(snippet->inputs, sizeof(SPlayerInput) * snippet->input_count, 1, f);
+      // The trimmed-away source travels with the project (version 7+), otherwise widening a snippet
+      // after a reload would come back blank.
+      fwrite(&snippet->source_offset, sizeof(int), 1, f);
+      fwrite(&snippet->source_count, sizeof(int), 1, f);
+      if (snippet->source_count > 0) fwrite(snippet->inputs, sizeof(SPlayerInput) * snippet->source_count, 1, f);
     }
   }
 
@@ -372,12 +376,23 @@ static bool read_and_load_timeline(FILE *f, ui_handler_t *ui, uint32_t version) 
         max_id = snippet->id;
       }
 
-      if (snippet->input_count > 0) {
-        snippet->inputs = malloc(sizeof(SPlayerInput) * snippet->input_count);
-        if (!snippet->inputs || fread(snippet->inputs, sizeof(SPlayerInput) * snippet->input_count, 1, f) != 1) return false;
+      if (version >= 7) {
+        if (fread(&snippet->source_offset, sizeof(int), 1, f) != 1) return false;
+        if (fread(&snippet->source_count, sizeof(int), 1, f) != 1) return false;
+      } else {
+        // Older projects stored only the visible window, which is exactly a snippet with no
+        // trimmed-away source.
+        snippet->source_offset = 0;
+        snippet->source_count = snippet->input_count;
+      }
+
+      if (snippet->source_count > 0) {
+        snippet->inputs = malloc(sizeof(SPlayerInput) * snippet->source_count);
+        if (!snippet->inputs || fread(snippet->inputs, sizeof(SPlayerInput) * snippet->source_count, 1, f) != 1) return false;
       } else {
         snippet->inputs = NULL;
       }
+      model_snippet_normalize(snippet);
     }
   }
 

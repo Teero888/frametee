@@ -14,6 +14,25 @@ void snippet_id_vector_add(snippet_id_vector_t *vec, int snippet_id);
 bool snippet_id_vector_remove(snippet_id_vector_t *vec, int snippet_id);
 bool snippet_id_vector_contains(const snippet_id_vector_t *vec, int snippet_id);
 
+// Source Window Access
+// Snippet inputs are addressed through the visible window, never through `inputs` directly, because
+// the source buffer can hold trimmed-away ticks on either side. Index 0 is the tick at start_tick.
+static inline SPlayerInput *snippet_window(const input_snippet_t *snippet) { return snippet->inputs + snippet->source_offset; }
+// Ticks of retained source sitting outside the window, i.e. how far each edge can still be pulled
+// before blank ticks have to be invented.
+static inline int snippet_source_before(const input_snippet_t *snippet) { return snippet->source_offset; }
+static inline int snippet_source_after(const input_snippet_t *snippet) {
+  return snippet->source_count - snippet->source_offset - snippet->input_count;
+}
+// Repairs source bookkeeping for snippets built by older code paths or loaded from older files.
+void model_snippet_normalize(input_snippet_t *snippet);
+// Drops the retained ticks outside the window so `inputs` holds exactly what plays. Used by the
+// operations that rewrite a snippet's buffer wholesale.
+void model_snippet_flatten(input_snippet_t *snippet);
+// Moves the window to [new_start_tick, new_end_tick), revealing retained source where it exists and
+// padding with blank ticks where it does not.
+bool model_trim_snippet(timeline_state_t *ts, input_snippet_t *snippet, int new_start_tick, int new_end_tick);
+
 // Finders
 input_snippet_t *model_find_snippet_by_id(timeline_state_t *ts, int snippet_id, int *out_track_index);
 input_snippet_t *model_find_snippet_in_track(player_track_t *track, int snippet_id);

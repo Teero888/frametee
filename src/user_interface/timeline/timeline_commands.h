@@ -22,6 +22,9 @@ struct undo_command_t *commands_create_merge_selected(ui_handler_t *ui);
 struct undo_command_t *commands_create_move_snippets(ui_handler_t *ui, const MoveSnippetInfo *infos, int count);
 struct undo_command_t *commands_create_duplicate_snippets(ui_handler_t *ui, const MoveSnippetInfo *infos, int count);
 struct undo_command_t *commands_create_toggle_selected_snippets_active(ui_handler_t *ui);
+// Moves one edge of a snippet. Retained source outside the window comes back into view where it
+// exists; past that the snippet grows with blank ticks.
+struct undo_command_t *commands_create_trim_snippet(ui_handler_t *ui, int snippet_id, int new_start_tick, int new_end_tick);
 struct undo_command_t *commands_create_remove_track(ui_handler_t *ui, int track_index);
 
 // Special command for the snippet editor

@@ -48,12 +48,13 @@ typedef struct {
   int deactivated_count;
 } DuplicateSnippetsCommand;
 
+// Splitting hands both halves the full source buffer and gives them different windows onto it, so
+// no inputs are moved anywhere and widening either half brings the other half's ticks back.
 typedef struct {
   int track_index;
   int original_snippet_id;
   int new_snippet_id;
-  SPlayerInput *moved_inputs;
-  int moved_inputs_count;
+  int original_input_count; // window length before the split, restored on undo
 } SplitInfo;
 
 typedef struct {
@@ -92,6 +93,15 @@ typedef struct {
   SPlayerInput *before;
   SPlayerInput *after;
 } EditInputsCommand;
+
+typedef struct {
+  undo_command_t base;
+  int snippet_id;
+  int old_start_tick, old_end_tick;
+  int new_start_tick, new_end_tick;
+  int *deactivated_ids; // snippets the widened snippet now covers
+  int deactivated_count;
+} TrimSnippetCommand;
 
 // Forward Declarations for Command Logic
 
@@ -176,6 +186,71 @@ static undo_command_t *create_add_snippet_command(timeline_state_t *ts, int trac
   model_compact_layers_for_track(track);
   model_recalc_physics(ts, snip.start_tick);
 
+  return &cmd->base;
+}
+
+// Trim Snippet
+static void apply_trim(TrimSnippetCommand *c, timeline_state_t *ts, bool redo) {
+  int track_idx = -1;
+  input_snippet_t *snippet = model_find_snippet_by_id(ts, c->snippet_id, &track_idx);
+  if (!snippet || track_idx < 0) return;
+
+  if (redo) model_trim_snippet(ts, snippet, c->new_start_tick, c->new_end_tick);
+  else model_trim_snippet(ts, snippet, c->old_start_tick, c->old_end_tick);
+
+  // The covered snippets are only displaced while the trimmed snippet is at its new extent.
+  player_track_t *track = &ts->player_tracks[track_idx];
+  for (int i = 0; i < c->deactivated_count; ++i) {
+    input_snippet_t *other = model_find_snippet_in_track(track, c->deactivated_ids[i]);
+    if (other) other->is_active = !redo;
+  }
+
+  model_compact_layers_for_track(track);
+}
+
+static void undo_trim_snippet(void *cmd, void *ts_void) { apply_trim((TrimSnippetCommand *)cmd, (timeline_state_t *)ts_void, false); }
+static void redo_trim_snippet(void *cmd, void *ts_void) { apply_trim((TrimSnippetCommand *)cmd, (timeline_state_t *)ts_void, true); }
+
+static void cleanup_trim_snippet_cmd(void *cmd) {
+  TrimSnippetCommand *c = (TrimSnippetCommand *)cmd;
+  free(c->deactivated_ids);
+  free(c);
+}
+
+undo_command_t *commands_create_trim_snippet(ui_handler_t *ui, int snippet_id, int new_start_tick, int new_end_tick) {
+  timeline_state_t *ts = &ui->timeline;
+  int track_idx = -1;
+  input_snippet_t *snippet = model_find_snippet_by_id(ts, snippet_id, &track_idx);
+  if (!snippet || track_idx < 0) return NULL;
+
+  int old_start_tick = snippet->start_tick;
+  int old_end_tick = snippet->end_tick;
+  if (!model_trim_snippet(ts, snippet, new_start_tick, new_end_tick)) return NULL;
+
+  TrimSnippetCommand *cmd = calloc(1, sizeof(TrimSnippetCommand));
+  snprintf(cmd->base.description, sizeof(cmd->base.description), "Resize Snippet %d", snippet_id);
+  cmd->base.undo = undo_trim_snippet;
+  cmd->base.redo = redo_trim_snippet;
+  cmd->base.cleanup = cleanup_trim_snippet_cmd;
+  cmd->snippet_id = snippet_id;
+  cmd->old_start_tick = old_start_tick;
+  cmd->old_end_tick = old_end_tick;
+  cmd->new_start_tick = snippet->start_tick;
+  cmd->new_end_tick = snippet->end_tick;
+
+  // Growing over a neighbour displaces it, same rule as adding a snippet on top of one.
+  player_track_t *track = &ts->player_tracks[track_idx];
+  for (int i = 0; i < track->snippet_count; ++i) {
+    input_snippet_t *other = &track->snippets[i];
+    if (other->id == snippet_id) continue;
+    if (other->is_active && snippet->start_tick < other->end_tick && snippet->end_tick > other->start_tick) {
+      other->is_active = false;
+      cmd->deactivated_ids = realloc(cmd->deactivated_ids, sizeof(int) * (cmd->deactivated_count + 1));
+      cmd->deactivated_ids[cmd->deactivated_count++] = other->id;
+    }
+  }
+
+  model_compact_layers_for_track(track);
   return &cmd->base;
 }
 
@@ -324,15 +399,10 @@ undo_command_t *commands_create_split_selected(ui_handler_t *ui) {
       valid_splits = realloc(valid_splits, sizeof(SplitInfo) * (split_count + 1));
       SplitInfo *info = &valid_splits[split_count];
 
-      int offset = ts->current_tick - snippet->start_tick;
-      int right_count = snippet->end_tick - ts->current_tick;
-
       info->track_index = track_idx;
       info->original_snippet_id = snippet->id;
       info->new_snippet_id = ts->next_snippet_id++;
-      info->moved_inputs_count = right_count;
-      info->moved_inputs = malloc(sizeof(SPlayerInput) * right_count);
-      memcpy(info->moved_inputs, snippet->inputs + offset, sizeof(SPlayerInput) * right_count);
+      info->original_input_count = snippet->input_count;
       split_count++;
     }
   }
@@ -413,8 +483,11 @@ undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
         // Perform the merge on snippet 'a's data. This does not reallocate the track's snippets array.
         int old_a_duration = a->input_count;
         int b_duration = b->input_count;
+        // Merging fuses the two windows into one buffer; whatever either side had trimmed away is
+        // dropped here, the same way consolidating clips in an editor discards their handles.
+        SPlayerInput *b_window = snippet_window(b);
         model_resize_snippet_inputs(ts, a, old_a_duration + b_duration);
-        memcpy(&a->inputs[old_a_duration], b->inputs, sizeof(SPlayerInput) * b_duration);
+        memcpy(&a->inputs[old_a_duration], b_window, sizeof(SPlayerInput) * b_duration);
 
         // Defer the removal of snippet 'b' by adding its ID to a list.
         ids_to_remove[remove_count++] = b->id;
@@ -750,12 +823,8 @@ static void undo_multi_split(void *cmd, void *ts_void) {
     input_snippet_t *original = model_find_snippet_in_track(track, info->original_snippet_id);
     if (!original) continue;
 
-    int old_duration = original->input_count;
-    int new_duration = old_duration + info->moved_inputs_count;
-    original->inputs = realloc(original->inputs, sizeof(SPlayerInput) * new_duration);
-    memcpy(&original->inputs[old_duration], info->moved_inputs, sizeof(SPlayerInput) * info->moved_inputs_count);
-    original->input_count = new_duration;
-    original->end_tick = original->start_tick + new_duration;
+    // The left half never lost the right half's ticks, so undoing is just widening it again.
+    model_trim_snippet(ts, original, original->start_tick, original->start_tick + info->original_input_count);
 
     model_remove_snippet_from_track(ts, track, info->new_snippet_id);
     if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
@@ -776,17 +845,18 @@ static void redo_multi_split(void *cmd, void *ts_void) {
     input_snippet_t *original = model_find_snippet_in_track(track, info->original_snippet_id);
     if (!original) continue;
 
-    input_snippet_t right;
+    // The right half is a copy of the whole source with its window moved past the split point; the
+    // left half keeps the same source and only narrows its window.
+    int split_index = c->split_tick - original->start_tick;
+    input_snippet_t right = {0};
+    model_snippet_clone(&right, original);
     right.id = info->new_snippet_id;
     right.start_tick = c->split_tick;
-    right.input_count = info->moved_inputs_count;
+    right.source_offset = original->source_offset + split_index;
+    right.input_count = original->input_count - split_index;
     right.end_tick = right.start_tick + right.input_count;
-    right.is_active = original->is_active;
-    right.layer = original->layer;
-    right.inputs = malloc(sizeof(SPlayerInput) * right.input_count);
-    memcpy(right.inputs, info->moved_inputs, sizeof(SPlayerInput) * right.input_count);
 
-    model_resize_snippet_inputs(ts, original, c->split_tick - original->start_tick);
+    model_trim_snippet(ts, original, original->start_tick, c->split_tick);
     model_insert_snippet_into_track(track, &right);
     interaction_add_snippet_to_selection(ts, right.id);
     if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
@@ -797,9 +867,6 @@ static void redo_multi_split(void *cmd, void *ts_void) {
 }
 static void cleanup_multi_split_cmd(void *cmd) {
   MultiSplitCommand *c = (MultiSplitCommand *)cmd;
-  for (int i = 0; i < c->count; i++) {
-    free(c->infos[i].moved_inputs);
-  }
   free(c->infos);
   free(c);
 }
@@ -835,10 +902,13 @@ static void redo_merge_snippets(void *cmd, void *ts_void) {
     int old_duration = target->input_count;
     int new_duration = old_duration + info->snippet_copy.input_count;
 
+    model_snippet_flatten(target);
     target->inputs = realloc(target->inputs, sizeof(SPlayerInput) * new_duration);
-    memcpy(&target->inputs[old_duration], info->snippet_copy.inputs, sizeof(SPlayerInput) * info->snippet_copy.input_count);
+    memcpy(&target->inputs[old_duration], snippet_window(&info->snippet_copy), sizeof(SPlayerInput) * info->snippet_copy.input_count);
     target->input_count = new_duration;
     target->end_tick = target->start_tick + new_duration;
+    target->source_offset = 0;
+    target->source_count = new_duration;
 
     model_remove_snippet_from_track(ts, track, info->snippet_copy.id);
   }
@@ -1075,7 +1145,7 @@ static void apply_input_states(timeline_state_t *ts, int snippet_id, int count, 
   for (int i = 0; i < count; i++) {
     int idx = indices[i];
     if (idx >= 0 && idx < snippet->input_count) {
-      snippet->inputs[idx] = states[i];
+      snippet_window(snippet)[idx] = states[i];
     }
   }
 }
@@ -1117,12 +1187,13 @@ undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id
   cmd->before = malloc(sizeof(SPlayerInput) * max_write);
   cmd->after = malloc(sizeof(SPlayerInput) * max_write);
 
+  SPlayerInput *window = snippet_window(snippet);
   for (int i = 0; i < max_write; ++i) {
     int idx = tick_offset + i;
     cmd->indices[i] = idx;
-    cmd->before[i] = snippet->inputs[idx];
+    cmd->before[i] = window[idx];
     cmd->after[i] = new_inputs[i];
-    snippet->inputs[idx] = new_inputs[i]; // Apply change immediately
+    window[idx] = new_inputs[i]; // Apply change immediately
   }
 
   // The world simulated from these inputs is now stale.
@@ -1260,7 +1331,7 @@ undo_command_t *commands_create_commit_recording(ui_handler_t *ui) {
       input_snippet_t *rec_snip = &track->recording_snippets[j];
       for (int k = 0; k < rec_snip->input_count; ++k) {
         int tick = rec_snip->start_tick + k;
-        model_apply_input_to_main_buffer(ts, track, tick, &rec_snip->inputs[k]);
+        model_apply_input_to_main_buffer(ts, track, tick, &snippet_window(rec_snip)[k]);
       }
     }
   }

@@ -11,13 +11,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <user_interface/user_interface.h>
+#include <user_interface/widgets/imcol.h>
 
 #define SNAP_THRESHOLD_PX 5.0f
 #define DRAG_THRESHOLD_PX 5.0f
+#define TRIM_HANDLE_PX 7.0f
 
 // Forward Declarations for Static Interaction Helpers
 static void handle_pan_and_zoom(timeline_state_t *ts, ImRect timeline_bb);
 static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_bb);
+static void handle_trim_handles(timeline_state_t *ts, input_snippet_t *snippet, ImRect timeline_bb, ImRect rect);
 static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb);
 static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb);
 static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id);
@@ -299,6 +302,176 @@ void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timelin
   *out_base_track = imax(0, imin(ts->player_track_count - 1, *out_base_track));
 }
 
+// Snaps a single dragged edge to the playhead and to the edges of other snippets.
+static int snap_edge_tick(const timeline_state_t *ts, int desired_tick, int exclude_id) {
+  float dpi_scale = gfx_get_ui_scale();
+  int snapped_tick = desired_tick;
+  float min_dist_px = SNAP_THRESHOLD_PX * dpi_scale;
+
+  float dist_to_playhead_px = fabsf((float)(desired_tick - ts->current_tick) * ts->zoom);
+  if (dist_to_playhead_px < min_dist_px) {
+    min_dist_px = dist_to_playhead_px;
+    snapped_tick = ts->current_tick;
+  }
+
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    for (int j = 0; j < ts->player_tracks[i].snippet_count; ++j) {
+      input_snippet_t *other = &ts->player_tracks[i].snippets[j];
+      if (other->id == exclude_id) continue;
+
+      int edges[2] = {other->start_tick, other->end_tick};
+      for (int e = 0; e < 2; ++e) {
+        float dist = fabsf((float)(desired_tick - edges[e]) * ts->zoom);
+        if (dist < min_dist_px) {
+          min_dist_px = dist;
+          snapped_tick = edges[e];
+        }
+      }
+    }
+  }
+  return imax(0, snapped_tick);
+}
+
+// Where the dragged edge currently wants to sit, clamped so the snippet keeps at least one tick.
+static int trim_target_tick(const timeline_state_t *ts, const input_snippet_t *snippet, ImRect timeline_bb) {
+  ImGuiIO *io = igGetIO_Nil();
+  int mouse_tick = renderer_screen_x_to_tick(ts, io->MousePos.x, timeline_bb.Min.x);
+  int desired = mouse_tick - ts->trim_state.grab_offset_ticks;
+  desired = snap_edge_tick(ts, desired, snippet->id);
+
+  if (ts->trim_state.left_edge) return imin(desired, snippet->end_tick - 1);
+  return imax(desired, snippet->start_tick + 1);
+}
+
+static void draw_arrow(ImDrawList *draw_list, float tip_x, float mid_y, float size, bool points_left, ImU32 col) {
+  float tip = roundf(tip_x);
+  float mid = roundf(mid_y);
+  float base = roundf(points_left ? tip + size * 1.2f : tip - size * 1.2f);
+  float half = roundf(size);
+
+  ImVec2 v_tip = {tip, mid};
+  ImVec2 v_top = {base, mid - half};
+  ImVec2 v_bottom = {base, mid + half};
+  if (points_left) ImDrawList_AddTriangleFilled(draw_list, v_tip, v_top, v_bottom, col);
+  else ImDrawList_AddTriangleFilled(draw_list, v_tip, v_bottom, v_top, col);
+}
+
+// Draws the grab affordance on one edge: a bright bar, plus a tick of extra brightness where the
+// snippet still holds source that trimming has hidden, so it reads as "there is more to pull out".
+static void draw_trim_handle(const input_snippet_t *snippet, ImRect rect, bool left_edge, bool active) {
+  float dpi_scale = gfx_get_ui_scale();
+  ImDrawList *draw_list = igGetWindowDrawList();
+
+  float thickness = (active ? 4.0f : 3.0f) * dpi_scale;
+  float x = left_edge ? rect.Min.x : rect.Max.x - thickness;
+  ImVec2 bar_min = {x, rect.Min.y};
+  ImVec2 bar_max = {x + thickness, rect.Max.y};
+
+  ImU32 col = active ? IM_COL32(255, 255, 255, 235) : IM_COL32(255, 255, 255, 150);
+  ImDrawList_AddRectFilled(draw_list, bar_min, bar_max, col, 2.0f * dpi_scale, ImDrawFlags_RoundCornersAll);
+
+  int hidden = left_edge ? snippet_source_before(snippet) : snippet_source_after(snippet);
+  if (hidden <= 0) return;
+
+  // Little arrow pointing outwards, in the direction the retained source lies.
+  float mid_y = (rect.Min.y + rect.Max.y) * 0.5f;
+  float size = fminf(5.0f * dpi_scale, (rect.Max.y - rect.Min.y) * 0.3f);
+  if (size < 2.0f) return;
+
+  draw_arrow(draw_list, left_edge ? bar_max.x + 1.0f : bar_min.x - 1.0f, mid_y, size, left_edge, col);
+}
+
+// Puts a grab zone on each edge of a snippet and runs the resize drag.
+static void handle_trim_handles(timeline_state_t *ts, input_snippet_t *snippet, ImRect timeline_bb, ImRect rect) {
+  float dpi_scale = gfx_get_ui_scale();
+  float width = rect.Max.x - rect.Min.x;
+  float height = rect.Max.y - rect.Min.y;
+  if (height < 1.0f) return;
+
+  // Never let the two handles eat the whole snippet, otherwise it cannot be dragged any more.
+  float handle_w = fminf(TRIM_HANDLE_PX * dpi_scale, width * 0.34f);
+  if (handle_w < 2.0f) return;
+
+  bool trimming_this = ts->trim_state.active && ts->trim_state.snippet_id == snippet->id;
+
+  for (int edge = 0; edge < 2; ++edge) {
+    bool left_edge = (edge == 0);
+    float x = left_edge ? rect.Min.x : rect.Max.x - handle_w;
+
+    igSetCursorScreenPos((ImVec2){x, rect.Min.y});
+    igPushID_Int(edge);
+    igInvisibleButton("trim", (ImVec2){handle_w, height}, 0);
+
+    bool hovered = igIsItemHovered(0);
+    if (hovered || (trimming_this && ts->trim_state.left_edge == left_edge)) {
+      igSetMouseCursor(ImGuiMouseCursor_ResizeEW);
+      draw_trim_handle(snippet, rect, left_edge, trimming_this);
+    }
+
+    if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Left, 1.0f) && !ts->trim_state.active && !ts->drag_state.active) {
+      int edge_tick = left_edge ? snippet->start_tick : snippet->end_tick;
+      int mouse_tick = renderer_screen_x_to_tick(ts, igGetIO_Nil()->MousePos.x, timeline_bb.Min.x);
+
+      ts->trim_state.active = true;
+      ts->trim_state.snippet_id = snippet->id;
+      ts->trim_state.left_edge = left_edge;
+      ts->trim_state.grab_offset_ticks = mouse_tick - edge_tick;
+      ts->trim_state.preview_tick = edge_tick;
+
+      // Resizing acts on one snippet, so make it the selection.
+      if (!interaction_is_snippet_selected(ts, snippet->id)) {
+        interaction_clear_selection(ts);
+        interaction_add_snippet_to_selection(ts, snippet->id);
+      }
+      ts->pending_single_select_id = -1;
+    }
+    igPopID();
+  }
+
+  if (!trimming_this) return;
+
+  // Live feedback while dragging: the new extent as an outline, plus the resulting length.
+  ts->trim_state.preview_tick = trim_target_tick(ts, snippet, timeline_bb);
+  int new_start = ts->trim_state.left_edge ? ts->trim_state.preview_tick : snippet->start_tick;
+  int new_end = ts->trim_state.left_edge ? snippet->end_tick : ts->trim_state.preview_tick;
+
+  float preview_min_x = renderer_tick_to_screen_x(ts, new_start, timeline_bb.Min.x);
+  float preview_max_x = renderer_tick_to_screen_x(ts, new_end, timeline_bb.Min.x);
+  ImDrawList *draw_list = igGetWindowDrawList();
+
+  // Mark where the retained source runs out on the side being dragged. With nothing hidden this
+  // still marks the edge the drag started from, which is the reference for how long it was.
+  bool left_edge = ts->trim_state.left_edge;
+  int hidden = left_edge ? snippet_source_before(snippet) : snippet_source_after(snippet);
+  int limit_tick = left_edge ? snippet->start_tick - hidden : snippet->end_tick + hidden;
+  float limit_x = renderer_tick_to_screen_x(ts, limit_tick, timeline_bb.Min.x);
+  float edge_x = left_edge ? preview_min_x : preview_max_x;
+  bool past_limit = left_edge ? (ts->trim_state.preview_tick < limit_tick) : (ts->trim_state.preview_tick > limit_tick);
+
+  // Between the dragged edge and that limit: source still to be revealed, or blank ticks being
+  // invented once the drag goes past it.
+  ImU32 region_col = past_limit ? IM_COL32(255, 180, 80, 45) : IM_COL32(255, 255, 255, 30);
+  ImDrawList_AddRectFilled(draw_list, (ImVec2){fminf(edge_x, limit_x), rect.Min.y}, (ImVec2){fmaxf(edge_x, limit_x), rect.Max.y}, region_col, 0.0f, 0);
+
+  ImDrawList_AddRectFilled(draw_list, (ImVec2){preview_min_x, rect.Min.y}, (ImVec2){preview_max_x, rect.Max.y}, IM_COL32(100, 150, 240, 70),
+                           4.0f * dpi_scale, ImDrawFlags_RoundCornersAll);
+  ImDrawList_AddRect(draw_list, (ImVec2){preview_min_x, rect.Min.y}, (ImVec2){preview_max_x, rect.Max.y}, IM_COL32(255, 255, 255, 200),
+                     4.0f * dpi_scale, ImDrawFlags_RoundCornersAll, 1.5f * dpi_scale);
+
+  ImU32 limit_col = IM_COL32(255, 255, 255, 190);
+  ImDrawList_AddLine(draw_list, (ImVec2){roundf(limit_x), rect.Min.y}, (ImVec2){roundf(limit_x), rect.Max.y}, limit_col, 1.0f * dpi_scale);
+  float arrow_size = fminf(5.0f * dpi_scale, (rect.Max.y - rect.Min.y) * 0.3f);
+  if (hidden > 0 && arrow_size >= 2.0f) {
+    // Points back into the material, capping the range the edge can still be pulled over.
+    draw_arrow(draw_list, left_edge ? limit_x + 2.0f : limit_x - 2.0f, (rect.Min.y + rect.Max.y) * 0.5f, arrow_size, !left_edge, limit_col);
+  }
+
+  int delta = left_edge ? snippet->start_tick - new_start : new_end - snippet->end_tick;
+  int beyond = left_edge ? limit_tick - ts->trim_state.preview_tick : ts->trim_state.preview_tick - limit_tick;
+  if (past_limit) igSetTooltip("%d ticks  (%+d)\n%d blank", new_end - new_start, delta, beyond);
+  else igSetTooltip("%d ticks  (%+d)\n%d source left", new_end - new_start, delta, -beyond);
+}
+
 static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_bb) {
   float dpi_scale = gfx_get_ui_scale();
   ImGuiIO *io = igGetIO_Nil();
@@ -330,6 +503,8 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
 
       igSetCursorScreenPos((ImVec2){start_x, snippet_y_pos});
       igPushID_Int(snippet->id);
+      // The trim handles sit on top of the body, so the body has to allow being overlapped.
+      igSetNextItemAllowOverlap();
       igInvisibleButton("snippet", (ImVec2){imax(end_x - start_x, 1), fmaxf(1.0f, snippet_height)}, 0);
 
       if (igIsItemClicked(ImGuiMouseButton_Left)) {
@@ -357,9 +532,12 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
         if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
       }
 
-      if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Left, DRAG_THRESHOLD_PX * dpi_scale) && !ts->drag_state.active) {
+      if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Left, DRAG_THRESHOLD_PX * dpi_scale) && !ts->drag_state.active &&
+          !ts->trim_state.active) {
         start_drag(ts, snippet->id, timeline_bb);
       }
+
+      handle_trim_handles(ts, snippet, timeline_bb, (ImRect){{start_x, snippet_y_pos}, {end_x, snippet_y_pos + snippet_height}});
       igPopID();
     }
   }
@@ -381,6 +559,18 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
         }
       }
     }
+  }
+
+  // commit a resize when the edge is let go
+  if (ts->trim_state.active && igIsMouseReleased_Nil(ImGuiMouseButton_Left)) {
+    input_snippet_t *snippet = model_find_snippet_by_id(ts, ts->trim_state.snippet_id, NULL);
+    if (snippet) {
+      int new_start = ts->trim_state.left_edge ? ts->trim_state.preview_tick : snippet->start_tick;
+      int new_end = ts->trim_state.left_edge ? snippet->end_tick : ts->trim_state.preview_tick;
+      undo_command_t *cmd = commands_create_trim_snippet(ts->ui, snippet->id, new_start, new_end);
+      if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
+    }
+    ts->trim_state.active = false;
   }
 
   // click on an already selected snippet that never became a drag collapses the selection onto it

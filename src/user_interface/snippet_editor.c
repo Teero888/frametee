@@ -106,7 +106,7 @@ static void record_change_if_new(input_snippet_t *snippet, int index) {
   }
 
   // Save the "before" state and the index.
-  editor_state.action_before_states[editor_state.action_changed_count] = snippet->inputs[index];
+  editor_state.action_before_states[editor_state.action_changed_count] = snippet_window(snippet)[index];
   editor_state.action_changed_indices[editor_state.action_changed_count] = index;
   editor_state.action_changed_count++;
 }
@@ -125,7 +125,7 @@ static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
 
   for (int i = 0; i < editor_state.action_changed_count; i++) {
     int idx = editor_state.action_changed_indices[i];
-    after_states[i] = snippet->inputs[idx];
+    after_states[i] = snippet_window(snippet)[idx];
   }
 
   undo_command_t *cmd = create_edit_inputs_command(snippet, editor_state.action_changed_indices, editor_state.action_changed_count,
@@ -176,7 +176,7 @@ static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
         get_selection_bounds(&earliest_tick, NULL);
         for (int i = 0; i < snippet->input_count; i++) {
           if (editor_state.selected_rows[i]) {
-            snippet->inputs[i].m_Direction = editor_state.bulk_dir;
+            snippet_window(snippet)[i].m_Direction = editor_state.bulk_dir;
           }
         }
         end_action(ui, snippet);
@@ -195,7 +195,7 @@ static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
         begin_action();
         get_selection_bounds(&earliest_tick, NULL);
         for (int i = 0; i < snippet->input_count; i++) {
-          if (editor_state.selected_rows[i]) snippet->inputs[i].m_WantedWeapon = editor_state.bulk_weapon;
+          if (editor_state.selected_rows[i]) snippet_window(snippet)[i].m_WantedWeapon = editor_state.bulk_weapon;
         }
         end_action(ui, snippet);
       }
@@ -215,7 +215,7 @@ static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
         for (int i = 0; i < snippet->input_count; i++)
           if (editor_state.selected_rows[i]) {
             record_change_if_new(snippet, i);
-            snippet->inputs[i].m_Jump = 1;
+            snippet_window(snippet)[i].m_Jump = 1;
           }
         end_action(ui, snippet);
       }
@@ -226,7 +226,7 @@ static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
         for (int i = 0; i < snippet->input_count; i++)
           if (editor_state.selected_rows[i]) {
             record_change_if_new(snippet, i);
-            snippet->inputs[i].m_Fire = 1;
+            snippet_window(snippet)[i].m_Fire = 1;
           }
         end_action(ui, snippet);
       }
@@ -237,7 +237,7 @@ static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
         for (int i = 0; i < snippet->input_count; i++)
           if (editor_state.selected_rows[i]) {
             record_change_if_new(snippet, i);
-            snippet->inputs[i].m_Hook = 1;
+            snippet_window(snippet)[i].m_Hook = 1;
           }
         end_action(ui, snippet);
       }
@@ -249,7 +249,7 @@ static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
         for (int i = 0; i < snippet->input_count; i++)
           if (editor_state.selected_rows[i]) {
             record_change_if_new(snippet, i);
-            snippet->inputs[i].m_Jump = 0;
+            snippet_window(snippet)[i].m_Jump = 0;
           }
         end_action(ui, snippet);
       }
@@ -260,7 +260,7 @@ static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
         for (int i = 0; i < snippet->input_count; i++)
           if (editor_state.selected_rows[i]) {
             record_change_if_new(snippet, i);
-            snippet->inputs[i].m_Fire = 0;
+            snippet_window(snippet)[i].m_Fire = 0;
           }
         end_action(ui, snippet);
       }
@@ -271,7 +271,7 @@ static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
         for (int i = 0; i < snippet->input_count; i++)
           if (editor_state.selected_rows[i]) {
             record_change_if_new(snippet, i);
-            snippet->inputs[i].m_Hook = 0;
+            snippet_window(snippet)[i].m_Hook = 0;
           }
         end_action(ui, snippet);
       }
@@ -375,7 +375,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
       ImGuiListClipper_Begin(clipper, snippet->input_count, 0);
       while (ImGuiListClipper_Step(clipper)) {
         for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; ++i) {
-          SPlayerInput *inp = &snippet->inputs[i];
+          SPlayerInput *inp = &snippet_window(snippet)[i];
 
           igTableNextRow(0, 0);
 
@@ -639,7 +639,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           int clipboard_idx = 0;
           for (int i = 0; i < snippet->input_count && clipboard_idx < editor_state.clipboard_count; i++) {
             if (editor_state.selected_rows[i]) {
-              editor_state.clipboard_inputs[clipboard_idx++] = snippet->inputs[i];
+              editor_state.clipboard_inputs[clipboard_idx++] = snippet_window(snippet)[i];
             }
           }
         }
@@ -654,7 +654,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           for (int i = 0; i < snippet->input_count; i++) {
             if (editor_state.selected_rows[i]) {
               record_change_if_new(snippet, i);
-              snippet->inputs[i] = editor_state.clipboard_inputs[clipboard_idx % editor_state.clipboard_count];
+              snippet_window(snippet)[i] = editor_state.clipboard_inputs[clipboard_idx % editor_state.clipboard_count];
               clipboard_idx++;
             }
           }
@@ -666,9 +666,9 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           begin_action();
           get_selection_bounds(&earliest_tick, NULL);
           for (int i = 0; i < snippet->input_count; i++) {
-            if (editor_state.selected_rows[i] && snippet->inputs[i].m_Direction > -1) {
+            if (editor_state.selected_rows[i] && snippet_window(snippet)[i].m_Direction > -1) {
               record_change_if_new(snippet, i);
-              snippet->inputs[i].m_Direction--;
+              snippet_window(snippet)[i].m_Direction--;
               changed = true;
             }
           }
@@ -680,9 +680,9 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           begin_action();
           if (!changed) get_selection_bounds(&earliest_tick, NULL);
           for (int i = 0; i < snippet->input_count; i++) {
-            if (editor_state.selected_rows[i] && snippet->inputs[i].m_Direction < 1) {
+            if (editor_state.selected_rows[i] && snippet_window(snippet)[i].m_Direction < 1) {
               record_change_if_new(snippet, i);
-              snippet->inputs[i].m_Direction++;
+              snippet_window(snippet)[i].m_Direction++;
               changed = true;
             }
           }
@@ -695,7 +695,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           for (int i = 0; i < snippet->input_count; i++) {
             if (editor_state.selected_rows[i]) {
               record_change_if_new(snippet, i);
-              snippet->inputs[i].m_Jump ^= 1;
+              snippet_window(snippet)[i].m_Jump ^= 1;
               changed = true;
             }
           }
@@ -707,7 +707,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           for (int i = 0; i < snippet->input_count; i++) {
             if (editor_state.selected_rows[i]) {
               record_change_if_new(snippet, i);
-              snippet->inputs[i].m_Fire ^= 1;
+              snippet_window(snippet)[i].m_Fire ^= 1;
               changed = true;
             }
           }
@@ -718,8 +718,8 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
         if (igIsKeyPressed_Bool(ImGuiKey_E, false)) {
           begin_action();
           for (int i = 0; i < snippet->input_count; i++) {
-            if (editor_state.selected_rows[i] && snippet->inputs[i].m_Direction < 1) {
-              snippet->inputs[i].m_Hook ^= 1;
+            if (editor_state.selected_rows[i] && snippet_window(snippet)[i].m_Direction < 1) {
+              snippet_window(snippet)[i].m_Hook ^= 1;
               changed = true;
             }
           }
