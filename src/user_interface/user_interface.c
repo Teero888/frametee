@@ -14,10 +14,12 @@
 #include "undo_redo.h"
 #include "widgets/hsl_colorpicker.h"
 #include "widgets/imcol.h"
+#include <GLFW/glfw3.h>
 #include <animation/anim_data.h>
 #include <ddnet_physics/gamecore.h>
 #include <limits.h>
 #include <logger/logger.h>
+#include <system/input.h>
 #include <math.h>
 #include <nfd.h>
 #include <plugins/api_impl.h>
@@ -333,7 +335,9 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
   camera_t *camera = &handler->renderer.camera;
   ImGuiIO *io = igGetIO_Nil();
 
-  float scroll_y = !hovered ? 0.0f : io->MouseWheel;
+  // Scroll comes from the GLFW callback: imgui holds back the mouse position events queued behind a
+  // wheel event, so reading both from imgui made panning stutter exactly while zooming.
+  float scroll_y = !hovered ? 0.0f : (float)input_scroll_y();
   if (!igIsAnyItemActive()) { // Prevent shortcuts while typing in a text field
     if (keybinds_is_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_IN, true)) scroll_y = 1.0f;
     if (keybinds_is_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_OUT, true)) scroll_y = -1.0f;
@@ -350,7 +354,15 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
   float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
   float aspect = (float)viewport_ratio / (float)map_ratio;
 
-  if (camera->mode == CAMERA_MODE_FOLLOW && hovered && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f) && handler->user_interface.timeline.selected_player_track_index >= 0) {
+  // Panning uses the summed GLFW motion for this frame so it stays in step with the mouse no matter
+  // how many events arrived between frames. Not gated on io->WantCaptureMouse: the viewport is an
+  // imgui window, so that flag is set the whole time the cursor is over it; `hovered` decides where
+  // a pan may start.
+  double raw_dx = 0.0, raw_dy = 0.0;
+  input_mouse_delta(&raw_dx, &raw_dy);
+  bool pan_button_down = input_mouse_down(GLFW_MOUSE_BUTTON_RIGHT);
+
+  if (camera->mode == CAMERA_MODE_FOLLOW && hovered && pan_button_down && handler->user_interface.timeline.selected_player_track_index >= 0) {
     camera->mode = CAMERA_MODE_FREEVIEW;
   }
 
@@ -380,21 +392,22 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
     camera->is_dragging = false;
   } else {
     if (handler->user_interface.timeline.recording) {
-    } else if (hovered && igIsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+    } else if (pan_button_down && (hovered || camera->is_dragging)) {
+      // Only start a pan inside the viewport, but keep it running once started even if the cursor
+      // wanders over a panel.
       if (!camera->is_dragging) {
         camera->is_dragging = true;
-        ImVec2 mouse_pos = igGetMousePos();
-        camera->drag_start_pos[0] = mouse_pos.x;
-        camera->drag_start_pos[1] = mouse_pos.y;
+        double mouse_x = 0.0, mouse_y = 0.0;
+        input_cursor_pos(&mouse_x, &mouse_y);
+        camera->drag_start_pos[0] = (float)mouse_x;
+        camera->drag_start_pos[1] = (float)mouse_y;
       }
 
-      ImVec2 drag_delta = igGetMouseDragDelta(ImGuiMouseButton_Right, 0.0f);
-      float dx = drag_delta.x / (handler->viewport[0] * camera->zoom);
-      float dy = drag_delta.y / (handler->viewport[1] * camera->zoom * aspect);
+      float dx = (float)raw_dx / (handler->viewport[0] * camera->zoom);
+      float dy = (float)raw_dy / (handler->viewport[1] * camera->zoom * aspect);
       float max_map_size = fmax(handler->map_data->width, handler->map_data->height) * 0.001;
       camera->pos[0] -= (dx * 2) / max_map_size;
       camera->pos[1] -= (dy * 2) / max_map_size;
-      igResetMouseDragDelta(ImGuiMouseButton_Right);
     } else {
       camera->is_dragging = false;
     }
@@ -1673,7 +1686,7 @@ bool ui_render_late(ui_handler_t *ui) {
     draw_recording_overlay(start);
   }
 
-  if ((hovered || ui->timeline.recording) && igIsKeyPressed_Bool(ImGuiKey_Tab, false)) {
+  if ((hovered || ui->timeline.recording) && input_key_pressed(GLFW_KEY_TAB, false)) {
     ui->show_timeline = !ui->show_timeline;
   }
 

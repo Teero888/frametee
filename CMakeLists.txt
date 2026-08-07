@@ -63,6 +63,7 @@ set(SRCS
 	src/animation/anim_system.c
 	src/system/save.c
 	src/system/config.c
+	src/system/input.c
 	src/system/fs.c
 	src/system/skin/skin_fetch.c
 	src/logger/logger.c

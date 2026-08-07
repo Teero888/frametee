@@ -1,4 +1,6 @@
 #include "keybinds.h"
+#include <GLFW/glfw3.h>
+#include <system/input.h>
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
@@ -12,28 +14,43 @@
 #include <system/config.h>
 #include <system/include_cimgui.h>
 
+// Binds read GLFW directly. Imgui trickles its event queue, holding back every mouse position
+// queued behind a key or wheel event, which put input several frames behind the hardware at high
+// polling rates. Imgui is still asked whether a text field is focused so typing cannot fire binds.
+static bool combo_blocked_by_ui(const key_combo_t *combo) {
+  // Mouse binds are left ungated: the viewport is itself an imgui window, so WantCaptureMouse is
+  // true whenever the cursor is over it and gating on it would stop fire and hook ever working.
+  if (input_glfw_button_from_imgui(combo->key) != -1) return false;
+
+  // Only typing blocks keyboard binds. Deliberately not WantCaptureKeyboard, which is also true
+  // whenever any widget is merely active, e.g. while dragging a snippet or scrubbing the ruler.
+  return igGetIO_Nil()->WantTextInput;
+}
+
+static bool combo_modifiers_match(const key_combo_t *combo) {
+  return combo->ctrl == input_ctrl_down() && combo->alt == input_alt_down() && combo->shift == input_shift_down();
+}
+
 // check if a key combination is pressed for single-press actions
 bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
   if (combo->key == ImGuiKey_None) return false;
+  if (!combo_modifiers_match(combo) || combo_blocked_by_ui(combo)) return false;
 
-  ImGuiIO *io = igGetIO_Nil();
-  if (combo->ctrl != io->KeyCtrl || combo->alt != io->KeyAlt || combo->shift != io->KeyShift) {
-    return false;
-  }
+  int button = input_glfw_button_from_imgui(combo->key);
+  if (button != -1) return input_mouse_pressed(button);
 
-  return igIsKeyPressed_Bool(combo->key, repeat);
+  return input_key_pressed(input_glfw_key_from_imgui(combo->key), repeat);
 }
 
 // check if a key combination is held down
 bool is_key_combo_down(const key_combo_t *combo) {
   if (combo->key == ImGuiKey_None) return false;
+  if (!combo_modifiers_match(combo) || combo_blocked_by_ui(combo)) return false;
 
-  ImGuiIO *io = igGetIO_Nil();
-  if (combo->ctrl != io->KeyCtrl || combo->alt != io->KeyAlt || combo->shift != io->KeyShift) {
-    return false;
-  }
+  int button = input_glfw_button_from_imgui(combo->key);
+  if (button != -1) return input_mouse_down(button);
 
-  return igIsKeyDown_Nil(combo->key);
+  return input_key_down(input_glfw_key_from_imgui(combo->key));
 }
 
 // This buffer is used by keybind_get_combo_string to avoid repeated allocations.
@@ -361,13 +378,6 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   }
 }
 
-static bool is_modifier_key(ImGuiKey key) {
-  return key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl || key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift ||
-         key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt || key == ImGuiKey_LeftSuper || key == ImGuiKey_RightSuper ||
-         key == ImGuiKey_ReservedForModCtrl || key == ImGuiKey_ReservedForModShift || key == ImGuiKey_ReservedForModAlt ||
-         key == ImGuiKey_ReservedForModSuper;
-}
-
 // Check for perfect duplicates
 static bool has_perfect_duplicate(keybind_manager_t *kb, action_t action, key_combo_t combo) {
   for (int i = 0; i < kb->bind_count; i++) {
@@ -456,19 +466,19 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
       igSeparator();
       igText("Press ESC to cancel.");
 
-      ImGuiIO *io = igGetIO_Nil();
-      if (igIsKeyPressed_Bool(ImGuiKey_Escape, false)) {
+      // Capture through GLFW as well, so what gets bound is exactly what the binds will later read.
+      if (input_key_pressed(GLFW_KEY_ESCAPE, false)) {
         manager->is_waiting_for_input = false;
         igCloseCurrentPopup();
       } else {
-        for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; key++) {
-          if (key == ImGuiKey_Escape || is_modifier_key(key)) continue;
-          if (igIsKeyPressed_Bool(key, false)) {
+        ImGuiKey key = input_capture_pressed_key();
+        {
+          if (key != ImGuiKey_None) {
             key_combo_t new_combo;
             new_combo.key = key;
-            new_combo.ctrl = io->KeyCtrl;
-            new_combo.alt = io->KeyAlt;
-            new_combo.shift = io->KeyShift;
+            new_combo.ctrl = input_ctrl_down();
+            new_combo.alt = input_alt_down();
+            new_combo.shift = input_shift_down();
 
             // Check for perfect duplicate
             if (has_perfect_duplicate(manager, manager->action_to_rebind, new_combo)) {
@@ -486,7 +496,6 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
 
             manager->is_waiting_for_input = false;
             igCloseCurrentPopup();
-            break;
           }
         }
       }

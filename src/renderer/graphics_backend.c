@@ -1,6 +1,7 @@
 #include "graphics_backend.h"
 #include "renderer.h"
 #include <logger/logger.h>
+#include <system/input.h>
 #include <user_interface/user_interface.h>
 #include <stdbool.h>
 
@@ -110,6 +111,9 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   handler->raw_mouse.dy += diff_y;
   handler->raw_mouse.x = xpos;
   handler->raw_mouse.y = ypos;
+
+  // Every motion event lands here, so a frame sees the full movement no matter the polling rate.
+  input_accumulate_mouse_delta(diff_x, diff_y);
     float div = (1.0f / (handler->viewport[1] / 2.f)) * 402.f;
 
   // used by recording
@@ -121,6 +125,19 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
     handler->user_interface.recording_mouse_pos[1] = vgety(n) * (handler->user_interface.mouse_max_distance / div);
     handler->user_interface.recording_mouse_pos[0] = vgetx(n) * (handler->user_interface.mouse_max_distance / div);
   }
+}
+
+static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) {
+  (void)window;
+  input_accumulate_scroll(xoffset, yoffset);
+}
+
+static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods) {
+  (void)window;
+  (void)scancode;
+  (void)mods;
+  // Down/up state is polled; only the OS repeat timing has to come from events.
+  if (action == GLFW_REPEAT) input_accumulate_key_repeat(key);
 }
 
 int init_gfx_handler(gfx_handler_t *handler) {
@@ -160,9 +177,13 @@ int init_gfx_handler(gfx_handler_t *handler) {
   }
 
   glfwSetWindowUserPointer(handler->window, handler);
+  // Installed before the imgui backend so that it chains to these instead of replacing them.
   glfwSetCursorPosCallback(handler->window, cursor_position_callback);
+  glfwSetScrollCallback(handler->window, scroll_callback);
+  glfwSetKeyCallback(handler->window, key_callback);
   handler->raw_mouse.x = handler->raw_mouse.y = 0.0;
   handler->raw_mouse.dx = handler->raw_mouse.dy = 0.0;
+  input_init(handler->window);
 
   // Initialize ImGui context early for config keybind parsing
   igCreateContext(NULL);
@@ -253,6 +274,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   if (glfwWindowShouldClose(handler->window)) return FRAME_EXIT;
 
   glfwPollEvents();
+  input_new_frame();
 
   if (glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
     ImGui_ImplGlfw_Sleep(10);

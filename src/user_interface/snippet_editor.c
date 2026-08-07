@@ -4,7 +4,9 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <GLFW/glfw3.h>
 #include <system/include_cimgui.h>
+#include <system/input.h>
 #include <user_interface/timeline/timeline_commands.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <user_interface/user_interface.h>
@@ -401,10 +403,9 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           // will correctly span the entire row thanks to the SpanAllColumns flag.
           if (igSelectable_Bool(selectable_id, editor_state.selected_rows[i], ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
                                 (ImVec2){0, igGetFrameHeight()})) {
-            ImGuiIO *io = igGetIO_Nil();
-            if (io->KeyCtrl) {
+            if (input_ctrl_down()) {
               editor_state.selected_rows[i] = !editor_state.selected_rows[i];
-            } else if (io->KeyShift && editor_state.last_selected_row != -1) {
+            } else if (input_shift_down() && editor_state.last_selected_row != -1) {
               int start = editor_state.last_selected_row < i ? editor_state.last_selected_row : i;
               int end = editor_state.last_selected_row > i ? editor_state.last_selected_row : i;
               memset(editor_state.selected_rows, 0, sizeof(editor_state.selected_rows));
@@ -621,15 +622,14 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
       bool changed = false;
       int earliest_tick = -1;
 
-      ImGuiIO *io = igGetIO_Nil();
 
       // Deselect all with Escape
-      if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) && editor_state.selection_count > 0) {
+      if (input_key_pressed(GLFW_KEY_ESCAPE, false) && editor_state.selection_count > 0) {
         reset_editor_state();
       }
 
       // Copy with Ctrl+C
-      if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_C, false) && editor_state.selection_count > 0) {
+      if (input_ctrl_down() && input_key_pressed(GLFW_KEY_C, false) && editor_state.selection_count > 0) {
         if (editor_state.clipboard_inputs) {
           free(editor_state.clipboard_inputs);
         }
@@ -646,7 +646,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
       }
 
       // Paste with Ctrl+V
-      if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_V, false) && editor_state.clipboard_count > 0 && editor_state.selection_count > 0) {
+      if (input_ctrl_down() && input_key_pressed(GLFW_KEY_V, false) && editor_state.clipboard_count > 0 && editor_state.selection_count > 0) {
         begin_action();
         get_selection_bounds(&earliest_tick, NULL);
         if (earliest_tick != -1) {
@@ -662,7 +662,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
         }
       }
       if (!igIsWindowHovered(0)) {
-        if (igIsKeyPressed_Bool(ImGuiKey_A, true)) {
+        if (input_key_pressed(GLFW_KEY_A, true)) {
           begin_action();
           get_selection_bounds(&earliest_tick, NULL);
           for (int i = 0; i < snippet->input_count; i++) {
@@ -676,7 +676,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           else editor_state.action_in_progress = false;
         }
 
-        if (igIsKeyPressed_Bool(ImGuiKey_D, true)) {
+        if (input_key_pressed(GLFW_KEY_D, true)) {
           begin_action();
           if (!changed) get_selection_bounds(&earliest_tick, NULL);
           for (int i = 0; i < snippet->input_count; i++) {
@@ -689,7 +689,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           if (changed) end_action(ui, snippet);
           else editor_state.action_in_progress = false;
         }
-        if (igIsKeyPressed_Bool(ImGuiKey_Space, true)) {
+        if (input_key_pressed(GLFW_KEY_SPACE, true)) {
           begin_action();
           get_selection_bounds(&earliest_tick, NULL);
           for (int i = 0; i < snippet->input_count; i++) {
@@ -702,7 +702,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           if (changed) end_action(ui, snippet);
           else editor_state.action_in_progress = false;
         }
-        if (igIsKeyPressed_Bool(ImGuiKey_Q, false)) {
+        if (input_key_pressed(GLFW_KEY_Q, false)) {
           begin_action();
           for (int i = 0; i < snippet->input_count; i++) {
             if (editor_state.selected_rows[i]) {
@@ -715,7 +715,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           else editor_state.action_in_progress = false;
         }
         // Mouse right click is for context menus, so avoiding it for keybinds.
-        if (igIsKeyPressed_Bool(ImGuiKey_E, false)) {
+        if (input_key_pressed(GLFW_KEY_E, false)) {
           begin_action();
           for (int i = 0; i < snippet->input_count; i++) {
             if (editor_state.selected_rows[i] && snippet_window(snippet)[i].m_Direction < 1) {

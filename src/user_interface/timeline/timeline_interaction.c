@@ -6,6 +6,7 @@
 #include "timeline_renderer.h"
 #include "user_interface/timeline/timeline_types.h"
 #include <GLFW/glfw3.h>
+#include <system/input.h>
 #include <ddnet_physics/gamecore.h>
 #include <math.h>
 #include <stdlib.h>
@@ -162,7 +163,7 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   if (ts->is_playing || ts->is_reversing) interaction_update_mouse(ts);
 
   // Abort recording
-  if (igIsKeyPressed_Bool(ImGuiKey_Escape, false) && ts->recording) {
+  if (input_key_pressed(GLFW_KEY_ESCAPE, false) && ts->recording) {
     ts->is_playing = 0;
     interaction_toggle_recording(ts);
   }
@@ -231,10 +232,11 @@ static void handle_pan_and_zoom(timeline_state_t *ts, ImRect timeline_bb) {
 
   if (!is_timeline_hovered) return;
 
-  // Zoom with mouse wheel
-  if (io->MouseWheel != 0) {
+  // Zoom with mouse wheel, read from GLFW so it is not delayed by imgui's event trickling.
+  float wheel = (float)input_scroll_y();
+  if (wheel != 0.0f) {
     int mouse_tick_before = renderer_screen_x_to_tick(ts, io->MousePos.x, timeline_bb.Min.x);
-    float zoom_delta = io->KeyCtrl * io->MouseWheel * 0.1f * ts->zoom;
+    float zoom_delta = (input_ctrl_down() ? 1.0f : 0.0f) * wheel * 0.1f * ts->zoom;
     ts->zoom = fmaxf(0.05f, fminf(20.0f, ts->zoom + zoom_delta));
     int mouse_tick_after = renderer_screen_x_to_tick(ts, io->MousePos.x, timeline_bb.Min.x);
     ts->view_start_tick += (mouse_tick_before - mouse_tick_after);
@@ -474,7 +476,6 @@ static void handle_trim_handles(timeline_state_t *ts, input_snippet_t *snippet, 
 
 static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_bb) {
   float dpi_scale = gfx_get_ui_scale();
-  ImGuiIO *io = igGetIO_Nil();
 
   // bool any_item_hovered_before = igIsAnyItemHovered();
 
@@ -508,7 +509,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
       igInvisibleButton("snippet", (ImVec2){imax(end_x - start_x, 1), fmaxf(1.0f, snippet_height)}, 0);
 
       if (igIsItemClicked(ImGuiMouseButton_Left)) {
-        if (io->KeyShift) {
+        if (input_shift_down()) {
           if (interaction_is_snippet_selected(ts, snippet->id)) interaction_remove_snippet_from_selection(ts, snippet->id);
           else interaction_add_snippet_to_selection(ts, snippet->id);
         } else {
@@ -619,7 +620,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
 
       if (valid_moves > 0) {
         undo_command_t *cmd = NULL;
-        if (io->KeyAlt) {
+        if (input_alt_down()) {
           cmd = commands_create_duplicate_snippets(ts->ui, infos, valid_moves);
         } else {
           cmd = commands_create_move_snippets(ts->ui, infos, valid_moves);
@@ -657,8 +658,7 @@ static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb) {
 
 static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb) {
   float dpi_scale = gfx_get_ui_scale();
-  ImGuiIO *io = igGetIO_Nil();
-  if (!io->KeyShift) {
+  if (!input_shift_down()) {
     interaction_clear_selection(ts);
   }
 
