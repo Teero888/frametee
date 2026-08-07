@@ -113,6 +113,9 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   handler->raw_mouse.y = ypos;
 
   input_accumulate_mouse_delta(diff_x, diff_y);
+
+  if (!handler->user_interface.timeline.recording) return;
+
   float sens = handler->user_interface.mouse_sens * 0.01f;
   handler->user_interface.recording_mouse_pos[0] += diff_x * sens;
   handler->user_interface.recording_mouse_pos[1] += diff_y * sens;

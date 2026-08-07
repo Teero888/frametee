@@ -206,6 +206,16 @@ void config_load(ui_handler_t *ui) {
       ui->show_prediction = show_prediction.u.boolean;
     }
 
+    toml_datum_t cursor_scale = toml_get(graphics_settings, "cursor_scale");
+    if (cursor_scale.type == TOML_FP64) {
+      ui->cursor_scale = (float)cursor_scale.u.fp64;
+    }
+
+    toml_datum_t render_cursor_follow = toml_get(graphics_settings, "render_cursor_follow");
+    if (render_cursor_follow.type == TOML_BOOLEAN) {
+      ui->render_cursor_follow = render_cursor_follow.u.boolean;
+    }
+
     toml_datum_t center_dot = toml_get(graphics_settings, "center_dot");
     if (center_dot.type == TOML_BOOLEAN) {
       ui->center_dot = center_dot.u.boolean;
@@ -355,6 +365,8 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);
   fprintf(fp, "prediction_alpha = [%.3f, %.3f]\n", ui->prediction_alpha[0], ui->prediction_alpha[1]);
   fprintf(fp, "show_prediction = %s\n", ui->show_prediction ? "true" : "false");
+  fprintf(fp, "cursor_scale = %.3f\n", ui->cursor_scale);
+  fprintf(fp, "render_cursor_follow = %s\n", ui->render_cursor_follow ? "true" : "false");
   fprintf(fp, "center_dot = %s\n", ui->center_dot ? "true" : "false");
   fprintf(fp, "render_map = %s\n", ui->render_map ? "true" : "false");
   fprintf(fp, "render_players = %s\n", ui->render_players ? "true" : "false");

@@ -137,11 +137,13 @@ void render_menu_bar(ui_handler_t *ui) {
         if (igCheckbox("Pickups", &ui->render_pickups)) config_save(ui);
         if (igCheckbox("HUD / Crosshair", &ui->render_hud)) config_save(ui);
         igSeparator();
+        if (igDragFloat("Cursor Scale", &ui->cursor_scale, 0.05f, 0.1f, 2.0f, "%.2f", 0)) config_save(ui);
+        if (igCheckbox("Cursor in follow camera", &ui->render_cursor_follow)) config_save(ui);
+        igSeparator();
         if (igCheckbox("Show prediction", &ui->show_prediction)) config_save(ui);
         if (igDragFloat("Prediction alpha own", &ui->prediction_alpha[0], 0.1f, 0.0f, 1.0f, "%.3f", 0)) config_save(ui);
         if (igDragFloat("Prediction alpha others", &ui->prediction_alpha[1], 0.1f, 0.0f, 1.0f, "%.3f", 0)) config_save(ui);
         if (igCheckbox("Show center dot", &ui->center_dot)) config_save(ui);
-
         igEndMenu();
       }
       if (igBeginMenu("Auto-Save", true)) {
@@ -432,7 +434,9 @@ void ui_init_config(ui_handler_t *ui) {
   ui->bg_color[2] = 40.f / 255.f;
   ui->prediction_alpha[0] = 1.0f;
   ui->prediction_alpha[1] = 1.0f;
+  ui->cursor_scale = 1.0f;
   ui->center_dot = 0;
+  ui->render_cursor_follow = true;
 
   ui->render_map = true;
   ui->render_players = true;
@@ -627,16 +631,20 @@ void render_players(ui_handler_t *ui) {
   float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
   if (ui->timeline.is_reversing) intra = 1.f - intra;
 
-  if (ui->timeline.recording) {
-    SCharacterCore *core = &world.m_pCharacters[gfx->user_interface.timeline.selected_player_track_index];
+  // keep track of where the selected player and their crosshair are, the cursor renders from it.
+  int selected = ui->timeline.selected_player_track_index;
+  if (selected >= 0 && selected < world.m_NumCharacters) {
+    SCharacterCore *core = &world.m_pCharacters[selected];
     vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
     vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
     vec2 p;
     lerp(ppp, pp, intra, p);
 
     glm_vec2_copy(p, ui->last_render_pos);
-    ui->gfx_handler->renderer.camera.pos[0] = (p[0]) / ui->gfx_handler->map_data->width;
-    ui->gfx_handler->renderer.camera.pos[1] = (p[1]) / ui->gfx_handler->map_data->height;
+    if (ui->timeline.recording) {
+      ui->gfx_handler->renderer.camera.pos[0] = (p[0]) / ui->gfx_handler->map_data->width;
+      ui->gfx_handler->renderer.camera.pos[1] = (p[1]) / ui->gfx_handler->map_data->height;
+    }
   }
 
   float min_wx, min_wy, max_wx, max_wy;
@@ -696,12 +704,13 @@ void render_players(ui_handler_t *ui) {
     vec2 dir;
     if (ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
       recording_aim(ui, dir);
+      glm_vec2_normalize(dir);
     } else {
-      dir[0] = core->m_Input.m_TargetX;
-      dir[1] = core->m_Input.m_TargetY;
+      const SPlayerInput *prev_input = &prev_world.m_pCharacters[i].m_Input;
+      dir[0] = glm_lerp(prev_input->m_TargetX, core->m_Input.m_TargetX, intra);
+      dir[1] = glm_lerp(prev_input->m_TargetY, core->m_Input.m_TargetY, intra);
+      glm_vec2_normalize(dir);
     }
-
-    glm_vec2_normalize(dir);
     player_info_t *info = &ui->timeline.player_tracks[i].player_info;
     int skin = info->skin;
     int eye = get_flag_eye_state(&core->m_Input);
@@ -1313,27 +1322,44 @@ static float tiles_to_pixels(gfx_handler_t *handler) {
 }
 
 void render_cursor(ui_handler_t *ui) {
-  if (!ui->render_hud || !ui->timeline.recording) return;
+  if (!ui->render_hud) return;
 
   gfx_handler_t *handler = ui->gfx_handler;
+  // while recording the crosshair is the one being drawn live, otherwise show the followed
+  // player's recorded aim when the camera is locked to them.
+  bool follow_view = handler->renderer.camera.mode == CAMERA_MODE_FOLLOW && ui->render_cursor_follow &&
+                     ui->timeline.selected_player_track_index >= 0 &&
+                     ui->timeline.selected_player_track_index < ui->timeline.player_track_count;
+  if (!ui->timeline.recording && !follow_view) return;
+
   if (!handler->map_data) return;
   int weapon = handler->user_interface.weapon;
   if (weapon < 0 || weapon >= CURSOR_SPRITE_COUNT) return;
 
   vec2 aim;
-  recording_aim(ui, aim);
+  if (ui->timeline.recording) {
+    recording_aim(ui, aim);
+  } else {
+    // Watching: take the aim straight off the timeline, interpolated like the tee itself.
+    timeline_state_t *ts = &ui->timeline;
+    int track = ts->selected_player_track_index;
+    float speed_scale = ts->is_reversing ? 2.0f : 1.0f;
+    float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
+    if (ts->is_reversing) intra = 1.f - intra;
 
-  // CHud::RenderCursor centers the cursor on the target position (character pos + mouse pos)
-  // and sizes it 64 units times the sprite's normalized proportions
-  // (CGraphics_Threaded::GetSpriteScaleImpl), but on a screen mapped at zoom 1 while the world
-  // is drawn zoomed. So the offset and the size stay fixed in screen pixels: convert them from
-  // DDNet's zoom-1 pixel scale into the tiles the current camera zoom needs to draw that.
+    SPlayerInput prev = model_get_input_at_tick(ts, track, ts->current_tick - 1);
+    SPlayerInput cur = model_get_input_at_tick(ts, track, ts->current_tick);
+    aim[0] = glm_lerp(prev.m_TargetX, cur.m_TargetX, intra);
+    aim[1] = glm_lerp(prev.m_TargetY, cur.m_TargetY, intra);
+  }
+
   float zoom1_tiles = aim_units_to_pixels(handler) * 32.0f / tiles_to_pixels(handler);
 
   const sprite_definition_t *def = &handler->renderer.cursor_renderer.sprite_definitions[weapon];
   float f = sqrtf((float)def->w * (float)def->w + (float)def->h * (float)def->h);
-  vec2 size = {64.0f * ((float)def->w / f) / 32.0f * zoom1_tiles,
-               64.0f * ((float)def->h / f) / 32.0f * zoom1_tiles};
+  float sprite_units = 64.0f * ui->cursor_scale;
+  vec2 size = {sprite_units * ((float)def->w / f) / 32.0f * zoom1_tiles,
+               sprite_units * ((float)def->h / f) / 32.0f * zoom1_tiles};
 
   vec2 pos = {ui->last_render_pos[0] + aim[0] / 32.0f * zoom1_tiles,
               ui->last_render_pos[1] + aim[1] / 32.0f * zoom1_tiles};

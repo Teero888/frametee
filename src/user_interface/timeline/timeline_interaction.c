@@ -6,11 +6,11 @@
 #include "timeline_renderer.h"
 #include "user_interface/timeline/timeline_types.h"
 #include <GLFW/glfw3.h>
-#include <system/input.h>
 #include <ddnet_physics/gamecore.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <system/input.h>
 #include <user_interface/user_interface.h>
 #include <user_interface/widgets/imcol.h>
 
@@ -101,19 +101,24 @@ void interaction_apply_dummy_inputs(ui_handler_t *ui) {
 }
 
 void interaction_update_mouse(timeline_state_t *ts) {
+  int track_index = ts->selected_player_track_index;
+  if (track_index < 0 || track_index >= ts->player_track_count) return;
+
   if (ts->recording) {
-    player_track_t *track = &ts->player_tracks[ts->selected_player_track_index];
-    input_snippet_t *active_rec_snip = active_rec_snip = &track->recording_snippets[track->recording_snippet_count - 1];
-    if (ts->current_tick < active_rec_snip->end_tick) {
-      float speed_scale = ts->is_reversing ? 2.0f : 1.0f;
-      float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
-      if (ts->ui->timeline.is_reversing) intra = 1.f - intra;
-      ts->ui->recording_mouse_pos[0] = glm_lerp(model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick - 1).m_TargetX,
-                                                model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick).m_TargetX, intra);
-      ts->ui->recording_mouse_pos[1] = glm_lerp(model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick - 1).m_TargetY,
-                                                model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick).m_TargetY, intra);
-    }
+    player_track_t *track = &ts->player_tracks[track_index];
+    if (track->recording_snippet_count <= 0) return;
+    input_snippet_t *active_rec_snip = &track->recording_snippets[track->recording_snippet_count - 1];
+    // Ticks past the recorded end are being recorded right now, those follow the physical mouse.
+    if (ts->current_tick >= active_rec_snip->end_tick) return;
   }
+
+  float speed_scale = ts->is_reversing ? 2.0f : 1.0f;
+  float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
+  if (ts->is_reversing) intra = 1.f - intra;
+  ts->ui->recording_mouse_pos[0] = glm_lerp(model_get_input_at_tick(ts, track_index, ts->current_tick - 1).m_TargetX,
+                                            model_get_input_at_tick(ts, track_index, ts->current_tick).m_TargetX, intra);
+  ts->ui->recording_mouse_pos[1] = glm_lerp(model_get_input_at_tick(ts, track_index, ts->current_tick - 1).m_TargetY,
+                                            model_get_input_at_tick(ts, track_index, ts->current_tick).m_TargetY, intra);
 }
 
 // Main Interaction Handlers
@@ -775,6 +780,14 @@ static void interaction_start_recording_on_track(timeline_state_t *ts, int track
 }
 
 void interaction_toggle_recording(timeline_state_t *ts) {
+  // continue the aim from the snippet under the playhead instead of jumping to wherever the mouse
+  // was left.
+  if (!ts->recording && ts->selected_player_track_index >= 0 && ts->selected_player_track_index < ts->player_track_count) {
+    SPlayerInput prev = model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick);
+    ts->ui->recording_mouse_pos[0] = prev.m_TargetX;
+    ts->ui->recording_mouse_pos[1] = prev.m_TargetY;
+  }
+
   ts->recording = !ts->recording;
 
   if (ts->recording) {
