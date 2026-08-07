@@ -186,11 +186,10 @@ void setup_docking(ui_handler_t *ui) {
   igPopStyleVar(3);
 
   // create the main dockspace
-  igDockSpace(main_dockspace_id, (ImVec2){0.0f, 0.0f}, ImGuiDockNodeFlags_PassthruCentralNode,
-              NULL); // Passthru allows seeing background
+  igDockSpace(main_dockspace_id, (ImVec2){0.0f, 0.0f}, ImGuiDockNodeFlags_PassthruCentralNode | ImGuiDockNodeFlags_NoWindowMenuButton, NULL);
   igEnd();
 
-  // build the initial layout programmatically --
+  // build the initial layout programmatically
   static bool first_time = true;
   if (first_time) {
     first_time = false;
@@ -370,9 +369,8 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
         vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
         vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
         vec2 p = {
-          ppp[0] + intra * (pp[0] - ppp[0]),
-          ppp[1] + intra * (pp[1] - ppp[1])
-        };
+            ppp[0] + intra * (pp[0] - ppp[0]),
+            ppp[1] + intra * (pp[1] - ppp[1])};
 
         camera->pos[0] = p[0] / handler->map_data->width;
         camera->pos[1] = p[1] / handler->map_data->height;
@@ -1818,9 +1816,8 @@ bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size) {
   // Calculate top-left for AddText so icon visual center matches button frame center
   ImVec2 center = {(bb.Min.x + bb.Max.x) * 0.5f, (bb.Min.y + bb.Max.y) * 0.5f};
   ImVec2 text_pos = {
-    roundf(center.x - text_size.x * 0.5f),
-    roundf(center.y - text_size.y * 0.5f)
-  };
+      roundf(center.x - text_size.x * 0.5f),
+      roundf(center.y - text_size.y * 0.5f)};
 
   ImDrawList_AddText_FontPtr(
       igGetWindowDrawList(),
