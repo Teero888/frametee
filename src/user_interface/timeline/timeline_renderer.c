@@ -270,7 +270,7 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
 
       // Render Track Info Panel (Left)
       bool is_track_selected = (ts->selected_player_track_index == i);
-      ImU32 header_bg_col = track->is_dummy ? igGetColorU32_Col(ImGuiCol_CheckMark, 0.6f) : igGetColorU32_Col(ImGuiCol_FrameBg, 0.8f);
+      ImU32 header_bg_col = track->is_dummy ? igGetColorU32_Col(ImGuiCol_TextLink, 0.6f) : igGetColorU32_Col(ImGuiCol_FrameBg, 0.8f);
 
       ImVec2 header_rect_min = row_start_pos;
       ImVec2 header_rect_max = {row_start_pos.x + track_header_width, row_start_pos.y + (ts->track_height * dpi_scale)};
