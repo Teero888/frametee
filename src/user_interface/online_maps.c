@@ -581,7 +581,9 @@ void online_map_manager_update(online_map_manager_t *mgr, gfx_handler_t *gfx) {
             online_map_item_t *item = find_map_item(mgr, g_thumb_tasks[i].target_name, g_thumb_tasks[i].target_repo);
             if (item) {
                 item->thumb_fetching = false;
-                if (!g_thumb_tasks[i].success || !g_thumb_tasks[i].decoded_pixels) {
+                if (item->thumb_loaded || item->thumb_preview_texture) {
+                    // Already loaded, do nothing
+                } else if (!g_thumb_tasks[i].success || !g_thumb_tasks[i].decoded_pixels) {
                     item->thumb_failed = true;
                 } else {
                     item->thumb_texture_res = renderer_create_texture_from_rgba(gfx, g_thumb_tasks[i].decoded_pixels, g_thumb_tasks[i].img_width, g_thumb_tasks[i].img_height);

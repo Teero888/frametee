@@ -100,6 +100,10 @@ struct ui_handler_t {
   double last_auto_save_time;
   bool show_plugin_manager;
   bool auto_generate_finish_events;
+  // the splash doubles as the "new project" screen, so it can be raised over a loaded project and
+  // dismissed again without touching it
+  bool show_splash;
+  bool show_new_project_prompt;
 };
 
 void on_camera_update(struct gfx_handler_t *handler, bool hovered);
@@ -111,6 +115,8 @@ void ui_check_auto_save(ui_handler_t *ui);
 struct timeline_state;
 void ui_mark_unsaved(ui_handler_t *ui);
 void timeline_mark_unsaved(struct timeline_state *ts);
+// asks for confirmation when there is unsaved work, otherwise raises the splash screen right away
+void ui_request_new_project(ui_handler_t *ui);
 
 void ui_init_config(ui_handler_t *ui);
 void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);

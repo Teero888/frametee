@@ -40,16 +40,28 @@
 
 static const char *LOG_SOURCE = "UI";
 
+// the name a "save as" dialog starts out on, so a project defaults to sitting next to its map
+static void project_default_file_name(ui_handler_t *ui, char *out, size_t out_size) {
+  const char *map_name = (ui->loaded_map_name[0] != '\0') ? ui->loaded_map_name : "unnamed_map";
+  snprintf(out, out_size, "%s.tasp", map_name);
+}
+
 void render_menu_bar(ui_handler_t *ui) {
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
+      if (igMenuItem_Bool("New Project", NULL, false, true)) {
+        ui_request_new_project(ui);
+      }
+      igSeparator();
       if (igMenuItem_Bool("Save Project", "Ctrl+S", false, true)) {
         ui_quick_save(ui);
       }
       if (igMenuItem_Bool("Save Project As...", "Ctrl+Shift+S", false, true)) {
         nfdu8char_t *save_path;
         nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
-        nfdresult_t result = NFD_SaveDialogU8(&save_path, filters, 1, NULL, "unnamed.tasp");
+        char default_file_name[256];
+        project_default_file_name(ui, default_file_name, sizeof(default_file_name));
+        nfdresult_t result = NFD_SaveDialogU8(&save_path, filters, 1, NULL, default_file_name);
         if (result == NFD_OKAY) {
           save_project(ui, save_path);
           NFD_FreePathU8(save_path);
@@ -1398,6 +1410,64 @@ void ui_add_recent_project(ui_handler_t *ui, const char *path) {
   config_save(ui);
 }
 
+static void render_new_project_prompt(ui_handler_t *ui) {
+  const char *popup_id = "Unsaved Changes##NewProject";
+
+  if (ui->show_new_project_prompt) {
+    ui->show_new_project_prompt = false;
+    igOpenPopup_Str(popup_id, ImGuiPopupFlags_None);
+  }
+
+  ImVec2 center;
+  ImGuiViewport *viewport = igGetMainViewport();
+  center.x = viewport->WorkPos.x + viewport->WorkSize.x * 0.5f;
+  center.y = viewport->WorkPos.y + viewport->WorkSize.y * 0.5f;
+  igSetNextWindowPos(center, ImGuiCond_Appearing, (ImVec2){0.5f, 0.5f});
+
+  if (igBeginPopupModal(popup_id, NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    if (ui->current_project_path[0] != '\0') {
+      igText("'%s' has unsaved changes.", ui->current_project_path);
+    } else {
+      igText("The current project has unsaved changes.");
+    }
+    igText("Save them before starting a new project?");
+
+    igSpacing();
+    igSeparator();
+    igSpacing();
+
+    float dpi = gfx_get_ui_scale();
+    ImVec2 button_size = {110.0f * dpi, 0.0f};
+
+    if (igButton("Save", button_size)) {
+      // a cancelled or failed save leaves the dialog up instead of moving on
+      if (ui_quick_save(ui)) {
+        ui->show_splash = true;
+        igCloseCurrentPopup();
+      }
+    }
+    igSameLine(0.0f, 8.0f);
+    if (igButton("Don't Save", button_size)) {
+      ui->show_splash = true;
+      igCloseCurrentPopup();
+    }
+    igSameLine(0.0f, 8.0f);
+    if (igButton("Cancel", button_size)) {
+      igCloseCurrentPopup();
+    }
+    igEndPopup();
+  }
+}
+
+// picking a bare map from the splash starts a fresh project, so the previously open project's path
+// must not stay behind or the next Ctrl+S would silently overwrite it.
+static void splash_on_map_picked(ui_handler_t *ui) {
+  ui->current_project_path[0] = '\0';
+  ui->has_unsaved_changes = false;
+  ui->last_auto_save_time = 0.0;
+  ui->show_splash = false;
+}
+
 static void render_splash_screen(ui_handler_t *ui) {
   if (!igIsPopupOpen_Str("Splash Screen", ImGuiPopupFlags_None)) {
     igOpenPopup_Str("Splash Screen", ImGuiPopupFlags_None);
@@ -1467,6 +1537,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         if (result == NFD_OKAY) {
           on_map_load_path(ui->gfx_handler, out_path);
           NFD_FreePathU8(out_path);
+          splash_on_map_picked(ui);
           igCloseCurrentPopup();
         }
       }
@@ -1481,6 +1552,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         if (result == NFD_OKAY) {
           load_project(ui, out_path);
           NFD_FreePathU8(out_path);
+          ui->show_splash = false;
           igCloseCurrentPopup();
         }
       }
@@ -1516,6 +1588,7 @@ static void render_splash_screen(ui_handler_t *ui) {
 
             if (igButton(item_lbl, (ImVec2){0.0f, 32.0f})) {
               load_project(ui, path);
+              ui->show_splash = false;
               igCloseCurrentPopup();
             }
             if (igIsItemHovered(ImGuiHoveredFlags_None)) {
@@ -1546,10 +1619,18 @@ static void render_splash_screen(ui_handler_t *ui) {
     {
       ImVec2 avail = igGetContentRegionAvail();
       if (render_online_map_browser(ui, &ui->online_maps, avail.x, avail.y)) {
+        splash_on_map_picked(ui);
         igCloseCurrentPopup();
       }
     }
     igEndChild();
+
+    // clicking the backdrop puts you back on the current project.
+    if (ui->gfx_handler->physics_handler.loaded && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) &&
+        !igIsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+      ui->show_splash = false;
+      igCloseCurrentPopup();
+    }
 
     igEndPopup();
   }
@@ -1597,7 +1678,11 @@ void ui_render(ui_handler_t *ui) {
   }
   entity_inspector_render(&ui->entity_inspector);
 
-  if (!ui->gfx_handler->physics_handler.loaded) {
+  render_new_project_prompt(ui);
+
+  // with nothing loaded the splash is the only thing to show, otherwise it is up because
+  // "New Project" raised it and the user can still dismiss it
+  if (!ui->gfx_handler->physics_handler.loaded || ui->show_splash) {
     render_splash_screen(ui);
   }
 }
@@ -1924,7 +2009,9 @@ bool ui_quick_save(ui_handler_t *ui) {
   } else {
     nfdu8char_t *save_path = NULL;
     nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
-    nfdresult_t result = NFD_SaveDialogU8(&save_path, filters, 1, NULL, "unnamed.tasp");
+    char default_file_name[256];
+    project_default_file_name(ui, default_file_name, sizeof(default_file_name));
+    nfdresult_t result = NFD_SaveDialogU8(&save_path, filters, 1, NULL, default_file_name);
     if (result == NFD_OKAY) {
       bool ok = save_project(ui, save_path);
       NFD_FreePathU8(save_path);
@@ -1932,6 +2019,14 @@ bool ui_quick_save(ui_handler_t *ui) {
     }
     return false;
   }
+}
+
+void ui_request_new_project(ui_handler_t *ui) {
+  if (ui->has_unsaved_changes) {
+    ui->show_new_project_prompt = true;
+    return;
+  }
+  ui->show_splash = true;
 }
 
 void ui_mark_unsaved(ui_handler_t *ui) {
