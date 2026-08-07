@@ -152,6 +152,9 @@ struct timeline_state {
   float zoom;
   int view_start_tick;
   float track_height;
+  // Screen-space Y of the top of the first track row, scrolling included.
+  // Refreshed every frame by renderer_draw_tracks_area() so rendering and hit testing share one origin.
+  float tracks_origin_y;
 
   // Playback & Recording State
   int current_tick;

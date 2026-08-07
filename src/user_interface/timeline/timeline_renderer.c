@@ -30,24 +30,19 @@ float renderer_tick_to_screen_x(const timeline_state_t *ts, int tick, float time
   return timeline_start_x + (tick - ts->view_start_tick) * ts->zoom;
 }
 
-float renderer_get_track_screen_y(const timeline_state_t *ts, ImRect timeline_bb, int track_index, float scroll_y) {
-  float dpi_scale = gfx_get_ui_scale();
-  float padding_y = igGetStyle()->WindowPadding.y;
-  float item_spacing_y = igGetStyle()->ItemSpacing.y;
-  float total_row_height = (ts->track_height * dpi_scale) + item_spacing_y;
-  return timeline_bb.Min.y + padding_y + (float)track_index * total_row_height - scroll_y;
+float renderer_get_track_row_height(const timeline_state_t *ts) {
+  return (ts->track_height * gfx_get_ui_scale()) + igGetStyle()->ItemSpacing.y;
 }
 
-int renderer_screen_y_to_track_index(const timeline_state_t *ts, ImRect timeline_bb, float screen_y, float scroll_y) {
-  float dpi_scale = gfx_get_ui_scale();
-  float padding_y = igGetStyle()->WindowPadding.y;
-  float item_spacing_y = igGetStyle()->ItemSpacing.y;
-  float total_row_height = (ts->track_height * dpi_scale) + item_spacing_y;
+float renderer_get_track_screen_y(const timeline_state_t *ts, int track_index) {
+  return ts->tracks_origin_y + (float)track_index * renderer_get_track_row_height(ts);
+}
 
-  float content_y = screen_y - (timeline_bb.Min.y + padding_y) + scroll_y;
+int renderer_screen_y_to_track_index(const timeline_state_t *ts, float screen_y) {
+  float content_y = screen_y - ts->tracks_origin_y;
   if (content_y < 0) return -1;
 
-  int track_index = (int)floorf(content_y / total_row_height);
+  int track_index = (int)floorf(content_y / renderer_get_track_row_height(ts));
   return (track_index >= ts->player_track_count) ? -1 : track_index;
 }
 
@@ -259,12 +254,18 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   float track_header_width = 120.0f * dpi_scale;
   ImDrawList *draw_list = igGetWindowDrawList();
 
+  // The rows are laid out from this origin, and hit testing derives the same positions from it.
+  ts->tracks_origin_y = igGetCursorScreenPos().y;
+
   ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
-  float total_row_height = (ts->track_height * dpi_scale) + igGetStyle()->ItemSpacing.y;
+  float total_row_height = renderer_get_track_row_height(ts);
   ImGuiListClipper_Begin(clipper, ts->player_track_count, total_row_height);
   while (ImGuiListClipper_Step(clipper)) {
     for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; i++) {
-      ImVec2 row_start_pos = igGetCursorScreenPos();
+      // Pin the row instead of letting the cursor accumulate: ImGui truncates it after every
+      // item, which would drift away from the row positions hit testing computes.
+      ImVec2 row_start_pos = {igGetCursorScreenPos().x, renderer_get_track_screen_y(ts, i)};
+      igSetCursorScreenPos(row_start_pos);
       player_track_t *track = &ts->player_tracks[i];
 
       // Render Track Info Panel (Left)
@@ -351,12 +352,12 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   ImGuiListClipper_destroy(clipper);
 }
 
-void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRect timeline_bb, float tracks_area_scroll_y) {
+void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRect timeline_bb) {
   float dpi_scale = gfx_get_ui_scale();
   if (!ts->drag_state.active) return;
 
   int snapped_start_tick_clicked, base_track_index;
-  interaction_calculate_drag_destination(ts, timeline_bb, tracks_area_scroll_y, &snapped_start_tick_clicked, &base_track_index);
+  interaction_calculate_drag_destination(ts, timeline_bb, &snapped_start_tick_clicked, &base_track_index);
 
   input_snippet_t *clicked_snippet = model_find_snippet_by_id(ts, ts->drag_state.dragged_snippet_id, NULL);
   if (!clicked_snippet) return;
@@ -451,7 +452,7 @@ void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_l
         float sub_lane_height = (ts->track_height * dpi_scale) / (float)fmax(1, stack_size);
         float preview_min_x = renderer_tick_to_screen_x(ts, preview_snip->start_tick, timeline_bb.Min.x);
         float preview_max_x = renderer_tick_to_screen_x(ts, preview_snip->end_tick, timeline_bb.Min.x);
-        float target_track_top = renderer_get_track_screen_y(ts, timeline_bb, track_idx, tracks_area_scroll_y);
+        float target_track_top = renderer_get_track_screen_y(ts, track_idx);
         float preview_min_y = target_track_top + preview_snip->layer * sub_lane_height + 2.0f * dpi_scale;
         float preview_max_y = preview_min_y + sub_lane_height - 4.0f * dpi_scale;
 

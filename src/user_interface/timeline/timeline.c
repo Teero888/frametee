@@ -60,13 +60,11 @@ void render_timeline(ui_handler_t *ui) {
     igBeginChild_Str("TracksArea", (ImVec2){available_space.x, timeline_bb.Max.y - timeline_bb.Min.y}, false, ImGuiWindowFlags_NoScrollWithMouse);
     igPopStyleVar(3);
 
-    float tracks_scroll_y = igGetScrollY();
-
     // Render the track headers and snippets inside the child window
     renderer_draw_tracks_area(ts, timeline_bb);
 
     // Handle mouse interactions for the main timeline area (panning, selection, drag-drop)
-    interaction_handle_timeline_area(ts, timeline_bb, tracks_scroll_y);
+    interaction_handle_timeline_area(ts, timeline_bb);
 
     // Handle context menu
     if (igIsMouseClicked_Bool(ImGuiMouseButton_Right, false) && igIsWindowHovered(ImGuiHoveredFlags_ChildWindows) && igGetIO_Nil()->MousePos.x >= timeline_bb.Min.x) {
@@ -81,7 +79,7 @@ void render_timeline(ui_handler_t *ui) {
 
     // Render overlays (drag preview, selection box)
     renderer_draw_selection_box(ts, overlay_draw_list);
-    renderer_draw_drag_preview(ts, overlay_draw_list, timeline_bb, tracks_scroll_y);
+    renderer_draw_drag_preview(ts, overlay_draw_list, timeline_bb);
 
     // Draw playhead handle in the parent window
     renderer_draw_playhead_handle(ts, draw_list, timeline_bb, header_bb);

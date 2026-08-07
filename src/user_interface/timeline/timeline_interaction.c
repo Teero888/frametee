@@ -17,9 +17,9 @@
 
 // Forward Declarations for Static Interaction Helpers
 static void handle_pan_and_zoom(timeline_state_t *ts, ImRect timeline_bb);
-static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_bb, float tracks_scroll_y);
-static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb, float tracks_scroll_y);
-static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb, float scroll_y);
+static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_bb);
+static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb);
+static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb);
 static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id);
 static void interaction_start_recording_on_track(timeline_state_t *ts, int track_index);
 
@@ -195,11 +195,11 @@ void interaction_handle_header(timeline_state_t *ts, ImRect header_bb) {
   }
 }
 
-void interaction_handle_timeline_area(timeline_state_t *ts, ImRect timeline_bb, float tracks_scroll_y) {
+void interaction_handle_timeline_area(timeline_state_t *ts, ImRect timeline_bb) {
   if (igGetIO_Nil()->ConfigFlags & ImGuiConfigFlags_NoMouse) return;
   handle_pan_and_zoom(ts, timeline_bb);
-  handle_snippet_drag_and_drop(ts, timeline_bb, tracks_scroll_y);
-  handle_selection_box(ts, timeline_bb, tracks_scroll_y);
+  handle_snippet_drag_and_drop(ts, timeline_bb);
+  handle_selection_box(ts, timeline_bb);
 }
 
 // Selection Helpers
@@ -280,7 +280,7 @@ static void start_drag(timeline_state_t *ts, int snippet_id, ImRect timeline_bb)
   }
 }
 
-void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timeline_bb, float scroll_y, int *out_snapped_tick, int *out_base_track) {
+void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timeline_bb, int *out_snapped_tick, int *out_base_track) {
   ImGuiIO *io = igGetIO_Nil();
   input_snippet_t *clicked_snippet = model_find_snippet_by_id(ts, ts->drag_state.dragged_snippet_id, NULL);
   if (!clicked_snippet) return;
@@ -289,7 +289,7 @@ void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timelin
   int desired_start_tick = mouse_tick - ts->drag_state.drag_offset_ticks;
   *out_snapped_tick = calculate_snapped_tick(ts, desired_start_tick, clicked_snippet->input_count, clicked_snippet->id);
 
-  *out_base_track = renderer_screen_y_to_track_index(ts, timeline_bb, io->MousePos.y, scroll_y);
+  *out_base_track = renderer_screen_y_to_track_index(ts, io->MousePos.y);
   if (*out_base_track == -1) {
     // If mouse is above or below, clamp to first or last track
     *out_base_track = (io->MousePos.y < timeline_bb.Min.y) ? 0 : ts->player_track_count - 1;
@@ -297,7 +297,7 @@ void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timelin
   *out_base_track = imax(0, imin(ts->player_track_count - 1, *out_base_track));
 }
 
-static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_bb, float tracks_scroll_y) {
+static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_bb) {
   float dpi_scale = gfx_get_ui_scale();
   ImGuiIO *io = igGetIO_Nil();
 
@@ -313,7 +313,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
       float end_x = renderer_tick_to_screen_x(ts, snippet->end_tick, timeline_bb.Min.x);
       if (end_x < timeline_bb.Min.x || start_x > timeline_bb.Max.x) continue;
 
-      float track_top = renderer_get_track_screen_y(ts, timeline_bb, i, tracks_scroll_y);
+      float track_top = renderer_get_track_screen_y(ts, i);
 
       // Mirror rendering logic to get correct hitbox for stacked snippets
       int stack_size = model_get_stack_size_at_tick_range(track, snippet->start_tick, snippet->end_tick);
@@ -365,7 +365,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
     ImVec2 mouse = igGetIO_Nil()->MousePos;
     // Only consider clicks inside the timeline bounding box
     if (mouse.x >= timeline_bb.Min.x && mouse.x <= timeline_bb.Max.x && mouse.y >= timeline_bb.Min.y && mouse.y <= timeline_bb.Max.y) {
-      int clicked_track = renderer_screen_y_to_track_index(ts, timeline_bb, mouse.y, tracks_scroll_y);
+      int clicked_track = renderer_screen_y_to_track_index(ts, mouse.y);
       if (clicked_track >= 0 && clicked_track < ts->player_track_count) {
         // If the click did NOT hit any existing item (snippet) we select the track.
         // igIsAnyItemHovered() being false is a reasonable heuristic here to mean the click landed on empty space.
@@ -381,7 +381,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
   // End drag
   if (ts->drag_state.active && igIsMouseReleased_Nil(ImGuiMouseButton_Left)) {
     int final_tick, final_track;
-    interaction_calculate_drag_destination(ts, timeline_bb, tracks_scroll_y, &final_tick, &final_track);
+    interaction_calculate_drag_destination(ts, timeline_bb, &final_tick, &final_track);
 
     input_snippet_t *clicked_snippet = model_find_snippet_by_id(ts, ts->drag_state.dragged_snippet_id, NULL);
     if (clicked_snippet) {
@@ -428,7 +428,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
   }
 }
 
-static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb, float tracks_scroll_y) {
+static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb) {
   ImGuiIO *io = igGetIO_Nil();
   bool is_timeline_hovered = igIsMouseHoveringRect(timeline_bb.Min, timeline_bb.Max, true);
 
@@ -444,13 +444,13 @@ static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb, float
     } else {
       ImRect rect = {{fminf(ts->selection_box_start.x, ts->selection_box_end.x), fminf(ts->selection_box_start.y, ts->selection_box_end.y)},
                      {fmaxf(ts->selection_box_start.x, ts->selection_box_end.x), fmaxf(ts->selection_box_start.y, ts->selection_box_end.y)}};
-      select_snippets_in_rect(ts, rect, timeline_bb, tracks_scroll_y);
+      select_snippets_in_rect(ts, rect, timeline_bb);
       ts->selection_box_active = false;
     }
   }
 }
 
-static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb, float scroll_y) {
+static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb) {
   float dpi_scale = gfx_get_ui_scale();
   ImGuiIO *io = igGetIO_Nil();
   if (!io->KeyShift) {
@@ -462,7 +462,7 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
     player_track_t *track = &ts->player_tracks[i];
 
     // Get the screen Y position for the top of the current track row
-    float track_top = renderer_get_track_screen_y(ts, timeline_bb, i, scroll_y);
+    float track_top = renderer_get_track_screen_y(ts, i);
 
     // If the entire track is outside the selection box, we can skip it
     if (track_top + (ts->track_height * dpi_scale) < rect.Min.y || track_top > rect.Max.y) {
