@@ -19,7 +19,6 @@
 #include <ddnet_physics/gamecore.h>
 #include <limits.h>
 #include <logger/logger.h>
-#include <system/input.h>
 #include <math.h>
 #include <nfd.h>
 #include <plugins/api_impl.h>
@@ -32,6 +31,7 @@
 #include <symbols.h>
 #include <system/config.h>
 #include <system/include_cimgui.h>
+#include <system/input.h>
 #include <system/save.h>
 
 #ifndef M_PI
@@ -600,6 +600,11 @@ static void process_net_events(ui_handler_t *ui) {
   ts->last_event_scan_tick = ts->current_tick;
 }
 
+static void recording_aim(const ui_handler_t *ui, vec2 out) {
+  out[0] = truncf(ui->recording_mouse_pos[0]);
+  out[1] = truncf(ui->recording_mouse_pos[1]);
+}
+
 void render_players(ui_handler_t *ui) {
   if (!ui->render_players) return;
   gfx_handler_t *gfx = ui->gfx_handler;
@@ -690,8 +695,7 @@ void render_players(ui_handler_t *ui) {
 
     vec2 dir;
     if (ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
-      dir[0] = ui->recording_mouse_pos[0];
-      dir[1] = ui->recording_mouse_pos[1];
+      recording_aim(ui, dir);
     } else {
       dir[0] = core->m_Input.m_TargetX;
       dir[1] = core->m_Input.m_TargetY;
@@ -1280,20 +1284,62 @@ void render_pickups(ui_handler_t *ui) {
   }
 }
 
+// Screen pixels per game unit on DDNet's cursor screen, which is always mapped at zoom 1
+// (CHud::RenderCursor -> MapScreenToWorld(..., 1.0f)).
+static float aim_units_to_pixels(const gfx_handler_t *handler) {
+  const float amount = 1150.0f * 1000.0f;
+  const float w_max = 1500.0f;
+  const float h_max = 1050.0f;
+
+  float aspect = (float)handler->viewport[0] / (float)handler->viewport[1];
+  if (!(aspect > 0.0f)) return 1.0f;
+
+  float height = sqrtf(amount / aspect);
+  if (height * aspect > w_max) height = w_max / aspect;
+  if (height > h_max) height = h_max;
+
+  return (float)handler->viewport[1] / height;
+}
+
+// Screen pixels per tile at the current camera zoom.
+static float tiles_to_pixels(gfx_handler_t *handler) {
+  float left, top, right, bottom;
+  screen_to_world(handler, 0.0f, 0.0f, &left, &top);
+  screen_to_world(handler, (float)handler->viewport[0], (float)handler->viewport[1], &right, &bottom);
+
+  float width = right - left;
+  if (!(fabsf(width) > 1e-6f)) return 1.0f;
+  return (float)handler->viewport[0] / width;
+}
+
 void render_cursor(ui_handler_t *ui) {
   if (!ui->render_hud || !ui->timeline.recording) return;
 
   gfx_handler_t *handler = ui->gfx_handler;
+  if (!handler->map_data) return;
+  int weapon = handler->user_interface.weapon;
+  if (weapon < 0 || weapon >= CURSOR_SPRITE_COUNT) return;
 
-  if (handler->user_interface.timeline.recording) {
+  vec2 aim;
+  recording_aim(ui, aim);
 
-    float cursor_scale = handler->viewport[1] / 1080.f;
-    renderer_submit_atlas(handler, &handler->renderer.cursor_renderer, Z_LAYER_CURSOR,
-                          (vec2){handler->viewport[0] * 0.5f + ui->recording_mouse_pos[0],
-                                 handler->viewport[1] * 0.5f + ui->recording_mouse_pos[1]},
-                          (vec2){64.f * cursor_scale, 64.f * cursor_scale},
-                          0.0f, handler->user_interface.weapon, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, true);
-  }
+  // CHud::RenderCursor centers the cursor on the target position (character pos + mouse pos)
+  // and sizes it 64 units times the sprite's normalized proportions
+  // (CGraphics_Threaded::GetSpriteScaleImpl), but on a screen mapped at zoom 1 while the world
+  // is drawn zoomed. So the offset and the size stay fixed in screen pixels: convert them from
+  // DDNet's zoom-1 pixel scale into the tiles the current camera zoom needs to draw that.
+  float zoom1_tiles = aim_units_to_pixels(handler) * 32.0f / tiles_to_pixels(handler);
+
+  const sprite_definition_t *def = &handler->renderer.cursor_renderer.sprite_definitions[weapon];
+  float f = sqrtf((float)def->w * (float)def->w + (float)def->h * (float)def->h);
+  vec2 size = {64.0f * ((float)def->w / f) / 32.0f * zoom1_tiles,
+               64.0f * ((float)def->h / f) / 32.0f * zoom1_tiles};
+
+  vec2 pos = {ui->last_render_pos[0] + aim[0] / 32.0f * zoom1_tiles,
+              ui->last_render_pos[1] + aim[1] / 32.0f * zoom1_tiles};
+
+  renderer_submit_atlas(handler, &handler->renderer.cursor_renderer, Z_LAYER_CURSOR, pos, size,
+                        0.0f, weapon, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
 }
 
 void ui_add_recent_project(ui_handler_t *ui, const char *path) {

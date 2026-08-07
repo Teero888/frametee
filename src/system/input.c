@@ -185,6 +185,8 @@ void input_init(GLFWwindow *window) {
   glfwSetInputMode(window, GLFW_STICKY_KEYS, GLFW_TRUE);
   glfwSetInputMode(window, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
 
+  if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+
   glfwGetCursorPos(window, &g_input.cursor_x, &g_input.cursor_y);
   g_input.initialized = true;
 }

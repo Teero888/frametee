@@ -1,9 +1,9 @@
 #include "graphics_backend.h"
 #include "renderer.h"
 #include <logger/logger.h>
+#include <stdbool.h>
 #include <system/input.h>
 #include <user_interface/user_interface.h>
-#include <stdbool.h>
 
 extern bool g_is_headless;
 
@@ -112,18 +112,20 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   handler->raw_mouse.x = xpos;
   handler->raw_mouse.y = ypos;
 
-  // Every motion event lands here, so a frame sees the full movement no matter the polling rate.
   input_accumulate_mouse_delta(diff_x, diff_y);
-    float div = (1.0f / (handler->viewport[1] / 2.f)) * 402.f;
+  float sens = handler->user_interface.mouse_sens * 0.01f;
+  handler->user_interface.recording_mouse_pos[0] += diff_x * sens;
+  handler->user_interface.recording_mouse_pos[1] += diff_y * sens;
 
-  // used by recording
-  handler->user_interface.recording_mouse_pos[0] += diff_x * (handler->user_interface.mouse_sens * 0.01f);
-  handler->user_interface.recording_mouse_pos[1] += diff_y * (handler->user_interface.mouse_sens * 0.01f);
-  if (vlength(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1])) >
-      handler->user_interface.mouse_max_distance / div) {
+  float max_distance = handler->user_interface.mouse_max_distance;
+  if (vlength(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1])) > max_distance) {
     mvec2 n = vnormalize(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1]));
-    handler->user_interface.recording_mouse_pos[1] = vgety(n) * (handler->user_interface.mouse_max_distance / div);
-    handler->user_interface.recording_mouse_pos[0] = vgetx(n) * (handler->user_interface.mouse_max_distance / div);
+    handler->user_interface.recording_mouse_pos[0] = vgetx(n) * max_distance;
+    handler->user_interface.recording_mouse_pos[1] = vgety(n) * max_distance;
+  }
+  // TODO: make this go in the right direction actually
+  if ((int)handler->user_interface.recording_mouse_pos[0] == 0 && (int)handler->user_interface.recording_mouse_pos[1] == 0) {
+    handler->user_interface.recording_mouse_pos[0] = 1;
   }
 }
 
@@ -142,7 +144,7 @@ static void key_callback(GLFWwindow *window, int key, int scancode, int action, 
 
 int init_gfx_handler(gfx_handler_t *handler) {
   memset(handler, 0, sizeof(gfx_handler_t));
-  
+
   if (g_is_headless) {
     igCreateContext(NULL);
     handler->user_interface.gfx_handler = handler;
@@ -498,7 +500,6 @@ void gfx_cleanup(gfx_handler_t *handler) {
     handler->window = NULL;
     glfwTerminate();
   }
-
 }
 
 static texture_t *load_layer_texture(gfx_handler_t *handler, uint8_t **data, uint32_t width, uint32_t height) {
@@ -612,7 +613,7 @@ static int init_window(gfx_handler_t *handler) {
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
-  
+
   handler->window = glfwCreateWindow(1920, 1080, "frametee", NULL, NULL);
   if (!handler->window) {
     glfwTerminate();
@@ -662,7 +663,6 @@ static int init_vulkan(gfx_handler_t *handler) {
   setup_window(handler, wd, surface, w, h);
   return 0;
 }
-
 
 /*
 void ayu_dark(void) {
@@ -800,8 +800,7 @@ static int init_imgui(gfx_handler_t *handler) {
                                          .PipelineInfoMain = {
                                              .RenderPass = handler->g_main_window_data.RenderPass,
                                              .Subpass = 0,
-                                             .MSAASamples = VK_SAMPLE_COUNT_1_BIT
-                                         },
+                                             .MSAASamples = VK_SAMPLE_COUNT_1_BIT},
                                          .MinImageCount = handler->g_min_image_count,
                                          .ImageCount = handler->g_main_window_data.ImageCount,
                                          .Allocator = handler->g_allocator,
@@ -1314,7 +1313,7 @@ static void update_cached_monitors(void) {
   for (int i = 0; i < count; i++) {
     g_cached_infos[i].monitor = monitors[i];
     glfwGetMonitorPos(monitors[i], &g_cached_infos[i].x, &g_cached_infos[i].y);
-    
+
     const GLFWvidmode *vm = glfwGetVideoMode(monitors[i]);
     if (vm) {
       g_cached_infos[i].vid_mode = *vm;

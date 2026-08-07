@@ -108,12 +108,10 @@ void interaction_update_mouse(timeline_state_t *ts) {
       float speed_scale = ts->is_reversing ? 2.0f : 1.0f;
       float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
       if (ts->ui->timeline.is_reversing) intra = 1.f - intra;
-      // idk man this is so hacky TODO: be smarter
-      float div = (1.0f / (ts->ui->gfx_handler->viewport[1] / 2.f)) * 402.f;
-      ts->ui->recording_mouse_pos[0] = glm_lerp(model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick - 1).m_TargetX / div,
-                                                model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick).m_TargetX / div, intra);
-      ts->ui->recording_mouse_pos[1] = glm_lerp(model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick - 1).m_TargetY / div,
-                                                model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick).m_TargetY / div, intra);
+      ts->ui->recording_mouse_pos[0] = glm_lerp(model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick - 1).m_TargetX,
+                                                model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick).m_TargetX, intra);
+      ts->ui->recording_mouse_pos[1] = glm_lerp(model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick - 1).m_TargetY,
+                                                model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick).m_TargetY, intra);
     }
   }
 }
@@ -912,9 +910,8 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   if (keybinds_is_action_pressed(kb, ACTION_GRENADE, false)) input->m_WantedWeapon = WEAPON_GRENADE;
   if (keybinds_is_action_pressed(kb, ACTION_LASER, false)) input->m_WantedWeapon = WEAPON_LASER;
 
-  float div = (1.0f / (ui->gfx_handler->viewport[1] / 2.f)) * 402.f;
-  input->m_TargetX = (int)ui->recording_mouse_pos[0] * div;
-  input->m_TargetY = (int)ui->recording_mouse_pos[1] * div;
+  input->m_TargetX = (int)ui->recording_mouse_pos[0];
+  input->m_TargetY = (int)ui->recording_mouse_pos[1];
   if (!input->m_TargetX && !input->m_TargetY)
     input->m_TargetX = 1;
 }
