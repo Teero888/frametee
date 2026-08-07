@@ -762,6 +762,7 @@ static int init_imgui(gfx_handler_t *handler) {
   // io->ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   io->ConfigDpiScaleFonts = true;
   io->ConfigDpiScaleViewports = true;
+  io->ConfigWindowsMoveFromTitleBarOnly = true;
 
   ImGuiStyle *style = igGetStyle();
   ImGuiStyle_ScaleAllSizes(style, gfx_get_ui_scale() * 0.5);
