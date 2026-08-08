@@ -1746,6 +1746,26 @@ void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4
   renderer->primitive_index_count += 6;
 }
 
+void renderer_draw_triangle_filled(gfx_handler_t *handler, vec2 p1, vec2 p2, vec2 p3, vec4 color) {
+  ensure_primitive_space(handler, 3, 3);
+
+  renderer_state_t *renderer = &handler->renderer;
+  uint32_t base_index = renderer->primitive_vertex_count;
+  primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
+  uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
+
+  const float *pts[3] = {p1, p2, p3};
+  for (uint32_t i = 0; i < 3; i++) {
+    vtx[i].pos[0] = pts[i][0];
+    vtx[i].pos[1] = pts[i][1];
+    glm_vec4_copy(color, vtx[i].color);
+    idx[i] = base_index + i;
+  }
+
+  renderer->primitive_vertex_count += 3;
+  renderer->primitive_index_count += 3;
+}
+
 void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color, uint32_t segments) {
   if (segments < 3) segments = 3;
 
@@ -2781,6 +2801,17 @@ void renderer_submit_circle_filled(struct gfx_handler_t *h, float z, vec2 center
   glm_vec4_copy(color, cmd->data.prim.color);
 }
 
+void renderer_submit_triangle_filled(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec2 p3, vec4 color) {
+  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_TRIANGLE_FILLED;
+  cmd->z = z;
+  glm_vec2_copy(p1, cmd->data.prim.p1);
+  glm_vec2_copy(p2, cmd->data.prim.p2);
+  glm_vec2_copy(p3, cmd->data.prim.p3);
+  glm_vec4_copy(color, cmd->data.prim.color);
+}
+
 void renderer_submit_line(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec4 color, float thickness) {
   if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
   render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
@@ -2880,7 +2911,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     }
 
     // Flush primitives if switching to non-primitive
-    if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_CIRCLE_FILLED && q->type != RENDER_CMD_LINE &&
+    if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_CIRCLE_FILLED && q->type != RENDER_CMD_TRIANGLE_FILLED && q->type != RENDER_CMD_LINE &&
         r->primitive_index_count > r->primitive_index_offset_drawn) {
       flush_primitives(h, cmd);
     }
@@ -2954,6 +2985,10 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
 
     case RENDER_CMD_CIRCLE_FILLED:
       renderer_draw_circle_filled(h, q->data.prim.p1, q->data.prim.thickness, q->data.prim.color, q->data.prim.segments);
+      break;
+
+    case RENDER_CMD_TRIANGLE_FILLED:
+      renderer_draw_triangle_filled(h, q->data.prim.p1, q->data.prim.p2, q->data.prim.p3, q->data.prim.color);
       break;
 
     case RENDER_CMD_LINE:

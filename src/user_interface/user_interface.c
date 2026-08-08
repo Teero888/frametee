@@ -755,18 +755,16 @@ void render_players(ui_handler_t *ui) {
     renderer_submit_skin(gfx, Z_LAYER_SKINS, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
 
     if (!ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
-      // vec2 box_size = {2.0f, 2.0f};
-      vec2 min_pos = {p[0] - 1.0f, p[1] - 1.0f};
-      vec4 red_col = {1.0f, 0.0f, 0.0f, 1.0f};
-      vec2 p1 = {min_pos[0], min_pos[1]};
-      vec2 p2 = {min_pos[0] + 2.0f, min_pos[1]};
-      vec2 p3 = {min_pos[0] + 2.0f, min_pos[1] + 2.0f};
-      vec2 p4 = {min_pos[0], min_pos[1] + 2.0f};
+      // Marker triangle floating above the player, pointing down at them.
+      const float width = 1.0f;
+      const float height = 0.8f;
+      const float gap = 0.35f; // distance between the tip and the top of the tee
+      vec4 red_col = {1.0f, 0.3f, 0.0f, 0.2f};
+      vec2 tip = {p[0], p[1] - 1.0f - gap};
+      vec2 left = {p[0] - width * 0.5f, tip[1] - height};
+      vec2 right = {p[0] + width * 0.5f, tip[1] - height};
 
-      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p1, p2, red_col, 0.05f);
-      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p2, p3, red_col, 0.05f);
-      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p3, p4, red_col, 0.05f);
-      renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, p4, p1, red_col, 0.05f);
+      renderer_submit_triangle_filled(gfx, Z_LAYER_PREDICTION_LINES, tip, left, right, red_col);
     }
     if (ui->center_dot) {
       int idx = (int)p[1] * world.m_pCollision->m_MapData.width + (int)p[0];
