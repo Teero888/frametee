@@ -16,7 +16,7 @@ layout(location = 9) in vec2 anim_dir;
 layout(location = 10) in vec3 col_body;
 layout(location = 11) in vec3 col_feet;
 layout(location = 12) in int col_custom;
-layout(location = 13) in int col_gs;
+layout(location = 13) in int instance_mode;
 
 layout(location = 0) out vec2 frag_uv;
 layout(location = 1) flat out int frag_skin_index;
@@ -29,7 +29,7 @@ layout(location = 7) flat out vec2 frag_dir;
 layout(location = 8) flat out vec3 frag_col_body;
 layout(location = 9) flat out vec3 frag_col_feet;
 layout(location = 10) flat out int frag_col_custom;
-layout(location = 11) flat out int frag_col_gs;
+layout(location = 11) flat out int frag_mode;
 
 layout(binding = 0) uniform primitive_ubo {
   vec2 cam_pos;
@@ -45,15 +45,24 @@ ubo;
 layout(location = 12) flat out float frag_lod_bias;
 
 void main() {
-  vec2 norm = (instance_pos + in_pos * instance_scale) / ubo.map_size;
+  // the hand rides a quad of its own, the tee quad never rotates
+  vec2 local = in_pos;
+  if (instance_mode == 1) {
+    float a = anim_attach.z;
+    float sa = sin(a), ca = cos(a);
+    // same handedness as the atlas renderer's rot(), so weapon and hand angles agree
+    local = mat2(ca, -sa, sa, ca) * in_pos;
+  }
+  vec2 norm = (instance_pos + local * instance_scale) / ubo.map_size;
   vec2 rel = norm - ubo.cam_pos;
   rel *= (ubo.zoom * ubo.max_map_size);
   rel.y *= ubo.aspect;
 
   gl_Position = ubo.proj * vec4(rel, 0.0, 1.0);
 
-  // 0.625 because we do * 1.25 for the instance scale so there is enough room for animation
-  frag_uv = in_pos * 0.625 + 0.5;
+  // 0.625 because we do * 1.25 for the instance scale so there is enough room for animation.
+  // the hand quad spans the whole quad.
+  frag_uv = instance_mode == 1 ? in_pos * 0.5 + 0.5 : in_pos * 0.625 + 0.5;
   frag_skin_index = instance_skin;
   frag_eye = instance_eye;
   frag_body = anim_body;
@@ -64,6 +73,6 @@ void main() {
   frag_col_body = col_body;
   frag_col_feet = col_feet;
   frag_col_custom = col_custom;
-  frag_col_gs = col_gs;
+  frag_mode = instance_mode;
   frag_lod_bias = ubo.lod_bias;
 }

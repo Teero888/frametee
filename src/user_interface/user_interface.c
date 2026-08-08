@@ -621,6 +621,24 @@ static void recording_aim(const ui_handler_t *ui, vec2 out) {
   out[1] = truncf(ui->recording_mouse_pos[1]);
 }
 
+static void submit_tee_hand(gfx_handler_t *gfx, vec2 center_phys, vec2 dir, float angle_offset, float off_x, float off_y, int skin,
+                            vec3 col_body, bool custom) {
+  vec2 dir_y = {-dir[1], dir[0]};
+  if (dir[0] < 0.0f) {
+    dir_y[0] = -dir_y[0];
+    dir_y[1] = -dir_y[1];
+  }
+  // CenterPos + Dir + Dir * off.x + DirY * off.y
+  vec2 hand = {(center_phys[0] + dir[0] * (1.0f + off_x) + dir_y[0] * off_y) / 32.0f,
+               (center_phys[1] + dir[1] * (1.0f + off_x) + dir_y[1] * off_y) / 32.0f};
+
+  // mirrored into the renderer's angle convention, the same way aim_angle is
+  const float sign = dir[0] < 0.0f ? -1.0f : 1.0f;
+  const float render_angle = atan2f(-dir[1], dir[0]) - sign * angle_offset;
+
+  renderer_submit_hand(gfx, Z_LAYER_HANDS, hand, 10.0f / 32.0f, skin, render_angle, col_body, custom);
+}
+
 void render_players(ui_handler_t *ui) {
   if (!ui->render_players) return;
   gfx_handler_t *gfx = ui->gfx_handler;
@@ -809,6 +827,10 @@ void render_players(ui_handler_t *ui) {
       sprite_definition_t *head_sprite_def = &gfx->renderer.gameskin_renderer.sprite_definitions[GAMESKIN_HOOK_HEAD];
       vec2 head_size = {(float)head_sprite_def->w / 64.0f, (float)head_sprite_def->h / 64.0f};
       renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_HOOK, hook_pos, head_size, angle, GAMESKIN_HOOK_HEAD, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
+
+      // the hand gripping the chain
+      vec2 hook_center = {p[0] * 32.0f, p[1] * 32.0f};
+      submit_tee_hand(gfx, hook_center, direction, -M_PI / 2.0f, 20.0f, 0.0f, skin, body_col, custom_col);
     }
     if (ui->render_weapons && !core->m_FreezeTime && core->m_ActiveWeapon < NUM_WEAPONS) {
       const weapon_spec_t *spec = &game_data.weapons.id[core->m_ActiveWeapon];
@@ -950,6 +972,19 @@ void render_players(ui_handler_t *ui) {
         vec2 render_pos = {weapon_pos[0] / 32.0f, weapon_pos[1] / 32.0f};
 
         renderer_submit_atlas(gfx, &gfx->renderer.gameskin_renderer, Z_LAYER_WEAPONS, render_pos, weapon_size, weapon_angle, weapon_sprite_id, false, (vec4){1.0f, 1.0f, 1.0f, 1.0f}, false);
+      }
+
+      // only these three are held with a visible hand in ddnet
+      switch (core->m_ActiveWeapon) {
+      case WEAPON_GUN:
+        submit_tee_hand(gfx, weapon_pos, dir, -3.0f * M_PI / 4.0f, -15.0f, 4.0f, skin, body_col, custom_col);
+        break;
+      case WEAPON_SHOTGUN:
+        submit_tee_hand(gfx, weapon_pos, dir, -M_PI / 2.0f, -5.0f, 4.0f, skin, body_col, custom_col);
+        break;
+      case WEAPON_GRENADE:
+        submit_tee_hand(gfx, weapon_pos, dir, -M_PI / 2.0f, -4.0f, 7.0f, skin, body_col, custom_col);
+        break;
       }
     }
   }

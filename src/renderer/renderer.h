@@ -34,6 +34,7 @@
 #define Z_LAYER_HOOK 3.f
 #define Z_LAYER_PROJECTILES 4.f
 #define Z_LAYER_WEAPONS 5.f
+#define Z_LAYER_HANDS 5.5f
 #define Z_LAYER_SKINS 6.f
 #define Z_LAYER_MAP 7.f
 #define Z_LAYER_PARTICLES_FRONT 8.0f
@@ -148,8 +149,12 @@ struct skin_instance_t {
   vec3 col_body;
   vec3 col_feet;
   int col_custom;
-  int col_gs;
+  // 0 draws the whole tee, 1 draws just the hand into a quad rotated by attach[2]. ddnet hangs the
+  // hand off the weapon, which can put it outside the tee's own quad, so it rides its own instance.
+  int mode;
 };
+
+enum { SKIN_MODE_TEE = 0, SKIN_MODE_HAND = 1 };
 
 struct skin_renderer_t {
   shader_t *skin_shader;
@@ -159,11 +164,15 @@ struct skin_renderer_t {
 };
 
 #define MAX_SKINS 128
+
+#define SKIN_ATLAS_W 512
+#define SKIN_ATLAS_H 352
+
 struct skin_atlas_manager_t {
-  texture_t *atlas_array; // giant 2D array texture for all skins
+  texture_t *atlas_array; // giant 2D array texture for all skins, original colors (rgba, premultiplied)
+  texture_t *color_array;
   bool layer_used[MAX_SKINS];
   uint32_t last_used_frame[MAX_SKINS];
-  uint8_t gs_org[MAX_SKINS];
 };
 
 struct sprite_definition_t {
@@ -225,6 +234,8 @@ struct render_command_t {
       vec3 col_body;
       vec3 col_feet;
       bool custom_color;
+      int mode;    // SKIN_MODE_*
+      float angle; // hand rotation,
     } skin;
     struct {
       atlas_renderer_t *ar;
@@ -334,7 +345,7 @@ void renderer_unlock(void);
 // skin rendering
 void renderer_begin_skins(gfx_handler_t *h);
 void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet, bool use_custom_color);
-void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array);
+void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array, texture_t *color_array);
 int renderer_load_skin_from_file(gfx_handler_t *h, const char *path, texture_t **out_preview_texture);
 int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size, texture_t **out_preview_texture);
 void renderer_unload_skin(gfx_handler_t *h, int layer);
@@ -345,6 +356,7 @@ VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, Vk
 
 void renderer_submit_map(gfx_handler_t *h, float z);
 void renderer_submit_skin(gfx_handler_t *h, float z, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet, bool custom);
+void renderer_submit_hand(gfx_handler_t *h, float z, vec2 pos, float scale, int skin_index, float angle, vec3 col_body, bool custom);
 void renderer_submit_atlas(gfx_handler_t *h, atlas_renderer_t *ar, float z, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv, vec4 color, bool screen_space);
 void renderer_submit_atlas_batch(gfx_handler_t *h, atlas_renderer_t *ar, float z, const atlas_instance_t *instances, uint32_t count, bool screen_space);
 void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, atlas_instance_t *out_inst);

@@ -552,8 +552,11 @@ int renderer_init(gfx_handler_t *handler) {
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_ubo_buffer);
   vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0, &renderer->ubo_buffer_ptr);
 
-  // create a 2d array texture to hold max_skins atlases (each 512x512, rgba8)
-  renderer->skin_manager.atlas_array = renderer_create_texture_2d_array(handler, 512, 512, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
+  // create a 2d array texture to hold max_skins atlases (each 512x352, rgba8)
+  renderer->skin_manager.atlas_array =
+      renderer_create_texture_2d_array(handler, SKIN_ATLAS_W, SKIN_ATLAS_H, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
+  renderer->skin_manager.color_array =
+      renderer_create_texture_2d_array(handler, SKIN_ATLAS_W, SKIN_ATLAS_H, MAX_SKINS, VK_FORMAT_R8G8_UNORM);
   memset(renderer->skin_manager.layer_used, 0, sizeof(renderer->skin_manager.layer_used));
   // skin renderer
   renderer->skin_renderer.skin_shader = renderer_load_shader(handler, "data/shaders/skin.vert.spv", "data/shaders/skin.frag.spv");
@@ -1569,7 +1572,7 @@ static void setup_vertex_descriptions(void) {
   skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
       .binding = 1, .location = 12, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, col_custom)};
   skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1, .location = 13, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, col_gs)};
+      (VkVertexInputAttributeDescription){.binding = 1, .location = 13, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, mode)};
 
   // Atlas instanced data
   atlas_binding_desc[0] = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
@@ -1964,15 +1967,35 @@ void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int sk
   memcpy(sr->instance_ptr[i].col_body, col_body, 3 * sizeof(float));
   memcpy(sr->instance_ptr[i].col_feet, col_feet, 3 * sizeof(float));
   sr->instance_ptr[i].col_custom = use_custom_color;
-  sr->instance_ptr[i].col_gs = h->renderer.skin_manager.gs_org[skin_index];
+  sr->instance_ptr[i].mode = SKIN_MODE_TEE;
 }
-void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array) {
+
+void renderer_push_hand_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, float angle, vec3 col_body, bool use_custom_color) {
+  if (skin_index >= 0 && skin_index < MAX_SKINS) {
+    h->renderer.skin_manager.last_used_frame[skin_index] = h->g_main_window_data.FrameIndex;
+  }
+  skin_renderer_t *sr = &h->renderer.skin_renderer;
+  uint32_t i = sr->instance_count++;
+  memset(&sr->instance_ptr[i], 0, sizeof(skin_instance_t));
+  sr->instance_ptr[i].pos[0] = pos[0];
+  sr->instance_ptr[i].pos[1] = pos[1];
+  sr->instance_ptr[i].scale = scale;
+  sr->instance_ptr[i].skin_index = skin_index;
+  sr->instance_ptr[i].eye_state = 6;
+  sr->instance_ptr[i].attach[2] = angle;
+  memcpy(sr->instance_ptr[i].col_body, col_body, 3 * sizeof(float));
+  memcpy(sr->instance_ptr[i].col_feet, col_body, 3 * sizeof(float));
+  sr->instance_ptr[i].col_custom = use_custom_color;
+  sr->instance_ptr[i].mode = SKIN_MODE_HAND;
+}
+
+void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array, texture_t *color_array) {
   renderer_state_t *renderer = &h->renderer;
   skin_renderer_t *sr = &renderer->skin_renderer;
   if (sr->instance_count == 0 || !skin_array) return;
 
   mesh_t *quad = h->quad_mesh;
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, sr->skin_shader, 1, 1, h->g_main_window_data.RenderPass);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, sr->skin_shader, 1, 2, h->g_main_window_data.RenderPass);
   if (!pso) return;
 
   primitive_ubo_t ubo;
@@ -2003,13 +2026,19 @@ void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin
   texture_t *skin_tex = (skin_array && skin_array->active && skin_array->image_view != VK_NULL_HANDLE && skin_array->sampler != VK_NULL_HANDLE)
                             ? skin_array
                             : renderer->default_texture;
+  texture_t *color_tex = (color_array && color_array->active && color_array->image_view != VK_NULL_HANDLE && color_array->sampler != VK_NULL_HANDLE)
+                             ? color_array
+                             : skin_tex;
   VkDescriptorBufferInfo b_info = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
   VkDescriptorImageInfo i_info = {.sampler = skin_tex->sampler, .imageView = skin_tex->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  VkDescriptorImageInfo c_info = {
+      .sampler = color_tex->sampler, .imageView = color_tex->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-  VkWriteDescriptorSet writes[2] = {
+  VkWriteDescriptorSet writes[3] = {
       {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .pBufferInfo = &b_info},
-      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &i_info}};
-  vkUpdateDescriptorSets(h->g_device, 2, writes, 0, NULL);
+      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &i_info},
+      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &c_info}};
+  vkUpdateDescriptorSets(h->g_device, 3, writes, 0, NULL);
 
   // Bind and Draw
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
@@ -2121,7 +2150,7 @@ texture_t *renderer_render_skin_preview(gfx_handler_t *h, int layer) {
 
   VkDescriptorPoolSize pool_sizes[] = {
       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}
   };
   VkDescriptorPoolCreateInfo pool_info = {
       .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -2132,7 +2161,7 @@ texture_t *renderer_render_skin_preview(gfx_handler_t *h, int layer) {
   VkDescriptorPool temp_pool;
   vkCreateDescriptorPool(h->g_device, &pool_info, h->g_allocator, &temp_pool);
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, r->skin_renderer.skin_shader, 1, 1, h->offscreen_render_pass);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, r->skin_renderer.skin_shader, 1, 2, h->offscreen_render_pass);
 
   VkDescriptorSetAllocateInfo alloc_info = {
       .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -2153,6 +2182,11 @@ texture_t *renderer_render_skin_preview(gfx_handler_t *h, int layer) {
       .imageView = r->skin_manager.atlas_array->image_view,
       .sampler = r->skin_manager.atlas_array->sampler,
   };
+  VkDescriptorImageInfo color_info = {
+      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+      .imageView = r->skin_manager.color_array->image_view,
+      .sampler = r->skin_manager.color_array->sampler,
+  };
   VkWriteDescriptorSet descriptor_writes[] = {
       {
           .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -2171,9 +2205,18 @@ texture_t *renderer_render_skin_preview(gfx_handler_t *h, int layer) {
           .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
           .descriptorCount = 1,
           .pImageInfo = &image_info,
+      },
+      {
+          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+          .dstSet = desc_set,
+          .dstBinding = 2,
+          .dstArrayElement = 0,
+          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+          .descriptorCount = 1,
+          .pImageInfo = &color_info,
       }
   };
-  vkUpdateDescriptorSets(h->g_device, 2, descriptor_writes, 0, NULL);
+  vkUpdateDescriptorSets(h->g_device, 3, descriptor_writes, 0, NULL);
 
   anim_state_t anim_state;
   anim_state_set(&anim_state, &anim_base, 0.0f);
@@ -2190,7 +2233,6 @@ texture_t *renderer_render_skin_preview(gfx_handler_t *h, int layer) {
   instance.col_body[0] = 1.0f; instance.col_body[1] = 1.0f; instance.col_body[2] = 1.0f;
   instance.col_feet[0] = 1.0f; instance.col_feet[1] = 1.0f; instance.col_feet[2] = 1.0f;
   instance.col_custom = 0;
-  instance.col_gs = r->skin_manager.gs_org[layer];
   
   instance.body[0] = anim_state.body.x;
   instance.body[1] = anim_state.body.y;
@@ -2256,6 +2298,41 @@ texture_t *renderer_render_skin_preview(gfx_handler_t *h, int layer) {
   return tex;
 }
 
+// Stage one layer of a skin atlas array and rebuild its mip chain.
+static void upload_skin_layer(gfx_handler_t *h, texture_t *array, VkFormat format, int layer, const void *src, VkDeviceSize bytes) {
+  if (!array) return;
+  renderer_state_t *r = &h->renderer;
+
+  buffer_t staging;
+  create_buffer(h, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging);
+
+  void *data;
+  vkMapMemory(h->g_device, staging.memory, 0, bytes, 0, &data);
+  memcpy(data, src, bytes);
+  vkUnmapMemory(h->g_device, staging.memory);
+
+  transition_image_layout(h, r->transfer_command_pool, array->image, format, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, array->mip_levels, layer, 1);
+
+  VkCommandBuffer cmd = begin_single_time_commands(h, r->transfer_command_pool);
+  VkBufferImageCopy region = {
+      .bufferOffset = 0,
+      .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = layer, .layerCount = 1},
+      .imageExtent = {array->width, array->height, 1},
+  };
+  vkCmdCopyBufferToImage(cmd, staging.buffer, array->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  end_single_time_commands(h, r->transfer_command_pool, cmd);
+
+  vkDestroyBuffer(h->g_device, staging.buffer, h->g_allocator);
+  vkFreeMemory(h->g_device, staging.memory, h->g_allocator);
+
+  if (!build_mipmaps(h, array->image, array->width, array->height, array->mip_levels, layer, 1)) {
+    transition_image_layout(h, r->transfer_command_pool, array->image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, layer, 1);
+  }
+}
+
 int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size, texture_t **out_preview_texture) {
   int tex_width, tex_height, channels;
   stbi_uc *pixels = stbi_load_from_memory(buffer, (int)size, &tex_width, &tex_height, &channels, STBI_rgb_alpha);
@@ -2273,39 +2350,88 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
 
   renderer_lock();
 
+  const int final_width = SKIN_ATLAS_W;
+  const int final_height = SKIN_ATLAS_H;
+  const float scale = (float)tex_width / 256.0f;
+  const size_t src_pixel_count = (size_t)tex_width * (size_t)tex_height;
+
+  // What ddnet calls the colorable skin (CSkins::LoadSkinData): a luma grayscale of the whole
+  // sheet, with the body renormalised so its most common weight lands on 192. Two channels,
+  // weight + alpha. This has to run on the straight colours, before the premultiply below.
+  uint8_t *gray_pixels = malloc(src_pixel_count * 2);
+  stbi_uc *repacked_pixels = calloc(1, (size_t)final_width * final_height * 4);
+  uint8_t *repacked_gray = calloc(1, (size_t)final_width * final_height * 2);
+  if (!gray_pixels || !repacked_pixels || !repacked_gray) {
+    free(gray_pixels);
+    free(repacked_pixels);
+    free(repacked_gray);
+    stbi_image_free(pixels);
+    renderer_unlock();
+    return -1;
+  }
+
+  for (size_t i = 0; i < src_pixel_count; ++i) {
+    gray_pixels[i * 2 + 0] = (uint8_t)(0.2126f * pixels[i * 4 + 0] + 0.7152f * pixels[i * 4 + 1] + 0.0722f * pixels[i * 4 + 2]);
+    gray_pixels[i * 2 + 1] = pixels[i * 4 + 3];
+  }
+
+  // the renormalisation covers the body sprite only, so the outline and feet keep their own weights
+  const int body_w = (int)(scale * 96.0f);
+  const int body_h = (int)(scale * 96.0f);
+  uint32_t freq[256] = {0};
+  for (int y = 0; y < body_h; ++y) {
+    for (int x = 0; x < body_w; ++x) {
+      size_t idx = ((size_t)y * tex_width + (size_t)x) * 2u;
+      if (gray_pixels[idx + 1] > 128) freq[gray_pixels[idx]]++;
+    }
+  }
+  uint8_t org_weight = 1;
+  for (int i = 1; i < 256; ++i) {
+    if (freq[org_weight] < freq[i]) org_weight = (uint8_t)i;
+  }
+
+  const float new_weight = 192.0f;
+  const float inv_org = 1.0f / (float)org_weight;
+  const float inv_rest = org_weight < 255 ? 1.0f / (float)(255 - org_weight) : 0.0f;
+  for (int y = 0; y < body_h; ++y) {
+    for (int x = 0; x < body_w; ++x) {
+      size_t idx = ((size_t)y * tex_width + (size_t)x) * 2u;
+      const uint8_t v = gray_pixels[idx];
+      gray_pixels[idx] = v <= org_weight ? (uint8_t)((float)v * inv_org * new_weight)
+                                         : (uint8_t)(((float)(v - org_weight) * inv_rest) * (255.0f - new_weight) + new_weight);
+    }
+  }
+
   // Pre-multiply alpha before resizing (Crucial for correct bilinear interpolation)
-  for (int i = 0; i < tex_width * tex_height; i++) {
-    int idx = i * 4;
+  for (size_t i = 0; i < src_pixel_count; i++) {
+    size_t idx = i * 4;
     uint8_t a = pixels[idx + 3];
     // Integer multiply effectively zeros out the pixel if a is 0
     pixels[idx + 0] = (uint8_t)((int)pixels[idx + 0] * a / 255);
     pixels[idx + 1] = (uint8_t)((int)pixels[idx + 1] * a / 255);
     pixels[idx + 2] = (uint8_t)((int)pixels[idx + 2] * a / 255);
+    gray_pixels[i * 2] = (uint8_t)((int)gray_pixels[i * 2] * a / 255);
   }
 
-
-
-
-  const int final_width = 512;
-  const int final_height = 512;
-  stbi_uc *repacked_pixels = calloc(1, final_width * final_height * 4);
-  if (!repacked_pixels) {
-    stbi_image_free(pixels);
-    return -1;
-  }
-
-  memset(repacked_pixels, 0, final_width * final_height * 4);
-
-  float scale = (float)tex_width / 256.0f;
-
-#define COPY_PART(src_x, src_y, w, h, dst_x, dst_y)                                                                                \
-  stbir_resize_uint8_linear(pixels + ((int)((src_y) * scale) * tex_width + (int)((src_x) * scale)) * 4, (int)((w) * scale), (int)((h) * scale), tex_width * 4, \
-                            repacked_pixels + ((dst_y) * final_width + (dst_x)) * 4, (w) * 2, (h) * 2, final_width * 4, STBIR_RGBA_PM)
+  // Both sheets get repacked through the same layout so one set of uvs addresses either array.
+#define COPY_PART(src_x, src_y, w, h, dst_x, dst_y)                                                                                        \
+  do {                                                                                                                                     \
+    const int sx_ = (int)((src_x) * scale), sy_ = (int)((src_y) * scale);                                                                   \
+    const int sw_ = (int)((w) * scale), sh_ = (int)((h) * scale);                                                                           \
+    stbir_resize_uint8_linear(pixels + ((size_t)sy_ * tex_width + sx_) * 4, sw_, sh_, tex_width * 4,                                        \
+                              repacked_pixels + ((size_t)(dst_y) * final_width + (dst_x)) * 4, (w) * 2, (h) * 2, final_width * 4,           \
+                              STBIR_RGBA_PM);                                                                                              \
+    stbir_resize_uint8_linear(gray_pixels + ((size_t)sy_ * tex_width + sx_) * 2, sw_, sh_, tex_width * 2,                                   \
+                              repacked_gray + ((size_t)(dst_y) * final_width + (dst_x)) * 2, (w) * 2, (h) * 2, final_width * 2,             \
+                              STBIR_2CHANNEL);                                                                                              \
+  } while (0)
 
   COPY_PART(0, 0, 96, 96, 8, 8);        // Body
   COPY_PART(96, 0, 96, 96, 208, 8);     // Body Shadow
   COPY_PART(192, 32, 64, 32, 8, 208);   // Foot
   COPY_PART(192, 64, 64, 32, 144, 208); // Foot Shadow
+  COPY_PART(192, 0, 32, 32, 280, 208);  // Hand
+  COPY_PART(224, 0, 32, 32, 352, 208);  // Hand Shadow
   for (int i = 0; i < 6; ++i) {
     int src_x = 64 + i * 32;
     int dst_x = 8 + i * 72;
@@ -2314,12 +2440,12 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
 #undef COPY_PART
 
   for (int i = 0; i < final_width * final_height; i++) {
-    int idx = i * 4;
-    if (repacked_pixels[idx + 3] == 0) {
-      repacked_pixels[idx + 0] = 0;
-      repacked_pixels[idx + 1] = 0;
-      repacked_pixels[idx + 2] = 0;
+    if (repacked_pixels[i * 4 + 3] == 0) {
+      repacked_pixels[i * 4 + 0] = 0;
+      repacked_pixels[i * 4 + 1] = 0;
+      repacked_pixels[i * 4 + 2] = 0;
     }
+    if (repacked_gray[i * 2 + 1] == 0) repacked_gray[i * 2 + 0] = 0;
   }
 
   renderer_state_t *r = &h->renderer;
@@ -2330,66 +2456,23 @@ int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer
       renderer_destroy_texture(h, *out_preview_texture);
       *out_preview_texture = NULL;
     }
+    free(gray_pixels);
     free(repacked_pixels);
+    free(repacked_gray);
     stbi_image_free(pixels);
     renderer_unlock();
     return -1;
   }
 
-  // do ddnet grayscale retard logic
-  // Note: this is done on the original 'pixels' for best quality before resize
-  uint32_t freq[256] = {0};
-  int body_w = (int)(scale * 96.0f);
-  int body_h = (int)(scale * 96.0f);
-  for (int y = 0; y < body_h; ++y) {
-    size_t rowBase = (size_t)y * tex_width;
-    for (int x = 0; x < body_w; ++x) {
-      size_t idx = (rowBase + (size_t)x) * 4u;
-      if (pixels[idx + 3] > 128) {
-        uint8_t gray = (uint8_t)(0.2126f * pixels[idx + 0] + 0.7152f * pixels[idx + 1] + 0.0722f * pixels[idx + 2]);
-        freq[gray]++;
-      }
-    }
-  }
-  uint8_t org_weight = 1;
-  for (int i = 1; i < 256; ++i) {
-    if (freq[org_weight] < freq[i]) org_weight = (uint8_t)i;
-  }
-  r->skin_manager.gs_org[layer] = org_weight;
+  upload_skin_layer(h, r->skin_manager.atlas_array, VK_FORMAT_R8G8B8A8_UNORM, layer, repacked_pixels,
+                    (VkDeviceSize)final_width * final_height * 4);
+  upload_skin_layer(h, r->skin_manager.color_array, VK_FORMAT_R8G8_UNORM, layer, repacked_gray,
+                    (VkDeviceSize)final_width * final_height * 2);
 
-  // Upload to Vulkan
-  VkDeviceSize image_size = final_width * final_height * 4;
-  buffer_t staging;
-  create_buffer(h, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &staging);
-
-  void *data;
-  vkMapMemory(h->g_device, staging.memory, 0, image_size, 0, &data);
-  memcpy(data, repacked_pixels, image_size);
-  vkUnmapMemory(h->g_device, staging.memory);
+  free(gray_pixels);
   free(repacked_pixels);
+  free(repacked_gray);
   stbi_image_free(pixels);
-
-  transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          r->skin_manager.atlas_array->mip_levels, layer, 1);
-
-  VkCommandBuffer cmd = begin_single_time_commands(h, r->transfer_command_pool);
-  VkBufferImageCopy region = {
-      .bufferOffset = 0,
-      .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = layer, .layerCount = 1},
-      .imageExtent = {(uint32_t)final_width, (uint32_t)final_height, 1},
-  };
-  vkCmdCopyBufferToImage(cmd, staging.buffer, r->skin_manager.atlas_array->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-  end_single_time_commands(h, r->transfer_command_pool, cmd);
-
-  vkDestroyBuffer(h->g_device, staging.buffer, h->g_allocator);
-  vkFreeMemory(h->g_device, staging.memory, h->g_allocator);
-
-  if (!build_mipmaps(h, r->skin_manager.atlas_array->image, final_width, final_height, r->skin_manager.atlas_array->mip_levels, layer, 1)) {
-    transition_image_layout(h, r->transfer_command_pool, r->skin_manager.atlas_array->image, VK_FORMAT_R8G8B8A8_UNORM,
-                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, layer, 1);
-  }
 
   if (out_preview_texture) {
     *out_preview_texture = renderer_render_skin_preview(h, layer);
@@ -2762,6 +2845,21 @@ void renderer_submit_skin(struct gfx_handler_t *h, float z, vec2 pos, float scal
   glm_vec3_copy(col_body, cmd->data.skin.col_body);
   glm_vec3_copy(col_feet, cmd->data.skin.col_feet);
   cmd->data.skin.custom_color = custom;
+  cmd->data.skin.mode = SKIN_MODE_TEE;
+}
+
+void renderer_submit_hand(struct gfx_handler_t *h, float z, vec2 pos, float scale, int skin_index, float angle, vec3 col_body, bool custom) {
+  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_SKIN;
+  cmd->z = z;
+  glm_vec2_copy(pos, cmd->data.skin.pos);
+  cmd->data.skin.scale = scale;
+  cmd->data.skin.skin_index = skin_index;
+  cmd->data.skin.angle = angle;
+  glm_vec3_copy(col_body, cmd->data.skin.col_body);
+  cmd->data.skin.custom_color = custom;
+  cmd->data.skin.mode = SKIN_MODE_HAND;
 }
 
 void renderer_submit_atlas(struct gfx_handler_t *h, struct atlas_renderer_t *ar, float z, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv, vec4 color, bool screen_space) {
@@ -2907,7 +3005,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
 
     // Flush skins if switching away
     if (q->type != RENDER_CMD_SKIN && r->skin_renderer.instance_count > 0) {
-      renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+      renderer_flush_skins(h, cmd, r->skin_manager.atlas_array, r->skin_manager.color_array);
     }
 
     // Flush primitives if switching to non-primitive
@@ -2923,10 +3021,15 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
 
     case RENDER_CMD_SKIN:
       if (r->skin_renderer.instance_count >= MAX_SKIN_INSTANCES) {
-        renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+        renderer_flush_skins(h, cmd, r->skin_manager.atlas_array, r->skin_manager.color_array);
       }
-      renderer_push_skin_instance(h, q->data.skin.pos, q->data.skin.scale, q->data.skin.skin_index, q->data.skin.eye_state, q->data.skin.dir,
-                                  &q->data.skin.anim_state, q->data.skin.col_body, q->data.skin.col_feet, q->data.skin.custom_color);
+      if (q->data.skin.mode == SKIN_MODE_HAND) {
+        renderer_push_hand_instance(h, q->data.skin.pos, q->data.skin.scale, q->data.skin.skin_index, q->data.skin.angle, q->data.skin.col_body,
+                                    q->data.skin.custom_color);
+      } else {
+        renderer_push_skin_instance(h, q->data.skin.pos, q->data.skin.scale, q->data.skin.skin_index, q->data.skin.eye_state, q->data.skin.dir,
+                                    &q->data.skin.anim_state, q->data.skin.col_body, q->data.skin.col_feet, q->data.skin.custom_color);
+      }
       break;
 
     case RENDER_CMD_ATLAS:
@@ -3004,7 +3107,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   }
 
   if (r->skin_renderer.instance_count > 0) {
-    renderer_flush_skins(h, cmd, r->skin_manager.atlas_array);
+    renderer_flush_skins(h, cmd, r->skin_manager.atlas_array, r->skin_manager.color_array);
   }
 
   if (r->primitive_index_count > 0) {
