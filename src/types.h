@@ -42,7 +42,6 @@ typedef struct skin_renderer_t skin_renderer_t;
 typedef struct skin_instance_t skin_instance_t;
 typedef struct primitive_ubo_t primitive_ubo_t;
 typedef struct gfx_handler_t gfx_handler_t;
-typedef struct raw_mouse_t raw_mouse_t;
 typedef struct texture_t texture_t;
 typedef struct vertex_t vertex_t;
 typedef struct shader_t shader_t;

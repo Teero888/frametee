@@ -1,28 +1,39 @@
 #ifndef INPUT_H
 #define INPUT_H
 
+/* TODO: Improve this, it's a bit of a mess, and might become more fragile in the future as the program expands
+ * How inputs in FrameTee work:
+ *
+ * The GLFW callbacks in graphics_backend.c are the only ones installed; the imgui backend is started
+ * with install_callbacks=false. Every event goes to this module first and is then passed on to
+ * ImGui_ImplGlfw_*Callback, so there is one path from the window to both consumers.
+ *
+ * This module keeps no queue. Key and button state is polled from GLFW once per frame, mouse motion
+ * and scroll are summed by the callbacks as they arrive and drained in input_new_frame(). Binds and
+ * viewport pan/zoom read from here, so nothing they do can fall behind the hardware.
+ *
+ * Imgui does keep a queue, and trickles it: events of the same kind arriving in one frame are spread
+ * over several, so that e.g. a click that is pressed and released inside one frame is not flattened
+ * into nothing. It gets past at most one blocking event per frame though, and a mouse reporting at
+ * 8000Hz can queue events faster than that. Two things keep it level:
+ *
+ *   - Mouse motion is held in graphics_backend.c and given to imgui once per frame, plus once ahead
+ *     of any event that is ordered against the cursor (a click, a wheel, the cursor leaving).
+ *   - imgui_queue_needs_trickling() reads the queue before each igNewFrame() and turns trickling off
+ *     for frames where flattening would lose nothing, which empties the queue in one frame.
+ */
+
 #include <stdbool.h>
 #include <system/include_cimgui.h>
 
 struct GLFWwindow;
-
-// Input read straight from GLFW rather than through imgui.
-//
-// Imgui trickles its input queue: once a key, mouse button or wheel event has been applied in a
-// frame, every mouse position event queued behind it is held back until the next frame. With a high
-// polling rate mouse there are hundreds of position events per frame, so a single key or wheel event
-// pushes the cursor several frames behind the hardware, which is what made viewport panning feel
-// delayed and buffered while zooming or holding a bind.
-//
-// Polling GLFW gives the current state with no queue in between, and mouse motion is summed by the
-// GLFW callback as it arrives, so no movement is lost no matter how fast the mouse reports.
 
 void input_init(struct GLFWwindow *window);
 // Samples the keyboard and mouse for this frame. Must run after glfwPollEvents().
 void input_new_frame(void);
 
 // Fed from the GLFW callbacks, which see every event even between frames.
-void input_accumulate_mouse_delta(double dx, double dy);
+void input_accumulate_mouse_pos(double x, double y, double *out_dx, double *out_dy);
 void input_accumulate_scroll(double x, double y);
 // Called for GLFW_REPEAT, so held binds repeat at the delay and rate configured in the OS.
 void input_accumulate_key_repeat(int glfw_key);

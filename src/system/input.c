@@ -26,6 +26,7 @@ typedef struct {
   double frame_dx, frame_dy;
   double frame_scroll_y;
   double cursor_x, cursor_y;
+  double last_event_x, last_event_y;
 
   int imgui_to_glfw[ImGuiKey_NamedKey_END];
 
@@ -37,8 +38,7 @@ typedef struct {
 
 static input_state_t g_input;
 
-// Transcribed from ImGui_ImplGlfw_KeyToImGuiKey so the two agree on what a key is. Kept in this
-// direction to stay easy to diff against the backend; the reverse table is built from it at init.
+// Converts a GLFW keycode to a ImGui keycode
 static ImGuiKey glfw_key_to_imgui(int keycode) {
   switch (keycode) {
   case GLFW_KEY_TAB: return ImGuiKey_Tab;
@@ -187,13 +187,25 @@ void input_init(GLFWwindow *window) {
 
   if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
 
+  // Seeded from the real cursor, or the first event to arrive would report a move all the way from
+  // the origin.
   glfwGetCursorPos(window, &g_input.cursor_x, &g_input.cursor_y);
+  g_input.last_event_x = g_input.cursor_x;
+  g_input.last_event_y = g_input.cursor_y;
   g_input.initialized = true;
 }
 
-void input_accumulate_mouse_delta(double dx, double dy) {
+void input_accumulate_mouse_pos(double x, double y, double *out_dx, double *out_dy) {
+  const double dx = x - g_input.last_event_x;
+  const double dy = y - g_input.last_event_y;
+  g_input.last_event_x = x;
+  g_input.last_event_y = y;
+
   g_input.pending_dx += dx;
   g_input.pending_dy += dy;
+
+  if (out_dx) *out_dx = dx;
+  if (out_dy) *out_dy = dy;
 }
 
 void input_accumulate_scroll(double x, double y) {

@@ -100,19 +100,30 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(VkDebugUtilsMessageSe
 }
 #endif
 
+
+static struct {
+  GLFWwindow *window;
+  double x, y;
+  bool pending;
+} g_imgui_mouse;
+
+static void flush_imgui_mouse_pos(void) {
+  if (!g_imgui_mouse.pending) return;
+  g_imgui_mouse.pending = false;
+  ImGui_ImplGlfw_CursorPosCallback((void *)g_imgui_mouse.window, g_imgui_mouse.x, g_imgui_mouse.y);
+}
+
 static void cursor_position_callback(GLFWwindow *window, double xpos, double ypos) {
   gfx_handler_t *handler = glfwGetWindowUserPointer(window);
   if (!handler) return;
 
-  double diff_x = xpos - handler->raw_mouse.x;
-  double diff_y = ypos - handler->raw_mouse.y;
+  g_imgui_mouse.window = window;
+  g_imgui_mouse.x = xpos;
+  g_imgui_mouse.y = ypos;
+  g_imgui_mouse.pending = true;
 
-  handler->raw_mouse.dx += diff_x;
-  handler->raw_mouse.dy += diff_y;
-  handler->raw_mouse.x = xpos;
-  handler->raw_mouse.y = ypos;
-
-  input_accumulate_mouse_delta(diff_x, diff_y);
+  double diff_x, diff_y;
+  input_accumulate_mouse_pos(xpos, ypos, &diff_x, &diff_y);
 
   if (!handler->user_interface.timeline.recording) return;
 
@@ -133,16 +144,99 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
 }
 
 static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) {
-  (void)window;
   input_accumulate_scroll(xoffset, yoffset);
+  flush_imgui_mouse_pos();
+  ImGui_ImplGlfw_ScrollCallback((void *)window, xoffset, yoffset);
 }
 
 static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods) {
-  (void)window;
-  (void)scancode;
-  (void)mods;
   // Down/up state is polled; only the OS repeat timing has to come from events.
   if (action == GLFW_REPEAT) input_accumulate_key_repeat(key);
+  flush_imgui_mouse_pos();
+  ImGui_ImplGlfw_KeyCallback((void *)window, key, scancode, action, mods);
+}
+
+static void mouse_button_callback(GLFWwindow *window, int button, int action, int mods) {
+  flush_imgui_mouse_pos();
+  ImGui_ImplGlfw_MouseButtonCallback((void *)window, button, action, mods);
+}
+
+static void char_callback(GLFWwindow *window, unsigned int c) {
+  flush_imgui_mouse_pos();
+  ImGui_ImplGlfw_CharCallback((void *)window, c);
+}
+
+static void cursor_enter_callback(GLFWwindow *window, int entered) {
+  // Leaving the window has to arrive after the last position inside it, or imgui keeps a cursor that
+  // is no longer there.
+  flush_imgui_mouse_pos();
+  ImGui_ImplGlfw_CursorEnterCallback((void *)window, entered);
+}
+
+static void window_focus_callback(GLFWwindow *window, int focused) {
+  flush_imgui_mouse_pos();
+  ImGui_ImplGlfw_WindowFocusCallback((void *)window, focused);
+}
+
+// Taken back before the imgui backend is shut down, since every one of these hands the event to a
+// backend that would no longer be there. Kept in step with the set installed in init_imgui().
+static void clear_glfw_callbacks(GLFWwindow *window) {
+  glfwSetCursorPosCallback(window, NULL);
+  glfwSetCursorEnterCallback(window, NULL);
+  glfwSetMouseButtonCallback(window, NULL);
+  glfwSetScrollCallback(window, NULL);
+  glfwSetKeyCallback(window, NULL);
+  glfwSetCharCallback(window, NULL);
+  glfwSetWindowFocusCallback(window, NULL);
+}
+
+static bool imgui_queue_needs_trickling(void) {
+  ImGuiContext *ctx = igGetCurrentContext();
+  if (!ctx) return true;
+
+  const ImGuiInputEvent *events = ctx->InputEventsQueue.Data;
+  const int event_count = ctx->InputEventsQueue.Size;
+
+  ImGuiKey keys_seen[32];
+  int keys_seen_count = 0;
+  unsigned int buttons_seen = 0;
+  bool has_key = false, has_text = false;
+
+  for (int i = 0; i < event_count; ++i) {
+    const ImGuiInputEvent *e = &events[i];
+    switch (e->Type) {
+    case ImGuiInputEventType_MousePos:
+      // A click belongs to the position the cursor was at when it happened, not to the one it
+      // reached by the end of the frame, so a click with movement queued behind it has to keep its
+      // own frame. Long frames are where this is worth the most and where the gap is widest.
+      if (buttons_seen != 0) return true;
+      break;
+
+    case ImGuiInputEventType_MouseButton: {
+      // Imgui drops events that only repeat the state already queued for that button, so a button
+      // showing up twice is a press and a release, which flattening would collapse into no click.
+      const unsigned int bit = 1u << e->MouseButton.Button;
+      if (buttons_seen & bit) return true;
+      buttons_seen |= bit;
+      break;
+    }
+
+    case ImGuiInputEventType_Key:
+      // Same reasoning as the mouse buttons: a key that appears twice was tapped inside one frame.
+      has_key = true;
+      for (int k = 0; k < keys_seen_count; ++k)
+        if (keys_seen[k] == e->Key.Key) return true;
+      if (keys_seen_count == ARRAYSIZE(keys_seen)) return true;
+      keys_seen[keys_seen_count++] = e->Key.Key;
+      break;
+
+    case ImGuiInputEventType_Text: has_text = true; break;
+
+    default: break;
+    }
+  }
+
+  return has_key && has_text && ctx->WantTextInputNextFrame == 1;
 }
 
 int init_gfx_handler(gfx_handler_t *handler) {
@@ -182,12 +276,6 @@ int init_gfx_handler(gfx_handler_t *handler) {
   }
 
   glfwSetWindowUserPointer(handler->window, handler);
-  // Installed before the imgui backend so that it chains to these instead of replacing them.
-  glfwSetCursorPosCallback(handler->window, cursor_position_callback);
-  glfwSetScrollCallback(handler->window, scroll_callback);
-  glfwSetKeyCallback(handler->window, key_callback);
-  handler->raw_mouse.x = handler->raw_mouse.y = 0.0;
-  handler->raw_mouse.dx = handler->raw_mouse.dy = 0.0;
   input_init(handler->window);
 
   // Initialize ImGui context early for config keybind parsing
@@ -359,6 +447,11 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   // Start ImGui and Renderer Frames
   ImGui_ImplVulkan_NewFrame();
   ImGui_ImplGlfw_NewFrame();
+  // Whatever motion is still held goes out here, so imgui starts the frame on the position the
+  // cursor is at now. Both of these run after the backend has queued its own events, so the queue
+  // being judged is the one igNewFrame() is about to process.
+  flush_imgui_mouse_pos();
+  igGetIO_Nil()->ConfigInputTrickleEventQueue = imgui_queue_needs_trickling();
   igNewFrame();
   renderer_begin_frame(handler, handler->current_frame_command_buffer);
 
@@ -490,6 +583,7 @@ void gfx_cleanup(gfx_handler_t *handler) {
   if (!g_is_headless) {
     renderer_cleanup(handler);
     destroy_offscreen_resources(handler);
+    clear_glfw_callbacks(handler->window);
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
   }
@@ -788,11 +882,24 @@ static int init_imgui(gfx_handler_t *handler) {
   io->ConfigDpiScaleFonts = true;
   io->ConfigDpiScaleViewports = true;
   io->ConfigWindowsMoveFromTitleBarOnly = true;
+  // Set per frame in gfx_begin_frame(); see imgui_queue_needs_trickling().
+  io->ConfigInputTrickleEventQueue = true;
 
   ImGuiStyle *style = igGetStyle();
   ImGuiStyle_ScaleAllSizes(style, gfx_get_ui_scale() * 0.5);
 
-  ImGui_ImplGlfw_InitForVulkan((void *)handler->window, true);
+  // The backend installs no callbacks of its own: every GLFW event goes to the callbacks above,
+  // which pass it on to the backend once they have put the mouse position in front of it. That keeps
+  // one path from the window to imgui, and the whole set has to be installed here, since anything
+  // left out is an event imgui stops receiving.
+  ImGui_ImplGlfw_InitForVulkan((void *)handler->window, false);
+  glfwSetCursorPosCallback(handler->window, cursor_position_callback);
+  glfwSetCursorEnterCallback(handler->window, cursor_enter_callback);
+  glfwSetMouseButtonCallback(handler->window, mouse_button_callback);
+  glfwSetScrollCallback(handler->window, scroll_callback);
+  glfwSetKeyCallback(handler->window, key_callback);
+  glfwSetCharCallback(handler->window, char_callback);
+  glfwSetWindowFocusCallback(handler->window, window_focus_callback);
   ImGui_ImplVulkan_InitInfo init_info = {.Instance = handler->g_instance,
                                          .PhysicalDevice = handler->g_physical_device,
                                          .Device = handler->g_device,

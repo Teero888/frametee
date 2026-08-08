@@ -49,11 +49,6 @@ void gfx_cleanup(gfx_handler_t *handler);
 void gfx_toggle_fullscreen(gfx_handler_t *handler);
 float gfx_get_ui_scale(void);
 
-struct raw_mouse_t {
-  double x, y;   // last cursor pos
-  double dx, dy; // delta since last poll
-};
-
 struct gfx_handler_t {
   // Backend Stuffs
   GLFWwindow *window;
@@ -87,8 +82,6 @@ struct gfx_handler_t {
   int default_skin;
   int x_ninja_skin;
   int x_spec_skin;
-
-  raw_mouse_t raw_mouse;
 
   // Map Specific Render Data
   shader_t *map_shader;
