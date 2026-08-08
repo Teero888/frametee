@@ -1624,8 +1624,8 @@ static void render_splash_screen(ui_handler_t *ui) {
     igEndChild();
 
     // clicking the backdrop puts you back on the current project.
-    if (ui->gfx_handler->physics_handler.loaded && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) &&
-        !igIsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+    if (ui->gfx_handler->physics_handler.loaded && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) && !igIsAnyItemActive() &&
+        !igIsWindowHovered(ImGuiHoveredFlags_AnyWindow | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
       ui->show_splash = false;
       igCloseCurrentPopup();
     }
