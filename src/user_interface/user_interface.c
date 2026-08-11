@@ -252,11 +252,74 @@ void setup_docking(ui_handler_t *ui) {
 static bool g_remove_confirm_needed = true;
 static int g_pending_remove_index = -1;
 
+typedef struct {
+  bool active;
+  int index;
+  char before[MAX_TIMELINE_GROUP_NAME];
+} TimelineTextEditUndo;
+
+typedef struct {
+  bool active;
+  int index;
+  float before[4];
+} TimelineColorEditUndo;
+
+typedef struct {
+  bool active;
+  int index;
+  int before;
+} TimelineIntEditUndo;
+
+static TimelineTextEditUndo g_group_name_edit_undo;
+static TimelineTextEditUndo g_track_name_edit_undo;
+static TimelineColorEditUndo g_group_color_edit_undo;
+static TimelineIntEditUndo g_group_offset_edit_undo;
+
+static void register_timeline_data_change(ui_handler_t *ui, timeline_data_snapshot_t *before, const char *description) {
+  undo_command_t *command = commands_create_timeline_data_change(ui, before, description);
+  if (command) undo_manager_register_command(&ui->undo_manager, command);
+}
+
 void render_player_manager(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   physics_handler_t *ph = &ui->gfx_handler->physics_handler;
   float dpi_scale = gfx_get_ui_scale();
   if (igBegin("Players", NULL, 0)) {
+    if (ts->recording) igBeginDisabled(true);
+    if (igButton(ICON_FA_PLUS " Group", (ImVec2){0, 0})) {
+      char name[MAX_TIMELINE_GROUP_NAME];
+      snprintf(name, sizeof(name), "Group %d", ts->group_count + 1);
+      timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
+      if (before && model_add_group(ts, name)) {
+        model_set_active_group(ts, ts->group_count - 1);
+        register_timeline_data_change(ui, before, "Add Group");
+      } else commands_free_timeline_data_snapshot(before);
+    }
+    igSameLine(0, 5.0f * dpi_scale);
+    if (igButton(ICON_FA_FILE_IMPORT " Import", (ImVec2){0, 0})) {
+      nfdu8char_t *path = NULL;
+      nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
+      if (NFD_OpenDialogU8(&path, filters, 1, NULL) == NFD_OKAY && path) {
+        timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
+        if (before && import_project_as_group(ui, path)) register_timeline_data_change(ui, before, "Import Project as Group");
+        else commands_free_timeline_data_snapshot(before);
+        NFD_FreePathU8(path);
+      }
+    }
+    if (ts->group_count > 1) {
+      igSameLine(0, 5.0f * dpi_scale);
+      if (igButton(ICON_FA_ARROWS_LEFT_RIGHT_TO_LINE " Align starts", (ImVec2){0, 0})) {
+        timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
+        if (before) {
+          model_align_group_starts(ts);
+          register_timeline_data_change(ui, before, "Align Group Starts");
+        }
+      }
+      if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("Align every group race start to Group 1");
+    }
+    if (ts->recording) igEndDisabled();
+
+    igSeparator();
     static int num_to_add = 1;
     igPushItemWidth(50 * dpi_scale);
     igDragInt("##NumToAdd", &num_to_add, 1, 1, 1000, "%d", ImGuiSliderFlags_None);
@@ -274,54 +337,263 @@ void render_player_manager(ui_handler_t *ui) {
         if (cmd) undo_manager_register_command(&ui->undo_manager, cmd);
       }
     }
-    // igSameLine(0, 10.f);
-    // if (ph->world.m_pCollision && igButton("Add 1000 Players", (ImVec2){0, 0})) {
-    //   add_new_track(ts, ph, 1000);
-    // }
     igSameLine(0, 10.f * dpi_scale);
-    igText("Players: %d", ts->player_track_count);
+    igText("Players: %d  |  Active: %s", ts->player_track_count, ts->groups[ts->active_group_index]->name);
 
     igSeparator();
-    SWorldCore world = wc_empty();
-    model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world, true);
+    int pending_group_remove = -1;
+    int pending_track_remove = -1;
+    int pending_clone_track = -1;
+    int pending_clone_group = -1;
+    for (int group_index = 0; group_index < ts->group_count; ++group_index) {
+      timeline_group_t *group = ts->groups[group_index];
+      igPushID_Int(10000 + group_index);
 
-    for (int i = 0; i < ts->player_track_count; i++) {
-      igPushID_Int(i);
-      bool sel = (i == ts->selected_player_track_index);
-      const char *label = ts->player_tracks[i].player_info.name[0] ? ts->player_tracks[i].player_info.name : "nameless tee";
-
-      // Selectable only
-      igSetNextItemAllowOverlap();
-      if (igSelectable_Bool(label, sel, ImGuiSelectableFlags_AllowDoubleClick, (ImVec2){0, 0})) {
-        ts->selected_player_track_index = i;
-      }
-
-      if (igBeginPopupContextItem("##track_context", ImGuiPopupFlags_MouseButtonRight)) {
-        ts->selected_player_track_index = i;
-        if (igMenuItem_Bool(ICON_FA_TRASH " Delete Player Track", NULL, false, true)) {
-          if (g_remove_confirm_needed && ts->player_tracks[i].snippet_count > 0) {
-            g_pending_remove_index = i;
-            igOpenPopup_Str("Confirm remove player", ImGuiPopupFlags_AnyPopupLevel);
-          } else {
-            undo_command_t *cmd = commands_create_remove_track(ui, i);
-            undo_manager_register_command(&ui->undo_manager, cmd);
-          }
-        }
+      ImVec4 header_color = {group->color[0], group->color[1], group->color[2], group_index == ts->active_group_index ? 0.55f : 0.28f};
+      igPushStyleColor_Vec4(ImGuiCol_Header, header_color);
+      igPushStyleColor_Vec4(ImGuiCol_HeaderHovered, (ImVec4){group->color[0], group->color[1], group->color[2], 0.65f});
+      bool open = igCollapsingHeader_TreeNodeFlags(group->name, ImGuiTreeNodeFlags_DefaultOpen);
+      igPopStyleColor(2);
+      if (igIsItemClicked(ImGuiMouseButton_Left)) model_set_active_group(ts, group_index);
+      if (igBeginPopupContextItem("##group_context", ImGuiPopupFlags_MouseButtonRight)) {
+        bool can_delete = ts->group_count > 1 && !ts->recording;
+        if (!can_delete) igBeginDisabled(true);
+        if (igMenuItem_Bool(ICON_FA_TRASH " Delete group", NULL, false, can_delete)) pending_group_remove = group_index;
+        if (!can_delete) igEndDisabled();
         igEndPopup();
       }
 
-      if (i < world.m_NumCharacters && world.m_pCharacters[i].m_FinishTick > 0) {
-        float time = physics_character_race_time(&world.m_pCharacters[i], (float)world.m_GameTick);
-        int m = (int)time / 60;
-        float s = fmodf(time, 60.0f);
-        igSameLine(0, 10.f * dpi_scale);
-        igTextDisabled("%02d:%06.3f", m, s);
-      }
+      if (open) {
+        char name_before_frame[MAX_TIMELINE_GROUP_NAME];
+        memcpy(name_before_frame, group->name, sizeof(name_before_frame));
+        igSetNextItemWidth(155.0f * dpi_scale);
+        bool name_changed = igInputText("Name", group->name, sizeof(group->name), ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
+        if (igIsItemActivated()) {
+          g_group_name_edit_undo.active = true;
+          g_group_name_edit_undo.index = group_index;
+          memcpy(g_group_name_edit_undo.before, name_before_frame, sizeof(g_group_name_edit_undo.before));
+        }
+        if (name_changed) ui_mark_unsaved(ui);
+        if (igIsItemDeactivatedAfterEdit() && g_group_name_edit_undo.active && g_group_name_edit_undo.index == group_index) {
+          undo_command_t *command = commands_create_group_name_change(ui, group_index, g_group_name_edit_undo.before);
+          if (command) undo_manager_register_command(&ui->undo_manager, command);
+          g_group_name_edit_undo.active = false;
+        }
 
+        float color_before_frame[4];
+        memcpy(color_before_frame, group->color, sizeof(color_before_frame));
+        igSameLine(0, 5.0f * dpi_scale);
+        igSetNextItemWidth(45.0f * dpi_scale);
+        bool color_changed = igColorEdit3("Color", group->color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+        if (igIsItemActivated()) {
+          g_group_color_edit_undo.active = true;
+          g_group_color_edit_undo.index = group_index;
+          memcpy(g_group_color_edit_undo.before, color_before_frame, sizeof(g_group_color_edit_undo.before));
+        }
+        if (color_changed) ui_mark_unsaved(ui);
+        if (igIsItemDeactivatedAfterEdit() && g_group_color_edit_undo.active && g_group_color_edit_undo.index == group_index) {
+          undo_command_t *command = commands_create_group_color_change(ui, group_index, g_group_color_edit_undo.before);
+          if (command) undo_manager_register_command(&ui->undo_manager, command);
+          g_group_color_edit_undo.active = false;
+        }
+
+        igSameLine(0, 8.0f * dpi_scale);
+        bool visible_before = group->visible;
+        if (igCheckbox("Show in viewport", &group->visible)) {
+          undo_command_t *command = commands_create_group_visibility_change(ui, group_index, visible_before);
+          if (command) undo_manager_register_command(&ui->undo_manager, command);
+        }
+
+        if (group_index == 0) {
+          group->start_offset = 0;
+          igBeginDisabled(true);
+        }
+        int offset_before_frame = group->start_offset;
+        igSetNextItemWidth(120.0f * dpi_scale);
+        bool offset_changed = igDragInt("Start offset", &group->start_offset, 1.0f, -1000000, 1000000, "%d ticks", ImGuiSliderFlags_AlwaysClamp);
+        if (igIsItemActivated()) {
+          g_group_offset_edit_undo.active = true;
+          g_group_offset_edit_undo.index = group_index;
+          g_group_offset_edit_undo.before = offset_before_frame;
+        }
+        if (offset_changed) {
+          model_recalc_physics(ts, 0);
+          ui_mark_unsaved(ui);
+        }
+        if (igIsItemDeactivatedAfterEdit() && g_group_offset_edit_undo.active && g_group_offset_edit_undo.index == group_index) {
+          undo_command_t *command = commands_create_group_start_offset_change(ui, group_index, g_group_offset_edit_undo.before);
+          if (command) undo_manager_register_command(&ui->undo_manager, command);
+          g_group_offset_edit_undo.active = false;
+        }
+        if (group_index == 0) igEndDisabled();
+
+        SWorldCore world = wc_empty();
+        model_get_group_world_state_at_tick(ts, group_index, ts->current_tick, &world, false);
+        for (int local_index = 0; local_index < world.m_NumCharacters; ++local_index) {
+          int i = model_group_track_index(ts, group_index, local_index);
+          if (i < 0) continue;
+          player_track_t *track = &ts->player_tracks[i];
+          igPushID_Int(i);
+          bool selected = i == ts->selected_player_track_index;
+          const char *player_name = track->player_info.name[0] ? track->player_info.name : "nameless tee";
+          char row_label[160];
+          snprintf(row_label, sizeof(row_label), "%s  (%s)", track->name[0] ? track->name : "Track", player_name);
+
+          ImDrawList *row_draw_list = igGetWindowDrawList();
+          ImVec4 row_color = {0.18f, 0.18f, 0.18f, 0.55f};
+          ImVec4 row_selected_color = {0.30f, 0.30f, 0.30f, 0.70f};
+          ImVec4 row_hovered_color = {0.25f, 0.25f, 0.25f, 0.75f};
+          ImVec4 row_active_color = {0.34f, 0.34f, 0.34f, 0.80f};
+
+          // Keep Selectable's native text-height layout so the label and the timing text placed on
+          // the same line share a baseline. Draw the persistent tint in a lower channel after the
+          // exact item rectangle is known.
+          ImDrawList_ChannelsSplit(row_draw_list, 2);
+          ImDrawList_ChannelsSetCurrent(row_draw_list, 1);
+          float row_left_padding = 12.0f * dpi_scale;
+          igIndent(row_left_padding);
+          igPushStyleColor_Vec4(ImGuiCol_Header, row_selected_color);
+          igPushStyleColor_Vec4(ImGuiCol_HeaderHovered, row_hovered_color);
+          igPushStyleColor_Vec4(ImGuiCol_HeaderActive, row_active_color);
+          bool track_clicked = igSelectable_Bool(row_label, selected, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns,
+                                                  (ImVec2){0, 0});
+          igPopStyleColor(3);
+          igUnindent(row_left_padding);
+
+          ImVec2 row_min = igGetItemRectMin();
+          ImVec2 row_max = igGetItemRectMax();
+          ImDrawList_ChannelsSetCurrent(row_draw_list, 0);
+          ImDrawList_AddRectFilled(row_draw_list, row_min, row_max, igGetColorU32_Vec4(row_color), 3.0f * dpi_scale, ImDrawFlags_RoundCornersAll);
+
+          ImDrawList_ChannelsSetCurrent(row_draw_list, 1);
+          ImU32 rail_color = igGetColorU32_Vec4((ImVec4){0.65f, 0.65f, 0.65f, 0.85f});
+          ImVec2 rail_min = {row_min.x + 1.0f * dpi_scale, row_min.y + 2.0f * dpi_scale};
+          ImVec2 rail_max = {row_min.x + 4.0f * dpi_scale, row_max.y - 2.0f * dpi_scale};
+          ImDrawList_AddRectFilled(row_draw_list, rail_min, rail_max, rail_color, 1.5f * dpi_scale, ImDrawFlags_RoundCornersAll);
+          ImDrawList_ChannelsMerge(row_draw_list);
+          if (track_clicked) interaction_select_track(ts, i);
+
+          if (igBeginPopupContextItem("##track_context", ImGuiPopupFlags_MouseButtonRight)) {
+            interaction_select_track(ts, i);
+            char track_name_before_frame[MAX_TRACK_NAME];
+            memcpy(track_name_before_frame, track->name, sizeof(track_name_before_frame));
+            igSetNextItemWidth(180.0f * dpi_scale);
+            bool track_name_changed = igInputText("Track name", track->name, sizeof(track->name), ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
+            if (igIsItemActivated()) {
+              g_track_name_edit_undo.active = true;
+              g_track_name_edit_undo.index = i;
+              memcpy(g_track_name_edit_undo.before, track_name_before_frame, sizeof(g_track_name_edit_undo.before));
+            }
+            if (track_name_changed) ui_mark_unsaved(ui);
+            if (igIsItemDeactivatedAfterEdit() && g_track_name_edit_undo.active && g_track_name_edit_undo.index == i) {
+              undo_command_t *command = commands_create_track_name_change(ui, i, g_track_name_edit_undo.before);
+              if (command) undo_manager_register_command(&ui->undo_manager, command);
+              g_track_name_edit_undo.active = false;
+            }
+            if (ts->group_count > 1 && igBeginMenu("Clone to group", !ts->recording)) {
+              for (int target_group = 0; target_group < ts->group_count; ++target_group) {
+                if (target_group == group_index) continue;
+                if (igMenuItem_Bool(ts->groups[target_group]->name, NULL, false, true)) {
+                  pending_clone_track = i;
+                  pending_clone_group = target_group;
+                }
+              }
+              igEndMenu();
+            }
+            igSeparator();
+            if (igMenuItem_Bool(ICON_FA_TRASH " Delete Player Track", NULL, false, true)) {
+              if (g_remove_confirm_needed && track->snippet_count > 0) {
+                g_pending_remove_index = i;
+                igOpenPopup_Str("Confirm remove player", ImGuiPopupFlags_AnyPopupLevel);
+              } else {
+                pending_track_remove = i;
+              }
+            }
+            igEndPopup();
+          }
+
+          SCharacterCore *character = &world.m_pCharacters[local_index];
+          if (character->m_FinishTick > 0) {
+            float time = physics_character_race_time(character, (float)world.m_GameTick);
+            igSameLine(0, 10.f * dpi_scale);
+            igTextDisabled("%02d:%06.3f", (int)time / 60, fmodf(time, 60.0f));
+          } else if (character->m_LastTimeCp >= 0) {
+            igSameLine(0, 10.f * dpi_scale);
+            igTextDisabled("CP%d %.3fs", character->m_LastTimeCp + 1, character->m_aTimeCp[character->m_LastTimeCp]);
+          }
+          igPopID();
+        }
+        wc_free(&world);
+        igSeparator();
+      }
       igPopID();
     }
-    wc_free(&world);
-    if (ts->player_track_count > 0) igSeparator();
+    if (pending_clone_track >= 0) {
+      timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
+      if (before && model_clone_track_to_group(ts, pending_clone_track, pending_clone_group, NULL))
+        register_timeline_data_change(ui, before, "Clone Track to Group");
+      else commands_free_timeline_data_snapshot(before);
+    }
+    if (pending_track_remove >= 0) {
+      undo_command_t *cmd = commands_create_remove_track(ui, pending_track_remove);
+      if (cmd) undo_manager_register_command(&ui->undo_manager, cmd);
+    }
+    if (pending_group_remove >= 0) {
+      timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
+      if (before && model_remove_group(ts, pending_group_remove)) register_timeline_data_change(ui, before, "Delete Group");
+      else commands_free_timeline_data_snapshot(before);
+    }
+
+    if (igCollapsingHeader_TreeNodeFlags("Time checkpoints", 0)) {
+      SWorldCore *worlds = calloc((size_t)ts->group_count, sizeof(SWorldCore));
+      if (worlds) {
+        for (int group_index = 0; group_index < ts->group_count; ++group_index) {
+          worlds[group_index] = wc_empty();
+          model_get_group_world_state_at_tick(ts, group_index, ts->current_tick, &worlds[group_index], false);
+        }
+        if (igBeginTable("TimeCPs", ts->group_count + 1, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollX,
+                         (ImVec2){0, 0}, 0.0f)) {
+          igTableSetupColumn("CP", ImGuiTableColumnFlags_WidthFixed, 42.0f * dpi_scale, 0);
+          for (int group_index = 0; group_index < ts->group_count; ++group_index)
+            igTableSetupColumn(ts->groups[group_index]->name, ImGuiTableColumnFlags_WidthFixed, 115.0f * dpi_scale, (ImGuiID)(group_index + 1));
+          igTableHeadersRow();
+          for (int cp = 0; cp < NUM_TIME_CHECKPOINTS; ++cp) {
+            float reference = -1.0f;
+            bool any = false;
+            float *times = malloc(sizeof(float) * (size_t)ts->group_count);
+            if (!times) break;
+            for (int group_index = 0; group_index < ts->group_count; ++group_index) {
+              times[group_index] = -1.0f;
+              for (int local = 0; local < worlds[group_index].m_NumCharacters; ++local) {
+                SCharacterCore *character = &worlds[group_index].m_pCharacters[local];
+                if (!(character->m_TimeCpMask & ((uint32_t)1 << cp))) continue;
+                float time = character->m_aTimeCp[cp];
+                if (times[group_index] < 0.0f || time < times[group_index]) times[group_index] = time;
+              }
+              if (times[group_index] >= 0.0f) any = true;
+            }
+            if (!any) {
+              free(times);
+              continue;
+            }
+            reference = times[0];
+            igTableNextRow(0, 0.0f);
+            igTableSetColumnIndex(0);
+            igText("%d", cp + 1);
+            for (int group_index = 0; group_index < ts->group_count; ++group_index) {
+              igTableSetColumnIndex(group_index + 1);
+              if (times[group_index] < 0.0f) igTextDisabled("--");
+              else if (group_index == 0 || reference < 0.0f) igText("%.3fs", times[group_index]);
+              else igText("%.3fs (%+.3f)", times[group_index], times[group_index] - reference);
+            }
+            free(times);
+          }
+          igEndTable();
+        }
+        for (int group_index = 0; group_index < ts->group_count; ++group_index) wc_free(&worlds[group_index]);
+        free(worlds);
+      }
+    }
   }
   if (igBeginPopupModal("Confirm remove player", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
     igText("This player has inputs. Remove anyway?");
@@ -382,7 +654,7 @@ void on_camera_update(gfx_handler_t *handler, bool hovered) {
 
   if (camera->mode == CAMERA_MODE_FOLLOW && handler->user_interface.timeline.selected_player_track_index >= 0) {
     timeline_state_t *ts = &handler->user_interface.timeline;
-    int char_idx = ts->selected_player_track_index;
+    int char_idx = model_group_local_track_index(ts, ts->selected_player_track_index);
     if (char_idx >= 0) {
       SWorldCore world = wc_empty();
       model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
@@ -441,9 +713,9 @@ void ui_init_config(ui_handler_t *ui) {
   ui->vsync = true;
   ui->fps_limit = 0;
   ui->lod_bias = -0.5f;
-  ui->bg_color[0] = 30.f / 255.f;
-  ui->bg_color[1] = 35.f / 255.f;
-  ui->bg_color[2] = 40.f / 255.f;
+  ui->bg_color[0] = 0.253f;
+  ui->bg_color[1] = 0.253f;
+  ui->bg_color[2] = 0.253f;
   ui->prediction_alpha[0] = 1.0f;
   ui->prediction_alpha[1] = 1.0f;
   ui->cursor_scale = 1.0f;
@@ -561,7 +833,6 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->show_net_events_window = false;
   ui->show_plugin_manager = false;
   entity_inspector_clear(&ui->entity_inspector);
-  particle_system_init(&ui->particle_system);
   timeline_init(ui);
   camera_init(&gfx_handler->renderer.camera);
   undo_manager_init(&ui->undo_manager);
@@ -639,7 +910,9 @@ static void submit_tee_hand(gfx_handler_t *gfx, vec2 center_phys, vec2 dir, floa
   renderer_submit_hand(gfx, Z_LAYER_HANDS, hand, 10.0f / 32.0f, skin, render_angle, col_body, custom);
 }
 
-void render_players(ui_handler_t *ui) {
+static void render_fastcap_flags(ui_handler_t *ui, const SWorldCore *world, float intra);
+
+static void render_player_group(ui_handler_t *ui, int group_index) {
   if (!ui->render_players) return;
   gfx_handler_t *gfx = ui->gfx_handler;
   physics_handler_t *ph = &gfx->physics_handler;
@@ -649,9 +922,10 @@ void render_players(ui_handler_t *ui) {
   SWorldCore world = wc_empty();
 
   // Get the world state pair for interpolation without cache thrashing.
-  model_get_world_state_pair(&ui->timeline, ui->timeline.current_tick, &prev_world, &world, true);
+  bool is_active_group = group_index == ui->timeline.active_group_index;
+  model_get_group_world_state_pair(&ui->timeline, group_index, ui->timeline.current_tick, &prev_world, &world, true);
 
-  if (ui->timeline.player_track_count != world.m_NumCharacters) {
+  if (model_group_track_count(&ui->timeline, group_index) != world.m_NumCharacters) {
     wc_free(&prev_world);
     wc_free(&world);
     return;
@@ -662,7 +936,10 @@ void render_players(ui_handler_t *ui) {
   if (ui->timeline.is_reversing) intra = 1.f - intra;
 
   // keep track of where the selected player and their crosshair are, the cursor renders from it.
-  int selected = ui->timeline.selected_player_track_index;
+  int selected_global = ui->timeline.selected_player_track_index;
+  int selected = model_track_group_index(&ui->timeline, selected_global) == group_index
+                     ? model_group_local_track_index(&ui->timeline, selected_global)
+                     : -1;
   if (selected >= 0 && selected < world.m_NumCharacters) {
     SCharacterCore *core = &world.m_pCharacters[selected];
     vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
@@ -696,7 +973,7 @@ void render_players(ui_handler_t *ui) {
     lerp(ppp, pp, intra, p);
 
     if (p[0] < cam_min_x || p[0] > cam_max_x || p[1] < cam_min_y || p[1] > cam_max_y) {
-      if (!(ui->timeline.recording && i == ui->timeline.selected_player_track_index)) {
+      if (!(ui->timeline.recording && i == selected)) {
         continue;
       }
     }
@@ -732,7 +1009,7 @@ void render_players(ui_handler_t *ui) {
       anim_state_add(&anim_state, &anim_ninja_swing, last_attack_time * 2.f, 1.0f);
 
     vec2 dir;
-    if (ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
+    if (ui->timeline.recording && i == selected) {
       recording_aim(ui, dir);
       glm_vec2_normalize(dir);
     } else {
@@ -741,7 +1018,9 @@ void render_players(ui_handler_t *ui) {
       dir[1] = glm_lerp(prev_input->m_TargetY, core->m_Input.m_TargetY, intra);
       glm_vec2_normalize(dir);
     }
-    player_info_t *info = &ui->timeline.player_tracks[i].player_info;
+    int global_track_index = model_group_track_index(&ui->timeline, group_index, i);
+    if (global_track_index < 0) continue;
+    player_info_t *info = &ui->timeline.player_tracks[global_track_index].player_info;
     int skin = info->skin;
     int eye = get_flag_eye_state(&core->m_Input);
     vec3 feet_col = {1.f, 1.f, 1.f};
@@ -772,12 +1051,12 @@ void render_players(ui_handler_t *ui) {
 
     renderer_submit_skin(gfx, Z_LAYER_SKINS, p, 1.0f, skin, eye, dir, &anim_state, body_col, feet_col, custom_col);
 
-    if (!ui->timeline.recording && i == ui->timeline.selected_player_track_index) {
+    if (!ui->timeline.recording && i == selected) {
       // Marker triangle floating above the player, pointing down at them.
       const float width = 1.0f;
       const float height = 0.8f;
       const float gap = 0.35f; // distance between the tip and the top of the tee
-      vec4 red_col = {1.0f, 0.3f, 0.0f, 0.2f};
+      vec4 red_col = {ui->timeline.groups[group_index]->color[0], ui->timeline.groups[group_index]->color[1], ui->timeline.groups[group_index]->color[2], 0.5f};
       vec2 tip = {p[0], p[1] - 1.0f - gap};
       vec2 left = {p[0] - width * 0.5f, tip[1] - height};
       vec2 right = {p[0] + width * 0.5f, tip[1] - height};
@@ -1017,11 +1296,13 @@ void render_players(ui_handler_t *ui) {
     renderer_submit_circle_filled(gfx, Z_LAYER_PREDICTION_LINES, p0, 0.2, ent->m_Type == WEAPON_LASER ? lsr_col : sg_col, 8);
   }
 
-  entity_inspector_render_highlight(&ui->entity_inspector, gfx);
+  render_fastcap_flags(ui, &world, intra);
 
-  ui->current_tick = world.m_GameTick;
-  if (ui->timeline.selected_player_track_index >= 0) {
-    SCharacterCore *p = &world.m_pCharacters[ui->timeline.selected_player_track_index];
+  if (is_active_group) entity_inspector_render_highlight(&ui->entity_inspector, gfx);
+
+  if (is_active_group) ui->current_tick = world.m_GameTick;
+  if (is_active_group && selected >= 0 && selected < world.m_NumCharacters) {
+    SCharacterCore *p = &world.m_pCharacters[selected];
     ui->pos_x = vgetx(p->m_Pos) - 200 * 32;
     ui->pos_y = vgety(p->m_Pos) - 200 * 32;
     ui->vel_x = vgetx(p->m_Vel);
@@ -1042,7 +1323,7 @@ void render_players(ui_handler_t *ui) {
       ui->weapons[i] = p->m_aWeaponGot[i];
   }
 
-  if (ui->timeline.selected_player_track_index < 0 || !ui->show_prediction || (ui->prediction_alpha[0] <= 0.0f && ui->prediction_alpha[1] <= 0.0f)) {
+  if (!is_active_group || selected < 0 || !ui->show_prediction || (ui->prediction_alpha[0] <= 0.0f && ui->prediction_alpha[1] <= 0.0f)) {
     wc_free(&prev_world);
     wc_free(&world);
     return;
@@ -1050,14 +1331,15 @@ void render_players(ui_handler_t *ui) {
 
   int start_i = 0;
   int end_i = world.m_NumCharacters;
+  const timeline_group_t *prediction_group = ui->timeline.groups[group_index];
   if (ui->prediction_alpha[1] <= 0.0f) {
-    start_i = ui->timeline.selected_player_track_index;
+    start_i = selected;
     end_i = start_i + 1;
   }
 
   for (int i = start_i; i < end_i; ++i) {
     if (i < 0 || i >= world.m_NumCharacters) continue;
-    bool is_own = (i == ui->timeline.selected_player_track_index);
+    bool is_own = (i == selected);
     if (ui->prediction_alpha[!is_own] <= 0.0f) continue;
 
     SCharacterCore *core = &world.m_pCharacters[i];
@@ -1065,9 +1347,13 @@ void render_players(ui_handler_t *ui) {
     vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
     vec2 p;
     lerp(ppp, pp, intra, p);
-    vec4 color = {[3] = ui->prediction_alpha[!is_own]};
-    if (core->m_FreezeTime > 0) color[0] = 1.f;
-    else color[1] = 1.f;
+    bool frozen = core->m_FreezeTime > 0;
+    vec4 color = {
+        frozen ? 1.0f - prediction_group->color[0] : prediction_group->color[0],
+        frozen ? 1.0f - prediction_group->color[1] : prediction_group->color[1],
+        frozen ? 1.0f - prediction_group->color[2] : prediction_group->color[2],
+        ui->prediction_alpha[!is_own],
+    };
     renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05);
   }
 
@@ -1090,10 +1376,11 @@ void render_players(ui_handler_t *ui) {
   for (int t = 0; t < ui->prediction_length; ++t) {
     for (int i = start_i; i < end_i; ++i) {
       if (i < 0 || i >= world.m_NumCharacters) continue;
-      bool is_own = (i == ui->timeline.selected_player_track_index);
+      bool is_own = (i == selected);
       if (ui->prediction_alpha[!is_own] <= 0.0f) continue;
 
-      SPlayerInput input = interaction_predict_input(ui, &world, i);
+      int global_track_index = model_group_track_index(&ui->timeline, group_index, i);
+      SPlayerInput input = interaction_predict_input(ui, &world, global_track_index);
       cc_on_input(&world.m_pCharacters[i], &input);
     }
 
@@ -1134,20 +1421,32 @@ void render_players(ui_handler_t *ui) {
 
     for (int i = start_i; i < end_i; ++i) {
       if (i < 0 || i >= world.m_NumCharacters) continue;
-      bool is_own = (i == ui->timeline.selected_player_track_index);
+      bool is_own = (i == selected);
       if (ui->prediction_alpha[!is_own] <= 0.0f) continue;
 
       SCharacterCore *core = &world.m_pCharacters[i];
       vec2 pp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
       vec2 p = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
-      vec4 color = {[3] = ui->prediction_alpha[!is_own]};
-      if (core->m_FreezeTime > 0) color[0] = 1.f;
-      else color[1] = 1.f;
+      bool frozen = core->m_FreezeTime > 0;
+      vec4 color = {
+          frozen ? 1.0f - prediction_group->color[0] : prediction_group->color[0],
+          frozen ? 1.0f - prediction_group->color[1] : prediction_group->color[1],
+          frozen ? 1.0f - prediction_group->color[2] : prediction_group->color[2],
+          ui->prediction_alpha[!is_own],
+      };
       renderer_submit_line(gfx, Z_LAYER_PREDICTION_LINES, pp, p, color, 0.05);
     }
   }
   wc_free(&prev_world);
   wc_free(&world);
+}
+
+void render_players(ui_handler_t *ui) {
+  if (!ui || !ui->render_players) return;
+  for (int group_index = 0; group_index < ui->timeline.group_count; ++group_index) {
+    if (!ui->timeline.groups[group_index]->visible) continue;
+    render_player_group(ui, group_index);
+  }
 }
 
 static void render_fastcap_flag(ui_handler_t *ui, int team, vec2 pos) {
@@ -1212,9 +1511,10 @@ void render_pickups(ui_handler_t *ui) {
   const SCharacterCore *view_character = NULL;
   const bool unique_race = physics->world.m_UniqueRace;
   const int selected = ui->timeline.selected_player_track_index;
+  const int selected_local = model_group_local_track_index(&ui->timeline, selected);
   if (unique_race) {
     model_get_world_state_at_tick(&ui->timeline, ui->timeline.current_tick, &world, false);
-    if (selected >= 0 && selected < world.m_NumCharacters) view_character = &world.m_pCharacters[selected];
+    if (selected_local >= 0 && selected_local < world.m_NumCharacters) view_character = &world.m_pCharacters[selected_local];
   }
 
   static atlas_instance_t *instances = NULL;
@@ -1263,7 +1563,7 @@ void render_pickups(ui_handler_t *ui) {
       continue;
     }
     if (view_character && world.m_pConfig->m_SvHealthAndAmmo &&
-        physics_pickup_on_cooldown(&world, selected, ui->pickup_cooldown_keys[i])) {
+        physics_pickup_on_cooldown(&world, selected_local, ui->pickup_cooldown_keys[i])) {
       continue;
     }
 
@@ -1333,7 +1633,6 @@ void render_pickups(ui_handler_t *ui) {
     renderer_submit_atlas_batch(h, ar, Z_LAYER_PICKUPS, instances, count, false);
   }
   if (unique_race) {
-    render_fastcap_flags(ui, &world, render_intra);
     wc_free(&world);
   }
 }
@@ -1388,12 +1687,13 @@ void render_cursor(ui_handler_t *ui) {
     // Watching: take the aim straight off the timeline, interpolated like the tee itself.
     timeline_state_t *ts = &ui->timeline;
     int track = ts->selected_player_track_index;
+    int group_tick = model_group_playhead_tick(ts, model_track_group_index(ts, track));
     float speed_scale = ts->is_reversing ? 2.0f : 1.0f;
     float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
     if (ts->is_reversing) intra = 1.f - intra;
 
-    SPlayerInput prev = model_get_input_at_tick(ts, track, ts->current_tick - 1);
-    SPlayerInput cur = model_get_input_at_tick(ts, track, ts->current_tick);
+    SPlayerInput prev = model_get_input_at_tick(ts, track, group_tick - 1);
+    SPlayerInput cur = model_get_input_at_tick(ts, track, group_tick);
     aim[0] = glm_lerp(prev.m_TargetX, cur.m_TargetX, intra);
     aim[1] = glm_lerp(prev.m_TargetY, cur.m_TargetY, intra);
   }
@@ -1711,6 +2011,8 @@ void ui_render(ui_handler_t *ui) {
   }
   entity_inspector_render(&ui->entity_inspector);
 
+  demo_render_export_dialog(ui);
+
   render_new_project_prompt(ui);
 
   // with nothing loaded the splash is the only thing to show, otherwise it is up because
@@ -1771,7 +2073,9 @@ static void draw_character_inspector(ui_handler_t *ui, ImVec2 start) {
   // input state
   SPlayerInput Input = ui->timeline.player_tracks[ui->timeline.selected_player_track_index].current_input;
   if (!ui->timeline.recording) {
-    Input = model_get_input_at_tick(&ui->timeline, ui->timeline.selected_player_track_index, ui->timeline.current_tick);
+    int group_index = model_track_group_index(&ui->timeline, ui->timeline.selected_player_track_index);
+    Input = model_get_input_at_tick(&ui->timeline, ui->timeline.selected_player_track_index,
+                                    model_group_playhead_tick(&ui->timeline, group_index));
   }
 
   igText("");
@@ -1858,8 +2162,30 @@ bool ui_render_late(ui_handler_t *ui) {
         float dist = sqrtf(dx * dx + dy * dy);
         if (dist < best_dist) {
           best_dist = dist;
-          best_match = i;
+          best_match = model_group_track_index(&ui->timeline, ui->timeline.active_group_index, i);
         }
+      }
+
+      // Every visible group is drawn into the same viewport, so picking follows the same rule.
+      for (int group_index = 0; group_index < ui->timeline.group_count; ++group_index) {
+        if (group_index == ui->timeline.active_group_index || !ui->timeline.groups[group_index]->visible) continue;
+        SWorldCore group_world = wc_empty();
+        model_get_group_world_state_at_tick(&ui->timeline, group_index, ui->timeline.current_tick, &group_world, false);
+        for (int local_index = 0; local_index < group_world.m_NumCharacters; ++local_index) {
+          SCharacterCore *core = &group_world.m_pCharacters[local_index];
+          vec2 ppp = {vgetx(core->m_PrevPos) / 32.f, vgety(core->m_PrevPos) / 32.f};
+          vec2 pp = {vgetx(core->m_Pos) / 32.f, vgety(core->m_Pos) / 32.f};
+          vec2 p;
+          lerp(ppp, pp, intra, p);
+          float dx = p[0] - wx;
+          float dy = p[1] - wy;
+          float dist = sqrtf(dx * dx + dy * dy);
+          if (dist < best_dist) {
+            best_dist = dist;
+            best_match = model_group_track_index(&ui->timeline, group_index, local_index);
+          }
+        }
+        wc_free(&group_world);
       }
 
       if (best_match != -1) {
@@ -1955,7 +2281,6 @@ void ui_cleanup(ui_handler_t *ui) {
   free(ui->ninja_pickup_indices);
   config_save(ui);
   plugin_manager_shutdown(&ui->plugin_manager);
-  particle_system_cleanup(&ui->particle_system);
   timeline_cleanup(&ui->timeline);
   undo_manager_cleanup(&ui->undo_manager);
   skin_manager_free(&ui->skin_manager, ui->gfx_handler);

@@ -29,7 +29,10 @@ static int api_get_track_count(void) { return g_ui_handler_for_api->timeline.pla
 
 // READ ONLY PLEASE
 static SWorldCore *api_get_initial_world(void) {
-  return g_ui_handler_for_api->gfx_handler->physics_handler.loaded ? &g_ui_handler_for_api->gfx_handler->physics_handler.world : NULL;
+  timeline_state_t *ts = &g_ui_handler_for_api->timeline;
+  return g_ui_handler_for_api->gfx_handler->physics_handler.loaded && ts->active_group_index >= 0 && ts->active_group_index < ts->group_count
+             ? &ts->groups[ts->active_group_index]->initial_world
+             : NULL;
 }
 
 static SWorldCore *api_get_world_state_at(int tick) {
@@ -39,25 +42,11 @@ static SWorldCore *api_get_world_state_at(int tick) {
   if (!world_copy) return NULL;
   *world_copy = wc_empty();
 
-  const int step = 50;
-  int snapshot_index = (tick - 1) / step;
-  snapshot_index = imin(snapshot_index, (int)ts->vec.current_size - 1);
-  snapshot_index = imax(snapshot_index, 0);
-
-  if (ts->vec.current_size == 0) {
+  if (ts->active_group_index < 0 || ts->active_group_index >= ts->group_count) {
     free(world_copy);
     return NULL;
   }
-
-  wc_copy_world(world_copy, &ts->vec.data[snapshot_index]);
-
-  while (world_copy->m_GameTick < tick) {
-    for (int p = 0; p < world_copy->m_NumCharacters; ++p) {
-      SPlayerInput input = model_get_input_at_tick(ts, p, world_copy->m_GameTick);
-      cc_on_input(&world_copy->m_pCharacters[p], &input);
-    }
-    wc_tick(world_copy);
-  }
+  model_get_group_world_state_at_tick(ts, ts->active_group_index, tick, world_copy, false);
 
   return world_copy;
 }

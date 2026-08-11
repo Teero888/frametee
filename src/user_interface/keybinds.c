@@ -287,7 +287,7 @@ void keybinds_process_inputs(ui_handler_t *ui) {
       if (ts->recording && ts->selected_player_track_index != new_index) {
         timeline_switch_recording_target(ts, new_index);
       }
-      ts->selected_player_track_index = new_index;
+      interaction_select_track(ts, new_index);
       break;
     }
   }
@@ -303,7 +303,7 @@ void keybinds_process_inputs(ui_handler_t *ui) {
       if (ts->recording && ts->selected_player_track_index != new_index) {
         timeline_switch_recording_target(ts, new_index);
       }
-      ts->selected_player_track_index = new_index;
+      interaction_select_track(ts, new_index);
     }
   }
   if (keybinds_is_action_pressed(kb, ACTION_CYCLE_TRACK_DOWN, false)) {
@@ -317,7 +317,7 @@ void keybinds_process_inputs(ui_handler_t *ui) {
       if (ts->recording && ts->selected_player_track_index != new_index) {
         timeline_switch_recording_target(ts, new_index);
       }
-      ts->selected_player_track_index = new_index;
+      interaction_select_track(ts, new_index);
     }
   }
 

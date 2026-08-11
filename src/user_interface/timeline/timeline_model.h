@@ -7,6 +7,22 @@
 void model_init(timeline_state_t *ts, ui_handler_t *ui);
 void model_cleanup(timeline_state_t *ts);
 
+// Groups
+timeline_group_t *model_add_group(timeline_state_t *ts, const char *name);
+bool model_remove_group(timeline_state_t *ts, int group_index);
+void model_reset_groups_for_map(timeline_state_t *ts);
+int model_track_group_index(const timeline_state_t *ts, int track_index);
+int model_group_track_count(const timeline_state_t *ts, int group_index);
+int model_group_track_index(const timeline_state_t *ts, int group_index, int local_index);
+int model_group_local_track_index(const timeline_state_t *ts, int track_index);
+int model_group_playhead_tick(const timeline_state_t *ts, int group_index);
+// Earliest meaningful shared/global tick. Group-local playheads remain clamped to zero.
+int model_get_min_global_tick(const timeline_state_t *ts);
+int model_clamp_global_tick_for_group(const timeline_state_t *ts, int group_index, int tick);
+void model_set_active_group(timeline_state_t *ts, int group_index);
+player_track_t *model_clone_track_to_group(timeline_state_t *ts, int track_index, int group_index, int *out_track_index);
+void model_align_group_starts(timeline_state_t *ts);
+
 // Snippet ID Vector Helpers
 void snippet_id_vector_init(snippet_id_vector_t *vec);
 void snippet_id_vector_free(snippet_id_vector_t *vec);
@@ -64,6 +80,9 @@ void model_advance_tick(timeline_state_t *ts, int steps);
 void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_id_to_activate);
 void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *out_world, bool effects);
 void model_get_world_state_pair(timeline_state_t *ts, int tick, SWorldCore *out_prev_world, SWorldCore *out_world, bool effects);
+void model_get_group_world_state_at_tick(timeline_state_t *ts, int group_index, int tick, SWorldCore *out_world, bool effects);
+void model_get_group_world_state_pair(timeline_state_t *ts, int group_index, int tick, SWorldCore *out_prev_world, SWorldCore *out_world,
+                                      bool effects);
 void model_apply_starting_config(timeline_state_t *ts, int track_index);
 
 #endif // UI_TIMELINE_MODEL_H

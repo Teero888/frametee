@@ -71,6 +71,7 @@ typedef struct {
 } particle_system_t;
 
 void particle_system_init(particle_system_t *ps);
+void particle_system_reset(particle_system_t *ps);
 void particle_system_cleanup(particle_system_t *ps);
 void particle_system_update_sim(particle_system_t *ps, map_data_t *map);
 void particle_system_update(particle_system_t *ps, float dt, map_data_t *map);

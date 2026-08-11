@@ -4,7 +4,9 @@
 #include <string.h>
 #include <math.h>
 #include <system/include_cimgui.h>
+#include "timeline/timeline_commands.h"
 #include "timeline/timeline_model.h"
+#include "undo_redo.h"
 
 static int compare_net_events(const void *a, const void *b) {
   const net_event_t *ev_a = (const net_event_t *)a;
@@ -104,6 +106,8 @@ void render_net_events_window(ui_handler_t *ui) {
     static int new_team_idx = 0; // Default to All
     static int new_client_id = 0;
 
+    igText("Group: %s", ts->groups[ts->active_group_index]->name);
+
     igCheckbox("Auto-generate finish events when recording", &ui->auto_generate_finish_events);
     igSameLine(0, 10);
     if (igButton("Generate Finish Net Events", (ImVec2){0, 0})) {
@@ -112,7 +116,7 @@ void render_net_events_window(ui_handler_t *ui) {
     igSeparator();
 
     if (igButton("Set to Current Tick", (ImVec2){0, 0})) {
-      new_tick = ts->current_tick;
+      new_tick = model_group_playhead_tick(ts, ts->active_group_index);
     }
     igSameLine(0, 5);
     igDragInt("Tick", &new_tick, 1.0f, 0, 0, "%d", 0);
@@ -184,6 +188,7 @@ void render_net_events_window(ui_handler_t *ui) {
     if (igButton("Add Event", (ImVec2){0, 0})) {
       net_event_t ev = {0};
       ev.tick = new_tick;
+      ev.group_index = ts->active_group_index;
       ev.type = (net_event_type_t)new_type;
 
       if (uses_message) {
@@ -225,7 +230,8 @@ void render_net_events_window(ui_handler_t *ui) {
 
     igSeparator();
 
-    if (igBeginTable("EventsTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable, (ImVec2){0, 0}, 0.0f)) {
+    if (igBeginTable("EventsTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable, (ImVec2){0, 0}, 0.0f)) {
+      igTableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 100.0f, 0);
       igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 60.0f, 0);
       igTableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 100.0f, 0);
       igTableSetupColumn("Message/Info", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
@@ -247,6 +253,20 @@ void render_net_events_window(ui_handler_t *ui) {
           igTableNextRow(0, 0.0f);
 
           igTableSetColumnIndex(0);
+          const char *group_name = ev->group_index >= 0 && ev->group_index < ts->group_count ? ts->groups[ev->group_index]->name : "Invalid";
+          if (igBeginCombo("##group", group_name, 0)) {
+            for (int group_index = 0; group_index < ts->group_count; ++group_index) {
+              if (igSelectable_Bool(ts->groups[group_index]->name, group_index == ev->group_index, 0, (ImVec2){0, 0})) {
+                int previous_group = ev->group_index;
+                ev->group_index = group_index;
+                undo_command_t *command = commands_create_net_event_group_change(ui, i, previous_group);
+                if (command) undo_manager_register_command(&ui->undo_manager, command);
+              }
+            }
+            igEndCombo();
+          }
+
+          igTableSetColumnIndex(1);
           igPushItemWidth(-FLT_MIN);
           if (igDragInt("##tick", &ev->tick, 1.0f, 0, 0, "%d", 0)) {
             // just updated value
@@ -254,7 +274,7 @@ void render_net_events_window(ui_handler_t *ui) {
           if (igIsItemDeactivatedAfterEdit()) sort_needed = true;
           igPopItemWidth();
 
-          igTableSetColumnIndex(1);
+          igTableSetColumnIndex(2);
           igPushItemWidth(-FLT_MIN);
           int type_idx = (int)ev->type;
           if (igCombo_Str("##type", &type_idx, "Chat\0Broadcast\0KillMsg\0SoundGlobal\0Emoticon\0VoteSet\0VoteStatus\0DDRaceTime\0Record\0\0", 0)) {
@@ -262,7 +282,7 @@ void render_net_events_window(ui_handler_t *ui) {
           }
           igPopItemWidth();
 
-          igTableSetColumnIndex(2);
+          igTableSetColumnIndex(3);
           if (ev->type == NET_EVENT_CHAT || ev->type == NET_EVENT_BROADCAST || ev->type == NET_EVENT_VOTE_SET) {
             igPushItemWidth(-FLT_MIN);
             igInputText("##msg", ev->message, sizeof(ev->message), 0, NULL, NULL);
@@ -277,7 +297,7 @@ void render_net_events_window(ui_handler_t *ui) {
             igTextDisabled("-");
           }
 
-          igTableSetColumnIndex(3);
+          igTableSetColumnIndex(4);
           if (ev->type == NET_EVENT_CHAT) {
             igPushItemWidth(40);
             igInputInt("##cid", &ev->client_id, 0, 0, 0);
@@ -375,7 +395,7 @@ void render_net_events_window(ui_handler_t *ui) {
             igTextDisabled("-");
           }
 
-          igTableSetColumnIndex(4);
+          igTableSetColumnIndex(5);
           if (igButton("Del", (ImVec2){0, 0})) {
             net_events_remove(ts, i);
             i--;
@@ -488,9 +508,9 @@ void net_event_tooltip_draw(const net_event_t *ev) {
   }
 }
 
-bool timeline_has_net_event(const timeline_state_t *ts, int tick, net_event_type_t type) {
+bool timeline_has_net_event(const timeline_state_t *ts, int group_index, int tick, net_event_type_t type) {
   for (int i = 0; i < ts->net_event_count; ++i) {
-    if (ts->net_events[i].tick == tick && ts->net_events[i].type == type) {
+    if (ts->net_events[i].group_index == group_index && ts->net_events[i].tick == tick && ts->net_events[i].type == type) {
       return true;
     }
   }
@@ -502,14 +522,16 @@ void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, co
   if (finish_time <= 0.0f) return;
 
   const char *player_name = ts->player_tracks[track_index].player_info.name;
+  const int group_index = model_track_group_index(ts, track_index);
   if (!player_name || player_name[0] == '\0') {
     player_name = "nameless tee";
   }
 
   // 1. Chat event
-  if (!timeline_has_net_event(ts, tick, NET_EVENT_CHAT)) {
+  if (!timeline_has_net_event(ts, group_index, tick, NET_EVENT_CHAT)) {
     net_event_t ev = {0};
     ev.tick = tick;
+    ev.group_index = group_index;
     ev.type = NET_EVENT_CHAT;
     ev.team = 0;
     ev.client_id = -1;
@@ -520,9 +542,10 @@ void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, co
   }
 
   // 2. DDRace Time event
-  if (!timeline_has_net_event(ts, tick, NET_EVENT_DDRACE_TIME)) {
+  if (!timeline_has_net_event(ts, group_index, tick, NET_EVENT_DDRACE_TIME)) {
     net_event_t ev = {0};
     ev.tick = tick;
+    ev.group_index = group_index;
     ev.type = NET_EVENT_DDRACE_TIME;
     ev.time = (int)roundf(finish_time * 100.0f);
     ev.check = 0;
@@ -531,9 +554,10 @@ void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, co
   }
 
   // 3. Record event
-  if (!timeline_has_net_event(ts, tick, NET_EVENT_RECORD)) {
+  if (!timeline_has_net_event(ts, group_index, tick, NET_EVENT_RECORD)) {
     net_event_t ev = {0};
     ev.tick = tick;
+    ev.group_index = group_index;
     ev.type = NET_EVENT_RECORD;
     ev.player_time_best = (int)roundf(finish_time * 100.0f);
     ev.server_time_best = (int)roundf(finish_time * 100.0f);
@@ -541,9 +565,9 @@ void timeline_add_finish_events_for_character(timeline_state_t *ts, int tick, co
   }
 
   // Confetti effect
-  if (ts->ui) {
+  if (ts->ui && group_index >= 0 && group_index < ts->group_count) {
     vec2 p = {vgetx(pChar->m_Pos), vgety(pChar->m_Pos)};
-    particles_create_confetti(&ts->ui->particle_system, p, 1.0f);
+    particles_create_confetti(&ts->groups[group_index]->particle_system, p, 1.0f);
   }
 }
 
@@ -551,31 +575,34 @@ void timeline_generate_finish_events(timeline_state_t *ts) {
   int max_ticks = model_get_max_timeline_tick(ts);
   if (max_ticks <= 0) return;
 
-  SWorldCore cur = wc_empty();
-  model_get_world_state_at_tick(ts, 0, &cur, false);
-
   bool generated_any = false;
 
-  for (int t = 0; t < max_ticks; ++t) {
-    for (int i = 0; i < cur.m_NumCharacters; ++i) {
-      SPlayerInput input = model_get_input_at_tick(ts, i, cur.m_GameTick);
-      cc_on_input(&cur.m_pCharacters[i], &input);
-    }
+  for (int group_index = 0; group_index < ts->group_count; ++group_index) {
+    SWorldCore cur = wc_empty();
+    model_get_group_world_state_at_tick(ts, group_index, 0, &cur, false);
+    int local_max = imax(0, max_ticks - ts->groups[group_index]->start_offset);
+    for (int t = 0; t < local_max; ++t) {
+      for (int local_index = 0; local_index < cur.m_NumCharacters; ++local_index) {
+        int track_index = model_group_track_index(ts, group_index, local_index);
+        SPlayerInput input = track_index >= 0 ? model_get_input_at_tick(ts, track_index, cur.m_GameTick) : (SPlayerInput){0};
+        cc_on_input(&cur.m_pCharacters[local_index], &input);
+      }
 
-    wc_tick(&cur);
+      wc_tick(&cur);
 
-    for (int i = 0; i < cur.m_NumCharacters; ++i) {
-      SCharacterCore *pChar = &cur.m_pCharacters[i];
-      if (pChar->m_StartTick != -1 && pChar->m_FinishTick == cur.m_GameTick) {
-        timeline_add_finish_events_for_character(ts, cur.m_GameTick, pChar, i);
-        generated_any = true;
+      for (int local_index = 0; local_index < cur.m_NumCharacters; ++local_index) {
+        SCharacterCore *pChar = &cur.m_pCharacters[local_index];
+        if (pChar->m_StartTick != -1 && pChar->m_FinishTick == cur.m_GameTick) {
+          int track_index = model_group_track_index(ts, group_index, local_index);
+          if (track_index >= 0) timeline_add_finish_events_for_character(ts, cur.m_GameTick, pChar, track_index);
+          generated_any = true;
+        }
       }
     }
+    wc_free(&cur);
   }
 
   if (generated_any) {
     timeline_mark_unsaved(ts);
   }
-
-  wc_free(&cur);
 }

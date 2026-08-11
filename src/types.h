@@ -85,6 +85,7 @@ typedef struct snippet_id_vector_t snippet_id_vector_t;
 typedef struct dragged_snippet_info_t dragged_snippet_info_t;
 typedef struct starting_config_t starting_config_t;
 typedef struct timeline_state timeline_state_t;
+typedef struct timeline_group_t timeline_group_t;
 typedef struct input_snippet_t input_snippet_t;
 typedef struct player_track_t player_track_t;
 typedef struct net_event_t net_event_t;

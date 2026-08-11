@@ -44,6 +44,15 @@ void particle_system_init(particle_system_t *ps) {
   ps->last_simulated_tick = -1;
 }
 
+void particle_system_reset(particle_system_t *ps) {
+  ps->active_count = 0;
+  memset(ps->flow_events, 0, sizeof(ps->flow_events));
+  ps->next_flow_index = 0;
+  ps->current_time = 0.0;
+  ps->last_simulated_tick = -1;
+  ps->rng_seed = 0;
+}
+
 void particle_system_cleanup(particle_system_t *ps) {
   if (ps->particles) {
     free(ps->particles);

@@ -92,6 +92,8 @@ void render_player_info(gfx_handler_t *h) {
   }
 
   player_info_t *player_info = &ts->player_tracks[ts->selected_player_track_index].player_info;
+  int selected_group = model_track_group_index(ts, ts->selected_player_track_index);
+  int selected_local = model_group_local_track_index(ts, ts->selected_player_track_index);
 
   if (igBegin("Player Info", NULL, ImGuiWindowFlags_NoFocusOnAppearing)) {
     igInputText("Name", player_info->name, 16, 0, NULL, NULL);
@@ -150,7 +152,8 @@ void render_player_info(gfx_handler_t *h) {
     }
     if (igButton("Apply info to all players", (ImVec2){0}))
       for (int i = 0; i < h->user_interface.timeline.player_track_count; ++i)
-        memcpy(&h->user_interface.timeline.player_tracks[i].player_info, player_info, sizeof(player_info_t));
+        if (h->user_interface.timeline.player_tracks[i].group_index == selected_group)
+          memcpy(&h->user_interface.timeline.player_tracks[i].player_info, player_info, sizeof(player_info_t));
 
     igSeparator();
     igText("Starting Configuration");
@@ -160,8 +163,8 @@ void render_player_info(gfx_handler_t *h) {
       if (sc->enabled) {
         SWorldCore world = wc_empty();
         model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
-        if (ts->selected_player_track_index < world.m_NumCharacters) {
-          SCharacterCore *chr = &world.m_pCharacters[ts->selected_player_track_index];
+        if (selected_local >= 0 && selected_local < world.m_NumCharacters) {
+          SCharacterCore *chr = &world.m_pCharacters[selected_local];
           sc->position[0] = vgetx(chr->m_Pos) - MAP_EXPAND * 32;
           sc->position[1] = vgety(chr->m_Pos) - MAP_EXPAND * 32;
           sc->velocity[0] = vgetx(chr->m_Vel);
@@ -236,8 +239,8 @@ void render_player_info(gfx_handler_t *h) {
       if (igButton("Take from Current State", (ImVec2){0})) {
         SWorldCore world = wc_empty();
         model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
-        if (ts->selected_player_track_index < world.m_NumCharacters) {
-          SCharacterCore *chr = &world.m_pCharacters[ts->selected_player_track_index];
+        if (selected_local >= 0 && selected_local < world.m_NumCharacters) {
+          SCharacterCore *chr = &world.m_pCharacters[selected_local];
           sc->position[0] = vgetx(chr->m_Pos) - MAP_EXPAND * 32;
           sc->position[1] = vgety(chr->m_Pos) - MAP_EXPAND * 32;
           sc->velocity[0] = vgetx(chr->m_Vel);

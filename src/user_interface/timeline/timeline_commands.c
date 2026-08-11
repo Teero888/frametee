@@ -55,13 +55,13 @@ typedef struct {
   int original_snippet_id;
   int new_snippet_id;
   int original_input_count; // window length before the split, restored on undo
+  int split_tick;
 } SplitInfo;
 
 typedef struct {
   undo_command_t base;
   SplitInfo *infos;
   int count;
-  int split_tick;
 } MultiSplitCommand;
 
 typedef struct {
@@ -82,6 +82,7 @@ typedef struct {
 typedef struct {
   undo_command_t base;
   int track_index;
+  int group_index;
   player_info_t player_info;
 } AddTrackCommand;
 
@@ -102,6 +103,449 @@ typedef struct {
   int *deactivated_ids; // snippets the widened snippet now covers
   int deactivated_count;
 } TrimSnippetCommand;
+
+typedef struct {
+  char name[MAX_TIMELINE_GROUP_NAME];
+  float color[4];
+  bool visible;
+  bool demo_export_enabled;
+  int start_offset;
+} TimelineGroupData;
+
+struct timeline_data_snapshot_t {
+  TimelineGroupData *groups;
+  int group_count;
+  player_track_t *tracks;
+  int track_count;
+  net_event_t *events;
+  int event_count;
+  int current_tick;
+  int next_snippet_id;
+  int active_group_index;
+  int selected_player_track_index;
+  int active_snippet_id;
+  int context_menu_snippet_id;
+  int *selected_snippet_ids;
+  int selected_snippet_count;
+  int last_event_scan_tick;
+};
+
+typedef struct {
+  undo_command_t base;
+  timeline_data_snapshot_t *before;
+  timeline_data_snapshot_t *after;
+} TimelineDataCommand;
+
+typedef enum {
+  TIMELINE_PROPERTY_GROUP_NAME,
+  TIMELINE_PROPERTY_GROUP_COLOR,
+  TIMELINE_PROPERTY_GROUP_VISIBILITY,
+  TIMELINE_PROPERTY_GROUP_START_OFFSET,
+  TIMELINE_PROPERTY_GROUP_DEMO_EXPORT,
+  TIMELINE_PROPERTY_TRACK_NAME,
+  TIMELINE_PROPERTY_TRACK_DEMO_EXPORT,
+  TIMELINE_PROPERTY_TRACK_DEMO_PING,
+  TIMELINE_PROPERTY_NET_EVENT_GROUP,
+} TimelinePropertyKind;
+
+typedef union {
+  char text[MAX_TIMELINE_GROUP_NAME];
+  float color[4];
+  bool boolean;
+  int integer;
+} TimelinePropertyValue;
+
+typedef struct {
+  undo_command_t base;
+  TimelinePropertyKind kind;
+  int index;
+  TimelinePropertyValue before;
+  TimelinePropertyValue after;
+} TimelinePropertyCommand;
+
+static void clone_track_data(player_track_t *destination, const player_track_t *source) {
+  *destination = *source;
+  destination->snippets = NULL;
+  destination->snippet_capacity = source->snippet_count;
+  if (source->snippet_count > 0) {
+    destination->snippets = calloc((size_t)source->snippet_count, sizeof(*destination->snippets));
+    for (int i = 0; i < source->snippet_count; ++i)
+      model_snippet_clone(&destination->snippets[i], &source->snippets[i]);
+  }
+
+  destination->recording_snippets = NULL;
+  destination->recording_snippet_capacity = source->recording_snippet_count;
+  if (source->recording_snippet_count > 0) {
+    destination->recording_snippets = calloc((size_t)source->recording_snippet_count, sizeof(*destination->recording_snippets));
+    for (int i = 0; i < source->recording_snippet_count; ++i)
+      model_snippet_clone(&destination->recording_snippets[i], &source->recording_snippets[i]);
+  }
+}
+
+static void free_track_data(player_track_t *track) {
+  for (int i = 0; i < track->snippet_count; ++i) model_free_snippet_inputs(&track->snippets[i]);
+  for (int i = 0; i < track->recording_snippet_count; ++i) model_free_snippet_inputs(&track->recording_snippets[i]);
+  free(track->snippets);
+  free(track->recording_snippets);
+  track->snippets = NULL;
+  track->recording_snippets = NULL;
+}
+
+timeline_data_snapshot_t *commands_capture_timeline_data(const timeline_state_t *ts) {
+  if (!ts || ts->recording || ts->group_count <= 0) return NULL;
+  timeline_data_snapshot_t *snapshot = calloc(1, sizeof(*snapshot));
+  if (!snapshot) return NULL;
+
+  snapshot->group_count = ts->group_count;
+  snapshot->groups = calloc((size_t)snapshot->group_count, sizeof(*snapshot->groups));
+  if (!snapshot->groups) {
+    commands_free_timeline_data_snapshot(snapshot);
+    return NULL;
+  }
+  for (int i = 0; i < snapshot->group_count; ++i) {
+    timeline_group_t *source = ts->groups[i];
+    TimelineGroupData *destination = &snapshot->groups[i];
+    memcpy(destination->name, source->name, sizeof(destination->name));
+    memcpy(destination->color, source->color, sizeof(destination->color));
+    destination->visible = source->visible;
+    destination->demo_export_enabled = source->demo_export_enabled;
+    destination->start_offset = source->start_offset;
+  }
+
+  snapshot->track_count = ts->player_track_count;
+  if (snapshot->track_count > 0) {
+    snapshot->tracks = calloc((size_t)snapshot->track_count, sizeof(*snapshot->tracks));
+    if (!snapshot->tracks) {
+      commands_free_timeline_data_snapshot(snapshot);
+      return NULL;
+    }
+    for (int i = 0; i < snapshot->track_count; ++i) clone_track_data(&snapshot->tracks[i], &ts->player_tracks[i]);
+  }
+
+  snapshot->event_count = ts->net_event_count;
+  if (snapshot->event_count > 0) {
+    snapshot->events = malloc(sizeof(*snapshot->events) * (size_t)snapshot->event_count);
+    if (!snapshot->events) {
+      commands_free_timeline_data_snapshot(snapshot);
+      return NULL;
+    }
+    memcpy(snapshot->events, ts->net_events, sizeof(*snapshot->events) * (size_t)snapshot->event_count);
+  }
+
+  snapshot->selected_snippet_count = ts->selected_snippets.count;
+  if (snapshot->selected_snippet_count > 0) {
+    snapshot->selected_snippet_ids = malloc(sizeof(*snapshot->selected_snippet_ids) * (size_t)snapshot->selected_snippet_count);
+    if (!snapshot->selected_snippet_ids) {
+      commands_free_timeline_data_snapshot(snapshot);
+      return NULL;
+    }
+    memcpy(snapshot->selected_snippet_ids, ts->selected_snippets.ids,
+           sizeof(*snapshot->selected_snippet_ids) * (size_t)snapshot->selected_snippet_count);
+  }
+
+  snapshot->current_tick = ts->current_tick;
+  snapshot->next_snippet_id = ts->next_snippet_id;
+  snapshot->active_group_index = ts->active_group_index;
+  snapshot->selected_player_track_index = ts->selected_player_track_index;
+  snapshot->active_snippet_id = ts->active_snippet_id;
+  snapshot->context_menu_snippet_id = ts->context_menu_snippet_id;
+  snapshot->last_event_scan_tick = ts->last_event_scan_tick;
+  return snapshot;
+}
+
+void commands_free_timeline_data_snapshot(timeline_data_snapshot_t *snapshot) {
+  if (!snapshot) return;
+  for (int i = 0; i < snapshot->track_count; ++i) free_track_data(&snapshot->tracks[i]);
+  free(snapshot->tracks);
+  free(snapshot->groups);
+  free(snapshot->events);
+  free(snapshot->selected_snippet_ids);
+  free(snapshot);
+}
+
+static void apply_timeline_data_snapshot(timeline_state_t *ts, const timeline_data_snapshot_t *snapshot) {
+  if (!ts || !snapshot || ts->recording || snapshot->group_count <= 0) return;
+
+  interaction_clear_selection(ts);
+  ts->drag_state.active = false;
+  ts->trim_state.active = false;
+  ts->selection_box_active = false;
+  ts->pending_single_select_id = -1;
+  model_clear_all_recording_buffers(ts);
+
+  for (int i = ts->player_track_count - 1; i >= 0; --i) model_remove_track_logic(ts, i);
+  while (ts->group_count > snapshot->group_count) model_remove_group(ts, ts->group_count - 1);
+  while (ts->group_count < snapshot->group_count) {
+    if (!model_add_group(ts, snapshot->groups[ts->group_count].name)) return;
+  }
+
+  for (int i = 0; i < snapshot->group_count; ++i) {
+    timeline_group_t *destination = ts->groups[i];
+    const TimelineGroupData *source = &snapshot->groups[i];
+    memcpy(destination->name, source->name, sizeof(destination->name));
+    memcpy(destination->color, source->color, sizeof(destination->color));
+    destination->visible = source->visible;
+    destination->demo_export_enabled = source->demo_export_enabled;
+    destination->start_offset = i == 0 ? 0 : source->start_offset;
+  }
+
+  for (int group_index = 0; group_index < snapshot->group_count; ++group_index) {
+    ts->active_group_index = group_index;
+    for (int track_index = 0; track_index < snapshot->track_count; ++track_index) {
+      const player_track_t *source = &snapshot->tracks[track_index];
+      if (source->group_index != group_index) continue;
+      player_track_t *destination = model_add_new_track(ts, NULL, 1);
+      if (!destination) return;
+      player_track_t copy;
+      clone_track_data(&copy, source);
+      copy.group_index = group_index;
+      *destination = copy;
+    }
+  }
+
+  for (int i = 0; i < ts->player_track_count; ++i)
+    if (ts->player_tracks[i].starting_config.enabled) model_apply_starting_config(ts, i);
+
+  free(ts->net_events);
+  ts->net_events = NULL;
+  ts->net_event_count = snapshot->event_count;
+  ts->net_event_capacity = snapshot->event_count;
+  if (snapshot->event_count > 0) {
+    ts->net_events = malloc(sizeof(*ts->net_events) * (size_t)snapshot->event_count);
+    memcpy(ts->net_events, snapshot->events, sizeof(*ts->net_events) * (size_t)snapshot->event_count);
+  }
+
+  if (snapshot->selected_snippet_count > ts->selected_snippets.capacity) {
+    ts->selected_snippets.ids = realloc(ts->selected_snippets.ids,
+                                        sizeof(*ts->selected_snippets.ids) * (size_t)snapshot->selected_snippet_count);
+    ts->selected_snippets.capacity = snapshot->selected_snippet_count;
+  }
+  ts->selected_snippets.count = snapshot->selected_snippet_count;
+  if (snapshot->selected_snippet_count > 0)
+    memcpy(ts->selected_snippets.ids, snapshot->selected_snippet_ids,
+           sizeof(*ts->selected_snippets.ids) * (size_t)snapshot->selected_snippet_count);
+
+  ts->current_tick = snapshot->current_tick;
+  ts->next_snippet_id = snapshot->next_snippet_id;
+  ts->active_group_index = snapshot->active_group_index;
+  ts->selected_player_track_index = snapshot->selected_player_track_index;
+  ts->active_snippet_id = snapshot->active_snippet_id;
+  ts->context_menu_snippet_id = snapshot->context_menu_snippet_id;
+  ts->last_event_scan_tick = snapshot->last_event_scan_tick;
+  model_recalc_physics(ts, 0);
+}
+
+static void undo_timeline_data_change(void *command, void *ts) {
+  TimelineDataCommand *c = command;
+  apply_timeline_data_snapshot(ts, c->before);
+}
+
+static void redo_timeline_data_change(void *command, void *ts) {
+  TimelineDataCommand *c = command;
+  apply_timeline_data_snapshot(ts, c->after);
+}
+
+static void cleanup_timeline_data_change(void *command) {
+  TimelineDataCommand *c = command;
+  commands_free_timeline_data_snapshot(c->before);
+  commands_free_timeline_data_snapshot(c->after);
+  free(c);
+}
+
+static bool timeline_data_summary_equal(const timeline_data_snapshot_t *a, const timeline_data_snapshot_t *b) {
+  if (a->group_count != b->group_count || a->track_count != b->track_count || a->event_count != b->event_count ||
+      a->current_tick != b->current_tick || a->next_snippet_id != b->next_snippet_id ||
+      a->active_group_index != b->active_group_index ||
+      a->selected_player_track_index != b->selected_player_track_index || a->active_snippet_id != b->active_snippet_id ||
+      a->context_menu_snippet_id != b->context_menu_snippet_id || a->selected_snippet_count != b->selected_snippet_count ||
+      a->last_event_scan_tick != b->last_event_scan_tick)
+    return false;
+  if (memcmp(a->groups, b->groups, sizeof(*a->groups) * (size_t)a->group_count) != 0) return false;
+  if (a->event_count > 0 && memcmp(a->events, b->events, sizeof(*a->events) * (size_t)a->event_count) != 0) return false;
+  if (a->selected_snippet_count > 0 &&
+      memcmp(a->selected_snippet_ids, b->selected_snippet_ids,
+             sizeof(*a->selected_snippet_ids) * (size_t)a->selected_snippet_count) != 0)
+    return false;
+  return true;
+}
+
+undo_command_t *commands_create_timeline_data_change(ui_handler_t *ui, timeline_data_snapshot_t *before, const char *description) {
+  if (!ui || !before) return NULL;
+  timeline_data_snapshot_t *after = commands_capture_timeline_data(&ui->timeline);
+  if (!after) {
+    commands_free_timeline_data_snapshot(before);
+    return NULL;
+  }
+  if (timeline_data_summary_equal(before, after)) {
+    commands_free_timeline_data_snapshot(before);
+    commands_free_timeline_data_snapshot(after);
+    return NULL;
+  }
+  TimelineDataCommand *command = calloc(1, sizeof(*command));
+  if (!command) {
+    commands_free_timeline_data_snapshot(before);
+    commands_free_timeline_data_snapshot(after);
+    return NULL;
+  }
+  snprintf(command->base.description, sizeof(command->base.description), "%s", description);
+  command->base.undo = undo_timeline_data_change;
+  command->base.redo = redo_timeline_data_change;
+  command->base.cleanup = cleanup_timeline_data_change;
+  command->before = before;
+  command->after = after;
+  return &command->base;
+}
+
+static void apply_timeline_property(TimelinePropertyCommand *command, timeline_state_t *ts, const TimelinePropertyValue *value) {
+  if (!command || !ts || !value) return;
+  switch (command->kind) {
+  case TIMELINE_PROPERTY_GROUP_NAME:
+    if (command->index >= 0 && command->index < ts->group_count)
+      memcpy(ts->groups[command->index]->name, value->text, sizeof(ts->groups[command->index]->name));
+    break;
+  case TIMELINE_PROPERTY_GROUP_COLOR:
+    if (command->index >= 0 && command->index < ts->group_count)
+      memcpy(ts->groups[command->index]->color, value->color, sizeof(ts->groups[command->index]->color));
+    break;
+  case TIMELINE_PROPERTY_GROUP_VISIBILITY:
+    if (command->index >= 0 && command->index < ts->group_count) ts->groups[command->index]->visible = value->boolean;
+    break;
+  case TIMELINE_PROPERTY_GROUP_START_OFFSET:
+    if (command->index > 0 && command->index < ts->group_count) ts->groups[command->index]->start_offset = value->integer;
+    break;
+  case TIMELINE_PROPERTY_GROUP_DEMO_EXPORT:
+    if (command->index >= 0 && command->index < ts->group_count) ts->groups[command->index]->demo_export_enabled = value->boolean;
+    break;
+  case TIMELINE_PROPERTY_TRACK_NAME:
+    if (command->index >= 0 && command->index < ts->player_track_count)
+      memcpy(ts->player_tracks[command->index].name, value->text, sizeof(ts->player_tracks[command->index].name));
+    break;
+  case TIMELINE_PROPERTY_TRACK_DEMO_EXPORT:
+    if (command->index >= 0 && command->index < ts->player_track_count)
+      ts->player_tracks[command->index].demo_export_enabled = value->boolean;
+    break;
+  case TIMELINE_PROPERTY_TRACK_DEMO_PING:
+    if (command->index >= 0 && command->index < ts->player_track_count) ts->player_tracks[command->index].demo_ping = value->integer;
+    break;
+  case TIMELINE_PROPERTY_NET_EVENT_GROUP:
+    if (command->index >= 0 && command->index < ts->net_event_count && value->integer >= 0 && value->integer < ts->group_count)
+      ts->net_events[command->index].group_index = value->integer;
+    break;
+  }
+}
+
+static void undo_timeline_property(void *command, void *ts) {
+  TimelinePropertyCommand *c = command;
+  apply_timeline_property(c, ts, &c->before);
+}
+
+static void redo_timeline_property(void *command, void *ts) {
+  TimelinePropertyCommand *c = command;
+  apply_timeline_property(c, ts, &c->after);
+}
+
+static void cleanup_timeline_property(void *command) { free(command); }
+
+static TimelinePropertyCommand *create_timeline_property(TimelinePropertyKind kind, int index, const char *description) {
+  TimelinePropertyCommand *command = calloc(1, sizeof(*command));
+  if (!command) return NULL;
+  snprintf(command->base.description, sizeof(command->base.description), "%s", description);
+  command->base.undo = undo_timeline_property;
+  command->base.redo = redo_timeline_property;
+  command->base.cleanup = cleanup_timeline_property;
+  command->kind = kind;
+  command->index = index;
+  return command;
+}
+
+undo_command_t *commands_create_group_name_change(ui_handler_t *ui, int group_index, const char *before) {
+  if (!ui || !before || group_index < 0 || group_index >= ui->timeline.group_count ||
+      strcmp(before, ui->timeline.groups[group_index]->name) == 0) return NULL;
+  TimelinePropertyCommand *command = create_timeline_property(TIMELINE_PROPERTY_GROUP_NAME, group_index, "Rename Group");
+  if (!command) return NULL;
+  snprintf(command->before.text, sizeof(command->before.text), "%s", before);
+  memcpy(command->after.text, ui->timeline.groups[group_index]->name, sizeof(command->after.text));
+  return &command->base;
+}
+
+undo_command_t *commands_create_group_color_change(ui_handler_t *ui, int group_index, const float before[4]) {
+  if (!ui || !before || group_index < 0 || group_index >= ui->timeline.group_count ||
+      memcmp(before, ui->timeline.groups[group_index]->color, sizeof(float) * 4) == 0) return NULL;
+  TimelinePropertyCommand *command = create_timeline_property(TIMELINE_PROPERTY_GROUP_COLOR, group_index, "Change Group Color");
+  if (!command) return NULL;
+  memcpy(command->before.color, before, sizeof(command->before.color));
+  memcpy(command->after.color, ui->timeline.groups[group_index]->color, sizeof(command->after.color));
+  return &command->base;
+}
+
+undo_command_t *commands_create_group_visibility_change(ui_handler_t *ui, int group_index, bool before) {
+  if (!ui || group_index < 0 || group_index >= ui->timeline.group_count || before == ui->timeline.groups[group_index]->visible) return NULL;
+  TimelinePropertyCommand *command = create_timeline_property(TIMELINE_PROPERTY_GROUP_VISIBILITY, group_index, "Toggle Group Visibility");
+  if (!command) return NULL;
+  command->before.boolean = before;
+  command->after.boolean = ui->timeline.groups[group_index]->visible;
+  return &command->base;
+}
+
+undo_command_t *commands_create_group_start_offset_change(ui_handler_t *ui, int group_index, int before) {
+  if (!ui || group_index <= 0 || group_index >= ui->timeline.group_count || before == ui->timeline.groups[group_index]->start_offset) return NULL;
+  TimelinePropertyCommand *command = create_timeline_property(TIMELINE_PROPERTY_GROUP_START_OFFSET, group_index, "Change Group Start Offset");
+  if (!command) return NULL;
+  command->before.integer = before;
+  command->after.integer = ui->timeline.groups[group_index]->start_offset;
+  return &command->base;
+}
+
+undo_command_t *commands_create_group_demo_export_change(ui_handler_t *ui, int group_index, bool before) {
+  if (!ui || group_index < 0 || group_index >= ui->timeline.group_count ||
+      before == ui->timeline.groups[group_index]->demo_export_enabled) return NULL;
+  TimelinePropertyCommand *command = create_timeline_property(TIMELINE_PROPERTY_GROUP_DEMO_EXPORT, group_index, "Toggle Group Demo Export");
+  if (!command) return NULL;
+  command->before.boolean = before;
+  command->after.boolean = ui->timeline.groups[group_index]->demo_export_enabled;
+  return &command->base;
+}
+
+undo_command_t *commands_create_track_name_change(ui_handler_t *ui, int track_index, const char *before) {
+  if (!ui || !before || track_index < 0 || track_index >= ui->timeline.player_track_count ||
+      strcmp(before, ui->timeline.player_tracks[track_index].name) == 0) return NULL;
+  TimelinePropertyCommand *command = create_timeline_property(TIMELINE_PROPERTY_TRACK_NAME, track_index, "Rename Track");
+  if (!command) return NULL;
+  snprintf(command->before.text, sizeof(command->before.text), "%s", before);
+  memcpy(command->after.text, ui->timeline.player_tracks[track_index].name, sizeof(command->after.text));
+  return &command->base;
+}
+
+undo_command_t *commands_create_track_demo_export_change(ui_handler_t *ui, int track_index, bool before) {
+  if (!ui || track_index < 0 || track_index >= ui->timeline.player_track_count ||
+      before == ui->timeline.player_tracks[track_index].demo_export_enabled) return NULL;
+  TimelinePropertyCommand *command = create_timeline_property(TIMELINE_PROPERTY_TRACK_DEMO_EXPORT, track_index, "Toggle Track Demo Export");
+  if (!command) return NULL;
+  command->before.boolean = before;
+  command->after.boolean = ui->timeline.player_tracks[track_index].demo_export_enabled;
+  return &command->base;
+}
+
+undo_command_t *commands_create_track_demo_ping_change(ui_handler_t *ui, int track_index, int before) {
+  if (!ui || track_index < 0 || track_index >= ui->timeline.player_track_count || before == ui->timeline.player_tracks[track_index].demo_ping)
+    return NULL;
+  TimelinePropertyCommand *command = create_timeline_property(TIMELINE_PROPERTY_TRACK_DEMO_PING, track_index, "Change Demo Ping");
+  if (!command) return NULL;
+  command->before.integer = before;
+  command->after.integer = ui->timeline.player_tracks[track_index].demo_ping;
+  return &command->base;
+}
+
+undo_command_t *commands_create_net_event_group_change(ui_handler_t *ui, int event_index, int before) {
+  if (!ui || event_index < 0 || event_index >= ui->timeline.net_event_count || before < 0 || before >= ui->timeline.group_count ||
+      before == ui->timeline.net_events[event_index].group_index)
+    return NULL;
+  TimelinePropertyCommand *command = create_timeline_property(TIMELINE_PROPERTY_NET_EVENT_GROUP, event_index, "Move Net Event to Group");
+  if (!command) return NULL;
+  command->before.integer = before;
+  command->after.integer = ui->timeline.net_events[event_index].group_index;
+  return &command->base;
+}
 
 // Forward Declarations for Command Logic
 
@@ -377,14 +821,13 @@ undo_command_t *commands_create_duplicate_snippets(ui_handler_t *ui, const MoveS
 
 undo_command_t *commands_create_split_selected(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
-  if (ts->selected_snippets.count == 0 || ts->current_tick <= 0) return NULL;
+  if (ts->selected_snippets.count == 0) return NULL;
 
   MultiSplitCommand *cmd = calloc(1, sizeof(MultiSplitCommand));
   snprintf(cmd->base.description, sizeof(cmd->base.description), "Split %d Snippets", ts->selected_snippets.count);
   cmd->base.undo = undo_multi_split;
   cmd->base.redo = redo_multi_split;
   cmd->base.cleanup = cleanup_multi_split_cmd;
-  cmd->split_tick = ts->current_tick;
 
   SplitInfo *valid_splits = NULL;
   int split_count = 0;
@@ -394,8 +837,11 @@ undo_command_t *commands_create_split_selected(ui_handler_t *ui) {
     int sid = ts->selected_snippets.ids[i];
     int track_idx;
     input_snippet_t *snippet = model_find_snippet_by_id(ts, sid, &track_idx);
+    if (!snippet) continue;
+    int group_index = model_track_group_index(ts, track_idx);
+    int split_tick = model_group_playhead_tick(ts, group_index);
 
-    if (snippet && ts->current_tick > snippet->start_tick && ts->current_tick < snippet->end_tick) {
+    if (split_tick > snippet->start_tick && split_tick < snippet->end_tick) {
       valid_splits = realloc(valid_splits, sizeof(SplitInfo) * (split_count + 1));
       SplitInfo *info = &valid_splits[split_count];
 
@@ -403,6 +849,7 @@ undo_command_t *commands_create_split_selected(ui_handler_t *ui) {
       info->original_snippet_id = snippet->id;
       info->new_snippet_id = ts->next_snippet_id++;
       info->original_input_count = snippet->input_count;
+      info->split_tick = split_tick;
       split_count++;
     }
   }
@@ -522,7 +969,6 @@ undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
 
 undo_command_t *commands_create_remove_track(ui_handler_t *ui, int track_index) {
   timeline_state_t *ts = &ui->timeline;
-  physics_handler_t *ph = &ui->gfx_handler->physics_handler;
   if (track_index < 0 || track_index >= ts->player_track_count) return NULL;
 
   RemoveTrackCommand *cmd = calloc(1, sizeof(RemoveTrackCommand));
@@ -542,7 +988,6 @@ undo_command_t *commands_create_remove_track(ui_handler_t *ui, int track_index) 
 
   // Perform the action
   redo_remove_track(&cmd->base, ts);
-  wc_remove_character(&ph->world, track_index);
 
   return &cmd->base;
 }
@@ -847,16 +1292,16 @@ static void redo_multi_split(void *cmd, void *ts_void) {
 
     // The right half is a copy of the whole source with its window moved past the split point; the
     // left half keeps the same source and only narrows its window.
-    int split_index = c->split_tick - original->start_tick;
+    int split_index = info->split_tick - original->start_tick;
     input_snippet_t right = {0};
     model_snippet_clone(&right, original);
     right.id = info->new_snippet_id;
-    right.start_tick = c->split_tick;
+    right.start_tick = info->split_tick;
     right.source_offset = original->source_offset + split_index;
     right.input_count = original->input_count - split_index;
     right.end_tick = right.start_tick + right.input_count;
 
-    model_trim_snippet(ts, original, original->start_tick, c->split_tick);
+    model_trim_snippet(ts, original, original->start_tick, info->split_tick);
     model_insert_snippet_into_track(track, &right);
     interaction_add_snippet_to_selection(ts, right.id);
     if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
@@ -1071,6 +1516,8 @@ static void undo_remove_track(void *cmd, void *ts_void) {
     model_snippet_clone(&new_track->snippets[i], &c->track_copy.snippets[i]);
   }
   ts->player_track_count = new_count;
+  model_insert_track_physics(ts, c->track_index);
+  if (new_track->starting_config.enabled) model_apply_starting_config(ts, c->track_index);
   model_recalc_physics(ts, 0);
 }
 
@@ -1093,11 +1540,10 @@ static void cleanup_remove_track_cmd(void *cmd) {
 
 undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t *info, int *out_track_index) {
   timeline_state_t *ts = &ui->timeline;
-  physics_handler_t *ph = &ui->gfx_handler->physics_handler;
 
-  int new_index = ts->player_track_count;
-  player_track_t *new_track = model_add_new_track(ts, ph, 1);
+  player_track_t *new_track = model_add_new_track(ts, NULL, 1);
   if (!new_track) return NULL;
+  int new_index = (int)(new_track - ts->player_tracks);
 
   if (info) new_track->player_info = *info;
   if (out_track_index) *out_track_index = new_index;
@@ -1108,6 +1554,7 @@ undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t 
   cmd->base.redo = redo_add_track;
   cmd->base.cleanup = cleanup_add_track_cmd;
   cmd->track_index = new_index;
+  cmd->group_index = new_track->group_index;
   cmd->player_info = new_track->player_info;
 
   return &cmd->base;
@@ -1116,20 +1563,20 @@ undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t 
 static void undo_add_track(void *cmd, void *ts_void) {
   AddTrackCommand *c = (AddTrackCommand *)cmd;
   struct timeline_state *ts = (struct timeline_state *)ts_void;
-  physics_handler_t *ph = &ts->ui->gfx_handler->physics_handler;
   model_remove_track_logic(ts, c->track_index);
-  wc_remove_character(&ph->world, c->track_index);
 }
 
 static void redo_add_track(void *cmd, void *ts_void) {
   AddTrackCommand *c = (AddTrackCommand *)cmd;
   struct timeline_state *ts = (struct timeline_state *)ts_void;
-  physics_handler_t *ph = &ts->ui->gfx_handler->physics_handler;
 
-  player_track_t *new_track = model_add_new_track(ts, ph, 1);
+  int old_active = ts->active_group_index;
+  ts->active_group_index = c->group_index;
+  player_track_t *new_track = model_add_new_track(ts, NULL, 1);
+  ts->active_group_index = old_active;
   if (!new_track) return;
 
-  // This logic assumes adding to the end. A more complex undo might need to handle insertion.
+  c->track_index = (int)(new_track - ts->player_tracks);
   new_track->player_info = c->player_info;
 }
 

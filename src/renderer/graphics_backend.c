@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <system/input.h>
 #include <user_interface/user_interface.h>
+#include <user_interface/timeline/timeline_model.h>
 
 extern bool g_is_headless;
 
@@ -632,8 +633,7 @@ void on_map_load(gfx_handler_t *handler) {
 
   if (g_is_headless) {
     handler->map_data = &handler->physics_handler.collision.m_MapData;
-    wc_copy_world(&handler->user_interface.timeline.vec.data[0], &handler->physics_handler.world);
-    wc_copy_world(&handler->user_interface.timeline.previous_world, &handler->physics_handler.world);
+    model_reset_groups_for_map(&handler->user_interface.timeline);
     return;
   }
   // entities texture
@@ -650,8 +650,7 @@ void on_map_load(gfx_handler_t *handler) {
   handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[2], handler->map_data->width, handler->map_data->height);
 
   // update physics data
-  wc_copy_world(&handler->user_interface.timeline.vec.data[0], &handler->physics_handler.world);
-  wc_copy_world(&handler->user_interface.timeline.previous_world, &handler->physics_handler.world);
+  model_reset_groups_for_map(&handler->user_interface.timeline);
 }
 
 static void extract_map_name(const char *path, char *out_name, size_t out_size) {

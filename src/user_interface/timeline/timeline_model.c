@@ -6,6 +6,7 @@
 #include <math.h>
 #include <particles/particle_system.h>
 #include <renderer/graphics_backend.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <user_interface/user_interface.h>
@@ -20,34 +21,39 @@ static void v_destroy(physics_v_t *t);
 static void v_push(physics_v_t *t, SWorldCore *world);
 
 static void ui_particle_callback(mvec2 pos, int type, int cid, void *user_data) {
-  ui_handler_t *ui = (ui_handler_t *)user_data;
+  timeline_state_t *ts = (timeline_state_t *)user_data;
+  ui_handler_t *ui = ts->ui;
+  if (ts->simulation_group_index < 0 || ts->simulation_group_index >= ts->group_count) return;
+  particle_system_t *ps = &ts->groups[ts->simulation_group_index]->particle_system;
   vec2 p = {vgetx(pos), vgety(pos)};
 
   vec2 zero_vel = {0, -1};
   float default_alpha = 1.0f;
   float time_passed = 0.0f;
 
-  if (type == PARTICLE_TYPE_SMOKE) particles_create_smoke(&ui->particle_system, p, zero_vel, default_alpha, time_passed);
-  else if (type == PARTICLE_TYPE_PLAYER_SPAWN) particles_create_player_spawn(&ui->particle_system, p, default_alpha);
+  if (type == PARTICLE_TYPE_SMOKE) particles_create_smoke(ps, p, zero_vel, default_alpha, time_passed);
+  else if (type == PARTICLE_TYPE_PLAYER_SPAWN) particles_create_player_spawn(ps, p, default_alpha);
   else if (type == PARTICLE_TYPE_PLAYER_DEATH) {
     // TODO: the coloring is different on ddnet i can't figure it out
     // TODO: this is also buggy since we don't re-push color when the player color changes
     vec4 col = {1, 1, 1, 1};
-    if (ui->timeline.player_tracks[cid].player_info.use_custom_color)
-      packed_hsl_to_rgb(ui->timeline.player_tracks[cid].player_info.color_body, col);
-    particles_create_player_death(&ui->particle_system, p, col);
-  } else if (type == PARTICLE_TYPE_AIR_JUMP) particles_create_air_jump(&ui->particle_system, p, default_alpha);
-  else if (type == PARTICLE_TYPE_BULLET_TRAIL) particles_create_bullet_trail(&ui->particle_system, p, default_alpha, time_passed);
-  else if (type == PARTICLE_TYPE_BULLET_STARS) particles_create_star(&ui->particle_system, p);
-  else if (type == PARTICLE_TYPE_EXPLOSION) particles_create_explosion(&ui->particle_system, p);
-  else if (type == PARTICLE_TYPE_HAMMER_HIT) particles_create_hammer_hit(&ui->particle_system, p, default_alpha);
-  else if (type == PARTICLE_TYPE_CONFETTI) particles_create_confetti(&ui->particle_system, p, default_alpha);
+    int track_index = model_group_track_index(ts, ts->simulation_group_index, cid);
+    if (track_index >= 0 && ui->timeline.player_tracks[track_index].player_info.use_custom_color)
+      packed_hsl_to_rgb(ui->timeline.player_tracks[track_index].player_info.color_body, col);
+    particles_create_player_death(ps, p, col);
+  } else if (type == PARTICLE_TYPE_AIR_JUMP) particles_create_air_jump(ps, p, default_alpha);
+  else if (type == PARTICLE_TYPE_BULLET_TRAIL) particles_create_bullet_trail(ps, p, default_alpha, time_passed);
+  else if (type == PARTICLE_TYPE_BULLET_STARS) particles_create_star(ps, p);
+  else if (type == PARTICLE_TYPE_EXPLOSION) particles_create_explosion(ps, p);
+  else if (type == PARTICLE_TYPE_HAMMER_HIT) particles_create_hammer_hit(ps, p, default_alpha);
+  else if (type == PARTICLE_TYPE_CONFETTI) particles_create_confetti(ps, p, default_alpha);
 }
 
 static void ui_damage_indicator_callback(mvec2 pos, float angle, int amount, int cid, void *user_data) {
   (void)cid;
-  ui_handler_t *ui = (ui_handler_t *)user_data;
-  particle_system_t *ps = &ui->particle_system;
+  timeline_state_t *ts = (timeline_state_t *)user_data;
+  if (ts->simulation_group_index < 0 || ts->simulation_group_index >= ts->group_count) return;
+  particle_system_t *ps = &ts->groups[ts->simulation_group_index]->particle_system;
   vec2 p = {vgetx(pos), vgety(pos)};
   const float pi = 3.14159265358979323846f;
   const float center = 3.0f * pi / 2.0f + angle;
@@ -67,15 +73,143 @@ static int compare_snippets_by_start_tick_p(const void *a, const void *b) {
   return snip_a->start_tick - snip_b->start_tick;
 }
 
+static const float s_group_colors[][4] = {
+    {0.25f, 0.55f, 0.95f, 1.0f},
+    {0.95f, 0.72f, 0.10f, 1.0f},
+    {0.45f, 0.82f, 0.28f, 1.0f},
+    {0.88f, 0.35f, 0.70f, 1.0f},
+    {0.20f, 0.80f, 0.78f, 1.0f},
+    {0.95f, 0.38f, 0.25f, 1.0f},
+};
+
+static void group_runtime_init(timeline_group_t *group) {
+  v_init(&group->vec);
+  group->initial_world = wc_empty();
+  group->previous_world = wc_empty();
+  group->prev_world_cached = wc_empty();
+  group->world_cached = wc_empty();
+  group->cached_tick = -1;
+  particle_system_init(&group->particle_system);
+}
+
+static void group_runtime_cleanup(timeline_group_t *group) {
+  if (!group) return;
+  v_destroy(&group->vec);
+  wc_free(&group->initial_world);
+  wc_free(&group->previous_world);
+  wc_free(&group->prev_world_cached);
+  wc_free(&group->world_cached);
+  particle_system_cleanup(&group->particle_system);
+}
+
+timeline_group_t *model_add_group(timeline_state_t *ts, const char *name) {
+  if (!ts) return NULL;
+  timeline_group_t *group = calloc(1, sizeof(*group));
+  if (!group) return NULL;
+
+  int index = ts->group_count;
+  snprintf(group->name, sizeof(group->name), "%s", name && name[0] ? name : "Group");
+  memcpy(group->color, s_group_colors[index % (int)(sizeof(s_group_colors) / sizeof(s_group_colors[0]))], sizeof(group->color));
+  group->visible = true;
+  group->demo_export_enabled = true;
+  group_runtime_init(group);
+
+  timeline_group_t **groups = realloc(ts->groups, sizeof(*groups) * (size_t)(index + 1));
+  if (!groups) {
+    group_runtime_cleanup(group);
+    free(group);
+    return NULL;
+  }
+  ts->groups = groups;
+  ts->groups[index] = group;
+  ts->group_count++;
+
+  if (ts->ui && ts->ui->gfx_handler && ts->ui->gfx_handler->physics_handler.loaded) {
+    wc_copy_world(&group->initial_world, &ts->ui->gfx_handler->physics_handler.world);
+    wc_copy_world(&group->vec.data[0], &group->initial_world);
+    wc_copy_world(&group->previous_world, &group->initial_world);
+  }
+  return group;
+}
+
+int model_track_group_index(const timeline_state_t *ts, int track_index) {
+  if (!ts || track_index < 0 || track_index >= ts->player_track_count) return -1;
+  int group = ts->player_tracks[track_index].group_index;
+  return group >= 0 && group < ts->group_count ? group : -1;
+}
+
+int model_group_track_count(const timeline_state_t *ts, int group_index) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count) return 0;
+  int count = 0;
+  for (int i = 0; i < ts->player_track_count; ++i)
+    if (ts->player_tracks[i].group_index == group_index) ++count;
+  return count;
+}
+
+int model_group_track_index(const timeline_state_t *ts, int group_index, int local_index) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count || local_index < 0) return -1;
+  for (int i = 0, local = 0; i < ts->player_track_count; ++i) {
+    if (ts->player_tracks[i].group_index != group_index) continue;
+    if (local++ == local_index) return i;
+  }
+  return -1;
+}
+
+int model_group_local_track_index(const timeline_state_t *ts, int track_index) {
+  int group_index = model_track_group_index(ts, track_index);
+  if (group_index < 0) return -1;
+  int local = 0;
+  for (int i = 0; i < track_index; ++i)
+    if (ts->player_tracks[i].group_index == group_index) ++local;
+  return local;
+}
+
+int model_group_playhead_tick(const timeline_state_t *ts, int group_index) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count) return 0;
+  return imax(0, ts->current_tick - ts->groups[group_index]->start_offset);
+}
+
+int model_get_min_global_tick(const timeline_state_t *ts) {
+  if (!ts) return 0;
+  int min_tick = 0;
+  for (int group_index = 0; group_index < ts->group_count; ++group_index)
+    min_tick = imin(min_tick, ts->groups[group_index]->start_offset);
+  return min_tick;
+}
+
+int model_clamp_global_tick_for_group(const timeline_state_t *ts, int group_index, int tick) {
+  int min_tick = ts && group_index >= 0 && group_index < ts->group_count ? ts->groups[group_index]->start_offset : 0;
+  return imax(tick, min_tick);
+}
+
+void model_set_active_group(timeline_state_t *ts, int group_index) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count) return;
+  if (ts->recording && group_index != ts->active_group_index) return;
+  ts->active_group_index = group_index;
+}
+
+void model_reset_groups_for_map(timeline_state_t *ts) {
+  if (!ts || !ts->ui || !ts->ui->gfx_handler) return;
+  SWorldCore *base = &ts->ui->gfx_handler->physics_handler.world;
+  for (int i = 0; i < ts->group_count; ++i) {
+    timeline_group_t *group = ts->groups[i];
+    wc_copy_world(&group->initial_world, base);
+    wc_copy_world(&group->vec.data[0], base);
+    wc_copy_world(&group->previous_world, base);
+    wc_free(&group->prev_world_cached);
+    wc_free(&group->world_cached);
+    group->prev_world_cached = wc_empty();
+    group->world_cached = wc_empty();
+    group->vec.current_size = 1;
+    group->cached_tick = -1;
+    particle_system_reset(&group->particle_system);
+  }
+}
+
 // Initialization and Cleanup
 
 void model_init(timeline_state_t *ts, ui_handler_t *ui) {
   ts->ui = ui;
-  v_init(&ts->vec);
-  ts->previous_world = wc_empty();
-  ts->prev_world_cached = wc_empty();
-  ts->world_cached = wc_empty();
-  ts->cached_tick = -1;
 
   ts->gui_playback_speed = 50;
   ts->playback_speed = 50;
@@ -85,7 +219,9 @@ void model_init(timeline_state_t *ts, ui_handler_t *ui) {
   ts->context_menu_snippet_id = -1;
   ts->active_snippet_id = -1;
   ts->pending_single_select_id = -1;
+  ts->header_drag_group_index = -1;
   ts->next_snippet_id = 1;
+  ts->active_group_index = 0;
 
   ts->drag_state.drag_infos = NULL;
   ts->drag_state.initial_mouse_pos = (ImVec2){0, 0};
@@ -98,6 +234,7 @@ void model_init(timeline_state_t *ts, ui_handler_t *ui) {
   ts->net_event_capacity = 0;
 
   snippet_id_vector_init(&ts->selected_snippets);
+  model_add_group(ts, "Group 1");
 }
 
 void model_cleanup(timeline_state_t *ts) {
@@ -122,10 +259,11 @@ void model_cleanup(timeline_state_t *ts) {
     free(ts->net_events);
   }
 
-  v_destroy(&ts->vec);
-  wc_free(&ts->previous_world);
-  wc_free(&ts->prev_world_cached);
-  wc_free(&ts->world_cached);
+  for (int i = 0; i < ts->group_count; ++i) {
+    group_runtime_cleanup(ts->groups[i]);
+    free(ts->groups[i]);
+  }
+  free(ts->groups);
   snippet_id_vector_free(&ts->selected_snippets);
 
   memset(ts, 0, sizeof(timeline_state_t));
@@ -233,8 +371,10 @@ int model_get_max_timeline_tick(timeline_state_t *ts) {
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
     for (int j = 0; j < track->snippet_count; ++j) {
-      if (track->snippets[j].end_tick > max_tick) {
-        max_tick = track->snippets[j].end_tick;
+      int group_index = model_track_group_index(ts, i);
+      int offset = group_index >= 0 ? ts->groups[group_index]->start_offset : 0;
+      if (track->snippets[j].end_tick + offset > max_tick) {
+        max_tick = track->snippets[j].end_tick + offset;
       }
     }
   }
@@ -443,38 +583,49 @@ bool model_trim_snippet(timeline_state_t *ts, input_snippet_t *snippet, int new_
 }
 
 player_track_t *model_add_new_track(timeline_state_t *ts, physics_handler_t *ph, int num) {
+  (void)ph;
   if (num <= 0) return NULL;
+  if (ts->active_group_index < 0 || ts->active_group_index >= ts->group_count) return NULL;
 
-  if (wc_add_character(&ts->vec.data[0], num) == NULL) return NULL;
-  wc_add_character(&ts->previous_world, num);
-  if (ph) {
-    wc_add_character(&ph->world, num);
+  timeline_group_t *group = ts->groups[ts->active_group_index];
+  if (wc_add_character(&group->initial_world, num) == NULL) return NULL;
+  int existing_group_count = model_group_track_count(ts, ts->active_group_index);
+
+  int insert_index = ts->player_track_count;
+  for (int i = ts->player_track_count - 1; i >= 0; --i) {
+    if (ts->player_tracks[i].group_index == ts->active_group_index) {
+      insert_index = i + 1;
+      break;
+    }
   }
-
-  int old_count = ts->player_track_count;
-  int new_count = old_count + num;
+  int new_count = ts->player_track_count + num;
   ts->player_tracks = realloc(ts->player_tracks, sizeof(player_track_t) * new_count);
+  memmove(&ts->player_tracks[insert_index + num], &ts->player_tracks[insert_index],
+          sizeof(player_track_t) * (size_t)(ts->player_track_count - insert_index));
 
   for (int i = 0; i < num; i++) {
-    player_track_t *new_track = &ts->player_tracks[old_count + i];
+    player_track_t *new_track = &ts->player_tracks[insert_index + i];
     memset(new_track, 0, sizeof(player_track_t));
+    snprintf(new_track->name, sizeof(new_track->name), "Track %d", existing_group_count + i + 1);
+    new_track->group_index = ts->active_group_index;
     new_track->dummy_copy_flags = COPY_ALL;
+    new_track->demo_export_enabled = true;
+    new_track->demo_ping = 0;
   }
 
   ts->player_track_count = new_count;
   model_recalc_physics(ts, 0);
 
-  return &ts->player_tracks[old_count];
+  return &ts->player_tracks[insert_index];
 }
 
 void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   if (track_index < 0 || track_index >= ts->player_track_count) return;
 
-  wc_remove_character(&ts->vec.data[0], track_index);
-  wc_remove_character(&ts->previous_world, track_index);
-  if (ts->ui && ts->ui->gfx_handler) {
-    wc_remove_character(&ts->ui->gfx_handler->physics_handler.world, track_index);
-  }
+  int group_index = model_track_group_index(ts, track_index);
+  int local_index = model_group_local_track_index(ts, track_index);
+  if (group_index >= 0 && local_index >= 0)
+    wc_remove_character(&ts->groups[group_index]->initial_world, local_index);
 
   player_track_t *track = &ts->player_tracks[track_index];
   for (int i = 0; i < track->snippet_count; ++i) {
@@ -503,7 +654,6 @@ void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   if (ts->selected_player_track_index == track_index) ts->selected_player_track_index = -1;
   else if (ts->selected_player_track_index > track_index) ts->selected_player_track_index--;
 
-  ts->vec.current_size = 1;
   model_recalc_physics(ts, 0);
 }
 
@@ -540,12 +690,12 @@ static void wc_insert_character_at_index(SWorldCore *pWorld, int index) {
 }
 
 void model_insert_track_physics(timeline_state_t *ts, int track_index) {
-  wc_insert_character_at_index(&ts->vec.data[0], track_index);
-  wc_insert_character_at_index(&ts->previous_world, track_index);
-  if (ts->ui && ts->ui->gfx_handler) {
-    wc_insert_character_at_index(&ts->ui->gfx_handler->physics_handler.world, track_index);
-  }
-  ts->vec.current_size = 1;
+  int group_index = model_track_group_index(ts, track_index);
+  int local_index = model_group_local_track_index(ts, track_index);
+  if (group_index < 0 || local_index < 0) return;
+  wc_insert_character_at_index(&ts->groups[group_index]->initial_world, local_index);
+  ts->groups[group_index]->vec.current_size = 1;
+  model_recalc_physics(ts, 0);
 }
 
 void model_compact_layers_for_track(player_track_t *track) {
@@ -644,14 +794,15 @@ void model_clear_all_recording_buffers(timeline_state_t *ts) {
 // Physics & Playback
 
 void model_recalc_physics(timeline_state_t *ts, int tick) {
-  ts->vec.current_size = imin(ts->vec.current_size, imax(tick / 50 + 1, 1));
-  ts->cached_tick = -1;
-  if (ts->previous_world.m_GameTick > tick) {
-    ts->previous_world.m_GameTick = INT_MAX;
-  }
-  if (!tick) {
-    wc_copy_world(&ts->previous_world, &ts->ui->gfx_handler->physics_handler.world);
-    wc_copy_world(&ts->vec.data[0], &ts->ui->gfx_handler->physics_handler.world);
+  (void)tick;
+  ts->current_tick = imax(ts->current_tick, model_get_min_global_tick(ts));
+  for (int i = 0; i < ts->group_count; ++i) {
+    timeline_group_t *group = ts->groups[i];
+    group->vec.current_size = 1;
+    group->cached_tick = -1;
+    wc_copy_world(&group->previous_world, &group->initial_world);
+    wc_copy_world(&group->vec.data[0], &group->initial_world);
+    particle_system_reset(&group->particle_system);
   }
 }
 
@@ -689,17 +840,19 @@ SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index
 }
 
 void model_advance_tick(timeline_state_t *ts, int steps) {
-  ts->current_tick = imax(ts->current_tick + steps, 0);
+  ts->current_tick = imax(ts->current_tick + steps, model_get_min_global_tick(ts));
 
   if (ts->recording) {
+    int group_tick = model_group_playhead_tick(ts, ts->active_group_index);
     for (int i = 0; i < ts->player_track_count; ++i) {
       player_track_t *track = &ts->player_tracks[i];
+      if (track->group_index != ts->active_group_index) continue;
       if (i != ts->selected_player_track_index && !track->is_dummy) continue;
       input_snippet_t *active_rec_snip = NULL;
       if (track->recording_snippet_count > 0) active_rec_snip = &track->recording_snippets[track->recording_snippet_count - 1];
       if (active_rec_snip) {
         // Calculate where the current tick is relative to the start of the snippet
-        int relative_tick = ts->current_tick - active_rec_snip->start_tick;
+        int relative_tick = group_tick - active_rec_snip->start_tick;
 
         // ONLY append if we are past the end of the current recording snippet.
         // DO NOT overwrite if we are rewinding/scrubbing inside the snippet.
@@ -736,24 +889,29 @@ void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_i
   model_recalc_physics(ts, target_snippet->start_tick);
 }
 
-void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *out_world, bool effects) {
-  if (ts->cached_tick == tick) {
-    wc_copy_world(out_world, &ts->world_cached);
+void model_get_group_world_state_at_tick(timeline_state_t *ts, int group_index, int tick, SWorldCore *out_world, bool effects) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count) return;
+  timeline_group_t *group = ts->groups[group_index];
+  tick = imax(0, tick - group->start_offset);
+  ts->simulation_group_index = group_index;
+
+  if (group->cached_tick == tick) {
+    wc_copy_world(out_world, &group->world_cached);
     return;
   }
   const int step = 50;
-  particle_system_t *ps = &ts->ui->particle_system;
+  particle_system_t *ps = &group->particle_system;
 
   // Jump or Rewind Logic
-  if (tick < ts->previous_world.m_GameTick || (tick - ts->previous_world.m_GameTick) > 100) {
+  if (tick < group->previous_world.m_GameTick || (tick - group->previous_world.m_GameTick) > 100) {
     int raw_index = (tick - 1) / step;
     // Go back one extra snapshot to ensure we re-simulate recent particles
     // that might have expired in the future state we are rewinding from.
     // TODO: this doesnt solve the real issue of long lasting particles not being rendered when reversing
     if (effects && raw_index > 0) raw_index--;
-    int base_index = imin(raw_index, ts->vec.current_size - 1);
+    int base_index = imin(raw_index, group->vec.current_size - 1);
     if (base_index < 0) base_index = 0;
-    wc_copy_world(out_world, &ts->vec.data[base_index]);
+    wc_copy_world(out_world, &group->vec.data[base_index]);
 
     if (effects) {
       double snapshot_time = (double)out_world->m_GameTick / 50.0;
@@ -763,10 +921,10 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
       ps->last_simulated_tick = out_world->m_GameTick - 1;
     }
   } else {
-    wc_copy_world(out_world, &ts->previous_world);
+    wc_copy_world(out_world, &group->previous_world);
   }
 
-  out_world->user_data = ts->ui;
+  out_world->user_data = ts;
 
   while (out_world->m_GameTick < tick) {
     int current_sim_tick = out_world->m_GameTick;
@@ -784,7 +942,8 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
     }
 
     for (int p = 0; p < out_world->m_NumCharacters; ++p) {
-      SPlayerInput input = model_get_input_at_tick(ts, p, current_sim_tick);
+      int track_index = model_group_track_index(ts, group_index, p);
+      SPlayerInput input = track_index >= 0 ? model_get_input_at_tick(ts, track_index, current_sim_tick) : (SPlayerInput){.m_TargetY = -1};
       cc_on_input(&out_world->m_pCharacters[p], &input);
     }
 
@@ -795,7 +954,8 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
       for (int p = 0; p < out_world->m_NumCharacters; ++p) {
         SCharacterCore *pChar = &out_world->m_pCharacters[p];
         if (pChar->m_StartTick != -1 && pChar->m_FinishTick == out_world->m_GameTick) {
-          timeline_add_finish_events_for_character(ts, out_world->m_GameTick, pChar, p);
+          int track_index = model_group_track_index(ts, group_index, p);
+          if (track_index >= 0) timeline_add_finish_events_for_character(ts, out_world->m_GameTick, pChar, track_index);
           timeline_mark_unsaved(ts);
         }
       }
@@ -826,70 +986,75 @@ void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *o
 
     if (out_world->m_GameTick % step == 0) {
       int cache_index = out_world->m_GameTick / step;
-      if ((uint32_t)cache_index >= ts->vec.current_size) v_push(&ts->vec, out_world);
-      else wc_copy_world(&ts->vec.data[cache_index], out_world);
+      if ((uint32_t)cache_index >= group->vec.current_size) v_push(&group->vec, out_world);
+      else wc_copy_world(&group->vec.data[cache_index], out_world);
     }
   }
 
   out_world->particle = NULL;
   out_world->damage_indicator = NULL;
-  wc_copy_world(&ts->previous_world, out_world);
+  wc_copy_world(&group->previous_world, out_world);
 }
 
-void model_get_world_state_pair(timeline_state_t *ts, int tick, SWorldCore *out_prev_world, SWorldCore *out_world, bool effects) {
-  if (tick <= 0) {
-    model_get_world_state_at_tick(ts, 0, out_prev_world, effects);
-    model_get_world_state_at_tick(ts, 0, out_world, effects);
+void model_get_group_world_state_pair(timeline_state_t *ts, int group_index, int tick, SWorldCore *out_prev_world, SWorldCore *out_world, bool effects) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count) return;
+  timeline_group_t *group = ts->groups[group_index];
+  int local_tick = imax(0, tick - group->start_offset);
+  if (local_tick <= 0) {
+    model_get_group_world_state_at_tick(ts, group_index, tick, out_prev_world, effects);
+    model_get_group_world_state_at_tick(ts, group_index, tick, out_world, effects);
     return;
   }
 
   // Fast path: if the cached pair is already at 'tick'
-  if (ts->cached_tick == tick) {
-    wc_copy_world(out_prev_world, &ts->prev_world_cached);
-    wc_copy_world(out_world, &ts->world_cached);
+  if (group->cached_tick == local_tick) {
+    wc_copy_world(out_prev_world, &group->prev_world_cached);
+    wc_copy_world(out_world, &group->world_cached);
     return;
   }
 
   // Fast path: playing forward by 1 tick (cached_tick == tick - 1)
-  if (ts->cached_tick == tick - 1) {
+  if (group->cached_tick == local_tick - 1) {
     // Current world at tick-1 becomes prev_world
-    wc_copy_world(&ts->prev_world_cached, &ts->world_cached);
-    wc_copy_world(out_prev_world, &ts->prev_world_cached);
+    wc_copy_world(&group->prev_world_cached, &group->world_cached);
+    wc_copy_world(out_prev_world, &group->prev_world_cached);
 
     // Simulate 1 tick from cached_world (which is at tick-1) to reach tick
-    ts->world_cached.user_data = ts->ui;
-    int current_sim_tick = ts->world_cached.m_GameTick;
-    particle_system_t *ps = &ts->ui->particle_system;
+    ts->simulation_group_index = group_index;
+    group->world_cached.user_data = ts;
+    int current_sim_tick = group->world_cached.m_GameTick;
+    particle_system_t *ps = &group->particle_system;
 
     bool is_new_logic_tick = (effects && current_sim_tick > ps->last_simulated_tick);
     if (is_new_logic_tick) {
-      ts->world_cached.particle = ui_particle_callback;
-      ts->world_cached.damage_indicator = ui_damage_indicator_callback;
+      group->world_cached.particle = ui_particle_callback;
+      group->world_cached.damage_indicator = ui_damage_indicator_callback;
       ps->current_time = (double)current_sim_tick / 50.0;
       ps->rng_seed = current_sim_tick;
     } else {
-      ts->world_cached.particle = NULL;
-      ts->world_cached.damage_indicator = NULL;
+      group->world_cached.particle = NULL;
+      group->world_cached.damage_indicator = NULL;
     }
 
-    for (int p = 0; p < ts->world_cached.m_NumCharacters; ++p) {
-      SPlayerInput input = model_get_input_at_tick(ts, p, current_sim_tick);
-      cc_on_input(&ts->world_cached.m_pCharacters[p], &input);
+    for (int p = 0; p < group->world_cached.m_NumCharacters; ++p) {
+      int track_index = model_group_track_index(ts, group_index, p);
+      SPlayerInput input = track_index >= 0 ? model_get_input_at_tick(ts, track_index, current_sim_tick) : (SPlayerInput){.m_TargetY = -1};
+      cc_on_input(&group->world_cached.m_pCharacters[p], &input);
     }
 
-    wc_tick(&ts->world_cached);
+    wc_tick(&group->world_cached);
 
     if (is_new_logic_tick) {
-      if (ts->world_cached.m_GameTick % 5 == 0) {
-        for (int p = 0; p < ts->world_cached.m_NumCharacters; ++p) {
-          SCharacterCore *core = &ts->world_cached.m_pCharacters[p];
+      if (group->world_cached.m_GameTick % 5 == 0) {
+        for (int p = 0; p < group->world_cached.m_NumCharacters; ++p) {
+          SCharacterCore *core = &group->world_cached.m_pCharacters[p];
           if (core->m_FreezeTime > 0) {
             vec2 pos = {vgetx(core->m_Pos), vgety(core->m_Pos)};
             particles_create_freezing_flakes(ps, pos, (vec2){32.0f, 32.0f}, 1.0f);
           }
         }
       }
-      if (!ts->world_cached.m_UniqueRace) {
+      if (!group->world_cached.m_UniqueRace) {
         for (int i = 0; i < ts->ui->num_ninja_pickups; ++i) {
           int p = ts->ui->ninja_pickup_indices[i];
           vec2 pos = {vgetx(ts->ui->pickup_positions[p]), vgety(ts->ui->pickup_positions[p])};
@@ -899,20 +1064,28 @@ void model_get_world_state_pair(timeline_state_t *ts, int tick, SWorldCore *out_
       ps->last_simulated_tick = current_sim_tick;
     }
 
-    ts->world_cached.particle = NULL;
-    ts->world_cached.damage_indicator = NULL;
-    wc_copy_world(out_world, &ts->world_cached);
-    ts->cached_tick = tick;
+    group->world_cached.particle = NULL;
+    group->world_cached.damage_indicator = NULL;
+    wc_copy_world(out_world, &group->world_cached);
+    group->cached_tick = local_tick;
     return;
   }
 
   // Full path: calculate state at tick - 1 and state at tick
-  model_get_world_state_at_tick(ts, tick - 1, &ts->prev_world_cached, effects);
-  model_get_world_state_at_tick(ts, tick, &ts->world_cached, effects);
-  ts->cached_tick = tick;
+  model_get_group_world_state_at_tick(ts, group_index, tick - 1, &group->prev_world_cached, effects);
+  model_get_group_world_state_at_tick(ts, group_index, tick, &group->world_cached, effects);
+  group->cached_tick = local_tick;
 
-  wc_copy_world(out_prev_world, &ts->prev_world_cached);
-  wc_copy_world(out_world, &ts->world_cached);
+  wc_copy_world(out_prev_world, &group->prev_world_cached);
+  wc_copy_world(out_world, &group->world_cached);
+}
+
+void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *out_world, bool effects) {
+  model_get_group_world_state_at_tick(ts, ts->active_group_index, tick, out_world, effects);
+}
+
+void model_get_world_state_pair(timeline_state_t *ts, int tick, SWorldCore *out_prev_world, SWorldCore *out_world, bool effects) {
+  model_get_group_world_state_pair(ts, ts->active_group_index, tick, out_prev_world, out_world, effects);
 }
 
 void model_apply_starting_config(timeline_state_t *ts, int track_index) {
@@ -920,9 +1093,13 @@ void model_apply_starting_config(timeline_state_t *ts, int track_index) {
 
   player_track_t *track = &ts->player_tracks[track_index];
   starting_config_t *sc = &track->starting_config;
+  int group_index = model_track_group_index(ts, track_index);
+  int local_index = model_group_local_track_index(ts, track_index);
+  if (group_index < 0 || local_index < 0 ||
+      local_index >= ts->groups[group_index]->initial_world.m_NumCharacters) return;
 
   // Update the initial world state
-  SCharacterCore *core = &ts->ui->gfx_handler->physics_handler.world.m_pCharacters[track_index];
+  SCharacterCore *core = &ts->groups[group_index]->initial_world.m_pCharacters[local_index];
   core->m_Pos = vec2_init(sc->position[0] + 200 * 32, sc->position[1] + 200 * 32);
   core->m_PrevPos = vec2_init(sc->position[0] + 200 * 32, sc->position[1] + 200 * 32);
   core->m_Vel = vec2_init(sc->velocity[0], sc->velocity[1]);
@@ -935,6 +1112,141 @@ void model_apply_starting_config(timeline_state_t *ts, int track_index) {
   }
   cc_calc_indices(core);
   model_recalc_physics(ts, 0);
+}
+
+player_track_t *model_clone_track_to_group(timeline_state_t *ts, int track_index, int group_index, int *out_track_index) {
+  if (!ts || track_index < 0 || track_index >= ts->player_track_count || group_index < 0 || group_index >= ts->group_count) return NULL;
+
+  const player_track_t *source = &ts->player_tracks[track_index];
+  player_track_t copy = *source;
+  copy.snippets = NULL;
+  copy.snippet_capacity = source->snippet_count;
+  copy.recording_snippets = NULL;
+  copy.recording_snippet_count = 0;
+  copy.recording_snippet_capacity = 0;
+  if (source->snippet_count > 0) {
+    copy.snippets = calloc((size_t)source->snippet_count, sizeof(input_snippet_t));
+    if (!copy.snippets) return NULL;
+    for (int i = 0; i < source->snippet_count; ++i) {
+      model_snippet_clone(&copy.snippets[i], &source->snippets[i]);
+      copy.snippets[i].id = ts->next_snippet_id++;
+    }
+  }
+  copy.group_index = group_index;
+  snprintf(copy.name, sizeof(copy.name), "%s copy", source->name[0] ? source->name : "Track");
+
+  int old_active = ts->active_group_index;
+  ts->active_group_index = group_index;
+  player_track_t *new_track = model_add_new_track(ts, NULL, 1);
+  ts->active_group_index = old_active;
+  if (!new_track) {
+    for (int i = 0; i < copy.snippet_count; ++i) model_free_snippet_inputs(&copy.snippets[i]);
+    free(copy.snippets);
+    return NULL;
+  }
+
+  int new_index = (int)(new_track - ts->player_tracks);
+  // model_add_new_track created the corresponding character and a pointer-free default row.
+  *new_track = copy;
+  if (out_track_index) *out_track_index = new_index;
+  if (copy.starting_config.enabled) model_apply_starting_config(ts, new_index);
+  model_recalc_physics(ts, 0);
+  return new_track;
+}
+
+bool model_remove_group(timeline_state_t *ts, int group_index) {
+  if (!ts || ts->recording || ts->group_count <= 1 || group_index < 0 || group_index >= ts->group_count) return false;
+
+  for (int i = ts->player_track_count - 1; i >= 0; --i) {
+    if (ts->player_tracks[i].group_index == group_index) model_remove_track_logic(ts, i);
+  }
+
+  group_runtime_cleanup(ts->groups[group_index]);
+  free(ts->groups[group_index]);
+  memmove(&ts->groups[group_index], &ts->groups[group_index + 1],
+          sizeof(*ts->groups) * (size_t)(ts->group_count - group_index - 1));
+  ts->group_count--;
+  ts->groups = realloc(ts->groups, sizeof(*ts->groups) * (size_t)ts->group_count);
+
+  for (int i = 0; i < ts->player_track_count; ++i)
+    if (ts->player_tracks[i].group_index > group_index) ts->player_tracks[i].group_index--;
+  for (int i = 0; i < ts->net_event_count;) {
+    if (ts->net_events[i].group_index == group_index) {
+      memmove(&ts->net_events[i], &ts->net_events[i + 1], sizeof(net_event_t) * (size_t)(ts->net_event_count - i - 1));
+      ts->net_event_count--;
+      continue;
+    }
+    if (ts->net_events[i].group_index > group_index) ts->net_events[i].group_index--;
+    ++i;
+  }
+
+  if (ts->active_group_index == group_index) ts->active_group_index = 0;
+  else if (ts->active_group_index > group_index) ts->active_group_index--;
+  if (group_index == 0 && ts->group_count > 0) ts->groups[0]->start_offset = 0;
+  model_recalc_physics(ts, 0);
+  return true;
+}
+
+static int model_find_group_race_start(const timeline_state_t *ts, int group_index) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count) return -1;
+
+  int max_local_tick = GAME_TICK_SPEED * 10;
+  for (int track_index = 0; track_index < ts->player_track_count; ++track_index) {
+    if (ts->player_tracks[track_index].group_index != group_index) continue;
+    const player_track_t *track = &ts->player_tracks[track_index];
+    for (int snippet_index = 0; snippet_index < track->snippet_count; ++snippet_index)
+      max_local_tick = imax(max_local_tick, track->snippets[snippet_index].end_tick + GAME_TICK_SPEED * 10);
+  }
+
+  SWorldCore world = wc_empty();
+  wc_copy_world(&world, &ts->groups[group_index]->initial_world);
+  int race_start = -1;
+  while (world.m_GameTick <= max_local_tick && race_start < 0) {
+    for (int local_index = 0; local_index < world.m_NumCharacters; ++local_index) {
+      const SCharacterCore *character = &world.m_pCharacters[local_index];
+      if (character->m_StartTick >= 0 && (race_start < 0 || character->m_StartTick < race_start))
+        race_start = character->m_StartTick;
+    }
+    if (race_start >= 0 || world.m_GameTick == max_local_tick) break;
+
+    int input_tick = world.m_GameTick;
+    for (int local_index = 0; local_index < world.m_NumCharacters; ++local_index) {
+      int track_index = model_group_track_index(ts, group_index, local_index);
+      SPlayerInput input = track_index >= 0 ? model_get_input_at_tick(ts, track_index, input_tick) : (SPlayerInput){.m_TargetY = -1};
+      cc_on_input(&world.m_pCharacters[local_index], &input);
+    }
+    wc_tick(&world);
+  }
+  wc_free(&world);
+  return race_start;
+}
+
+void model_align_group_starts(timeline_state_t *ts) {
+  if (!ts || ts->group_count < 2) return;
+  int *starts = malloc(sizeof(int) * (size_t)ts->group_count);
+  if (!starts) return;
+
+  // Simulate fresh worlds rather than consulting the viewport caches. This makes alignment work
+  // after edits, imports, and rewinds even when a group's cached world predates the race start.
+  for (int group_index = 0; group_index < ts->group_count; ++group_index)
+    starts[group_index] = model_find_group_race_start(ts, group_index);
+
+  // Group 1 owns the controlled playhead, so its race start is the natural alignment anchor.
+  // Signed offsets are required when another group reaches the start line later than Group 1.
+  int anchor_group = starts[0] >= 0 ? 0 : -1;
+  for (int group_index = 1; anchor_group < 0 && group_index < ts->group_count; ++group_index)
+    if (starts[group_index] >= 0) anchor_group = group_index;
+
+  if (anchor_group >= 0) {
+    int anchor_tick = starts[anchor_group] + (anchor_group == 0 ? 0 : ts->groups[anchor_group]->start_offset);
+    for (int group_index = 1; group_index < ts->group_count; ++group_index) {
+      if (starts[group_index] >= 0)
+        ts->groups[group_index]->start_offset = anchor_tick - starts[group_index];
+    }
+    ts->groups[0]->start_offset = 0;
+    model_recalc_physics(ts, 0);
+  }
+  free(starts);
 }
 
 // Static Physics Vector Helpers

@@ -322,7 +322,8 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
     // Set it as the active snippet for the editor's logic.
     ui->timeline.active_snippet_id = ts->selected_snippets.ids[0];
 
-    input_snippet_t *snippet = model_find_snippet_by_id(ts, ui->timeline.active_snippet_id, NULL);
+    int snippet_track_index = -1;
+    input_snippet_t *snippet = model_find_snippet_by_id(ts, ui->timeline.active_snippet_id, &snippet_track_index);
 
     if (!snippet) {
       igText("Selected snippet not found.");
@@ -419,7 +420,8 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
               }
             }
             editor_state.last_selected_row = i;
-            ts->current_tick = snippet->start_tick + i;
+            int group_index = model_track_group_index(ts, snippet_track_index);
+            ts->current_tick = snippet->start_tick + i + ts->groups[group_index]->start_offset;
             editor_state.selection_count = 0;
             for (int k = 0; k < snippet->input_count; k++)
               if (editor_state.selected_rows[k]) editor_state.selection_count++;

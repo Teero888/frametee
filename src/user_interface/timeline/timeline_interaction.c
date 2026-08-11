@@ -24,7 +24,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
 static void handle_trim_handles(timeline_state_t *ts, input_snippet_t *snippet, ImRect timeline_bb, ImRect rect);
 static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb);
 static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect timeline_bb);
-static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id);
+static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id, int target_track_index);
 static void interaction_start_recording_on_track(timeline_state_t *ts, int track_index);
 
 // TODO: Make this faster. Performance is kind of horrible since we're doing this for every frame and every dummy for the prediction rendering.
@@ -35,13 +35,14 @@ void interaction_apply_dummy_inputs(ui_handler_t *ui) {
 
   SWorldCore world = wc_empty();
   model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
+  int selected_local = model_group_local_track_index(ts, ts->selected_player_track_index);
 
-  if (ts->selected_player_track_index >= world.m_NumCharacters) {
+  if (selected_local < 0 || selected_local >= world.m_NumCharacters) {
     wc_free(&world);
     return;
   }
 
-  SCharacterCore *recording_char = &world.m_pCharacters[ts->selected_player_track_index];
+  SCharacterCore *recording_char = &world.m_pCharacters[selected_local];
   mvec2 recording_pos = recording_char->m_Pos;
 
   SPlayerInput source_input = ts->player_tracks[ts->selected_player_track_index].current_input;
@@ -57,8 +58,10 @@ void interaction_apply_dummy_inputs(ui_handler_t *ui) {
     if (i == ts->selected_player_track_index) continue;
 
     player_track_t *track = &ts->player_tracks[i];
-    if (!track->is_dummy || i >= world.m_NumCharacters) continue;
-    mvec2 dummy_pos = world.m_pCharacters[i].m_Pos;
+    if (!track->is_dummy || track->group_index != ts->active_group_index) continue;
+    int local_index = model_group_local_track_index(ts, i);
+    if (local_index < 0 || local_index >= world.m_NumCharacters) continue;
+    mvec2 dummy_pos = world.m_pCharacters[local_index].m_Pos;
 
     SPlayerInput final_input = {.m_TargetX = track->current_input.m_TargetX, .m_TargetY = track->current_input.m_TargetY};
 
@@ -109,16 +112,17 @@ void interaction_update_mouse(timeline_state_t *ts) {
     if (track->recording_snippet_count <= 0) return;
     input_snippet_t *active_rec_snip = &track->recording_snippets[track->recording_snippet_count - 1];
     // Ticks past the recorded end are being recorded right now, those follow the physical mouse.
-    if (ts->current_tick >= active_rec_snip->end_tick) return;
+    if (model_group_playhead_tick(ts, track->group_index) >= active_rec_snip->end_tick) return;
   }
 
   float speed_scale = ts->is_reversing ? 2.0f : 1.0f;
   float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
   if (ts->is_reversing) intra = 1.f - intra;
-  ts->ui->recording_mouse_pos[0] = glm_lerp(model_get_input_at_tick(ts, track_index, ts->current_tick - 1).m_TargetX,
-                                            model_get_input_at_tick(ts, track_index, ts->current_tick).m_TargetX, intra);
-  ts->ui->recording_mouse_pos[1] = glm_lerp(model_get_input_at_tick(ts, track_index, ts->current_tick - 1).m_TargetY,
-                                            model_get_input_at_tick(ts, track_index, ts->current_tick).m_TargetY, intra);
+  int group_tick = model_group_playhead_tick(ts, ts->active_group_index);
+  ts->ui->recording_mouse_pos[0] = glm_lerp(model_get_input_at_tick(ts, track_index, group_tick - 1).m_TargetX,
+                                            model_get_input_at_tick(ts, track_index, group_tick).m_TargetX, intra);
+  ts->ui->recording_mouse_pos[1] = glm_lerp(model_get_input_at_tick(ts, track_index, group_tick - 1).m_TargetY,
+                                            model_get_input_at_tick(ts, track_index, group_tick).m_TargetY, intra);
 }
 
 // Main Interaction Handlers
@@ -188,16 +192,30 @@ void interaction_handle_header(timeline_state_t *ts, ImRect header_bb) {
   bool is_header_hovered = igIsMouseHoveringRect(header_bb.Min, header_bb.Max, true);
 
   if (is_header_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
-    ts->is_header_dragging = true;
+    int mouse_tick = renderer_screen_x_to_tick(ts, io->MousePos.x, header_bb.Min.x);
+    int hit_group = renderer_hit_test_playhead_handle(ts, header_bb, io->MousePos);
+    int selected_group = hit_group >= 0 ? hit_group : renderer_find_nearest_playhead(ts, header_bb, io->MousePos.x);
+    if (selected_group >= 0) {
+      // Preserve the grab point on a handle. Elsewhere in the header, move the nearest playhead
+      // directly to the pointer and continue dragging that group.
+      int selected_playhead_tick = model_group_playhead_tick(ts, selected_group);
+      ts->header_drag_group_index = selected_group;
+      ts->header_drag_grab_offset_ticks = hit_group >= 0 ? selected_playhead_tick - mouse_tick : 0;
+      ts->header_drag_current_to_playhead_ticks = ts->groups[selected_group]->start_offset;
+      ts->is_header_dragging = true;
+    }
   }
   if (ts->is_header_dragging) {
     if (igIsMouseDown_Nil(ImGuiMouseButton_Left)) {
       if (!ts->recording) {
         int mouse_tick = renderer_screen_x_to_tick(ts, io->MousePos.x, header_bb.Min.x);
-        ts->current_tick = imax(0, mouse_tick);
+        int selected_group = ts->header_drag_group_index;
+        int target_tick = mouse_tick + ts->header_drag_grab_offset_ticks + ts->header_drag_current_to_playhead_ticks;
+        ts->current_tick = model_clamp_global_tick_for_group(ts, selected_group, target_tick);
       }
     } else {
       ts->is_header_dragging = false;
+      ts->header_drag_group_index = -1;
     }
   }
 }
@@ -225,7 +243,15 @@ bool interaction_is_snippet_selected(const timeline_state_t *ts, int snippet_id)
   return snippet_id_vector_contains(&ts->selected_snippets, snippet_id);
 }
 
-void interaction_select_track(timeline_state_t *ts, int track_index) { ts->selected_player_track_index = track_index; }
+void interaction_select_track(timeline_state_t *ts, int track_index) {
+  if (!ts) return;
+  if (track_index >= 0 && track_index < ts->player_track_count) {
+    int group_index = model_track_group_index(ts, track_index);
+    if (ts->recording && group_index != ts->active_group_index) return;
+    model_set_active_group(ts, group_index);
+  }
+  ts->selected_player_track_index = track_index;
+}
 
 // Static Interaction Helpers
 
@@ -295,16 +321,15 @@ void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timelin
   input_snippet_t *clicked_snippet = model_find_snippet_by_id(ts, ts->drag_state.dragged_snippet_id, NULL);
   if (!clicked_snippet) return;
 
-  int mouse_tick = renderer_screen_x_to_tick(ts, io->MousePos.x, timeline_bb.Min.x);
-  int desired_start_tick = mouse_tick - ts->drag_state.drag_offset_ticks;
-  *out_snapped_tick = calculate_snapped_tick(ts, desired_start_tick, clicked_snippet->input_count, clicked_snippet->id);
-
   *out_base_track = renderer_screen_y_to_track_index(ts, io->MousePos.y);
   if (*out_base_track == -1) {
     // If mouse is above or below, clamp to first or last track
     *out_base_track = (io->MousePos.y < timeline_bb.Min.y) ? 0 : ts->player_track_count - 1;
   }
   *out_base_track = imax(0, imin(ts->player_track_count - 1, *out_base_track));
+  int mouse_tick = renderer_screen_x_to_tick(ts, io->MousePos.x, timeline_bb.Min.x);
+  int desired_start_tick = mouse_tick - ts->drag_state.drag_offset_ticks;
+  *out_snapped_tick = calculate_snapped_tick(ts, desired_start_tick, clicked_snippet->input_count, clicked_snippet->id, *out_base_track);
 }
 
 // Snaps a single dragged edge to the playhead and to the edges of other snippets.
@@ -313,10 +338,14 @@ static int snap_edge_tick(const timeline_state_t *ts, int desired_tick, int excl
   int snapped_tick = desired_tick;
   float min_dist_px = SNAP_THRESHOLD_PX * dpi_scale;
 
-  float dist_to_playhead_px = fabsf((float)(desired_tick - ts->current_tick) * ts->zoom);
+  int track_index = -1;
+  model_find_snippet_by_id((timeline_state_t *)ts, exclude_id, &track_index);
+  int group_index = model_track_group_index(ts, track_index);
+  int playhead_tick = model_group_playhead_tick(ts, group_index);
+  float dist_to_playhead_px = fabsf((float)(desired_tick - playhead_tick) * ts->zoom);
   if (dist_to_playhead_px < min_dist_px) {
     min_dist_px = dist_to_playhead_px;
-    snapped_tick = ts->current_tick;
+    snapped_tick = playhead_tick;
   }
 
   for (int i = 0; i < ts->player_track_count; ++i) {
@@ -703,16 +732,18 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
   }
 }
 
-static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id) {
+static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id, int target_track_index) {
   float dpi_scale = gfx_get_ui_scale();
   int snapped_tick = desired_start_tick;
   float min_dist_px = SNAP_THRESHOLD_PX * dpi_scale;
 
   // Snap to playhead
-  float dist_to_playhead_px = fabsf((float)(desired_start_tick - ts->current_tick) * ts->zoom);
+  int group_index = model_track_group_index(ts, target_track_index);
+  int playhead_tick = model_group_playhead_tick(ts, group_index);
+  float dist_to_playhead_px = fabsf((float)(desired_start_tick - playhead_tick) * ts->zoom);
   if (dist_to_playhead_px < min_dist_px) {
     min_dist_px = dist_to_playhead_px;
-    snapped_tick = ts->current_tick;
+    snapped_tick = playhead_tick;
   }
 
   // Snap to other snippets
@@ -762,8 +793,9 @@ static void interaction_start_recording_on_track(timeline_state_t *ts, int track
   // Create a new snippet to record into
   input_snippet_t new_snippet = {0};
   new_snippet.id = ts->next_snippet_id++;
-  new_snippet.start_tick = ts->current_tick;
-  new_snippet.end_tick = ts->current_tick;
+  int group_tick = model_group_playhead_tick(ts, ts->active_group_index);
+  new_snippet.start_tick = group_tick;
+  new_snippet.end_tick = group_tick;
   new_snippet.is_active = true;
   new_snippet.layer = 0;
 
@@ -783,7 +815,8 @@ void interaction_toggle_recording(timeline_state_t *ts) {
   // continue the aim from the snippet under the playhead instead of jumping to wherever the mouse
   // was left.
   if (!ts->recording && ts->selected_player_track_index >= 0 && ts->selected_player_track_index < ts->player_track_count) {
-    SPlayerInput prev = model_get_input_at_tick(ts, ts->selected_player_track_index, ts->current_tick);
+    int group_tick = model_group_playhead_tick(ts, model_track_group_index(ts, ts->selected_player_track_index));
+    SPlayerInput prev = model_get_input_at_tick(ts, ts->selected_player_track_index, group_tick);
     ts->ui->recording_mouse_pos[0] = prev.m_TargetX;
     ts->ui->recording_mouse_pos[1] = prev.m_TargetY;
   }
@@ -797,7 +830,7 @@ void interaction_toggle_recording(timeline_state_t *ts) {
     for (int i = 0; i < ts->player_track_count; ++i) {
       player_track_t *track = &ts->player_tracks[i];
       bool is_selected = (i == ts->selected_player_track_index);
-      bool is_dummy = track->is_dummy;
+      bool is_dummy = track->is_dummy && track->group_index == ts->active_group_index;
 
       if (is_selected || is_dummy) {
         interaction_start_recording_on_track(ts, i);
@@ -841,7 +874,7 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
       input_snippet_t *rec = &track->recording_snippets[j];
       if (!rec) continue;
 
-      int trim_to = ts->current_tick;
+      int trim_to = model_group_playhead_tick(ts, ts->active_group_index);
       if (trim_to < rec->start_tick) {
         model_free_snippet_inputs(rec);
         memmove(&track->recording_snippets[j], &track->recording_snippets[j + 1], (track->recording_snippet_count - j - 1) * sizeof(input_snippet_t));
@@ -869,13 +902,13 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
 
-    bool should_record = (i == ts->selected_player_track_index) || track->is_dummy;
+    bool should_record = track->group_index == ts->active_group_index && ((i == ts->selected_player_track_index) || track->is_dummy);
     if (!should_record && track->recording_snippet_count == 0) continue;
 
     input_snippet_t *target = NULL;
 
     for (int j = 0; j < track->recording_snippet_count; ++j) {
-      if (track->recording_snippets[j].end_tick == ts->current_tick) {
+      if (track->recording_snippets[j].end_tick == model_group_playhead_tick(ts, ts->active_group_index)) {
         target = &track->recording_snippets[j];
         break;
       }
@@ -894,7 +927,8 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
 }
 
 void interaction_switch_recording_target(timeline_state_t *ts, int new_track_index) {
-  if (ts->recording && new_track_index >= 0 && new_track_index < ts->player_track_count) {
+  if (ts->recording && new_track_index >= 0 && new_track_index < ts->player_track_count &&
+      model_track_group_index(ts, new_track_index) == ts->active_group_index) {
     ts->selected_player_track_index = new_track_index;
     if (!ts->player_tracks[new_track_index].is_dummy) {
       interaction_start_recording_on_track(ts, new_track_index);
@@ -957,7 +991,9 @@ void interaction_handle_context_menu(timeline_state_t *ts) {
   if (igGetIO_Nil()->ConfigFlags & ImGuiConfigFlags_NoMouse) return;
   if (igBeginPopup("TimelineContextMenu", 0)) {
     if (igMenuItem_Bool("Add Snippet", NULL, false, ts->selected_player_track_index != -1)) {
-      undo_command_t *cmd = commands_create_add_snippet(ts->ui, ts->selected_player_track_index, ts->current_tick, 50);
+      int group_index = model_track_group_index(ts, ts->selected_player_track_index);
+      int local_tick = model_group_playhead_tick(ts, group_index);
+      undo_command_t *cmd = commands_create_add_snippet(ts->ui, ts->selected_player_track_index, local_tick, 50);
       if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
     }
     igSeparator();

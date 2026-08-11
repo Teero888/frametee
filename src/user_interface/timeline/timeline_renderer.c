@@ -1,17 +1,28 @@
 #include "timeline_renderer.h"
 #include "renderer/graphics_backend.h"
+#include "timeline_commands.h"
 #include "timeline_interaction.h"
 #include "timeline_model.h"
 #include "../net_events.h"
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include <symbols.h>
 #include <system/include_cimgui.h>
+#include <user_interface/undo_redo.h>
 #include <user_interface/widgets/imcol.h>
 
 #define MIN_TIMELINE_ZOOM 0.05f
 #define MAX_TIMELINE_ZOOM 20.0f
 #define TPS 50
+
+typedef struct {
+  bool active;
+  int track_index;
+  char before[MAX_TRACK_NAME];
+} RendererTrackNameEditUndo;
+
+static RendererTrackNameEditUndo g_track_name_edit_undo;
 
 // Forward Declarations for Static Render Helpers
 static void render_input_snippet(timeline_state_t *ts, player_track_t *track, input_snippet_t *snippet, ImDrawList *draw_list, ImRect timeline_bb,
@@ -46,6 +57,64 @@ int renderer_screen_y_to_track_index(const timeline_state_t *ts, float screen_y)
   return (track_index >= ts->player_track_count) ? -1 : track_index;
 }
 
+// Playheads are drawn from left to right. When their handles overlap, this leaves the rightmost
+// playhead in front. The unclamped tick breaks ties at tick zero, where several groups can share
+// the same visible position while approaching it from different offsets.
+static int renderer_next_playhead_group(const timeline_state_t *ts, int previous_group) {
+  int next_group = -1;
+  int previous_offset = previous_group >= 0 ? ts->groups[previous_group]->start_offset : 0;
+
+  for (int group_index = 0; group_index < ts->group_count; ++group_index) {
+    int offset = ts->groups[group_index]->start_offset;
+    // Unclamped playhead ticks are current_tick - start_offset. Visit distinct offsets from
+    // largest to smallest to draw their playheads from left to right and deduplicate groups whose
+    // offset is exactly equal.
+    if (previous_group >= 0 && offset >= previous_offset) continue;
+
+    if (next_group < 0) {
+      next_group = group_index;
+      continue;
+    }
+
+    int next_offset = ts->groups[next_group]->start_offset;
+    if (offset > next_offset || (offset == next_offset && group_index < next_group)) next_group = group_index;
+  }
+  return next_group;
+}
+
+int renderer_hit_test_playhead_handle(const timeline_state_t *ts, ImRect header_bb, ImVec2 position) {
+  float dpi_scale = gfx_get_ui_scale();
+  float handle_top = header_bb.Max.y - 11.0f * dpi_scale;
+  if (position.y < handle_top || position.y > header_bb.Max.y + 1.0f * dpi_scale) return -1;
+
+  int frontmost_group = -1;
+  float hit_half_width = 7.0f * dpi_scale;
+  for (int group_index = renderer_next_playhead_group(ts, -1); group_index >= 0;
+       group_index = renderer_next_playhead_group(ts, group_index)) {
+    float x = renderer_tick_to_screen_x(ts, model_group_playhead_tick(ts, group_index), header_bb.Min.x);
+    if (x < header_bb.Min.x || x > header_bb.Max.x) continue;
+    if (fabsf(position.x - x) <= hit_half_width) frontmost_group = group_index;
+  }
+  return frontmost_group;
+}
+
+int renderer_find_nearest_playhead(const timeline_state_t *ts, ImRect header_bb, float position_x) {
+  int nearest_group = -1;
+  float nearest_distance = 0.0f;
+  for (int group_index = renderer_next_playhead_group(ts, -1); group_index >= 0;
+       group_index = renderer_next_playhead_group(ts, group_index)) {
+    float x = renderer_tick_to_screen_x(ts, model_group_playhead_tick(ts, group_index), header_bb.Min.x);
+    float distance = fabsf(position_x - x);
+    // Render order is back-to-front, so an equal-distance candidate encountered later is the
+    // visible one and must also win selection.
+    if (nearest_group < 0 || distance <= nearest_distance) {
+      nearest_group = group_index;
+      nearest_distance = distance;
+    }
+  }
+  return nearest_group;
+}
+
 // Main Rendering Functions
 
 void renderer_draw_controls(timeline_state_t *ts) {
@@ -53,13 +122,12 @@ void renderer_draw_controls(timeline_state_t *ts) {
   float btn_gap = 6.0f * dpi_scale;
 
   igPushItemWidth(80 * dpi_scale);
-  if (igDragInt("##CurrentTick", &ts->current_tick, 1, 0, 100000, "Tick %d", ImGuiSliderFlags_None)) {
-    if (ts->current_tick < 0) ts->current_tick = 0;
-  }
+  igDragInt("##CurrentTick", &ts->current_tick, 1, model_get_min_global_tick(ts), 100000000, "Tick %d", ImGuiSliderFlags_AlwaysClamp);
   igPopItemWidth();
 
   igSameLine(0, 10 * dpi_scale);
-  if (ui_icon_button(ts->ui, ICON_FA_BACKWARD_STEP, (ImVec2){30 * dpi_scale, 0})) ts->current_tick = 0;
+  if (ui_icon_button(ts->ui, ICON_FA_BACKWARD_STEP, (ImVec2){30 * dpi_scale, 0}))
+    ts->current_tick = model_get_min_global_tick(ts);
 
   igSameLine(0, btn_gap);
   if (ui_icon_button(ts->ui, ICON_FA_BACKWARD, (ImVec2){30 * dpi_scale, 0})) model_advance_tick(ts, -ts->playback_speed);
@@ -70,7 +138,8 @@ void renderer_draw_controls(timeline_state_t *ts) {
     if (ts->is_playing) {
       if (ts->recording && ts->recording_snippets.count > 0) {
         input_snippet_t *recording_snippet = ts->recording_snippets.snippets[0];
-        if (recording_snippet) ts->current_tick = recording_snippet->end_tick;
+        if (recording_snippet)
+          ts->current_tick = recording_snippet->end_tick + ts->groups[ts->active_group_index]->start_offset;
       }
       ts->last_update_time = igGetTime();
     }
@@ -190,23 +259,14 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
   }
 
   // Draw markers for net events
-  ImU32 event_marker_col = IM_COL32(255, 200, 0, 255);
-  int start_idx = ts->net_event_count;
-  int low = 0, high = ts->net_event_count - 1;
-  while (low <= high) {
-    int mid = low + (high - low) / 2;
-    if (ts->net_events[mid].tick >= start_tick) {
-      start_idx = mid;
-      high = mid - 1;
-    } else {
-      low = mid + 1;
-    }
-  }
-
-  for (int i = start_idx; i < ts->net_event_count; ++i) {
+  for (int i = 0; i < ts->net_event_count; ++i) {
     net_event_t *ev = &ts->net_events[i];
-    if (ev->tick > end_tick) break;
-    float x = renderer_tick_to_screen_x(ts, ev->tick, header_bb.Min.x);
+    if (ev->group_index < 0 || ev->group_index >= ts->group_count) continue;
+    int global_tick = ev->tick + ts->groups[ev->group_index]->start_offset;
+    if (global_tick < start_tick || global_tick > end_tick) continue;
+    timeline_group_t *group = ts->groups[ev->group_index];
+    ImU32 event_marker_col = igColorConvertFloat4ToU32((ImVec4){group->color[0], group->color[1], group->color[2], 1.0f});
+    float x = renderer_tick_to_screen_x(ts, global_tick, header_bb.Min.x);
     if (x >= header_bb.Min.x && x <= header_bb.Max.x) {
       ImVec2 p1 = {x - 4 * dpi_scale, header_bb.Max.y - 12 * dpi_scale};
       ImVec2 p2 = {x + 4 * dpi_scale, header_bb.Max.y - 12 * dpi_scale};
@@ -216,6 +276,7 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
       // Optional: Hover tooltip for the event
       if (igIsMouseHoveringRect((ImVec2){x - 4 * dpi_scale, header_bb.Max.y - 12 * dpi_scale}, (ImVec2){x + 4 * dpi_scale, header_bb.Max.y - 4 * dpi_scale}, true)) {
         igBeginTooltip();
+        igText("Group: %s", group->name);
         net_event_tooltip_draw(ev);
         igEndTooltip();
       }
@@ -226,26 +287,39 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
 }
 
 void renderer_draw_playhead_line(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_rect) {
+  if (ts->player_track_count <= 0) return;
   float dpi_scale = gfx_get_ui_scale();
-  float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, timeline_rect.Min.x);
-  if (playhead_x >= timeline_rect.Min.x && playhead_x <= timeline_rect.Max.x) {
-    ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, timeline_rect.Min.y}, (ImVec2){playhead_x, timeline_rect.Max.y},
-                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f * dpi_scale);
+  float y0 = renderer_get_track_screen_y(ts, 0);
+  float y1 = renderer_get_track_screen_y(ts, ts->player_track_count - 1) + ts->track_height * dpi_scale;
+  for (int group_index = renderer_next_playhead_group(ts, -1); group_index >= 0;
+       group_index = renderer_next_playhead_group(ts, group_index)) {
+    int playhead_tick = model_group_playhead_tick(ts, group_index);
+
+    float playhead_x = renderer_tick_to_screen_x(ts, playhead_tick, timeline_rect.Min.x);
+    if (playhead_x < timeline_rect.Min.x || playhead_x > timeline_rect.Max.x) continue;
+    ImU32 color = group_index == 0 ? igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f)
+                                  : igGetColorU32_Vec4((ImVec4){ts->groups[group_index]->color[0], ts->groups[group_index]->color[1],
+                                                                ts->groups[group_index]->color[2], 0.95f});
+    ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, y0}, (ImVec2){playhead_x, y1}, color, 2.0f * dpi_scale);
   }
 }
 
 void renderer_draw_playhead_handle(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_rect, ImRect header_bb) {
   float dpi_scale = gfx_get_ui_scale();
-  float playhead_x = renderer_tick_to_screen_x(ts, ts->current_tick, timeline_rect.Min.x);
-
-  if (playhead_x >= timeline_rect.Min.x && playhead_x <= timeline_rect.Max.x) {
-    ImVec2 head_bottom = {playhead_x + 0.5f, header_bb.Max.y + 0.5f};
+  for (int group_index = renderer_next_playhead_group(ts, -1); group_index >= 0;
+       group_index = renderer_next_playhead_group(ts, group_index)) {
+    int playhead_tick = model_group_playhead_tick(ts, group_index);
+    float group_x = renderer_tick_to_screen_x(ts, playhead_tick, timeline_rect.Min.x);
+    if (group_x < timeline_rect.Min.x || group_x > timeline_rect.Max.x) continue;
+    ImU32 color = group_index == 0 ? igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f)
+                                  : igGetColorU32_Vec4((ImVec4){ts->groups[group_index]->color[0], ts->groups[group_index]->color[1],
+                                                                ts->groups[group_index]->color[2], 0.95f});
+    ImVec2 head_bottom = {group_x + 0.5f, header_bb.Max.y + 0.5f};
     ImVec2 head_top_left = {(head_bottom.x - 6.0f * dpi_scale) + 0.5f, head_bottom.y - 10.0f * dpi_scale + 0.5f};
     ImVec2 head_top_right = {(head_bottom.x + 6.0f * dpi_scale) - 0.5f, head_bottom.y - 10.0f * dpi_scale + 0.5f};
-    ImDrawList_AddTriangleFilled(draw_list, head_top_left, head_top_right, head_bottom, igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f));
-
-    ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, header_bb.Max.y - 5.0f * dpi_scale}, (ImVec2){playhead_x, header_bb.Max.y},
-                       igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f), 2.0f * dpi_scale);
+    ImDrawList_AddTriangleFilled(draw_list, head_top_left, head_top_right, head_bottom, color);
+    ImDrawList_AddLine(draw_list, (ImVec2){group_x, header_bb.Max.y - 5.0f * dpi_scale}, (ImVec2){group_x, header_bb.Max.y}, color,
+                       2.0f * dpi_scale);
   }
 }
 
@@ -253,6 +327,8 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   float dpi_scale = gfx_get_ui_scale();
   float track_header_width = 120.0f * dpi_scale;
   ImDrawList *draw_list = igGetWindowDrawList();
+  int pending_clone_track = -1;
+  int pending_clone_group = -1;
 
   // The rows are laid out from this origin, and hit testing derives the same positions from it.
   ts->tracks_origin_y = igGetCursorScreenPos().y;
@@ -263,10 +339,10 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   while (ImGuiListClipper_Step(clipper)) {
     for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; i++) {
       // Pin the row instead of letting the cursor accumulate: ImGui truncates it after every
-      // item, which would drift away from the row positions hit testing computes.
       ImVec2 row_start_pos = {igGetCursorScreenPos().x, renderer_get_track_screen_y(ts, i)};
       igSetCursorScreenPos(row_start_pos);
       player_track_t *track = &ts->player_tracks[i];
+      timeline_group_t *group = ts->groups[track->group_index];
 
       // Render Track Info Panel (Left)
       bool is_track_selected = (ts->selected_player_track_index == i);
@@ -277,15 +353,30 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
       ImDrawList_AddRectFilled(draw_list, header_rect_min, header_rect_max, header_bg_col, 0.0f, 0);
       ImDrawList_AddLine(draw_list, (ImVec2){header_rect_max.x, header_rect_min.y}, header_rect_max, igGetColorU32_Col(ImGuiCol_Border, 0.5f), 1.0f * dpi_scale);
 
+      // The colored claw is the visual group binding from the issue mockup. Its caps only appear
+      // on the first/last row, so adjacent rows read as one physics instance without spending a
+      // separate header row.
+      ImU32 group_color = igGetColorU32_Vec4((ImVec4){group->color[0], group->color[1], group->color[2], 1.0f});
+      float claw_x = row_start_pos.x + 3.0f * dpi_scale;
+      ImDrawList_AddLine(draw_list, (ImVec2){claw_x, header_rect_min.y}, (ImVec2){claw_x, header_rect_max.y}, group_color, 4.0f * dpi_scale);
+      bool first_in_group = i == 0 || ts->player_tracks[i - 1].group_index != track->group_index;
+      bool last_in_group = i == ts->player_track_count - 1 || ts->player_tracks[i + 1].group_index != track->group_index;
+      if (first_in_group)
+        ImDrawList_AddLine(draw_list, (ImVec2){claw_x, header_rect_min.y + 2.0f * dpi_scale},
+                           (ImVec2){claw_x + 14.0f * dpi_scale, header_rect_min.y + 2.0f * dpi_scale}, group_color, 4.0f * dpi_scale);
+      if (last_in_group)
+        ImDrawList_AddLine(draw_list, (ImVec2){claw_x, header_rect_max.y - 2.0f * dpi_scale},
+                           (ImVec2){claw_x + 14.0f * dpi_scale, header_rect_max.y - 2.0f * dpi_scale}, group_color, 4.0f * dpi_scale);
+
       igPushID_Int(i);
 
       // Draw track name. Add a prefix for dummy tracks
-      igSetCursorScreenPos((ImVec2){row_start_pos.x + 8.0f * dpi_scale, row_start_pos.y + ((ts->track_height * dpi_scale) - igGetTextLineHeight()) * 0.5f});
+      igSetCursorScreenPos((ImVec2){row_start_pos.x + 20.0f * dpi_scale, row_start_pos.y + ((ts->track_height * dpi_scale) - igGetTextLineHeight()) * 0.5f});
       if (track->is_dummy) {
         igTextDisabled("[D]");
         igSameLine(0, 4.0f * dpi_scale);
       }
-      igText("Track %d", i + 1);
+      igText("%s", track->name[0] ? track->name : "Track");
 
       // Add a single invisible button over the header for interactions.
       igSetCursorScreenPos(row_start_pos);
@@ -296,7 +387,7 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
         if (igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
           if (igGetIO_Nil()->KeyShift) {
             for (int t = 0; t < ts->player_track_count; ++t)
-              ts->player_tracks[t].is_dummy ^= 1;
+              if (ts->player_tracks[t].group_index == track->group_index) ts->player_tracks[t].is_dummy ^= 1;
           } else track->is_dummy = !track->is_dummy;
 
         } else if (igIsItemClicked(ImGuiMouseButton_Left)) {
@@ -305,6 +396,32 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
       }
 
       if (igBeginPopupContextItem("TrackSettings", 1)) {
+        char name_before_frame[MAX_TRACK_NAME];
+        memcpy(name_before_frame, track->name, sizeof(name_before_frame));
+        igSetNextItemWidth(180.0f * dpi_scale);
+        bool name_changed = igInputText("Name", track->name, sizeof(track->name), ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
+        if (igIsItemActivated()) {
+          g_track_name_edit_undo.active = true;
+          g_track_name_edit_undo.track_index = i;
+          memcpy(g_track_name_edit_undo.before, name_before_frame, sizeof(g_track_name_edit_undo.before));
+        }
+        if (name_changed) timeline_mark_unsaved(ts);
+        if (igIsItemDeactivatedAfterEdit() && g_track_name_edit_undo.active && g_track_name_edit_undo.track_index == i) {
+          undo_command_t *command = commands_create_track_name_change(ts->ui, i, g_track_name_edit_undo.before);
+          if (command) undo_manager_register_command(&ts->ui->undo_manager, command);
+          g_track_name_edit_undo.active = false;
+        }
+        if (ts->group_count > 1 && igBeginMenu("Clone to group", !ts->recording)) {
+          for (int target_group = 0; target_group < ts->group_count; ++target_group) {
+            if (target_group == track->group_index) continue;
+            if (igMenuItem_Bool(ts->groups[target_group]->name, NULL, false, true)) {
+              pending_clone_track = i;
+              pending_clone_group = target_group;
+            }
+          }
+          igEndMenu();
+        }
+        igSeparator();
         if (track->is_dummy) {
           igText("Copy Settings");
           igSeparator();
@@ -350,6 +467,13 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   }
   ImGuiListClipper_End(clipper);
   ImGuiListClipper_destroy(clipper);
+  if (pending_clone_track >= 0) {
+    timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
+    if (before && model_clone_track_to_group(ts, pending_clone_track, pending_clone_group, NULL)) {
+      undo_command_t *command = commands_create_timeline_data_change(ts->ui, before, "Clone Track to Group");
+      if (command) undo_manager_register_command(&ts->ui->undo_manager, command);
+    } else commands_free_timeline_data_snapshot(before);
+  }
 }
 
 void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_list, ImRect timeline_bb) {
@@ -456,14 +580,13 @@ void renderer_draw_drag_preview(timeline_state_t *ts, ImDrawList *overlay_draw_l
         float preview_min_y = target_track_top + preview_snip->layer * sub_lane_height + 2.0f * dpi_scale;
         float preview_max_y = preview_min_y + sub_lane_height - 4.0f * dpi_scale;
 
-        ImU32 fill;
-        if (igGetIO_Nil()->KeyAlt) {
-          fill = IM_COL32(100, 240, 150, 90); // Green
-        } else {
-          fill = IM_COL32(100, 150, 240, 90); // Blue
-        }
+        timeline_group_t *target_group = ts->groups[track->group_index];
+        ImU32 fill = igGetColorU32_Vec4((ImVec4){target_group->color[0], target_group->color[1], target_group->color[2], 0.35f});
         ImDrawList_AddRectFilled(overlay_draw_list, (ImVec2){preview_min_x, preview_min_y}, (ImVec2){preview_max_x, preview_max_y}, fill, 4.0f * dpi_scale,
                                  ImDrawFlags_RoundCornersAll);
+        if (igGetIO_Nil()->KeyAlt)
+          ImDrawList_AddRect(overlay_draw_list, (ImVec2){preview_min_x, preview_min_y}, (ImVec2){preview_max_x, preview_max_y},
+                             IM_COL32(100, 240, 150, 210), 4.0f * dpi_scale, ImDrawFlags_RoundCornersAll, 2.0f * dpi_scale);
       }
     }
     ImDrawList_PopClipRect(overlay_draw_list);
@@ -526,17 +649,32 @@ static void render_input_snippet(timeline_state_t *ts, player_track_t *track, in
   if (max.y <= min.y) return;
 
   bool is_selected = interaction_is_snippet_selected(ts, snippet->id);
+  timeline_group_t *group = ts->groups[track->group_index];
+  ImVec4 selected_color = {
+      group->color[0] + (1.0f - group->color[0]) * 0.24f,
+      group->color[1] + (1.0f - group->color[1]) * 0.24f,
+      group->color[2] + (1.0f - group->color[2]) * 0.24f,
+      1.0f,
+  };
+  ImVec4 selected_border = {
+      group->color[0] + (1.0f - group->color[0]) * 0.52f,
+      group->color[1] + (1.0f - group->color[1]) * 0.52f,
+      group->color[2] + (1.0f - group->color[2]) * 0.52f,
+      1.0f,
+  };
   ImU32 color;
   if (is_recording_snippet) {
     color = IM_COL32(255, 30, 0, 100);
   } else {
+    ImVec4 group_color = {group->color[0], group->color[1], group->color[2], 0.86f};
     color = snippet->is_active
-                ? (is_selected ? igGetColorU32_Col(ImGuiCol_HeaderActive, 1.0f) : igGetColorU32_Col(ImGuiCol_Button, 0.8f))
-                : (is_selected ? igGetColorU32_Vec4((ImVec4){0.45f, 0.45f, 0.45f, 1.0f}) : igGetColorU32_Vec4((ImVec4){0.25f, 0.25f, 0.25f, 0.9f}));
+                ? (is_selected ? igGetColorU32_Vec4(selected_color) : igGetColorU32_Vec4(group_color))
+                : (is_selected ? igGetColorU32_Vec4((ImVec4){group->color[0] * 0.55f, group->color[1] * 0.55f, group->color[2] * 0.55f, 1.0f})
+                               : igGetColorU32_Vec4((ImVec4){0.25f, 0.25f, 0.25f, 0.9f}));
   }
 
   ImDrawList_AddRectFilled(draw_list, min, max, color, 4.0f * dpi_scale, ImDrawFlags_RoundCornersAll);
   ImDrawList_AddRect(draw_list, min, max,
-                     is_selected ? igGetColorU32_Col(ImGuiCol_NavWindowingHighlight, 1.0f) : igGetColorU32_Col(ImGuiCol_Border, 0.6f), 4.0f * dpi_scale,
+                     is_selected ? igGetColorU32_Vec4(selected_border) : igGetColorU32_Col(ImGuiCol_Border, 0.6f), 4.0f * dpi_scale,
                      ImDrawFlags_RoundCornersAll, (is_selected ? 2.0f : 1.0f) * dpi_scale);
 }

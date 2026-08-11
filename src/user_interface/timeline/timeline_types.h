@@ -2,6 +2,7 @@
 #define UI_TIMELINE_TYPES_H
 
 #include <physics/physics.h>
+#include <particles/particle_system.h>
 #include <stdbool.h>
 #include <system/include_cimgui.h>
 #include <types.h>
@@ -9,6 +10,8 @@
 
 #define MAX_SNIPPETS_PER_PLAYER 64
 #define MAX_SNIPPET_LAYERS 8
+#define MAX_TIMELINE_GROUP_NAME 64
+#define MAX_TRACK_NAME 64
 
 struct physics_v_t {
   SWorldCore *data;
@@ -67,8 +70,16 @@ struct player_track_t {
 
   player_info_t player_info;
   starting_config_t starting_config;
+  char name[MAX_TRACK_NAME];
+  int group_index;
   bool is_dummy;
   int dummy_copy_flags;
+
+  // Per-track demo export settings. These deliberately live with the track so importing or
+  // cloning a group never shares presentation metadata with another physics instance.
+  bool demo_export_enabled;
+  int demo_ping;
+  int demo_player_flags;
 };
 
 struct dragged_snippet_info_t {
@@ -127,6 +138,7 @@ typedef enum {
 
 struct net_event_t {
   int tick;
+  int group_index;
   net_event_type_t type;
   int team;
   int client_id;
@@ -161,6 +173,25 @@ struct net_event_t {
   int player_time_best;
 };
 
+// A group owns an entirely separate physics history. Tracks remain in one flat array so existing
+// timeline editing and plugin APIs can continue to address rows by index, while group_index maps a
+// row into the correct independent world.
+struct timeline_group_t {
+  char name[MAX_TIMELINE_GROUP_NAME];
+  float color[4];
+  bool visible;
+  bool demo_export_enabled;
+  int start_offset;
+
+  physics_v_t vec;
+  SWorldCore initial_world;
+  SWorldCore previous_world;
+  SWorldCore prev_world_cached;
+  SWorldCore world_cached;
+  int cached_tick;
+  particle_system_t particle_system;
+};
+
 struct timeline_state {
   // View State
   float zoom;
@@ -186,6 +217,10 @@ struct timeline_state {
   player_track_t *player_tracks;
   int player_track_count;
   int next_snippet_id;
+  timeline_group_t **groups;
+  int group_count;
+  int active_group_index;
+  int simulation_group_index;
 
   // Net Events
   net_event_t *net_events;
@@ -204,6 +239,11 @@ struct timeline_state {
   timeline_drag_state_t drag_state;
   timeline_trim_state_t trim_state;
   bool is_header_dragging;
+  // The playhead selected for a header drag. Overlapping handles use the renderer's back-to-front
+  // order so hit testing selects the same handle the user sees in front.
+  int header_drag_group_index;
+  int header_drag_grab_offset_ticks;
+  int header_drag_current_to_playhead_ticks;
   // snippet that was clicked while it was already part of a multi-selection. clicking one of
   // several selected snippets must keep the selection alive until release, so a group drag can
   // still start; if the click ends without a drag, the selection collapses onto this snippet.
@@ -211,13 +251,6 @@ struct timeline_state {
 
   // Recording Targets
   recording_snippet_vector_t recording_snippets;
-
-  // Physics Integration
-  physics_v_t vec;
-  SWorldCore previous_world;
-  SWorldCore prev_world_cached;
-  SWorldCore world_cached;
-  int cached_tick;
 
   // Back-pointer to parent UI handler
   ui_handler_t *ui;

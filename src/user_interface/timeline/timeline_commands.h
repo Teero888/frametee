@@ -4,6 +4,7 @@
 #include "timeline_types.h"
 
 struct undo_command_t;
+typedef struct timeline_data_snapshot_t timeline_data_snapshot_t;
 
 typedef struct {
   int snippet_id;
@@ -26,6 +27,27 @@ struct undo_command_t *commands_create_toggle_selected_snippets_active(ui_handle
 // exists; past that the snippet grows with blank ticks.
 struct undo_command_t *commands_create_trim_snippet(ui_handler_t *ui, int snippet_id, int new_start_tick, int new_end_tick);
 struct undo_command_t *commands_create_remove_track(ui_handler_t *ui, int track_index);
+
+// Structural group operations can change group/track indices and their owned snippets/events in
+// one step. Capture immediately before the operation, then create the command after it succeeds.
+// The resulting command owns `before` and restores the complete timeline data on undo/redo.
+timeline_data_snapshot_t *commands_capture_timeline_data(const timeline_state_t *ts);
+void commands_free_timeline_data_snapshot(timeline_data_snapshot_t *snapshot);
+struct undo_command_t *commands_create_timeline_data_change(ui_handler_t *ui, timeline_data_snapshot_t *before,
+                                                            const char *description);
+
+// Property commands are created after the widget has applied the new value. `before` is the value
+// from the start of the edit (not merely the previous drag frame), so one drag/text edit is one
+// undo step.
+struct undo_command_t *commands_create_group_name_change(ui_handler_t *ui, int group_index, const char *before);
+struct undo_command_t *commands_create_group_color_change(ui_handler_t *ui, int group_index, const float before[4]);
+struct undo_command_t *commands_create_group_visibility_change(ui_handler_t *ui, int group_index, bool before);
+struct undo_command_t *commands_create_group_start_offset_change(ui_handler_t *ui, int group_index, int before);
+struct undo_command_t *commands_create_group_demo_export_change(ui_handler_t *ui, int group_index, bool before);
+struct undo_command_t *commands_create_track_name_change(ui_handler_t *ui, int track_index, const char *before);
+struct undo_command_t *commands_create_track_demo_export_change(ui_handler_t *ui, int track_index, bool before);
+struct undo_command_t *commands_create_track_demo_ping_change(ui_handler_t *ui, int track_index, int before);
+struct undo_command_t *commands_create_net_event_group_change(ui_handler_t *ui, int event_index, int before);
 
 // Special command for the snippet editor
 struct undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, int *indices, int count, SPlayerInput *before_states,
