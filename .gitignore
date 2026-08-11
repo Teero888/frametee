@@ -12,3 +12,4 @@ imgui.ini
 \#*\#
 todo.txt
 .claude
+build-pgo

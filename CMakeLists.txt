@@ -35,6 +35,10 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type (default Release)" FORCE)
 endif()
 
+option(ENABLE_AGGRESSIVE_OPTIM "Enable aggressive optimizations with LTO and native tuning" OFF)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(PGO)
+
 if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
     add_compile_options(
@@ -231,6 +235,21 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 
     $<$<AND:$<BOOL:${ENABLE_SANITIZERS}>,$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-fsanitize=address,undefined>
 )
+
+# Aggressive optimizations, matching libs/ddnet_physics. ddnet_physics is linked
+# into this executable, so when it is compiled to LTO bitcode the final link has
+# to run LTO codegen as well -- without -flto here the host would be linking
+# bitcode objects through the plugin fallback path.
+if(ENABLE_AGGRESSIVE_OPTIM AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT ENABLE_SANITIZERS)
+    target_compile_options(${PROJECT_NAME} PRIVATE
+        $<$<CONFIG:Release>:-flto -march=native -mtune=native>
+    )
+    target_link_options(${PROJECT_NAME} PRIVATE
+        $<$<CONFIG:Release>:-flto -march=native -mtune=native>
+    )
+endif()
+
+frametee_enable_pgo(${PROJECT_NAME})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/libs)

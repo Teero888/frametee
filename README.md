@@ -69,6 +69,9 @@
     # For Release
     cmake .. -DCMAKE_BUILD_TYPE=Release
 
+    # For optimized builds
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_AGGRESSIVE_OPTIM=On
+
     # OR for Debug (with sanitizers)
     # cmake .. -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=On
 
