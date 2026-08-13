@@ -98,23 +98,36 @@ set(SRCS
 find_package(Vulkan REQUIRED)
 
 # Try to find an existing glfw3 installation first; fall back to fetching it if unavailable.
-find_package(glfw3 CONFIG QUIET)
+# 3.4 is a hard minimum: raylib (games/example_platformer) uses GLFW 3.4-only API
+# such as GLFW_MOUSE_PASSTHROUGH and glfwGetPlatform.
+find_package(glfw3 3.4 CONFIG QUIET)
 if(NOT glfw3_FOUND)
-    find_package(glfw3 QUIET)
+    find_package(glfw3 3.4 QUIET)
 endif()
 
 if(NOT glfw3_FOUND)
-    message(STATUS "glfw3 not found via CMake package registry, fetching from source")
+    message(STATUS "glfw3 >= 3.4 not found via CMake package registry, fetching from source")
     include(FetchContent)
     set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+    if(UNIX AND NOT APPLE)
+        # keeps the fallback buildable with only the X11 dev packages installed
+        set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
+    endif()
     FetchContent_Declare(
         glfw
         GIT_REPOSITORY https://github.com/glfw/glfw.git
-        GIT_TAG 3.3.9
+        GIT_TAG 3.4
+        GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(glfw)
+    # the fetched library is static and ends up inside loadable game modules
+    set_target_properties(glfw PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    # raylib's cmake/GlfwImport.cmake keys off glfw3_FOUND; without this it also
+    # adds its own bundled glfw and collides with the target created above.
+    set(glfw3_FOUND TRUE)
 endif()
 
 set(GLFW_LINK_TARGET glfw)
