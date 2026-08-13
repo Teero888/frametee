@@ -890,13 +890,16 @@ static void ddnet_destroy(ft_game *game) {
 static bool ddnet_resources_create(ft_game *game) { return dd_gfx_create(game); }
 
 static void ddnet_resources_destroy(ft_game *game) {
+  // Destroying the custom pipeline waits for outstanding GPU work. Do that
+  // before releasing browser/map ImGui descriptors which may have appeared in
+  // the preceding frame.
+  dd_gfx_destroy(game);
   if (game->maps) {
     online_map_manager_cleanup(game->maps, game);
     free(game->maps);
     game->maps = NULL;
   }
   dd_skin_browser_cleanup(game);
-  dd_gfx_destroy(game);
 }
 
 // DDNet's start screen is its map browser: picking a map is how a run begins.

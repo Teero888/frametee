@@ -23,7 +23,7 @@ Three modules ship in [`games/`](../games), deliberately in three languages:
 
 ```
 $ frametee --list-games
-FrameTee game modules (ABI 6)
+FrameTee game modules (ABI 7)
   ddnet                    DDNet v1.0.0 by Teero
       players 0..64, 50 ticks/s, dynamic cast
       inputs: direction target jump fire hook weapon kill eyes emote sit tele_out

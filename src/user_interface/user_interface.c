@@ -1322,7 +1322,11 @@ void ui_render(ui_handler_t *ui) {
     plugin_manager_render_ui(&ui->plugin_manager, &ui->show_plugin_manager);
   }
   entity_inspector_render(&ui->entity_inspector);
-  render_game_ui_slot(ui, FT_UI_PANELS, ui->timeline.selected_player_track_index);
+  // Game-owned panels may reference game-owned GPU resources. Keep them out
+  // of the frame in which the splash can replace the active game.
+  if (ui->gfx_handler->level != NULL && !ui->show_splash) {
+    render_game_ui_slot(ui, FT_UI_PANELS, ui->timeline.selected_player_track_index);
+  }
 
 
   render_new_project_prompt(ui);

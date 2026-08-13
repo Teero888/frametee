@@ -25,8 +25,9 @@
 #define DD_Z_PARTICLES_BACK 2.f
 #define DD_Z_HOOK 3.f
 #define DD_Z_PROJECTILES 4.f
+#define DD_Z_HOOK_HAND 4.5f
 #define DD_Z_WEAPONS 5.f
-#define DD_Z_HANDS 5.5f
+#define DD_Z_WEAPON_HAND 5.5f
 #define DD_Z_SKINS 6.f
 #define DD_Z_PARTICLES_FRONT 8.0f
 #define DD_Z_MAP 7.0f
@@ -34,6 +35,8 @@
 #define DD_Z_CURSOR 100.0f
 
 #define DD_MAX_SKINS 128
+#define DD_SKIN_PREVIEW_LAYER (DD_MAX_SKINS - 1)
+#define DD_MAX_PLAYER_SKINS DD_SKIN_PREVIEW_LAYER
 #define DD_SKIN_ATLAS_W 512
 #define DD_SKIN_ATLAS_H 352
 
@@ -371,6 +374,11 @@ typedef struct {
   dd_skin_instance_t *hand_batch;
   uint32_t hand_batch_count;
   uint32_t hand_batch_capacity;
+  // Hook hands sit behind weapons, while hands gripping a weapon sit in front.
+  // They cannot share one z-sorted draw batch.
+  dd_skin_instance_t *hook_hand_batch;
+  uint32_t hook_hand_batch_count;
+  uint32_t hook_hand_batch_capacity;
 } dd_gfx_t;
 
 // Presentation settings. These belong to the game, not the editor, which is why
@@ -414,6 +422,10 @@ void dd_gfx_destroy(ft_game *game);
 int dd_gfx_skin_index(ft_game *game, const char *name);
 // Loads a skin chosen by the DDNet browser from an arbitrary local path.
 int dd_gfx_load_skin_path(ft_game *game, const char *name, const char *path);
+// Renders one browser thumbnail through the same pipeline and texture arrays
+// used by the in-game tee renderer.
+bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *path, ft_texture *destination, uint32_t destination_x,
+                                uint32_t destination_y);
 
 void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame);
 void dd_skin_browser_cleanup(ft_game *game);
@@ -428,8 +440,8 @@ void dd_draw_triangle(ft_game *game, float z, vec2 a, vec2 b, vec2 c, vec4 color
 void dd_skins_begin(ft_game *game);
 void dd_skin_push(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 dir, const dd_anim_state_t *anim, vec3 col_body, vec3 col_feet,
                   bool custom);
-void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, vec3 col_body, bool custom);
-void dd_skins_flush(ft_game *game, float hand_z, float tee_z);
+void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, vec3 col_body, bool custom, bool hook_hand);
+void dd_skins_flush(ft_game *game);
 
 // Retrieves the sprite rectangle a draw needs for its aspect ratio.
 const ft_sprite_rect *dd_sprite_rect(ft_game *game, ft_atlas *atlas, uint32_t index);
