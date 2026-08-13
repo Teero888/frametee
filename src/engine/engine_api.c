@@ -163,6 +163,42 @@ static ft_texture *api_render_instances_preview(const ft_instance_preview_desc *
                                                          desc->destination_x, desc->destination_y);
 }
 
+static const ft_gpu_device *api_gpu_device(void) {
+  if (!have_graphics()) return NULL;
+
+  // Filled once and handed out by pointer: the handles live as long as the
+  // engine's device does, which outlives every module that asks for them.
+  static ft_gpu_device device;
+  device = (ft_gpu_device){.struct_size = sizeof(device),
+                           .api = FT_GPU_API_VULKAN,
+                           .instance = (void *)g_engine->g_instance,
+                           .physical_device = (void *)g_engine->g_physical_device,
+                           .device = (void *)g_engine->g_device,
+                           .queue = (void *)g_engine->g_queue,
+                           .queue_family_index = g_engine->g_queue_family,
+                           .api_version = VK_API_VERSION_1_0};
+  return &device;
+}
+
+static bool api_texture_gpu_image(ft_texture *texture, ft_gpu_image *out) {
+  if (!have_graphics() || !texture || !out || out->struct_size < sizeof(*out)) return false;
+
+  texture_t *tex = AS_TEXTURE(texture);
+  if (!tex->active || tex->image == VK_NULL_HANDLE) return false;
+  // Asking for the image is what transfers ownership of the contents, so the
+  // engine only starts working around this texture once a module commits to
+  // drawing into it.
+  if (!renderer_mark_texture_external(g_engine, tex)) return false;
+
+  out->image = (void *)tex->image;
+  out->format = (uint64_t)tex->format;
+  out->width = tex->width;
+  out->height = tex->height;
+  out->layers = tex->layer_count;
+  out->layout = (uint32_t)VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  return true;
+}
+
 static ft_atlas *api_atlas_create(const ft_atlas_desc *desc) {
   if (!have_graphics() || !desc || !desc->texture) return NULL;
   // ft_sprite_rect and sprite_definition_t are the same four uint32s, but the
@@ -253,6 +289,32 @@ static void api_draw_sprites(ft_atlas *atlas, float z, const ft_sprite_draw *dra
   }
   renderer_submit_atlas_batch(g_engine, ar, z, instances, count, false);
   free(instances);
+}
+
+static void api_draw_texture(float z, ft_texture *texture, ft_rect dst, ft_color tint) {
+  if (!have_graphics() || !texture) return;
+  texture_t *tex = AS_TEXTURE(texture);
+  if (!tex->active) return;
+
+  // Built once per texture and kept: the sampling setup does not change even
+  // though the pixels do.
+  if (!tex->alias_atlas) {
+    tex->alias_atlas = renderer_create_texture_atlas(g_engine, tex);
+    if (!tex->alias_atlas) return;
+  }
+
+  atlas_instance_t inst = {0};
+  renderer_calculate_atlas_uvs(tex->alias_atlas, 0, &inst);
+  inst.pos[0] = dst.x + dst.w * 0.5f;
+  inst.pos[1] = dst.y + dst.h * 0.5f;
+  inst.size[0] = dst.w;
+  inst.size[1] = dst.h;
+  inst.rotation = 0.f;
+  inst.sprite_index = 0;
+  inst.tiling[0] = 1.f;
+  inst.tiling[1] = 1.f;
+  copy_color(&tint, inst.color);
+  renderer_submit_atlas_batch(g_engine, tex->alias_atlas, z, &inst, 1, false);
 }
 
 static void api_draw_line(float z, ft_vec2 a, ft_vec2 b, ft_color color, float thickness) {
@@ -615,6 +677,9 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .timeline_world_pair = api_timeline_world_pair,
       .timeline_player_track = api_timeline_player_track,
       .render_instances_preview = api_render_instances_preview,
+      .gpu_device = api_gpu_device,
+      .texture_gpu_image = api_texture_gpu_image,
+      .draw_texture = api_draw_texture,
   };
   return &api;
 }

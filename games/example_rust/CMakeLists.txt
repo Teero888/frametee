@@ -37,13 +37,18 @@ if(WIN32 AND TARGET frametee)
     )
 endif()
 
+# Every Rust source, rather than the handful that happened to exist when this
+# was written. Naming them individually means a new module silently ships a
+# binary built from older code, which looks exactly like a fix that did nothing.
+file(GLOB_RECURSE RUST_MODULE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.rs")
+
 add_custom_command(
     OUTPUT "${RUST_MODULE_INSTALLED}"
     COMMAND ${RUST_CARGO_LAUNCHER} build --release --locked --quiet
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/games"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RUST_MODULE_BUILT}" "${RUST_MODULE_INSTALLED}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/lib.rs" "${CMAKE_CURRENT_SOURCE_DIR}/src/abi.rs"
+    DEPENDS ${RUST_MODULE_SOURCES}
             "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
     COMMENT "Building the Rust example game module"
     VERBATIM

@@ -17,6 +17,9 @@ name = "example_bouncer"
 [dependencies]
 bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }
 bevy_math = { version = "0.19.1", default-features = false, features = ["std"] }
+bevy = { version = "0.19.1", default-features = false, features = ["std", "debug", "2d_bevy_render", "bevy_asset"] }
+wgpu = { version = "29.0.4", default-features = false, features = ["vulkan"] }
+ash = "0.38"
 
 [profile.release]
 opt-level = 2

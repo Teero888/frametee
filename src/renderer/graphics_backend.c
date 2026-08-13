@@ -458,6 +458,12 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
   handler->current_frame_command_buffer = fd->CommandBuffer;
 
+  // A game rendering with its own renderer has already submitted this frame's
+  // work to the shared queue, so its images become sampleable here, before the
+  // pass that reads them opens. Layout transitions cannot be recorded inside a
+  // render pass, which is why this sits ahead of it.
+  renderer_sync_external_textures(handler, fd->CommandBuffer, true);
+
   // Begin offscreen render pass (for game rendering)
   if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE && handler->offscreen_framebuffer != VK_NULL_HANDLE) {
     VkClearValue clear = {.color = {.float32 = {handler->user_interface.bg_color[0], handler->user_interface.bg_color[1],
@@ -510,6 +516,10 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   } else {
     renderer_end_frame(handler, handler->current_frame_command_buffer);
   }
+
+  // Hand the externally rendered images back in the layout their owner draws
+  // into, so the next frame starts from the same state this one assumed.
+  renderer_sync_external_textures(handler, handler->current_frame_command_buffer, false);
 
   // Begin swapchain render pass for ImGui
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
@@ -911,6 +921,13 @@ float gfx_get_ui_scale(void) {
     return dpi;
 #define UI_DIV 5.0
   GLFWmonitor *mon = glfwGetPrimaryMonitor();
+  // There is no primary monitor when GLFW enumerates none — a headless X
+  // server, a stripped build without RandR. Scaling is guesswork then, so take
+  // 1.0 rather than dereferencing NULL inside GLFW.
+  if (!mon) {
+    dpi = 1.f;
+    return dpi;
+  }
   int width_mm, height_mm;
   glfwGetMonitorPhysicalSize(mon, &width_mm, &height_mm);
   float dia_inch = sqrtf(width_mm * width_mm + height_mm * height_mm) * UI_DIV;

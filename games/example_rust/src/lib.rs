@@ -12,6 +12,8 @@
 //! ownership rules in `game_abi.h`.
 
 mod abi;
+mod gpu;
+mod render;
 
 use abi::*;
 use bevy_ecs::prelude::{Component, Entity, Query, Res, ResMut, Resource, With, World as EcsWorld};
@@ -56,6 +58,7 @@ const fn cstr(bytes: &'static [u8]) -> *const c_char {
     bytes.as_ptr() as *const c_char
 }
 
+const BALL_RADIUS: f32 = 0.78;
 const WIDTH: f32 = 48.0;
 const HEIGHT: f32 = 27.0;
 
@@ -195,7 +198,7 @@ impl World {
         ecs.insert_resource(Arena {
             width: WIDTH,
             height: HEIGHT,
-            ball_radius: 0.78,
+            ball_radius: BALL_RADIUS,
         });
         let ball = ecs
             .spawn((
@@ -273,6 +276,11 @@ impl World {
 
 struct Game {
     engine: *const ft_engine_api,
+    // Built on first use: the engine has no graphics in headless runs, and the
+    // viewport size is not known until a frame arrives.
+    renderer: Option<render::BevyRenderer>,
+    // Set once the renderer has failed, so it is not rebuilt every frame.
+    renderer_failed: bool,
 }
 
 // --- input schema ------------------------------------------------------------
@@ -386,7 +394,11 @@ static INPUT_SCHEMA: ft_input_schema = ft_input_schema {
 // function is ordinary safe Rust.
 
 unsafe extern "C" fn create(engine: *const ft_engine_api) -> *mut c_void {
-    Box::into_raw(Box::new(Game { engine })) as *mut c_void
+    Box::into_raw(Box::new(Game {
+        engine,
+        renderer: None,
+        renderer_failed: false,
+    })) as *mut c_void
 }
 
 unsafe extern "C" fn destroy(game: *mut c_void) {
@@ -658,100 +670,9 @@ unsafe extern "C" fn render(game: *mut c_void, frame: *const ft_render_frame) {
     let api = &*engine;
     let frame = &*frame;
 
+    // The level passes draw nothing: Bevy renders the arena, its walls and the
+    // ball itself, into the image the engine composites during the entity pass.
     if frame.pass == FT_PASS_LEVEL_BACKGROUND {
-        if let Some(draw_rect) = api.draw_rect {
-            draw_rect(
-                1.0,
-                ft_vec2 { x: 0.0, y: 0.0 },
-                ft_vec2 {
-                    x: WIDTH,
-                    y: HEIGHT,
-                },
-                ft_color {
-                    r: 0.11,
-                    g: 0.12,
-                    b: 0.16,
-                    a: 1.0,
-                },
-            );
-
-            // A bright inset frame makes the arena readable at a glance and
-            // gives the moving ball an obvious collision boundary.
-            let wall = ft_color {
-                r: 0.28,
-                g: 0.34,
-                b: 0.46,
-                a: 1.0,
-            };
-            draw_rect(
-                2.0,
-                ft_vec2 { x: 0.0, y: 0.0 },
-                ft_vec2 { x: WIDTH, y: 0.25 },
-                wall,
-            );
-            draw_rect(
-                2.0,
-                ft_vec2 {
-                    x: 0.0,
-                    y: HEIGHT - 0.25,
-                },
-                ft_vec2 { x: WIDTH, y: 0.25 },
-                wall,
-            );
-            draw_rect(
-                2.0,
-                ft_vec2 { x: 0.0, y: 0.0 },
-                ft_vec2 { x: 0.25, y: HEIGHT },
-                wall,
-            );
-            draw_rect(
-                2.0,
-                ft_vec2 {
-                    x: WIDTH - 0.25,
-                    y: 0.0,
-                },
-                ft_vec2 { x: 0.25, y: HEIGHT },
-                wall,
-            );
-        }
-        if let Some(draw_line) = api.draw_line {
-            let grid = ft_color {
-                r: 0.55,
-                g: 0.62,
-                b: 0.78,
-                a: 0.10,
-            };
-            for x in (4..WIDTH as i32).step_by(4) {
-                draw_line(
-                    1.5,
-                    ft_vec2 {
-                        x: x as f32,
-                        y: 0.0,
-                    },
-                    ft_vec2 {
-                        x: x as f32,
-                        y: HEIGHT,
-                    },
-                    grid,
-                    0.03,
-                );
-            }
-            for y in (4..HEIGHT as i32).step_by(4) {
-                draw_line(
-                    1.5,
-                    ft_vec2 {
-                        x: 0.0,
-                        y: y as f32,
-                    },
-                    ft_vec2 {
-                        x: WIDTH,
-                        y: y as f32,
-                    },
-                    grid,
-                    0.03,
-                );
-            }
-        }
         return;
     }
 
@@ -787,6 +708,54 @@ unsafe extern "C" fn render(game: *mut c_void, frame: *const ft_render_frame) {
     };
     let velocity = Vec2::from_array(now_snapshot.velocity);
 
+    // Bevy draws the scene itself, on the engine's device and into the engine's
+    // image; the engine only composites the result. Everything drawn after this
+    // point is editor overlay rather than the game.
+    if !frame.state.headless {
+        let this = &mut *(game as *mut Game);
+        if this.renderer.is_none() && !this.renderer_failed {
+            let viewport = frame.state.camera.viewport;
+            let (w, h) = (viewport.x as u32, viewport.y as u32);
+            if w > 0 && h > 0 {
+                this.renderer = render::BevyRenderer::new(
+                    api,
+                    w,
+                    h,
+                    Vec2::new(WIDTH, HEIGHT),
+                    BALL_RADIUS,
+                );
+                if let Some(log) = api.log {
+                    let message = if this.renderer.is_some() {
+                        c"Bevy renderer active: drawing on the engine's device"
+                    } else {
+                        c"Bevy renderer unavailable; drawing with engine primitives"
+                    };
+                    log(FT_LOG_INFO, c"Bouncer".as_ptr(), message.as_ptr());
+                }
+            }
+        }
+        if let Some(renderer) = this.renderer.as_mut() {
+            // This function is `extern "C"`, so a panic escaping it aborts the
+            // whole editor rather than unwinding. A module must not be able to
+            // take the host down, so a failing renderer is caught and switched
+            // off; the engine-drawn fallback below keeps the game visible.
+            let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                renderer.render(api, pos, Vec2::new(WIDTH, HEIGHT));
+            }));
+            if drawn.is_err() {
+                if let Some(log) = api.log {
+                    log(
+                        FT_LOG_INFO,
+                        c"Bouncer".as_ptr(),
+                        c"Bevy renderer panicked; falling back to engine drawing".as_ptr(),
+                    );
+                }
+                this.renderer = None;
+                this.renderer_failed = true;
+            }
+        }
+    }
+
     if let Some(draw_line) = api.draw_line {
         draw_line(
             5.5,
@@ -805,55 +774,6 @@ unsafe extern "C" fn render(game: *mut c_void, frame: *const ft_render_frame) {
         );
     }
 
-    if let Some(draw_circle) = api.draw_circle {
-        let alpha = if frame.opacity > 0.0 {
-            frame.opacity
-        } else {
-            1.0
-        };
-        draw_circle(
-            5.9,
-            ft_vec2 {
-                x: pos.x + 0.16,
-                y: pos.y + 0.18,
-            },
-            0.78,
-            ft_color {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: alpha * 0.32,
-            },
-            32,
-        );
-        draw_circle(
-            6.0,
-            ft_vec2 { x: pos.x, y: pos.y },
-            0.78,
-            ft_color {
-                r: 0.95,
-                g: 0.75,
-                b: 0.3,
-                a: alpha,
-            },
-            32,
-        );
-        draw_circle(
-            6.1,
-            ft_vec2 {
-                x: pos.x - 0.24,
-                y: pos.y - 0.24,
-            },
-            0.18,
-            ft_color {
-                r: 1.0,
-                g: 0.95,
-                b: 0.72,
-                a: alpha,
-            },
-            16,
-        );
-    }
 }
 
 unsafe extern "C" fn ui(game: *mut c_void, frame: *const ft_ui_frame) {
