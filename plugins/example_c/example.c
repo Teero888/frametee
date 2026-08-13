@@ -2,7 +2,6 @@
 
 #include "cimgui.h"
 #include "plugin_api.h"
-#include <logger/logger.h>
 
 typedef struct {
   const tas_api_t *api;
@@ -19,6 +18,10 @@ FT_API plugin_info_t get_plugin_info(void) {
                              "A self-contained plugin written in C that compiles its own ImGui sources."};
 }
 
+// No plugin_game_id export, so this plugin is global: it stays loaded no
+// matter which game the editor is running. Export plugin_game_id returning a
+// game id ("ddnet", ...) to bind a plugin to one game instead.
+
 FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
   plugin_state_t *state = (plugin_state_t *)calloc(1, sizeof(plugin_state_t));
   if (!state)
@@ -29,7 +32,7 @@ FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
   state->show_example_window = true;
   state->snippet_duration = 100;
 
-  log_info("C API Example", "Plugin initialized successfully!");
+  api->log(FT_LOG_INFO, "C API Example", "Plugin initialized successfully!");
   return state;
 }
 
@@ -50,13 +53,13 @@ FT_API void plugin_update(void *plugin_data) {
       igText("This window is rendered from a pure C plugin!");
       igSeparator();
 
-      igText("Host Context: %d tracks", state->context->timeline->player_track_count);
+      igText("Host API: %d tracks", state->api->get_track_count());
       igText("Host API: Current tick is %d", state->api->get_current_tick());
 
       igSeparator();
       igSliderInt("Snippet Duration", &state->snippet_duration, 10, 500, "%d ticks", ImGuiSliderFlags_None);
 
-      int selected_track = state->context->timeline->selected_player_track_index;
+      int selected_track = state->api->get_selected_track();
       if (selected_track < 0) {
         igTextDisabled("Select a track to create a snippet.");
       } else {
@@ -74,6 +77,6 @@ FT_API void plugin_update(void *plugin_data) {
 
 FT_API void plugin_shutdown(void *plugin_data) {
   plugin_state_t *state = (plugin_state_t *)plugin_data;
-  log_info("C API Example", "Plugin is shutting down.");
+  state->api->log(FT_LOG_INFO, "C API Example", "Plugin is shutting down.");
   free(state);
 }

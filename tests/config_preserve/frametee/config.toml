@@ -1,0 +1,13 @@
+[keybinds]
+game_ddnet_jump = "J"
+game_example-bouncer_left = "Q"
+
+[game]
+id = "example-bouncer"
+
+[game.ddnet]
+render_particles = false
+future_setting = ["kept", "seven"]
+
+[game.example-bouncer]
+future_setting = "also kept"

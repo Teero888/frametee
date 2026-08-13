@@ -1,6 +1,13 @@
 # FrameTee
 
-**FrameTee** is a Tool-Assisted Speedrun (TAS) editor for [DDNet](https://github.com/ddnet/ddnet), built with C99, Vulkan, and ImGui.
+**FrameTee** is a Tool-Assisted Speedrun (TAS) editor built with C99, Vulkan, and ImGui.
+
+The editor itself is game-agnostic: it owns the timeline, snippets, undo/redo,
+projects and rendering, while a **game module** supplies the physics, the level
+format, the visuals and the rules. Modules are shared libraries that implement
+one C ABI, so they can be written in any language that compiles to one — the
+bundled examples are in C, C++ and Rust. [DDNet](https://github.com/ddnet/ddnet)
+is the game FrameTee ships with. See [docs/game-modules.md](docs/game-modules.md).
 
 > **Note:** This project is a Work In Progress (WIP). Expect bugs, crashes, and missing features. Physics and project file formats are subject to change.
 > Currently, there is **no macOS support**.
@@ -20,9 +27,10 @@
 ## Features
 
 ### Core & Rendering
-*   **Custom Physics:** Using [ddnet_physics](https://github.com/Teero888/ddnet_physics) to prevent cheating.
-*   **Vulkan Renderer:** High-performance rendering pipeline.
-*   **DDNet Support:** Full compatibility with DDNet maps and skins.
+*   **Game Modules:** Games plug in as shared libraries through a versioned C ABI (C, C++, Rust, ...), and each one tells the editor what it allows: player counts, tick rate, whether worlds can be forked.
+*   **Custom Physics:** The DDNet module uses [ddnet_physics](https://github.com/Teero888/ddnet_physics) to prevent cheating.
+*   **Vulkan Renderer:** High-performance rendering pipeline, with sprite atlases and custom pipelines available to game modules.
+*   **DDNet Support:** Compatibility with DDNet maps and skins.
 
 ### TAS Editing
 *   **Timeline Interface:** Multi-track timeline for managing inputs.
@@ -34,15 +42,15 @@
 *   **Bulk Editing:** Apply changes (direction, jumping, weapons) to multiple ticks simultaneously.
 
 ### Advanced Control
-*   **Dummy Handling:** Dedicated controls for dummy tees with input mirroring and copying.
+*   **Linked Inputs:** Games opt into schema-driven input mirroring. The DDNet module uses it for dummy-tee controls; unrelated games do not expose them.
 *   **Deepfly Support:** Dummy fire mechanics similar to the standard [deepfly bind](https://wiki.ddnet.org/wiki/Binds#Deepfly).
 
 ### Tools & Extensibility
-*   **Demo Export:** Export directly to DDNet-compatible demo files.
-*   **Plugin System:** C/C++ plugin support (DLL/SO) for custom functionality.
+*   **Exporters:** Games provide their own; DDNet exports directly to DDNet-compatible demo files.
+*   **Plugin System:** C/C++ plugin support (DLL/SO) for custom functionality, scoped either globally or to one game.
 *   **Project System:** `.tasp` project files for saving/loading work.
 *   **Keybinds:** Fully configurable keyboard and mouse bindings.
-*   **Skin Browser:** Visual browser for managing player skins.
+*   **Player Identity:** Names, colours and an appearance id the active game resolves however it likes.
 
 ---
 
@@ -88,6 +96,10 @@
 
 ### Default Key Bindings
 
+The engine owns playback, timeline, project, camera and track-selection binds.
+Recording controls are declared by the active game and appear in the same
+keybind editor. These are the bundled DDNet module's defaults:
+
 | Category | Action | Default Key |
 | :--- | :--- | :--- |
 | **Playback** | Play/Pause | `X` |
@@ -100,18 +112,17 @@
 | | Split Snippet | `Ctrl + R` |
 | | Merge Snippets | `Ctrl + M` |
 | | Toggle Active | `A` |
-| **Recording** | Move | `A` / `D` |
+| **DDNet Recording** | Move | `A` / `D` |
 | | Jump | `Space` |
 | | Fire | `Mouse Left` |
 | | Hook | `Mouse Right` |
 | | Kill | `K` |
 | | Weapons | `1`-`5` (Hammer, Gun, Shotgun, Grenade, Laser) |
-| | Trim Recording | `F` |
+| **Recording** | Trim Recording | `F` |
 | | Cancel Recording | `F4` |
-| **Tools** | Dummy Fire | `V` |
-| | Toggle Dummy Copy | `R` |
-| | Zoom | `W` / `S` |
-| | Switch Track | `Alt + 1-9` |
+| | Toggle Linked Copy | `R` |
+| **Camera** | Zoom | `=` / `-` |
+| **Tracks** | Switch Track | `Alt + 1-9` |
 
 ---
 
@@ -132,11 +143,12 @@ Plugins must export four C functions:
 
 Plugins interact with the host via `src/plugins/plugin_api.h`:
 
-*   **`tas_context_t`**: Read-only access to application state (Timeline, ImGui Context, Graphics).
-    *   *Note: Plugins must set the ImGui context using `imgui_context`.*
+*   **`tas_context_t`**: The shared ImGui context, headless flag, and active game id.
+    *   *Note: UI plugins must set the ImGui context using `imgui_context`.*
 *   **`tas_api_t`**: Function pointers for actions:
     *   `do_create_track()`, `do_create_snippet()`, `do_set_inputs()`
-    *   `log_info()`, `draw_line_world()`
+    *   `input_field_count()`, `input_field()`, and the typed input accessors
+    *   `log()`, `draw_line_world()`
     *   `register_undo_command()`
 
 ### Building a Plugin
@@ -155,6 +167,37 @@ cmake --build build
 ```
 
 The output binary will be copied to `build/plugins` automatically if configured like the examples. See `plugins/example_c/` and `plugins/example_cpp/` for reference.
+
+### Plugin Scope
+
+A plugin is global by default and stays loaded whichever game is active. To bind
+one to a single game, export:
+
+```c
+FT_API const char *plugin_game_id(void) { return "ddnet"; }
+```
+
+The host then only loads it while that game is active. Anything that reads or
+writes a game's world or input records should do this, since those bytes mean
+nothing under a different game.
+
+---
+
+## Game Modules
+
+Games live in `games/`, are built to `build/games/`, and are discovered at
+startup:
+
+```sh
+./frametee --list-games              # installed games and what each one allows
+./frametee --game example-platformer # start under a specific game
+```
+
+The bundled modules are `ddnet` (C), a raylib-backed C++ platformer, and a
+Bevy ECS-backed Rust bouncer. Writing your own means implementing
+`include/frametee/game_abi.h` and exporting `ft_game_module_entry` — no engine
+sources, no Vulkan, no ImGui required. Full guide:
+[docs/game-modules.md](docs/game-modules.md).
 
 ---
 

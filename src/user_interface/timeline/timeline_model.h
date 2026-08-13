@@ -10,7 +10,7 @@ void model_cleanup(timeline_state_t *ts);
 // Groups
 timeline_group_t *model_add_group(timeline_state_t *ts, const char *name);
 bool model_remove_group(timeline_state_t *ts, int group_index);
-void model_reset_groups_for_map(timeline_state_t *ts);
+void model_reset_groups_for_level(timeline_state_t *ts);
 int model_track_group_index(const timeline_state_t *ts, int track_index);
 int model_group_track_count(const timeline_state_t *ts, int group_index);
 int model_group_track_index(const timeline_state_t *ts, int group_index, int local_index);
@@ -33,7 +33,7 @@ bool snippet_id_vector_contains(const snippet_id_vector_t *vec, int snippet_id);
 // Source Window Access
 // Snippet inputs are addressed through the visible window, never through `inputs` directly, because
 // the source buffer can hold trimmed-away ticks on either side. Index 0 is the tick at start_tick.
-static inline SPlayerInput *snippet_window(const input_snippet_t *snippet) { return snippet->inputs + snippet->source_offset; }
+static inline input_record_t *snippet_window(const input_snippet_t *snippet) { return snippet->inputs + snippet->source_offset; }
 // Ticks of retained source sitting outside the window, i.e. how far each edge can still be pulled
 // before blank ticks have to be invented.
 static inline int snippet_source_before(const input_snippet_t *snippet) { return snippet->source_offset; }
@@ -63,26 +63,36 @@ bool model_remove_snippet_from_track(timeline_state_t *ts, player_track_t *track
 void model_resize_snippet_inputs(timeline_state_t *ts, input_snippet_t *snippet, int new_duration);
 void model_snippet_clone(input_snippet_t *dest, const input_snippet_t *src);
 void model_free_snippet_inputs(input_snippet_t *snippet);
-player_track_t *model_add_new_track(timeline_state_t *ts, physics_handler_t *ph, int num);
+player_track_t *model_add_new_track(timeline_state_t *ts, int num);
+// Creates timeline rows for players already present in a group's starting
+// world. Fixed-cast games use this because their players exist at world
+// creation time and cannot be added through world_add_player.
+void model_sync_tracks_to_world(timeline_state_t *ts, int group_index);
 void model_remove_track_logic(timeline_state_t *ts, int track_index);
 void model_insert_track_physics(timeline_state_t *ts, int track_index);
 void model_compact_layers_for_track(player_track_t *track);
 
 // Recording & Merging
-void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *track, int tick, const SPlayerInput *input);
+void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *track, int tick, const input_record_t *input);
 void model_clear_all_recording_buffers(timeline_state_t *ts);
 void model_insert_snippet_into_recording_track(player_track_t *track, const input_snippet_t *snippet);
 
 // Physics & Playback
 void model_recalc_physics(timeline_state_t *ts, int tick);
-SPlayerInput model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
+input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
 void model_advance_tick(timeline_state_t *ts, int steps);
 void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_id_to_activate);
-void model_get_world_state_at_tick(timeline_state_t *ts, int tick, SWorldCore *out_world, bool effects);
-void model_get_world_state_pair(timeline_state_t *ts, int tick, SWorldCore *out_prev_world, SWorldCore *out_world, bool effects);
-void model_get_group_world_state_at_tick(timeline_state_t *ts, int group_index, int tick, SWorldCore *out_world, bool effects);
-void model_get_group_world_state_pair(timeline_state_t *ts, int group_index, int tick, SWorldCore *out_prev_world, SWorldCore *out_world,
-                                      bool effects);
+// World access. The returned world is borrowed from the group's cache and stays
+// valid until the next call for that group, which is enough for a frame's worth
+// of rendering and inspection without copying a world per query.
+const ft_world *model_world_at_tick(timeline_state_t *ts, int tick);
+const ft_world *model_group_world_at_tick(timeline_state_t *ts, int group_index, int tick);
+// Both the tick and the one before it, for interpolated rendering.
+void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, const ft_world **out_prev, const ft_world **out_cur);
+
+// Index of a player property by id in the active game's table, or -1.
+int model_find_player_prop(game_host_t *host, const char *prop_id);
 void model_apply_starting_config(timeline_state_t *ts, int track_index);
+void model_rebind_starting_strings(starting_config_t *config);
 
 #endif // UI_TIMELINE_MODEL_H

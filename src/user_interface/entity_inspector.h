@@ -1,82 +1,50 @@
 #ifndef ENTITY_INSPECTOR_H
 #define ENTITY_INSPECTOR_H
 
-#include <ddnet_physics/gamecore.h>
+// A property inspector for whatever the active game exposes.
+//
+// It used to model DDNet's projectiles and lasers field by field, which meant
+// the editor knew what a laser was. It now walks the entity classes and
+// property descriptors the game publishes, so it shows a Trackmania car or a
+// Mario the same way it shows a tee.
+
+#include <engine/game_host.h>
 #include <stdbool.h>
 #include <stdint.h>
 
 struct gfx_handler_t;
 
-typedef enum {
-  ENTITY_INSPECTOR_NONE,
-  ENTITY_INSPECTOR_PROJECTILE,
-  ENTITY_INSPECTOR_LASER,
-} entity_inspector_kind_t;
+#define ENTITY_INSPECTOR_MAX_PROPS 64
 
 typedef struct {
-  uintptr_t world;
-  uintptr_t collision;
-  uintptr_t prev_type_entity;
-  uintptr_t next_type_entity;
-  mvec2 pos;
-  int obj_type;
-  int number;
-  int layer;
-  bool marked_for_destroy;
-  bool spawned;
-} entity_base_snapshot_t;
-
-typedef struct {
-  entity_base_snapshot_t base;
-  mvec2 direction;
-  uintptr_t tuning;
-  int life_span;
-  int owner;
-  uint32_t owner_spawn_generation;
-  int type;
-  int start_tick;
-  int bouncing;
-  bool explosive;
-  bool freeze;
-  bool is_solo;
-} projectile_snapshot_t;
-
-typedef struct {
-  entity_base_snapshot_t base;
-  uintptr_t tuning;
-  mvec2 from;
-  mvec2 dir;
-  mvec2 tele_pos;
-  mvec2 prev_pos;
-  bool was_tele;
-  float energy;
-  int bounces;
-  int eval_tick;
-  int owner;
-  bool zero_energy_bounce_in_last_tick;
-  int type;
-  bool teleport_cancelled;
-  bool is_blue_teleport;
-} laser_snapshot_t;
+  char label[64];
+  char group[32];
+  char unit[16];
+  ft_value value;
+  char text[64]; // formatted for display, so rendering does no work
+} entity_prop_view_t;
 
 typedef struct {
   bool valid;
   bool show;
-  entity_inspector_kind_t kind;
+
+  // What is being inspected, in the game's own numbering.
+  uint32_t entity_class;
+  int32_t entity_index;
+  char class_name[64];
+
   int timeline_tick;
   int world_tick;
-  int type_index;
-  mvec2 previous_position;
-  mvec2 current_position;
-  projectile_snapshot_t projectile;
-  laser_snapshot_t laser;
-  bool has_tuning;
-  STuningParams tuning;
+  ft_vec2 position;
+
+  entity_prop_view_t props[ENTITY_INSPECTOR_MAX_PROPS];
+  int prop_count;
 } entity_inspector_t;
 
 void entity_inspector_clear(entity_inspector_t *inspector);
-bool entity_inspector_pick(entity_inspector_t *inspector, const SWorldCore *world, struct gfx_handler_t *gfx, float intra, float mouse_x,
-                           float mouse_y, int timeline_tick);
+// Picks the entity nearest the cursor, across every class the game exposes.
+bool entity_inspector_pick(entity_inspector_t *inspector, const ft_world *world, struct gfx_handler_t *gfx, float intra, float mouse_x,
+                           float mouse_y);
 void entity_inspector_render(entity_inspector_t *inspector);
 void entity_inspector_render_highlight(const entity_inspector_t *inspector, struct gfx_handler_t *gfx);
 

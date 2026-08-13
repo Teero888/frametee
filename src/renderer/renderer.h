@@ -1,7 +1,6 @@
 #ifndef RENDERER_H
 #define RENDERER_H
 
-#include <animation/anim_system.h>
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <cglm/cglm.h>
 #include <stdbool.h>
@@ -18,7 +17,10 @@
 #define MAX_PRIMITIVE_INDICES 200000
 #define MAX_RENDER_COMMANDS 65536
 #define MAX_ATLAS_INSTANCES 1000000
-#define MAX_SKIN_INSTANCES 1000000
+// Resources a game module may create at runtime, on top of the engine's own.
+#define MAX_CUSTOM_VERTEX_ATTRS 24
+#define MAX_CUSTOM_PIPELINES 16
+#define MAX_DYNAMIC_ATLASES 32
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <malloc.h>
@@ -28,18 +30,6 @@
 #define VLA(T, name, n) T name[(n)]
 #define VLA_FREE(name) (void)0
 #endif
-
-#define Z_LAYER_PICKUPS 1.f
-#define Z_LAYER_PARTICLES_BACK 2.f
-#define Z_LAYER_HOOK 3.f
-#define Z_LAYER_PROJECTILES 4.f
-#define Z_LAYER_WEAPONS 5.f
-#define Z_LAYER_HANDS 5.5f
-#define Z_LAYER_SKINS 6.f
-#define Z_LAYER_MAP 7.f
-#define Z_LAYER_PARTICLES_FRONT 8.0f
-#define Z_LAYER_PREDICTION_LINES 9.0f
-#define Z_LAYER_CURSOR 100.0f
 
 struct buffer_t {
   VkBuffer buffer;
@@ -59,8 +49,8 @@ struct texture_t {
   uint32_t height;
   uint32_t mip_levels;
   uint32_t layer_count;
+  VkFormat format;
   char path[256];
-  uint8_t gs_org; // ddnet grayscale shit for coloring skins
   uint32_t last_used_frame;
 };
 
@@ -73,6 +63,18 @@ struct mesh_t {
   uint32_t index_count;
 };
 
+// Vertex input a shader expects. Built-in shaders leave this empty and are
+// matched to one of the renderer's fixed layouts by identity; shaders created
+// by a game module carry their own, which is what lets a game add a render
+// technique the engine has never heard of.
+struct vertex_layout_t {
+  VkVertexInputBindingDescription bindings[2];
+  uint32_t binding_count;
+  VkVertexInputAttributeDescription attrs[MAX_CUSTOM_VERTEX_ATTRS];
+  uint32_t attr_count;
+  bool alpha_blend;
+};
+
 struct shader_t {
   uint32_t id;
   bool active;
@@ -80,6 +82,24 @@ struct shader_t {
   VkShaderModule frag_shader_module;
   char vert_path[256];
   char frag_path[256];
+  // NULL for the built-in shaders.
+  vertex_layout_t *layout;
+};
+
+// An instanced draw technique owned by a game module: its own shader pair plus
+// a ring of instance data. Instances are laid over the engine's unit quad, so a
+// module supplies attribute locations 1 and up while location 0 stays the quad
+// corner the engine provides.
+struct custom_pipeline_t {
+  bool active;
+  shader_t *shader;
+  vertex_layout_t layout;
+  uint32_t instance_stride;
+  uint32_t max_instances;
+  uint32_t texture_count;
+  buffer_t instance_buffer;
+  uint8_t *instance_ptr;
+  uint32_t instance_count;
 };
 
 struct vertex_t {
@@ -120,60 +140,18 @@ struct pipeline_cache_entry_t {
   uint32_t texture_count;
 };
 
-typedef enum {
-  CAMERA_MODE_FREEVIEW = 0,
-  CAMERA_MODE_FOLLOW
-} camera_mode_t;
-
 struct camera_t {
   vec2 pos;
   vec2 drag_start_pos;
   float zoom;
   float zoom_wanted;
   bool is_dragging;
-  camera_mode_t mode;
+  // Index into the active game's camera mode list. Which modes exist, and where
+  // each one points, is the game's decision; the engine only owns panning,
+  // zooming and the projection.
+  uint32_t mode;
 };
 
-struct skin_instance_t {
-  vec2 pos;
-  float scale;
-  int skin_index;
-  int eye_state;
-
-  // Animation data per-part (x,y offset + angle)
-  vec4 body; // x, y, angle, unused
-  vec4 back_foot;
-  vec4 front_foot;
-  vec4 attach;
-  vec2 dir; // aim
-  vec3 col_body;
-  vec3 col_feet;
-  int col_custom;
-  // 0 draws the whole tee, 1 draws just the hand into a quad rotated by attach[2]. ddnet hangs the
-  // hand off the weapon, which can put it outside the tee's own quad, so it rides its own instance.
-  int mode;
-};
-
-enum { SKIN_MODE_TEE = 0, SKIN_MODE_HAND = 1 };
-
-struct skin_renderer_t {
-  shader_t *skin_shader;
-  buffer_t instance_buffer;
-  skin_instance_t *instance_ptr;
-  uint32_t instance_count;
-};
-
-#define MAX_SKINS 128
-
-#define SKIN_ATLAS_W 512
-#define SKIN_ATLAS_H 352
-
-struct skin_atlas_manager_t {
-  texture_t *atlas_array; // giant 2D array texture for all skins, original colors (rgba, premultiplied)
-  texture_t *color_array;
-  bool layer_used[MAX_SKINS];
-  uint32_t last_used_frame[MAX_SKINS];
-};
 
 struct sprite_definition_t {
   uint32_t x, y, w, h;
@@ -206,15 +184,18 @@ struct atlas_renderer_t {
 };
 
 typedef enum {
-  RENDER_CMD_MAP,
-  RENDER_CMD_SKIN,
-  RENDER_CMD_ATLAS,
   RENDER_CMD_ATLAS_BATCH,
   RENDER_CMD_RECT_FILLED,
   RENDER_CMD_CIRCLE_FILLED,
   RENDER_CMD_TRIANGLE_FILLED,
-  RENDER_CMD_LINE
+  RENDER_CMD_LINE,
+  RENDER_CMD_INSTANCES,
+  RENDER_CMD_MESH
 } render_cmd_type_t;
+
+// Uniform payload carried inline with a queued mesh draw. Small on purpose: a
+// mesh technique's per-draw constants, not a general buffer.
+#define MAX_QUEUED_UNIFORM_BYTES 128
 
 struct render_command_t {
   render_cmd_type_t type;
@@ -224,29 +205,6 @@ struct render_command_t {
   // overlapping sprites such as particles swap places at random.
   uint32_t seq;
   union {
-    struct {
-      vec2 pos;
-      float scale;
-      int skin_index;
-      int eye_state;
-      vec2 dir;
-      anim_state_t anim_state;
-      vec3 col_body;
-      vec3 col_feet;
-      bool custom_color;
-      int mode;    // SKIN_MODE_*
-      float angle; // hand rotation,
-    } skin;
-    struct {
-      atlas_renderer_t *ar;
-      vec2 pos;
-      vec2 size;
-      float rotation;
-      uint32_t sprite_index;
-      bool tile_uv;
-      vec4 color;
-      bool screen_space;
-    } atlas;
     struct {
       atlas_renderer_t *ar;
       const atlas_instance_t *instances;
@@ -261,6 +219,21 @@ struct render_command_t {
       float thickness;
       uint32_t segments;
     } prim;
+    struct {
+      custom_pipeline_t *pipeline;
+      uint32_t start;
+      uint32_t count;
+      texture_t *textures[MAX_TEXTURES_PER_DRAW];
+      uint32_t texture_count;
+    } instances;
+    struct {
+      custom_pipeline_t *pipeline;
+      mesh_t *mesh;
+      texture_t *textures[MAX_TEXTURES_PER_DRAW];
+      uint32_t texture_count;
+      uint8_t uniforms[MAX_QUEUED_UNIFORM_BYTES];
+      uint32_t uniform_size;
+    } mesh_draw;
   } data;
 };
 
@@ -301,12 +274,13 @@ struct renderer_state_t {
   float lod_bias;
   texture_t *default_texture;
   gfx_handler_t *gfx;
-  skin_atlas_manager_t skin_manager;
-  skin_renderer_t skin_renderer;
-  atlas_renderer_t gameskin_renderer;
-  atlas_renderer_t cursor_renderer;
-  atlas_renderer_t particle_renderer;
-  atlas_renderer_t extras_renderer;
+
+  // Resources created at runtime by the active game module. They live beside
+  // the engine's own so the queue can batch and reset them the same way.
+  atlas_renderer_t *dynamic_atlases[MAX_DYNAMIC_ATLASES];
+  uint32_t dynamic_atlas_count;
+  custom_pipeline_t custom_pipelines[MAX_CUSTOM_PIPELINES];
+  uint32_t custom_pipeline_count;
 
   uint8_t *transient_memory;
   size_t transient_offset;
@@ -332,7 +306,6 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
 void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh, shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count);
 void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
-void renderer_draw_map(gfx_handler_t *h);
 
 texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas, uint32_t tile_width, uint32_t tile_height, uint32_t num_tiles_x, uint32_t num_tiles_y);
 void screen_to_world(gfx_handler_t *handler, float screen_x, float screen_y, float *world_x, float *world_y);
@@ -342,22 +315,11 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
 void renderer_lock(void);
 void renderer_unlock(void);
 
-// skin rendering
-void renderer_begin_skins(gfx_handler_t *h);
-void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet, bool use_custom_color);
-void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array, texture_t *color_array);
-int renderer_load_skin_from_file(gfx_handler_t *h, const char *path, texture_t **out_preview_texture);
-int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size, texture_t **out_preview_texture);
-void renderer_unload_skin(gfx_handler_t *h, int layer);
 
 void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_layers, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory);
 VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count);
 VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
 
-void renderer_submit_map(gfx_handler_t *h, float z);
-void renderer_submit_skin(gfx_handler_t *h, float z, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet, bool custom);
-void renderer_submit_hand(gfx_handler_t *h, float z, vec2 pos, float scale, int skin_index, float angle, vec3 col_body, bool custom);
-void renderer_submit_atlas(gfx_handler_t *h, atlas_renderer_t *ar, float z, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv, vec4 color, bool screen_space);
 void renderer_submit_atlas_batch(gfx_handler_t *h, atlas_renderer_t *ar, float z, const atlas_instance_t *instances, uint32_t count, bool screen_space);
 void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, atlas_instance_t *out_inst);
 void renderer_submit_rect_filled(gfx_handler_t *h, float z, vec2 pos, vec2 size, vec4 color);
@@ -366,93 +328,33 @@ void renderer_submit_triangle_filled(gfx_handler_t *h, float z, vec2 p1, vec2 p2
 void renderer_submit_line(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec4 color, float thickness);
 void renderer_flush_queue(gfx_handler_t *h, VkCommandBuffer cmd);
 
-typedef enum { CURSOR_HAMMER,
-               CURSOR_GUN,
-               CURSOR_SHOTGUN,
-               CURSOR_GRENADE,
-               CURSOR_LASER,
-               CURSOR_NINJA,
-               CURSOR_SPRITE_COUNT } cursor_type_t;
+// --- resources a game module creates at runtime -------------------------------
+// The engine owns the graphics API; a game owns what goes through it. These are
+// the entry points behind the ft_engine_api draw services.
+// `format` is a VkFormat; game modules reach this through ft_texture_format.
+texture_t *renderer_create_texture_layered(gfx_handler_t *h, const unsigned char *pixels, uint32_t width, uint32_t height, uint32_t layers,
+                                           VkFormat format, bool mipmaps, bool linear_filter);
+atlas_renderer_t *renderer_create_atlas(gfx_handler_t *h, texture_t *source, const sprite_definition_t *sprites, uint32_t sprite_count,
+                                        uint32_t max_instances);
+void renderer_destroy_atlas(gfx_handler_t *h, atlas_renderer_t *ar);
+bool renderer_update_texture_layer(gfx_handler_t *h, texture_t *tex, uint32_t layer, const void *pixels, uint32_t width, uint32_t height);
+shader_t *renderer_create_shader_spirv(gfx_handler_t *h, const void *vert_spirv, size_t vert_size, const void *frag_spirv, size_t frag_size,
+                                       const vertex_layout_t *layout);
+// Instance attribute locations start at 1; location 0 is the unit-quad corner
+// the engine binds. attr_formats uses the ft_vertex_format enumeration.
+custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void *vert_spirv, size_t vert_size, const void *frag_spirv,
+                                                   size_t frag_size, const uint32_t *attr_locations, const uint32_t *attr_offsets,
+                                                   const int *attr_formats, uint32_t attr_count, uint32_t instance_stride,
+                                                   uint32_t max_instances, uint32_t texture_count, bool alpha_blend);
+void renderer_destroy_custom_pipeline(gfx_handler_t *h, custom_pipeline_t *pipe);
+void renderer_submit_instances(gfx_handler_t *h, custom_pipeline_t *pipe, float z, texture_t *const *textures, uint32_t texture_count,
+                               const void *instances, uint32_t count);
+// Queues a mesh draw so it sorts with everything else. A game's level pass goes
+// through here, which is what lets it sit above or below the entities by z.
+void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh, texture_t *const *textures,
+                          uint32_t texture_count, const void *uniforms, size_t uniform_size);
+void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
+texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t layer_count, VkFormat format);
 
-// game.png 32x16 grid
-typedef enum {
-  GAMESKIN_HAMMER_BODY,
-  GAMESKIN_GUN_BODY,
-  GAMESKIN_GUN_PROJ,
-  GAMESKIN_GUN_MUZZLE1,
-  GAMESKIN_GUN_MUZZLE2,
-  GAMESKIN_GUN_MUZZLE3,
-  GAMESKIN_SHOTGUN_BODY,
-  GAMESKIN_SHOTGUN_PROJ,
-  GAMESKIN_SHOTGUN_MUZZLE1,
-  GAMESKIN_SHOTGUN_MUZZLE2,
-  GAMESKIN_SHOTGUN_MUZZLE3,
-  GAMESKIN_GRENADE_BODY,
-  GAMESKIN_GRENADE_PROJ,
-  GAMESKIN_LASER_BODY,
-  GAMESKIN_LASER_PROJ,
-  GAMESKIN_NINJA_BODY,
-  GAMESKIN_NINJA_MUZZLE1,
-  GAMESKIN_NINJA_MUZZLE2,
-  GAMESKIN_NINJA_MUZZLE3,
-  GAMESKIN_HEALTH_FULL,
-  GAMESKIN_HEALTH_EMPTY,
-  GAMESKIN_ARMOR_FULL,
-  GAMESKIN_ARMOR_EMPTY,
-  GAMESKIN_HOOK_CHAIN,
-  GAMESKIN_HOOK_HEAD,
-  GAMESKIN_PARTICLE_0,
-  GAMESKIN_PARTICLE_1,
-  GAMESKIN_PARTICLE_2,
-  GAMESKIN_PARTICLE_3,
-  GAMESKIN_PARTICLE_4,
-  GAMESKIN_PARTICLE_5,
-  GAMESKIN_PARTICLE_6,
-  GAMESKIN_PARTICLE_7,
-  GAMESKIN_PARTICLE_8,
-  GAMESKIN_STAR_0,
-  GAMESKIN_STAR_1,
-  GAMESKIN_STAR_2,
-  GAMESKIN_PICKUP_HEALTH,
-  GAMESKIN_PICKUP_ARMOR,
-  GAMESKIN_PICKUP_HAMMER,
-  GAMESKIN_PICKUP_GUN,
-  GAMESKIN_PICKUP_SHOTGUN,
-  GAMESKIN_PICKUP_GRENADE,
-  GAMESKIN_PICKUP_LASER,
-  GAMESKIN_PICKUP_NINJA,
-  GAMESKIN_PICKUP_ARMOR_SHOTGUN,
-  GAMESKIN_PICKUP_ARMOR_GRENADE,
-  GAMESKIN_PICKUP_ARMOR_NINJA,
-  GAMESKIN_PICKUP_ARMOR_LASER,
-  GAMESKIN_FLAG_BLUE,
-  GAMESKIN_FLAG_RED,
-  GAMESKIN_SPRITE_COUNT
-} gameskin_sprite_t;
-
-// particles.png 8x8 grid
-typedef enum {
-  PARTICLE_SLICE,
-  PARTICLE_BALL,
-  PARTICLE_SPLAT01,
-  PARTICLE_SPLAT02,
-  PARTICLE_SPLAT03,
-  PARTICLE_SMOKE,
-  PARTICLE_SHELL,
-  PARTICLE_EXPL01,
-  PARTICLE_AIRJUMP,
-  PARTICLE_HIT01,
-  PARTICLE_SPRITE_COUNT
-} particle_sprite_t;
-
-// extras.png 16x16 grid
-typedef enum { EXTRA_SNOWFLAKE,
-               EXTRA_SPARKLE,
-               EXTRA_PULLEY,
-               EXTRA_HECTAGON,
-               EXTRA_SPRITE_COUNT } extra_sprite_t;
-
-#define PARTICLE_SPRITE_OFFSET 1000
-#define EXTRA_SPRITE_OFFSET 2000
 
 #endif // RENDERER_H

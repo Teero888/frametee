@@ -6,7 +6,6 @@
 
 #include "cimgui.h"
 #include "plugin_api.h"
-#include <logger/logger.h>
 
 typedef struct {
   const tas_api_t *api;
@@ -35,13 +34,46 @@ static void set_status(random_input_state_t *state, const char *message) {
   snprintf(state->status_message, sizeof(state->status_message), "%s", message ? message : "");
 }
 
-static void fill_tracks_with_random_inputs(random_input_state_t *state) {
-  if (!state->context || !state->context->timeline) {
-    set_status(state, "Timeline context unavailable.");
-    return;
-  }
+static int random_int_inclusive(uint32_t *rng_state, int minimum, int maximum) {
+  if (maximum <= minimum) return minimum;
+  const uint64_t range = (uint64_t)((int64_t)maximum - (int64_t)minimum) + 1u;
+  return (int)((int64_t)minimum + (int64_t)((uint64_t)rng_next(rng_state) % range));
+}
 
-  timeline_state_t *ts = state->context->timeline;
+static float random_float(uint32_t *rng_state, float minimum, float maximum) {
+  if (maximum <= minimum) return minimum;
+  const float unit = (float)rng_next(rng_state) / (float)UINT32_MAX;
+  return minimum + (maximum - minimum) * unit;
+}
+
+static void randomize_record(random_input_state_t *state, uint32_t *rng_state, void *record) {
+  const uint32_t field_count = state->api->input_field_count();
+  for (uint32_t index = 0; index < field_count; ++index) {
+    const ft_input_field *field = state->api->input_field(index);
+    if (!field || (field->flags & FT_INPUT_FLAG_INTERNAL)) continue;
+
+    switch (field->kind) {
+    case FT_INPUT_BOOL:
+      state->api->input_set(record, (int)index, (long long)(rng_next(rng_state) >> 31));
+      break;
+    case FT_INPUT_INT:
+    case FT_INPUT_ENUM:
+      state->api->input_set(record, (int)index, random_int_inclusive(rng_state, field->min_value, field->max_value));
+      break;
+    case FT_INPUT_FLOAT:
+      state->api->input_set_float(record, (int)index, random_float(rng_state, field->min_float, field->max_float));
+      break;
+    case FT_INPUT_VEC2: {
+      const ft_vec2 value = {.x = random_float(rng_state, field->min_float, field->max_float),
+                             .y = random_float(rng_state, field->min_float, field->max_float)};
+      state->api->input_set_vec2(record, (int)index, value);
+      break;
+    }
+    }
+  }
+}
+
+static void fill_tracks_with_random_inputs(random_input_state_t *state) {
   int track_count = state->api->get_track_count();
   if (track_count <= 0) {
     if (state->auto_create_track) {
@@ -50,7 +82,7 @@ static void fill_tracks_with_random_inputs(random_input_state_t *state) {
       if (create_cmd) {
         state->api->register_undo_command(create_cmd);
         track_count = state->api->get_track_count();
-        log_info("Random Input Filler", "Created a new track because none existed.");
+        state->api->log(FT_LOG_INFO, "Random Input Filler", "Created a new track because none existed.");
       }
     }
     if (track_count <= 0) {
@@ -78,34 +110,22 @@ static void fill_tracks_with_random_inputs(random_input_state_t *state) {
       tick_offset = 0;
       fill_count = state->snippet_length;
     } else {
-      player_track_t *track = &ts->player_tracks[track_index];
-      input_snippet_t *target_snippet = NULL;
-      for (int s = 0; s < track->snippet_count; ++s) {
-        input_snippet_t *snip = &track->snippets[s];
-        if (snip->start_tick <= state->start_tick && snip->end_tick > state->start_tick) {
-          target_snippet = snip;
-          break;
-        }
-      }
-      if (!target_snippet) {
-        log_warn("Random Input Filler",
-                                "Could not create snippet due to overlap and no suitable snippet exists.");
+      int available = 0;
+      if (!state->api->find_snippet_at(track_index, state->start_tick, &snippet_id, &tick_offset, &available)) {
+        state->api->log(FT_LOG_WARN, "Random Input Filler",
+                        "Could not create snippet due to overlap and no suitable snippet exists.");
         failed_tracks++;
         continue;
       }
-      snippet_id = target_snippet->id;
-      tick_offset = state->start_tick - target_snippet->start_tick;
-      int available = target_snippet->input_count - tick_offset;
       if (available <= 0) {
-        log_warn("Random Input Filler",
-                                "Target snippet does not extend past the requested start tick.");
+        state->api->log(FT_LOG_WARN, "Random Input Filler", "Target snippet does not extend past the requested start tick.");
         failed_tracks++;
         continue;
       }
       if (fill_count > available) {
         fill_count = available;
-        log_warn("Random Input Filler",
-                                "Snippet shorter than requested length; filling available portion only.");
+        state->api->log(FT_LOG_WARN, "Random Input Filler",
+                        "Snippet shorter than requested length; filling available portion only.");
       }
       updated_snippets++;
     }
@@ -115,52 +135,26 @@ static void fill_tracks_with_random_inputs(random_input_state_t *state) {
       continue;
     }
 
-    SPlayerInput *buffer = (SPlayerInput *)malloc(sizeof(SPlayerInput) * (size_t)fill_count);
+    const size_t record_size = state->api->input_record_size();
+    unsigned char *buffer = (unsigned char *)calloc((size_t)fill_count, record_size);
     if (!buffer) {
-      log_error("Random Input Filler", "Failed to allocate input buffer.");
+      state->api->log(FT_LOG_ERROR, "Random Input Filler", "Failed to allocate input buffer.");
       failed_tracks++;
       continue;
     }
 
     for (int tick = 0; tick < fill_count; ++tick) {
-      SPlayerInput input = (SPlayerInput){0};
-
-      uint32_t r = rng_next(&rng_state);
-      input.m_Direction = (int8_t)((r % 3u) - 1);
-
-      r = rng_next(&rng_state);
-      input.m_TargetX = (int16_t)((int)(r % 1021u) - 510);
-
-      r = rng_next(&rng_state);
-      input.m_TargetY = (int16_t)((int)(r % 1021u) - 510);
-
-      r = rng_next(&rng_state);
-      input.m_Jump = (uint8_t)((r >> 31) & 1u);
-
-      r = rng_next(&rng_state);
-      input.m_Fire = (uint8_t)((r >> 31) & 1u);
-
-      r = rng_next(&rng_state);
-      input.m_Hook = (uint8_t)((r >> 31) & 1u);
-
-      // r = rng_next(&rng_state);
-      // input.m_WantedWeapon = (uint8_t)(r % NUM_WEAPONS);
-
-      // r = rng_next(&rng_state);
-      // input.m_TeleOut = (uint8_t)((r >> 31) & 1u);
-
-      // r = rng_next(&rng_state);
-      // input.m_Flags = (uint16_t)(r & 0xFFFFu);
-
-      buffer[tick] = input;
+      void *input = buffer + (size_t)tick * record_size;
+      state->api->input_default(input);
+      randomize_record(state, &rng_state, input);
     }
 
-    undo_command_t *set_cmd = state->api->do_set_inputs(snippet_id, tick_offset, fill_count, buffer);
+    undo_command_t *set_cmd = state->api->do_set_inputs(snippet_id, tick_offset, fill_count, buffer, record_size);
     if (set_cmd) {
       state->api->register_undo_command(set_cmd);
       total_ticks_written += fill_count;
     } else {
-      log_warn("Random Input Filler", "Failed to apply random inputs to a snippet.");
+      state->api->log(FT_LOG_WARN, "Random Input Filler", "Failed to apply random inputs to a snippet.");
       failed_tracks++;
     }
 
@@ -183,6 +177,9 @@ FT_API plugin_info_t get_plugin_info(void) {
                          .version = "1.0.0",
                          .description = "Generates random inputs for every track"};
 }
+
+// Now schema-driven, so it works under any game and stays global. Export
+// plugin_game_id() here to bind it to one instead.
 
 FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
   random_input_state_t *state = (random_input_state_t *)calloc(1, sizeof(random_input_state_t));
@@ -258,6 +255,6 @@ FT_API void plugin_shutdown(void *plugin_data) {
   if (!state)
     return;
 
-  log_info("Random Input Filler", "Plugin shutting down.");
+  state->api->log(FT_LOG_INFO, "Random Input Filler", "Plugin shutting down.");
   free(state);
 }

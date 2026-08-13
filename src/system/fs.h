@@ -51,6 +51,10 @@ int fs_mkdir(const char *path);
  */
 void fs_remove(const char *path);
 
+// Atomically replaces destination with source when the platform supports it.
+// Both paths are UTF-8. Source is left in place on failure.
+bool fs_replace(const char *source, const char *destination);
+
 /**
  * @brief Platform-independent dynamic library loading.
  */

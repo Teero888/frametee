@@ -1,617 +1,353 @@
+// The snippet editor: a tick-by-tick matrix of a snippet's inputs.
+//
+// Every column here is generated from the active game's input schema. It used
+// to have a hardcoded column per DDNet button, which is why the editor could
+// only ever edit DDNet. Now a game that declares three buttons gets three
+// columns, and one that declares a steering axis gets a slider, without the
+// editor knowing what any of them mean.
+
 #include "snippet_editor.h"
+
+#include "timeline/timeline_commands.h"
+#include "timeline/timeline_model.h"
+#include "user_interface.h"
+#include <engine/input_record.h>
 #include <float.h>
-#include <limits.h>
-#include <stdbool.h>
-#include <stdio.h>
+#include <renderer/graphics_backend.h>
+#include <stdlib.h>
 #include <string.h>
-#include <GLFW/glfw3.h>
 #include <system/include_cimgui.h>
-#include <system/input.h>
-#include <user_interface/timeline/timeline_commands.h>
-#include <user_interface/timeline/timeline_model.h>
-#include <user_interface/user_interface.h>
 
-#define MAX_INPUTS 8192
+#define MAX_INPUTS 100000
 
-typedef struct {
-  bool selected_rows[MAX_INPUTS];
-  int selection_count;
-  int last_selected_row;
-  int active_snippet_id;
+static struct {
+  int snippet_id;
+  bool *selected_rows;
+  int selected_capacity;
+  int last_clicked_row;
 
-  // State for "painting" inputs with mouse drag
-  bool is_painting;
-  int painting_column;
-  int painting_value;
-
-  int bulk_dir;
-  int bulk_target_x_start, bulk_target_x_end;
-  int bulk_target_y_start, bulk_target_y_end;
-  int bulk_weapon;
-
-  SPlayerInput *clipboard_inputs;
-  int clipboard_count;
-
-  // State for tracking changes for a single undoable action (like painting or a bulk edit)
+  // One undoable action covers a whole drag or bulk edit, so the before-state
+  // is captured once when it starts.
   bool action_in_progress;
-  SPlayerInput *action_before_states; // Stores the 'before' state of inputs that were changed
-  int *action_changed_indices;        // Stores the indices of inputs that were changed
-  int action_changed_count;
-  int action_changed_capacity;
+  input_record_t *action_before_states;
+  int action_before_count;
 
-  // State for single input text edit undo/redo
-  bool text_edit_in_progress;
-  SPlayerInput before_text_edit_state;
-  int text_edit_index;
-} SnippetEditorState;
+  // Bulk edit target: which schema field, and the value to write.
+  int bulk_field;
+  long long bulk_value;
+  float bulk_float_value;
+  ft_vec2 bulk_vec2_value;
+} editor_state = {.snippet_id = -1, .last_clicked_row = -1, .bulk_field = 0};
 
-static SnippetEditorState editor_state = {.last_selected_row = -1, .active_snippet_id = -1};
+static void ensure_selection_capacity(int count) {
+  if (count <= editor_state.selected_capacity) return;
+  bool *grown = realloc(editor_state.selected_rows, (size_t)count * sizeof(bool));
+  if (!grown) return;
+  memset(grown + editor_state.selected_capacity, 0, (size_t)(count - editor_state.selected_capacity) * sizeof(bool));
+  editor_state.selected_rows = grown;
+  editor_state.selected_capacity = count;
+}
 
 static void reset_editor_state(void) {
-  memset(editor_state.selected_rows, 0, sizeof(editor_state.selected_rows));
-  editor_state.selection_count = 0;
-  editor_state.last_selected_row = -1;
+  if (editor_state.selected_rows) memset(editor_state.selected_rows, 0, (size_t)editor_state.selected_capacity * sizeof(bool));
+  editor_state.last_clicked_row = -1;
   editor_state.action_in_progress = false;
-  editor_state.text_edit_in_progress = false;
   free(editor_state.action_before_states);
-  free(editor_state.action_changed_indices);
   editor_state.action_before_states = NULL;
-  editor_state.action_changed_indices = NULL;
-  editor_state.action_changed_count = 0;
+  editor_state.action_before_count = 0;
 }
 
-static void get_selection_bounds(int *start, int *end) {
-  if (start) *start = -1;
-  if (end) *end = -1;
-  for (int i = 0; i < MAX_INPUTS; i++) {
-    if (editor_state.selected_rows[i]) {
-      if (start && *start == -1) *start = i;
-      if (end) *end = i;
-    }
-  }
+void snippet_editor_reset(void) {
+  reset_editor_state();
+  editor_state.snippet_id = -1;
 }
 
-// UNDO/REDO ACTION MANAGEMENT for Painting and Bulk Edits
+void snippet_editor_cleanup(void) {
+  snippet_editor_reset();
+  free(editor_state.selected_rows);
+  editor_state.selected_rows = NULL;
+  editor_state.selected_capacity = 0;
+}
 
-// Begins tracking a new multi-input change.
-static void begin_action(void) {
+static void begin_action(const input_snippet_t *snippet) {
   if (editor_state.action_in_progress) return;
-
-  // Clean up any old data, just in case.
-  free(editor_state.action_before_states);
-  free(editor_state.action_changed_indices);
-
-  editor_state.action_before_states = NULL;
-  editor_state.action_changed_indices = NULL;
-  editor_state.action_changed_count = 0;
-  editor_state.action_changed_capacity = 0;
   editor_state.action_in_progress = true;
+  editor_state.action_before_count = snippet->input_count;
+  free(editor_state.action_before_states);
+  editor_state.action_before_states = malloc(sizeof(input_record_t) * (size_t)snippet->input_count);
+  if (editor_state.action_before_states)
+    memcpy(editor_state.action_before_states, snippet_window(snippet), sizeof(input_record_t) * (size_t)snippet->input_count);
 }
 
-// Before changing an input at index, this function must be called to save its "before" state.
-static void record_change_if_new(input_snippet_t *snippet, int index) {
-  if (!editor_state.action_in_progress) return;
-
-  // Check if this index's "before" state has already been saved for this action.
-  for (int i = 0; i < editor_state.action_changed_count; i++) {
-    if (editor_state.action_changed_indices[i] == index) {
-      return; // Already recorded.
-    }
-  }
-
-  // Grow the tracking arrays if they are full.
-  if (editor_state.action_changed_count >= editor_state.action_changed_capacity) {
-    int new_capacity = editor_state.action_changed_capacity == 0 ? 16 : editor_state.action_changed_capacity * 2;
-    editor_state.action_changed_indices = realloc(editor_state.action_changed_indices, sizeof(int) * new_capacity);
-    editor_state.action_before_states = realloc(editor_state.action_before_states, sizeof(SPlayerInput) * new_capacity);
-    editor_state.action_changed_capacity = new_capacity;
-  }
-
-  // Save the "before" state and the index.
-  editor_state.action_before_states[editor_state.action_changed_count] = snippet_window(snippet)[index];
-  editor_state.action_changed_indices[editor_state.action_changed_count] = index;
-  editor_state.action_changed_count++;
-}
-
-// Finishes the action, creates the undo command, and registers it.
+// Closes the action, turning the whole edit into one undo entry.
 static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
-  if (!editor_state.action_in_progress || editor_state.action_changed_count == 0) {
-    editor_state.action_in_progress = false; // Ensure state is reset
-    return;
-  }
-
-  SPlayerInput *after_states = malloc(sizeof(SPlayerInput) * editor_state.action_changed_count);
-  if (!after_states) { /* TODO: Handle malloc failure */
-    return;
-  }
-
-  for (int i = 0; i < editor_state.action_changed_count; i++) {
-    int idx = editor_state.action_changed_indices[i];
-    after_states[i] = snippet_window(snippet)[idx];
-  }
-
-  undo_command_t *cmd = create_edit_inputs_command(snippet, editor_state.action_changed_indices, editor_state.action_changed_count,
-                                                   editor_state.action_before_states, after_states);
-  undo_manager_register_command(&ui->undo_manager, cmd);
-
-  editor_state.action_before_states = NULL; // Null out pointers to prevent double-free
-  editor_state.action_changed_indices = NULL;
+  if (!editor_state.action_in_progress) return;
   editor_state.action_in_progress = false;
-}
 
-static const char *weapon_options[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
-
-// Bulk Edit Panel
-static void render_bulk_edit_panel(ui_handler_t *ui, input_snippet_t *snippet) {
-  timeline_state_t *ts = &ui->timeline;
-
-  // Use a collapsing header for the entire panel
-  if (igCollapsingHeader_TreeNodeFlags("Bulk Edit Selected Ticks", 0)) {
-    if (editor_state.selection_count == 0) {
-      igTextDisabled("Select one or more rows to enable bulk editing.");
-      return;
-    }
-    igText("%d tick(s) selected.", editor_state.selection_count);
-    igSpacing();
-    int earliest_tick = -1;
-
-    // use a two-column table for a clean, aligned layout.
-    if (igBeginTable("BulkEditLayout", 2, ImGuiTableFlags_SizingFixedFit, (ImVec2){0, 0}, 0)) {
-      igTableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 0.0f, 0);
-      igTableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
-
-      // Direction
-      igTableNextRow(0, 0);
-      igTableSetColumnIndex(0);
-      igText("Direction");
-      igTableSetColumnIndex(1);
-      const char *dir_opts[] = {"Left", "Neutral", "Right"};
-      int dir_idx = editor_state.bulk_dir + 1;
-      igPushItemWidth(-FLT_MIN);
-      if (igCombo_Str_arr("##Direction", &dir_idx, dir_opts, 3, 3)) {
-        editor_state.bulk_dir = dir_idx - 1;
-      }
-      igPopItemWidth();
-      igSameLine(0, 5);
-      if (igButton("Set##Dir", (ImVec2){0, 0})) {
-        begin_action();
-        get_selection_bounds(&earliest_tick, NULL);
-        for (int i = 0; i < snippet->input_count; i++) {
-          if (editor_state.selected_rows[i]) {
-            snippet_window(snippet)[i].m_Direction = editor_state.bulk_dir;
-          }
-        }
-        end_action(ui, snippet);
-      }
-
-      // Weapon
-      igTableNextRow(0, 0);
-      igTableSetColumnIndex(0);
-      igText("Weapon");
-      igTableSetColumnIndex(1);
-      igPushItemWidth(-FLT_MIN);
-      igCombo_Str_arr("##Weapon", &editor_state.bulk_weapon, weapon_options, 6, 4);
-      igPopItemWidth();
-      igSameLine(0, 5);
-      if (igButton("Set##Wpn", (ImVec2){0, 0})) {
-        begin_action();
-        get_selection_bounds(&earliest_tick, NULL);
-        for (int i = 0; i < snippet->input_count; i++) {
-          if (editor_state.selected_rows[i]) snippet_window(snippet)[i].m_WantedWeapon = editor_state.bulk_weapon;
-        }
-        end_action(ui, snippet);
-      }
-
-      igEndTable();
-    }
-
-    igSeparator();
-
-    // use a more structured layout for binary state buttons
-    if (igBeginTable("BulkEditActions", 3, ImGuiTableFlags_SizingStretchSame, (ImVec2){0, 0}, 0)) {
-      igTableNextRow(0, 0);
-      igTableSetColumnIndex(0);
-      if (igButton("Set Jump ON", (ImVec2){-1, 0})) {
-        begin_action();
-        get_selection_bounds(&earliest_tick, NULL);
-        for (int i = 0; i < snippet->input_count; i++)
-          if (editor_state.selected_rows[i]) {
-            record_change_if_new(snippet, i);
-            snippet_window(snippet)[i].m_Jump = 1;
-          }
-        end_action(ui, snippet);
-      }
-      igTableSetColumnIndex(1);
-      if (igButton("Set Fire ON", (ImVec2){-1, 0})) {
-        begin_action();
-        get_selection_bounds(&earliest_tick, NULL);
-        for (int i = 0; i < snippet->input_count; i++)
-          if (editor_state.selected_rows[i]) {
-            record_change_if_new(snippet, i);
-            snippet_window(snippet)[i].m_Fire = 1;
-          }
-        end_action(ui, snippet);
-      }
-      igTableSetColumnIndex(2);
-      if (igButton("Set Hook ON", (ImVec2){-1, 0})) {
-        begin_action();
-        get_selection_bounds(&earliest_tick, NULL);
-        for (int i = 0; i < snippet->input_count; i++)
-          if (editor_state.selected_rows[i]) {
-            record_change_if_new(snippet, i);
-            snippet_window(snippet)[i].m_Hook = 1;
-          }
-        end_action(ui, snippet);
-      }
-      igTableNextRow(0, 0);
-      igTableSetColumnIndex(0);
-      if (igButton("Set Jump OFF", (ImVec2){-1, 0})) {
-        begin_action();
-        get_selection_bounds(&earliest_tick, NULL);
-        for (int i = 0; i < snippet->input_count; i++)
-          if (editor_state.selected_rows[i]) {
-            record_change_if_new(snippet, i);
-            snippet_window(snippet)[i].m_Jump = 0;
-          }
-        end_action(ui, snippet);
-      }
-      igTableSetColumnIndex(1);
-      if (igButton("Set Fire OFF", (ImVec2){-1, 0})) {
-        begin_action();
-        get_selection_bounds(&earliest_tick, NULL);
-        for (int i = 0; i < snippet->input_count; i++)
-          if (editor_state.selected_rows[i]) {
-            record_change_if_new(snippet, i);
-            snippet_window(snippet)[i].m_Fire = 0;
-          }
-        end_action(ui, snippet);
-      }
-      igTableSetColumnIndex(2);
-      if (igButton("Set Hook OFF", (ImVec2){-1, 0})) {
-        begin_action();
-        get_selection_bounds(&earliest_tick, NULL);
-        for (int i = 0; i < snippet->input_count; i++)
-          if (editor_state.selected_rows[i]) {
-            record_change_if_new(snippet, i);
-            snippet_window(snippet)[i].m_Hook = 0;
-          }
-        end_action(ui, snippet);
-      }
-      igEndTable();
-    }
-
-    if (earliest_tick != -1) {
-      // All actions now create undo commands, which already call recalc.
-      model_recalc_physics(ts, snippet->start_tick + earliest_tick);
+  if (editor_state.action_before_states && editor_state.action_before_count == snippet->input_count) {
+    // Every tick in the snippet is handed to the undo command; it stores the
+    // before and after states so redo is exact.
+    int *indices = malloc(sizeof(int) * (size_t)snippet->input_count);
+    if (indices) {
+      for (int i = 0; i < snippet->input_count; ++i) indices[i] = i;
+      undo_command_t *command = create_edit_inputs_command(snippet, indices, snippet->input_count, editor_state.action_before_states,
+                                                           snippet_window(snippet));
+      if (command) undo_manager_register_command(&ui->undo_manager, command);
+      free(indices);
     }
   }
+  free(editor_state.action_before_states);
+  editor_state.action_before_states = NULL;
+  editor_state.action_before_count = 0;
+
+  model_recalc_physics(&ui->timeline, snippet->start_tick);
+  ui_mark_unsaved(ui);
 }
 
-static void commit_single_edit(ui_handler_t *ui, input_snippet_t *snippet, int index, SPlayerInput before, SPlayerInput after) {
-  int *indices = malloc(sizeof(int));
-  *indices = index;
+// One cell of the matrix, drawn according to what kind of field it is.
+static bool draw_field_cell(game_host_t *host, const ft_input_field *field, int field_index, input_record_t *record, int row) {
+  bool changed = false;
+  igPushID_Int(row * 64 + field_index);
 
-  SPlayerInput *before_arr = malloc(sizeof(SPlayerInput));
-  *before_arr = before;
+  switch (field->kind) {
+  case FT_INPUT_BOOL: {
+    bool value = engine_input_get(host, record, field_index) != 0;
+    if (igCheckbox("##v", &value)) {
+      engine_input_set(host, record, field_index, value ? 1 : 0);
+      changed = true;
+    }
+    break;
+  }
+  case FT_INPUT_ENUM: {
+    int value = (int)engine_input_get(host, record, field_index) - field->min_value;
+    if (field->enum_labels && field->enum_count > 0) {
+      igPushItemWidth(-FLT_MIN);
+      if (igCombo_Str_arr("##v", &value, field->enum_labels, (int)field->enum_count, -1)) {
+        engine_input_set(host, record, field_index, field->min_value + value);
+        changed = true;
+      }
+      igPopItemWidth();
+    }
+    break;
+  }
+  case FT_INPUT_INT: {
+    int value = (int)engine_input_get(host, record, field_index);
+    igPushItemWidth(-FLT_MIN);
+    if (igDragInt("##v", &value, 1.f, field->min_value, field->max_value ? field->max_value : 0, "%d", 0)) {
+      engine_input_set(host, record, field_index, value);
+      changed = true;
+    }
+    igPopItemWidth();
+    break;
+  }
+  case FT_INPUT_VEC2: {
+    ft_vec2 value = engine_input_get_vec2(host, record, field_index);
+    float components[2] = {value.x, value.y};
+    igPushItemWidth(-FLT_MIN);
+    if (igDragFloat2("##v", components, 1.f, field->min_float, field->max_float, "%.0f", 0)) {
+      engine_input_set_vec2(host, record, field_index, (ft_vec2){components[0], components[1]});
+      changed = true;
+    }
+    igPopItemWidth();
+    break;
+  }
+  case FT_INPUT_FLOAT: {
+    float value = engine_input_get_float(host, record, field_index);
+    igPushItemWidth(-FLT_MIN);
+    if (igDragFloat("##v", &value, 0.01f, field->min_float, field->max_float, "%.3f", 0)) {
+      engine_input_set_float(host, record, field_index, value);
+      changed = true;
+    }
+    igPopItemWidth();
+    break;
+  }
+  default: break;
+  }
 
-  SPlayerInput *after_arr = malloc(sizeof(SPlayerInput));
-  *after_arr = after;
+  igPopID();
+  return changed;
+}
 
-  undo_command_t *cmd = create_edit_inputs_command(snippet, indices, 1, before_arr, after_arr);
-  undo_manager_register_command(&ui->undo_manager, cmd);
+// Bulk edit: pick a field, pick a value, apply it to every selected row.
+static void draw_bulk_edit(ui_handler_t *ui, game_host_t *host, const ft_input_schema *schema, input_snippet_t *snippet) {
+  if (!igCollapsingHeader_TreeNodeFlags("Bulk edit", 0)) return;
+
+  if (editor_state.bulk_field >= (int)schema->field_count) editor_state.bulk_field = 0;
+  const ft_input_field *field = &schema->fields[editor_state.bulk_field];
+
+  if (igBeginCombo("Field", field->display_name ? field->display_name : field->id, 0)) {
+    for (uint32_t i = 0; i < schema->field_count; ++i) {
+      if (schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL) continue;
+      const bool selected = (int)i == editor_state.bulk_field;
+      if (igSelectable_Bool(schema->fields[i].display_name ? schema->fields[i].display_name : schema->fields[i].id, selected, 0,
+                            (ImVec2){0, 0})) {
+        editor_state.bulk_field = (int)i;
+        editor_state.bulk_value = 0;
+        editor_state.bulk_float_value = 0.f;
+        editor_state.bulk_vec2_value = (ft_vec2){0.f, 0.f};
+      }
+    }
+    igEndCombo();
+  }
+
+  switch (field->kind) {
+  case FT_INPUT_BOOL: {
+    bool value = editor_state.bulk_value != 0;
+    if (igCheckbox("Value", &value)) editor_state.bulk_value = value ? 1 : 0;
+    break;
+  }
+  case FT_INPUT_ENUM: {
+    int value = (int)editor_state.bulk_value - field->min_value;
+    if (field->enum_labels && igCombo_Str_arr("Value", &value, field->enum_labels, (int)field->enum_count, -1))
+      editor_state.bulk_value = field->min_value + value;
+    break;
+  }
+  case FT_INPUT_FLOAT:
+    igDragFloat("Value", &editor_state.bulk_float_value, 0.01f, field->min_float, field->max_float, "%.3f", 0);
+    break;
+  case FT_INPUT_VEC2: {
+    float value[2] = {editor_state.bulk_vec2_value.x, editor_state.bulk_vec2_value.y};
+    if (igDragFloat2("Value", value, 0.01f, field->min_float, field->max_float, "%.3f", 0))
+      editor_state.bulk_vec2_value = (ft_vec2){value[0], value[1]};
+    break;
+  }
+  default: {
+    int value = (int)editor_state.bulk_value;
+    if (igDragInt("Value", &value, 1.f, field->min_value, field->max_value, "%d", 0)) editor_state.bulk_value = value;
+    break;
+  }
+  }
+
+  if (igButton("Apply to selection", (ImVec2){0, 0})) {
+    begin_action(snippet);
+    for (int i = 0; i < snippet->input_count; ++i) {
+      if (i >= editor_state.selected_capacity || !editor_state.selected_rows[i]) continue;
+      input_record_t *record = &snippet_window(snippet)[i];
+      if (field->kind == FT_INPUT_FLOAT)
+        engine_input_set_float(host, record, editor_state.bulk_field, editor_state.bulk_float_value);
+      else if (field->kind == FT_INPUT_VEC2)
+        engine_input_set_vec2(host, record, editor_state.bulk_field, editor_state.bulk_vec2_value);
+      else
+        engine_input_set(host, record, editor_state.bulk_field, editor_state.bulk_value);
+    }
+    end_action(ui, snippet);
+  }
 }
 
 void render_snippet_editor_panel(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const ft_input_schema *schema = game_input_schema(host);
+
   if (igBegin("Snippet Editor", NULL, 0)) {
-    // Check the number of selected snippets first
-    if (ts->selected_snippets.count == 0) {
-      igText("No snippet selected.");
+    if (!schema) {
+      igTextDisabled("No game is active.");
       igEnd();
       return;
     }
 
+    // The timeline's selection is the source of truth; active_snippet_id only
+    // follows it. Reading that field directly showed an empty editor whenever a
+    // snippet was picked normally.
+    if (ts->selected_snippets.count == 0) {
+      igTextDisabled("No snippet selected.");
+      igEnd();
+      return;
+    }
     if (ts->selected_snippets.count > 1) {
       igText("Multiple snippets selected.");
       igTextDisabled("The snippet editor only works with a single selection.");
       igEnd();
       return;
     }
+    ts->active_snippet_id = ts->selected_snippets.ids[0];
 
-    // If we reach here, we know exactly one snippet is selected.
-    // Set it as the active snippet for the editor's logic.
-    ui->timeline.active_snippet_id = ts->selected_snippets.ids[0];
-
-    int snippet_track_index = -1;
-    input_snippet_t *snippet = model_find_snippet_by_id(ts, ui->timeline.active_snippet_id, &snippet_track_index);
-
+    int track_index = -1;
+    input_snippet_t *snippet = model_find_snippet_by_id(ts, ts->active_snippet_id, &track_index);
     if (!snippet) {
-      igText("Selected snippet not found.");
+      igTextDisabled("Selected snippet not found.");
       igEnd();
       return;
-    }
-    if (editor_state.active_snippet_id != snippet->id) {
-      reset_editor_state();
-      editor_state.active_snippet_id = snippet->id;
     }
     if (snippet->input_count > MAX_INPUTS) {
-      igText("Error: Snippet has too many inputs (%d) to edit.", snippet->input_count);
+      igText("Snippet has too many inputs (%d) to edit.", snippet->input_count);
       igEnd();
       return;
     }
 
-    igText("Editing Snippet ID: %d (%d inputs)", snippet->id, snippet->input_count);
-    igPushStyleColor_Vec4(ImGuiCol_Text, igGetStyle()->Colors[ImGuiCol_TextDisabled]);
-    igTextWrapped("Hint: Click+Drag to 'paint' inputs. Use Ctrl+Click and Shift+Click to select rows.");
-    igPopStyleColor(1);
+    if (editor_state.snippet_id != snippet->id) {
+      editor_state.snippet_id = snippet->id;
+      reset_editor_state();
+    }
+    ensure_selection_capacity(snippet->input_count);
 
-    float footer_height = igGetStyle()->ItemSpacing.y + 220;
-    float max_footer_height = igGetContentRegionAvail().y * 0.5f;
-    if (footer_height > max_footer_height) footer_height = max_footer_height;
-    igBeginChild_Str("InputsScroll", (ImVec2){0, -footer_height}, false, ImGuiWindowFlags_HorizontalScrollbar);
+    igText("Track %d, ticks %d..%d", track_index, snippet->start_tick, snippet->end_tick);
+    igSameLine(0, 12.f);
+    if (igSmallButton("Select all")) {
+      for (int i = 0; i < snippet->input_count && i < editor_state.selected_capacity; ++i) editor_state.selected_rows[i] = true;
+    }
+    igSameLine(0, 6.f);
+    if (igSmallButton("Select none")) reset_editor_state();
 
-    ImGuiTableFlags flags =
-        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame;
+    draw_bulk_edit(ui, host, schema, snippet);
+    igSeparator();
 
-    if (igBeginTable("InputsTable", 9, flags, (ImVec2){0, 0}, 0)) {
-      // The user can still resize them, but they will start out evenly spaced.
+    // One column per non-internal field, plus the tick number.
+    int columns = 1;
+    for (uint32_t i = 0; i < schema->field_count; ++i)
+      if (!(schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL)) ++columns;
+
+    const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX |
+                                  ImGuiTableFlags_Resizable;
+    if (igBeginTable("SnippetInputs", columns, flags, (ImVec2){0, 0}, 0.f)) {
       igTableSetupScrollFreeze(1, 1);
-      igTableSetupColumn("Tick", ImGuiTableColumnFlags_None, 0.0f, 0);
-      igTableSetupColumn("Dir", ImGuiTableColumnFlags_None, 0.0f, 1);
-      igTableSetupColumn("TX", ImGuiTableColumnFlags_None, 0.0f, 2);
-      igTableSetupColumn("TY", ImGuiTableColumnFlags_None, 0.0f, 3);
-      igTableSetupColumn("J", ImGuiTableColumnFlags_None, 0.0f, 4);
-      igTableSetupColumn("F", ImGuiTableColumnFlags_None, 0.0f, 5);
-      igTableSetupColumn("H", ImGuiTableColumnFlags_None, 0.0f, 6);
-      igTableSetupColumn("Wpn", ImGuiTableColumnFlags_None, 0.0f, 7);
-      igTableSetupColumn("Tele", ImGuiTableColumnFlags_None, 0.0f, 8);
+      igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 64.f, 0);
+      for (uint32_t i = 0; i < schema->field_count; ++i) {
+        if (schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL) continue;
+        igTableSetupColumn(schema->fields[i].display_name ? schema->fields[i].display_name : schema->fields[i].id,
+                           ImGuiTableColumnFlags_WidthFixed, schema->fields[i].kind == FT_INPUT_VEC2 ? 140.f : 90.f, 0);
+      }
       igTableHeadersRow();
 
-      if (igIsMouseReleased_Nil(ImGuiMouseButton_Left)) {
-        editor_state.is_painting = false;
-        if (editor_state.action_in_progress) {
-          end_action(ui, snippet);
-        }
-      }
-
+      // Only the visible rows are built, so a snippet of any length costs the
+      // same to draw.
       ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
-      ImGuiListClipper_Begin(clipper, snippet->input_count, 0);
+      ImGuiListClipper_Begin(clipper, snippet->input_count, -1.f);
       while (ImGuiListClipper_Step(clipper)) {
-        for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; ++i) {
-          SPlayerInput *inp = &snippet_window(snippet)[i];
-
-          igTableNextRow(0, 0);
-
-          if (editor_state.selected_rows[i]) {
-            ImU32 selection_color = igGetColorU32_Col(ImGuiCol_HeaderHovered, 0.6f);
-            igTableSetBgColor(ImGuiTableBgTarget_RowBg0, selection_color, -1);
-            igTableSetBgColor(ImGuiTableBgTarget_RowBg1, selection_color, -1);
-          }
-
+        for (int row = clipper->DisplayStart; row < clipper->DisplayEnd; ++row) {
+          igTableNextRow(0, 0.f);
           igTableSetColumnIndex(0);
+
           char label[32];
-          snprintf(label, 32, "%d", snippet->start_tick + i);
-
-          char selectable_id[32];
-          snprintf(selectable_id, 32, "##Selectable%d", i);
-
-          // We make the selectable transparent because we are handling the background color ourselves.
-          igPushStyleColor_U32(ImGuiCol_Header, 0);
-          igPushStyleColor_U32(ImGuiCol_HeaderHovered, 0);
-          igPushStyleColor_U32(ImGuiCol_HeaderActive, 0);
-
-          // By using a label-less selectable and giving it a proper height, its hitbox
-          // will correctly span the entire row thanks to the SpanAllColumns flag.
-          if (igSelectable_Bool(selectable_id, editor_state.selected_rows[i], ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
-                                (ImVec2){0, igGetFrameHeight()})) {
-            if (input_ctrl_down()) {
-              editor_state.selected_rows[i] = !editor_state.selected_rows[i];
-            } else if (input_shift_down() && editor_state.last_selected_row != -1) {
-              int start = editor_state.last_selected_row < i ? editor_state.last_selected_row : i;
-              int end = editor_state.last_selected_row > i ? editor_state.last_selected_row : i;
-              memset(editor_state.selected_rows, 0, sizeof(editor_state.selected_rows));
-              for (int j = start; j <= end; j++)
-                editor_state.selected_rows[j] = true;
+          snprintf(label, sizeof(label), "%d", snippet->start_tick + row);
+          const bool selected = row < editor_state.selected_capacity && editor_state.selected_rows[row];
+          if (igSelectable_Bool(label, selected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap, (ImVec2){0, 0})) {
+            const ImGuiIO *io = igGetIO_Nil();
+            if (io->KeyShift && editor_state.last_clicked_row >= 0) {
+              const int from = row < editor_state.last_clicked_row ? row : editor_state.last_clicked_row;
+              const int to = row < editor_state.last_clicked_row ? editor_state.last_clicked_row : row;
+              for (int i = from; i <= to && i < editor_state.selected_capacity; ++i) editor_state.selected_rows[i] = true;
             } else {
-              const bool was_only_selection = editor_state.selected_rows[i] && editor_state.selection_count == 1;
-              memset(editor_state.selected_rows, 0, sizeof(editor_state.selected_rows));
-              if (!was_only_selection) {
-                editor_state.selected_rows[i] = true;
-              }
-            }
-            editor_state.last_selected_row = i;
-            int group_index = model_track_group_index(ts, snippet_track_index);
-            ts->current_tick = snippet->start_tick + i + ts->groups[group_index]->start_offset;
-            editor_state.selection_count = 0;
-            for (int k = 0; k < snippet->input_count; k++)
-              if (editor_state.selected_rows[k]) editor_state.selection_count++;
-          }
-          igPopStyleColor(3);
-
-          // Now, draw the text on top of the selectable area in the same cell.
-          igSameLine(0.0f, 4.0f);
-          igTextUnformatted(label, NULL);
-
-          bool needs_recalc = false;
-          int recalc_tick = snippet->start_tick + i;
-
-          // Direction
-          igTableSetColumnIndex(1);
-          igPushID_Int(i * 10 + 1);
-          const char *dir_text;
-          ImVec4 dir_color;
-          switch (inp->m_Direction) {
-          case -1:
-            dir_text = "L";
-            dir_color = (ImVec4){0.6f, 0.8f, 1.0f, 1.0f};
-            break;
-          case 1:
-            dir_text = "R";
-            dir_color = (ImVec4){1.0f, 0.6f, 0.6f, 1.0f};
-            break;
-          default:
-            dir_text = "N";
-            dir_color = (ImVec4){0.9f, 0.9f, 0.9f, 1.0f};
-            break;
-          }
-          igPushStyleColor_Vec4(ImGuiCol_Text, dir_color);
-          igSetNextItemAllowOverlap();
-          igButton(dir_text, (ImVec2){-1, 0});
-          igPopStyleColor(1);
-          if (igIsItemClicked(ImGuiMouseButton_Left)) {
-            // Now that a selection is guaranteed, begin the action.
-            begin_action();
-            editor_state.is_painting = true;
-            editor_state.painting_column = 1;
-            record_change_if_new(snippet, i); // Record state before changing
-            inp->m_Direction = (inp->m_Direction + 1 + 1) % 3 - 1;
-            editor_state.painting_value = inp->m_Direction;
-            needs_recalc = true;
-          }
-          if (igIsItemClicked(ImGuiMouseButton_Right)) {
-            begin_action();
-            editor_state.is_painting = true;
-            editor_state.painting_column = 1;
-            record_change_if_new(snippet, i);
-            inp->m_Direction = (inp->m_Direction + 3) % 3 - 1;
-            editor_state.painting_value = inp->m_Direction;
-            needs_recalc = true;
-          }
-          ImVec2 dir_min = igGetItemRectMin();
-          ImVec2 dir_max = igGetItemRectMax();
-          if (editor_state.is_painting && editor_state.painting_column == 1 && igIsMouseHoveringRect(dir_min, dir_max, false)) {
-            if (inp->m_Direction != editor_state.painting_value) {
-              record_change_if_new(snippet, i);
-              inp->m_Direction = editor_state.painting_value;
-              needs_recalc = true;
+              if (!io->KeyCtrl) memset(editor_state.selected_rows, 0, (size_t)editor_state.selected_capacity * sizeof(bool));
+              if (row < editor_state.selected_capacity) editor_state.selected_rows[row] = !selected || io->KeyCtrl;
+              editor_state.last_clicked_row = row;
             }
           }
-          igPopID();
 
-          // Target X/Y
-          igTableSetColumnIndex(2);
-          igPushID_Int(i * 10 + 2);
-          igPushItemWidth(-FLT_MIN);
-          int temp_tx = inp->m_TargetX;
-          if (igIsItemActivated()) {
-            editor_state.text_edit_in_progress = true;
-            editor_state.before_text_edit_state = *inp;
-            editor_state.text_edit_index = i;
-          }
-          if (igInputInt("##TX", &temp_tx, 0, 0, 0)) {
-            inp->m_TargetX = (int16_t)temp_tx;
-            needs_recalc = true;
-          }
-          if (igIsItemDeactivatedAfterEdit()) {
-            if (editor_state.text_edit_in_progress && editor_state.text_edit_index == i) {
-              commit_single_edit(ui, snippet, editor_state.text_edit_index, editor_state.before_text_edit_state, *inp);
-            }
-            editor_state.text_edit_in_progress = false;
-          }
-          igPopItemWidth();
-          igPopID();
-          igTableSetColumnIndex(3);
-          igPushID_Int(i * 10 + 3);
-          igPushItemWidth(-FLT_MIN);
-          int temp_ty = inp->m_TargetY;
-          if (igIsItemActivated()) {
-            editor_state.text_edit_in_progress = true;
-            editor_state.before_text_edit_state = *inp;
-            editor_state.text_edit_index = i;
-          }
-          if (igInputInt("##TY", &temp_ty, 0, 0, 0)) {
-            inp->m_TargetY = (int16_t)temp_ty;
-            needs_recalc = true;
-          }
-          if (igIsItemDeactivatedAfterEdit()) {
-            if (editor_state.text_edit_in_progress && editor_state.text_edit_index == i) {
-              commit_single_edit(ui, snippet, editor_state.text_edit_index, editor_state.before_text_edit_state, *inp);
-            }
-            editor_state.text_edit_in_progress = false;
-          }
-          igPopItemWidth();
-          igPopID();
-
-          // Booleans (J, F, H)
-          for (int j = 0; j < 3; j++) {
-            int current_column = 4 + j;
-            igTableSetColumnIndex(current_column);
-            igPushID_Int(i * 10 + current_column);
-            uint8_t *val = (j == 0) ? &inp->m_Jump : (j == 1) ? &inp->m_Fire
-                                                              : &inp->m_Hook;
-            ImU32 c_on = (j == 0)   ? igGetColorU32_Vec4((ImVec4){0.4f, 0.7f, 1.0f, 1.0f})
-                         : (j == 1) ? igGetColorU32_Vec4((ImVec4){1.0f, 0.4f, 0.4f, 1.0f})
-                                    : igGetColorU32_Vec4((ImVec4){0.8f, 0.8f, 0.8f, 1.0f});
-            ImU32 c_off = igGetColorU32_Vec4((ImVec4){0.2f, 0.2f, 0.2f, 1.0f});
-            igSetNextItemAllowOverlap();
-            // This was already correct, using -1 for width.
-            igInvisibleButton("##bool_interaction", (ImVec2){-1, igGetFrameHeight()}, 0);
-            ImVec2 r_min = igGetItemRectMin();
-            ImVec2 r_max = igGetItemRectMax();
-            ImDrawList_AddRectFilled(igGetWindowDrawList(), r_min, r_max, *val ? c_on : c_off, 2.0f, 0);
-            if (igIsItemClicked(ImGuiMouseButton_Left)) {
-              begin_action();
-              editor_state.is_painting = true;
-              editor_state.painting_column = current_column;
-              record_change_if_new(snippet, i);
-              *val = !*val;
-              editor_state.painting_value = *val;
-              needs_recalc = true;
-            }
-            if (editor_state.is_painting && editor_state.painting_column == current_column && igIsMouseHoveringRect(r_min, r_max, false)) {
-              if (*val != editor_state.painting_value) {
-                record_change_if_new(snippet, i);
-                *val = editor_state.painting_value;
-                needs_recalc = true;
-              }
-            }
-            igPopID();
+          bool row_changed = false;
+          int column = 1;
+          for (uint32_t i = 0; i < schema->field_count; ++i) {
+            if (schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL) continue;
+            igTableSetColumnIndex(column++);
+            if (draw_field_cell(host, &schema->fields[i], (int)i, &snippet_window(snippet)[row], row)) row_changed = true;
           }
 
-          // Weapon
-          igTableSetColumnIndex(7);
-          igPushID_Int(i * 10 + 7);
-          const char *wi[] = {"Hm", "Gn", "Sg", "Gr", "Ls"};
-          if (igButton(wi[inp->m_WantedWeapon], (ImVec2){-1, 0})) {
-            begin_action();
-            record_change_if_new(snippet, i);
-            inp->m_WantedWeapon = (inp->m_WantedWeapon + 1) % (NUM_WEAPONS - 1);
-            end_action(ui, snippet);
-            needs_recalc = true;
+          if (row_changed) {
+            begin_action(snippet);
+            // Editing continues while the widget is held; the action closes on
+            // release so a drag is one undo step.
+            if (!igIsAnyItemActive()) end_action(ui, snippet);
           }
-          if (igIsItemClicked(ImGuiMouseButton_Right)) {
-            begin_action();
-            record_change_if_new(snippet, i);
-            inp->m_WantedWeapon = (inp->m_WantedWeapon + NUM_WEAPONS - 2) % (NUM_WEAPONS - 1);
-            end_action(ui, snippet);
-            needs_recalc = true;
-          }
-          igPopID();
-
-          // Teleport
-          igTableSetColumnIndex(8);
-          igPushID_Int(i * 10 + 8);
-          igPushItemWidth(-FLT_MIN);
-          int temp_tele = inp->m_TeleOut;
-          if (igIsItemActivated()) {
-            editor_state.text_edit_in_progress = true;
-            editor_state.before_text_edit_state = *inp;
-            editor_state.text_edit_index = i;
-          }
-          if (igInputInt("##Tele", &temp_tele, 0, 0, 0)) {
-            inp->m_TeleOut = (uint8_t)temp_tele;
-            needs_recalc = true;
-          }
-          if (igIsItemDeactivatedAfterEdit()) {
-            if (editor_state.text_edit_in_progress && editor_state.text_edit_index == i) {
-              commit_single_edit(ui, snippet, editor_state.text_edit_index, editor_state.before_text_edit_state, *inp);
-            }
-            editor_state.text_edit_in_progress = false;
-          }
-          igPopItemWidth();
-          igPopID();
-
-          if (needs_recalc) model_recalc_physics(ts, recalc_tick);
         }
       }
       ImGuiListClipper_End(clipper);
@@ -619,124 +355,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
       igEndTable();
     }
 
-    // Keybind Handling
-    if (editor_state.selection_count > 0) {
-      bool changed = false;
-      int earliest_tick = -1;
-
-
-      // Deselect all with Escape
-      if (input_key_pressed(GLFW_KEY_ESCAPE, false) && editor_state.selection_count > 0) {
-        reset_editor_state();
-      }
-
-      // Copy with Ctrl+C
-      if (input_ctrl_down() && input_key_pressed(GLFW_KEY_C, false) && editor_state.selection_count > 0) {
-        if (editor_state.clipboard_inputs) {
-          free(editor_state.clipboard_inputs);
-        }
-        editor_state.clipboard_count = editor_state.selection_count;
-        editor_state.clipboard_inputs = (SPlayerInput *)malloc(editor_state.clipboard_count * sizeof(SPlayerInput));
-        if (editor_state.clipboard_inputs) {
-          int clipboard_idx = 0;
-          for (int i = 0; i < snippet->input_count && clipboard_idx < editor_state.clipboard_count; i++) {
-            if (editor_state.selected_rows[i]) {
-              editor_state.clipboard_inputs[clipboard_idx++] = snippet_window(snippet)[i];
-            }
-          }
-        }
-      }
-
-      // Paste with Ctrl+V
-      if (input_ctrl_down() && input_key_pressed(GLFW_KEY_V, false) && editor_state.clipboard_count > 0 && editor_state.selection_count > 0) {
-        begin_action();
-        get_selection_bounds(&earliest_tick, NULL);
-        if (earliest_tick != -1) {
-          int clipboard_idx = 0;
-          for (int i = 0; i < snippet->input_count; i++) {
-            if (editor_state.selected_rows[i]) {
-              record_change_if_new(snippet, i);
-              snippet_window(snippet)[i] = editor_state.clipboard_inputs[clipboard_idx % editor_state.clipboard_count];
-              clipboard_idx++;
-            }
-          }
-          end_action(ui, snippet);
-        }
-      }
-      if (!igIsWindowHovered(0)) {
-        if (input_key_pressed(GLFW_KEY_A, true)) {
-          begin_action();
-          get_selection_bounds(&earliest_tick, NULL);
-          for (int i = 0; i < snippet->input_count; i++) {
-            if (editor_state.selected_rows[i] && snippet_window(snippet)[i].m_Direction > -1) {
-              record_change_if_new(snippet, i);
-              snippet_window(snippet)[i].m_Direction--;
-              changed = true;
-            }
-          }
-          if (changed) end_action(ui, snippet);
-          else editor_state.action_in_progress = false;
-        }
-
-        if (input_key_pressed(GLFW_KEY_D, true)) {
-          begin_action();
-          if (!changed) get_selection_bounds(&earliest_tick, NULL);
-          for (int i = 0; i < snippet->input_count; i++) {
-            if (editor_state.selected_rows[i] && snippet_window(snippet)[i].m_Direction < 1) {
-              record_change_if_new(snippet, i);
-              snippet_window(snippet)[i].m_Direction++;
-              changed = true;
-            }
-          }
-          if (changed) end_action(ui, snippet);
-          else editor_state.action_in_progress = false;
-        }
-        if (input_key_pressed(GLFW_KEY_SPACE, true)) {
-          begin_action();
-          get_selection_bounds(&earliest_tick, NULL);
-          for (int i = 0; i < snippet->input_count; i++) {
-            if (editor_state.selected_rows[i]) {
-              record_change_if_new(snippet, i);
-              snippet_window(snippet)[i].m_Jump ^= 1;
-              changed = true;
-            }
-          }
-          if (changed) end_action(ui, snippet);
-          else editor_state.action_in_progress = false;
-        }
-        if (input_key_pressed(GLFW_KEY_Q, false)) {
-          begin_action();
-          for (int i = 0; i < snippet->input_count; i++) {
-            if (editor_state.selected_rows[i]) {
-              record_change_if_new(snippet, i);
-              snippet_window(snippet)[i].m_Fire ^= 1;
-              changed = true;
-            }
-          }
-          if (changed) end_action(ui, snippet);
-          else editor_state.action_in_progress = false;
-        }
-        // Mouse right click is for context menus, so avoiding it for keybinds.
-        if (input_key_pressed(GLFW_KEY_E, false)) {
-          begin_action();
-          for (int i = 0; i < snippet->input_count; i++) {
-            if (editor_state.selected_rows[i] && snippet_window(snippet)[i].m_Direction < 1) {
-              snippet_window(snippet)[i].m_Hook ^= 1;
-              changed = true;
-            }
-          }
-          if (changed) end_action(ui, snippet);
-          else editor_state.action_in_progress = false;
-        }
-      }
-
-      if (changed && earliest_tick != -1) {
-        model_recalc_physics(ts, snippet->start_tick + earliest_tick);
-      }
-    }
-
-    igEndChild();
-    render_bulk_edit_panel(ui, snippet);
+    if (editor_state.action_in_progress && !igIsAnyItemActive()) end_action(ui, snippet);
   }
   igEnd();
 }

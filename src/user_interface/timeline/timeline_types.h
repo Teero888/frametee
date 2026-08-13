@@ -1,8 +1,8 @@
 #ifndef UI_TIMELINE_TYPES_H
 #define UI_TIMELINE_TYPES_H
 
-#include <physics/physics.h>
-#include <particles/particle_system.h>
+#include <engine/game_host.h>
+#include <engine/input_record.h>
 #include <stdbool.h>
 #include <system/include_cimgui.h>
 #include <types.h>
@@ -13,8 +13,11 @@
 #define MAX_TIMELINE_GROUP_NAME 64
 #define MAX_TRACK_NAME 64
 
+// Ring of periodic world snapshots, so scrubbing backwards does not have to
+// re-simulate from tick zero. The worlds belong to the active game; the engine
+// only ever creates, copies and destroys them.
 struct physics_v_t {
-  SWorldCore *data;
+  ft_world **data;
   uint32_t current_size;
   uint32_t max_size;
 };
@@ -29,31 +32,31 @@ struct input_snippet_t {
   int end_tick; // always start_tick + input_count
   bool is_active;
   int layer;
-  SPlayerInput *inputs; // source buffer, may extend past the window on either side
+  input_record_t *inputs; // source buffer, may extend past the window on either side
   int input_count;      // length of the visible window
   int source_offset;    // index in `inputs` of the tick played at start_tick
   int source_count;     // total ticks held in `inputs`
 };
 
+// An override the user pinned on a track's starting state. The engine stores it
+// as a game property id plus a value and applies it through the game's own
+// property table, so it never has to know what "active weapon" means.
+#define MAX_STARTING_OVERRIDES 16
+#define MAX_STARTING_STRING 256
+
+typedef struct starting_override_t {
+  char prop_id[32];
+  ft_value value;
+  // FT_VALUE_STRING cannot retain a module-owned pointer in project or undo
+  // data. String overrides live inline and value.as.s is rebound after moves.
+  char string_value[MAX_STARTING_STRING];
+} starting_override_t;
+
 struct starting_config_t {
-  vec2 position;
-  vec2 velocity;
-  int active_weapon;
-  bool has_weapons[NUM_WEAPONS];
+  starting_override_t overrides[MAX_STARTING_OVERRIDES];
+  int override_count;
   bool enabled;
 };
-
-typedef enum {
-  COPY_DIRECTION = 1 << 0,
-  COPY_TARGET = 1 << 1,
-  COPY_JUMP = 1 << 2,
-  COPY_FIRE = 1 << 3,
-  COPY_HOOK = 1 << 4,
-  COPY_WEAPON = 1 << 5,
-  COPY_MIRROR_X = 1 << 6,
-  COPY_MIRROR_Y = 1 << 7,
-  COPY_ALL = 0xFFFF & ~COPY_MIRROR_X & ~COPY_MIRROR_Y
-} dummy_copy_flags_t;
 
 struct player_track_t {
   input_snippet_t *snippets;
@@ -66,20 +69,23 @@ struct player_track_t {
   int recording_snippet_capacity;
 
   // The input state for this track for the current frame/tick
-  SPlayerInput current_input;
+  input_record_t current_input;
 
   player_info_t player_info;
   starting_config_t starting_config;
   char name[MAX_TRACK_NAME];
   int group_index;
-  bool is_dummy;
-  int dummy_copy_flags;
+  // A linked track can be authored from another track during the same
+  // recording pass. Which fields are copied comes from the active schema,
+  // rather than from a fixed DDNet button list.
+  bool is_linked;
+  int linked_source_player;
+  uint64_t linked_copy_fields;
+  uint32_t linked_transform_flags;
 
-  // Per-track demo export settings. These deliberately live with the track so importing or
-  // cloning a group never shares presentation metadata with another physics instance.
-  bool demo_export_enabled;
-  int demo_ping;
-  int demo_player_flags;
+  // Generic exporter selection; every exporter receives the same chosen track
+  // set and interprets its own output format inside the game module.
+  bool export_enabled;
 };
 
 struct dragged_snippet_info_t {
@@ -119,58 +125,17 @@ struct recording_snippet_vector_t {
   int capacity;
 };
 
-typedef enum { DUMMY_ACTION_COPY,
-               DUMMY_ACTION_INPUTS,
-               DUMMY_ACTION_COUNT } dummy_action_type_t;
-
-typedef enum {
-  NET_EVENT_CHAT,
-  NET_EVENT_BROADCAST,
-  NET_EVENT_KILLMSG,
-  NET_EVENT_SOUND_GLOBAL,
-  NET_EVENT_EMOTICON,
-  NET_EVENT_VOTE_SET,
-  NET_EVENT_VOTE_STATUS,
-  NET_EVENT_DDRACE_TIME,
-  NET_EVENT_RECORD,
-  NET_EVENT_COUNT
-} net_event_type_t;
-
-struct net_event_t {
+// An event the active game reported at a tick. The engine stores and displays
+// these; what they mean is the game's business, which is why the payload is a
+// category and a line of text rather than the fixed set of DDNet message types
+// this used to be.
+struct timeline_event_t {
   int tick;
   int group_index;
-  net_event_type_t type;
-  int team;
-  int client_id;
+  int player; // -1 for world-wide events
+  char category[32];
   char message[256];
-
-  // KillMsg
-  int killer;
-  int victim;
-  int weapon;
-  int mode_special;
-
-  int sound_id;
-  int emoticon;
-
-  // Vote Set
-  int vote_timeout;
-  char reason[256]; // description is stored in message
-
-  // Vote Status
-  int vote_yes;
-  int vote_no;
-  int vote_pass;
-  int vote_total;
-
-  // DDRace Time
-  int time;
-  int check;
-  int finish;
-
-  // Record
-  int server_time_best;
-  int player_time_best;
+  float color[4];
 };
 
 // A group owns an entirely separate physics history. Tracks remain in one flat array so existing
@@ -180,16 +145,15 @@ struct timeline_group_t {
   char name[MAX_TIMELINE_GROUP_NAME];
   float color[4];
   bool visible;
-  bool demo_export_enabled;
+  bool export_enabled;
   int start_offset;
 
   physics_v_t vec;
-  SWorldCore initial_world;
-  SWorldCore previous_world;
-  SWorldCore prev_world_cached;
-  SWorldCore world_cached;
+  ft_world *initial_world;
+  ft_world *previous_world;
+  ft_world *prev_world_cached;
+  ft_world *world_cached;
   int cached_tick;
-  particle_system_t particle_system;
 };
 
 struct timeline_state {
@@ -210,8 +174,7 @@ struct timeline_state {
   bool auto_scroll_playhead;
   bool recording;
   bool is_reversing;
-  bool dummy_copy_input;
-  dummy_action_type_t dummy_action_priority[DUMMY_ACTION_COUNT];
+  bool linked_copy_input;
 
   // Data Model
   player_track_t *player_tracks;
@@ -222,11 +185,10 @@ struct timeline_state {
   int active_group_index;
   int simulation_group_index;
 
-  // Net Events
-  net_event_t *net_events;
-  int net_event_count;
-  int net_event_capacity;
-  int last_event_scan_tick;
+  // Timeline events reported by the active game.
+  timeline_event_t *events;
+  int event_count;
+  int event_capacity;
 
   // Interaction State
   snippet_id_vector_t selected_snippets;

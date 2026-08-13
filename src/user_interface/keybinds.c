@@ -1,4 +1,6 @@
+#include <engine/int_math.h>
 #include "keybinds.h"
+#include <frametee/icons.h>
 #include <GLFW/glfw3.h>
 #include <system/input.h>
 #include "timeline/timeline_commands.h"
@@ -8,9 +10,9 @@
 #include <limits.h>
 #include <logger/logger.h>
 #include <renderer/graphics_backend.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <symbols.h>
 #include <system/config.h>
 #include <system/include_cimgui.h>
 
@@ -19,7 +21,7 @@
 // polling rates. Imgui is still asked whether a text field is focused so typing cannot fire binds.
 static bool combo_blocked_by_ui(const key_combo_t *combo) {
   // Mouse binds are left ungated: the viewport is itself an imgui window, so WantCaptureMouse is
-  // true whenever the cursor is over it and gating on it would stop fire and hook ever working.
+  // true whenever the cursor is over it and gating on it would stop mouse-bound game controls.
   if (input_glfw_button_from_imgui(combo->key) != -1) return false;
 
   // Only typing blocks keyboard binds. Deliberately not WantCaptureKeyboard, which is also true
@@ -151,13 +153,14 @@ int keybinds_get_global_index_for_action(keybind_manager_t *kb, action_t action,
 }
 
 static void set_action_info(keybind_manager_t *kb, action_t action, const char *id, const char *name, const char *cat) {
-  kb->action_infos[action].identifier = id;
-  kb->action_infos[action].name = name;
-  kb->action_infos[action].category = cat;
+  snprintf(kb->action_infos[action].identifier, sizeof(kb->action_infos[action].identifier), "%s", id ? id : "");
+  snprintf(kb->action_infos[action].name, sizeof(kb->action_infos[action].name), "%s", name ? name : "");
+  snprintf(kb->action_infos[action].category, sizeof(kb->action_infos[action].category), "%s", cat ? cat : "");
 }
 
 void keybinds_init(keybind_manager_t *manager) {
   memset(manager, 0, sizeof(keybind_manager_t));
+  manager->action_count = ACTION_ENGINE_COUNT;
   manager->show_settings_window = false;
 
   // Initialize Action Infos
@@ -181,26 +184,7 @@ void keybinds_init(keybind_manager_t *manager) {
 
   set_action_info(manager, ACTION_TRIM_SNIPPET, "trim_snippet", "Trim Recording", "Recording");
   set_action_info(manager, ACTION_CANCEL_RECORDING, "cancel_recording", "Cancel Recording", "Recording");
-  set_action_info(manager, ACTION_LEFT, "move_left", "Move Left", "Recording");
-  set_action_info(manager, ACTION_RIGHT, "move_right", "Move Right", "Recording");
-  set_action_info(manager, ACTION_JUMP, "jump", "Jump", "Recording");
-  set_action_info(manager, ACTION_KILL, "kill", "Kill", "Recording");
-  set_action_info(manager, ACTION_FIRE, "fire", "Fire weapon", "Recording");
-  set_action_info(manager, ACTION_HOOK, "hook", "Hook", "Recording");
-  set_action_info(manager, ACTION_HAMMER, "hammer", "Switch to hammer", "Recording");
-  set_action_info(manager, ACTION_GUN, "gun", "Switch to gun", "Recording");
-  set_action_info(manager, ACTION_SHOTGUN, "shotgun", "Switch to shotgun", "Recording");
-  set_action_info(manager, ACTION_GRENADE, "grenade", "Switch to grenade", "Recording");
-  set_action_info(manager, ACTION_LASER, "laser", "Switch to laser", "Recording");
-
-  set_action_info(manager, ACTION_DUMMY_LEFT, "dummy_left", "Dummy Left", "Dummy");
-  set_action_info(manager, ACTION_DUMMY_RIGHT, "dummy_right", "Dummy Right", "Dummy");
-  set_action_info(manager, ACTION_DUMMY_JUMP, "dummy_jump", "Dummy Jump", "Dummy");
-  set_action_info(manager, ACTION_DUMMY_FIRE, "dummy_fire", "Dummy Fire", "Dummy");
-  set_action_info(manager, ACTION_DUMMY_HOOK, "dummy_hook", "Dummy Hook", "Dummy");
-  set_action_info(manager, ACTION_DUMMY_AIM, "dummy_aim", "Dummy Aim at Recorder", "Dummy");
-  set_action_info(manager, ACTION_TOGGLE_DUMMY_COPY, "toggle_dummy_copy", "Toggle dummy copy", "Dummy");
-
+  set_action_info(manager, ACTION_TOGGLE_LINKED_COPY, "toggle_linked_copy", "Toggle Linked Input Copy", "Recording");
   set_action_info(manager, ACTION_ZOOM_IN, "zoom_in", "Zoom in", "Camera");
   set_action_info(manager, ACTION_ZOOM_OUT, "zoom_out", "Zoom out", "Camera");
 
@@ -239,22 +223,9 @@ void keybinds_init(keybind_manager_t *manager) {
 
   keybinds_add(manager, ACTION_TRIM_SNIPPET, (key_combo_t){ImGuiKey_F, false, false, false});
   keybinds_add(manager, ACTION_CANCEL_RECORDING, (key_combo_t){ImGuiKey_F4, false, false, false});
-  keybinds_add(manager, ACTION_LEFT, (key_combo_t){ImGuiKey_A, false, false, false});
-  keybinds_add(manager, ACTION_RIGHT, (key_combo_t){ImGuiKey_D, false, false, false});
-  keybinds_add(manager, ACTION_JUMP, (key_combo_t){ImGuiKey_Space, false, false, false});
-  keybinds_add(manager, ACTION_KILL, (key_combo_t){ImGuiKey_K, false, false, false});
-  keybinds_add(manager, ACTION_FIRE, (key_combo_t){ImGuiKey_MouseLeft, false, false, false});
-  keybinds_add(manager, ACTION_HOOK, (key_combo_t){ImGuiKey_MouseRight, false, false, false});
-  keybinds_add(manager, ACTION_HAMMER, (key_combo_t){ImGuiKey_1, false, false, false});
-  keybinds_add(manager, ACTION_GUN, (key_combo_t){ImGuiKey_2, false, false, false});
-  keybinds_add(manager, ACTION_SHOTGUN, (key_combo_t){ImGuiKey_3, false, false, false});
-  keybinds_add(manager, ACTION_GRENADE, (key_combo_t){ImGuiKey_4, false, false, false});
-  keybinds_add(manager, ACTION_LASER, (key_combo_t){ImGuiKey_5, false, false, false});
-
-  keybinds_add(manager, ACTION_TOGGLE_DUMMY_COPY, (key_combo_t){ImGuiKey_R, false, false, false});
-
-  keybinds_add(manager, ACTION_ZOOM_IN, (key_combo_t){ImGuiKey_W, false, false, false});
-  keybinds_add(manager, ACTION_ZOOM_OUT, (key_combo_t){ImGuiKey_S, false, false, false});
+  keybinds_add(manager, ACTION_TOGGLE_LINKED_COPY, (key_combo_t){ImGuiKey_R, false, false, false});
+  keybinds_add(manager, ACTION_ZOOM_IN, (key_combo_t){ImGuiKey_Equal, false, false, false});
+  keybinds_add(manager, ACTION_ZOOM_OUT, (key_combo_t){ImGuiKey_Minus, false, false, false});
 
   for (int i = 0; i < 9; ++i) {
     keybinds_add(manager, ACTION_SWITCH_TRACK_1 + i, (key_combo_t){ImGuiKey_1 + i, false, true, false});
@@ -265,6 +236,101 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_CYCLE_TRACK_UP, (key_combo_t){ImGuiKey_UpArrow, false, true, false});
   keybinds_add(manager, ACTION_CYCLE_TRACK_DOWN, (key_combo_t){ImGuiKey_PageDown, false, false, false});
   keybinds_add(manager, ACTION_CYCLE_TRACK_DOWN, (key_combo_t){ImGuiKey_DownArrow, false, true, false});
+}
+
+bool keybinds_parse_combo(const char *text, key_combo_t *out) {
+  if (!text || !out) return false;
+  *out = (key_combo_t){.key = ImGuiKey_None};
+  char buffer[128];
+  snprintf(buffer, sizeof(buffer), "%s", text);
+  for (char *part = strtok(buffer, "+"); part; part = strtok(NULL, "+")) {
+    if (strcmp(part, "Ctrl") == 0) out->ctrl = true;
+    else if (strcmp(part, "Alt") == 0) out->alt = true;
+    else if (strcmp(part, "Shift") == 0) out->shift = true;
+    else {
+      for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key) {
+        const char *name = igGetKeyName(key);
+        if (name && strcmp(name, part) == 0) {
+          out->key = key;
+          break;
+        }
+      }
+    }
+  }
+  return out->key != ImGuiKey_None;
+}
+
+action_t keybinds_game_action(unsigned control_index) { return (action_t)(ACTION_GAME_FIRST + control_index); }
+action_t keybinds_linked_game_action(unsigned control_index) { return (action_t)(ACTION_LINKED_GAME_FIRST + control_index); }
+action_t keybinds_linked_extra_action(unsigned action_index) { return (action_t)(ACTION_LINKED_EXTRA_FIRST + action_index); }
+
+void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
+  if (!manager) return;
+  for (int action = ACTION_GAME_FIRST; action < ACTION_COUNT; ++action) {
+    keybinds_clear_action(manager, (action_t)action);
+    memset(&manager->action_infos[action], 0, sizeof(manager->action_infos[action]));
+  }
+  manager->game_action_count = 0;
+  manager->linked_action_count = 0;
+  manager->action_count = ACTION_ENGINE_COUNT;
+  if (!host || !game_host_ready(host)) return;
+
+  const ft_input_schema *schema = game_input_schema(host);
+  if (!schema || !schema->controls) return;
+  unsigned count = schema->control_count;
+  if (count > (unsigned)(ACTION_COUNT - ACTION_GAME_FIRST)) count = ACTION_COUNT - ACTION_GAME_FIRST;
+  for (unsigned i = 0; i < count; ++i) {
+    const ft_input_control *control = &schema->controls[i];
+    action_t action = keybinds_game_action(i);
+    char identifier[96];
+    snprintf(identifier, sizeof(identifier), "game_%s_%s", game_host_active_id(host), control->id);
+    set_action_info(manager, action, identifier, control->display_name,
+                    control->category && *control->category ? control->category : host->module->info.display_name);
+    key_combo_t combo;
+    if (keybinds_parse_combo(control->default_binding, &combo)) keybinds_add(manager, action, combo);
+  }
+  manager->game_action_count = (int)count;
+  manager->action_count = ACTION_GAME_FIRST + (int)count;
+
+  if (!game_has_cap(host, FT_CAP_LINKED_INPUTS)) return;
+
+  for (unsigned i = 0; i < count; ++i) {
+    const ft_input_control *control = &schema->controls[i];
+    const action_t action = keybinds_linked_game_action(i);
+    char identifier[96];
+    char name[64];
+    char category[64];
+    snprintf(identifier, sizeof(identifier), "game_%s_linked_%s", game_host_active_id(host), control->id);
+    snprintf(name, sizeof(name), "Linked: %s", control->display_name);
+    snprintf(category, sizeof(category), "%s Linked Inputs", host->module->info.display_name);
+    set_action_info(manager, action, identifier, name, category);
+    key_combo_t combo;
+    if (keybinds_parse_combo(control->linked_default_binding, &combo)) keybinds_add(manager, action, combo);
+  }
+
+  unsigned linked_count = host->module->linked_action_count;
+  if (linked_count > 64) linked_count = 64;
+  for (unsigned i = 0; i < linked_count; ++i) {
+    const ft_linked_action *desc = &host->module->linked_actions[i];
+    const action_t action = keybinds_linked_extra_action(i);
+    char identifier[96];
+    char category[64];
+    snprintf(identifier, sizeof(identifier), "game_%s_linked_%s", game_host_active_id(host), desc->id);
+    snprintf(category, sizeof(category), "%s Linked Inputs", host->module->info.display_name);
+    set_action_info(manager, action, identifier, desc->display_name, category);
+    key_combo_t combo;
+    if (keybinds_parse_combo(desc->default_binding, &combo)) keybinds_add(manager, action, combo);
+  }
+  manager->linked_action_count = (int)linked_count;
+  manager->action_count = ACTION_LINKED_EXTRA_FIRST + (int)linked_count;
+}
+
+void keybinds_cleanup(keybind_manager_t *manager) {
+  if (!manager) return;
+  free(manager->bindings);
+  manager->bindings = NULL;
+  manager->bind_count = 0;
+  manager->bind_capacity = 0;
 }
 
 void keybinds_process_inputs(ui_handler_t *ui) {
@@ -328,13 +394,12 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   }
   if (keybinds_is_action_pressed(kb, ACTION_NEXT_FRAME, true)) {
     ts->is_playing = false;
-    interaction_apply_dummy_inputs(ui);
+    interaction_apply_linked_inputs(ui);
     interaction_update_mouse(ts);
     model_advance_tick(ts, 1);
-    // update effects at least
-    SWorldCore world = wc_empty();
-    model_get_world_state_at_tick(ts, ts->current_tick, &world, true);
-    wc_free(&world);
+    // Pull the world for the new tick so the game gets a chance to run its
+    // own per-tick effects before the frame is drawn.
+    model_world_at_tick(ts, ts->current_tick);
   }
   if (keybinds_is_action_pressed(kb, ACTION_INC_TPS, true)) {
     ++ts->gui_playback_speed;
@@ -342,8 +407,9 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   if (keybinds_is_action_pressed(kb, ACTION_DEC_TPS, true)) {
     --ts->gui_playback_speed;
   }
-  if (keybinds_is_action_pressed(kb, ACTION_TOGGLE_DUMMY_COPY, false)) {
-    ts->dummy_copy_input ^= 1;
+  if (game_has_cap(&ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS) &&
+      keybinds_is_action_pressed(kb, ACTION_TOGGLE_LINKED_COPY, false)) {
+    ts->linked_copy_input ^= 1;
   }
 
   if (ts->recording) return;
@@ -505,16 +571,19 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
     igText("Click '+' to add a binding. Click trash icon to remove.");
     igSeparator();
 
-    if (igCollapsingHeader_TreeNodeFlags("Mouse Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (engine_input_cursor_field() >= 0 && igCollapsingHeader_TreeNodeFlags("Aim Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
       if (igDragFloat("Sensitivity", &ui->mouse_sens, 0.5f, 1.0f, 1000.0f, "%.1f", 0)) config_save(ui);
       if (igDragFloat("Max Distance", &ui->mouse_max_distance, 1.0f, 0.0f, 2000.0f, "%.1f", 0)) config_save(ui);
     }
 
-    const char *categories[] = {"Playback", "Timeline", "General", "Recording", "Dummy", "Camera", "Tracks"};
-    int num_categories = sizeof(categories) / sizeof(categories[0]);
-
-    for (int cat_idx = 0; cat_idx < num_categories; ++cat_idx) {
-      const char *current_category = categories[cat_idx];
+    for (int cat_idx = 0; cat_idx < manager->action_count; ++cat_idx) {
+      const char *current_category = manager->action_infos[cat_idx].category;
+      if (!*current_category) continue;
+      bool already_rendered = false;
+      for (int previous = 0; previous < cat_idx; ++previous) {
+        if (strcmp(manager->action_infos[previous].category, current_category) == 0) already_rendered = true;
+      }
+      if (already_rendered) continue;
 
       ImGuiTreeNodeFlags flags = (strcmp(current_category, "Tracks") == 0) ? 0 : ImGuiTreeNodeFlags_DefaultOpen;
 
@@ -523,33 +592,7 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
           igTableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
           igTableSetupColumn("Bindings", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
 
-          if (strcmp(current_category, "Dummy") == 0) {
-            igTableNextRow(0, 0);
-            igTableSetColumnIndex(0);
-            igText("Action Priority (Top = First, Bottom = Last/Overwrites)");
-            for (int i = 0; i < DUMMY_ACTION_COUNT; ++i) {
-              igPushID_Int(1000 + i);
-              dummy_action_type_t action = ui->timeline.dummy_action_priority[i];
-              const char *name = (action == DUMMY_ACTION_COPY) ? "Copy Input" : "Dummy Inputs";
-              igText("  %d. %s", i + 1, name);
-              igSameLine(0, 10);
-              if (i > 0 && igArrowButton("##up", ImGuiDir_Up)) {
-                dummy_action_type_t temp = ui->timeline.dummy_action_priority[i];
-                ui->timeline.dummy_action_priority[i] = ui->timeline.dummy_action_priority[i - 1];
-                ui->timeline.dummy_action_priority[i - 1] = temp;
-              }
-              igSameLine(0, 10);
-              if (i < DUMMY_ACTION_COUNT - 1 && igArrowButton("##down", ImGuiDir_Down)) {
-                dummy_action_type_t temp = ui->timeline.dummy_action_priority[i];
-                ui->timeline.dummy_action_priority[i] = ui->timeline.dummy_action_priority[i + 1];
-                ui->timeline.dummy_action_priority[i + 1] = temp;
-              }
-              igPopID();
-            }
-            igSeparator();
-          }
-
-          for (int i = 0; i < ACTION_COUNT; i++) {
+          for (int i = 0; i < manager->action_count; i++) {
             if (strcmp(manager->action_infos[i].category, current_category) == 0) {
               igTableNextRow(0, 0);
               igTableSetColumnIndex(0);

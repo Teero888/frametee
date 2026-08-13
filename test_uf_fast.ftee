@@ -1,5 +1,5 @@
-load_map libs/ddnet_demo/Aip-Gores.map
-spawn_character
+load_level libs/ddnet_demo/Aip-Gores.map
+add_track
 uf_set_config cells_per_tick 10
 uf_set_config search_attempts 2
 uf_set_config ticks_search 10

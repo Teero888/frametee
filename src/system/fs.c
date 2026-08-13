@@ -145,6 +145,20 @@ void fs_remove(const char *path) {
 #endif
 }
 
+bool fs_replace(const char *source, const char *destination) {
+#ifdef _WIN32
+    wchar_t wsource[1024];
+    wchar_t wdestination[1024];
+    if (MultiByteToWideChar(CP_UTF8, 0, source, -1, wsource, 1024) <= 0 ||
+        MultiByteToWideChar(CP_UTF8, 0, destination, -1, wdestination, 1024) <= 0) {
+        return false;
+    }
+    return MoveFileExW(wsource, wdestination, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    return rename(source, destination) == 0;
+#endif
+}
+
 void *fs_load_library(const char *path) {
 #ifdef _WIN32
     return LoadLibrary(path);

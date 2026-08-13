@@ -1,13 +1,13 @@
 #ifndef USER_INTERFACE_H
 #define USER_INTERFACE_H
 
-#include "demo.h"
 #include "entity_inspector.h"
 #include "keybinds.h"
 #include "undo_redo.h"
-#include "online_maps.h"
-#include <ddnet_physics/gamecore.h>
+#include <engine/game_host.h>
+#include <engine/input_record.h>
 #include <plugins/plugin_manager.h>
+#include <user_interface/timeline/timeline.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <types.h>
@@ -18,21 +18,13 @@ struct ui_handler_t {
   ImFont *icon_font;
 
   timeline_state_t timeline;
-  skin_manager_t skin_manager;
   keybind_manager_t keybinds;
-  demo_exporter_t demo_exporter;
   undo_manager_t undo_manager;
   plugin_manager_t plugin_manager;
   tas_context_t plugin_context;
   tas_api_t plugin_api;
-  online_map_manager_t online_maps;
   entity_inspector_t entity_inspector;
 
-  SPickup *pickups;
-  mvec2 *pickup_positions;
-  int *pickup_cooldown_keys;
-  int *ninja_pickup_indices;
-  int num_ninja_pickups;
 
   ImVec2 viewport_window_pos;
   vec2 last_render_pos;
@@ -40,74 +32,52 @@ struct ui_handler_t {
   bool viewport_focused;
   bool viewport_hovered;
 
-  int prediction_length;
-  int pos_x;
-  int pos_y;
   int current_tick;
-  int start_tick;
-  int finish_tick;
-  int freezetime;
-  int reloadtime;
-  int health;
-  int armor;
-  int ammo;
-  int weapon;
-  EGameMode game_mode;
-  int num_pickups;
   int fps_limit;
 
-  float vel_x;
-  float vel_y;
-  float vel_m;
-  float vel_r;
-  float race_time;
   float mouse_sens;
   float mouse_max_distance;
   float lod_bias;
   float bg_color[3];
-  float prediction_alpha[2]; // 0=own,1=others
-  float cursor_scale;
-  bool center_dot;
-  bool render_cursor_follow;
 
   bool show_timeline;
-  bool show_prediction;
-  bool show_skin_browser;
-  bool show_net_events_window;
+  bool show_timeline_events_window;
   bool vsync;
   bool show_fps;
-  bool render_map;
-  bool render_players;
-  bool render_weapons;
-  bool render_particles;
-  bool render_pickups;
-  bool render_hud;
-  bool health_and_ammo_hud;
-  bool weapons[NUM_WEAPONS];
-  bool selecting_override_pos;
+  bool render_level;
+
+  // Game module the user last worked with. Restored on startup so a project
+  // opens under the same game it was authored in.
+  char preferred_game_id[32];
+  // Per-game editor state is parsed before the timeline/camera exist during
+  // startup, then applied as soon as those objects are initialized.
+  char configured_camera_mode_id[32];
+  bool configured_linked_copy_input;
+
+  // The start screen runs in two stages: pick a game, then whatever that game
+  // starts a run with. Choosing is only offered here, where nothing is open.
+  enum { SPLASH_STAGE_GAME = 0, SPLASH_STAGE_START = 1 } splash_stage;
 
   char recent_projects[10][1024];
   int num_recent_projects;
-  char loaded_map_name[128];
-  // full path the current map was loaded from, empty when it did not come from a file on disk
-  char loaded_map_path[1024];
+  char loaded_level_name[128];
+  // Full path the current level was loaded from; empty for an in-memory level.
+  char loaded_level_path[1024];
   char current_project_path[1024];
   bool has_unsaved_changes;
   bool auto_save_enabled;
   int auto_save_interval_sec;
   double last_auto_save_time;
   bool show_plugin_manager;
-  bool auto_generate_finish_events;
   // the splash doubles as the "new project" screen, so it can be raised over a loaded project and
   // dismissed again without touching it
   bool show_splash;
   bool show_new_project_prompt;
 };
 
-void on_camera_update(struct gfx_handler_t *handler, bool hovered);
-void render_players(ui_handler_t *ui);
-void render_pickups(ui_handler_t *ui);
-void render_cursor(ui_handler_t *ui);
+// `intra` is the interpolation between the previous tick and the current one,
+// so a game-directed camera can track what is actually drawn.
+void on_camera_update(struct gfx_handler_t *handler, bool hovered, float intra);
 bool ui_quick_save(ui_handler_t *ui);
 void ui_check_auto_save(ui_handler_t *ui);
 struct timeline_state;
@@ -117,13 +87,17 @@ void timeline_mark_unsaved(struct timeline_state *ts);
 void ui_request_new_project(ui_handler_t *ui);
 
 void ui_init_config(ui_handler_t *ui);
+void camera_init(camera_t *camera);
 void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);
 void ui_render(ui_handler_t *ui);
 bool ui_render_late(ui_handler_t *ui);
-void ui_post_map_load(ui_handler_t *ui);
+void ui_post_level_load(ui_handler_t *ui);
 void ui_cleanup(ui_handler_t *ui);
 void ui_add_recent_project(ui_handler_t *ui, const char *path);
+// Runs one of the active game's exporters, asking for a destination first.
+void ui_run_exporter(ui_handler_t *ui, unsigned exporter_index);
+// Draws the active game's own settings, described by the game and rendered here.
+void ui_render_game_settings(ui_handler_t *ui);
 bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size);
-void ui_export_demo(ui_handler_t *ui);
 
 #endif

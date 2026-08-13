@@ -1,0 +1,22 @@
+# Reference game module written in Rust and backed by Bevy's modular ECS.
+# FrameTee drives the deterministic ticks and rendering boundary; Bevy owns the
+# example's entities, components, resources, and ordered simulation schedule.
+
+[package]
+name = "example_bouncer"
+version = "2.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+# A cdylib is all the engine asks for: a shared library exporting
+# ft_game_module_entry.
+crate-type = ["cdylib"]
+name = "example_bouncer"
+
+[dependencies]
+bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }
+bevy_math = { version = "0.19.1", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = 2
