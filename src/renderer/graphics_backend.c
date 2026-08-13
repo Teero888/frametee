@@ -1,9 +1,13 @@
 #include "graphics_backend.h"
+#include <engine/engine_api.h>
 #include "renderer.h"
 #include <logger/logger.h>
+#include <math.h>
 #include <stdbool.h>
+#include <system/config.h>
 #include <system/input.h>
 #include <user_interface/user_interface.h>
+#include <user_interface/snippet_editor.h>
 #include <user_interface/timeline/timeline_model.h>
 
 extern bool g_is_headless;
@@ -19,7 +23,6 @@ extern bool g_is_headless;
 #ifndef ARRAYSIZE
 #define ARRAYSIZE(_ARR) ((int)(sizeof(_ARR) / sizeof(*(_ARR))))
 #endif
-#define ENTITIES_PATH "data/textures/ddnet.png"
 
 static const char *LOG_SOURCE = "GfxBackend";
 
@@ -31,7 +34,6 @@ static int init_imgui(gfx_handler_t *handler);
 static void cleanup_vulkan(gfx_handler_t *handler);
 static void cleanup_vulkan_window(gfx_handler_t *handler);
 // frame_render and frame_present are now folded into gfx_begin/end_frame
-static void cleanup_map_resources(gfx_handler_t *handler);
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT object_type, uint64_t object,
@@ -126,17 +128,21 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   double diff_x, diff_y;
   input_accumulate_mouse_pos(xpos, ypos, &diff_x, &diff_y);
 
-  if (!handler->user_interface.timeline.recording) return;
+  if (!handler->user_interface.timeline.recording || engine_input_cursor_field() < 0) return;
 
   float sens = handler->user_interface.mouse_sens * 0.01f;
   handler->user_interface.recording_mouse_pos[0] += diff_x * sens;
   handler->user_interface.recording_mouse_pos[1] += diff_y * sens;
 
-  float max_distance = handler->user_interface.mouse_max_distance;
-  if (vlength(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1])) > max_distance) {
-    mvec2 n = vnormalize(vec2_init(handler->user_interface.recording_mouse_pos[0], handler->user_interface.recording_mouse_pos[1]));
-    handler->user_interface.recording_mouse_pos[0] = vgetx(n) * max_distance;
-    handler->user_interface.recording_mouse_pos[1] = vgety(n) * max_distance;
+  // Clamp the recorded aim to the configured reach. Plain float maths now that
+  // the engine no longer borrows a game's vector type for this.
+  const float max_distance = handler->user_interface.mouse_max_distance;
+  const float aim_x = handler->user_interface.recording_mouse_pos[0];
+  const float aim_y = handler->user_interface.recording_mouse_pos[1];
+  const float length = sqrtf(aim_x * aim_x + aim_y * aim_y);
+  if (length > max_distance && length > 0.0001f) {
+    handler->user_interface.recording_mouse_pos[0] = aim_x / length * max_distance;
+    handler->user_interface.recording_mouse_pos[1] = aim_y / length * max_distance;
   }
   // TODO: make this go in the right direction actually
   if ((int)handler->user_interface.recording_mouse_pos[0] == 0 && (int)handler->user_interface.recording_mouse_pos[1] == 0) {
@@ -240,18 +246,62 @@ static bool imgui_queue_needs_trickling(void) {
   return has_key && has_text && ctx->WantTextInputNextFrame == 1;
 }
 
+// Brings up the game layer: builds the service table, finds the installed game
+// modules and activates one. The engine can run with none active — it just has
+// nothing to simulate or draw until a game is chosen.
+static void init_game_layer(gfx_handler_t *handler) {
+  const ft_engine_api *api = engine_api_init(handler);
+  game_host_init(&handler->game_host, api);
+  game_host_discover(&handler->game_host, "games");
+
+  // A --game argument wins over the config, which in turn wins over "whatever
+  // loaded first" so a fresh install still comes up with something usable.
+  extern const char *g_forced_game_id;
+
+  // FRAMETEE_DEFAULT_GAME_ID is a build-time setting, not engine knowledge: a
+  // distribution names the game it ships as its default, and without it the
+  // engine simply takes the first module in id order.
+#ifndef FRAMETEE_DEFAULT_GAME_ID
+#define FRAMETEE_DEFAULT_GAME_ID ""
+#endif
+  const char *const wanted[3] = {g_forced_game_id, handler->user_interface.preferred_game_id, FRAMETEE_DEFAULT_GAME_ID};
+  for (int w = 0; w < 3; ++w) {
+    if (!wanted[w] || !*wanted[w]) continue;
+    if (game_host_activate_id(&handler->game_host, wanted[w])) {
+      snprintf(handler->user_interface.preferred_game_id, sizeof(handler->user_interface.preferred_game_id), "%s", wanted[w]);
+      keybinds_bind_game(&handler->user_interface.keybinds, &handler->game_host);
+      config_load(&handler->user_interface);
+      return;
+    }
+  }
+  for (int i = 0; i < handler->game_host.count; ++i) {
+    if (!handler->game_host.slots[i].usable) continue;
+    if (!game_host_activate_index(&handler->game_host, i)) continue;
+    snprintf(handler->user_interface.preferred_game_id, sizeof(handler->user_interface.preferred_game_id), "%s",
+             handler->game_host.slots[i].id);
+    keybinds_bind_game(&handler->user_interface.keybinds, &handler->game_host);
+    config_load(&handler->user_interface);
+    return;
+  }
+  log_warn(LOG_SOURCE, "No game module could be activated; the editor has nothing to simulate.");
+}
+
 int init_gfx_handler(gfx_handler_t *handler) {
   memset(handler, 0, sizeof(gfx_handler_t));
+  // Unit playfield until a level is loaded, so the projection stays finite even
+  // when nothing has been opened yet.
+  handler->world_width = 1.f;
+  handler->world_height = 1.f;
 
   if (g_is_headless) {
     igCreateContext(NULL);
     handler->user_interface.gfx_handler = handler;
     ui_init_config(&handler->user_interface);
+    init_game_layer(handler);
     ui_init(&handler->user_interface, handler);
     return 0;
   }
 
-  memset(handler, 0, sizeof(gfx_handler_t));
   handler->g_allocator = NULL;
   handler->g_instance = VK_NULL_HANDLE;
   handler->g_physical_device = VK_NULL_HANDLE;
@@ -308,16 +358,6 @@ int init_gfx_handler(gfx_handler_t *handler) {
     return 1;
   }
 
-  texture_t *entities_atlas = renderer_load_texture(handler, ENTITIES_PATH);
-  if (!entities_atlas) {
-    log_error(LOG_SOURCE,
-              "Failed to load entities atlas at '%s'. The program might have been started from the wrong "
-              "directory.",
-              ENTITIES_PATH);
-    return 1;
-  }
-
-  handler->map_shader = renderer_load_shader(handler, "data/shaders/map.vert.spv", "data/shaders/map.frag.spv");
 
   if (!handler->quad_mesh) {
     vertex_t quad_vertices[] = {
@@ -333,22 +373,6 @@ int init_gfx_handler(gfx_handler_t *handler) {
     handler->quad_mesh = renderer_create_mesh(handler, quad_vertices, 4, quad_indices, 6);
   }
 
-  handler->entities_array = renderer_create_texture_array_from_atlas(handler, entities_atlas, 64, 64, 16, 16);
-  handler->entities_atlas = entities_atlas;
-
-  handler->default_skin = renderer_load_skin_from_file(handler, "data/textures/default.png", NULL);
-  handler->x_ninja_skin = renderer_load_skin_from_file(handler, "data/textures/x_ninja.png", NULL);
-  handler->x_spec_skin = renderer_load_skin_from_file(handler, "data/textures/x_spec.png", NULL);
-  if (handler->default_skin == -1) {
-    log_error(LOG_SOURCE, "Default skin 'default.png' not found. The program might have been started from the wrong path.");
-  }
-  if (handler->x_ninja_skin == -1) {
-    log_error(LOG_SOURCE, "Ninja skin 'x_ninja.png' not found. The program might have been started from the wrong path.");
-  }
-  if (handler->x_spec_skin == -1) {
-    log_error(LOG_SOURCE, "Spec skin 'x_spec.png' not found. The program might have been started from the wrong path.");
-  }
-
   int fb_width, fb_height;
   glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
   handler->viewport[0] = (float)fb_width;
@@ -359,6 +383,8 @@ int init_gfx_handler(gfx_handler_t *handler) {
     log_warn(LOG_SOURCE, "Failed to create offscreen resources. The ImGui game view will be disabled.");
   }
 
+  init_game_layer(handler);
+  gh_resources_create(&handler->game_host);
   ui_init(&handler->user_interface, handler);
 
   return 0;
@@ -572,14 +598,10 @@ void gfx_cleanup(gfx_handler_t *handler) {
 
   ui_cleanup(&handler->user_interface);
 
-  if (!g_is_headless) {
-    cleanup_map_resources(handler);
-    if (handler->entities_array) renderer_destroy_texture(handler, handler->entities_array);
-    handler->map_textures[0] = NULL;
-  }
 
-  physics_free(&handler->physics_handler);
-  handler->map_data = 0x0;
+  gh_level_destroy(&handler->game_host, handler->level);
+  handler->level = NULL;
+  game_host_shutdown(&handler->game_host);
 
   if (!g_is_headless) {
     renderer_cleanup(handler);
@@ -600,106 +622,92 @@ void gfx_cleanup(gfx_handler_t *handler) {
   }
 }
 
-static texture_t *load_layer_texture(gfx_handler_t *handler, uint8_t **data, uint32_t width, uint32_t height) {
-  if (g_is_headless) return NULL;
-  if (!data) return handler->renderer.default_texture;
-  texture_t *tex = renderer_load_compact_texture_from_array(handler, (const uint8_t **)data, width, height);
-  return tex ? tex : handler->renderer.default_texture;
-}
-
-static void cleanup_map_resources(gfx_handler_t *handler) {
-  if (handler->map_texture_count == 0) {
-    return;
-  }
-  log_info(LOG_SOURCE, "Cleaning up previous map resources...");
-
-  vkDeviceWaitIdle(handler->g_device);
-  for (uint32_t i = 1; i < handler->map_texture_count; ++i) {
-    texture_t *tex = handler->map_textures[i];
-    if (tex && tex != handler->renderer.default_texture && tex != handler->entities_array) {
-      renderer_destroy_texture(handler, tex);
-    }
-    handler->map_textures[i] = NULL;
-  }
-  handler->map_texture_count = 0;
-}
-
-void on_map_load(gfx_handler_t *handler) {
-  cleanup_map_resources(handler);
-
+// Publishes a freshly loaded level to the parts of the engine that need to know
+// how big it is, then lets the timeline rebuild its worlds on top of it.
+static void on_level_loaded(gfx_handler_t *handler) {
   handler->renderer.camera.pos[0] = 0.5f;
   handler->renderer.camera.pos[1] = 0.5f;
-  handler->map_data = &handler->physics_handler.collision.m_MapData;
 
-  if (g_is_headless) {
-    handler->map_data = &handler->physics_handler.collision.m_MapData;
-    model_reset_groups_for_map(&handler->user_interface.timeline);
-    return;
+  ft_level_info info;
+  if (gh_level_info(&handler->game_host, handler->level, &info) && info.bounds.w > 0.f && info.bounds.h > 0.f) {
+    engine_api_set_world_extent(handler, info.bounds.w, info.bounds.h);
+    snprintf(handler->user_interface.loaded_level_name, sizeof(handler->user_interface.loaded_level_name), "%s", info.name ? info.name : "level");
+  } else {
+    engine_api_set_world_extent(handler, 1.f, 1.f);
   }
-  // entities texture
-  handler->map_textures[handler->map_texture_count++] = handler->entities_array ? handler->entities_array : handler->renderer.default_texture;
 
-  uint8_t *map[3][3] = {
-      {handler->map_data->game_layer.data, handler->map_data->front_layer.data, handler->map_data->tele_layer.type},
-      {handler->map_data->tune_layer.type, handler->map_data->speedup_layer.type, handler->map_data->switch_layer.type},
-      {handler->map_data->game_layer.flags, handler->map_data->front_layer.flags, handler->map_data->switch_layer.flags}, // rotation flags
-  };
-  // collision textures
-  handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[0], handler->map_data->width, handler->map_data->height);
-  handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[1], handler->map_data->width, handler->map_data->height);
-  handler->map_textures[handler->map_texture_count++] = load_layer_texture(handler, map[2], handler->map_data->width, handler->map_data->height);
-
-  // update physics data
-  model_reset_groups_for_map(&handler->user_interface.timeline);
+  model_reset_groups_for_level(&handler->user_interface.timeline);
 }
 
-static void extract_map_name(const char *path, char *out_name, size_t out_size) {
-  if (!path || !out_name || out_size == 0) return;
-  const char *filename = strrchr(path, '/');
-#ifdef _WIN32
-  const char *win_slash = strrchr(path, '\\');
-  if (win_slash && (!filename || win_slash > filename)) filename = win_slash;
-#endif
-  if (filename) filename++;
-  else filename = path;
+bool gfx_activate_game(gfx_handler_t *handler, int game_index) {
+  if (!handler || game_index < 0 || game_index >= handler->game_host.count) return false;
+  if (game_index == handler->game_host.active) return true;
 
-  strncpy(out_name, filename, out_size - 1);
-  out_name[out_size - 1] = '\0';
+  ui_handler_t *ui = &handler->user_interface;
 
-  char *dot = strrchr(out_name, '.');
-  if (dot && dot != out_name) {
-    *dot = '\0';
+  // Worlds and levels are opaque module-owned objects. They must be destroyed
+  // while the old module is still active; otherwise the new game would receive
+  // foreign pointers on its first render or simulation callback.
+  snippet_editor_reset();
+  undo_manager_cleanup(&ui->undo_manager);
+  undo_manager_init(&ui->undo_manager);
+  timeline_cleanup(&ui->timeline);
+  gh_level_destroy(&handler->game_host, handler->level);
+  handler->level = NULL;
+
+  if (!game_host_activate_index(&handler->game_host, game_index)) {
+    timeline_init(ui);
+    return false;
   }
+  if (!gh_resources_create(&handler->game_host)) {
+    log_error(LOG_SOURCE, "The selected game could not create its rendering resources.");
+    game_host_deactivate(&handler->game_host);
+    timeline_init(ui);
+    return false;
+  }
+
+  timeline_init(ui);
+  camera_init(&handler->renderer.camera);
+  keybinds_bind_game(&ui->keybinds, &handler->game_host);
+  config_load(ui);
+  entity_inspector_clear(&ui->entity_inspector);
+  engine_api_set_world_extent(handler, 1.f, 1.f);
+
+  snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", "unnamed_level");
+  ui->loaded_level_path[0] = '\0';
+  ui->current_project_path[0] = '\0';
+  ui->has_unsaved_changes = false;
+  plugin_manager_on_game_changed(&ui->plugin_manager);
+  return true;
 }
 
-void on_map_load_path(gfx_handler_t *handler, const char *map_path) {
-  extract_map_name(map_path, handler->user_interface.loaded_map_name, sizeof(handler->user_interface.loaded_map_name));
-  snprintf(handler->user_interface.loaded_map_path, sizeof(handler->user_interface.loaded_map_path), "%s", map_path);
+void on_level_load_path(gfx_handler_t *handler, const char *level_path) {
+  snprintf(handler->user_interface.loaded_level_path, sizeof(handler->user_interface.loaded_level_path), "%s", level_path);
   timeline_cleanup(&handler->user_interface.timeline);
   timeline_init(&handler->user_interface);
-  physics_free(&handler->physics_handler);
-  physics_init(&handler->physics_handler, map_path, handler->user_interface.game_mode);
 
-  if (!handler->physics_handler.collision.m_MapData.game_layer.data) {
-    log_error(LOG_SOURCE, "Failed to load map data from '%s'", map_path);
+  gh_level_destroy(&handler->game_host, handler->level);
+  handler->level = gh_level_load_path(&handler->game_host, level_path);
+  if (!handler->level) {
+    log_error(LOG_SOURCE, "The active game could not load '%s'", level_path);
     return;
   }
-  log_info(LOG_SOURCE, "Loaded map '%s' (%ux%u)", map_path, handler->map_data->width, handler->map_data->height);
+  log_info(LOG_SOURCE, "Loaded level '%s'", level_path);
 
-  on_map_load(handler);
-  ui_post_map_load(&handler->user_interface);
+  on_level_loaded(handler);
+  ui_post_level_load(&handler->user_interface);
 }
 
-void on_map_load_mem(struct gfx_handler_t *handler, const unsigned char *map_buffer, size_t size) {
-  handler->user_interface.loaded_map_path[0] = '\0';
-  physics_free(&handler->physics_handler);
-  physics_init_from_memory(&handler->physics_handler, map_buffer, size, handler->user_interface.game_mode);
-  if (!handler->physics_handler.collision.m_MapData.game_layer.data) {
-    log_error(LOG_SOURCE, "Failed to load map data from save file");
+void on_level_load_memory(struct gfx_handler_t *handler, const unsigned char *level_buffer, size_t size) {
+  handler->user_interface.loaded_level_path[0] = '\0';
+  gh_level_destroy(&handler->game_host, handler->level);
+  handler->level = gh_level_load_memory(&handler->game_host, level_buffer, size);
+  if (!handler->level) {
+    log_error(LOG_SOURCE, "The active game could not load the level stored in this project");
     return;
   }
-  on_map_load(handler);
-  ui_post_map_load(&handler->user_interface);
+  on_level_loaded(handler);
+  ui_post_level_load(&handler->user_interface);
 }
 
 // initialization and cleanup
@@ -1328,29 +1336,6 @@ static void frame_render(gfx_handler_t *handler, ImDrawData *draw_data) {
   // Immediate Mode Drawing Logic
   renderer_begin_frame(handler, fd->CommandBuffer);
 
-  if (handler->map_shader && handler->quad_mesh && handler->map_texture_count > 0) {
-    int width, height;
-    glfwGetFramebufferSize(handler->window, &width, &height);
-    if (width > 0 && height > 0) {
-      float window_ratio = (float)width / (float)height;
-      float map_ratio = (float)handler->map_data->width / (float)handler->map_data->height;
-      if (isnan(map_ratio) || map_ratio == 0) map_ratio = 1.0f;
-
-      float zoom = 1.0 / (handler->renderer.camera.zoom * fmax(handler->map_data->width, handler->map_data->height) * 0.001);
-      if (isnan(zoom)) zoom = 1.0f;
-
-      float aspect = 1.0f / (window_ratio / map_ratio);
-
-      map_buffer_object_t ubo = {.transform = {handler->renderer.camera.pos[0], handler->renderer.camera.pos[1], zoom},
-                                 .aspect = aspect,
-                                 .lod_bias = handler->renderer.lod_bias};
-
-      void *ubos[] = {&ubo};
-      VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
-      renderer_draw_mesh(handler, fd->CommandBuffer, handler->quad_mesh, handler->map_shader, handler->map_textures, handler->map_texture_count, ubos,
-                         ubo_sizes, 1);
-    }
-  }
 
   // Draw primitives on top
   renderer_end_frame(handler, fd->CommandBuffer);

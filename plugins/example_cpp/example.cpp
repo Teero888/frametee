@@ -3,7 +3,6 @@
 
 #include "imgui.h"
 #include "plugin_api.h"
-#include <logger/logger.h>
 
 class CppPlugin {
 private:
@@ -14,10 +13,10 @@ private:
 
 public:
   CppPlugin(tas_context_t *pContext, const tas_api_t *pAPI) : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_SnippetDuration(100) {
-    log_info("Native C++ ImGui Plugin", "Plugin instance created!");
+    m_pAPI->log(FT_LOG_INFO, "Native C++ ImGui Plugin", "Plugin instance created!");
   }
 
-  ~CppPlugin() { log_info("Native C++ ImGui Plugin", "Plugin instance destroyed."); }
+  ~CppPlugin() { m_pAPI->log(FT_LOG_INFO, "Native C++ ImGui Plugin", "Plugin instance destroyed."); }
 
   void update() {
     ImGui::SetCurrentContext(m_pContext->imgui_context);
@@ -35,13 +34,13 @@ public:
         ImGui::Text("This window is rendered from a C++ plugin using the native ImGui API!");
         ImGui::Separator();
 
-        ImGui::Text("Host Context: %d tracks", m_pContext->timeline->player_track_count);
+        ImGui::Text("Host API: %d tracks", m_pAPI->get_track_count());
         ImGui::Text("Host API: Current tick is %d", m_pAPI->get_current_tick());
         ImGui::Separator();
 
         ImGui::SliderInt("Snippet Duration", &m_SnippetDuration, 10, 500, "%d ticks");
 
-        int SelectedTrack = m_pContext->timeline->selected_player_track_index;
+        int SelectedTrack = m_pAPI->get_selected_track();
         if (SelectedTrack < 0) {
           ImGui::TextDisabled("Select a track to create a snippet.");
         } else {

@@ -1,3 +1,4 @@
+#include <renderer/graphics_backend.h>
 #include "config.h"
 #include "fs.h"
 #include <logger/logger.h>
@@ -23,6 +24,86 @@
 #endif
 
 static const char *LOG_SOURCE = "Config";
+
+static void write_toml_string(FILE *fp, const char *text) {
+  fputc('"', fp);
+  for (const unsigned char *cursor = (const unsigned char *)(text ? text : ""); *cursor; ++cursor) {
+    switch (*cursor) {
+    case '"': fputs("\\\"", fp); break;
+    case '\\': fputs("\\\\", fp); break;
+    case '\b': fputs("\\b", fp); break;
+    case '\t': fputs("\\t", fp); break;
+    case '\n': fputs("\\n", fp); break;
+    case '\f': fputs("\\f", fp); break;
+    case '\r': fputs("\\r", fp); break;
+    default:
+      if (*cursor < 0x20) fprintf(fp, "\\u%04x", *cursor);
+      else fputc(*cursor, fp);
+      break;
+    }
+  }
+  fputc('"', fp);
+}
+
+static void write_toml_key(FILE *fp, const char *key) { write_toml_string(fp, key); }
+
+static bool write_toml_value(FILE *fp, toml_datum_t value) {
+  switch (value.type) {
+  case TOML_STRING: write_toml_string(fp, value.u.str.ptr); return true;
+  case TOML_INT64: fprintf(fp, "%lld", (long long)value.u.int64); return true;
+  case TOML_FP64: fprintf(fp, "%.17g", value.u.fp64); return true;
+  case TOML_BOOLEAN: fputs(value.u.boolean ? "true" : "false", fp); return true;
+  case TOML_ARRAY:
+    fputc('[', fp);
+    for (int i = 0; i < value.u.arr.size; ++i) {
+      if (i > 0) fputs(", ", fp);
+      if (!write_toml_value(fp, value.u.arr.elem[i])) return false;
+    }
+    fputc(']', fp);
+    return true;
+  default: return false;
+  }
+}
+
+static bool toml_value_is_writable(toml_datum_t value) {
+  if (value.type == TOML_STRING || value.type == TOML_INT64 || value.type == TOML_FP64 || value.type == TOML_BOOLEAN) return true;
+  if (value.type != TOML_ARRAY) return false;
+  for (int i = 0; i < value.u.arr.size; ++i)
+    if (!toml_value_is_writable(value.u.arr.elem[i])) return false;
+  return true;
+}
+
+static bool action_identifier_is_active(const ui_handler_t *ui, const char *identifier) {
+  for (int i = 0; i < ui->keybinds.action_count; ++i)
+    if (strcmp(ui->keybinds.action_infos[i].identifier, identifier) == 0) return true;
+  return false;
+}
+
+static bool reserved_game_editor_key(const char *key) {
+  return strcmp(key, "editor_camera_mode") == 0 || strcmp(key, "editor_linked_copy_input") == 0;
+}
+
+static void write_preserved_values(FILE *fp, toml_datum_t table, bool (*skip)(const char *key, void *user), void *user) {
+  if (table.type != TOML_TABLE) return;
+  for (int i = 0; i < table.u.tab.size; ++i) {
+    const char *key = table.u.tab.key[i];
+    toml_datum_t value = table.u.tab.value[i];
+    if (!key || !toml_value_is_writable(value) || (skip && skip(key, user))) continue;
+    write_toml_key(fp, key);
+    fputs(" = ", fp);
+    write_toml_value(fp, value);
+    fputc('\n', fp);
+  }
+}
+
+static bool skip_active_keybind(const char *key, void *user) {
+  return action_identifier_is_active((const ui_handler_t *)user, key);
+}
+
+static bool skip_active_game_value(const char *key, void *user) {
+  game_host_t *host = user;
+  return reserved_game_editor_key(key) || gh_setting_find(host, key) >= 0;
+}
 
 static void get_config_path(char *buffer, size_t size) {
   char *config_home = NULL;
@@ -58,49 +139,16 @@ static void get_config_path(char *buffer, size_t size) {
   }
 }
 
-static ImGuiKey key_from_name(const char *name) {
-  // Linear search through named keys. Not efficient but runs only on config load.
-  for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; key++) {
-    const char *key_name = igGetKeyName(key);
-    if (key_name && strcmp(key_name, name) == 0) {
-      return key;
-    }
-  }
-  // Fallback for number keys which might not be in NamedKey range depending on ImGui version logic,
-  // but usually they are.
-  // Also check standard keys if needed, but igGetKeyName handles them.
-  return ImGuiKey_None;
-}
-
-static void parse_keybind_string(const char *str, key_combo_t *out) {
-  out->key = ImGuiKey_None;
-  out->ctrl = false;
-  out->alt = false;
-  out->shift = false;
-
-  char buffer[128];
-  strncpy(buffer, str, sizeof(buffer) - 1);
-  buffer[sizeof(buffer) - 1] = '\0';
-
-  char *token = strtok(buffer, "+");
-  while (token) {
-    if (strcmp(token, "Ctrl") == 0) {
-      out->ctrl = true;
-    } else if (strcmp(token, "Alt") == 0) {
-      out->alt = true;
-    } else if (strcmp(token, "Shift") == 0) {
-      out->shift = true;
-    } else {
-      // Assume it's the key
-      out->key = key_from_name(token);
-    }
-    token = strtok(NULL, "+");
-  }
-}
-
 void config_load(ui_handler_t *ui) {
   char config_path[1024];
   get_config_path(config_path, sizeof(config_path));
+
+  game_host_t *active_host = &ui->gfx_handler->game_host;
+  if (game_host_ready(active_host)) {
+    ui->configured_camera_mode_id[0] = '\0';
+    ui->configured_linked_copy_input = false;
+    config_apply_game_editor_state(ui);
+  }
 
   FILE *fp = fs_open(config_path, "r");
   if (!fp) {
@@ -119,16 +167,15 @@ void config_load(ui_handler_t *ui) {
 
   toml_datum_t keybinds = toml_get(res.toptab, "keybinds");
   if (keybinds.type == TOML_TABLE) {
-    for (int i = 0; i < ACTION_COUNT; ++i) {
+    for (int i = 0; i < ui->keybinds.action_count; ++i) {
       const char *id = ui->keybinds.action_infos[i].identifier;
-      if (!id) continue;
+      if (!*id) continue;
 
       toml_datum_t val = toml_get(keybinds, id);
       if (val.type == TOML_STRING) {
         keybinds_clear_action(&ui->keybinds, i);
         key_combo_t combo;
-        parse_keybind_string(val.u.str.ptr, &combo);
-        keybinds_add(&ui->keybinds, i, combo);
+        if (keybinds_parse_combo(val.u.str.ptr, &combo)) keybinds_add(&ui->keybinds, i, combo);
       } else if (val.type == TOML_ARRAY) {
         keybinds_clear_action(&ui->keybinds, i);
         int count = val.u.arr.size;
@@ -136,8 +183,7 @@ void config_load(ui_handler_t *ui) {
           toml_datum_t elem = val.u.arr.elem[j];
           if (elem.type == TOML_STRING) {
             key_combo_t combo;
-            parse_keybind_string(elem.u.str.ptr, &combo);
-            keybinds_add(&ui->keybinds, i, combo);
+            if (keybinds_parse_combo(elem.u.str.ptr, &combo)) keybinds_add(&ui->keybinds, i, combo);
           }
         }
       }
@@ -192,52 +238,12 @@ void config_load(ui_handler_t *ui) {
         }
       }
     }
-    toml_datum_t prediction_alpha = toml_get(graphics_settings, "prediction_alpha");
-    if (prediction_alpha.type == TOML_ARRAY && prediction_alpha.u.arr.size == 3) {
-      for (int i = 0; i < 2; ++i) {
-        toml_datum_t val = prediction_alpha.u.arr.elem[i];
-        if (val.type == TOML_FP64) {
-          ui->prediction_alpha[i] = (float)val.u.fp64;
-        }
-      }
-    }
-    toml_datum_t show_prediction = toml_get(graphics_settings, "show_prediction");
-    if (show_prediction.type == TOML_BOOLEAN) {
-      ui->show_prediction = show_prediction.u.boolean;
-    }
 
-    toml_datum_t cursor_scale = toml_get(graphics_settings, "cursor_scale");
-    if (cursor_scale.type == TOML_FP64) {
-      ui->cursor_scale = (float)cursor_scale.u.fp64;
-    }
+    // Presentation toggles that used to live here (prediction, particles, tee
+    // rendering, cursor) belong to the game module and are stored with it.
+    toml_datum_t render_level = toml_get(graphics_settings, "render_level");
+    if (render_level.type == TOML_BOOLEAN) ui->render_level = render_level.u.boolean;
 
-    toml_datum_t render_cursor_follow = toml_get(graphics_settings, "render_cursor_follow");
-    if (render_cursor_follow.type == TOML_BOOLEAN) {
-      ui->render_cursor_follow = render_cursor_follow.u.boolean;
-    }
-
-    toml_datum_t center_dot = toml_get(graphics_settings, "center_dot");
-    if (center_dot.type == TOML_BOOLEAN) {
-      ui->center_dot = center_dot.u.boolean;
-    }
-
-    toml_datum_t render_map = toml_get(graphics_settings, "render_map");
-    if (render_map.type == TOML_BOOLEAN) ui->render_map = render_map.u.boolean;
-
-    toml_datum_t render_players = toml_get(graphics_settings, "render_players");
-    if (render_players.type == TOML_BOOLEAN) ui->render_players = render_players.u.boolean;
-
-    toml_datum_t render_weapons = toml_get(graphics_settings, "render_weapons");
-    if (render_weapons.type == TOML_BOOLEAN) ui->render_weapons = render_weapons.u.boolean;
-
-    toml_datum_t render_particles = toml_get(graphics_settings, "render_particles");
-    if (render_particles.type == TOML_BOOLEAN) ui->render_particles = render_particles.u.boolean;
-
-    toml_datum_t render_pickups = toml_get(graphics_settings, "render_pickups");
-    if (render_pickups.type == TOML_BOOLEAN) ui->render_pickups = render_pickups.u.boolean;
-
-    toml_datum_t render_hud = toml_get(graphics_settings, "render_hud");
-    if (render_hud.type == TOML_BOOLEAN) ui->render_hud = render_hud.u.boolean;
   }
 
   toml_datum_t projects_settings = toml_get(res.toptab, "projects");
@@ -256,13 +262,54 @@ void config_load(ui_handler_t *ui) {
     }
   }
 
-  toml_datum_t gameplay_settings = toml_get(res.toptab, "gameplay");
-  if (gameplay_settings.type == TOML_TABLE) {
-    toml_datum_t game_mode = toml_get(gameplay_settings, "game_mode");
-    if (game_mode.type == TOML_INT64 && game_mode.u.int64 >= GAME_MODE_DDRACE && game_mode.u.int64 < NUM_GAME_MODES) {
-      ui->game_mode = (EGameMode)game_mode.u.int64;
-    }
+  // Which game module to bring up. Read before the game layer starts, so it is
+  // kept as a plain id rather than resolved here.
+  toml_datum_t game_settings = toml_get(res.toptab, "game");
+  if (game_settings.type == TOML_TABLE) {
+    toml_datum_t id = toml_get(game_settings, "id");
+    if (id.type == TOML_STRING && id.u.str.ptr) snprintf(ui->preferred_game_id, sizeof(ui->preferred_game_id), "%s", id.u.str.ptr);
   }
+
+  // The active game's own settings live under its id, so switching games does
+  // not overwrite the other one's preferences.
+  game_host_t *host = &ui->gfx_handler->game_host;
+  char game_table[64];
+  snprintf(game_table, sizeof(game_table), "game.%s", game_host_active_id(host));
+  toml_datum_t per_game = toml_seek(res.toptab, game_table);
+  if (per_game.type == TOML_TABLE) {
+    const unsigned setting_count = gh_setting_count(host);
+    for (unsigned i = 0; i < setting_count; ++i) {
+      const ft_setting_desc *desc = gh_setting_desc(host, i);
+      if (!desc || !desc->id) continue;
+      toml_datum_t stored = toml_get(per_game, desc->id);
+      ft_value value = {.kind = desc->kind};
+      switch (desc->kind) {
+      case FT_VALUE_BOOL:
+        if (stored.type != TOML_BOOLEAN) continue;
+        value.as.b = stored.u.boolean;
+        break;
+      case FT_VALUE_INT:
+        if (stored.type != TOML_INT64) continue;
+        value.as.i = stored.u.int64;
+        break;
+      case FT_VALUE_FLOAT:
+        if (stored.type == TOML_FP64) value.as.f = stored.u.fp64;
+        else if (stored.type == TOML_INT64) value.as.f = (double)stored.u.int64;
+        else continue;
+        break;
+      default: continue;
+      }
+      gh_setting_set(host, i, &value);
+    }
+
+    toml_datum_t camera_mode = toml_get(per_game, "editor_camera_mode");
+    if (camera_mode.type == TOML_STRING)
+      snprintf(ui->configured_camera_mode_id, sizeof(ui->configured_camera_mode_id), "%s", camera_mode.u.str.ptr);
+
+    toml_datum_t linked_copy = toml_get(per_game, "editor_linked_copy_input");
+    if (linked_copy.type == TOML_BOOLEAN) ui->configured_linked_copy_input = linked_copy.u.boolean;
+  }
+  config_apply_game_editor_state(ui);
 
   toml_datum_t auto_save = toml_get(res.toptab, "auto_save");
   if (auto_save.type == TOML_TABLE) {
@@ -273,37 +320,72 @@ void config_load(ui_handler_t *ui) {
     if (interval.type == TOML_INT64) ui->auto_save_interval_sec = (int)interval.u.int64;
   }
 
-  toml_datum_t recording_settings = toml_get(res.toptab, "recording");
-  if (recording_settings.type == TOML_TABLE) {
-    toml_datum_t auto_generate = toml_get(recording_settings, "auto_generate_finish_events");
-    if (auto_generate.type == TOML_BOOLEAN) {
-      ui->auto_generate_finish_events = auto_generate.u.boolean;
-    }
-  }
-
   toml_free(res);
   log_info(LOG_SOURCE, "Config loaded successfully from %s.", config_path);
+}
+
+void config_apply_game_editor_state(ui_handler_t *ui) {
+  if (!ui || !ui->gfx_handler || ui->timeline.ui != ui) return;
+  game_host_t *host = &ui->gfx_handler->game_host;
+  camera_t *camera = &ui->gfx_handler->renderer.camera;
+  camera->mode = 0;
+  if (ui->configured_camera_mode_id[0]) {
+    for (unsigned i = 0; i < game_camera_mode_count(host); ++i) {
+      const ft_camera_mode *mode = game_camera_mode(host, i);
+      if (mode && mode->id && strcmp(mode->id, ui->configured_camera_mode_id) == 0) {
+        camera->mode = i;
+        break;
+      }
+    }
+  }
+  ui->timeline.linked_copy_input = game_has_cap(host, FT_CAP_LINKED_INPUTS) && ui->configured_linked_copy_input;
 }
 
 void config_save(ui_handler_t *ui) {
   char config_path[1024];
   get_config_path(config_path, sizeof(config_path));
 
-  FILE *fp = fs_open(config_path, "w");
+  toml_result_t previous = {0};
+  bool parsed_previous = false;
+  bool have_previous = false;
+  FILE *old = fs_open(config_path, "r");
+  if (old) {
+    previous = toml_parse_file(old);
+    fclose(old);
+    parsed_previous = true;
+    have_previous = previous.ok;
+  }
+
+  char temporary_path[1060];
+  if (snprintf(temporary_path, sizeof(temporary_path), "%s.tmp", config_path) >= (int)sizeof(temporary_path)) {
+    if (parsed_previous) toml_free(previous);
+    return;
+  }
+  FILE *fp = fs_open(temporary_path, "w");
   if (!fp) {
     log_error(LOG_SOURCE, "Failed to open config file for writing at %s.", config_path);
+    if (parsed_previous) toml_free(previous);
     return;
   }
 
   fprintf(fp, "# Frametee Configuration (https://github.com/Teero888/frametee)\n\n");
   fprintf(fp, "[keybinds]\n");
 
+  // A keybind manager only contains the active game's controls. Carry every
+  // other key through verbatim-as-data so saving one game cannot erase the
+  // user's bindings for another.
+  if (have_previous) {
+    toml_datum_t old_keybinds = toml_get(previous.toptab, "keybinds");
+    write_preserved_values(fp, old_keybinds, skip_active_keybind, ui);
+  }
+
   keybind_manager_t defaults;
   keybinds_init(&defaults);
+  keybinds_bind_game(&defaults, &ui->gfx_handler->game_host);
 
-  for (int i = 0; i < ACTION_COUNT; ++i) {
+  for (int i = 0; i < ui->keybinds.action_count; ++i) {
     const char *id = ui->keybinds.action_infos[i].identifier;
-    if (!id) continue;
+    if (!*id) continue;
 
     int count = keybinds_get_count_for_action(&ui->keybinds, i);
 
@@ -331,13 +413,18 @@ void config_save(ui_handler_t *ui) {
       if (count == 1) {
         keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, 0);
         const char *combo_str = keybind_get_combo_string(&bind->combo);
-        fprintf(fp, "%s = \"%s\"\n", id, combo_str);
+        write_toml_key(fp, id);
+        fputs(" = ", fp);
+        write_toml_string(fp, combo_str);
+        fputc('\n', fp);
       } else if (count > 1) {
-        fprintf(fp, "%s = [", id);
+        write_toml_key(fp, id);
+        fputs(" = [", fp);
         for (int k = 0; k < count; k++) {
           keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, k);
           const char *combo_str = keybind_get_combo_string(&bind->combo);
-          fprintf(fp, "\"%s\"%s", combo_str, (k < count - 1) ? ", " : "");
+          write_toml_string(fp, combo_str);
+          if (k < count - 1) fputs(", ", fp);
         }
         fprintf(fp, "]\n");
       } else {
@@ -345,13 +432,14 @@ void config_save(ui_handler_t *ui) {
         // If default had > 0, we should save empty list to override default.
         // But tomlc17 writer might need care.
         if (def_count > 0) {
-          fprintf(fp, "%s = []\n", id);
+          write_toml_key(fp, id);
+          fputs(" = []\n", fp);
         }
       }
     }
   }
 
-  if (defaults.bindings) free(defaults.bindings);
+  keybinds_cleanup(&defaults);
 
   fprintf(fp, "\n[mouse]\n");
   fprintf(fp, "sensitivity = %.2f\n", ui->mouse_sens);
@@ -363,40 +451,84 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "fps_limit = %d\n", ui->fps_limit);
   fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
   fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);
-  fprintf(fp, "prediction_alpha = [%.3f, %.3f]\n", ui->prediction_alpha[0], ui->prediction_alpha[1]);
-  fprintf(fp, "show_prediction = %s\n", ui->show_prediction ? "true" : "false");
-  fprintf(fp, "cursor_scale = %.3f\n", ui->cursor_scale);
-  fprintf(fp, "render_cursor_follow = %s\n", ui->render_cursor_follow ? "true" : "false");
-  fprintf(fp, "center_dot = %s\n", ui->center_dot ? "true" : "false");
-  fprintf(fp, "render_map = %s\n", ui->render_map ? "true" : "false");
-  fprintf(fp, "render_players = %s\n", ui->render_players ? "true" : "false");
-  fprintf(fp, "render_weapons = %s\n", ui->render_weapons ? "true" : "false");
-  fprintf(fp, "render_particles = %s\n", ui->render_particles ? "true" : "false");
-  fprintf(fp, "render_pickups = %s\n", ui->render_pickups ? "true" : "false");
-  fprintf(fp, "render_hud = %s\n", ui->render_hud ? "true" : "false");
+  fprintf(fp, "render_level = %s\n", ui->render_level ? "true" : "false");
 
   fprintf(fp, "\n[projects]\n");
   fprintf(fp, "recent = [\n");
   for (int i = 0; i < ui->num_recent_projects; ++i) {
-    fprintf(fp, "  \"%s\"%s\n", ui->recent_projects[i], (i < ui->num_recent_projects - 1) ? "," : "");
+    fputs("  ", fp);
+    write_toml_string(fp, ui->recent_projects[i]);
+    fprintf(fp, "%s\n", (i < ui->num_recent_projects - 1) ? "," : "");
   }
   fprintf(fp, "]\n");
 
-  fprintf(fp, "\n[gameplay]\n");
-  fprintf(fp, "game_mode = %d\n", (int)ui->game_mode);
+  fprintf(fp, "\n[game]\n");
+  fputs("id = ", fp);
+  write_toml_string(fp, ui->preferred_game_id);
+  fputc('\n', fp);
+
+  {
+    game_host_t *host = &ui->gfx_handler->game_host;
+    toml_datum_t old_game = {0};
+    if (have_previous) old_game = toml_get(previous.toptab, "game");
+
+    // Preserve every inactive game's complete settings table.
+    if (old_game.type == TOML_TABLE) {
+      for (int table_index = 0; table_index < old_game.u.tab.size; ++table_index) {
+        const char *game_id = old_game.u.tab.key[table_index];
+        toml_datum_t table = old_game.u.tab.value[table_index];
+        if (!game_id || table.type != TOML_TABLE || strcmp(game_id, game_host_active_id(host)) == 0) continue;
+        fputs("\n[game.", fp);
+        write_toml_key(fp, game_id);
+        fputs("]\n", fp);
+        write_preserved_values(fp, table, NULL, NULL);
+      }
+    }
+
+    const unsigned setting_count = gh_setting_count(host);
+    fputs("\n[game.", fp);
+    write_toml_key(fp, game_host_active_id(host));
+    fputs("]\n", fp);
+    toml_datum_t old_active = old_game.type == TOML_TABLE ? toml_get(old_game, game_host_active_id(host)) : (toml_datum_t){0};
+    write_preserved_values(fp, old_active, skip_active_game_value, host);
+    for (unsigned i = 0; i < setting_count; ++i) {
+      const ft_setting_desc *desc = gh_setting_desc(host, i);
+      ft_value value;
+      if (!desc || !desc->id || !gh_setting_get(host, i, &value)) continue;
+      if (value.kind != FT_VALUE_BOOL && value.kind != FT_VALUE_INT && value.kind != FT_VALUE_FLOAT) continue;
+      write_toml_key(fp, desc->id);
+      fputs(" = ", fp);
+      switch (value.kind) {
+      case FT_VALUE_BOOL: fputs(value.as.b ? "true\n" : "false\n", fp); break;
+      case FT_VALUE_INT: fprintf(fp, "%lld\n", (long long)value.as.i); break;
+      case FT_VALUE_FLOAT: fprintf(fp, "%.17g\n", value.as.f); break;
+      default: break;
+      }
+    }
+    const camera_t *camera = &ui->gfx_handler->renderer.camera;
+    const ft_camera_mode *mode = game_camera_mode(host, camera->mode);
+    fputs("editor_camera_mode = ", fp);
+    write_toml_string(fp, mode && mode->id ? mode->id : "free");
+    fputc('\n', fp);
+    fprintf(fp, "editor_linked_copy_input = %s\n", ui->timeline.linked_copy_input ? "true" : "false");
+  }
 
   fprintf(fp, "\n[auto_save]\n");
   fprintf(fp, "enabled = %s\n", ui->auto_save_enabled ? "true" : "false");
   fprintf(fp, "interval_sec = %d\n", ui->auto_save_interval_sec);
 
-  fprintf(fp, "\n[recording]\n");
-  fprintf(fp, "auto_generate_finish_events = %s\n", ui->auto_generate_finish_events ? "true" : "false");
-
   fprintf(fp, "\n[plugins]\n");
   for (int i = 0; i < ui->plugin_manager.count; ++i) {
-    fprintf(fp, "%s = %s\n", ui->plugin_manager.plugins[i].key, ui->plugin_manager.plugins[i].enabled ? "true" : "false");
+    write_toml_key(fp, ui->plugin_manager.plugins[i].key);
+    fprintf(fp, " = %s\n", ui->plugin_manager.plugins[i].enabled ? "true" : "false");
   }
 
-  fclose(fp);
+  const bool flushed = fflush(fp) == 0;
+  const bool closed = fclose(fp) == 0;
+  if (!flushed || !closed || !fs_replace(temporary_path, config_path)) {
+    fs_remove(temporary_path);
+    log_error(LOG_SOURCE, "Failed to finish writing config file at %s.", config_path);
+  }
+  if (parsed_previous) toml_free(previous);
   // log_info(LOG_SOURCE, "Config saved to %s.", config_path);
 }

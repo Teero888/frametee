@@ -49,6 +49,28 @@ static void get_plugin_key(const char *path, char *key, size_t key_size) {
   key[i] = '\0';
 }
 
+// A plugin without the optional symbol is global. Anything that touches a
+// game's world or input records should name its game, because those bytes only
+// mean something under the game that defined them.
+static void read_game_id(void *handle, loaded_plugin_t *p) {
+  union {
+    void *sym;
+    plugin_game_id_func get_game_id;
+  } u;
+  u.sym = fs_get_symbol(handle, GET_PLUGIN_GAME_ID_FUNC_NAME);
+  p->game_id[0] = '\0';
+  if (!u.get_game_id) return;
+  const char *id = u.get_game_id();
+  if (id && *id) snprintf(p->game_id, sizeof(p->game_id), "%s", id);
+}
+
+bool plugin_manager_matches_active_game(const plugin_manager_t *manager, const loaded_plugin_t *plugin) {
+  if (!plugin->game_id[0]) return true; // global
+  if (!manager->context) return false;
+  const char *active = manager->context->active_game_id;
+  return active && strcmp(active, plugin->game_id) == 0;
+}
+
 static bool load_metadata_temp(loaded_plugin_t *p) {
   void *handle = fs_load_library(p->path);
   if (!handle) {
@@ -66,6 +88,7 @@ static bool load_metadata_temp(loaded_plugin_t *p) {
     return false;
   }
 
+  read_game_id(handle, p);
   plugin_info_t raw_info = u.get_info();
   strncpy(p->info_name, raw_info.name ? raw_info.name : "", sizeof(p->info_name) - 1);
   strncpy(p->info_author, raw_info.author ? raw_info.author : "", sizeof(p->info_author) - 1);
@@ -125,6 +148,15 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
     return false;
   }
 
+  read_game_id(handle, p);
+  if (!plugin_manager_matches_active_game(manager, p)) {
+    p->status = PLUGIN_STATUS_WRONG_GAME;
+    snprintf(p->error_msg, sizeof(p->error_msg), "Written for game '%s', which is not active.", p->game_id);
+    log_info(LOG_SOURCE, "Skipping '%s': it belongs to game '%s'.", p->path, p->game_id);
+    fs_free_library(handle);
+    return false;
+  }
+
   p->handle = handle;
 
   plugin_info_t raw_info = get_info();
@@ -157,6 +189,10 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
 
 void plugin_manager_unload_plugin(plugin_manager_t *manager, int index) {
   loaded_plugin_t *p = &manager->plugins[index];
+  if (p->status == PLUGIN_STATUS_WRONG_GAME) {
+    p->status = PLUGIN_STATUS_UNLOADED;
+    return;
+  }
   if (p->status != PLUGIN_STATUS_LOADED) return;
 
   log_info(LOG_SOURCE, "Shutting down '%s'...", p->info.name);
@@ -184,16 +220,17 @@ void plugin_manager_toggle_plugin(plugin_manager_t *manager, int index) {
   } else {
     plugin_manager_unload_plugin(manager, index);
   }
-  config_save(manager->context->ui_handler);
+  config_save(manager->host_ui);
 }
 
-void plugin_manager_init(plugin_manager_t *manager, tas_context_t *context, tas_api_t *api) {
+void plugin_manager_init(plugin_manager_t *manager, tas_context_t *context, tas_api_t *api, ui_handler_t *host_ui) {
   log_info(LOG_SOURCE, "Initializing plugin system...");
   manager->plugins = NULL;
   manager->count = 0;
   manager->capacity = 0;
   manager->context = context;
   manager->api = api;
+  manager->host_ui = host_ui;
   manager->directory[0] = '\0';
 }
 
@@ -317,6 +354,27 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
   }
 }
 
+void plugin_manager_on_game_changed(plugin_manager_t *manager) {
+  for (int i = 0; i < manager->count; ++i) {
+    loaded_plugin_t *p = &manager->plugins[i];
+    const bool allowed = plugin_manager_matches_active_game(manager, p);
+
+    if (!allowed && p->status == PLUGIN_STATUS_LOADED) {
+      plugin_manager_unload_plugin(manager, i);
+      p->status = PLUGIN_STATUS_WRONG_GAME;
+      snprintf(p->error_msg, sizeof(p->error_msg), "Written for game '%s', which is not active.", p->game_id);
+    } else if (allowed && p->enabled && p->status != PLUGIN_STATUS_LOADED) {
+      // A plugin parked for the wrong game becomes loadable again; one that
+      // errored out for its own reasons is left alone.
+      if (p->status == PLUGIN_STATUS_WRONG_GAME || p->status == PLUGIN_STATUS_UNLOADED) {
+        p->status = PLUGIN_STATUS_UNLOADED;
+        p->error_msg[0] = '\0';
+        plugin_manager_load_plugin(manager, i);
+      }
+    }
+  }
+}
+
 void plugin_manager_update_all(plugin_manager_t *manager) {
   for (int i = 0; i < manager->count; ++i) {
     if (manager->plugins[i].status == PLUGIN_STATUS_LOADED && manager->plugins[i].update && manager->plugins[i].data) {
@@ -344,10 +402,11 @@ void plugin_manager_shutdown(plugin_manager_t *manager) {
 void plugin_manager_reload_all(plugin_manager_t *manager, const char *directory) {
   tas_context_t *context = manager->context;
   tas_api_t *api = manager->api;
+  ui_handler_t *host_ui = manager->host_ui;
   log_info(LOG_SOURCE, "Reloading all plugins...");
 
   plugin_manager_shutdown(manager);
-  plugin_manager_init(manager, context, api);
+  plugin_manager_init(manager, context, api, host_ui);
   plugin_manager_load_all(manager, directory);
 }
 
@@ -424,6 +483,9 @@ void plugin_manager_render_ui(plugin_manager_t *manager, bool *p_open) {
             igTableSetColumnIndex(3);
             if (p->status == PLUGIN_STATUS_LOADED) {
               igTextColored((ImVec4){0.2f, 0.8f, 0.2f, 1.0f}, "Active");
+            } else if (p->status == PLUGIN_STATUS_WRONG_GAME) {
+              igTextColored((ImVec4){0.55f, 0.65f, 0.9f, 1.0f}, "Other game");
+              if (igIsItemHovered(0)) igSetTooltip("Written for '%s'. It loads again when that game is active.", p->game_id);
             } else if (p->status == PLUGIN_STATUS_UNLOADED) {
               igTextColored((ImVec4){0.6f, 0.6f, 0.6f, 1.0f}, "Disabled");
             } else {
@@ -461,10 +523,19 @@ void plugin_manager_render_ui(plugin_manager_t *manager, bool *p_open) {
           igTextColored((ImVec4){0.8f, 0.8f, 0.8f, 1.0f}, "%s", (p->info.description && p->info.description[0]) ? p->info.description : "No description provided.");
           
           igSeparator();
+          igText("Scope:");
+          igSameLine(0, 5);
+          if (p->game_id[0])
+            igTextColored((ImVec4){0.7f, 0.8f, 1.0f, 1.0f}, "Game-specific (%s)", p->game_id);
+          else
+            igTextColored((ImVec4){0.8f, 0.8f, 0.8f, 1.0f}, "Global (any game)");
+
           igText("Status:");
           igSameLine(0, 5);
           if (p->status == PLUGIN_STATUS_LOADED) {
             igTextColored((ImVec4){0.2f, 0.8f, 0.2f, 1.0f}, "Active (Loaded)");
+          } else if (p->status == PLUGIN_STATUS_WRONG_GAME) {
+            igTextColored((ImVec4){0.55f, 0.65f, 0.9f, 1.0f}, "Waiting for its game");
           } else if (p->status == PLUGIN_STATUS_UNLOADED) {
             igTextColored((ImVec4){0.6f, 0.6f, 0.6f, 1.0f}, "Disabled (Unloaded)");
           } else {
@@ -502,13 +573,13 @@ void plugin_manager_render_ui(plugin_manager_t *manager, bool *p_open) {
               if (igButton("Disable", (ImVec2){0, 0})) {
                 p->enabled = false;
                 p->status = PLUGIN_STATUS_UNLOADED;
-                config_save(manager->context->ui_handler);
+                config_save(manager->host_ui);
               }
             } else {
               if (igButton("Enable (Retry)", (ImVec2){0, 0})) {
                 p->enabled = true;
                 plugin_manager_load_plugin(manager, selected_index);
-                config_save(manager->context->ui_handler);
+                config_save(manager->host_ui);
               }
             }
           }

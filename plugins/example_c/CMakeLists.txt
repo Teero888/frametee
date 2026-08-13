@@ -8,12 +8,10 @@ set(CMAKE_C_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 
-set(HOST_APP_DIR "" CACHE PATH "Path to the root of the ddnet_frametee project")
+set(HOST_APP_DIR "" CACHE PATH "Path to the FrameTee project root")
 if(NOT HOST_APP_DIR)
     message(FATAL_ERROR "Please provide the path to the host application root via -DHOST_APP_DIR=../..")
 endif()
-
-find_package(Vulkan REQUIRED)
 
 set(PLUGIN_C_SOURCES
     example.c
@@ -28,18 +26,11 @@ set_source_files_properties(${PLUGIN_C_SOURCES} PROPERTIES
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
-    "${HOST_APP_DIR}/src"
+    "${HOST_APP_DIR}/include"
     "${HOST_APP_DIR}/src/plugins"
-    "${HOST_APP_DIR}/src/user_interface"
     "${HOST_APP_DIR}/libs/cglm/include"
     "${HOST_APP_DIR}/libs/cimgui"
     "${HOST_APP_DIR}/libs/cimgui/imgui"
-    "${HOST_APP_DIR}/libs/ddnet_physics/include"
-    "${HOST_APP_DIR}/libs/ddnet_physics/libs/ddnet_map_loader"
-)
-
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    Vulkan::Vulkan
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE

@@ -1,3 +1,4 @@
+#include <engine/int_math.h>
 #include "timeline_interaction.h"
 #include "cglm/util.h"
 #include "renderer/graphics_backend.h"
@@ -6,7 +7,6 @@
 #include "timeline_renderer.h"
 #include "user_interface/timeline/timeline_types.h"
 #include <GLFW/glfw3.h>
-#include <ddnet_physics/gamecore.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,80 +27,106 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
 static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id, int target_track_index);
 static void interaction_start_recording_on_track(timeline_state_t *ts, int track_index);
 
-// TODO: Make this faster. Performance is kind of horrible since we're doing this for every frame and every dummy for the prediction rendering.
-// Or we should probably just keep track of prediction worlds instead of recalculating everything every frame.
-void interaction_apply_dummy_inputs(ui_handler_t *ui) {
+static void copy_linked_field(game_host_t *host, const ft_input_field *field, int field_index, const input_record_t *source,
+                              input_record_t *target) {
+  if (field->kind == FT_INPUT_VEC2)
+    engine_input_set_vec2(host, target, field_index, engine_input_get_vec2(host, source, field_index));
+  else if (field->kind == FT_INPUT_FLOAT)
+    engine_input_set_float(host, target, field_index, engine_input_get_float(host, source, field_index));
+  else
+    engine_input_set(host, target, field_index, engine_input_get(host, source, field_index));
+}
+
+static void mirror_linked_field(game_host_t *host, const ft_input_field *field, int field_index, uint32_t transforms,
+                                input_record_t *record) {
+  const bool mirror_x = (transforms & FT_LINKED_MIRROR_X) && (field->flags & FT_INPUT_FLAG_MIRROR_X);
+  const bool mirror_y = (transforms & FT_LINKED_MIRROR_Y) && (field->flags & FT_INPUT_FLAG_MIRROR_Y);
+  if (!mirror_x && !mirror_y) return;
+  if (field->kind == FT_INPUT_VEC2) {
+    ft_vec2 value = engine_input_get_vec2(host, record, field_index);
+    if (mirror_x) value.x = -value.x;
+    if (mirror_y) value.y = -value.y;
+    engine_input_set_vec2(host, record, field_index, value);
+  } else if (field->kind == FT_INPUT_FLOAT) {
+    engine_input_set_float(host, record, field_index, -engine_input_get_float(host, record, field_index));
+  } else if (field->kind == FT_INPUT_INT) {
+    engine_input_set(host, record, field_index, -engine_input_get(host, record, field_index));
+  }
+}
+
+void interaction_apply_linked_inputs(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (!ts->recording || ts->selected_player_track_index == -1) return;
 
-  SWorldCore world = wc_empty();
-  model_get_world_state_at_tick(ts, ts->current_tick, &world, false);
-  int selected_local = model_group_local_track_index(ts, ts->selected_player_track_index);
+  game_host_t *host = &ui->gfx_handler->game_host;
+  // Linked players are only meaningful when the game says it has them.
+  if (!game_has_cap(host, FT_CAP_LINKED_INPUTS)) return;
 
-  if (selected_local < 0 || selected_local >= world.m_NumCharacters) {
-    wc_free(&world);
-    return;
-  }
-
-  SCharacterCore *recording_char = &world.m_pCharacters[selected_local];
-  mvec2 recording_pos = recording_char->m_Pos;
-
-  SPlayerInput source_input = ts->player_tracks[ts->selected_player_track_index].current_input;
-
-  bool dummy_left = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_LEFT);
-  bool dummy_right = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_RIGHT);
-  bool dummy_jump = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_JUMP);
-  bool dummy_fire = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_FIRE);
-  bool dummy_hook = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_HOOK);
-  bool dummy_aim = keybinds_is_action_down(&ts->ui->keybinds, ACTION_DUMMY_AIM);
+  const ft_input_schema *schema = game_input_schema(host);
+  const ft_world *world = model_world_at_tick(ts, ts->current_tick);
+  if (!schema || !world) return;
 
   for (int i = 0; i < ts->player_track_count; ++i) {
-    if (i == ts->selected_player_track_index) continue;
-
     player_track_t *track = &ts->player_tracks[i];
-    if (!track->is_dummy || track->group_index != ts->active_group_index) continue;
-    int local_index = model_group_local_track_index(ts, i);
-    if (local_index < 0 || local_index >= world.m_NumCharacters) continue;
-    mvec2 dummy_pos = world.m_pCharacters[local_index].m_Pos;
+    if (!track->is_linked || track->group_index != ts->active_group_index) continue;
+    const int target_player = model_group_local_track_index(ts, i);
+    int source_player = track->linked_source_player;
+    const int group_players = model_group_track_count(ts, track->group_index);
+    if (source_player < 0 || source_player >= group_players || source_player == target_player)
+      source_player = model_group_local_track_index(ts, ts->selected_player_track_index);
+    if (source_player < 0 || source_player == target_player) continue;
+    const int source_track = model_group_track_index(ts, track->group_index, source_player);
+    if (source_track < 0) continue;
+    const input_record_t *source_input = &ts->player_tracks[source_track].current_input;
 
-    SPlayerInput final_input = {.m_TargetX = track->current_input.m_TargetX, .m_TargetY = track->current_input.m_TargetY};
+    input_record_t final_input;
+    engine_input_default(host, &final_input);
 
-    for (int action_idx = 0; action_idx < DUMMY_ACTION_COUNT; ++action_idx) {
-      dummy_action_type_t action = ts->dummy_action_priority[action_idx];
-
-      if (action == DUMMY_ACTION_COPY && ts->dummy_copy_input) {
-        if (track->dummy_copy_flags & COPY_DIRECTION) final_input.m_Direction = source_input.m_Direction;
-        if (track->dummy_copy_flags & COPY_TARGET) {
-          final_input.m_TargetX = source_input.m_TargetX;
-          final_input.m_TargetY = source_input.m_TargetY;
-        }
-        if (track->dummy_copy_flags & COPY_JUMP) final_input.m_Jump = source_input.m_Jump;
-        if (track->dummy_copy_flags & COPY_FIRE) final_input.m_Fire = source_input.m_Fire;
-        if (track->dummy_copy_flags & COPY_HOOK) final_input.m_Hook = source_input.m_Hook;
-        if (track->dummy_copy_flags & COPY_WEAPON) final_input.m_WantedWeapon = source_input.m_WantedWeapon;
-
-        if (track->dummy_copy_flags & COPY_MIRROR_X) {
-          final_input.m_TargetX = -final_input.m_TargetX;
-          final_input.m_Direction = -final_input.m_Direction;
-        }
-        if (track->dummy_copy_flags & COPY_MIRROR_Y) {
-          final_input.m_TargetY = -final_input.m_TargetY;
-        }
-      } else if (action == DUMMY_ACTION_INPUTS) {
-        if (dummy_left || dummy_right) final_input.m_Direction = dummy_right - dummy_left;
-        if (dummy_jump) final_input.m_Jump = dummy_jump;
-        if (dummy_fire) final_input.m_Fire = dummy_fire;
-        if (dummy_hook) final_input.m_Hook = dummy_hook;
-
-        if (dummy_aim) {
-          final_input.m_TargetX = vgetx(recording_pos) - vgetx(dummy_pos);
-          final_input.m_TargetY = vgety(recording_pos) - vgety(dummy_pos);
-        }
+    if (ts->linked_copy_input) {
+      for (uint32_t field_index = 0; field_index < schema->field_count && field_index < 64; ++field_index) {
+        if ((track->linked_copy_fields & (UINT64_C(1) << field_index)) == 0) continue;
+        const ft_input_field *field = &schema->fields[field_index];
+        copy_linked_field(host, field, (int)field_index, source_input, &final_input);
+        mirror_linked_field(host, field, (int)field_index, track->linked_transform_flags, &final_input);
       }
     }
+
+    for (uint32_t control_index = 0; control_index < schema->control_count; ++control_index) {
+      const ft_input_control *control = &schema->controls[control_index];
+      if (control->field >= schema->field_count) continue;
+      const action_t action = keybinds_linked_game_action(control_index);
+      const bool active = (control->flags & FT_CONTROL_PRESSED) ? keybinds_is_action_pressed(&ui->keybinds, action, false)
+                                                                : keybinds_is_action_down(&ui->keybinds, action);
+      if (!active) continue;
+      const ft_input_field *field = &schema->fields[control->field];
+      if (field->kind == FT_INPUT_FLOAT) {
+        float value = (float)control->value;
+        if (control->flags & FT_CONTROL_ADD) value += engine_input_get_float(host, &final_input, (int)control->field);
+        engine_input_set_float(host, &final_input, (int)control->field, value);
+      } else {
+        int64_t value = control->value;
+        if (control->flags & FT_CONTROL_ADD) value += engine_input_get(host, &final_input, (int)control->field);
+        engine_input_set(host, &final_input, (int)control->field, value);
+      }
+    }
+
+    uint64_t actions_down = 0;
+    uint64_t actions_pressed = 0;
+    for (int action_index = 0; action_index < ui->keybinds.linked_action_count; ++action_index) {
+      const action_t action = keybinds_linked_extra_action((unsigned)action_index);
+      if (keybinds_is_action_down(&ui->keybinds, action)) actions_down |= UINT64_C(1) << action_index;
+      if (keybinds_is_action_pressed(&ui->keybinds, action, false)) actions_pressed |= UINT64_C(1) << action_index;
+    }
+    ft_linked_input_frame frame = {.struct_size = sizeof(frame),
+                                   .world = world,
+                                   .source_player = source_player,
+                                   .target_player = target_player,
+                                   .source_input = source_input->bytes,
+                                   .actions_down = actions_down,
+                                   .actions_pressed = actions_pressed};
+    gh_linked_input_update(host, &frame, final_input.bytes);
     track->current_input = final_input;
   }
-  wc_free(&world);
 }
 
 void interaction_update_mouse(timeline_state_t *ts) {
@@ -119,10 +145,15 @@ void interaction_update_mouse(timeline_state_t *ts) {
   float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
   if (ts->is_reversing) intra = 1.f - intra;
   int group_tick = model_group_playhead_tick(ts, ts->active_group_index);
-  ts->ui->recording_mouse_pos[0] = glm_lerp(model_get_input_at_tick(ts, track_index, group_tick - 1).m_TargetX,
-                                            model_get_input_at_tick(ts, track_index, group_tick).m_TargetX, intra);
-  ts->ui->recording_mouse_pos[1] = glm_lerp(model_get_input_at_tick(ts, track_index, group_tick - 1).m_TargetY,
-                                            model_get_input_at_tick(ts, track_index, group_tick).m_TargetY, intra);
+  game_host_t *host = &ts->ui->gfx_handler->game_host;
+  const int aim_field = engine_input_cursor_field();
+  if (aim_field < 0) return;
+  const input_record_t previous = model_get_input_at_tick(ts, track_index, group_tick - 1);
+  const input_record_t current = model_get_input_at_tick(ts, track_index, group_tick);
+  const ft_vec2 from = engine_input_get_vec2(host, &previous, aim_field);
+  const ft_vec2 to = engine_input_get_vec2(host, &current, aim_field);
+  ts->ui->recording_mouse_pos[0] = glm_lerp(from.x, to.x, intra);
+  ts->ui->recording_mouse_pos[1] = glm_lerp(from.y, to.y, intra);
 }
 
 // Main Interaction Handlers
@@ -142,7 +173,7 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   // Always update inputs for ALL tracks (selected + dummies) to ensure smooth prediction rendering
   if (ts->recording) {
     interaction_update_recording_input(ts->ui);
-    interaction_apply_dummy_inputs(ts->ui);
+    interaction_apply_linked_inputs(ts->ui);
   }
 
   // Playback tick advancement
@@ -158,11 +189,8 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     if (steps > 0) {
       for (int i = 0; i < steps; ++i)
         model_advance_tick(ts, dir);
-      if (dir > 0) {
-        SWorldCore world = wc_empty();
-        model_get_world_state_at_tick(ts, ts->current_tick, &world, true);
-        wc_free(&world);
-      }
+      // Pull the new tick so the game runs its per-tick effects before drawing.
+      if (dir > 0) model_world_at_tick(ts, ts->current_tick);
       ts->last_update_time += (double)steps * tick_interval;
     }
   }
@@ -814,11 +842,13 @@ static void interaction_start_recording_on_track(timeline_state_t *ts, int track
 void interaction_toggle_recording(timeline_state_t *ts) {
   // continue the aim from the snippet under the playhead instead of jumping to wherever the mouse
   // was left.
-  if (!ts->recording && ts->selected_player_track_index >= 0 && ts->selected_player_track_index < ts->player_track_count) {
+  if (!ts->recording && engine_input_cursor_field() >= 0 && ts->selected_player_track_index >= 0 &&
+      ts->selected_player_track_index < ts->player_track_count) {
     int group_tick = model_group_playhead_tick(ts, model_track_group_index(ts, ts->selected_player_track_index));
-    SPlayerInput prev = model_get_input_at_tick(ts, ts->selected_player_track_index, group_tick);
-    ts->ui->recording_mouse_pos[0] = prev.m_TargetX;
-    ts->ui->recording_mouse_pos[1] = prev.m_TargetY;
+    const input_record_t prev = model_get_input_at_tick(ts, ts->selected_player_track_index, group_tick);
+    const ft_vec2 aim = engine_input_get_vec2(&ts->ui->gfx_handler->game_host, &prev, engine_input_cursor_field());
+    ts->ui->recording_mouse_pos[0] = aim.x;
+    ts->ui->recording_mouse_pos[1] = aim.y;
   }
 
   ts->recording = !ts->recording;
@@ -830,9 +860,10 @@ void interaction_toggle_recording(timeline_state_t *ts) {
     for (int i = 0; i < ts->player_track_count; ++i) {
       player_track_t *track = &ts->player_tracks[i];
       bool is_selected = (i == ts->selected_player_track_index);
-      bool is_dummy = track->is_dummy && track->group_index == ts->active_group_index;
+      bool is_linked = game_has_cap(&ts->ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS) && track->is_linked &&
+                      track->group_index == ts->active_group_index;
 
-      if (is_selected || is_dummy) {
+      if (is_selected || is_linked) {
         interaction_start_recording_on_track(ts, i);
         any_recording_started = true;
       }
@@ -902,7 +933,9 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
 
-    bool should_record = track->group_index == ts->active_group_index && ((i == ts->selected_player_track_index) || track->is_dummy);
+    bool should_record = track->group_index == ts->active_group_index &&
+                         ((i == ts->selected_player_track_index) ||
+                          (game_has_cap(&ts->ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS) && track->is_linked));
     if (!should_record && track->recording_snippet_count == 0) continue;
 
     input_snippet_t *target = NULL;
@@ -930,7 +963,7 @@ void interaction_switch_recording_target(timeline_state_t *ts, int new_track_ind
   if (ts->recording && new_track_index >= 0 && new_track_index < ts->player_track_count &&
       model_track_group_index(ts, new_track_index) == ts->active_group_index) {
     ts->selected_player_track_index = new_track_index;
-    if (!ts->player_tracks[new_track_index].is_dummy) {
+    if (!game_has_cap(&ts->ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS) || !ts->player_tracks[new_track_index].is_linked) {
       interaction_start_recording_on_track(ts, new_track_index);
     }
   }
@@ -943,31 +976,70 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   if (!ts->recording) return;
   if (ts->selected_player_track_index == -1 || ts->selected_player_track_index >= ts->player_track_count) return;
 
-  SPlayerInput *input = &ts->player_tracks[ts->selected_player_track_index].current_input;
+  game_host_t *host = &ui->gfx_handler->game_host;
+  input_record_t *input = &ts->player_tracks[ts->selected_player_track_index].current_input;
 
-  input->m_Direction = keybinds_is_action_down(kb, ACTION_RIGHT) - keybinds_is_action_down(kb, ACTION_LEFT);
-  input->m_Jump = keybinds_is_action_down(kb, ACTION_JUMP);
-  input->m_Fire = keybinds_is_action_down(kb, ACTION_FIRE);
-  input->m_Hook = keybinds_is_action_down(kb, ACTION_HOOK);
-  set_flag_kill(input, keybinds_is_action_down(kb, ACTION_KILL));
+  const ft_input_schema *schema = game_input_schema(host);
+  if (!schema) return;
 
-  if (keybinds_is_action_pressed(kb, ACTION_HAMMER, false)) input->m_WantedWeapon = WEAPON_HAMMER;
-  if (keybinds_is_action_pressed(kb, ACTION_GUN, false)) input->m_WantedWeapon = WEAPON_GUN;
-  if (keybinds_is_action_pressed(kb, ACTION_SHOTGUN, false)) input->m_WantedWeapon = WEAPON_SHOTGUN;
-  if (keybinds_is_action_pressed(kb, ACTION_GRENADE, false)) input->m_WantedWeapon = WEAPON_GRENADE;
-  if (keybinds_is_action_pressed(kb, ACTION_LASER, false)) input->m_WantedWeapon = WEAPON_LASER;
+  // Held actions describe the complete value for this frame. Reset each field
+  // they target once, then let active controls write or add their values.
+  bool reset[256] = {false};
+  const uint32_t control_count =
+      schema->control_count < (uint32_t)kb->game_action_count ? schema->control_count : (uint32_t)kb->game_action_count;
+  for (uint32_t i = 0; i < control_count; ++i) {
+    const ft_input_control *control = &schema->controls[i];
+    if (control->field >= schema->field_count || control->field >= 256 || reset[control->field]) continue;
+    const bool persistent_pressed = (control->flags & FT_CONTROL_PRESSED) &&
+                                    (schema->fields[control->field].flags & FT_INPUT_FLAG_TRIGGER) == 0;
+    if (persistent_pressed)
+      continue;
+    const ft_input_field *field = &schema->fields[control->field];
+    if (field->kind == FT_INPUT_FLOAT)
+      engine_input_set_float(host, input, (int)control->field, field->default_float);
+    else
+      engine_input_set(host, input, (int)control->field, field->default_value);
+    reset[control->field] = true;
+  }
 
-  input->m_TargetX = (int)ui->recording_mouse_pos[0];
-  input->m_TargetY = (int)ui->recording_mouse_pos[1];
-  if (!input->m_TargetX && !input->m_TargetY)
-    input->m_TargetX = 1;
+  for (uint32_t i = 0; i < control_count; ++i) {
+    const ft_input_control *control = &schema->controls[i];
+    if (control->field >= schema->field_count) continue;
+    const action_t action = keybinds_game_action(i);
+    const bool active = (control->flags & FT_CONTROL_PRESSED) ? keybinds_is_action_pressed(kb, action, false)
+                                                              : keybinds_is_action_down(kb, action);
+    if (!active) continue;
+    const ft_input_field *field = &schema->fields[control->field];
+    if (field->kind == FT_INPUT_FLOAT) {
+      float value = (float)control->value;
+      if (control->flags & FT_CONTROL_ADD) value += engine_input_get_float(host, input, (int)control->field);
+      engine_input_set_float(host, input, (int)control->field, value);
+    } else {
+      int64_t value = control->value;
+      if (control->flags & FT_CONTROL_ADD) value += engine_input_get(host, input, (int)control->field);
+      engine_input_set(host, input, (int)control->field, value);
+    }
+  }
+
+  // Cursor-driven fields are marked explicitly in the game schema. No field
+  // name ("aim", "target", etc.) is special to the engine anymore.
+  for (uint32_t field = 0; field < schema->field_count; ++field) {
+    if ((schema->fields[field].flags & FT_INPUT_FLAG_RECORDING_CURSOR) == 0) continue;
+    ft_vec2 cursor = {ui->recording_mouse_pos[0], ui->recording_mouse_pos[1]};
+    if (cursor.x == 0.f && cursor.y == 0.f) cursor.x = 1.f;
+    engine_input_set_vec2(host, input, (int)field, cursor);
+  }
 }
 
-SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int track_idx) {
+input_record_t interaction_predict_input(ui_handler_t *ui, const ft_world *world, int track_idx) {
   timeline_state_t *ts = &ui->timeline;
 
   if (ts->recording) {
-    if (track_idx < 0 || track_idx >= ts->player_track_count) return (SPlayerInput){0};
+    if (track_idx < 0 || track_idx >= ts->player_track_count) {
+      input_record_t blank;
+      engine_input_default(&ui->gfx_handler->game_host, &blank);
+      return blank;
+    }
 
     // Force update of recording state to ensure smooth visuals at frame rate
     // This is safe because it only updates the current_input struct,
@@ -976,15 +1048,13 @@ SPlayerInput interaction_predict_input(ui_handler_t *ui, SWorldCore *world, int 
     if (track_idx == ts->selected_player_track_index) {
       interaction_update_recording_input(ui);
     } else {
-      // Re-evaluate dummy logic for this specific frame
-      // We can call apply_dummy_inputs which updates ALL dummies,
-      // or we could extract specific logic. Calling the bulk update is safer.
-      interaction_apply_dummy_inputs(ui);
+      // Re-evaluate all linked tracks for this preview frame.
+      interaction_apply_linked_inputs(ui);
     }
     if (track_idx == ts->selected_player_track_index) return ts->player_tracks[track_idx].current_input;
   }
 
-  return model_get_input_at_tick(ts, track_idx, world->m_GameTick);
+  return model_get_input_at_tick(ts, track_idx, gh_world_tick(&ui->gfx_handler->game_host, world));
 }
 
 void interaction_handle_context_menu(timeline_state_t *ts) {

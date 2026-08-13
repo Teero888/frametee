@@ -1,8 +1,7 @@
 #ifndef GRAPHICS_H
 #define GRAPHICS_H
 #include "renderer.h"
-#include <ddnet_physics/libs/ddnet_map_loader/ddnet_map_loader.h>
-#include <physics/physics.h>
+#include <engine/game_host.h>
 #include <types.h>
 #include <user_interface/user_interface.h>
 #include <vulkan/vulkan_core.h>
@@ -40,8 +39,11 @@ enum { FRAME_OK = 0,
        FRAME_EXIT };
 
 // public api
-void on_map_load_mem(gfx_handler_t *handler, const unsigned char *map_buffer, size_t size);
-void on_map_load_path(gfx_handler_t *handler, const char *map_path);
+void on_level_load_memory(gfx_handler_t *handler, const unsigned char *level_buffer, size_t size);
+void on_level_load_path(gfx_handler_t *handler, const char *level_path);
+// Starts a clean project under another game. All objects owned by the old
+// module are destroyed before it is deactivated.
+bool gfx_activate_game(gfx_handler_t *handler, int game_index);
 int init_gfx_handler(gfx_handler_t *handler);
 int gfx_begin_frame(gfx_handler_t *handler);
 bool gfx_end_frame(gfx_handler_t *handler);
@@ -72,23 +74,24 @@ struct gfx_handler_t {
   // App Stuffs
   ui_handler_t user_interface;
   renderer_state_t renderer;
-  physics_handler_t physics_handler;
-  map_data_t *map_data; // ptr to ^ collision data for quick typing
-  texture_t *entities_atlas;
-  texture_t *entities_array;
+  // The active game. Everything game-specific — physics, level format, how a
+  // world looks — lives behind this and never in the engine.
+  game_host_t game_host;
+  // The level the project is built on, owned by the game module. NULL until one
+  // is opened.
+  ft_level *level;
+
+  // Extent of the playfield in world units, taken from the active game's level.
+  // The renderer normalizes every world coordinate by this, which is the only
+  // thing it needs to know about a level, so nothing in the render path has to
+  // understand any particular game's level format.
+  float world_width;
+  float world_height;
 
   vec2 viewport; // width,height
 
-  int default_skin;
-  int x_ninja_skin;
-  int x_spec_skin;
-
-  // Map Specific Render Data
-  shader_t *map_shader;
+  // The unit quad every instanced technique is laid over.
   mesh_t *quad_mesh;
-  // TODO: this should be 2
-  texture_t *map_textures[MAX_TEXTURES_PER_DRAW];
-  uint32_t map_texture_count;
 
   // retirement list for delayed frees
   struct {

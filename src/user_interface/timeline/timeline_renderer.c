@@ -1,13 +1,14 @@
+#include <engine/int_math.h>
 #include "timeline_renderer.h"
 #include "renderer/graphics_backend.h"
 #include "timeline_commands.h"
 #include "timeline_interaction.h"
 #include "timeline_model.h"
-#include "../net_events.h"
+#include "../timeline_events.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <symbols.h>
+#include <frametee/icons.h>
 #include <system/include_cimgui.h>
 #include <user_interface/undo_redo.h>
 #include <user_interface/widgets/imcol.h>
@@ -167,20 +168,28 @@ void renderer_draw_controls(timeline_state_t *ts) {
 
   igSameLine(0, 14 * dpi_scale);
 
+  // Cycles the camera modes the active game declared. The button lights up
+  // whenever the current mode is one the game drives rather than the user.
   camera_t *camera = &ts->ui->gfx_handler->renderer.camera;
-  bool follow_active = (camera->mode == CAMERA_MODE_FOLLOW);
-  if (follow_active) {
+  game_host_t *camera_host = &ts->ui->gfx_handler->game_host;
+  const unsigned mode_count = game_camera_mode_count(camera_host);
+  const ft_camera_mode *mode = game_camera_mode(camera_host, camera->mode);
+  const bool directed = mode && (mode->flags & FT_CAMERA_MODE_DIRECTED) != 0;
+
+  if (directed) {
     igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){1., 0.48f, 0.1f, 1.0f});
     igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){1., 0.58f, 0.1f, 1.0f});
     igPushStyleColor_Vec4(ImGuiCol_ButtonActive, (ImVec4){1., 0.68f, 0.1f, 1.0f});
   }
-  if (ui_icon_button(ts->ui, ICON_FA_VIDEO, (ImVec2){30 * dpi_scale, 0})) {
-    camera->mode = follow_active ? CAMERA_MODE_FREEVIEW : CAMERA_MODE_FOLLOW;
+  if (ui_icon_button(ts->ui, ICON_FA_VIDEO, (ImVec2){30 * dpi_scale, 0}) && mode_count > 0) {
+    camera->mode = (camera->mode + 1) % mode_count;
   }
   if (igIsItemHovered(ImGuiHoveredFlags_None)) {
-    igSetTooltip(follow_active ? "Lock Camera to Player (Active)" : "Lock Camera to Player");
+    const ft_camera_mode *next = game_camera_mode(camera_host, mode_count ? (camera->mode + 1) % mode_count : 0);
+    igSetTooltip("Camera: %s%s\nClick for %s", mode ? mode->display_name : "?", directed ? " (active)" : "",
+                 next ? next->display_name : "?");
   }
-  if (follow_active) {
+  if (directed) {
     igPopStyleColor(3);
   }
 
@@ -239,14 +248,16 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
 
     ImDrawList_AddLine(draw_list, (ImVec2){x, header_bb.Max.y - line_height}, (ImVec2){x, header_bb.Max.y}, col, 1.0f * dpi_scale);
 
-    // Format labels based on the time scale
+    // Format labels based on the time scale. Seconds come from the active game's
+    // tick rate, so a 60 Hz game reads correctly on the same ruler as a 50 Hz one.
+    const int tps = game_ticks_per_second(&ts->ui->gfx_handler->game_host);
     char label[64];
-    if (tick < 50) {
+    if (tick < tps) {
       snprintf(label, sizeof(label), "%d", tick);
-    } else if (tick < 3000) { // Under 1 minute
-      snprintf(label, sizeof(label), "%.1fs", tick / 50.0);
+    } else if (tick < tps * 60) { // Under 1 minute
+      snprintf(label, sizeof(label), "%.1fs", (double)tick / (double)tps);
     } else { // Over 1 minute
-      int total_secs = tick / 50;
+      int total_secs = tick / tps;
       int mins = total_secs / 60;
       int secs = total_secs % 60;
       snprintf(label, sizeof(label), "%d:%02d", mins, secs);
@@ -258,9 +269,9 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
     ImDrawList_AddText_Vec2(draw_list, text_pos, tick_text_col, label, NULL);
   }
 
-  // Draw markers for net events
-  for (int i = 0; i < ts->net_event_count; ++i) {
-    net_event_t *ev = &ts->net_events[i];
+  // Draw markers for events reported by the active game.
+  for (int i = 0; i < ts->event_count; ++i) {
+    timeline_event_t *ev = &ts->events[i];
     if (ev->group_index < 0 || ev->group_index >= ts->group_count) continue;
     int global_tick = ev->tick + ts->groups[ev->group_index]->start_offset;
     if (global_tick < start_tick || global_tick > end_tick) continue;
@@ -277,7 +288,7 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
       if (igIsMouseHoveringRect((ImVec2){x - 4 * dpi_scale, header_bb.Max.y - 12 * dpi_scale}, (ImVec2){x + 4 * dpi_scale, header_bb.Max.y - 4 * dpi_scale}, true)) {
         igBeginTooltip();
         igText("Group: %s", group->name);
-        net_event_tooltip_draw(ev);
+        timeline_event_tooltip_content(ev);
         igEndTooltip();
       }
     }
@@ -343,10 +354,12 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
       igSetCursorScreenPos(row_start_pos);
       player_track_t *track = &ts->player_tracks[i];
       timeline_group_t *group = ts->groups[track->group_index];
+      const bool supports_linked = game_has_cap(&ts->ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS);
+      if (!supports_linked) track->is_linked = false;
 
       // Render Track Info Panel (Left)
       bool is_track_selected = (ts->selected_player_track_index == i);
-      ImU32 header_bg_col = track->is_dummy ? igGetColorU32_Col(ImGuiCol_TextLink, 0.6f) : igGetColorU32_Col(ImGuiCol_FrameBg, 0.8f);
+      ImU32 header_bg_col = track->is_linked ? igGetColorU32_Col(ImGuiCol_TextLink, 0.6f) : igGetColorU32_Col(ImGuiCol_FrameBg, 0.8f);
 
       ImVec2 header_rect_min = row_start_pos;
       ImVec2 header_rect_max = {row_start_pos.x + track_header_width, row_start_pos.y + (ts->track_height * dpi_scale)};
@@ -370,10 +383,10 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
 
       igPushID_Int(i);
 
-      // Draw track name. Add a prefix for dummy tracks
+      // Draw track name. Linked tracks get a compact visual marker.
       igSetCursorScreenPos((ImVec2){row_start_pos.x + 20.0f * dpi_scale, row_start_pos.y + ((ts->track_height * dpi_scale) - igGetTextLineHeight()) * 0.5f});
-      if (track->is_dummy) {
-        igTextDisabled("[D]");
+      if (track->is_linked) {
+        igTextDisabled("[L]");
         igSameLine(0, 4.0f * dpi_scale);
       }
       igText("%s", track->name[0] ? track->name : "Track");
@@ -382,13 +395,13 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
       igSetCursorScreenPos(row_start_pos);
       igInvisibleButton("##track_header_interact", (ImVec2){track_header_width, ts->track_height * dpi_scale}, 0);
 
-      // Handle interactions: double-click to toggle dummy, single-click to select.
+      // Handle interactions: double-click to toggle linking, single-click to select.
       if (igIsItemHovered(0)) {
-        if (igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
+        if (supports_linked && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
           if (igGetIO_Nil()->KeyShift) {
             for (int t = 0; t < ts->player_track_count; ++t)
-              if (ts->player_tracks[t].group_index == track->group_index) ts->player_tracks[t].is_dummy ^= 1;
-          } else track->is_dummy = !track->is_dummy;
+              if (ts->player_tracks[t].group_index == track->group_index) ts->player_tracks[t].is_linked ^= 1;
+          } else track->is_linked = !track->is_linked;
 
         } else if (igIsItemClicked(ImGuiMouseButton_Left)) {
           interaction_select_track(ts, i);
@@ -421,34 +434,75 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
           }
           igEndMenu();
         }
-        igSeparator();
-        if (track->is_dummy) {
-          igText("Copy Settings");
+        if (supports_linked) {
           igSeparator();
-          int flags = track->dummy_copy_flags;
-          bool dir = (flags & COPY_DIRECTION) != 0;
-          bool target = (flags & COPY_TARGET) != 0;
-          bool jump = (flags & COPY_JUMP) != 0;
-          bool fire = (flags & COPY_FIRE) != 0;
-          bool hook = (flags & COPY_HOOK) != 0;
-          bool weapon = (flags & COPY_WEAPON) != 0;
+          if (track->is_linked) {
+            game_host_t *host = &ts->ui->gfx_handler->game_host;
+            const ft_input_schema *schema = game_input_schema(host);
+            const int player_count = model_group_track_count(ts, track->group_index);
+            const int target_player = model_group_local_track_index(ts, i);
+            if (track->linked_source_player < 0 || track->linked_source_player >= player_count ||
+                track->linked_source_player == target_player) {
+              track->linked_source_player = target_player == 0 && player_count > 1 ? 1 : 0;
+            }
 
-          if (igCheckbox("Direction", &dir)) flags ^= COPY_DIRECTION;
-          if (igCheckbox("Target", &target)) flags ^= COPY_TARGET;
-          if (igCheckbox("Jump", &jump)) flags ^= COPY_JUMP;
-          if (igCheckbox("Fire", &fire)) flags ^= COPY_FIRE;
-          if (igCheckbox("Hook", &hook)) flags ^= COPY_HOOK;
-          if (igCheckbox("Weapon", &weapon)) flags ^= COPY_WEAPON;
+            char source_label[96] = "No source";
+            const int source_track = model_group_track_index(ts, track->group_index, track->linked_source_player);
+            if (source_track >= 0)
+              snprintf(source_label, sizeof(source_label), "%d: %s", track->linked_source_player + 1,
+                       ts->player_tracks[source_track].name);
+            if (igBeginCombo("Source", source_label, 0)) {
+              for (int local = 0; local < player_count; ++local) {
+                if (local == target_player) continue;
+                const int candidate = model_group_track_index(ts, track->group_index, local);
+                if (candidate < 0) continue;
+                char label[96];
+                snprintf(label, sizeof(label), "%d: %s", local + 1, ts->player_tracks[candidate].name);
+                if (igSelectable_Bool(label, local == track->linked_source_player, 0, (ImVec2){0, 0})) {
+                  track->linked_source_player = local;
+                  timeline_mark_unsaved(ts);
+                }
+              }
+              igEndCombo();
+            }
 
-          bool mirror_x = (flags & COPY_MIRROR_X) != 0;
-          bool mirror_y = (flags & COPY_MIRROR_Y) != 0;
-          if (igCheckbox("Mirror Aim X (and Dir)", &mirror_x)) flags ^= COPY_MIRROR_X;
-          if (igCheckbox("Mirror Aim Y", &mirror_y)) flags ^= COPY_MIRROR_Y;
+            igText("Copied fields");
+            igSeparator();
+            bool has_mirror_x = false;
+            bool has_mirror_y = false;
+            if (schema) {
+              for (uint32_t field_index = 0; field_index < schema->field_count && field_index < 64; ++field_index) {
+                const ft_input_field *field = &schema->fields[field_index];
+                if (field->flags & FT_INPUT_FLAG_INTERNAL) continue;
+                bool copied = (track->linked_copy_fields & (UINT64_C(1) << field_index)) != 0;
+                if (igCheckbox(field->display_name ? field->display_name : field->id, &copied)) {
+                  track->linked_copy_fields ^= UINT64_C(1) << field_index;
+                  timeline_mark_unsaved(ts);
+                }
+                has_mirror_x |= (field->flags & FT_INPUT_FLAG_MIRROR_X) != 0;
+                has_mirror_y |= (field->flags & FT_INPUT_FLAG_MIRROR_Y) != 0;
+              }
+            }
 
-          track->dummy_copy_flags = flags;
-        } else {
-          igTextDisabled("Not a dummy track");
-          igTextDisabled("Double-click header to toggle");
+            if (has_mirror_x || has_mirror_y) igSeparator();
+            if (has_mirror_x) {
+              bool mirror = (track->linked_transform_flags & FT_LINKED_MIRROR_X) != 0;
+              if (igCheckbox("Mirror horizontally", &mirror)) {
+                track->linked_transform_flags ^= FT_LINKED_MIRROR_X;
+                timeline_mark_unsaved(ts);
+              }
+            }
+            if (has_mirror_y) {
+              bool mirror = (track->linked_transform_flags & FT_LINKED_MIRROR_Y) != 0;
+              if (igCheckbox("Mirror vertically", &mirror)) {
+                track->linked_transform_flags ^= FT_LINKED_MIRROR_Y;
+                timeline_mark_unsaved(ts);
+              }
+            }
+          } else {
+            igTextDisabled("Not a linked track");
+            igTextDisabled("Double-click header to toggle");
+          }
         }
         igEndPopup();
       }

@@ -61,45 +61,40 @@ if(MSVC)
 endif()
 
 
+# The engine. Nothing here knows about any particular game: physics, level
+# formats, visuals and per-game panels all live in games/<id>/ behind
+# include/frametee/game_abi.h.
 set(SRCS 
 	src/main.c
-	src/animation/anim_data.c
-	src/animation/anim_system.c
 	src/system/save.c
 	src/system/config.c
 	src/system/input.c
 	src/system/fs.c
-	src/system/skin/skin_fetch.c
 	src/logger/logger.c
-	src/physics/physics.c
+	src/engine/game_host.c
+	src/engine/engine_api.c
+	src/engine/input_record.c
 	src/plugins/api_impl.c
 	src/plugins/plugin_manager.c
 	src/scripting/script_engine.c
 	src/renderer/graphics_backend.c
 	src/renderer/renderer.c
-	src/user_interface/skin_browser.c
-	src/user_interface/demo.c
 	src/user_interface/keybinds.c
 	src/user_interface/player_info.c
 	src/user_interface/snippet_editor.c
-	src/user_interface/net_events.c
+	src/user_interface/timeline_events.c
 	src/user_interface/undo_redo.c
 	src/user_interface/entity_inspector.c
 	src/user_interface/user_interface.c
-	src/user_interface/online_maps.c
-	src/user_interface/widgets/hsl_colorpicker.c
 	src/user_interface/timeline/timeline.c
 	src/user_interface/timeline/timeline_commands.c
 	src/user_interface/timeline/timeline_interaction.c
 	src/user_interface/timeline/timeline_model.c
 	src/user_interface/timeline/timeline_renderer.c
-	src/particles/particle_system.c
-	libs/cjson/cJSON.c
 )
 
 # find dependencies
 find_package(Vulkan REQUIRED)
-find_package(CURL REQUIRED)
 
 # Try to find an existing glfw3 installation first; fall back to fetching it if unavailable.
 find_package(glfw3 CONFIG QUIET)
@@ -194,29 +189,12 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 
 # add and link libs
 add_subdirectory(libs/cglm)
-add_subdirectory(libs/ddnet_physics)
-if(WIN32)
-    get_target_property(DDNET_PHYSICS_TYPE ddnet_physics TYPE)
-    if(DDNET_PHYSICS_TYPE STREQUAL "SHARED_LIBRARY")
-        target_compile_definitions(ddnet_physics PRIVATE "DDNET_PHYSICS_API=__declspec(dllexport)")
-        target_compile_definitions(ddnet_physics INTERFACE "DDNET_PHYSICS_API=__declspec(dllimport)")
-    else()
-        # On Windows, when building statically, we override DDNET_PHYSICS_API to __declspec(dllexport)
-        # for ddnet_physics and targets linking it (the host app frametee).
-        # This tells the compiler to mark all library symbols for export in the host executable.
-        # Meanwhile, plugins (which don't link ddnet_physics) will naturally fall back to __declspec(dllimport).
-        set_target_properties(ddnet_physics PROPERTIES COMPILE_DEFINITIONS "")
-        target_compile_definitions(ddnet_physics PUBLIC "DDNET_PHYSICS_API=__declspec(dllexport)")
-    endif()
-endif()
 add_subdirectory(libs/nfd)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nfd
     stb
     toml
-    CURL::libcurl
-    ddnet_physics
     cglm
     cimgui
     ${GLFW_LINK_TARGET}
@@ -236,10 +214,8 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<AND:$<BOOL:${ENABLE_SANITIZERS}>,$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-fsanitize=address,undefined>
 )
 
-# Aggressive optimizations, matching libs/ddnet_physics. ddnet_physics is linked
-# into this executable, so when it is compiled to LTO bitcode the final link has
-# to run LTO codegen as well -- without -flto here the host would be linking
-# bitcode objects through the plugin fallback path.
+# Aggressive host optimizations. Game modules configure their own optimization
+# and link options independently.
 if(ENABLE_AGGRESSIVE_OPTIM AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT ENABLE_SANITIZERS)
     target_compile_options(${PROJECT_NAME} PRIVATE
         $<$<CONFIG:Release>:-flto -march=native -mtune=native>
@@ -252,8 +228,10 @@ endif()
 frametee_enable_pgo(${PROJECT_NAME})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/src)
+# The game module ABI. Kept in its own root so a game module can consume it
+# without seeing any engine internals.
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/libs)
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/libs/cjson)
 
 # sanitizer options
 if(ENABLE_SANITIZERS)
@@ -380,11 +358,87 @@ add_custom_command(
 )
 
 # =================================================================================================
+# GAME MODULE ASSETS
+# =================================================================================================
+# Each game keeps its assets under data/games/<id>/, which is what
+# engine->resolve_data_path() hands back to a module. Shaders there are compiled
+# the same way the engine's own are.
+file(GLOB GAME_SHADER_SOURCES
+    "${CMAKE_SOURCE_DIR}/data/games/*/shaders/*.vert.glsl"
+    "${CMAKE_SOURCE_DIR}/data/games/*/shaders/*.frag.glsl"
+)
+set(GAME_SHADER_OUTPUTS "")
+foreach(SHADER ${GAME_SHADER_SOURCES})
+    file(RELATIVE_PATH SHADER_REL "${CMAKE_SOURCE_DIR}/data" "${SHADER}")
+    string(REPLACE ".glsl" ".spv" SHADER_REL_SPV "${SHADER_REL}")
+    set(SHADER_OUTPUT "${CMAKE_BINARY_DIR}/data/${SHADER_REL_SPV}")
+    get_filename_component(SHADER_OUT_DIR "${SHADER_OUTPUT}" DIRECTORY)
+    list(APPEND GAME_SHADER_OUTPUTS ${SHADER_OUTPUT})
+    add_custom_command(
+        OUTPUT ${SHADER_OUTPUT}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+        COMMAND ${GLSLANG_VALIDATOR} -V ${SHADER} -o ${SHADER_OUTPUT}
+        DEPENDS ${SHADER}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Compiling game shader ${SHADER_REL}"
+    )
+endforeach()
+add_custom_target(compile_game_shaders ALL DEPENDS ${GAME_SHADER_OUTPUTS})
+add_dependencies(${PROJECT_NAME} compile_game_shaders)
+
+# copy the non-shader game assets (textures, skins, ...) next to them
+add_custom_command(
+    TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/data/games
+        ${CMAKE_BINARY_DIR}/data/games
+    COMMENT "Copying game module assets to build directory"
+)
+
+# =================================================================================================
+# GAME MODULES
+# =================================================================================================
+# Each subdirectory of games/ is an independent shared library implementing
+# include/frametee/game_abi.h. They are built here purely for convenience: a
+# module has no build-time dependency on the engine and can be compiled
+# out-of-tree, in any language that can produce a C-callable shared library.
+option(BUILD_GAMES "Build the bundled game modules" ON)
+# The game this build starts with when the user has no saved preference. Purely
+# a packaging choice: the engine itself knows nothing about any game, and an
+# empty value makes it take the first module in id order.
+set(FRAMETEE_DEFAULT_GAME "" CACHE STRING "Game module id to start with by default; empty selects the first installed module")
+target_compile_definitions(${PROJECT_NAME} PRIVATE FRAMETEE_DEFAULT_GAME_ID="${FRAMETEE_DEFAULT_GAME}")
+set(FRAMETEE_ABI_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include" CACHE PATH "Location of the FrameTee game ABI header")
+
+add_custom_command(
+    TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/games
+    COMMENT "Creating games directory in build folder"
+)
+
+if(BUILD_GAMES)
+    file(GLOB GAME_ENTRIES "${CMAKE_SOURCE_DIR}/games/*")
+    foreach(GAME_DIR ${GAME_ENTRIES})
+        if(IS_DIRECTORY "${GAME_DIR}" AND EXISTS "${GAME_DIR}/CMakeLists.txt")
+            add_subdirectory("${GAME_DIR}")
+            get_property(GAME_TARGETS DIRECTORY "${GAME_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
+            foreach(GAME_TARGET ${GAME_TARGETS})
+                set_target_properties(${GAME_TARGET} PROPERTIES
+                    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/games"
+                    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/games"
+                )
+                add_dependencies(${PROJECT_NAME} ${GAME_TARGET})
+            endforeach()
+        endif()
+    endforeach()
+endif()
+
+# =================================================================================================
 # PLUGINS INTEGRATION
 # =================================================================================================
 option(BUILD_PLUGINS "Build all default plugins" ON)
 if(BUILD_PLUGINS)
-    set(HOST_APP_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH "Path to the root of the ddnet_frametee project" FORCE)
+    set(HOST_APP_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH "Path to the FrameTee project root" FORCE)
     file(GLOB PLUGIN_ENTRIES "${CMAKE_SOURCE_DIR}/plugins/*")
     foreach(PLUGIN_DIR ${PLUGIN_ENTRIES})
         if(IS_DIRECTORY "${PLUGIN_DIR}" AND EXISTS "${PLUGIN_DIR}/CMakeLists.txt")
@@ -399,4 +453,79 @@ if(BUILD_PLUGINS)
 
         endif()
     endforeach()
+endif()
+
+# =================================================================================================
+# TESTS
+# =================================================================================================
+include(CTest)
+if(BUILD_TESTING AND BUILD_GAMES)
+    add_library(semver_invalid_game MODULE tests/semver_invalid_game.c)
+    set_target_properties(semver_invalid_game PROPERTIES PREFIX "" OUTPUT_NAME "semver_invalid_game")
+    target_include_directories(semver_invalid_game PRIVATE ${FRAMETEE_ABI_INCLUDE_DIR})
+    add_library(input_stride_game MODULE tests/input_stride_game.c)
+    set_target_properties(input_stride_game PROPERTIES PREFIX "" OUTPUT_NAME "input_stride_game")
+    target_include_directories(input_stride_game PRIVATE ${FRAMETEE_ABI_INCLUDE_DIR})
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-config-bouncer")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-config-platformer")
+    add_test(
+        NAME project_v11_bouncer_roundtrip
+        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-bouncer --auto "${CMAKE_SOURCE_DIR}/tests/v11_bouncer_roundtrip.auto"
+    )
+    add_test(
+        NAME project_v11_platformer_roundtrip
+        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-platformer --auto "${CMAKE_SOURCE_DIR}/tests/v11_platformer_roundtrip.auto"
+    )
+    add_test(
+        NAME game_switch_and_quick_save_lifetime
+        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-bouncer --auto "${CMAKE_SOURCE_DIR}/tests/game_switch_lifetime.auto"
+    )
+    add_test(
+        NAME config_preserves_inactive_games
+        COMMAND ${CMAKE_COMMAND}
+            -DAPP=$<TARGET_FILE:${PROJECT_NAME}>
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DBUILD_DIR=${CMAKE_BINARY_DIR}
+            -P "${CMAKE_SOURCE_DIR}/tests/config_preserve.cmake"
+    )
+    add_test(
+        NAME rejects_invalid_game_semver
+        COMMAND ${CMAKE_COMMAND}
+            -DAPP=$<TARGET_FILE:${PROJECT_NAME}>
+            -DMODULE=$<TARGET_FILE:semver_invalid_game>
+            -DBUILD_DIR=${CMAKE_BINARY_DIR}
+            -P "${CMAKE_SOURCE_DIR}/tests/semver_rejection.cmake"
+    )
+    add_test(
+        NAME game_input_records_use_declared_stride
+        COMMAND ${CMAKE_COMMAND}
+            -DAPP=$<TARGET_FILE:${PROJECT_NAME}>
+            -DMODULE=$<TARGET_FILE:input_stride_game>
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DBUILD_DIR=${CMAKE_BINARY_DIR}
+            -P "${CMAKE_SOURCE_DIR}/tests/input_stride.cmake"
+    )
+    add_test(
+        NAME ddnet_demo_exporter_writes_demo
+        COMMAND ${CMAKE_COMMAND}
+            -DAPP=$<TARGET_FILE:${PROJECT_NAME}>
+            -DMODULE=$<TARGET_FILE:ddnet_game>
+            -DMAP=${CMAKE_SOURCE_DIR}/libs/ddnet_demo/Aip-Gores.map
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DBUILD_DIR=${CMAKE_BINARY_DIR}
+            -P "${CMAKE_SOURCE_DIR}/tests/ddnet_export.cmake"
+    )
+    set_tests_properties(project_v11_bouncer_roundtrip PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-bouncer;APPDATA=${CMAKE_BINARY_DIR}/test-config-bouncer"
+    )
+    set_tests_properties(project_v11_platformer_roundtrip PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-platformer;APPDATA=${CMAKE_BINARY_DIR}/test-config-platformer"
+    )
+    set_tests_properties(game_switch_and_quick_save_lifetime PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-switch;APPDATA=${CMAKE_BINARY_DIR}/test-config-switch"
+        PASS_REGULAR_EXPRESSION "Quick-saved current project to 'frametee-switch-lifetime.tasp'."
+    )
 endif()

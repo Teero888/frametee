@@ -1,3 +1,4 @@
+#include <engine/int_math.h>
 #include "timeline.h"
 #include "../user_interface.h"
 #include "renderer/graphics_backend.h"

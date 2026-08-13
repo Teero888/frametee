@@ -5,6 +5,8 @@
 #include <system/include_cimgui.h>
 #include <types.h>
 
+struct game_host_t;
+
 typedef enum {
   // playback controls
   ACTION_PLAY_PAUSE,
@@ -43,32 +45,17 @@ typedef enum {
   // recording
   ACTION_TRIM_SNIPPET,
   ACTION_CANCEL_RECORDING,
-  ACTION_FIRE,
-  ACTION_HOOK,
-  ACTION_LEFT,
-  ACTION_RIGHT,
-  ACTION_JUMP,
-  ACTION_HAMMER,
-  ACTION_GUN,
-  ACTION_SHOTGUN,
-  ACTION_GRENADE,
-  ACTION_LASER,
-  ACTION_KILL,
-
-  // dummy binds
-  ACTION_DUMMY_LEFT,
-  ACTION_DUMMY_RIGHT,
-  ACTION_DUMMY_JUMP,
-  ACTION_DUMMY_FIRE,
-  ACTION_DUMMY_HOOK,
-  ACTION_DUMMY_AIM,
-  ACTION_TOGGLE_DUMMY_COPY,
+  ACTION_TOGGLE_LINKED_COPY,
 
   // camera
   ACTION_ZOOM_IN,
   ACTION_ZOOM_OUT,
 
-  ACTION_COUNT
+  ACTION_ENGINE_COUNT,
+  ACTION_GAME_FIRST = ACTION_ENGINE_COUNT,
+  ACTION_LINKED_GAME_FIRST = ACTION_GAME_FIRST + 64,
+  ACTION_LINKED_EXTRA_FIRST = ACTION_LINKED_GAME_FIRST + 64,
+  ACTION_COUNT = ACTION_LINKED_EXTRA_FIRST + 64
 } action_t;
 
 struct key_combo_t {
@@ -79,9 +66,9 @@ struct key_combo_t {
 };
 
 struct action_info_t {
-  const char *identifier;
-  const char *name;
-  const char *category;
+  char identifier[96];
+  char name[64];
+  char category[64];
 };
 
 struct keybind_entry_t {
@@ -92,6 +79,9 @@ struct keybind_entry_t {
 struct keybind_manager_t {
   // Static info about actions
   action_info_t action_infos[ACTION_COUNT];
+  int action_count;
+  int game_action_count;
+  int linked_action_count;
 
   // Dynamic list of bindings
   keybind_entry_t *bindings;
@@ -107,6 +97,9 @@ struct keybind_manager_t {
 };
 
 void keybinds_init(keybind_manager_t *manager);
+void keybinds_bind_game(keybind_manager_t *manager, const struct game_host_t *host);
+void keybinds_cleanup(keybind_manager_t *manager);
+bool keybinds_parse_combo(const char *text, key_combo_t *out);
 void keybinds_process_inputs(ui_handler_t *ui);
 void keybinds_render_settings_window(ui_handler_t *ui);
 const char *keybind_get_combo_string(const key_combo_t *combo);
@@ -123,4 +116,7 @@ bool keybinds_is_action_down(keybind_manager_t *kb, action_t action);
 int keybinds_get_count_for_action(keybind_manager_t *kb, action_t action);
 keybind_entry_t *keybinds_get_binding_for_action(keybind_manager_t *kb, action_t action, int n); // Get n-th binding for action
 int keybinds_get_global_index_for_action(keybind_manager_t *kb, action_t action, int n);
+action_t keybinds_game_action(unsigned control_index);
+action_t keybinds_linked_game_action(unsigned control_index);
+action_t keybinds_linked_extra_action(unsigned action_index);
 #endif // KEYBINDS_H

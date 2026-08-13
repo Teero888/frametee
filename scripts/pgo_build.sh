@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-NAME=workload_plugin_dir_name
+NAME=ultraforce
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT/build-pgo"

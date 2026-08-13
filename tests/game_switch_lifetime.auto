@@ -1,0 +1,14 @@
+load_level builtin:bevy-arena
+tick 4
+save_project frametee-switch-lifetime.tasp
+load_project frametee-switch-lifetime.tasp
+quick_save
+
+activate_game ddnet
+activate_game example-platformer
+load_level builtin:platformer-arena
+tick 4
+
+activate_game example-bouncer
+load_level builtin:bevy-arena
+tick 4

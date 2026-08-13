@@ -1,6 +1,4 @@
 #include "renderer.h"
-#include <animation/anim_data.h>
-#include <animation/anim_system.h>
 #include <system/fs.h>
 #include "graphics_backend.h"
 #include <cglm/cglm.h>
@@ -35,6 +33,7 @@ void renderer_unlock(void) {
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #endif
 #include "stb_image_resize2.h"
 #if defined(__GNUC__)
@@ -64,11 +63,12 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
 static void copy_buffer_to_image(gfx_handler_t *handler, VkCommandPool pool, VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
 static char *read_file(const char *filename, size_t *length);
 static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *code, size_t code_size);
+static primitive_ubo_t world_ubo(gfx_handler_t *h);
+static void upload_texture_layer(gfx_handler_t *h, texture_t *array, VkFormat format, int layer, const void *src, VkDeviceSize bytes);
+static void renderer_flush_custom_instances(gfx_handler_t *h, VkCommandBuffer cmd, const render_command_t *q);
 static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t base_layer,
                           uint32_t layer_count);
 static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer);
-static void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path, const sprite_definition_t *sprites,
-                                         uint32_t sprite_count, uint32_t max_instances);
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 
 // vertex description helpers
@@ -76,9 +76,6 @@ static VkVertexInputBindingDescription primitive_binding_description;
 static VkVertexInputAttributeDescription primitive_attribute_descriptions[2];
 static VkVertexInputBindingDescription mesh_binding_description;
 static VkVertexInputAttributeDescription mesh_attribute_descriptions[3];
-// skin instancing
-static VkVertexInputBindingDescription skin_binding_desc[2];
-static VkVertexInputAttributeDescription skin_attrib_descs[14];
 
 // atlas things
 static VkVertexInputBindingDescription atlas_binding_desc[2];
@@ -470,7 +467,8 @@ texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t wid
   texArray->height = height;
   texArray->mip_levels = (uint32_t)floor(log2(fmax(width, height))) + 1;
   texArray->layer_count = layer_count;
-  strncpy(texArray->path, "runtime_skin_array", sizeof(texArray->path) - 1);
+  texArray->format = format;
+  strncpy(texArray->path, "runtime_texture_array", sizeof(texArray->path) - 1);
 
   // Create the VkImage (2D array)
   create_image(handler, width, height, texArray->mip_levels, layer_count, format, VK_IMAGE_TILING_OPTIMAL,
@@ -552,106 +550,8 @@ int renderer_init(gfx_handler_t *handler) {
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_ubo_buffer);
   vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0, &renderer->ubo_buffer_ptr);
 
-  // create a 2d array texture to hold max_skins atlases (each 512x352, rgba8)
-  renderer->skin_manager.atlas_array =
-      renderer_create_texture_2d_array(handler, SKIN_ATLAS_W, SKIN_ATLAS_H, MAX_SKINS, VK_FORMAT_R8G8B8A8_UNORM);
-  renderer->skin_manager.color_array =
-      renderer_create_texture_2d_array(handler, SKIN_ATLAS_W, SKIN_ATLAS_H, MAX_SKINS, VK_FORMAT_R8G8_UNORM);
-  memset(renderer->skin_manager.layer_used, 0, sizeof(renderer->skin_manager.layer_used));
-  // skin renderer
-  renderer->skin_renderer.skin_shader = renderer_load_shader(handler, "data/shaders/skin.vert.spv", "data/shaders/skin.frag.spv");
-
-  // allocate big instance buffer
-  create_buffer(handler, sizeof(skin_instance_t) * MAX_SKIN_INSTANCES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->skin_renderer.instance_buffer);
-  vkMapMemory(handler->g_device, renderer->skin_renderer.instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->skin_renderer.instance_ptr);
-
-  renderer->skin_renderer.instance_count = 0;
 
   // Game Skin Sprites (32x16 grid, 32px unit)
-  static sprite_definition_t gameskin_sprites[GAMESKIN_SPRITE_COUNT] = {[GAMESKIN_HAMMER_BODY] = {64, 32, 128, 96},
-                                                                        [GAMESKIN_GUN_BODY] = {64, 128, 128, 64},
-                                                                        [GAMESKIN_GUN_PROJ] = {192, 128, 64, 64},
-                                                                        [GAMESKIN_GUN_MUZZLE1] = {256, 128, 128, 64},
-                                                                        [GAMESKIN_GUN_MUZZLE2] = {384, 128, 128, 64},
-                                                                        [GAMESKIN_GUN_MUZZLE3] = {512, 128, 128, 64},
-                                                                        [GAMESKIN_SHOTGUN_BODY] = {64, 192, 256, 64},
-                                                                        [GAMESKIN_SHOTGUN_PROJ] = {320, 192, 64, 64},
-                                                                        [GAMESKIN_SHOTGUN_MUZZLE1] = {384, 192, 128, 64},
-                                                                        [GAMESKIN_SHOTGUN_MUZZLE2] = {512, 192, 128, 64},
-                                                                        [GAMESKIN_SHOTGUN_MUZZLE3] = {640, 192, 128, 64},
-                                                                        [GAMESKIN_GRENADE_BODY] = {64, 256, 224, 64},
-                                                                        [GAMESKIN_GRENADE_PROJ] = {320, 256, 64, 64},
-                                                                        [GAMESKIN_LASER_BODY] = {64, 384, 224, 96},
-                                                                        [GAMESKIN_LASER_PROJ] = {320, 384, 64, 64},
-                                                                        [GAMESKIN_NINJA_BODY] = {64, 320, 256, 64},
-                                                                        [GAMESKIN_NINJA_MUZZLE1] = {800, 0, 224, 128},
-                                                                        [GAMESKIN_NINJA_MUZZLE2] = {800, 128, 224, 128},
-                                                                        [GAMESKIN_NINJA_MUZZLE3] = {800, 256, 224, 128},
-                                                                        [GAMESKIN_HEALTH_FULL] = {672, 0, 64, 64},
-                                                                        [GAMESKIN_HEALTH_EMPTY] = {736, 0, 64, 64},
-                                                                        [GAMESKIN_ARMOR_FULL] = {672, 64, 64, 64},
-                                                                        [GAMESKIN_ARMOR_EMPTY] = {736, 64, 64, 64},
-                                                                        [GAMESKIN_HOOK_CHAIN] = {64, 0, 32, 32},
-                                                                        [GAMESKIN_HOOK_HEAD] = {96, 0, 64, 32},
-                                                                        [GAMESKIN_PARTICLE_0] = {192, 0, 32, 32},
-                                                                        [GAMESKIN_PARTICLE_1] = {192, 32, 32, 32},
-                                                                        [GAMESKIN_PARTICLE_2] = {224, 0, 32, 32},
-                                                                        [GAMESKIN_PARTICLE_3] = {224, 32, 32, 32},
-                                                                        [GAMESKIN_PARTICLE_4] = {256, 0, 32, 32},
-                                                                        [GAMESKIN_PARTICLE_5] = {256, 32, 32, 32},
-                                                                        [GAMESKIN_PARTICLE_6] = {288, 0, 64, 64},
-                                                                        [GAMESKIN_PARTICLE_7] = {352, 0, 64, 64},
-                                                                        [GAMESKIN_PARTICLE_8] = {416, 0, 64, 64},
-                                                                        [GAMESKIN_STAR_0] = {480, 0, 64, 64},
-                                                                        [GAMESKIN_STAR_1] = {544, 0, 64, 64},
-                                                                        [GAMESKIN_STAR_2] = {608, 0, 64, 64},
-                                                                        [GAMESKIN_PICKUP_HEALTH] = {320, 64, 64, 64},
-                                                                        [GAMESKIN_PICKUP_ARMOR] = {384, 64, 64, 64},
-                                                                        [GAMESKIN_PICKUP_HAMMER] = {64, 32, 128, 96},
-                                                                        [GAMESKIN_PICKUP_GUN] = {64, 128, 128, 64},
-                                                                        [GAMESKIN_PICKUP_SHOTGUN] = {64, 192, 256, 64},
-                                                                        [GAMESKIN_PICKUP_GRENADE] = {64, 256, 224, 64},
-                                                                        [GAMESKIN_PICKUP_LASER] = {64, 384, 224, 96},
-                                                                        [GAMESKIN_PICKUP_NINJA] = {64, 320, 256, 64},
-                                                                        [GAMESKIN_PICKUP_ARMOR_SHOTGUN] = {480, 64, 64, 64},
-                                                                        [GAMESKIN_PICKUP_ARMOR_GRENADE] = {544, 64, 64, 64},
-                                                                        [GAMESKIN_PICKUP_ARMOR_NINJA] = {320, 320, 64, 64},
-                                                                        [GAMESKIN_PICKUP_ARMOR_LASER] = {608, 64, 64, 64},
-                                                                        [GAMESKIN_FLAG_BLUE] = {384, 256, 128, 256},
-                                                                        [GAMESKIN_FLAG_RED] = {512, 256, 128, 256}};
-
-  renderer_init_atlas_renderer(handler, &renderer->gameskin_renderer, "data/textures/game.png", gameskin_sprites, GAMESKIN_SPRITE_COUNT, MAX_ATLAS_INSTANCES);
-
-  // Particles Sprites (8x8 grid, 64px unit)
-  static sprite_definition_t particle_sprites[PARTICLE_SPRITE_COUNT] = {
-      [PARTICLE_SLICE] = {0, 0, 64, 64},         // 0,0
-      [PARTICLE_BALL] = {64, 0, 64, 64},         // 1,0
-      [PARTICLE_SPLAT01] = {128, 0, 64, 64},     // 2,0
-      [PARTICLE_SPLAT02] = {192, 0, 64, 64},     // 3,0
-      [PARTICLE_SPLAT03] = {256, 0, 64, 64},     // 4,0
-      [PARTICLE_SMOKE] = {0, 64, 64, 64},        // 0,1
-      [PARTICLE_SHELL] = {0, 128, 128, 128},     // 0,2 2x2
-      [PARTICLE_EXPL01] = {0, 256, 256, 256},    // 0,4 4x4
-      [PARTICLE_AIRJUMP] = {128, 128, 128, 128}, // 2,2 2x2
-      [PARTICLE_HIT01] = {256, 64, 128, 128}     // 4,1 2x2
-  };
-  renderer_init_atlas_renderer(handler, &renderer->particle_renderer, "data/textures/particles.png", particle_sprites, PARTICLE_SPRITE_COUNT, MAX_ATLAS_INSTANCES);
-
-  // Extras Sprites (16x16 grid, 32px unit)
-  static sprite_definition_t extra_sprites[EXTRA_SPRITE_COUNT] = {
-      [EXTRA_SNOWFLAKE] = {0, 0, 64, 64}, // 0,0 2x2
-      [EXTRA_SPARKLE] = {64, 0, 64, 64},  // 2,0 2x2
-      [EXTRA_PULLEY] = {128, 0, 32, 32},  // 4,0 1x1
-      [EXTRA_HECTAGON] = {192, 0, 64, 64} // 6,0 2x2
-  };
-  renderer_init_atlas_renderer(handler, &renderer->extras_renderer, "data/textures/extras.png", extra_sprites, EXTRA_SPRITE_COUNT, MAX_ATLAS_INSTANCES);
-
-  // Initialize cursor renderer (using gameskin)
-  static sprite_definition_t cursor_sprites[CURSOR_SPRITE_COUNT + 1] = {
-      [CURSOR_HAMMER] = {0, 0, 64, 64}, [CURSOR_GUN] = {0, 128, 64, 64}, [CURSOR_SHOTGUN] = {0, 192, 64, 64}, [CURSOR_GRENADE] = {0, 256, 64, 64}, [CURSOR_LASER] = {0, 384, 64, 64}, [CURSOR_NINJA] = {0, 320, 64, 64}};
-  renderer_init_atlas_renderer(handler, &renderer->cursor_renderer, "data/textures/game.png", cursor_sprites, CURSOR_SPRITE_COUNT,
-                               1); // we only render a single cursor
 
   log_info(LOG_SOURCE, "Renderer initialized successfully.");
   return 0;
@@ -725,15 +625,6 @@ void renderer_cleanup(gfx_handler_t *handler) {
   }
   vkDestroyCommandPool(device, renderer->transfer_command_pool, allocator);
 
-  // free skin instance buffer
-  if (renderer->skin_renderer.instance_buffer.buffer) {
-    vkDestroyBuffer(device, renderer->skin_renderer.instance_buffer.buffer, allocator);
-    vkFreeMemory(device, renderer->skin_renderer.instance_buffer.memory, allocator);
-  }
-  renderer_cleanup_atlas_renderer(handler, &renderer->gameskin_renderer);
-  renderer_cleanup_atlas_renderer(handler, &renderer->cursor_renderer);
-  renderer_cleanup_atlas_renderer(handler, &renderer->particle_renderer);
-  renderer_cleanup_atlas_renderer(handler, &renderer->extras_renderer);
 
   if (renderer->transient_memory) {
     free(renderer->transient_memory);
@@ -769,17 +660,13 @@ pipeline_cache_entry_t *entry = &renderer->pipeline_cache[shader->id][rp_idx];
   VkVertexInputAttributeDescription *attrib_descs;
   uint32_t a_desc_count;
 
-  if (shader == renderer->skin_renderer.skin_shader) {
-    binding_descs = skin_binding_desc;
-    b_desc_count = 2;
-    attrib_descs = skin_attrib_descs;
-    a_desc_count = 14;
-  } else if (shader == renderer->gameskin_renderer.shader || shader == renderer->particle_renderer.shader ||
-             shader == renderer->extras_renderer.shader || shader == renderer->cursor_renderer.shader) {
-    binding_descs = atlas_binding_desc;
-    b_desc_count = 2;
-    attrib_descs = atlas_attrib_descs;
-    a_desc_count = 9;
+  if (shader->layout && shader->layout->attr_count > 0) {
+    // A shader created by a game module describes its own vertex input, so the
+    // renderer never has to recognise the technique to be able to draw it.
+    binding_descs = shader->layout->bindings;
+    b_desc_count = shader->layout->binding_count;
+    attrib_descs = shader->layout->attrs;
+    a_desc_count = shader->layout->attr_count;
   } else if (shader == renderer->primitive_shader) {
     binding_descs = &primitive_binding_description;
     b_desc_count = 1;
@@ -969,6 +856,7 @@ texture_t *renderer_load_compact_texture_from_array(gfx_handler_t *handler, cons
   texture->height = height;
   texture->mip_levels = 1;
   texture->layer_count = 1;
+  texture->format = VK_FORMAT_R8G8B8A8_UNORM;
   strncpy(texture->path, "from_array", sizeof(texture->path) - 1);
 
   buffer_t staging_buffer;
@@ -1037,6 +925,7 @@ texture_t *renderer_load_texture_from_array(gfx_handler_t *handler, const uint8_
   texture->height = height;
   texture->mip_levels = 1;
   texture->layer_count = 1;
+  texture->format = VK_FORMAT_R8G8B8A8_UNORM;
   strncpy(texture->path, "from_array", sizeof(texture->path) - 1);
 
   buffer_t staging_buffer;
@@ -1112,6 +1001,7 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   texture->height = tex_height;
   texture->mip_levels = mip_levels;
   texture->layer_count = 1;
+  texture->format = VK_FORMAT_R8G8B8A8_UNORM;
   strncpy(texture->path, image_path, sizeof(texture->path) - 1);
 
   buffer_t staging_buffer;
@@ -1146,6 +1036,11 @@ texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path)
   // log_info(LOG_SOURCE, "Loaded texture: %s", image_path);
   return texture;
 }
+
+// Filter for the next single-layer texture. Set by renderer_create_texture_layered
+// so a caller can ask for nearest sampling without every existing call site
+// growing a parameter it does not care about.
+static VkFilter g_next_texture_filter = VK_FILTER_LINEAR;
 
 texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsigned char *pixels, int width, int height) {
   renderer_lock();
@@ -1195,6 +1090,7 @@ texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsig
   texture->height = height;
   texture->mip_levels = 1; // No mipmaps for previews
   texture->layer_count = 1;
+  texture->format = VK_FORMAT_R8G8B8A8_UNORM;
   strncpy(texture->path, "from_rgba_memory", sizeof(texture->path) - 1);
 
   buffer_t staging_buffer;
@@ -1218,7 +1114,8 @@ texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsig
   vkFreeMemory(handler->g_device, staging_buffer.memory, handler->g_allocator);
 
   texture->image_view = create_image_view(handler, texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
-  texture->sampler = create_texture_sampler(handler, 1, VK_FILTER_LINEAR);
+  texture->sampler = create_texture_sampler(handler, 1, g_next_texture_filter);
+  g_next_texture_filter = VK_FILTER_LINEAR;
   renderer_unlock();
   return texture;
 }
@@ -1435,6 +1332,7 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
   tex_array->height = tile_height;
   tex_array->mip_levels = mip_levels;
   tex_array->layer_count = layer_count;
+  tex_array->format = VK_FORMAT_R8G8B8A8_UNORM;
   strncpy(tex_array->path, "entities_texture_array", sizeof(tex_array->path) - 1);
 
   create_image(handler, tile_width, tile_height, mip_levels, layer_count, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
@@ -1489,29 +1387,29 @@ void screen_to_world(gfx_handler_t *h, float sx, float sy, float *wx, float *wy)
   camera_t *cam = &h->renderer.camera;
 
   float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
-  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
+  float map_ratio = h->world_width / h->world_height;
   float aspect = window_ratio / map_ratio;
 
-  float max_map_size = fmax(h->map_data->width, h->map_data->height) * 0.001f;
+  float max_map_size = fmax(h->world_width, h->world_height) * 0.001f;
   float ndc_x = (2.0f * sx / h->viewport[0]) - 1.0f;
   float ndc_y = (2.0f * sy / h->viewport[1]) - 1.0f;
 
   *wx = cam->pos[0] + (ndc_x / (cam->zoom * max_map_size));
   *wy = cam->pos[1] + (ndc_y / (cam->zoom * max_map_size * aspect));
-  *wx *= h->map_data->width;
-  *wy *= h->map_data->height;
+  *wx *= h->world_width;
+  *wy *= h->world_height;
 }
 
 void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy) {
   camera_t *cam = &h->renderer.camera;
-  wx /= h->map_data->width;
-  wy /= h->map_data->height;
+  wx /= h->world_width;
+  wy /= h->world_height;
 
   float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
-  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
+  float map_ratio = h->world_width / h->world_height;
   float aspect = window_ratio / map_ratio;
 
-  float max_map_size = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
+  float max_map_size = fmaxf(h->world_width, h->world_height) * 0.001f;
 
   // World offset from camera center -> NDC
   float ndc_x = (wx - cam->pos[0]) * (cam->zoom * max_map_size);
@@ -1538,48 +1436,13 @@ static void setup_vertex_descriptions(void) {
   mesh_attribute_descriptions[2] =
       (VkVertexInputAttributeDescription){.binding = 0, .location = 2, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, tex_coord)};
 
-  // skin instanced data
-  skin_binding_desc[0] = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
-  skin_binding_desc[1] =
-      (VkVertexInputBindingDescription){.binding = 1, .stride = sizeof(skin_instance_t), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE};
-
-  int i = 0;
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1, .location = 1, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(skin_instance_t, pos)};
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1, .location = 2, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(skin_instance_t, scale)};
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1, .location = 3, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, skin_index)};
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1, .location = 4, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, eye_state)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
-      .binding = 1, .location = 5, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, body)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
-      .binding = 1, .location = 6, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, back_foot)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
-      .binding = 1, .location = 7, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, front_foot)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
-      .binding = 1, .location = 8, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, attach)};
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1, .location = 9, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(skin_instance_t, dir)};
-  // colors
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
-      .binding = 1, .location = 10, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, col_body)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
-      .binding = 1, .location = 11, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(skin_instance_t, col_feet)};
-  skin_attrib_descs[i++] = (VkVertexInputAttributeDescription){
-      .binding = 1, .location = 12, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, col_custom)};
-  skin_attrib_descs[i++] =
-      (VkVertexInputAttributeDescription){.binding = 1, .location = 13, .format = VK_FORMAT_R32_SINT, .offset = offsetof(skin_instance_t, mode)};
 
   // Atlas instanced data
+  uint32_t i = 0;
   atlas_binding_desc[0] = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
   atlas_binding_desc[1] =
       (VkVertexInputBindingDescription){.binding = 1, .stride = sizeof(atlas_instance_t), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE};
 
-  i = 0;
   // from vertex_t (binding 0)
   atlas_attrib_descs[i++] =
       (VkVertexInputAttributeDescription){.binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
@@ -1625,12 +1488,12 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   ubo.zoom = h->renderer.camera.zoom;
 
   float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
-  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
+  float map_ratio = h->world_width / h->world_height;
   ubo.aspect = window_ratio / map_ratio;
 
-  ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
-  ubo.mapSize[0] = (float)h->map_data->width;
-  ubo.mapSize[1] = (float)h->map_data->height;
+  ubo.maxMapSize = fmaxf(h->world_width, h->world_height) * 0.001f;
+  ubo.mapSize[0] = h->world_width;
+  ubo.mapSize[1] = h->world_height;
   ubo.lod_bias = renderer->lod_bias;
 
   glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
@@ -1876,430 +1739,15 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   renderer->primitive_vertex_count += 4;
   renderer->primitive_index_count += 6;
 }
-void renderer_draw_map(gfx_handler_t *h) {
-  if (!h->map_shader || !h->quad_mesh || h->map_texture_count <= 0) return;
 
-  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
-  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
-  if (isnan(map_ratio) || map_ratio == 0) map_ratio = 1.0f;
 
-  float zoom = 1.0 / (h->renderer.camera.zoom * fmax(h->map_data->width, h->map_data->height) * 0.001);
-  if (isnan(zoom)) zoom = 1.0f;
 
-  float aspect = 1.0f / (window_ratio / map_ratio);
 
-  map_buffer_object_t ubo = {
-      .transform = {h->renderer.camera.pos[0], h->renderer.camera.pos[1], zoom}, .aspect = aspect, .lod_bias = h->renderer.lod_bias};
 
-  void *ubos[] = {&ubo};
-  VkDeviceSize ubo_sizes[] = {sizeof(ubo)};
-  renderer_draw_mesh(h, h->current_frame_command_buffer, h->quad_mesh, h->map_shader, h->map_textures, h->map_texture_count, ubos, ubo_sizes, 1);
-}
 
-static int skin_manager_alloc_layer(gfx_handler_t *h) {
-  renderer_state_t *r = &h->renderer;
-  for (int i = 0; i < MAX_SKINS; i++) {
-    if (!r->skin_manager.layer_used[i]) {
-      r->skin_manager.layer_used[i] = true;
-      r->skin_manager.last_used_frame[i] = h->g_main_window_data.FrameIndex;
-      return i;
-    }
-  }
 
-  uint32_t oldest_frame = (uint32_t)-1;
-  int oldest_layer = -1;
-  for (int i = 0; i < MAX_SKINS; i++) {
-    if (r->skin_manager.last_used_frame[i] < oldest_frame) {
-      oldest_frame = r->skin_manager.last_used_frame[i];
-      oldest_layer = i;
-    }
-  }
-
-  if (oldest_layer != -1) {
-    r->skin_manager.layer_used[oldest_layer] = true;
-    r->skin_manager.last_used_frame[oldest_layer] = h->g_main_window_data.FrameIndex;
-    return oldest_layer;
-  }
-
-  return 0;
-}
-
-static void skin_manager_free_layer(renderer_state_t *r, int idx) {
-  if (idx >= 0 && idx < MAX_SKINS) {
-    r->skin_manager.layer_used[idx] = false;
-  }
-}
-
-void renderer_begin_skins(gfx_handler_t *h) { h->renderer.skin_renderer.instance_count = 0; }
-
-void renderer_push_skin_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state,
-                                 vec3 col_body, vec3 col_feet, bool use_custom_color) {
-  if (skin_index >= 0 && skin_index < MAX_SKINS) {
-    h->renderer.skin_manager.last_used_frame[skin_index] = h->g_main_window_data.FrameIndex;
-  }
-  skin_renderer_t *sr = &h->renderer.skin_renderer;
-  uint32_t i = sr->instance_count++;
-  sr->instance_ptr[i].pos[0] = pos[0];
-  sr->instance_ptr[i].pos[1] = pos[1];
-  sr->instance_ptr[i].scale = scale * 1.25f;
-  sr->instance_ptr[i].skin_index = skin_index;
-  sr->instance_ptr[i].eye_state = eye_state + 6;
-
-  sr->instance_ptr[i].body[0] = anim_state->body.x;
-  sr->instance_ptr[i].body[1] = anim_state->body.y;
-  sr->instance_ptr[i].body[2] = anim_state->body.angle;
-
-  sr->instance_ptr[i].back_foot[0] = anim_state->back_foot.x;
-  sr->instance_ptr[i].back_foot[1] = anim_state->back_foot.y;
-  sr->instance_ptr[i].back_foot[2] = anim_state->back_foot.angle;
-
-  sr->instance_ptr[i].front_foot[0] = anim_state->front_foot.x;
-  sr->instance_ptr[i].front_foot[1] = anim_state->front_foot.y;
-  sr->instance_ptr[i].front_foot[2] = anim_state->front_foot.angle;
-
-  sr->instance_ptr[i].attach[0] = anim_state->attach.x;
-  sr->instance_ptr[i].attach[1] = anim_state->attach.y;
-  sr->instance_ptr[i].attach[2] = anim_state->attach.angle;
-
-  sr->instance_ptr[i].dir[0] = dir[0];
-  sr->instance_ptr[i].dir[1] = dir[1];
-
-  memcpy(sr->instance_ptr[i].col_body, col_body, 3 * sizeof(float));
-  memcpy(sr->instance_ptr[i].col_feet, col_feet, 3 * sizeof(float));
-  sr->instance_ptr[i].col_custom = use_custom_color;
-  sr->instance_ptr[i].mode = SKIN_MODE_TEE;
-}
-
-void renderer_push_hand_instance(gfx_handler_t *h, vec2 pos, float scale, int skin_index, float angle, vec3 col_body, bool use_custom_color) {
-  if (skin_index >= 0 && skin_index < MAX_SKINS) {
-    h->renderer.skin_manager.last_used_frame[skin_index] = h->g_main_window_data.FrameIndex;
-  }
-  skin_renderer_t *sr = &h->renderer.skin_renderer;
-  uint32_t i = sr->instance_count++;
-  memset(&sr->instance_ptr[i], 0, sizeof(skin_instance_t));
-  sr->instance_ptr[i].pos[0] = pos[0];
-  sr->instance_ptr[i].pos[1] = pos[1];
-  sr->instance_ptr[i].scale = scale;
-  sr->instance_ptr[i].skin_index = skin_index;
-  sr->instance_ptr[i].eye_state = 6;
-  sr->instance_ptr[i].attach[2] = angle;
-  memcpy(sr->instance_ptr[i].col_body, col_body, 3 * sizeof(float));
-  memcpy(sr->instance_ptr[i].col_feet, col_body, 3 * sizeof(float));
-  sr->instance_ptr[i].col_custom = use_custom_color;
-  sr->instance_ptr[i].mode = SKIN_MODE_HAND;
-}
-
-void renderer_flush_skins(gfx_handler_t *h, VkCommandBuffer cmd, texture_t *skin_array, texture_t *color_array) {
-  renderer_state_t *renderer = &h->renderer;
-  skin_renderer_t *sr = &renderer->skin_renderer;
-  if (sr->instance_count == 0 || !skin_array) return;
-
-  mesh_t *quad = h->quad_mesh;
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, sr->skin_shader, 1, 2, h->g_main_window_data.RenderPass);
-  if (!pso) return;
-
-  primitive_ubo_t ubo;
-  ubo.camPos[0] = renderer->camera.pos[0];
-  ubo.camPos[1] = renderer->camera.pos[1];
-  ubo.zoom = renderer->camera.zoom;
-  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
-  float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
-  ubo.aspect = window_ratio / map_ratio;
-  ubo.maxMapSize = fmaxf(h->map_data->width, h->map_data->height) * 0.001f;
-  ubo.mapSize[0] = (float)h->map_data->width;
-  ubo.mapSize[1] = (float)h->map_data->height;
-  ubo.lod_bias = renderer->lod_bias;
-  glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
-
-  VkDeviceSize aligned = (sizeof(ubo) + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
-  if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) return;
-  uint32_t dyn_offset = renderer->ubo_buffer_offset;
-  memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, sizeof(ubo));
-  renderer->ubo_buffer_offset += (uint32_t)aligned;
-
-  // Descriptor Allocation
-  uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
-  VkDescriptorSet desc;
-  VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = renderer->frame_descriptor_pools[pool_idx], .descriptorSetCount = 1, .pSetLayouts = &pso->descriptor_set_layout};
-  if (vkAllocateDescriptorSets(h->g_device, &ai, &desc) != VK_SUCCESS) return;
-
-  texture_t *skin_tex = (skin_array && skin_array->active && skin_array->image_view != VK_NULL_HANDLE && skin_array->sampler != VK_NULL_HANDLE)
-                            ? skin_array
-                            : renderer->default_texture;
-  texture_t *color_tex = (color_array && color_array->active && color_array->image_view != VK_NULL_HANDLE && color_array->sampler != VK_NULL_HANDLE)
-                             ? color_array
-                             : skin_tex;
-  VkDescriptorBufferInfo b_info = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
-  VkDescriptorImageInfo i_info = {.sampler = skin_tex->sampler, .imageView = skin_tex->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-  VkDescriptorImageInfo c_info = {
-      .sampler = color_tex->sampler, .imageView = color_tex->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-
-  VkWriteDescriptorSet writes[3] = {
-      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .pBufferInfo = &b_info},
-      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &i_info},
-      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = desc, .dstBinding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &c_info}};
-  vkUpdateDescriptorSets(h->g_device, 3, writes, 0, NULL);
-
-  // Bind and Draw
-  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
-  VkBuffer bufs[2] = {quad->vertex_buffer.buffer, sr->instance_buffer.buffer};
-  VkDeviceSize offs[2] = {0, 0};
-  vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
-  vkCmdBindIndexBuffer(cmd, quad->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0, NULL);
-  vkCmdDrawIndexed(cmd, quad->index_count, sr->instance_count, 0, 0, 0);
-
-  sr->instance_count = 0;
-}
-
-texture_t *renderer_render_skin_preview(gfx_handler_t *h, int layer) {
-  uint32_t preview_width = 128;
-  uint32_t preview_height = 128;
-  
-  renderer_lock();
-  renderer_state_t *r = &h->renderer;
-
-  uint32_t free_slot = (uint32_t)-1;
-  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
-    if (!r->textures[i].active) {
-      free_slot = i;
-      break;
-    }
-  }
-
-  if (free_slot == (uint32_t)-1) {
-    uint32_t oldest_frame = (uint32_t)-1;
-    int oldest_slot = -1;
-    for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
-      if (r->textures[i].active && r->textures[i].last_used_frame < oldest_frame) {
-        oldest_frame = r->textures[i].last_used_frame;
-        oldest_slot = (int)i;
-      }
-    }
-    if (oldest_slot != -1) {
-      renderer_destroy_texture(h, &r->textures[oldest_slot]);
-      free_slot = (uint32_t)oldest_slot;
-    }
-  }
-
-  if (free_slot == (uint32_t)-1) {
-    log_error(LOG_SOURCE, "Max texture count (%d) reached for preview.", MAX_TEXTURES);
-    renderer_unlock();
-    return NULL;
-  }
-
-  texture_t *tex = &r->textures[free_slot];
-  memset(tex, 0, sizeof(texture_t));
-  tex->id = free_slot;
-  tex->active = true;
-  tex->last_used_frame = h->g_main_window_data.FrameIndex;
-  tex->width = preview_width;
-  tex->height = preview_height;
-  tex->mip_levels = 1;
-  tex->layer_count = 1;
-  strncpy(tex->path, "skin_preview_render_target", sizeof(tex->path) - 1);
-
-  VkFormat format = h->g_main_window_data.SurfaceFormat.format;
-  if (format == VK_FORMAT_UNDEFINED) format = VK_FORMAT_R8G8B8A8_UNORM;
-
-  create_image(h, preview_width, preview_height, 1, 1, format, VK_IMAGE_TILING_OPTIMAL,
-               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &tex->image, &tex->memory);
-
-  transition_image_layout(h, r->transfer_command_pool, tex->image, format, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, 0, 1);
-
-  tex->image_view = create_image_view(h, tex->image, format, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
-  tex->sampler = create_texture_sampler(h, 1, VK_FILTER_LINEAR);
-  renderer_unlock();
-
-  VkImageView attachments[] = { tex->image_view };
-  VkFramebufferCreateInfo fb_info = {
-      .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-      .renderPass = h->offscreen_render_pass,
-      .attachmentCount = 1,
-      .pAttachments = attachments,
-      .width = preview_width,
-      .height = preview_height,
-      .layers = 1,
-  };
-  VkFramebuffer fb;
-  VkResult fb_res = vkCreateFramebuffer(h->g_device, &fb_info, h->g_allocator, &fb);
-  if (fb_res != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "Failed to create offscreen framebuffer for preview (%d)", fb_res);
-    return tex;
-  }
-
-  primitive_ubo_t ubo = {0};
-  ubo.camPos[0] = 0.0f;
-  ubo.camPos[1] = 0.0f;
-  ubo.zoom = 1.0f;
-  ubo.aspect = 1.0f;
-  ubo.maxMapSize = 1.0f;
-  ubo.mapSize[0] = 1.0f;
-  ubo.mapSize[1] = 1.0f;
-  ubo.lod_bias = 0.0f;
-  glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
-
-  buffer_t temp_ubo;
-  create_buffer(h, sizeof(primitive_ubo_t), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &temp_ubo);
-  void *data;
-  vkMapMemory(h->g_device, temp_ubo.memory, 0, sizeof(primitive_ubo_t), 0, &data);
-  memcpy(data, &ubo, sizeof(primitive_ubo_t));
-  vkUnmapMemory(h->g_device, temp_ubo.memory);
-
-  VkDescriptorPoolSize pool_sizes[] = {
-      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}
-  };
-  VkDescriptorPoolCreateInfo pool_info = {
-      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-      .poolSizeCount = 2,
-      .pPoolSizes = pool_sizes,
-      .maxSets = 1,
-  };
-  VkDescriptorPool temp_pool;
-  vkCreateDescriptorPool(h->g_device, &pool_info, h->g_allocator, &temp_pool);
-
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, r->skin_renderer.skin_shader, 1, 2, h->offscreen_render_pass);
-
-  VkDescriptorSetAllocateInfo alloc_info = {
-      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-      .descriptorPool = temp_pool,
-      .descriptorSetCount = 1,
-      .pSetLayouts = &pso->descriptor_set_layout,
-  };
-  VkDescriptorSet desc_set;
-  vkAllocateDescriptorSets(h->g_device, &alloc_info, &desc_set);
-
-  VkDescriptorBufferInfo buffer_info = {
-      .buffer = temp_ubo.buffer,
-      .offset = 0,
-      .range = sizeof(primitive_ubo_t),
-  };
-  VkDescriptorImageInfo image_info = {
-      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-      .imageView = r->skin_manager.atlas_array->image_view,
-      .sampler = r->skin_manager.atlas_array->sampler,
-  };
-  VkDescriptorImageInfo color_info = {
-      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-      .imageView = r->skin_manager.color_array->image_view,
-      .sampler = r->skin_manager.color_array->sampler,
-  };
-  VkWriteDescriptorSet descriptor_writes[] = {
-      {
-          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-          .dstSet = desc_set,
-          .dstBinding = 0,
-          .dstArrayElement = 0,
-          .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-          .descriptorCount = 1,
-          .pBufferInfo = &buffer_info,
-      },
-      {
-          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-          .dstSet = desc_set,
-          .dstBinding = 1,
-          .dstArrayElement = 0,
-          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-          .descriptorCount = 1,
-          .pImageInfo = &image_info,
-      },
-      {
-          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-          .dstSet = desc_set,
-          .dstBinding = 2,
-          .dstArrayElement = 0,
-          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-          .descriptorCount = 1,
-          .pImageInfo = &color_info,
-      }
-  };
-  vkUpdateDescriptorSets(h->g_device, 3, descriptor_writes, 0, NULL);
-
-  anim_state_t anim_state;
-  anim_state_set(&anim_state, &anim_base, 0.0f);
-  anim_state_add(&anim_state, &anim_idle, 0.0f, 1.0f);
-
-  skin_instance_t instance = {0};
-  instance.pos[0] = 0.0f;
-  instance.pos[1] = 0.0f;
-  instance.scale = 0.75f * 1.25f;
-  instance.skin_index = layer;
-  instance.eye_state = 6;
-  instance.dir[0] = 1.0f;
-  instance.dir[1] = 0.0f;
-  instance.col_body[0] = 1.0f; instance.col_body[1] = 1.0f; instance.col_body[2] = 1.0f;
-  instance.col_feet[0] = 1.0f; instance.col_feet[1] = 1.0f; instance.col_feet[2] = 1.0f;
-  instance.col_custom = 0;
-  
-  instance.body[0] = anim_state.body.x;
-  instance.body[1] = anim_state.body.y;
-  instance.body[2] = anim_state.body.angle;
-
-  instance.back_foot[0] = anim_state.back_foot.x;
-  instance.back_foot[1] = anim_state.back_foot.y;
-  instance.back_foot[2] = anim_state.back_foot.angle;
-
-  instance.front_foot[0] = anim_state.front_foot.x;
-  instance.front_foot[1] = anim_state.front_foot.y;
-  instance.front_foot[2] = anim_state.front_foot.angle;
-
-  instance.attach[0] = anim_state.attach.x;
-  instance.attach[1] = anim_state.attach.y;
-  instance.attach[2] = anim_state.attach.angle;
-
-  buffer_t temp_instance;
-  create_buffer(h, sizeof(skin_instance_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &temp_instance);
-  vkMapMemory(h->g_device, temp_instance.memory, 0, sizeof(skin_instance_t), 0, &data);
-  memcpy(data, &instance, sizeof(skin_instance_t));
-  vkUnmapMemory(h->g_device, temp_instance.memory);
-
-  VkCommandBuffer cmd = begin_single_time_commands(h, h->renderer.transfer_command_pool);
-  
-  VkRenderPassBeginInfo render_pass_info = {
-      .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-      .renderPass = h->offscreen_render_pass,
-      .framebuffer = fb,
-      .renderArea.offset = {0, 0},
-      .renderArea.extent = {preview_width, preview_height},
-  };
-  VkClearValue clear_color = {{{0.0f, 0.0f, 0.0f, 0.0f}}};
-  render_pass_info.clearValueCount = 1;
-  render_pass_info.pClearValues = &clear_color;
-  
-  vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
-  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc_set, 0, NULL);
-  
-  VkBuffer vertex_buffers[] = {h->quad_mesh->vertex_buffer.buffer, temp_instance.buffer};
-  VkDeviceSize offsets[] = {0, 0};
-  vkCmdBindVertexBuffers(cmd, 0, 2, vertex_buffers, offsets);
-  vkCmdBindIndexBuffer(cmd, h->quad_mesh->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-  
-  VkViewport viewport = {0.0f, 0.0f, (float)preview_width, (float)preview_height, 0.0f, 1.0f};
-  vkCmdSetViewport(cmd, 0, 1, &viewport);
-  VkRect2D scissor = {{0, 0}, {preview_width, preview_height}};
-  vkCmdSetScissor(cmd, 0, 1, &scissor);
-  
-  vkCmdDrawIndexed(cmd, h->quad_mesh->index_count, 1, 0, 0, 0);
-  
-  vkCmdEndRenderPass(cmd);
-  end_single_time_commands(h, h->renderer.transfer_command_pool, cmd);
-
-  vkDestroyFramebuffer(h->g_device, fb, h->g_allocator);
-  vkDestroyDescriptorPool(h->g_device, temp_pool, h->g_allocator);
-  vkDestroyBuffer(h->g_device, temp_ubo.buffer, h->g_allocator);
-  vkFreeMemory(h->g_device, temp_ubo.memory, h->g_allocator);
-  vkDestroyBuffer(h->g_device, temp_instance.buffer, h->g_allocator);
-  vkFreeMemory(h->g_device, temp_instance.memory, h->g_allocator);
-
-  return tex;
-}
-
-// Stage one layer of a skin atlas array and rebuild its mip chain.
-static void upload_skin_layer(gfx_handler_t *h, texture_t *array, VkFormat format, int layer, const void *src, VkDeviceSize bytes) {
+// Stage one layer of an array texture and rebuild its mip chain.
+static void upload_texture_layer(gfx_handler_t *h, texture_t *array, VkFormat format, int layer, const void *src, VkDeviceSize bytes) {
   if (!array) return;
   renderer_state_t *r = &h->renderer;
 
@@ -2333,195 +1781,34 @@ static void upload_skin_layer(gfx_handler_t *h, texture_t *array, VkFormat forma
   }
 }
 
-int renderer_load_skin_from_memory(gfx_handler_t *h, const unsigned char *buffer, size_t size, texture_t **out_preview_texture) {
-  int tex_width, tex_height, channels;
-  stbi_uc *pixels = stbi_load_from_memory(buffer, (int)size, &tex_width, &tex_height, &channels, STBI_rgb_alpha);
-  if (out_preview_texture) *out_preview_texture = NULL;
-  if (!pixels) {
-    log_error(LOG_SOURCE, "Failed to load skin from memory buffer.");
-    return -1;
-  }
 
-  if (tex_width <= 0 || tex_height <= 0 || tex_width != tex_height * 2) {
-    log_error(LOG_SOURCE, "Skin from memory has invalid dimensions (%dx%d), aspect ratio must be 2:1", tex_width, tex_height);
-    stbi_image_free(pixels);
-    return -1;
-  }
 
-  renderer_lock();
 
-  const int final_width = SKIN_ATLAS_W;
-  const int final_height = SKIN_ATLAS_H;
-  const float scale = (float)tex_width / 256.0f;
-  const size_t src_pixel_count = (size_t)tex_width * (size_t)tex_height;
-
-  // What ddnet calls the colorable skin (CSkins::LoadSkinData): a luma grayscale of the whole
-  // sheet, with the body renormalised so its most common weight lands on 192. Two channels,
-  // weight + alpha. This has to run on the straight colours, before the premultiply below.
-  uint8_t *gray_pixels = malloc(src_pixel_count * 2);
-  stbi_uc *repacked_pixels = calloc(1, (size_t)final_width * final_height * 4);
-  uint8_t *repacked_gray = calloc(1, (size_t)final_width * final_height * 2);
-  if (!gray_pixels || !repacked_pixels || !repacked_gray) {
-    free(gray_pixels);
-    free(repacked_pixels);
-    free(repacked_gray);
-    stbi_image_free(pixels);
-    renderer_unlock();
-    return -1;
-  }
-
-  for (size_t i = 0; i < src_pixel_count; ++i) {
-    gray_pixels[i * 2 + 0] = (uint8_t)(0.2126f * pixels[i * 4 + 0] + 0.7152f * pixels[i * 4 + 1] + 0.0722f * pixels[i * 4 + 2]);
-    gray_pixels[i * 2 + 1] = pixels[i * 4 + 3];
-  }
-
-  // the renormalisation covers the body sprite only, so the outline and feet keep their own weights
-  const int body_w = (int)(scale * 96.0f);
-  const int body_h = (int)(scale * 96.0f);
-  uint32_t freq[256] = {0};
-  for (int y = 0; y < body_h; ++y) {
-    for (int x = 0; x < body_w; ++x) {
-      size_t idx = ((size_t)y * tex_width + (size_t)x) * 2u;
-      if (gray_pixels[idx + 1] > 128) freq[gray_pixels[idx]]++;
-    }
-  }
-  uint8_t org_weight = 1;
-  for (int i = 1; i < 256; ++i) {
-    if (freq[org_weight] < freq[i]) org_weight = (uint8_t)i;
-  }
-
-  const float new_weight = 192.0f;
-  const float inv_org = 1.0f / (float)org_weight;
-  const float inv_rest = org_weight < 255 ? 1.0f / (float)(255 - org_weight) : 0.0f;
-  for (int y = 0; y < body_h; ++y) {
-    for (int x = 0; x < body_w; ++x) {
-      size_t idx = ((size_t)y * tex_width + (size_t)x) * 2u;
-      const uint8_t v = gray_pixels[idx];
-      gray_pixels[idx] = v <= org_weight ? (uint8_t)((float)v * inv_org * new_weight)
-                                         : (uint8_t)(((float)(v - org_weight) * inv_rest) * (255.0f - new_weight) + new_weight);
-    }
-  }
-
-  // Pre-multiply alpha before resizing (Crucial for correct bilinear interpolation)
-  for (size_t i = 0; i < src_pixel_count; i++) {
-    size_t idx = i * 4;
-    uint8_t a = pixels[idx + 3];
-    // Integer multiply effectively zeros out the pixel if a is 0
-    pixels[idx + 0] = (uint8_t)((int)pixels[idx + 0] * a / 255);
-    pixels[idx + 1] = (uint8_t)((int)pixels[idx + 1] * a / 255);
-    pixels[idx + 2] = (uint8_t)((int)pixels[idx + 2] * a / 255);
-    gray_pixels[i * 2] = (uint8_t)((int)gray_pixels[i * 2] * a / 255);
-  }
-
-  // Both sheets get repacked through the same layout so one set of uvs addresses either array.
-#define COPY_PART(src_x, src_y, w, h, dst_x, dst_y)                                                                                        \
-  do {                                                                                                                                     \
-    const int sx_ = (int)((src_x) * scale), sy_ = (int)((src_y) * scale);                                                                   \
-    const int sw_ = (int)((w) * scale), sh_ = (int)((h) * scale);                                                                           \
-    stbir_resize_uint8_linear(pixels + ((size_t)sy_ * tex_width + sx_) * 4, sw_, sh_, tex_width * 4,                                        \
-                              repacked_pixels + ((size_t)(dst_y) * final_width + (dst_x)) * 4, (w) * 2, (h) * 2, final_width * 4,           \
-                              STBIR_RGBA_PM);                                                                                              \
-    stbir_resize_uint8_linear(gray_pixels + ((size_t)sy_ * tex_width + sx_) * 2, sw_, sh_, tex_width * 2,                                   \
-                              repacked_gray + ((size_t)(dst_y) * final_width + (dst_x)) * 2, (w) * 2, (h) * 2, final_width * 2,             \
-                              STBIR_2CHANNEL);                                                                                              \
-  } while (0)
-
-  COPY_PART(0, 0, 96, 96, 8, 8);        // Body
-  COPY_PART(96, 0, 96, 96, 208, 8);     // Body Shadow
-  COPY_PART(192, 32, 64, 32, 8, 208);   // Foot
-  COPY_PART(192, 64, 64, 32, 144, 208); // Foot Shadow
-  COPY_PART(192, 0, 32, 32, 280, 208);  // Hand
-  COPY_PART(224, 0, 32, 32, 352, 208);  // Hand Shadow
-  for (int i = 0; i < 6; ++i) {
-    int src_x = 64 + i * 32;
-    int dst_x = 8 + i * 72;
-    COPY_PART(src_x, 96, 32, 32, dst_x, 280); // Eyes
-  }
-#undef COPY_PART
-
-  for (int i = 0; i < final_width * final_height; i++) {
-    if (repacked_pixels[i * 4 + 3] == 0) {
-      repacked_pixels[i * 4 + 0] = 0;
-      repacked_pixels[i * 4 + 1] = 0;
-      repacked_pixels[i * 4 + 2] = 0;
-    }
-    if (repacked_gray[i * 2 + 1] == 0) repacked_gray[i * 2 + 0] = 0;
-  }
-
-  renderer_state_t *r = &h->renderer;
-  int layer = skin_manager_alloc_layer(h);
-  if (layer < 0) {
-    log_error(LOG_SOURCE, "No free skin layers available (max %d reached).", MAX_SKINS);
-    if (out_preview_texture && *out_preview_texture) {
-      renderer_destroy_texture(h, *out_preview_texture);
-      *out_preview_texture = NULL;
-    }
-    free(gray_pixels);
-    free(repacked_pixels);
-    free(repacked_gray);
-    stbi_image_free(pixels);
-    renderer_unlock();
-    return -1;
-  }
-
-  upload_skin_layer(h, r->skin_manager.atlas_array, VK_FORMAT_R8G8B8A8_UNORM, layer, repacked_pixels,
-                    (VkDeviceSize)final_width * final_height * 4);
-  upload_skin_layer(h, r->skin_manager.color_array, VK_FORMAT_R8G8_UNORM, layer, repacked_gray,
-                    (VkDeviceSize)final_width * final_height * 2);
-
-  free(gray_pixels);
-  free(repacked_pixels);
-  free(repacked_gray);
-  stbi_image_free(pixels);
-
-  if (out_preview_texture) {
-    *out_preview_texture = renderer_render_skin_preview(h, layer);
-  }
-
-  // log_info(LOG_SOURCE, "Loaded skin from memory into layer %d", layer);
-  renderer_unlock();
-  return layer;
-}
-
-int renderer_load_skin_from_file(gfx_handler_t *h, const char *path, texture_t **out_preview_texture) {
-  FILE *f = fs_open(path, "rb");
-  if (!f) {
-    if (out_preview_texture) *out_preview_texture = NULL;
-    return -1;
-  }
-  fseek(f, 0, SEEK_END);
-  size_t size = ftell(f);
-  fseek(f, 0, SEEK_SET);
-  unsigned char *buffer = malloc(size);
-  fread(buffer, size, 1, f);
-  fclose(f);
-  int id = renderer_load_skin_from_memory(h, buffer, size, out_preview_texture);
-  free(buffer);
-  return id;
-}
-
-void renderer_unload_skin(gfx_handler_t *h, int layer) {
-  renderer_lock();
-  renderer_state_t *r = &h->renderer;
-  skin_manager_free_layer(r, layer);
-  // log_info(LOG_SOURCE, "Freed skin layer %d", layer);
-  renderer_unlock();
-}
-
-static void renderer_init_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, const char *atlas_path, const sprite_definition_t *sprites,
-                                         uint32_t sprite_count, uint32_t max_instances) {
+// Slices `source_atlas` into a texture array, one sprite per layer, and gives
+// the atlas renderer its instance ring. Split out from the path-based helper so
+// a game module can build an atlas from pixels it produced itself.
+static void renderer_build_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, texture_t *source_atlas, const sprite_definition_t *sprites,
+                                          uint32_t sprite_count, uint32_t max_instances) {
+  const char *atlas_path = source_atlas->path;
   ar->shader = renderer_load_shader(h, "data/shaders/atlas.vert.spv", "data/shaders/atlas.frag.spv");
   ar->max_instances = max_instances;
+
+  // Describe the atlas vertex input on the shader itself. Selecting a layout by
+  // comparing shader pointers only worked while the renderer owned every atlas;
+  // modules create their own now, so the shader has to say what it expects.
+  if (ar->shader && !ar->shader->layout) {
+    static vertex_layout_t atlas_layout;
+    atlas_layout.binding_count = 2;
+    atlas_layout.bindings[0] = atlas_binding_desc[0];
+    atlas_layout.bindings[1] = atlas_binding_desc[1];
+    atlas_layout.attr_count = 9;
+    for (uint32_t i = 0; i < 9; ++i) atlas_layout.attrs[i] = atlas_attrib_descs[i];
+    ar->shader->layout = &atlas_layout;
+  }
 
   ar->sprite_count = sprite_count;
   ar->sprite_definitions = malloc(sizeof(sprite_definition_t) * sprite_count);
   memcpy(ar->sprite_definitions, sprites, sizeof(sprite_definition_t) * sprite_count);
-
-  texture_t *source_atlas = renderer_load_texture(h, atlas_path);
-  if (!source_atlas) {
-    log_error(LOG_SOURCE, "Failed to load source atlas %s for array creation.", atlas_path);
-    return;
-  }
 
   uint32_t max_w = 0, max_h = 0;
   for (uint32_t i = 0; i < sprite_count; ++i) {
@@ -2666,51 +1953,24 @@ void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar) {
 
 void renderer_begin_atlas_instances(atlas_renderer_t *ar) { ar->instance_count = 0; }
 
-void renderer_push_atlas_instance(atlas_renderer_t *ar, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv, vec4 color) {
-  if (ar->instance_count >= ar->max_instances) {
-    log_warn(LOG_SOURCE, "Max atlas instances reached for this renderer.");
-    return;
-  }
-  if (sprite_index >= ar->sprite_count) {
-    log_error(LOG_SOURCE, "Invalid sprite_index %d for atlas renderer.", sprite_index);
-    return;
-  }
-  uint32_t i = ar->instance_count++;
-  glm_vec2_copy(pos, ar->instance_ptr[i].pos);
-  glm_vec2_copy(size, ar->instance_ptr[i].size);
-  ar->instance_ptr[i].rotation = rotation;
-  ar->instance_ptr[i].sprite_index = (int)sprite_index;
-  if (color) {
-    glm_vec4_copy(color, ar->instance_ptr[i].color);
-  } else {
-    glm_vec4_copy((vec4){1.0f, 1.0f, 1.0f, 1.0f}, ar->instance_ptr[i].color);
-  }
-
-  // uv calc
-  float layer_w = (float)ar->layer_width;
-  float layer_h = (float)ar->layer_height;
-  float sprite_w = (float)ar->sprite_definitions[sprite_index].w;
-  float sprite_h = (float)ar->sprite_definitions[sprite_index].h;
-  float padding = 1.0f; // Matches init function
-
-  // Calculate scaling factors
-  // This ensures 0..1 UV maps exactly to the sprite's content, ignoring padding.
-  ar->instance_ptr[i].uv_scale[0] = sprite_w / layer_w;
-  ar->instance_ptr[i].uv_scale[1] = sprite_h / layer_h;
-
-  // Calculate offsets
-  // Pushes the UVs start point past the transparent padding.
-  ar->instance_ptr[i].uv_offset[0] = padding / layer_w;
-  ar->instance_ptr[i].uv_offset[1] = padding / layer_h;
-
-  // Handle hook chain. hook chain is 1.5 stretched
-  if (tile_uv) {
-    ar->instance_ptr[i].tiling[0] = (size[0] * 1.5f);
-    ar->instance_ptr[i].tiling[1] = 1.0f;
-  } else {
-    ar->instance_ptr[i].tiling[0] = 1.0f;
-    ar->instance_ptr[i].tiling[1] = 1.0f;
-  }
+// The projection every world-space technique shares. World coordinates are
+// normalized by the playfield extent the active game published, so this is the
+// only place the renderer has to think about how big a level is.
+static primitive_ubo_t world_ubo(gfx_handler_t *h) {
+  renderer_state_t *renderer = &h->renderer;
+  primitive_ubo_t ubo;
+  ubo.camPos[0] = renderer->camera.pos[0];
+  ubo.camPos[1] = renderer->camera.pos[1];
+  ubo.zoom = renderer->camera.zoom;
+  float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
+  float map_ratio = h->world_width / h->world_height;
+  ubo.aspect = window_ratio / map_ratio;
+  ubo.maxMapSize = fmaxf(h->world_width, h->world_height) * 0.001f;
+  ubo.mapSize[0] = h->world_width;
+  ubo.mapSize[1] = h->world_height;
+  ubo.lod_bias = renderer->lod_bias;
+  glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
+  return ubo;
 }
 
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar, uint32_t start_index, uint32_t count, bool screen_space) {
@@ -2731,19 +1991,10 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
     ubo.mapSize[0] = (float)h->viewport[0];
     ubo.mapSize[1] = (float)h->viewport[1];
     ubo.lod_bias = 0.0f;
+    glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
   } else {
-    ubo.camPos[0] = renderer->camera.pos[0];
-    ubo.camPos[1] = renderer->camera.pos[1];
-    ubo.zoom = renderer->camera.zoom;
-    float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
-    float map_ratio = (float)h->map_data->width / (float)h->map_data->height;
-    ubo.aspect = window_ratio / map_ratio;
-    ubo.maxMapSize = fmaxf((float)h->map_data->width, (float)h->map_data->height) * 0.001f;
-    ubo.mapSize[0] = (float)h->map_data->width;
-    ubo.mapSize[1] = (float)h->map_data->height;
-    ubo.lod_bias = renderer->lod_bias;
+    ubo = world_ubo(h);
   }
-  glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
 
   VkDeviceSize aligned = (sizeof(ubo) + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
   if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) {
@@ -2802,14 +2053,7 @@ static int compare_render_commands(const void *a, const void *b) {
   if (cmd_a->type < cmd_b->type) return -1;
   if (cmd_a->type > cmd_b->type) return 1;
 
-  if (cmd_a->type == RENDER_CMD_ATLAS) {
-    if (cmd_a->data.atlas.ar < cmd_b->data.atlas.ar) return -1;
-    if (cmd_a->data.atlas.ar > cmd_b->data.atlas.ar) return 1;
-    if (cmd_a->data.atlas.screen_space != cmd_b->data.atlas.screen_space) {
-      return cmd_a->data.atlas.screen_space ? 1 : -1;
-    }
-    // Fall through to the submission order tiebreak below.
-  } else if (cmd_a->type == RENDER_CMD_ATLAS_BATCH) {
+  if (cmd_a->type == RENDER_CMD_ATLAS_BATCH) {
     if (cmd_a->data.atlas_batch.ar < cmd_b->data.atlas_batch.ar) return -1;
     if (cmd_a->data.atlas_batch.ar > cmd_b->data.atlas_batch.ar) return 1;
     if (cmd_a->data.atlas_batch.screen_space != cmd_b->data.atlas_batch.screen_space) {
@@ -2824,59 +2068,8 @@ static int compare_render_commands(const void *a, const void *b) {
   return 0;
 }
 
-void renderer_submit_map(struct gfx_handler_t *h, float z) {
-  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
-  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
-  cmd->type = RENDER_CMD_MAP;
-  cmd->z = z;
-}
 
-void renderer_submit_skin(struct gfx_handler_t *h, float z, vec2 pos, float scale, int skin_index, int eye_state, vec2 dir, const anim_state_t *anim_state, vec3 col_body, vec3 col_feet, bool custom) {
-  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
-  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
-  cmd->type = RENDER_CMD_SKIN;
-  cmd->z = z;
-  glm_vec2_copy(pos, cmd->data.skin.pos);
-  cmd->data.skin.scale = scale;
-  cmd->data.skin.skin_index = skin_index;
-  cmd->data.skin.eye_state = eye_state;
-  glm_vec2_copy(dir, cmd->data.skin.dir);
-  cmd->data.skin.anim_state = *anim_state;
-  glm_vec3_copy(col_body, cmd->data.skin.col_body);
-  glm_vec3_copy(col_feet, cmd->data.skin.col_feet);
-  cmd->data.skin.custom_color = custom;
-  cmd->data.skin.mode = SKIN_MODE_TEE;
-}
 
-void renderer_submit_hand(struct gfx_handler_t *h, float z, vec2 pos, float scale, int skin_index, float angle, vec3 col_body, bool custom) {
-  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
-  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
-  cmd->type = RENDER_CMD_SKIN;
-  cmd->z = z;
-  glm_vec2_copy(pos, cmd->data.skin.pos);
-  cmd->data.skin.scale = scale;
-  cmd->data.skin.skin_index = skin_index;
-  cmd->data.skin.angle = angle;
-  glm_vec3_copy(col_body, cmd->data.skin.col_body);
-  cmd->data.skin.custom_color = custom;
-  cmd->data.skin.mode = SKIN_MODE_HAND;
-}
-
-void renderer_submit_atlas(struct gfx_handler_t *h, struct atlas_renderer_t *ar, float z, vec2 pos, vec2 size, float rotation, uint32_t sprite_index, bool tile_uv, vec4 color, bool screen_space) {
-  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
-  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
-  cmd->type = RENDER_CMD_ATLAS;
-  cmd->z = z;
-  cmd->data.atlas.ar = ar;
-  glm_vec2_copy(pos, cmd->data.atlas.pos);
-  glm_vec2_copy(size, cmd->data.atlas.size);
-  cmd->data.atlas.rotation = rotation;
-  cmd->data.atlas.sprite_index = sprite_index;
-  cmd->data.atlas.tile_uv = tile_uv;
-  cmd->data.atlas.screen_space = screen_space;
-  if (color) glm_vec4_copy(color, cmd->data.atlas.color);
-  else glm_vec4_fill(cmd->data.atlas.color, 1.0f);
-}
 
 void renderer_submit_rect_filled(struct gfx_handler_t *h, float z, vec2 pos, vec2 size, vec4 color) {
   if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
@@ -2973,11 +2166,8 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   qsort(r->queue.commands, r->queue.count, sizeof(render_command_t), compare_render_commands);
 
   // Reset all instance counters
-  r->skin_renderer.instance_count = 0;
-  r->gameskin_renderer.instance_count = 0;
-  r->particle_renderer.instance_count = 0;
-  r->extras_renderer.instance_count = 0;
-  r->cursor_renderer.instance_count = 0;
+  for (uint32_t i = 0; i < r->dynamic_atlas_count; ++i) r->dynamic_atlases[i]->instance_count = 0;
+  for (uint32_t i = 0; i < r->custom_pipeline_count; ++i) r->custom_pipelines[i].instance_count = 0;
 
   struct atlas_renderer_t *active_ar = NULL;
   bool ar_screen_space = false;
@@ -2987,12 +2177,12 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     render_command_t *q = &r->queue.commands[i];
 
     // Check if we need to flush atlas buffer
-    bool is_atlas = (q->type == RENDER_CMD_ATLAS || q->type == RENDER_CMD_ATLAS_BATCH);
+    bool is_atlas = q->type == RENDER_CMD_ATLAS_BATCH;
     if (active_ar != NULL) {
       bool flush = !is_atlas;
       if (is_atlas) {
-        atlas_renderer_t *next_ar = (q->type == RENDER_CMD_ATLAS) ? q->data.atlas.ar : q->data.atlas_batch.ar;
-        bool next_ss = (q->type == RENDER_CMD_ATLAS) ? q->data.atlas.screen_space : q->data.atlas_batch.screen_space;
+        atlas_renderer_t *next_ar = q->data.atlas_batch.ar;
+        bool next_ss = q->data.atlas_batch.screen_space;
         if (next_ar != active_ar || next_ss != ar_screen_space) flush = true;
       }
 
@@ -3003,10 +2193,6 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       }
     }
 
-    // Flush skins if switching away
-    if (q->type != RENDER_CMD_SKIN && r->skin_renderer.instance_count > 0) {
-      renderer_flush_skins(h, cmd, r->skin_manager.atlas_array, r->skin_manager.color_array);
-    }
 
     // Flush primitives if switching to non-primitive
     if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_CIRCLE_FILLED && q->type != RENDER_CMD_TRIANGLE_FILLED && q->type != RENDER_CMD_LINE &&
@@ -3015,44 +2201,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     }
 
     switch (q->type) {
-    case RENDER_CMD_MAP:
-      renderer_draw_map(h);
-      break;
 
-    case RENDER_CMD_SKIN:
-      if (r->skin_renderer.instance_count >= MAX_SKIN_INSTANCES) {
-        renderer_flush_skins(h, cmd, r->skin_manager.atlas_array, r->skin_manager.color_array);
-      }
-      if (q->data.skin.mode == SKIN_MODE_HAND) {
-        renderer_push_hand_instance(h, q->data.skin.pos, q->data.skin.scale, q->data.skin.skin_index, q->data.skin.angle, q->data.skin.col_body,
-                                    q->data.skin.custom_color);
-      } else {
-        renderer_push_skin_instance(h, q->data.skin.pos, q->data.skin.scale, q->data.skin.skin_index, q->data.skin.eye_state, q->data.skin.dir,
-                                    &q->data.skin.anim_state, q->data.skin.col_body, q->data.skin.col_feet, q->data.skin.custom_color);
-      }
-      break;
-
-    case RENDER_CMD_ATLAS:
-      if (active_ar == NULL) {
-        active_ar = q->data.atlas.ar;
-        ar_screen_space = q->data.atlas.screen_space;
-        batch_start_idx = active_ar->instance_count;
-      }
-
-      if (active_ar->instance_count >= active_ar->max_instances) {
-        uint32_t count = active_ar->instance_count - batch_start_idx;
-        renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
-        batch_start_idx = active_ar->instance_count;
-        // Check if we are still full (should not happen if we reset logic, but we don't reset instance_count global)
-        if (active_ar->instance_count >= active_ar->max_instances) {
-          // Buffer full for this frame. Drop.
-          break;
-        }
-      }
-
-      renderer_push_atlas_instance(active_ar, q->data.atlas.pos, q->data.atlas.size, q->data.atlas.rotation, q->data.atlas.sprite_index,
-                                   q->data.atlas.tile_uv, q->data.atlas.color);
-      break;
 
     case RENDER_CMD_ATLAS_BATCH:
       if (active_ar == NULL) {
@@ -3097,6 +2246,27 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     case RENDER_CMD_LINE:
       renderer_draw_line(h, q->data.prim.p1, q->data.prim.p2, q->data.prim.color, q->data.prim.thickness);
       break;
+
+    case RENDER_CMD_INSTANCES:
+      // A module technique breaks the primitive batch the same way a mesh does,
+      // otherwise its instances would land behind primitives queued before it.
+      if (r->primitive_index_count > 0) flush_primitives(h, cmd);
+      renderer_flush_custom_instances(h, cmd, q);
+      break;
+
+    case RENDER_CMD_MESH: {
+      if (r->primitive_index_count > 0) flush_primitives(h, cmd);
+      custom_pipeline_t *mesh_pipe = q->data.mesh_draw.pipeline;
+      if (mesh_pipe && mesh_pipe->shader) {
+        void *ubos[1] = {(void *)q->data.mesh_draw.uniforms};
+        VkDeviceSize ubo_sizes[1] = {q->data.mesh_draw.uniform_size};
+        const bool has_uniforms = q->data.mesh_draw.uniform_size > 0;
+        renderer_draw_mesh(h, cmd, q->data.mesh_draw.mesh, mesh_pipe->shader, (texture_t **)q->data.mesh_draw.textures,
+                           q->data.mesh_draw.texture_count, has_uniforms ? ubos : NULL, has_uniforms ? ubo_sizes : NULL,
+                           has_uniforms ? 1 : 0);
+      }
+      break;
+    }
     }
   }
 
@@ -3106,13 +2276,356 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
   }
 
-  if (r->skin_renderer.instance_count > 0) {
-    renderer_flush_skins(h, cmd, r->skin_manager.atlas_array, r->skin_manager.color_array);
-  }
 
   if (r->primitive_index_count > 0) {
     flush_primitives(h, cmd);
   }
 
   r->queue.count = 0;
+}
+
+// =============================================================================
+// Resources created by game modules
+// =============================================================================
+//
+// Everything below exists so the active game can own how it looks. The engine
+// supplies batching, sorting and the graphics API; the game supplies pixels,
+// shaders and instance data. Nothing here knows what is being drawn.
+
+static uint32_t format_bytes_per_pixel(VkFormat format) {
+  switch (format) {
+  case VK_FORMAT_R8G8_UNORM: return 2;
+  case VK_FORMAT_R8G8B8A8_UNORM:
+  default: return 4;
+  }
+}
+
+texture_t *renderer_create_texture_layered(gfx_handler_t *h, const unsigned char *pixels, uint32_t width, uint32_t height, uint32_t layers,
+                                           VkFormat format, bool mipmaps, bool linear_filter) {
+  if (layers <= 1 && format == VK_FORMAT_R8G8B8A8_UNORM) {
+    g_next_texture_filter = linear_filter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    texture_t *tex = renderer_create_texture_from_rgba(h, pixels, (int)width, (int)height);
+    g_next_texture_filter = VK_FILTER_LINEAR;
+    return tex;
+  }
+
+  texture_t *tex = renderer_create_texture_2d_array(h, width, height, layers, format);
+  if (!tex || !pixels) return tex;
+
+  const VkDeviceSize layer_bytes = (VkDeviceSize)width * height * format_bytes_per_pixel(format);
+  const VkDeviceSize total = layer_bytes * layers;
+
+  buffer_t staging = {0};
+  create_buffer(h, total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging);
+  void *mapped = NULL;
+  vkMapMemory(h->g_device, staging.memory, 0, total, 0, &mapped);
+  memcpy(mapped, pixels, (size_t)total);
+  vkUnmapMemory(h->g_device, staging.memory);
+
+  transition_image_layout(h, h->renderer.transfer_command_pool, tex->image, format, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, tex->mip_levels, 0, layers);
+
+  VkCommandBuffer cmd = begin_single_time_commands(h, h->renderer.transfer_command_pool);
+  VkBufferImageCopy copy = {.bufferOffset = 0,
+                            .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = layers},
+                            .imageExtent = {width, height, 1}};
+  vkCmdCopyBufferToImage(cmd, staging.buffer, tex->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+  end_single_time_commands(h, h->renderer.transfer_command_pool, cmd);
+
+  if (!mipmaps || !build_mipmaps(h, tex->image, width, height, tex->mip_levels, 0, layers)) {
+    transition_image_layout(h, h->renderer.transfer_command_pool, tex->image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->mip_levels, 0, layers);
+  }
+
+  vkDestroyBuffer(h->g_device, staging.buffer, h->g_allocator);
+  vkFreeMemory(h->g_device, staging.memory, h->g_allocator);
+  return tex;
+}
+
+atlas_renderer_t *renderer_create_atlas(gfx_handler_t *h, texture_t *source, const sprite_definition_t *sprites, uint32_t sprite_count,
+                                        uint32_t max_instances) {
+  renderer_state_t *r = &h->renderer;
+  if (!source || !sprites || sprite_count == 0) return NULL;
+  if (r->dynamic_atlas_count >= MAX_DYNAMIC_ATLASES) {
+    log_error(LOG_SOURCE, "Dynamic atlas limit (%d) reached.", MAX_DYNAMIC_ATLASES);
+    return NULL;
+  }
+
+  atlas_renderer_t *ar = calloc(1, sizeof(atlas_renderer_t));
+  if (!ar) return NULL;
+
+  renderer_lock();
+  renderer_build_atlas_renderer(h, ar, source, sprites, sprite_count, max_instances ? max_instances : MAX_ATLAS_INSTANCES);
+  r->dynamic_atlases[r->dynamic_atlas_count++] = ar;
+  renderer_unlock();
+  return ar;
+}
+
+void renderer_destroy_atlas(gfx_handler_t *h, atlas_renderer_t *ar) {
+  renderer_state_t *r = &h->renderer;
+  if (!ar) return;
+
+  renderer_lock();
+  vkDeviceWaitIdle(h->g_device);
+  for (uint32_t i = 0; i < r->dynamic_atlas_count; ++i) {
+    if (r->dynamic_atlases[i] != ar) continue;
+    r->dynamic_atlases[i] = r->dynamic_atlases[--r->dynamic_atlas_count];
+    break;
+  }
+  if (ar->atlas_texture) renderer_destroy_texture(h, ar->atlas_texture);
+  renderer_cleanup_atlas_renderer(h, ar);
+  free(ar);
+  renderer_unlock();
+}
+
+static VkFormat vertex_format_to_vk(int format) {
+  switch (format) {
+  case 0: return VK_FORMAT_R32_SFLOAT;
+  case 1: return VK_FORMAT_R32G32_SFLOAT;
+  case 2: return VK_FORMAT_R32G32B32_SFLOAT;
+  case 3: return VK_FORMAT_R32G32B32A32_SFLOAT;
+  case 4: return VK_FORMAT_R32_SINT;
+  case 5: return VK_FORMAT_R32_UINT;
+  default: return VK_FORMAT_UNDEFINED;
+  }
+}
+
+shader_t *renderer_create_shader_spirv(gfx_handler_t *h, const void *vert_spirv, size_t vert_size, const void *frag_spirv, size_t frag_size,
+                                       const vertex_layout_t *layout) {
+  renderer_state_t *r = &h->renderer;
+  if (!vert_spirv || !frag_spirv) return NULL;
+  if (r->shader_count >= MAX_SHADERS) {
+    log_error(LOG_SOURCE, "Max shader count (%d) reached.", MAX_SHADERS);
+    return NULL;
+  }
+
+  shader_t *shader = &r->shaders[r->shader_count];
+  memset(shader, 0, sizeof(*shader));
+  shader->id = r->shader_count++;
+  shader->active = true;
+  shader->vert_shader_module = create_shader_module(h, (const char *)vert_spirv, vert_size);
+  shader->frag_shader_module = create_shader_module(h, (const char *)frag_spirv, frag_size);
+  if (layout) {
+    // Owned by the shader slot so the module may free its descriptor.
+    static vertex_layout_t layouts[MAX_SHADERS];
+    layouts[shader->id] = *layout;
+    shader->layout = &layouts[shader->id];
+  }
+  snprintf(shader->vert_path, sizeof(shader->vert_path), "<module:%u:vert>", shader->id);
+  snprintf(shader->frag_path, sizeof(shader->frag_path), "<module:%u:frag>", shader->id);
+  return shader;
+}
+
+custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void *vert_spirv, size_t vert_size, const void *frag_spirv,
+                                                   size_t frag_size, const uint32_t *attr_locations, const uint32_t *attr_offsets,
+                                                   const int *attr_formats, uint32_t attr_count, uint32_t instance_stride,
+                                                   uint32_t max_instances, uint32_t texture_count, bool alpha_blend) {
+  renderer_state_t *r = &h->renderer;
+  if (r->custom_pipeline_count >= MAX_CUSTOM_PIPELINES) {
+    log_error(LOG_SOURCE, "Custom pipeline limit (%d) reached.", MAX_CUSTOM_PIPELINES);
+    return NULL;
+  }
+  if (attr_count + 1 > MAX_CUSTOM_VERTEX_ATTRS) {
+    log_error(LOG_SOURCE, "Custom pipeline declares %u attributes, limit is %d.", attr_count, MAX_CUSTOM_VERTEX_ATTRS - 1);
+    return NULL;
+  }
+  // instance_stride == 0 asks for a mesh pipeline: attributes come from the
+  // vertex buffer itself and there is no per-instance binding at all. That is
+  // what a game's level pass wants, where one big mesh is drawn once.
+  const bool mesh_mode = instance_stride == 0;
+  if (!mesh_mode && max_instances == 0) return NULL;
+  if (texture_count > MAX_TEXTURES_PER_DRAW) {
+    log_error(LOG_SOURCE, "Custom pipeline wants %u textures, limit is %d.", texture_count, MAX_TEXTURES_PER_DRAW);
+    return NULL;
+  }
+
+  custom_pipeline_t *pipe = &r->custom_pipelines[r->custom_pipeline_count];
+  memset(pipe, 0, sizeof(*pipe));
+
+  pipe->layout.bindings[0] = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+  if (mesh_mode) {
+    pipe->layout.binding_count = 1;
+    pipe->layout.attr_count = 0;
+    for (uint32_t i = 0; i < attr_count; ++i) {
+      const VkFormat format = vertex_format_to_vk(attr_formats[i]);
+      if (format == VK_FORMAT_UNDEFINED) {
+        log_error(LOG_SOURCE, "Mesh pipeline attribute %u has an unknown format.", i);
+        return NULL;
+      }
+      pipe->layout.attrs[pipe->layout.attr_count++] =
+          (VkVertexInputAttributeDescription){.binding = 0, .location = attr_locations[i], .format = format, .offset = attr_offsets[i]};
+    }
+  } else {
+    // Binding 0 is the engine's unit quad, binding 1 the module's instance data.
+    pipe->layout.bindings[1] =
+        (VkVertexInputBindingDescription){.binding = 1, .stride = instance_stride, .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE};
+    pipe->layout.binding_count = 2;
+    pipe->layout.attrs[0] =
+        (VkVertexInputAttributeDescription){.binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, pos)};
+    pipe->layout.attr_count = 1;
+    for (uint32_t i = 0; i < attr_count; ++i) {
+      const VkFormat format = vertex_format_to_vk(attr_formats[i]);
+      if (format == VK_FORMAT_UNDEFINED) {
+        log_error(LOG_SOURCE, "Custom pipeline attribute %u has an unknown format.", i);
+        return NULL;
+      }
+      if (attr_locations[i] == 0) {
+        log_error(LOG_SOURCE, "Custom pipeline attribute %u uses location 0, reserved for the quad corner.", i);
+        return NULL;
+      }
+      pipe->layout.attrs[pipe->layout.attr_count++] =
+          (VkVertexInputAttributeDescription){.binding = 1, .location = attr_locations[i], .format = format, .offset = attr_offsets[i]};
+    }
+  }
+  pipe->layout.alpha_blend = alpha_blend;
+
+  pipe->shader = renderer_create_shader_spirv(h, vert_spirv, vert_size, frag_spirv, frag_size, &pipe->layout);
+  if (!pipe->shader) return NULL;
+
+  pipe->instance_stride = instance_stride;
+  pipe->max_instances = max_instances;
+  pipe->texture_count = texture_count;
+  if (!mesh_mode) {
+    create_buffer(h, (VkDeviceSize)instance_stride * max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &pipe->instance_buffer);
+    vkMapMemory(h->g_device, pipe->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&pipe->instance_ptr);
+  }
+  pipe->active = true;
+  r->custom_pipeline_count++;
+  return pipe;
+}
+
+void renderer_destroy_custom_pipeline(gfx_handler_t *h, custom_pipeline_t *pipe) {
+  if (!pipe || !pipe->active) return;
+  vkDeviceWaitIdle(h->g_device);
+  if (pipe->instance_buffer.buffer) {
+    vkUnmapMemory(h->g_device, pipe->instance_buffer.memory);
+    vkDestroyBuffer(h->g_device, pipe->instance_buffer.buffer, h->g_allocator);
+    vkFreeMemory(h->g_device, pipe->instance_buffer.memory, h->g_allocator);
+  }
+  pipe->active = false;
+  pipe->instance_ptr = NULL;
+  pipe->instance_count = 0;
+}
+
+void renderer_submit_instances(gfx_handler_t *h, custom_pipeline_t *pipe, float z, texture_t *const *textures, uint32_t texture_count,
+                               const void *instances, uint32_t count) {
+  renderer_state_t *r = &h->renderer;
+  if (!pipe || !pipe->active || count == 0 || !instances) return;
+  if (r->queue.count >= MAX_RENDER_COMMANDS) return;
+  if (pipe->instance_count + count > pipe->max_instances) {
+    log_error(LOG_SOURCE, "Custom pipeline instance ring exhausted (%u).", pipe->max_instances);
+    return;
+  }
+
+  const uint32_t start = pipe->instance_count;
+  memcpy(pipe->instance_ptr + (size_t)start * pipe->instance_stride, instances, (size_t)count * pipe->instance_stride);
+  pipe->instance_count += count;
+
+  render_command_t *cmd = &r->queue.commands[r->queue.count++];
+  cmd->type = RENDER_CMD_INSTANCES;
+  cmd->z = z;
+  cmd->data.instances.pipeline = pipe;
+  cmd->data.instances.start = start;
+  cmd->data.instances.count = count;
+  cmd->data.instances.texture_count = texture_count < MAX_TEXTURES_PER_DRAW ? texture_count : MAX_TEXTURES_PER_DRAW;
+  for (uint32_t i = 0; i < cmd->data.instances.texture_count; ++i) cmd->data.instances.textures[i] = textures[i];
+}
+
+void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh, texture_t *const *textures,
+                          uint32_t texture_count, const void *uniforms, size_t uniform_size) {
+  renderer_state_t *r = &h->renderer;
+  if (!pipe || !pipe->active || !mesh) return;
+  if (r->queue.count >= MAX_RENDER_COMMANDS) return;
+  if (uniform_size > MAX_QUEUED_UNIFORM_BYTES) {
+    log_error(LOG_SOURCE, "Mesh draw carries %zu uniform bytes, limit is %d.", uniform_size, MAX_QUEUED_UNIFORM_BYTES);
+    return;
+  }
+
+  render_command_t *cmd = &r->queue.commands[r->queue.count++];
+  cmd->type = RENDER_CMD_MESH;
+  cmd->z = z;
+  cmd->data.mesh_draw.pipeline = pipe;
+  cmd->data.mesh_draw.mesh = mesh;
+  cmd->data.mesh_draw.texture_count = texture_count < MAX_TEXTURES_PER_DRAW ? texture_count : MAX_TEXTURES_PER_DRAW;
+  for (uint32_t i = 0; i < cmd->data.mesh_draw.texture_count; ++i) cmd->data.mesh_draw.textures[i] = textures[i];
+  cmd->data.mesh_draw.uniform_size = (uint32_t)uniform_size;
+  if (uniforms && uniform_size > 0) memcpy(cmd->data.mesh_draw.uniforms, uniforms, uniform_size);
+}
+
+static void renderer_flush_custom_instances(gfx_handler_t *h, VkCommandBuffer cmd, const render_command_t *q) {
+  renderer_state_t *r = &h->renderer;
+  custom_pipeline_t *pipe = q->data.instances.pipeline;
+  if (!pipe || !pipe->active || !pipe->shader) return;
+
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, pipe->shader, 1, q->data.instances.texture_count, h->g_main_window_data.RenderPass);
+  if (!pso) return;
+
+  primitive_ubo_t ubo = world_ubo(h);
+
+  VkDeviceSize aligned = (sizeof(ubo) + r->min_ubo_alignment - 1) & ~(r->min_ubo_alignment - 1);
+  if (r->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) {
+    log_error(LOG_SOURCE, "UBO Ring Buffer Exhausted");
+    return;
+  }
+  const uint32_t dyn_offset = r->ubo_buffer_offset;
+  memcpy((char *)r->ubo_buffer_ptr + dyn_offset, &ubo, sizeof(ubo));
+  r->ubo_buffer_offset += (uint32_t)aligned;
+
+  const uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
+  VkDescriptorSet desc;
+  VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                    .descriptorPool = r->frame_descriptor_pools[pool_idx],
+                                    .descriptorSetCount = 1,
+                                    .pSetLayouts = &pso->descriptor_set_layout};
+  if (vkAllocateDescriptorSets(h->g_device, &ai, &desc) != VK_SUCCESS) {
+    log_error(LOG_SOURCE, "Descriptor allocation failed for a module pipeline");
+    return;
+  }
+
+  VkDescriptorBufferInfo b_info = {.buffer = r->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
+  VkWriteDescriptorSet writes[1 + MAX_TEXTURES_PER_DRAW];
+  VkDescriptorImageInfo image_infos[MAX_TEXTURES_PER_DRAW];
+  uint32_t write_count = 0;
+  writes[write_count++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                                 .dstSet = desc,
+                                                 .dstBinding = 0,
+                                                 .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                                 .descriptorCount = 1,
+                                                 .pBufferInfo = &b_info};
+  for (uint32_t i = 0; i < q->data.instances.texture_count; ++i) {
+    texture_t *tex = q->data.instances.textures[i] ? q->data.instances.textures[i] : r->default_texture;
+    image_infos[i] = (VkDescriptorImageInfo){
+        .sampler = tex->sampler, .imageView = tex->image_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    writes[write_count++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                                   .dstSet = desc,
+                                                   .dstBinding = 1 + i,
+                                                   .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                                   .descriptorCount = 1,
+                                                   .pImageInfo = &image_infos[i]};
+  }
+  vkUpdateDescriptorSets(h->g_device, write_count, writes, 0, NULL);
+
+  mesh_t *quad = h->quad_mesh;
+  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
+  VkBuffer bufs[2] = {quad->vertex_buffer.buffer, pipe->instance_buffer.buffer};
+  VkDeviceSize offs[2] = {0, (VkDeviceSize)q->data.instances.start * pipe->instance_stride};
+  vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
+  vkCmdBindIndexBuffer(cmd, quad->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0, NULL);
+  vkCmdDrawIndexed(cmd, quad->index_count, q->data.instances.count, 0, 0, 0);
+}
+
+bool renderer_update_texture_layer(gfx_handler_t *h, texture_t *tex, uint32_t layer, const void *pixels, uint32_t width, uint32_t height) {
+  if (!tex || !pixels) return false;
+  if (layer >= tex->layer_count) return false;
+  // Partial-extent uploads would need their own copy region; the callers that
+  // stream appearances always replace a whole layer.
+  if (width != tex->width || height != tex->height) return false;
+
+  renderer_lock();
+  upload_texture_layer(h, tex, tex->format, (int)layer, pixels, (VkDeviceSize)width * height * format_bytes_per_pixel(tex->format));
+  renderer_unlock();
+  return true;
 }

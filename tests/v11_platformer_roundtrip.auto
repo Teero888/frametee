@@ -1,0 +1,5 @@
+load_level builtin:roundtrip
+tick 8
+save_project frametee-v11-platformer-roundtrip.tasp
+load_project frametee-v11-platformer-roundtrip.tasp
+tick 3

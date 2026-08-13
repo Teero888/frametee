@@ -49,6 +49,8 @@ endif()
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${tracy_SOURCE_DIR}/public"
     "${HOST_APP_DIR}/src"
+    "${HOST_APP_DIR}/include"
+    "${HOST_APP_DIR}/games/ddnet/include"
     "${HOST_APP_DIR}/src/plugins"
     "${HOST_APP_DIR}/libs/cimgui"
     "${HOST_APP_DIR}/libs/cimgui/imgui"
@@ -97,4 +99,10 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
             "${HOST_APP_ABS_DIR}/build/plugins"
         VERBATIM
     )
+endif()
+
+# The engine no longer links any game's physics, so a DDNet-specific plugin
+# brings its own copy of the game's library.
+if(TARGET ddnet_physics)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ddnet_physics)
 endif()

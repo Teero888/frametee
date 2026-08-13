@@ -5,7 +5,7 @@
 #include "../user_interface/timeline/timeline_model.h"
 #include "../scripting/script_engine.h"
 #include "renderer/renderer.h"
-#include <ddnet_physics/gamecore.h>
+#include <engine/input_record.h>
 #include <nfd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +19,17 @@
 // it is set once by api_init() and is internal to this file.
 static ui_handler_t *g_ui_handler_for_api = NULL;
 
+static void api_log(ft_log_level level, const char *category, const char *message) {
+  const char *source = category && *category ? category : "Plugin";
+  const char *text = message ? message : "";
+  if (level >= FT_LOG_ERROR)
+    log_error(source, "%s", text);
+  else if (level == FT_LOG_WARN)
+    log_warn(source, "%s", text);
+  else
+    log_info(source, "%s", text);
+}
+
 static void api_register_script_command(const char *name, void (*callback)(int argc, const char **argv)) {
   script_engine_register_command(name, callback);
 }
@@ -27,40 +38,139 @@ static int api_get_current_tick(void) { return g_ui_handler_for_api->timeline.cu
 
 static int api_get_track_count(void) { return g_ui_handler_for_api->timeline.player_track_count; }
 
-// READ ONLY PLEASE
-static SWorldCore *api_get_initial_world(void) {
+static int api_get_selected_track(void) { return g_ui_handler_for_api->timeline.selected_player_track_index; }
+
+// READ ONLY PLEASE. The handle belongs to the active game; a plugin that looks
+// inside it has to be built for that game and declare so via plugin_game_id().
+static const ft_world *api_get_initial_world(void) {
   timeline_state_t *ts = &g_ui_handler_for_api->timeline;
-  return g_ui_handler_for_api->gfx_handler->physics_handler.loaded && ts->active_group_index >= 0 && ts->active_group_index < ts->group_count
-             ? &ts->groups[ts->active_group_index]->initial_world
-             : NULL;
+  if (!g_ui_handler_for_api->gfx_handler->level) return NULL;
+  if (ts->active_group_index < 0 || ts->active_group_index >= ts->group_count) return NULL;
+  return ts->groups[ts->active_group_index]->initial_world;
 }
 
-static SWorldCore *api_get_world_state_at(int tick) {
+// Borrowed from the timeline's own cache, so a plugin must not hold it across
+// another timeline query.
+static ft_world *api_get_world_state_at(int tick) {
   timeline_state_t *ts = &g_ui_handler_for_api->timeline;
+  if (ts->active_group_index < 0 || ts->active_group_index >= ts->group_count) return NULL;
+  const ft_world *world = model_group_world_at_tick(ts, ts->active_group_index, tick);
+  if (!world) return NULL;
+  game_host_t *host = &g_ui_handler_for_api->gfx_handler->game_host;
+  ft_world *copy = gh_world_create(host, g_ui_handler_for_api->gfx_handler->level, gh_world_player_count(host, world),
+                                   ts->active_group_index);
+  if (copy) gh_world_copy(host, copy, world);
+  return copy;
+}
 
-  SWorldCore *world_copy = (SWorldCore *)malloc(sizeof(SWorldCore));
-  if (!world_copy) return NULL;
-  *world_copy = wc_empty();
+static void api_destroy_world(ft_world *world) {
+  gh_world_destroy(&g_ui_handler_for_api->gfx_handler->game_host, world);
+}
 
-  if (ts->active_group_index < 0 || ts->active_group_index >= ts->group_count) {
-    free(world_copy);
-    return NULL;
+// Schema reflection, so a plugin can edit inputs without knowing the layout.
+static uint32_t api_input_record_size(void) {
+  return game_input_size(&g_ui_handler_for_api->gfx_handler->game_host);
+}
+
+static void api_input_default(void *record) {
+  game_host_t *host = &g_ui_handler_for_api->gfx_handler->game_host;
+  if (!record) return;
+  memset(record, 0, game_input_size(host));
+  gh_input_default(host, record);
+}
+
+static uint32_t api_input_field_count(void) {
+  const ft_input_schema *schema = game_input_schema(&g_ui_handler_for_api->gfx_handler->game_host);
+  return schema ? schema->field_count : 0;
+}
+
+static const ft_input_field *api_input_field(uint32_t index) {
+  const ft_input_schema *schema = game_input_schema(&g_ui_handler_for_api->gfx_handler->game_host);
+  return schema && index < schema->field_count ? &schema->fields[index] : NULL;
+}
+
+static int api_input_field_index(const char *field_id) {
+  return game_input_field_index(&g_ui_handler_for_api->gfx_handler->game_host, field_id);
+}
+
+static long long api_input_get(const void *record, int field) {
+  return field >= 0 ? gh_input_get(&g_ui_handler_for_api->gfx_handler->game_host, record, (unsigned)field) : 0;
+}
+
+static void api_input_set(void *record, int field, long long value) {
+  if (field >= 0) gh_input_set(&g_ui_handler_for_api->gfx_handler->game_host, record, (unsigned)field, value);
+}
+
+static float api_input_get_float(const void *record, int field) {
+  return field >= 0 ? gh_input_get_float(&g_ui_handler_for_api->gfx_handler->game_host, record, (unsigned)field) : 0.f;
+}
+
+static void api_input_set_float(void *record, int field, float value) {
+  if (field >= 0) gh_input_set_float(&g_ui_handler_for_api->gfx_handler->game_host, record, (unsigned)field, value);
+}
+
+static ft_vec2 api_input_get_vec2(const void *record, int field) {
+  return field >= 0 ? gh_input_get_vec2(&g_ui_handler_for_api->gfx_handler->game_host, record, (unsigned)field)
+                    : (ft_vec2){0.f, 0.f};
+}
+
+static void api_input_set_vec2(void *record, int field, ft_vec2 value) {
+  if (field >= 0) gh_input_set_vec2(&g_ui_handler_for_api->gfx_handler->game_host, record, (unsigned)field, value);
+}
+
+static struct undo_command_t *api_do_create_track(const ft_player_setup *setup, int *out_track_index) {
+  player_info_t info = {0};
+  const player_info_t *info_ptr = NULL;
+  if (setup) {
+    snprintf(info.name, sizeof(info.name), "%s", setup->name ? setup->name : "");
+    snprintf(info.tag, sizeof(info.tag), "%s", setup->tag ? setup->tag : "");
+    snprintf(info.appearance_id, sizeof(info.appearance_id), "%s", setup->appearance_id ? setup->appearance_id : "");
+    memcpy(info.primary_color, &setup->primary_color, sizeof(info.primary_color));
+    memcpy(info.secondary_color, &setup->secondary_color, sizeof(info.secondary_color));
+    info.use_custom_color = setup->use_custom_color;
+    info_ptr = &info;
   }
-  model_get_group_world_state_at_tick(ts, ts->active_group_index, tick, world_copy, false);
-
-  return world_copy;
-}
-
-static struct undo_command_t *api_do_create_track(const player_info_t *info, int *out_track_index) {
-  return timeline_api_create_track(g_ui_handler_for_api, info, out_track_index);
+  return timeline_api_create_track(g_ui_handler_for_api, info_ptr, out_track_index);
 }
 
 static struct undo_command_t *api_do_create_snippet(int track_index, int start_tick, int duration, int *out_snippet_id) {
   return timeline_api_create_snippet(g_ui_handler_for_api, track_index, start_tick, duration, out_snippet_id);
 }
 
-static struct undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset, int count, const SPlayerInput *new_inputs) {
-  return timeline_api_set_snippet_inputs(g_ui_handler_for_api, snippet_id, tick_offset, count, new_inputs);
+static bool api_find_snippet_at(int track_index, int tick, int *out_snippet_id, int *out_tick_offset, int *out_available) {
+  timeline_state_t *ts = &g_ui_handler_for_api->timeline;
+  if (track_index < 0 || track_index >= ts->player_track_count) return false;
+  player_track_t *track = &ts->player_tracks[track_index];
+  for (int i = 0; i < track->snippet_count; ++i) {
+    input_snippet_t *snippet = &track->snippets[i];
+    if (tick < snippet->start_tick || tick >= snippet->end_tick) continue;
+    const int offset = tick - snippet->start_tick;
+    if (out_snippet_id) *out_snippet_id = snippet->id;
+    if (out_tick_offset) *out_tick_offset = offset;
+    if (out_available) *out_available = snippet->input_count - offset;
+    return true;
+  }
+  return false;
+}
+
+static struct undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset, int count, const void *new_inputs,
+                                                 size_t record_stride) {
+  game_host_t *host = &g_ui_handler_for_api->gfx_handler->game_host;
+  const size_t record_size = game_input_size(host);
+  if (!new_inputs || count <= 0 || record_stride < record_size) return NULL;
+  input_record_t *records = calloc((size_t)count, sizeof(*records));
+  if (!records) return NULL;
+  for (int i = 0; i < count; ++i)
+    memcpy(records[i].bytes, (const uint8_t *)new_inputs + (size_t)i * record_stride, record_size);
+  struct undo_command_t *command = timeline_api_set_snippet_inputs(g_ui_handler_for_api, snippet_id, tick_offset, count, records);
+  free(records);
+  return command;
+}
+
+static const char *api_get_level_name(void) { return g_ui_handler_for_api->loaded_level_name; }
+static const char *api_get_level_path(void) { return g_ui_handler_for_api->loaded_level_path; }
+static bool api_viewport_accepts_input(bool continuing_drag) {
+  return g_ui_handler_for_api->viewport_focused && (g_ui_handler_for_api->viewport_hovered || continuing_drag);
 }
 
 static void api_register_undo_command(struct undo_command_t *command) {
@@ -160,14 +270,32 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
   g_ui_handler_for_api = ui_handler;
 
   return (tas_api_t){
+      .log = api_log,
       .get_current_tick = api_get_current_tick,
       .get_track_count = api_get_track_count,
+      .get_selected_track = api_get_selected_track,
       .get_initial_world = api_get_initial_world,
       .get_world_state_at = api_get_world_state_at,
+      .destroy_world = api_destroy_world,
+      .input_record_size = api_input_record_size,
+      .input_default = api_input_default,
+      .input_field_count = api_input_field_count,
+      .input_field = api_input_field,
+      .input_field_index = api_input_field_index,
+      .input_get = api_input_get,
+      .input_set = api_input_set,
+      .input_get_float = api_input_get_float,
+      .input_set_float = api_input_set_float,
+      .input_get_vec2 = api_input_get_vec2,
+      .input_set_vec2 = api_input_set_vec2,
       .do_create_track = api_do_create_track,
       .register_undo_command = api_register_undo_command,
       .do_create_snippet = api_do_create_snippet,
+      .find_snippet_at = api_find_snippet_at,
       .do_set_inputs = api_do_set_inputs,
+      .get_level_name = api_get_level_name,
+      .get_level_path = api_get_level_path,
+      .viewport_accepts_input = api_viewport_accepts_input,
       .draw_line_world = api_draw_line_world,
       .draw_circle_world = api_draw_circle_world,
       .draw_rect_filled_world = api_draw_rect_filled_world,

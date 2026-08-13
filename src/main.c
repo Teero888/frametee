@@ -2,9 +2,11 @@
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
 #include "user_interface/user_interface.h"
+#include <engine/engine_api.h>
+#include <user_interface/entity_inspector.h>
+#include <user_interface/timeline/timeline_model.h>
 #include "scripting/script_engine.h"
 #include <math.h>
-#include <particles/particle_system.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <time.h>
 #include <stdio.h>
@@ -19,6 +21,72 @@
 #endif
 
 bool g_is_headless = false;
+bool g_list_games = false;
+
+// Set from --game, consumed by the game layer during startup. A command line
+// choice outranks the config so a project can be opened under a specific game
+// without editing settings first.
+const char *g_forced_game_id = NULL;
+
+
+// Walks the game through one frame of rendering: every visible world, in every
+// pass, with the interpolation the playhead is currently between. The engine
+// supplies the schedule and the draw services; the game supplies the picture.
+static void render_game_passes(struct gfx_handler_t *handler, float intra) {
+  ui_handler_t *ui = &handler->user_interface;
+  timeline_state_t *ts = &ui->timeline;
+
+  static const ft_render_pass passes[] = {FT_PASS_LEVEL_BACKGROUND, FT_PASS_ENTITIES, FT_PASS_LEVEL_FOREGROUND, FT_PASS_OVERLAY};
+  const int selected_track = ts->selected_player_track_index;
+
+  for (size_t pass_index = 0; pass_index < sizeof(passes) / sizeof(passes[0]); ++pass_index) {
+    // Level layers are shared by every simulation group and are drawn once.
+    // Entities and overlays receive each world's adjacent snapshots.
+    const bool level_pass = passes[pass_index] == FT_PASS_LEVEL_BACKGROUND || passes[pass_index] == FT_PASS_LEVEL_FOREGROUND;
+    const bool per_world = !level_pass;
+    const int world_count = per_world ? ts->group_count : 1;
+
+    if (level_pass && !ui->render_level) continue;
+
+    for (int group_index = 0; group_index < world_count; ++group_index) {
+      if (per_world && !ts->groups[group_index]->visible) continue;
+
+      const ft_world *previous = NULL;
+      const ft_world *current = NULL;
+      if (per_world) model_group_world_pair(ts, group_index, ts->current_tick, &previous, &current);
+
+      ft_render_frame frame = {0};
+      frame.struct_size = sizeof(frame);
+      frame.pass = passes[pass_index];
+      frame.level = handler->level;
+      frame.world = current;
+      frame.previous_world = previous;
+      frame.alpha = intra;
+      frame.tick = ts->current_tick;
+      frame.opacity = 1.f;
+      frame.world_index = per_world ? group_index : -1;
+      frame.world_count = ts->group_count;
+      frame.active = !per_world || group_index == ts->active_group_index;
+      frame.selected_player = per_world && model_track_group_index(ts, selected_track) == group_index
+                                  ? model_group_local_track_index(ts, selected_track)
+                                  : -1;
+      if (per_world) {
+        const float *color = ts->groups[group_index]->color;
+        frame.accent = (ft_color){color[0], color[1], color[2], color[3]};
+      } else {
+        frame.accent = (ft_color){1.f, 1.f, 1.f, 1.f};
+      }
+      frame.player_setups = ui_player_setups(ui, group_index, &frame.player_setup_count);
+      engine_api_fill_state(&frame.state);
+
+      gh_render(&handler->game_host, &frame);
+    }
+  }
+
+  // The editor's own marker for whatever the inspector has selected, drawn on
+  // top of everything the game produced.
+  entity_inspector_render_highlight(&ui->entity_inspector, handler);
+}
 
 int main(int argc, char **argv) {
   const char *auto_script = NULL;
@@ -26,16 +94,29 @@ int main(int argc, char **argv) {
     if (strcmp(argv[i], "--auto") == 0 && i + 1 < argc) {
       g_is_headless = true;
       auto_script = argv[++i];
+    } else if (strcmp(argv[i], "--game") == 0 && i + 1 < argc) {
+      g_forced_game_id = argv[++i];
+    } else if (strcmp(argv[i], "--list-games") == 0) {
+      g_list_games = true;
+      g_is_headless = true;
     }
   }
 
   logger_init();
 
+  if (g_list_games) {
+    game_host_t game_host;
+    game_host_init(&game_host, NULL);
+    game_host_discover(&game_host, "games");
+    game_host_print_listing(&game_host);
+    game_host_shutdown(&game_host);
+    return 0;
+  }
+
   static struct gfx_handler_t handler;
   if (init_gfx_handler(&handler) != 0) return 1;
-  handler.map_data = &handler.physics_handler.collision.m_MapData;
 
-  script_engine_init(&handler.user_interface.plugin_context, &handler.user_interface.plugin_api);
+  script_engine_init(&handler.user_interface, &handler.user_interface.plugin_api);
 
   if (g_is_headless && auto_script) {
     script_engine_run(auto_script);
@@ -73,32 +154,22 @@ int main(int argc, char **argv) {
     if (frame_result == FRAME_EXIT) break;
     if (frame_result == FRAME_SKIP) continue;
 
-    on_camera_update(&handler, viewport_hovered);
-
-    float speed_scale = handler.user_interface.timeline.is_reversing ? 2.0f : 1.0f;
-    float intra = fminf((igGetTime() - handler.user_interface.timeline.last_update_time) / (1.f / (handler.user_interface.timeline.playback_speed * speed_scale)), 1.f);
-    if (handler.user_interface.timeline.is_reversing) intra = 1.f - intra;
-
-    if (handler.user_interface.render_map) {
-      renderer_submit_map(&handler, Z_LAYER_MAP);
+    timeline_state_t *timeline = &handler.user_interface.timeline;
+    float intra = 1.f;
+    if ((timeline->is_playing || timeline->is_reversing) && timeline->playback_speed > 0) {
+      const float speed_scale = timeline->is_reversing ? 2.0f : 1.0f;
+      intra = fminf((igGetTime() - timeline->last_update_time) /
+                        (1.f / (timeline->playback_speed * speed_scale)),
+                    1.f);
+      if (timeline->is_reversing) intra = 1.f - intra;
     }
-    render_players(&handler.user_interface);
-    render_pickups(&handler.user_interface);
 
-    if (handler.user_interface.render_particles) {
-      timeline_state_t *ts = &handler.user_interface.timeline;
-      for (int group_index = 0; group_index < ts->group_count; ++group_index) {
-        timeline_group_t *group = ts->groups[group_index];
-        if (!group->visible) continue;
-        int local_tick = model_group_playhead_tick(ts, group_index);
-        double particle_time = ((double)local_tick - 1.0 + intra) * 0.02;
-        group->particle_system.current_time = particle_time < 0.0 ? 0.0 : particle_time;
-        particle_system_update_sim(&group->particle_system, handler.map_data);
-        particle_system_render(&group->particle_system, &handler, 0);
-        particle_system_render(&group->particle_system, &handler, 1);
-      }
-    }
-    render_cursor(&handler.user_interface);
+    on_camera_update(&handler, viewport_hovered, intra);
+
+    // Everything in the viewport is drawn by the active game. The engine
+    // decides the passes and their order; what happens inside each one is the
+    // game's business entirely.
+    render_game_passes(&handler, intra);
     renderer_flush_queue(&handler, handler.current_frame_command_buffer);
 
     ui_check_auto_save(&handler.user_interface);

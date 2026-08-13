@@ -10,6 +10,8 @@
 #define CIMGUI_INCLUDED
 #include "imgui.h"
 #include "plugin_api.h"
+// This plugin is DDNet-specific, so it may read the game's worlds directly.
+#include <ddnet/ddnet_game.h>
 #include <logger/logger.h>
 
 extern "C" {
@@ -81,7 +83,7 @@ public:
     auto startTime = std::chrono::high_resolution_clock::now();
 
     SWorldCore StartWorld = wc_empty();
-    wc_copy_world(&StartWorld, m_pAPI->get_initial_world());
+    wc_copy_world(&StartWorld, const_cast<SWorldCore *>(ddnet_world(m_pAPI->get_initial_world())));
 
     unsigned int global_seed = 0; // (unsigned)time(NULL);
     if (m_UseMultiThreading) {
@@ -203,6 +205,10 @@ public:
 extern "C" {
 
 FT_API plugin_info_t get_plugin_info() { return {"Physics Profiler", "Teero", "1.0.0", "Integrates Tracy to benchmark the ddnet_physics library."}; }
+
+// Benchmarks ddnet_physics itself, so it only makes sense while DDNet is the
+// active game.
+FT_API const char *plugin_game_id() { return "ddnet"; }
 
 FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) { return new PhysicsProfilerPlugin(context, api); }
 
