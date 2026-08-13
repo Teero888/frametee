@@ -53,6 +53,7 @@ typedef struct project_group_t {
   float color[4];
   bool visible;
   bool export_enabled;
+  bool prediction_enabled;
   int start_offset;
   uint8_t *world_data;
   size_t world_size;
@@ -74,6 +75,7 @@ typedef struct project_document_t {
   int active_group_index;
   int selected_track_index;
   bool linked_copy_input;
+  prediction_settings_t prediction;
 
   uint8_t *level_data;
   size_t level_size;
@@ -317,6 +319,17 @@ static uint64_t input_schema_hash(const game_host_t *host) {
     for (uint32_t label = 0; label < field->enum_count; ++label)
       hash = hash_string(hash, field->enum_labels ? field->enum_labels[label] : "");
   }
+  // Prediction alternatives store control selections by schema index, so the
+  // controls are as much a part of project compatibility as the input fields.
+  hash = hash_u32(hash, schema->control_count);
+  for (uint32_t i = 0; i < schema->control_count; ++i) {
+    const ft_input_control *control = &schema->controls[i];
+    hash = hash_string(hash, control->id);
+    hash = hash_u32(hash, control->field);
+    hash = hash_u32(hash, (uint32_t)control->value);
+    hash = hash_u32(hash, (uint32_t)((uint64_t)control->value >> 32));
+    hash = hash_u32(hash, control->flags);
+  }
   return hash;
 }
 
@@ -398,13 +411,30 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
       !buffer_i32(buffer, timeline->selected_player_track_index) || !buffer_u8(buffer, timeline->linked_copy_input ? 1 : 0))
     return false;
 
+  const prediction_settings_t *prediction = &timeline->prediction;
+  if (prediction->length < 1 || prediction->length > 2000 || !isfinite(prediction->thickness) ||
+      prediction->thickness <= 0.f || prediction->line_count < 1 || prediction->line_count > MAX_PREDICTION_LINES ||
+      !buffer_u8(buffer, prediction->enabled ? 1 : 0) || !buffer_i32(buffer, prediction->length) ||
+      !buffer_f32(buffer, prediction->thickness) || !buffer_u32(buffer, (uint32_t)prediction->line_count))
+    return false;
+  for (int i = 0; i < prediction->line_count; ++i) {
+    const prediction_line_t *line = &prediction->lines[i];
+    if (line->use_timeline_inputs != (i == 0) || !buffer_string(buffer, line->name)) return false;
+    for (int c = 0; c < 4; ++c)
+      if (!isfinite(line->color[c]) || !buffer_f32(buffer, line->color[c])) return false;
+    if (!buffer_u64(buffer, line->controls) || !buffer_u8(buffer, line->enabled ? 1 : 0) ||
+        !buffer_u8(buffer, line->use_timeline_inputs ? 1 : 0))
+      return false;
+  }
+
   for (int i = 0; i < timeline->group_count; ++i) {
     const timeline_group_t *group = timeline->groups[i];
     if (!buffer_string(buffer, group->name)) return false;
     for (int c = 0; c < 4; ++c)
       if (!buffer_f32(buffer, group->color[c])) return false;
     if (!buffer_u8(buffer, group->visible ? 1 : 0) || !buffer_u8(buffer, group->export_enabled ? 1 : 0) ||
-        !buffer_i32(buffer, group->start_offset) || !write_world_blob(buffer, host, group->initial_world))
+        !buffer_u8(buffer, group->prediction_enabled ? 1 : 0) || !buffer_i32(buffer, group->start_offset) ||
+        !write_world_blob(buffer, host, group->initial_world))
       return false;
   }
 
@@ -430,7 +460,8 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
     }
 
     if (!buffer_i32(buffer, track->group_index) || !buffer_string(buffer, track->name) ||
-        !buffer_u8(buffer, track->export_enabled ? 1 : 0) || !buffer_u32(buffer, (uint32_t)track->snippet_count))
+        !buffer_u8(buffer, track->export_enabled ? 1 : 0) || !buffer_u8(buffer, track->prediction_enabled ? 1 : 0) ||
+        !buffer_u32(buffer, (uint32_t)track->snippet_count))
       return false;
 
     if (track->snippet_count < 0 || track->snippet_count > MAX_SNIPPETS_PER_PLAYER) return false;
@@ -579,24 +610,50 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document) {
     return false;
   document->linked_copy_input = boolean != 0;
 
+  int32_t prediction_length;
+  uint32_t prediction_lines;
+  float prediction_thickness;
+  if (!reader_u8(reader, &boolean) || boolean > 1 || !reader_i32(reader, &prediction_length) || prediction_length < 1 ||
+      prediction_length > 2000 || !reader_f32(reader, &prediction_thickness) || prediction_thickness <= 0.f ||
+      !reader_u32(reader, &prediction_lines) || prediction_lines < 1 || prediction_lines > MAX_PREDICTION_LINES)
+    return false;
+  document->prediction.enabled = boolean != 0;
+  document->prediction.length = prediction_length;
+  document->prediction.thickness = prediction_thickness;
+  document->prediction.line_count = (int)prediction_lines;
+  for (uint32_t i = 0; i < prediction_lines; ++i) {
+    prediction_line_t *line = &document->prediction.lines[i];
+    uint8_t enabled, timeline_inputs;
+    if (!reader_string(reader, line->name, sizeof(line->name))) return false;
+    for (int c = 0; c < 4; ++c)
+      if (!reader_f32(reader, &line->color[c])) return false;
+    if (!reader_u64(reader, &line->controls) || !reader_u8(reader, &enabled) || enabled > 1 ||
+        !reader_u8(reader, &timeline_inputs) || timeline_inputs > 1 || (timeline_inputs != (i == 0)))
+      return false;
+    line->enabled = enabled != 0;
+    line->use_timeline_inputs = timeline_inputs != 0;
+  }
+
   for (int i = 0; i < document->group_count; ++i) {
     project_group_t *group = &document->groups[i];
     if (!reader_string(reader, group->name, sizeof(group->name))) return false;
     for (int c = 0; c < 4; ++c)
       if (!reader_f32(reader, &group->color[c])) return false;
-    uint8_t visible, export_enabled;
+    uint8_t visible, export_enabled, prediction_enabled;
     uint64_t world_size;
     if (!reader_u8(reader, &visible) || visible > 1 || !reader_u8(reader, &export_enabled) || export_enabled > 1 ||
-        !reader_i32(reader, &group->start_offset) || !reader_u64(reader, &world_size) ||
+        !reader_u8(reader, &prediction_enabled) || prediction_enabled > 1 || !reader_i32(reader, &group->start_offset) ||
+        !reader_u64(reader, &world_size) ||
         !reader_blob(reader, world_size, &group->world_data, &group->world_size))
       return false;
     group->visible = visible != 0;
     group->export_enabled = export_enabled != 0;
+    group->prediction_enabled = prediction_enabled != 0;
   }
 
   for (int i = 0; i < document->track_count; ++i) {
     player_track_t *track = &document->tracks[i];
-    uint8_t custom_color, is_linked, starting_enabled, export_enabled;
+    uint8_t custom_color, is_linked, starting_enabled, export_enabled, prediction_enabled;
     if (!reader_string(reader, track->player_info.name, sizeof(track->player_info.name)) ||
         !reader_string(reader, track->player_info.tag, sizeof(track->player_info.tag)) ||
         !reader_string(reader, track->player_info.appearance_id, sizeof(track->player_info.appearance_id)) ||
@@ -619,9 +676,11 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document) {
     }
     if (!reader_i32(reader, &track->group_index) || track->group_index < 0 || track->group_index >= document->group_count ||
         !reader_string(reader, track->name, sizeof(track->name)) || !reader_u8(reader, &export_enabled) || export_enabled > 1 ||
-        !reader_u32(reader, &count) || count > MAX_SNIPPETS_PER_PLAYER)
+        !reader_u8(reader, &prediction_enabled) || prediction_enabled > 1 || !reader_u32(reader, &count) ||
+        count > MAX_SNIPPETS_PER_PLAYER)
       return false;
     track->export_enabled = export_enabled != 0;
+    track->prediction_enabled = prediction_enabled != 0;
     track->snippet_count = (int)count;
     track->snippet_capacity = (int)count;
     if (count > 0) {
@@ -791,6 +850,7 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
     memcpy(destination->color, source->color, sizeof(destination->color));
     destination->visible = source->visible;
     destination->export_enabled = source->export_enabled;
+    destination->prediction_enabled = source->prediction_enabled;
     destination->start_offset = source->start_offset;
     if (source->world_size > 0) {
       if (!gh_world_deserialize(host, destination->initial_world, source->world_data, source->world_size) ||
@@ -840,6 +900,7 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
   timeline->active_group_index = document->active_group_index;
   timeline->selected_player_track_index = document->selected_track_index;
   timeline->linked_copy_input = document->linked_copy_input;
+  timeline->prediction = document->prediction;
   model_recalc_physics(timeline, 0);
   return true;
 }
@@ -1016,6 +1077,7 @@ bool import_project_as_group(ui_handler_t *ui, const char *path) {
     memcpy(group->color, source_group_data->color, sizeof(group->color));
     group->visible = source_group_data->visible;
     group->export_enabled = source_group_data->export_enabled;
+    group->prediction_enabled = source_group_data->prediction_enabled;
     group->start_offset = source_group_data->start_offset;
     const int destination_group = timeline->group_count - 1;
     if (source_group_data->world_size > 0 &&

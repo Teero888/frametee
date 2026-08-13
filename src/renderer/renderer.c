@@ -2160,6 +2160,25 @@ void renderer_submit_line(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, ve
   glm_vec4_copy(color, cmd->data.prim.color);
 }
 
+void renderer_submit_line_batch(struct gfx_handler_t *h, float z, const line_segment_t *segments, uint32_t count) {
+  renderer_state_t *renderer = &h->renderer;
+  if (!segments || count == 0 || renderer->queue.count >= MAX_RENDER_COMMANDS) return;
+  const size_t size = sizeof(*segments) * (size_t)count;
+  if (size > renderer->transient_capacity - renderer->transient_offset) {
+    log_error(LOG_SOURCE, "Transient memory exhausted while queuing %u line segments.", count);
+    return;
+  }
+  line_segment_t *copy = (line_segment_t *)(renderer->transient_memory + renderer->transient_offset);
+  memcpy(copy, segments, size);
+  renderer->transient_offset += size;
+
+  render_command_t *cmd = &renderer->queue.commands[renderer->queue.count++];
+  cmd->type = RENDER_CMD_LINE_BATCH;
+  cmd->z = z;
+  cmd->data.line_batch.segments = copy;
+  cmd->data.line_batch.count = count;
+}
+
 void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, atlas_instance_t *out_inst) {
   if (sprite_index >= ar->sprite_count) return;
   float layer_w = (float)ar->layer_width;
@@ -2241,7 +2260,8 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
 
 
     // Flush primitives if switching to non-primitive
-    if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_CIRCLE_FILLED && q->type != RENDER_CMD_TRIANGLE_FILLED && q->type != RENDER_CMD_LINE &&
+    if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_CIRCLE_FILLED && q->type != RENDER_CMD_TRIANGLE_FILLED &&
+        q->type != RENDER_CMD_LINE && q->type != RENDER_CMD_LINE_BATCH &&
         r->primitive_index_count > r->primitive_index_offset_drawn) {
       flush_primitives(h, cmd);
     }
@@ -2291,6 +2311,13 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
 
     case RENDER_CMD_LINE:
       renderer_draw_line(h, q->data.prim.p1, q->data.prim.p2, q->data.prim.color, q->data.prim.thickness);
+      break;
+
+    case RENDER_CMD_LINE_BATCH:
+      for (uint32_t segment = 0; segment < q->data.line_batch.count; ++segment) {
+        line_segment_t *line = &q->data.line_batch.segments[segment];
+        renderer_draw_line(h, line->p1, line->p2, line->color, line->thickness);
+      }
       break;
 
     case RENDER_CMD_INSTANCES:

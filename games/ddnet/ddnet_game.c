@@ -623,8 +623,11 @@ static void ddnet_world_destroy(ft_game *game, ft_world *world) {
 static void ddnet_world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
   (void)game;
   if (!dst || !src) return;
+  const int world_index = dst->index;
   dst->level = src->level;
-  dst->index = src->index;
+  // Keep the destination's identity. Prediction worlds use index -1 so their
+  // speculative ticks cannot emit particles into a visible simulation group.
+  dst->index = world_index;
   // wc_copy_world reuses whatever dst already allocated, which is what keeps
   // the engine's constant snapshotting affordable.
   wc_copy_world(&dst->core, (SWorldCore *)&src->core);
@@ -865,9 +868,6 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
                                    .render_pickups = true,
                                    .render_cursor_follow = true,
                                    .center_dot = false,
-                                   .show_prediction = true,
-                                   .prediction_alpha = {0.7f, 0.25f},
-                                   .prediction_length = 100,
                                    .cursor_scale = 1.0f};
 
   ft_engine_state state;
@@ -1056,10 +1056,6 @@ enum ddnet_setting {
   SET_RENDER_WEAPONS,
   SET_RENDER_PARTICLES,
   SET_RENDER_PICKUPS,
-  SET_SHOW_PREDICTION,
-  SET_PREDICTION_LENGTH,
-  SET_PREDICTION_ALPHA_OWN,
-  SET_PREDICTION_ALPHA_OTHERS,
   SET_CURSOR_SCALE,
   SET_CURSOR_FOLLOW,
   SET_CENTER_DOT,
@@ -1071,10 +1067,6 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_RENDER_WEAPONS] = {"render_weapons", "Weapons and hooks", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
     [SET_RENDER_PARTICLES] = {"render_particles", "Particles", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
     [SET_RENDER_PICKUPS] = {"render_pickups", "Pickups", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
-    [SET_SHOW_PREDICTION] = {"show_prediction", "Show prediction", "Trajectory lines for the coming ticks", "Prediction", FT_VALUE_BOOL, 0, 0},
-    [SET_PREDICTION_LENGTH] = {"prediction_length", "Prediction length", "Ticks simulated ahead", "Prediction", FT_VALUE_INT, 0, 2000},
-    [SET_PREDICTION_ALPHA_OWN] = {"prediction_alpha_own", "Alpha, selected tee", NULL, "Prediction", FT_VALUE_FLOAT, 0.0, 1.0},
-    [SET_PREDICTION_ALPHA_OTHERS] = {"prediction_alpha_others", "Alpha, other tees", NULL, "Prediction", FT_VALUE_FLOAT, 0.0, 1.0},
     [SET_CURSOR_SCALE] = {"cursor_scale", "Crosshair scale", NULL, "Crosshair", FT_VALUE_FLOAT, 0.1, 2.0},
     [SET_CURSOR_FOLLOW] = {"cursor_follow", "Crosshair in follow camera", NULL, "Crosshair", FT_VALUE_BOOL, 0, 0},
     [SET_CENTER_DOT] = {"center_dot", "Show center dot", "Marks the tee's exact position", "Rendering", FT_VALUE_BOOL, 0, 0},
@@ -1097,10 +1089,6 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
   case SET_RENDER_WEAPONS: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_weapons}; return true;
   case SET_RENDER_PARTICLES: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_particles}; return true;
   case SET_RENDER_PICKUPS: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_pickups}; return true;
-  case SET_SHOW_PREDICTION: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->show_prediction}; return true;
-  case SET_PREDICTION_LENGTH: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->prediction_length}; return true;
-  case SET_PREDICTION_ALPHA_OWN: *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = s->prediction_alpha[0]}; return true;
-  case SET_PREDICTION_ALPHA_OTHERS: *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = s->prediction_alpha[1]}; return true;
   case SET_CURSOR_SCALE: *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = s->cursor_scale}; return true;
   case SET_CURSOR_FOLLOW: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_cursor_follow}; return true;
   case SET_CENTER_DOT: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->center_dot}; return true;
@@ -1115,10 +1103,6 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
   case SET_RENDER_WEAPONS: s->render_weapons = value->as.b; return true;
   case SET_RENDER_PARTICLES: s->render_particles = value->as.b; return true;
   case SET_RENDER_PICKUPS: s->render_pickups = value->as.b; return true;
-  case SET_SHOW_PREDICTION: s->show_prediction = value->as.b; return true;
-  case SET_PREDICTION_LENGTH: s->prediction_length = (int)value->as.i; return true;
-  case SET_PREDICTION_ALPHA_OWN: s->prediction_alpha[0] = (float)value->as.f; return true;
-  case SET_PREDICTION_ALPHA_OTHERS: s->prediction_alpha[1] = (float)value->as.f; return true;
   case SET_CURSOR_SCALE: s->cursor_scale = (float)value->as.f; return true;
   case SET_CURSOR_FOLLOW: s->render_cursor_follow = value->as.b; return true;
   case SET_CENTER_DOT: s->center_dot = value->as.b; return true;

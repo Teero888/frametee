@@ -3,6 +3,7 @@
 #include "renderer/renderer.h"
 #include "user_interface/user_interface.h"
 #include <engine/engine_api.h>
+#include <engine/prediction.h>
 #include <user_interface/entity_inspector.h>
 #include <user_interface/timeline/timeline_model.h>
 #include "scripting/script_engine.h"
@@ -80,6 +81,8 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
       engine_api_fill_state(&frame.state);
 
       gh_render(&handler->game_host, &frame);
+      if (per_world && passes[pass_index] == FT_PASS_ENTITIES)
+        prediction_render_group(ui, group_index, previous, current, intra);
     }
   }
 

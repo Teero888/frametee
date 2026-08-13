@@ -134,6 +134,13 @@ struct primitive_ubo_t {
   float lod_bias;
 };
 
+typedef struct line_segment_t {
+  vec2 p1;
+  vec2 p2;
+  vec4 color;
+  float thickness;
+} line_segment_t;
+
 struct map_buffer_object_t {
   vec3 transform; // x, y, zoom
   float aspect;
@@ -199,6 +206,7 @@ typedef enum {
   RENDER_CMD_CIRCLE_FILLED,
   RENDER_CMD_TRIANGLE_FILLED,
   RENDER_CMD_LINE,
+  RENDER_CMD_LINE_BATCH,
   RENDER_CMD_INSTANCES,
   RENDER_CMD_MESH
 } render_cmd_type_t;
@@ -229,6 +237,10 @@ struct render_command_t {
       float thickness;
       uint32_t segments;
     } prim;
+    struct {
+      line_segment_t *segments;
+      uint32_t count;
+    } line_batch;
     struct {
       custom_pipeline_t *pipeline;
       uint32_t start;
@@ -340,6 +352,7 @@ void renderer_submit_rect_filled(gfx_handler_t *h, float z, vec2 pos, vec2 size,
 void renderer_submit_circle_filled(gfx_handler_t *h, float z, vec2 center, float radius, vec4 color, uint32_t segments);
 void renderer_submit_triangle_filled(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec2 p3, vec4 color);
 void renderer_submit_line(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec4 color, float thickness);
+void renderer_submit_line_batch(gfx_handler_t *h, float z, const line_segment_t *segments, uint32_t count);
 void renderer_flush_queue(gfx_handler_t *h, VkCommandBuffer cmd);
 
 // --- resources a game module creates at runtime -------------------------------

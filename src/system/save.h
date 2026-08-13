@@ -9,7 +9,8 @@
 // value has an explicit little-endian representation; game-owned levels,
 // worlds and project metadata remain opaque length-delimited blobs.
 // Pre-release v9 files are intentionally rejected rather than guessed at.
-#define TAS_PROJECT_FILE_VERSION 11
+// 12 adds engine-owned prediction-line settings and per-group/track scope.
+#define TAS_PROJECT_FILE_VERSION 12
 
 bool save_project(ui_handler_t *ui, const char *path);
 bool load_project(ui_handler_t *ui, const char *path);

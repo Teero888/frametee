@@ -189,13 +189,20 @@ Coordinates crossing the ABI are in the editor's world units, which is whatever
 `level_info` reports bounds in. DDNet works internally in pixels and divides by
 32 at the boundary, so the editor sees tiles.
 
+Prediction is an engine feature. The engine deep-copies a group's current
+`ft_world`, feeds future or alternative schema controls through `world_step`,
+and draws the resulting paths. A module chooses the value being tracked by the
+`position` it returns from `world_player_view`; it does not implement a second
+prediction renderer. Scratch worlds are created with `world_index == -1`, so a
+module must not emit persistent presentation effects while stepping them.
+
 `world_serialize` / `world_deserialize` store starting states in project files.
 Version the blob yourself; the engine only records it next to the game id and
 version. DDNet's implementation refuses to load a blob whose character struct
 size differs from the running build, rather than reinterpreting stale bytes.
 
 `level_serialize` embeds a level when it can be recreated through
-`level_load_memory`; otherwise version 11 stores the original reloadable path.
+`level_load_memory`; otherwise version 12 stores the original reloadable path.
 `project_save` / `project_load` are an optional pair for metadata that belongs
 to neither a level nor a world. Both bundled reference examples implement a
 small versioned project blob, showing the size-query/write/read convention in
@@ -387,13 +394,15 @@ renderer, plugins, keybinds and the window.
 
 Two consequences worth knowing:
 
-- **Project files are version 11 and not backwards compatible.** Engine-owned
+- **Project files are version 12 and not backwards compatible.** Engine-owned
   values use explicit little-endian fields rather than raw C structs. Levels,
   each group's starting world, and optional module project metadata are stored
-  as opaque length-delimited blobs. A project carries its game id and SemVer,
-  ruleset, and a hash of the full input schema; any mismatch is refused before
-  the open project is replaced. Modules without level serialization use the
-  stored reloadable level path instead.
+  as opaque length-delimited blobs. Prediction variants, their colors and input
+  controls, and per-group/per-track prediction scope are engine-owned project
+  state. A project carries its game id and SemVer, ruleset, and a hash of the
+  full input schema; any mismatch is refused before the open project is
+  replaced. Modules without level serialization use the stored reloadable
+  level path instead.
 - **DDNet-specific plugins link the game's physics themselves.** The engine used
   to re-export `ddnet_physics` symbols to plugins; it no longer links it at all.
   Such a plugin includes `games/ddnet/include/ddnet/ddnet_game.h`, which is the

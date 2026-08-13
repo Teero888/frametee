@@ -1,5 +1,0 @@
-load_level builtin:roundtrip
-tick 8
-save_project frametee-v11-bouncer-roundtrip.tasp
-load_project frametee-v11-bouncer-roundtrip.tasp
-tick 3

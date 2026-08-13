@@ -390,9 +390,6 @@ typedef struct {
   bool render_pickups;
   bool render_cursor_follow;
   bool center_dot;
-  bool show_prediction;
-  float prediction_alpha[2]; // 0 = selected player, 1 = everyone else
-  int prediction_length;
   float cursor_scale;
 } dd_settings_t;
 

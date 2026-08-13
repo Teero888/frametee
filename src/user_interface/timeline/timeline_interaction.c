@@ -1051,7 +1051,7 @@ input_record_t interaction_predict_input(ui_handler_t *ui, const ft_world *world
       // Re-evaluate all linked tracks for this preview frame.
       interaction_apply_linked_inputs(ui);
     }
-    if (track_idx == ts->selected_player_track_index) return ts->player_tracks[track_idx].current_input;
+    return ts->player_tracks[track_idx].current_input;
   }
 
   return model_get_input_at_tick(ts, track_idx, gh_world_tick(&ui->gfx_handler->game_host, world));
