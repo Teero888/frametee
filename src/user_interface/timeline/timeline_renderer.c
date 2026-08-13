@@ -1,4 +1,5 @@
 #include <engine/int_math.h>
+#include <engine/prediction.h>
 #include "timeline_renderer.h"
 #include "renderer/graphics_backend.h"
 #include "timeline_commands.h"
@@ -192,6 +193,10 @@ void renderer_draw_controls(timeline_state_t *ts) {
   if (directed) {
     igPopStyleColor(3);
   }
+
+  igSameLine(0, btn_gap);
+
+  prediction_render_menu(ts);
 
   igSameLine(0, btn_gap);
 

@@ -493,100 +493,6 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const SW
   free(draws);
 }
 
-// --- prediction --------------------------------------------------------------
-
-// Trajectory lines: the module simulates a copy of the world forward, pulling
-// the inputs the editor already holds for each tick. Only the game can do this,
-// because only the game can step its own physics.
-static void render_prediction(ft_game *game, const ft_render_frame *frame, const SWorldCore *source, float intra) {
-  const dd_settings_t *settings = &game->settings;
-  const int selected = frame->selected_player;
-  if (!settings->show_prediction || selected < 0) return;
-  if (settings->prediction_alpha[0] <= 0.0f && settings->prediction_alpha[1] <= 0.0f) return;
-
-  int start_i = 0;
-  int end_i = source->m_NumCharacters;
-  if (settings->prediction_alpha[1] <= 0.0f) {
-    start_i = selected;
-    end_i = start_i + 1;
-  }
-
-  SWorldCore world = wc_empty();
-  wc_copy_world(&world, (SWorldCore *)source);
-
-  const ft_color accent = frame->accent;
-  for (int i = start_i; i < end_i && i < world.m_NumCharacters; ++i) {
-    if (i < 0) continue;
-    const bool is_own = (i == selected);
-    if (settings->prediction_alpha[!is_own] <= 0.0f) continue;
-
-    const SCharacterCore *core = &world.m_pCharacters[i];
-    vec2 from, to, p;
-    tile_pos(core->m_PrevPos, from);
-    tile_pos(core->m_Pos, to);
-    lerp2(from, to, intra, p);
-    const bool frozen = core->m_FreezeTime > 0;
-    vec4 color = {frozen ? 1.0f - accent.r : accent.r, frozen ? 1.0f - accent.g : accent.g, frozen ? 1.0f - accent.b : accent.b,
-                  settings->prediction_alpha[!is_own]};
-    dd_draw_line(game, DD_Z_LINES, to, p, color, 0.05f);
-  }
-
-  for (int t = 0; t < settings->prediction_length; ++t) {
-    for (int i = start_i; i < end_i && i < world.m_NumCharacters; ++i) {
-      if (i < 0) continue;
-      const bool is_own = (i == selected);
-      if (settings->prediction_alpha[!is_own] <= 0.0f) continue;
-
-      // What the editor has recorded for that future tick, or the tee's last
-      // input when the timeline runs out.
-      SPlayerInput input = world.m_pCharacters[i].m_Input;
-      game->engine->get_player_input(frame->world_index >= 0 ? i : i, world.m_GameTick, &input);
-      cc_on_input(&world.m_pCharacters[i], &input);
-    }
-
-    for (SProjectile *ent = (SProjectile *)world.m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
-         ent = (SProjectile *)ent->m_Base.m_pNextTypeEntity) {
-      const float pt = (world.m_GameTick - ent->m_StartTick) / (float)GAME_TICK_SPEED;
-      const float ct = (world.m_GameTick - ent->m_StartTick + 1) / (float)GAME_TICK_SPEED;
-      const mvec2 prev_pos = prj_get_pos(ent, pt);
-      const mvec2 cur_pos = prj_get_pos(ent, ct);
-
-      mvec2 col, next;
-      const bool collide = intersect_line(ent->m_Base.m_pCollision, prev_pos, cur_pos, &col, &next);
-      vec2 pp, p;
-      tile_pos(prev_pos, pp);
-      tile_pos(collide ? col : cur_pos, p);
-      dd_draw_line(game, DD_Z_LINES, pp, p, (vec4){1.0f, 0.5f, 0.5f, 0.8f}, 0.05f);
-    }
-
-    for (SLaser *ent = (SLaser *)world.m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent; ent = (SLaser *)ent->m_Base.m_pNextTypeEntity) {
-      vec2 p1, p0;
-      tile_pos(ent->m_Base.m_Pos, p1);
-      tile_pos(ent->m_From, p0);
-      dd_draw_line(game, DD_Z_LINES, p0, p1, (vec4){0.5f, 0.5f, 1.0f, 0.8f}, 0.05f);
-    }
-
-    wc_tick(&world);
-
-    for (int i = start_i; i < end_i && i < world.m_NumCharacters; ++i) {
-      if (i < 0) continue;
-      const bool is_own = (i == selected);
-      if (settings->prediction_alpha[!is_own] <= 0.0f) continue;
-
-      const SCharacterCore *core = &world.m_pCharacters[i];
-      vec2 pp, p;
-      tile_pos(core->m_PrevPos, pp);
-      tile_pos(core->m_Pos, p);
-      const bool frozen = core->m_FreezeTime > 0;
-      vec4 color = {frozen ? 1.0f - accent.r : accent.r, frozen ? 1.0f - accent.g : accent.g, frozen ? 1.0f - accent.b : accent.b,
-                    settings->prediction_alpha[!is_own]};
-      dd_draw_line(game, DD_Z_LINES, pp, p, color, 0.05f);
-    }
-  }
-
-  wc_free(&world);
-}
-
 // --- entry point -------------------------------------------------------------
 
 static void render_entities(ft_game *game, const ft_render_frame *frame) {
@@ -668,7 +574,6 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
   render_projectiles_and_lasers(game, world, intra);
   render_fastcap_flags(game, world, intra);
 
-  if (frame->active) render_prediction(game, frame, world, intra);
 }
 
 void dd_render(ft_game *game, const ft_render_frame *frame) {

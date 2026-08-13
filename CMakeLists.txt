@@ -74,6 +74,7 @@ set(SRCS
 	src/engine/game_host.c
 	src/engine/engine_api.c
 	src/engine/input_record.c
+	src/engine/prediction.c
 	src/plugins/api_impl.c
 	src/plugins/plugin_manager.c
 	src/scripting/script_engine.c
@@ -469,12 +470,12 @@ if(BUILD_TESTING AND BUILD_GAMES)
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-config-bouncer")
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-config-platformer")
     add_test(
-        NAME project_v11_bouncer_roundtrip
-        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-bouncer --auto "${CMAKE_SOURCE_DIR}/tests/v11_bouncer_roundtrip.auto"
+        NAME project_v12_bouncer_roundtrip
+        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-bouncer --auto "${CMAKE_SOURCE_DIR}/tests/v12_bouncer_roundtrip.auto"
     )
     add_test(
-        NAME project_v11_platformer_roundtrip
-        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-platformer --auto "${CMAKE_SOURCE_DIR}/tests/v11_platformer_roundtrip.auto"
+        NAME project_v12_platformer_roundtrip
+        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-platformer --auto "${CMAKE_SOURCE_DIR}/tests/v12_platformer_roundtrip.auto"
     )
     add_test(
         NAME game_switch_and_quick_save_lifetime
@@ -515,11 +516,11 @@ if(BUILD_TESTING AND BUILD_GAMES)
             -DBUILD_DIR=${CMAKE_BINARY_DIR}
             -P "${CMAKE_SOURCE_DIR}/tests/ddnet_export.cmake"
     )
-    set_tests_properties(project_v11_bouncer_roundtrip PROPERTIES
+    set_tests_properties(project_v12_bouncer_roundtrip PROPERTIES
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-bouncer;APPDATA=${CMAKE_BINARY_DIR}/test-config-bouncer"
     )
-    set_tests_properties(project_v11_platformer_roundtrip PROPERTIES
+    set_tests_properties(project_v12_platformer_roundtrip PROPERTIES
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-platformer;APPDATA=${CMAKE_BINARY_DIR}/test-config-platformer"
     )

@@ -3,6 +3,7 @@
 
 #include <engine/game_host.h>
 #include <engine/input_record.h>
+#include <engine/prediction.h>
 #include <stdbool.h>
 #include <system/include_cimgui.h>
 #include <types.h>
@@ -86,6 +87,10 @@ struct player_track_t {
   // Generic exporter selection; every exporter receives the same chosen track
   // set and interprets its own output format inside the game module.
   bool export_enabled;
+
+  // Engine-owned trajectory selection. The game only supplies this player's
+  // position through ft_player_view and advances scratch worlds on request.
+  bool prediction_enabled;
 };
 
 struct dragged_snippet_info_t {
@@ -146,6 +151,7 @@ struct timeline_group_t {
   float color[4];
   bool visible;
   bool export_enabled;
+  bool prediction_enabled;
   int start_offset;
 
   physics_v_t vec;
@@ -154,6 +160,9 @@ struct timeline_group_t {
   ft_world *prev_world_cached;
   ft_world *world_cached;
   int cached_tick;
+  // Reused scratch simulations, one for each prediction variant. These are
+  // deliberately world handles rather than game data.
+  ft_world *prediction_worlds[MAX_PREDICTION_LINES];
 };
 
 struct timeline_state {
@@ -184,6 +193,8 @@ struct timeline_state {
   int group_count;
   int active_group_index;
   int simulation_group_index;
+
+  prediction_settings_t prediction;
 
   // Timeline events reported by the active game.
   timeline_event_t *events;

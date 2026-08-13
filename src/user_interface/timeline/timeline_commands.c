@@ -110,6 +110,7 @@ typedef struct {
   float color[4];
   bool visible;
   bool export_enabled;
+  bool prediction_enabled;
   int start_offset;
 } TimelineGroupData;
 
@@ -209,6 +210,7 @@ timeline_data_snapshot_t *commands_capture_timeline_data(const timeline_state_t 
     memcpy(destination->color, source->color, sizeof(destination->color));
     destination->visible = source->visible;
     destination->export_enabled = source->export_enabled;
+    destination->prediction_enabled = source->prediction_enabled;
     destination->start_offset = source->start_offset;
   }
 
@@ -285,6 +287,7 @@ static void apply_timeline_data_snapshot(timeline_state_t *ts, const timeline_da
     memcpy(destination->color, source->color, sizeof(destination->color));
     destination->visible = source->visible;
     destination->export_enabled = source->export_enabled;
+    destination->prediction_enabled = source->prediction_enabled;
     destination->start_offset = i == 0 ? 0 : source->start_offset;
   }
 

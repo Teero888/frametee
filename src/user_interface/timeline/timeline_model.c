@@ -54,6 +54,7 @@ static void group_runtime_init(timeline_state_t *ts, timeline_group_t *group, in
 static void group_runtime_cleanup(timeline_state_t *ts, timeline_group_t *group) {
   if (!group) return;
   game_host_t *host = model_host(ts);
+  prediction_group_cleanup(ts, group);
   v_destroy(ts, &group->vec);
   gh_world_destroy(host, group->initial_world);
   gh_world_destroy(host, group->previous_world);
@@ -72,6 +73,7 @@ timeline_group_t *model_add_group(timeline_state_t *ts, const char *name) {
   memcpy(group->color, s_group_colors[index % (int)(sizeof(s_group_colors) / sizeof(s_group_colors[0]))], sizeof(group->color));
   group->visible = true;
   group->export_enabled = true;
+  group->prediction_enabled = true;
   group_runtime_init(ts, group, index);
 
   timeline_group_t **groups = realloc(ts->groups, sizeof(*groups) * (size_t)(index + 1));
@@ -173,6 +175,8 @@ void model_reset_groups_for_level(timeline_state_t *ts) {
 
 void model_init(timeline_state_t *ts, ui_handler_t *ui) {
   ts->ui = ui;
+
+  prediction_settings_default(&ts->prediction);
 
   ts->gui_playback_speed = 50;
   ts->playback_speed = 50;
@@ -586,6 +590,7 @@ static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, 
           new_track->linked_copy_fields |= UINT64_C(1) << field;
     }
     new_track->export_enabled = true;
+    new_track->prediction_enabled = true;
   }
 
   ts->player_track_count = new_count;
