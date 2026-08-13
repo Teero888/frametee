@@ -46,3 +46,9 @@ target_link_libraries(example_platformer_game PRIVATE raylib)
 if(NOT MSVC)
     target_compile_options(example_platformer_game PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()
+
+# The start screen calls into the editor's ImGui; on Windows those symbols have
+# to be resolved at link time against the host executable's import library.
+if(WIN32 AND TARGET frametee)
+    target_link_libraries(example_platformer_game PRIVATE frametee)
+endif()

@@ -13,6 +13,13 @@
 #include <math.h>
 #include <sys/stat.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#define strcasecmp _stricmp
+#else
+#include <strings.h>
+#endif
+
 // --- host services -----------------------------------------------------------
 //
 // This browser used to live in the editor, where it reached straight into the
