@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 7;
+pub const FT_GAME_ABI_VERSION: u32 = 9;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -245,6 +245,63 @@ pub struct ft_sprite_draw {
     pub tiling: ft_vec2,
 }
 
+/// The engine's Vulkan device, handed over so a renderer that can adopt an
+/// existing device renders into engine memory instead of copying pixels.
+#[repr(C)]
+pub struct ft_gpu_device {
+    pub struct_size: u32,
+    pub api: u32,
+    pub instance: *mut c_void,
+    pub physical_device: *mut c_void,
+    pub device: *mut c_void,
+    pub queue: *mut c_void,
+    pub queue_family_index: u32,
+    pub api_version: u32,
+}
+
+#[repr(C)]
+pub struct ft_texture_desc {
+    pub struct_size: u32,
+    pub pixels: *const c_void,
+    pub width: u32,
+    pub height: u32,
+    pub layers: u32,
+    pub format: u32,
+    pub mipmaps: bool,
+    pub linear_filter: bool,
+}
+
+#[repr(C)]
+pub struct ft_sprite_rect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+#[repr(C)]
+pub struct ft_atlas_desc {
+    pub struct_size: u32,
+    pub texture: *mut c_void,
+    pub sprites: *const ft_sprite_rect,
+    pub sprite_count: u32,
+    pub max_instances_per_frame: u32,
+}
+
+/// The image behind an `ft_texture`.
+#[repr(C)]
+pub struct ft_gpu_image {
+    pub struct_size: u32,
+    pub image: *mut c_void,
+    pub format: u64,
+    pub width: u32,
+    pub height: u32,
+    pub layers: u32,
+    pub layout: u32,
+}
+
+pub const FT_GPU_API_VULKAN: u32 = 1;
+
 /// The engine's service table. Only the entries this example calls are typed
 /// precisely; the rest are opaque pointers, which is safe because the module
 /// never invokes them and the layout is preserved either way.
@@ -259,17 +316,19 @@ pub struct ft_engine_api {
     pub free_file_data: *const c_void,
     pub resolve_cache_path: *const c_void,
 
-    pub texture_create: *const c_void,
+    pub texture_create: Option<unsafe extern "C" fn(desc: *const ft_texture_desc) -> *mut c_void>,
     pub texture_destroy: *const c_void,
     pub texture_update_layer: *const c_void,
-    pub atlas_create: *const c_void,
+    pub atlas_create: Option<unsafe extern "C" fn(desc: *const ft_atlas_desc) -> *mut c_void>,
     pub atlas_destroy: *const c_void,
     pub pipeline_create: *const c_void,
     pub pipeline_destroy: *const c_void,
     pub mesh_create: *const c_void,
     pub mesh_destroy: *const c_void,
 
-    pub draw_sprites: *const c_void,
+    pub draw_sprites: Option<
+        unsafe extern "C" fn(atlas: *mut c_void, z: f32, draws: *const ft_sprite_draw, count: u32),
+    >,
     pub draw_line: Option<
         unsafe extern "C" fn(z: f32, a: ft_vec2, b: ft_vec2, color: ft_color, thickness: f32),
     >,
@@ -308,6 +367,12 @@ pub struct ft_engine_api {
     pub timeline_world_pair: *const c_void,
     pub timeline_player_track: *const c_void,
     pub render_instances_preview: *const c_void,
+
+    pub gpu_device: Option<unsafe extern "C" fn() -> *const ft_gpu_device>,
+    pub texture_gpu_image:
+        Option<unsafe extern "C" fn(texture: *mut c_void, out: *mut ft_gpu_image) -> bool>,
+    pub draw_texture:
+        Option<unsafe extern "C" fn(z: f32, texture: *mut c_void, dst: ft_rect, tint: ft_color)>,
 }
 
 /// The module vtable. Field order and count must match `ft_game_module`

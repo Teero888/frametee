@@ -283,11 +283,11 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
 
     igText("Track %d, ticks %d..%d", track_index, snippet->start_tick, snippet->end_tick);
     igSameLine(0, 12.f);
-    if (igSmallButton("Select all")) {
+    if (igButton("Select all", (ImVec2){0.f, 0.f})) {
       for (int i = 0; i < snippet->input_count && i < editor_state.selected_capacity; ++i) editor_state.selected_rows[i] = true;
     }
     igSameLine(0, 6.f);
-    if (igSmallButton("Select none")) reset_editor_state();
+    if (igButton("Select none", (ImVec2){0.f, 0.f})) reset_editor_state();
 
     draw_bulk_edit(ui, host, schema, snippet);
     igSeparator();

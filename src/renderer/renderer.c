@@ -2185,7 +2185,8 @@ void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, a
   float layer_h = (float)ar->layer_height;
   float sprite_w = (float)ar->sprite_definitions[sprite_index].w;
   float sprite_h = (float)ar->sprite_definitions[sprite_index].h;
-  float padding = 1.0f;
+  // A borrowed image has no padding gutter around it: the sprite is the image.
+  float padding = ar->aliased ? 0.0f : 1.0f;
 
   out_inst->uv_scale[0] = sprite_w / layer_w;
   out_inst->uv_scale[1] = sprite_h / layer_h;
@@ -2465,6 +2466,77 @@ atlas_renderer_t *renderer_create_atlas(gfx_handler_t *h, texture_t *source, con
   return ar;
 }
 
+atlas_renderer_t *renderer_create_texture_atlas(gfx_handler_t *h, texture_t *src) {
+  renderer_state_t *r = &h->renderer;
+  if (!src || !src->active || src->image == VK_NULL_HANDLE) return NULL;
+  if (r->dynamic_atlas_count >= MAX_DYNAMIC_ATLASES) {
+    log_error(LOG_SOURCE, "Dynamic atlas limit (%d) reached.", MAX_DYNAMIC_ATLASES);
+    return NULL;
+  }
+
+  atlas_renderer_t *ar = calloc(1, sizeof(atlas_renderer_t));
+  if (!ar) return NULL;
+
+  renderer_lock();
+
+  // The atlas shader samples a 2D array, so the borrowed image gets a second
+  // view of that type. A single-layer 2D image is a legal one-layer array, so
+  // this costs a view rather than a copy.
+  texture_t *view = calloc(1, sizeof(texture_t));
+  if (!view) {
+    renderer_unlock();
+    free(ar);
+    return NULL;
+  }
+  *view = *src;
+  view->alias_atlas = NULL;
+  view->image_view = create_image_view(h, src->image, src->format, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 1, 1);
+  view->layer_count = 1;
+  view->mip_levels = 1;
+  // The sampler the draw path binds lives on the atlas, not on the texture.
+  // Clamped rather than repeating: a whole image drawn as one quad has nothing
+  // to tile, and clamping keeps edge filtering off the opposite border.
+  view->sampler = VK_NULL_HANDLE;
+  VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                                      .magFilter = VK_FILTER_LINEAR,
+                                      .minFilter = VK_FILTER_LINEAR,
+                                      .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                                      .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                                      .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                                      .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                                      .maxLod = 1.0f,
+                                      .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK};
+  check_vk_result(vkCreateSampler(h->g_device, &sampler_info, h->g_allocator, &ar->sampler));
+
+  ar->aliased = true;
+  ar->atlas_texture = view;
+  ar->shader = renderer_load_shader(h, "data/shaders/atlas.vert.spv", "data/shaders/atlas.frag.spv");
+  // Same vertex input the sprite path uses; a module that only ever draws whole
+  // images still needs the layout described on the shader.
+  if (ar->shader && !ar->shader->layout) {
+    static vertex_layout_t alias_layout;
+    alias_layout.binding_count = 2;
+    alias_layout.bindings[0] = atlas_binding_desc[0];
+    alias_layout.bindings[1] = atlas_binding_desc[1];
+    alias_layout.attr_count = 9;
+    for (uint32_t i = 0; i < 9; ++i) alias_layout.attrs[i] = atlas_attrib_descs[i];
+    ar->shader->layout = &alias_layout;
+  }
+  ar->max_instances = 256;
+  ar->sprite_count = 1;
+  ar->sprite_definitions = malloc(sizeof(sprite_definition_t));
+  ar->sprite_definitions[0] = (sprite_definition_t){0, 0, src->width, src->height};
+  ar->layer_width = src->width;
+  ar->layer_height = src->height;
+  create_buffer(h, sizeof(atlas_instance_t) * ar->max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ar->instance_buffer);
+  vkMapMemory(h->g_device, ar->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&ar->instance_ptr);
+
+  r->dynamic_atlases[r->dynamic_atlas_count++] = ar;
+  renderer_unlock();
+  return ar;
+}
+
 void renderer_destroy_atlas(gfx_handler_t *h, atlas_renderer_t *ar) {
   renderer_state_t *r = &h->renderer;
   if (!ar) return;
@@ -2476,7 +2548,19 @@ void renderer_destroy_atlas(gfx_handler_t *h, atlas_renderer_t *ar) {
     r->dynamic_atlases[i] = r->dynamic_atlases[--r->dynamic_atlas_count];
     break;
   }
-  if (ar->atlas_texture) renderer_destroy_texture(h, ar->atlas_texture);
+  if (ar->aliased) {
+    // The image belongs to whoever created the texture; only the view and
+    // sampler built for sampling it are ours to release.
+    if (ar->atlas_texture) {
+      // Only the view is ours here: the sampler belongs to the atlas and is
+      // released by renderer_cleanup_atlas_renderer just below.
+      if (ar->atlas_texture->image_view) vkDestroyImageView(h->g_device, ar->atlas_texture->image_view, h->g_allocator);
+      free(ar->atlas_texture);
+      ar->atlas_texture = NULL;
+    }
+  } else if (ar->atlas_texture) {
+    renderer_destroy_texture(h, ar->atlas_texture);
+  }
   renderer_cleanup_atlas_renderer(h, ar);
   free(ar);
   renderer_unlock();
@@ -3004,4 +3088,53 @@ bool renderer_update_texture_layer(gfx_handler_t *h, texture_t *tex, uint32_t la
   upload_texture_layer(h, tex, tex->format, (int)layer, pixels, (VkDeviceSize)width * height * format_bytes_per_pixel(tex->format));
   renderer_unlock();
   return true;
+}
+
+bool renderer_mark_texture_external(gfx_handler_t *h, texture_t *tex) {
+  if (!h || !tex || !tex->active || tex->image == VK_NULL_HANDLE) return false;
+  if (tex->external) return true;
+
+  renderer_lock();
+  // Textures are created sampleable. Parking this one as a colour attachment
+  // now is what lets every later frame assume the same starting layout, so the
+  // module never has to special-case the first frame it draws.
+  transition_image_layout(h, h->renderer.transfer_command_pool, tex->image, tex->format, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, tex->mip_levels, 0, tex->layer_count);
+  tex->external = true;
+  renderer_unlock();
+  return true;
+}
+
+void renderer_sync_external_textures(gfx_handler_t *h, VkCommandBuffer cmd, bool for_sampling) {
+  if (!h || cmd == VK_NULL_HANDLE) return;
+
+  renderer_state_t *renderer = &h->renderer;
+  for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {
+    texture_t *tex = &renderer->textures[i];
+    if (!tex->active || !tex->external || tex->image == VK_NULL_HANDLE) continue;
+
+    // The module's own submission is ordered ahead of this command buffer, so
+    // its writes are already in flight by the time these barriers execute and
+    // an execution dependency on the colour attachment stage is enough.
+    VkImageMemoryBarrier barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .oldLayout = for_sampling ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .newLayout = for_sampling ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = tex->image,
+        .srcAccessMask = for_sampling ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT,
+        .dstAccessMask = for_sampling ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .baseMipLevel = 0,
+                             .levelCount = tex->mip_levels,
+                             .baseArrayLayer = 0,
+                             .layerCount = tex->layer_count}};
+
+    const VkPipelineStageFlags src_stage =
+        for_sampling ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    const VkPipelineStageFlags dst_stage =
+        for_sampling ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &barrier);
+  }
 }

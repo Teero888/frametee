@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 7u
+#define FT_GAME_ABI_VERSION 9u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -585,6 +585,49 @@ typedef struct ft_texture_desc {
   bool linear_filter;
 } ft_texture_desc;
 
+/* The graphics API the engine's device belongs to. A module compares this
+ * against what its own renderer can adopt before touching any handle below. */
+typedef enum ft_gpu_api {
+  FT_GPU_API_NONE = 0,
+  FT_GPU_API_VULKAN = 1,
+} ft_gpu_api;
+
+/* The engine's graphics device, handed over as opaque handles so this header
+ * stays free of any graphics API's types. Every pointer is the corresponding
+ * Vulkan handle when `api` is FT_GPU_API_VULKAN: VkInstance, VkPhysicalDevice,
+ * VkDevice, VkQueue. A module casts them back itself.
+ *
+ * The queue is the one the engine records its own frame on. A module that
+ * submits there is ordered against the engine's frame for free. */
+typedef struct ft_gpu_device {
+  uint32_t struct_size;
+  ft_gpu_api api;
+  void *instance;
+  void *physical_device;
+  void *device;
+  void *queue;
+  uint32_t queue_family_index;
+  /* Vulkan API version the instance was created with, in VK_MAKE_VERSION form.
+   * A renderer being handed the device needs it to build its own tables. */
+  uint32_t api_version;
+} ft_gpu_device;
+
+/* The image behind an ft_texture, for a module rendering into engine memory. */
+typedef struct ft_gpu_image {
+  uint32_t struct_size;
+  /* VkImage when the device reports FT_GPU_API_VULKAN. */
+  void *image;
+  /* VkFormat as a plain integer, so no Vulkan header is needed to read it. */
+  uint64_t format;
+  uint32_t width;
+  uint32_t height;
+  uint32_t layers;
+  /* VkImageLayout the engine expects to find the image in when it samples it,
+   * and therefore the layout the module must leave it in. The engine reports
+   * what it will transition from rather than dictating a value mid-frame. */
+  uint32_t layout;
+} ft_gpu_image;
+
 /* A sprite atlas: one texture plus a sprite table. The engine batches every
  * draw that shares an atlas, which is how a game gets thousands of particles or
  * tiles on screen without touching the graphics API itself. */
@@ -836,6 +879,38 @@ typedef struct ft_engine_api {
   /* Immediately renders instances through the game's existing pipeline into a
    * sampled 2D texture. Valid outside render callbacks, including game UI. */
   ft_texture *(*render_instances_preview)(const ft_instance_preview_desc *desc);
+
+  /* --- games that bring their own renderer ---
+   *
+   * Everything above expresses a frame through the engine's renderer. A game
+   * built on an engine that owns a renderer of its own — Bevy, raylib, anything
+   * with its own device and pipelines — does not want that. These two calls let
+   * such a module draw its frame itself and hand over the result.
+   *
+   * The engine's device, for a module whose renderer can adopt an existing one
+   * rather than create its own. wgpu can (wgpu::hal), OpenGL cannot. NULL in
+   * headless runs and whenever the engine has no graphics. */
+  const ft_gpu_device *(*gpu_device)(void);
+  /* The backing image of a texture the module created, so a module rendering on
+   * the engine's device can target engine memory directly instead of copying
+   * pixels through texture_update_layer. Returns false when the engine has no
+   * graphics or the texture has no image.
+   *
+   * Calling this marks the texture externally rendered, which changes who owns
+   * its contents: the engine stops assuming it left the image in a sampleable
+   * layout and instead transitions it from `ft_gpu_image.layout` before each
+   * frame that samples it. A module must therefore leave the image in the
+   * layout it reported, every frame, and must submit its own work to the queue
+   * in ft_gpu_device before returning from its render callback. Work submitted
+   * to that queue is ordered ahead of the engine's own frame, which is what
+   * makes a plain barrier sufficient and avoids any cross-device semaphore. */
+  bool (*texture_gpu_image)(ft_texture *texture, ft_gpu_image *out);
+  /* Draws a texture as a single quad, sampling it as it stands this frame.
+   * This is how a module hands back a frame it rendered itself, and it is
+   * deliberately not the atlas path: an atlas copies its sprites into a private
+   * array once, which is right for a sprite sheet and wrong for an image whose
+   * contents change every frame. `dst` is in world units; `tint` multiplies. */
+  void (*draw_texture)(float z, ft_texture *texture, ft_rect dst, ft_color tint);
 } ft_engine_api;
 
 /* -------------------------------------------------------------------------

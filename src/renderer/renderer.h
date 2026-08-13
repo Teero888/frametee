@@ -54,6 +54,14 @@ struct texture_t {
   VkFormat format;
   char path[256];
   uint32_t last_used_frame;
+  // Built on first draw_texture and reused after, so drawing a live image does
+  // not rebuild its sampling setup every frame.
+  struct atlas_renderer_t *alias_atlas;
+  // Set when a game module renders into this image with its own renderer. The
+  // engine then stops owning the contents: it parks the image in
+  // VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL for the module to draw into and
+  // transitions it for sampling around its own pass, every frame.
+  bool external;
 };
 
 struct mesh_t {
@@ -198,6 +206,12 @@ struct atlas_renderer_t {
   uint32_t max_instances;
   uint32_t layer_width;  // Max width of a sprite, used for UV scaling
   uint32_t layer_height; // Max height of a sprite, used for UV scaling
+  // Set when this atlas samples someone else's image instead of owning a copy
+  // of it. A normal atlas blits its sprites into a private array texture once,
+  // which is right for a sprite sheet and wrong for anything that changes every
+  // frame — a game module rendering its own frame, above all. An aliased atlas
+  // borrows the image, so it has no padding and must never free it.
+  bool aliased;
 };
 
 typedef enum {
@@ -365,6 +379,16 @@ atlas_renderer_t *renderer_create_atlas(gfx_handler_t *h, texture_t *source, con
                                         uint32_t max_instances);
 void renderer_destroy_atlas(gfx_handler_t *h, atlas_renderer_t *ar);
 bool renderer_update_texture_layer(gfx_handler_t *h, texture_t *tex, uint32_t layer, const void *pixels, uint32_t width, uint32_t height);
+
+// Hands a texture's contents to a game module that renders with its own
+// renderer on this device, and parks it in the layout that module draws into.
+bool renderer_mark_texture_external(gfx_handler_t *h, texture_t *tex);
+// An atlas that samples `src` live rather than copying it, for drawing an image
+// whose contents change after creation.
+atlas_renderer_t *renderer_create_texture_atlas(gfx_handler_t *h, texture_t *src);
+// Records the layout transitions the externally rendered textures need around
+// the engine's own pass: to sampled before it, back to colour attachment after.
+void renderer_sync_external_textures(gfx_handler_t *h, VkCommandBuffer cmd, bool for_sampling);
 shader_t *renderer_create_shader_spirv(gfx_handler_t *h, const void *vert_spirv, size_t vert_size, const void *frag_spirv, size_t frag_size,
                                        const vertex_layout_t *layout);
 // Instance attribute locations start at 1; location 0 is the unit-quad corner

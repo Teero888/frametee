@@ -318,13 +318,13 @@ void prediction_render_menu(timeline_state_t *timeline) {
     add_prediction_line(timeline);
 
   igSeparatorText("Groups and tracks");
-  if (igSmallButton("All")) {
+  if (igButton("All", (ImVec2){0.f, 0.f})) {
     for (int group = 0; group < timeline->group_count; ++group) timeline->groups[group]->prediction_enabled = true;
     for (int track = 0; track < timeline->player_track_count; ++track) timeline->player_tracks[track].prediction_enabled = true;
     changed = true;
   }
   igSameLine(0.f, 6.f * dpi);
-  if (igSmallButton("None")) {
+  if (igButton("None", (ImVec2){0.f, 0.f})) {
     for (int group = 0; group < timeline->group_count; ++group) timeline->groups[group]->prediction_enabled = false;
     for (int track = 0; track < timeline->player_track_count; ++track) timeline->player_tracks[track].prediction_enabled = false;
     changed = true;
