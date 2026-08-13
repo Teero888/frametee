@@ -531,17 +531,25 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   // End swapchain render pass
   vkCmdEndRenderPass(handler->current_frame_command_buffer);
 
-  // retire textures whose frame fences are now done
-  uint32_t cur_frame = handler->g_main_window_data.FrameIndex;
+  // Retire resources only after enough complete submissions have passed for
+  // every swapchain image that could reference them.
   renderer_lock();
   for (uint32_t i = 0; i < handler->retire_count;) {
-    if ((cur_frame - handler->retire_textures[i].frame_index) > 2) {
+    if (handler->frame_serial - handler->retire_textures[i].frame_serial >= 3) {
       if (handler->retire_textures[i].sampler) vkDestroySampler(handler->g_device, handler->retire_textures[i].sampler, handler->g_allocator);
       if (handler->retire_textures[i].image_view) vkDestroyImageView(handler->g_device, handler->retire_textures[i].image_view, handler->g_allocator);
       if (handler->retire_textures[i].image) vkDestroyImage(handler->g_device, handler->retire_textures[i].image, handler->g_allocator);
       if (handler->retire_textures[i].memory) vkFreeMemory(handler->g_device, handler->retire_textures[i].memory, handler->g_allocator);
 
       handler->retire_textures[i] = handler->retire_textures[--handler->retire_count];
+      continue;
+    }
+    i++;
+  }
+  for (uint32_t i = 0; i < handler->retire_imgui_count;) {
+    if (handler->frame_serial - handler->retire_imgui_textures[i].frame_serial >= 3) {
+      ImGui_ImplVulkan_RemoveTexture(handler->retire_imgui_textures[i].descriptor_set);
+      handler->retire_imgui_textures[i] = handler->retire_imgui_textures[--handler->retire_imgui_count];
       continue;
     }
     i++;
@@ -587,7 +595,25 @@ bool gfx_end_frame(gfx_handler_t *handler) {
     check_vk_result(err);
   }
   wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->ImageCount;
+  handler->frame_serial++;
   return hovered;
+}
+
+void gfx_retire_imgui_texture(gfx_handler_t *handler, uint64_t texture_id) {
+  if (!handler || !texture_id || g_is_headless) return;
+  renderer_lock();
+  if (handler->retire_imgui_count >= 256) {
+    renderer_unlock();
+    vkDeviceWaitIdle(handler->g_device);
+    renderer_lock();
+    for (uint32_t i = 0; i < handler->retire_imgui_count; ++i)
+      ImGui_ImplVulkan_RemoveTexture(handler->retire_imgui_textures[i].descriptor_set);
+    handler->retire_imgui_count = 0;
+  }
+  const uint32_t index = handler->retire_imgui_count++;
+  handler->retire_imgui_textures[index].descriptor_set = (VkDescriptorSet)texture_id;
+  handler->retire_imgui_textures[index].frame_serial = handler->frame_serial;
+  renderer_unlock();
 }
 
 void gfx_cleanup(gfx_handler_t *handler) {
@@ -604,6 +630,20 @@ void gfx_cleanup(gfx_handler_t *handler) {
   game_host_shutdown(&handler->game_host);
 
   if (!g_is_headless) {
+    for (uint32_t i = 0; i < handler->retire_count; ++i) {
+      if (handler->retire_textures[i].sampler)
+        vkDestroySampler(handler->g_device, handler->retire_textures[i].sampler, handler->g_allocator);
+      if (handler->retire_textures[i].image_view)
+        vkDestroyImageView(handler->g_device, handler->retire_textures[i].image_view, handler->g_allocator);
+      if (handler->retire_textures[i].image)
+        vkDestroyImage(handler->g_device, handler->retire_textures[i].image, handler->g_allocator);
+      if (handler->retire_textures[i].memory)
+        vkFreeMemory(handler->g_device, handler->retire_textures[i].memory, handler->g_allocator);
+    }
+    handler->retire_count = 0;
+    for (uint32_t i = 0; i < handler->retire_imgui_count; ++i)
+      ImGui_ImplVulkan_RemoveTexture(handler->retire_imgui_textures[i].descriptor_set);
+    handler->retire_imgui_count = 0;
     renderer_cleanup(handler);
     destroy_offscreen_resources(handler);
     clear_glfw_callbacks(handler->window);

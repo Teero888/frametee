@@ -12,6 +12,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define DD_GFX_PATH_SEP '\\'
+#else
+#define DD_GFX_PATH_SEP '/'
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -250,6 +256,12 @@ bool dd_gfx_create(ft_game *game) {
   skin_desc.format = FT_TEXTURE_RG8;
   gfx->skin_color_array = game->engine->texture_create(&skin_desc);
 
+  if (!gfx->skin_array || !gfx->skin_color_array) {
+    dd_log(game, FT_LOG_ERROR, "Could not create the DDNet skin texture arrays.");
+    dd_gfx_destroy(game);
+    return false;
+  }
+
   if (!create_skin_pipeline(game)) return false;
 
   gfx->skin_batch_capacity = 256;
@@ -275,6 +287,7 @@ void dd_gfx_destroy(ft_game *game) {
   if (gfx->skin_color_array) game->engine->texture_destroy(gfx->skin_color_array);
   free(gfx->skin_batch);
   free(gfx->hand_batch);
+  free(gfx->hook_hand_batch);
   memset(gfx, 0, sizeof(*gfx));
 }
 
@@ -381,60 +394,113 @@ static bool build_skin_layers(const stbi_uc *source, int src_w, int src_h, uint8
   return true;
 }
 
-static int load_skin_path_into_layer(ft_game *game, const char *name, const char *path, int layer) {
+static bool load_skin_path_layers(ft_game *game, const char *name, const char *path, uint8_t **out_rgba, uint8_t **out_weights) {
+  *out_rgba = NULL;
+  *out_weights = NULL;
   void *file = NULL;
   size_t size = 0;
-  if (!game->engine->read_file(path, &file, &size)) return -1;
+  if (!game->engine->read_file(path, &file, &size)) return false;
 
   int w = 0, h = 0, channels = 0;
   stbi_uc *pixels = stbi_load_from_memory(file, (int)size, &w, &h, &channels, STBI_rgb_alpha);
   game->engine->free_file_data(file);
-  if (!pixels) return -1;
+  if (!pixels) return false;
   if (w <= 0 || h <= 0 || w != h * 2) {
     dd_log(game, FT_LOG_WARN, "Skin '%s' is %dx%d; a skin sheet has to be 2:1.", name, w, h);
     stbi_image_free(pixels);
-    return -1;
+    return false;
   }
 
   uint8_t *rgba = malloc((size_t)DD_SKIN_ATLAS_W * DD_SKIN_ATLAS_H * 4);
   uint8_t *weights = malloc((size_t)DD_SKIN_ATLAS_W * DD_SKIN_ATLAS_H * 2);
   bool ok = rgba && weights && build_skin_layers(pixels, w, h, rgba, weights);
   stbi_image_free(pixels);
-
-  if (ok) {
-    game->engine->texture_update_layer(game->gfx.skin_array, (uint32_t)layer, rgba, DD_SKIN_ATLAS_W, DD_SKIN_ATLAS_H);
-    game->engine->texture_update_layer(game->gfx.skin_color_array, (uint32_t)layer, weights, DD_SKIN_ATLAS_W, DD_SKIN_ATLAS_H);
+  if (!ok) {
+    free(rgba);
+    free(weights);
+    return false;
   }
+
+  *out_rgba = rgba;
+  *out_weights = weights;
+  return true;
+}
+
+static int load_skin_path_into_layer(ft_game *game, const char *name, const char *path, int layer) {
+  uint8_t *rgba = NULL, *weights = NULL;
+  if (!load_skin_path_layers(game, name, path, &rgba, &weights)) return -1;
+  const bool ok = game->engine->texture_update_layer(game->gfx.skin_array, (uint32_t)layer, rgba, DD_SKIN_ATLAS_W, DD_SKIN_ATLAS_H) &&
+                  game->engine->texture_update_layer(game->gfx.skin_color_array, (uint32_t)layer, weights, DD_SKIN_ATLAS_W,
+                                                     DD_SKIN_ATLAS_H);
   free(rgba);
   free(weights);
   return ok ? layer : -1;
 }
 
 static int load_skin_into_layer(ft_game *game, const char *name, int layer) {
+  if (!name || !*name || strstr(name, "..") || strchr(name, '/') || strchr(name, '\\')) return -1;
+
   char relative[256];
   snprintf(relative, sizeof(relative), "skins/%s.png", name);
   char path[1024];
+  game->engine->resolve_cache_path(relative, path, sizeof(path));
+  int loaded = load_skin_path_into_layer(game, name, path, layer);
+  if (loaded >= 0) return loaded;
+
   game->engine->resolve_data_path(relative, path, sizeof(path));
-  return load_skin_path_into_layer(game, name, path, layer);
+  loaded = load_skin_path_into_layer(game, name, path, layer);
+  if (loaded >= 0) return loaded;
+
+#ifdef _WIN32
+  const char *base = getenv("APPDATA");
+  if (base) {
+    snprintf(path, sizeof(path), "%s\\frametee\\skins\\%s.png", base, name);
+    loaded = load_skin_path_into_layer(game, name, path, layer);
+    if (loaded >= 0) return loaded;
+  }
+  static const char *subdirs[] = {"Teeworlds\\skins", "Teeworlds\\downloadedskins", "DDNet\\skins", "DDNet\\downloadedskins"};
+#else
+  const char *base = getenv("HOME");
+  const char *config_home = getenv("XDG_CONFIG_HOME");
+  if (config_home) {
+    snprintf(path, sizeof(path), "%s/frametee/skins/%s.png", config_home, name);
+    loaded = load_skin_path_into_layer(game, name, path, layer);
+    if (loaded >= 0) return loaded;
+  } else if (base) {
+    snprintf(path, sizeof(path), "%s/.config/frametee/skins/%s.png", base, name);
+    loaded = load_skin_path_into_layer(game, name, path, layer);
+    if (loaded >= 0) return loaded;
+  }
+  static const char *subdirs[] = {".teeworlds/skins", ".teeworlds/downloadedskins", ".local/share/ddnet/skins",
+                                  ".local/share/ddnet/downloadedskins"};
+#endif
+  if (base) {
+    for (unsigned i = 0; i < sizeof(subdirs) / sizeof(subdirs[0]); ++i) {
+      snprintf(path, sizeof(path), "%s%c%s%c%s.png", base, DD_GFX_PATH_SEP, subdirs[i], DD_GFX_PATH_SEP, name);
+      loaded = load_skin_path_into_layer(game, name, path, layer);
+      if (loaded >= 0) return loaded;
+    }
+  }
+  return -1;
 }
 
 int dd_gfx_skin_index(ft_game *game, const char *name) {
   dd_gfx_t *gfx = &game->gfx;
   if (!name || !*name) return gfx->default_skin;
 
-  for (int i = 0; i < DD_MAX_SKINS; ++i) {
+  for (int i = 0; i < DD_MAX_PLAYER_SKINS; ++i) {
     if (gfx->skins[i].used && strcmp(gfx->skins[i].name, name) == 0) return gfx->skins[i].loaded ? i : gfx->default_skin;
   }
 
   int layer = -1;
-  for (int i = 0; i < DD_MAX_SKINS; ++i) {
+  for (int i = 0; i < DD_MAX_PLAYER_SKINS; ++i) {
     if (!gfx->skins[i].used) {
       layer = i;
       break;
     }
   }
   if (layer < 0) {
-    dd_log(game, FT_LOG_WARN, "Out of skin layers (%d); '%s' falls back to the default.", DD_MAX_SKINS, name);
+    dd_log(game, FT_LOG_WARN, "Out of skin layers (%d); '%s' falls back to the default.", DD_MAX_PLAYER_SKINS, name);
     return gfx->default_skin;
   }
 
@@ -453,21 +519,85 @@ int dd_gfx_load_skin_path(ft_game *game, const char *name, const char *path) {
   if (!game || !name || !*name || !path || !*path) return -1;
   dd_gfx_t *gfx = &game->gfx;
 
-  for (int i = 0; i < DD_MAX_SKINS; ++i) {
+  for (int i = 0; i < DD_MAX_PLAYER_SKINS; ++i) {
     if (!gfx->skins[i].used || strcmp(gfx->skins[i].name, name) != 0) continue;
     if (!gfx->skins[i].loaded) gfx->skins[i].loaded = load_skin_path_into_layer(game, name, path, i) >= 0;
     return gfx->skins[i].loaded ? i : gfx->default_skin;
   }
 
-  for (int i = 0; i < DD_MAX_SKINS; ++i) {
+  for (int i = 0; i < DD_MAX_PLAYER_SKINS; ++i) {
     if (gfx->skins[i].used) continue;
     gfx->skins[i].used = true;
     snprintf(gfx->skins[i].name, sizeof(gfx->skins[i].name), "%s", name);
     gfx->skins[i].loaded = load_skin_path_into_layer(game, name, path, i) >= 0;
     return gfx->skins[i].loaded ? i : gfx->default_skin;
   }
-  dd_log(game, FT_LOG_WARN, "Out of skin layers (%d); '%s' falls back to the default.", DD_MAX_SKINS, name);
+  dd_log(game, FT_LOG_WARN, "Out of skin layers (%d); '%s' falls back to the default.", DD_MAX_PLAYER_SKINS, name);
   return gfx->default_skin;
+}
+
+bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *path, ft_texture *destination, uint32_t destination_x,
+                                uint32_t destination_y) {
+  if (!game || !game->gfx.ready || !destination || !game->engine->render_instances_preview) return false;
+  uint8_t *rgba = NULL, *weights = NULL;
+  if (!load_skin_path_layers(game, name, path, &rgba, &weights)) return false;
+
+  dd_anim_state_t anim;
+  dd_anim_state_set(&anim, &anim_base, 0.f);
+  dd_anim_state_add(&anim, &anim_idle, 0.f, 1.f);
+
+  dd_skin_instance_t instance = {0};
+  instance.scale = 0.75f * 1.25f;
+  instance.skin_index = DD_SKIN_PREVIEW_LAYER;
+  instance.eye_state = 6;
+  instance.dir[0] = 1.f;
+  instance.col_body[0] = instance.col_body[1] = instance.col_body[2] = 1.f;
+  instance.col_feet[0] = instance.col_feet[1] = instance.col_feet[2] = 1.f;
+  instance.body[0] = anim.body.x;
+  instance.body[1] = anim.body.y;
+  instance.body[2] = anim.body.angle;
+  instance.back_foot[0] = anim.back_foot.x;
+  instance.back_foot[1] = anim.back_foot.y;
+  instance.back_foot[2] = anim.back_foot.angle;
+  instance.front_foot[0] = anim.front_foot.x;
+  instance.front_foot[1] = anim.front_foot.y;
+  instance.front_foot[2] = anim.front_foot.angle;
+  instance.attach[0] = anim.attach.x;
+  instance.attach[1] = anim.attach.y;
+  instance.attach[2] = anim.attach.angle;
+  instance.mode = DD_SKIN_MODE_TEE;
+
+  ft_texture *textures[2] = {game->gfx.skin_array, game->gfx.skin_color_array};
+  const ft_texture_layer_update updates[2] = {
+      {.texture = game->gfx.skin_array,
+       .layer = DD_SKIN_PREVIEW_LAYER,
+       .pixels = rgba,
+       .width = DD_SKIN_ATLAS_W,
+       .height = DD_SKIN_ATLAS_H},
+      {.texture = game->gfx.skin_color_array,
+       .layer = DD_SKIN_PREVIEW_LAYER,
+       .pixels = weights,
+       .width = DD_SKIN_ATLAS_W,
+       .height = DD_SKIN_ATLAS_H},
+  };
+  const ft_instance_preview_desc desc = {.struct_size = sizeof(desc),
+                                         .pipeline = game->gfx.skin_pipeline,
+                                         .textures = textures,
+                                         .texture_count = 2,
+                                         .instances = &instance,
+                                         .instance_count = 1,
+                                         .width = 128,
+                                         .height = 128,
+                                         .clear_color = {0.f, 0.f, 0.f, 0.f},
+                                         .updates = updates,
+                                         .update_count = 2,
+                                         .destination = destination,
+                                         .destination_x = destination_x,
+                                         .destination_y = destination_y};
+  ft_texture *preview = game->engine->render_instances_preview(&desc);
+  free(rgba);
+  free(weights);
+  return preview == destination;
 }
 
 // --- draw helpers ------------------------------------------------------------
@@ -514,18 +644,18 @@ void dd_draw_triangle(ft_game *game, float z, vec2 a, vec2 b, vec2 c, vec4 color
 void dd_skins_begin(ft_game *game) {
   game->gfx.skin_batch_count = 0;
   game->gfx.hand_batch_count = 0;
+  game->gfx.hook_hand_batch_count = 0;
 }
 
-static dd_skin_instance_t *hand_batch_push(ft_game *game) {
-  dd_gfx_t *gfx = &game->gfx;
-  if (gfx->hand_batch_count >= gfx->hand_batch_capacity) {
-    const uint32_t capacity = gfx->hand_batch_capacity ? gfx->hand_batch_capacity * 2 : 256;
-    dd_skin_instance_t *grown = realloc(gfx->hand_batch, (size_t)capacity * sizeof(*grown));
+static dd_skin_instance_t *hand_batch_push(dd_skin_instance_t **batch, uint32_t *count, uint32_t *batch_capacity) {
+  if (*count >= *batch_capacity) {
+    const uint32_t capacity = *batch_capacity ? *batch_capacity * 2 : 256;
+    dd_skin_instance_t *grown = realloc(*batch, (size_t)capacity * sizeof(*grown));
     if (!grown) return NULL;
-    gfx->hand_batch = grown;
-    gfx->hand_batch_capacity = capacity;
+    *batch = grown;
+    *batch_capacity = capacity;
   }
-  dd_skin_instance_t *inst = &gfx->hand_batch[gfx->hand_batch_count++];
+  dd_skin_instance_t *inst = &(*batch)[(*count)++];
   memset(inst, 0, sizeof(*inst));
   return inst;
 }
@@ -579,9 +709,11 @@ void dd_skin_push(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 
   inst->mode = DD_SKIN_MODE_TEE;
 }
 
-void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, vec3 col_body, bool custom) {
+void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, vec3 col_body, bool custom, bool hook_hand) {
   if (!game->gfx.ready) return;
-  dd_skin_instance_t *inst = hand_batch_push(game);
+  dd_gfx_t *gfx = &game->gfx;
+  dd_skin_instance_t *inst = hook_hand ? hand_batch_push(&gfx->hook_hand_batch, &gfx->hook_hand_batch_count, &gfx->hook_hand_batch_capacity)
+                                       : hand_batch_push(&gfx->hand_batch, &gfx->hand_batch_count, &gfx->hand_batch_capacity);
   if (!inst) return;
 
   inst->pos[0] = pos[0];
@@ -601,17 +733,21 @@ void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, v
 
 // Hands and bodies go in as two draws at their own depths, so a hand gripping
 // a weapon stays behind the tee holding it.
-void dd_skins_flush(ft_game *game, float hand_z, float tee_z) {
+void dd_skins_flush(ft_game *game) {
   dd_gfx_t *gfx = &game->gfx;
-  if (!gfx->ready || !gfx->skin_pipeline) return;
+  if (!gfx->ready || !gfx->skin_pipeline || !gfx->skin_array || !gfx->skin_color_array) return;
   ft_texture *textures[2] = {gfx->skin_array, gfx->skin_color_array};
 
+  if (gfx->hook_hand_batch_count > 0) {
+    game->engine->draw_instances(gfx->skin_pipeline, DD_Z_HOOK_HAND, textures, 2, gfx->hook_hand_batch, gfx->hook_hand_batch_count);
+    gfx->hook_hand_batch_count = 0;
+  }
   if (gfx->hand_batch_count > 0) {
-    game->engine->draw_instances(gfx->skin_pipeline, hand_z, textures, 2, gfx->hand_batch, gfx->hand_batch_count);
+    game->engine->draw_instances(gfx->skin_pipeline, DD_Z_WEAPON_HAND, textures, 2, gfx->hand_batch, gfx->hand_batch_count);
     gfx->hand_batch_count = 0;
   }
   if (gfx->skin_batch_count > 0) {
-    game->engine->draw_instances(gfx->skin_pipeline, tee_z, textures, 2, gfx->skin_batch, gfx->skin_batch_count);
+    game->engine->draw_instances(gfx->skin_pipeline, DD_Z_SKINS, textures, 2, gfx->skin_batch, gfx->skin_batch_count);
     gfx->skin_batch_count = 0;
   }
 }

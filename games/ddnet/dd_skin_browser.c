@@ -1,8 +1,10 @@
 #include "dd_internal.h"
+#include "dd_imcol.h"
 #include "dd_imgui.h"
 
 #include <ctype.h>
 #include <curl/curl.h>
+#include <frametee/icons.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,25 +22,37 @@
 #define dd_mkdir(path) mkdir(path, 0755)
 #endif
 
-enum { DD_BROWSER_MAX_SKINS = 1024 };
+enum {
+  DD_BROWSER_MAX_SKINS = 1024,
+  DD_BROWSER_PREVIEW_SIZE = 128,
+  DD_BROWSER_ATLAS_SIZE = 1024,
+  DD_BROWSER_ATLAS_COLUMNS = DD_BROWSER_ATLAS_SIZE / DD_BROWSER_PREVIEW_SIZE,
+  DD_BROWSER_PREVIEWS_PER_ATLAS = DD_BROWSER_ATLAS_COLUMNS * DD_BROWSER_ATLAS_COLUMNS,
+  DD_BROWSER_MAX_ATLASES = (DD_BROWSER_MAX_SKINS + DD_BROWSER_PREVIEWS_PER_ATLAS - 1) / DD_BROWSER_PREVIEWS_PER_ATLAS,
+  // Each shader preview streams two mipmapped skin-array layers and performs
+  // an immediate offscreen draw. Spreading those operations over frames keeps
+  // a large browser from blocking the UI when it first opens.
+  DD_BROWSER_PREVIEWS_PER_FRAME = 1,
+};
 
 typedef struct dd_browser_skin_t {
   char name[64];
   char path[1024];
-  ft_texture *preview;
-  uint64_t preview_id;
-  uint32_t width;
-  uint32_t height;
+  bool preview_loaded;
   bool preview_attempted;
-  bool visible;
 } dd_browser_skin_t;
+
+typedef struct dd_browser_atlas_t {
+  ft_texture *texture;
+  uint64_t texture_id;
+} dd_browser_atlas_t;
 
 struct dd_skin_browser_t {
   dd_browser_skin_t *skins;
+  dd_browser_atlas_t atlases[DD_BROWSER_MAX_ATLASES];
   int count;
   int capacity;
   char search[128];
-  char status[192];
   bool scanned;
 };
 
@@ -176,24 +190,16 @@ static void scan_directory(ft_game *game, const char *path) {
 static void release_catalog(ft_game *game) {
   struct dd_skin_browser_t *browser = game->skin_browser;
   if (!browser) return;
-  for (int i = 0; i < browser->count; ++i) {
-    if (browser->skins[i].preview_id && game->engine->imgui_texture_release)
-      game->engine->imgui_texture_release(browser->skins[i].preview_id);
-    if (browser->skins[i].preview) game->engine->texture_destroy(browser->skins[i].preview);
+  for (int i = 0; i < DD_BROWSER_MAX_ATLASES; ++i) {
+    if (browser->atlases[i].texture_id && game->engine->imgui_texture_release)
+      game->engine->imgui_texture_release(browser->atlases[i].texture_id);
+    if (browser->atlases[i].texture) game->engine->texture_destroy(browser->atlases[i].texture);
   }
+  memset(browser->atlases, 0, sizeof(browser->atlases));
   free(browser->skins);
   browser->skins = NULL;
   browser->count = 0;
   browser->capacity = 0;
-}
-
-static void release_preview(ft_game *game, dd_browser_skin_t *skin) {
-  if (skin->preview_id && game->engine->imgui_texture_release)
-    game->engine->imgui_texture_release(skin->preview_id);
-  if (skin->preview) game->engine->texture_destroy(skin->preview);
-  skin->preview = NULL;
-  skin->preview_id = 0;
-  skin->preview_attempted = false;
 }
 
 static void scan_skins(ft_game *game) {
@@ -208,6 +214,10 @@ static void scan_skins(ft_game *game) {
 #ifdef _WIN32
   const char *base = getenv("APPDATA");
   if (base) {
+    // Keep the user's original FrameTee skin collection visible. Downloads
+    // made by the module itself remain isolated in its game cache above.
+    snprintf(path, sizeof(path), "%s\\frametee\\skins", base);
+    scan_directory(game, path);
     const char *subdirs[] = {"Teeworlds\\skins", "Teeworlds\\downloadedskins", "DDNet\\skins", "DDNet\\downloadedskins"};
     for (unsigned i = 0; i < sizeof(subdirs) / sizeof(subdirs[0]); ++i) {
       snprintf(path, sizeof(path), "%s\\%s", base, subdirs[i]);
@@ -216,6 +226,14 @@ static void scan_skins(ft_game *game) {
   }
 #else
   const char *base = getenv("HOME");
+  const char *config_home = getenv("XDG_CONFIG_HOME");
+  if (config_home) {
+    snprintf(path, sizeof(path), "%s/frametee/skins", config_home);
+    scan_directory(game, path);
+  } else if (base) {
+    snprintf(path, sizeof(path), "%s/.config/frametee/skins", base);
+    scan_directory(game, path);
+  }
   if (base) {
     const char *subdirs[] = {".teeworlds/skins", ".teeworlds/downloadedskins", ".local/share/ddnet/skins",
                              ".local/share/ddnet/downloadedskins"};
@@ -231,63 +249,142 @@ static void scan_skins(ft_game *game) {
   browser->scanned = true;
 }
 
-static void load_preview(ft_game *game, dd_browser_skin_t *skin) {
-  if (!skin || skin->preview_attempted) return;
-  skin->preview_attempted = true;
-  void *file = NULL;
-  size_t file_size = 0;
-  if (!game->engine->read_file(skin->path, &file, &file_size)) return;
-  int width = 0, height = 0, channels = 0;
-  unsigned char *pixels = dd_decode_png(file, file_size, &width, &height, &channels);
-  game->engine->free_file_data(file);
-  if (!pixels || width <= 0 || height <= 0 || width != height * 2) {
-    dd_free_png(pixels);
-    return;
+static dd_browser_atlas_t *ensure_preview_atlas(ft_game *game, int atlas_index) {
+  struct dd_skin_browser_t *browser = game->skin_browser;
+  if (!browser || atlas_index < 0 || atlas_index >= DD_BROWSER_MAX_ATLASES) return NULL;
+  dd_browser_atlas_t *atlas = &browser->atlases[atlas_index];
+  if (atlas->texture && atlas->texture_id) return atlas;
+
+  const ft_texture_desc desc = {.struct_size = sizeof(desc),
+                                .pixels = NULL,
+                                .width = DD_BROWSER_ATLAS_SIZE,
+                                .height = DD_BROWSER_ATLAS_SIZE,
+                                .layers = 1,
+                                .format = FT_TEXTURE_RGBA8,
+                                .mipmaps = false,
+                                .linear_filter = true};
+  atlas->texture = game->engine->texture_create(&desc);
+  if (atlas->texture && game->engine->imgui_texture_id) atlas->texture_id = game->engine->imgui_texture_id(atlas->texture);
+  if (!atlas->texture_id) {
+    if (atlas->texture) game->engine->texture_destroy(atlas->texture);
+    memset(atlas, 0, sizeof(*atlas));
+    return NULL;
   }
-  ft_texture_desc desc = {.struct_size = sizeof(desc),
-                          .pixels = pixels,
-                          .width = (uint32_t)width,
-                          .height = (uint32_t)height,
-                          .layers = 1,
-                          .format = FT_TEXTURE_RGBA8,
-                          .mipmaps = true,
-                          .linear_filter = true};
-  skin->preview = game->engine->texture_create(&desc);
-  if (skin->preview && game->engine->imgui_texture_id)
-    skin->preview_id = game->engine->imgui_texture_id(skin->preview);
-  skin->width = (uint32_t)width;
-  skin->height = (uint32_t)height;
-  dd_free_png(pixels);
+  return atlas;
 }
 
-static void draw_skin_card(ft_game *game, const ft_ui_frame *frame, dd_browser_skin_t *skin, int id, float width) {
-  skin->visible = true;
-  load_preview(game, skin);
+static void load_preview(ft_game *game, dd_browser_skin_t *skin, int skin_index) {
+  if (!skin || skin->preview_attempted) return;
+  skin->preview_attempted = true;
+  const int atlas_index = skin_index / DD_BROWSER_PREVIEWS_PER_ATLAS;
+  const int cell = skin_index % DD_BROWSER_PREVIEWS_PER_ATLAS;
+  dd_browser_atlas_t *atlas = ensure_preview_atlas(game, atlas_index);
+  if (!atlas) return;
+  const uint32_t x = (uint32_t)(cell % DD_BROWSER_ATLAS_COLUMNS) * DD_BROWSER_PREVIEW_SIZE;
+  const uint32_t y = (uint32_t)(cell / DD_BROWSER_ATLAS_COLUMNS) * DD_BROWSER_PREVIEW_SIZE;
+  skin->preview_loaded = dd_gfx_render_skin_preview(game, skin->name, skin->path, atlas->texture, x, y);
+}
+
+typedef struct dd_browser_card_draw_t {
+  dd_browser_skin_t *skin;
+  int id;
+  ImVec2 min;
+  ImVec2 max;
+  float width;
+  bool selected;
+  bool hovered;
+} dd_browser_card_draw_t;
+
+static void layout_skin_card(ft_game *game, const ft_ui_frame *frame, dd_browser_skin_t *skin, int id, float width, float height,
+                             int *preview_budget, dd_browser_card_draw_t *draw) {
+  if (!skin->preview_attempted && *preview_budget > 0) {
+    --*preview_budget;
+    load_preview(game, skin, id);
+  }
   igPushID_Int(id);
   ft_player_setup setup = {0};
   const bool have_player = frame->state.selected_player >= 0 && game->engine->get_player_setup &&
                            game->engine->get_player_setup(frame->state.selected_player, &setup);
   const bool selected = have_player && setup.appearance_id && dd_strcasecmp(setup.appearance_id, skin->name) == 0;
 
-  if (selected) igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.12f, 0.38f, 0.68f, 1.f});
-  bool clicked = false;
-  if (skin->preview_id) {
-    const ImTextureRef_c ref = {._TexData = NULL, ._TexID = (ImTextureID)skin->preview_id};
-    const float uv_x = 96.0f / 256.0f;
-    const float uv_y = 96.0f / 128.0f;
-    clicked = igImageButton("##skin", ref, (ImVec2){width, width}, (ImVec2){0.f, 0.f}, (ImVec2){uv_x, uv_y},
-                            (ImVec4){0.08f, 0.09f, 0.11f, 1.f}, (ImVec4){1.f, 1.f, 1.f, 1.f});
-  } else {
-    clicked = igButton("No preview", (ImVec2){width, width});
-  }
-  if (selected) igPopStyleColor(1);
-  igTextWrapped("%s", skin->name);
+  const ImVec2 card_min = igGetCursorScreenPos();
+  const ImVec2 card_max = {card_min.x + width, card_min.y + height};
+  const bool clicked = igInvisibleButton("##skin", (ImVec2){width, height}, 0);
+  const bool hovered = igIsItemHovered(ImGuiHoveredFlags_None);
+  if (hovered) igSetTooltip("%s", skin->name);
 
   if (clicked && have_player) {
     dd_gfx_load_skin_path(game, skin->name, skin->path);
     game->engine->set_player_appearance(frame->state.selected_player, skin->name);
   }
+  *draw = (dd_browser_card_draw_t){.skin = skin,
+                                   .id = id,
+                                   .min = card_min,
+                                   .max = card_max,
+                                   .width = width,
+                                   .selected = selected,
+                                   .hovered = hovered};
   igPopID();
+}
+
+static void draw_card_backgrounds(ImDrawList *draw_list, const dd_browser_card_draw_t *cards, int count) {
+  for (int i = 0; i < count; ++i) {
+    const dd_browser_card_draw_t *card = &cards[i];
+    if (card->selected) {
+      ImDrawList_AddRectFilled(draw_list, card->min, card->max, IM_COL32(35, 75, 120, 180), 8.f, ImDrawFlags_None);
+      ImDrawList_AddRect(draw_list, card->min, card->max, IM_COL32(75, 175, 255, 255), 8.f, ImDrawFlags_None, 2.f);
+    } else if (card->hovered) {
+      ImDrawList_AddRectFilled(draw_list, card->min, card->max, IM_COL32(50, 58, 75, 160), 8.f, ImDrawFlags_None);
+      ImDrawList_AddRect(draw_list, card->min, card->max, IM_COL32(110, 190, 255, 220), 8.f, ImDrawFlags_None, 1.5f);
+    } else {
+      ImDrawList_AddRectFilled(draw_list, card->min, card->max, IM_COL32(28, 32, 42, 120), 8.f, ImDrawFlags_None);
+      ImDrawList_AddRect(draw_list, card->min, card->max, IM_COL32(255, 255, 255, 15), 8.f, ImDrawFlags_None, 1.f);
+    }
+  }
+}
+
+static void draw_card_previews(ImDrawList *draw_list, const struct dd_skin_browser_t *browser,
+                               const dd_browser_card_draw_t *cards, int count) {
+  for (int i = 0; i < count; ++i) {
+    const dd_browser_card_draw_t *card = &cards[i];
+    if (!card->skin->preview_loaded) continue;
+    const int atlas_index = card->id / DD_BROWSER_PREVIEWS_PER_ATLAS;
+    const int cell = card->id % DD_BROWSER_PREVIEWS_PER_ATLAS;
+    const int atlas_x = cell % DD_BROWSER_ATLAS_COLUMNS;
+    const int atlas_y = cell / DD_BROWSER_ATLAS_COLUMNS;
+    const float uv_cell = 1.f / DD_BROWSER_ATLAS_COLUMNS;
+    const ImVec2 uv_min = {(float)atlas_x * uv_cell, (float)atlas_y * uv_cell};
+    const ImVec2 uv_max = {uv_min.x + uv_cell, uv_min.y + uv_cell};
+    const ImTextureRef_c ref = {._TexData = NULL, ._TexID = (ImTextureID)browser->atlases[atlas_index].texture_id};
+    const ImVec2 image_min = {card->min.x + card->width * .5f - 26.f, card->min.y + 4.f};
+    const ImVec2 image_max = {card->min.x + card->width * .5f + 26.f, card->min.y + 56.f};
+    ImDrawList_AddImage(draw_list, ref, image_min, image_max, uv_min, uv_max, IM_COL32_WHITE);
+  }
+}
+
+static void draw_card_labels(ImDrawList *draw_list, const dd_browser_card_draw_t *cards, int count) {
+  for (int i = 0; i < count; ++i) {
+    const dd_browser_card_draw_t *card = &cards[i];
+    if (!card->skin->preview_loaded) {
+      const ImVec2 icon_size = igCalcTextSize(ICON_FA_IMAGE, NULL, false, -1.f);
+      const ImVec2 icon_pos = {card->min.x + (card->width - icon_size.x) * .5f, card->min.y + 22.f};
+      ImDrawList_AddText_Vec2(draw_list, icon_pos, IM_COL32(105, 115, 135, 255), ICON_FA_IMAGE, NULL);
+    }
+
+    char label[64];
+    snprintf(label, sizeof(label), "%s", card->skin->name);
+    ImVec2 label_size = igCalcTextSize(label, NULL, false, -1.f);
+    size_t length = strlen(label);
+    while (label_size.x > card->width - 8.f && length > 4) {
+      --length;
+      label[length - 2] = '.';
+      label[length - 1] = '.';
+      label[length] = '\0';
+      label_size = igCalcTextSize(label, NULL, false, -1.f);
+    }
+    const ImVec2 label_pos = {card->min.x + (card->width - label_size.x) * .5f, card->min.y + 61.f};
+    ImDrawList_AddText_Vec2(draw_list, label_pos, IM_COL32(235, 240, 250, 255), label, NULL);
+  }
 }
 
 void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
@@ -297,58 +394,63 @@ void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
   struct dd_skin_browser_t *browser = game->skin_browser;
   if (!browser->scanned) scan_skins(game);
 
-  if (!igBegin("Skin Browser", &game->show_skin_browser, ImGuiWindowFlags_NoFocusOnAppearing)) {
+  if (!igBegin("Skin Browser", &game->show_skin_browser, ImGuiWindowFlags_None)) {
     igEnd();
     return;
   }
-  igSetNextItemWidth(-174.f);
-  igInputTextWithHint("##skin_search", "Search / fetch skin...", browser->search, sizeof(browser->search), 0, NULL, NULL);
+  const float dpi = igGetFontSize() / 19.f;
+  const float button_width = 110.f * dpi;
+  float search_width = igGetContentRegionAvail().x - button_width * 2.f - 16.f;
+  if (search_width < 120.f) search_width = 120.f;
+  igSetNextItemWidth(search_width);
+  igInputTextWithHint("##skin_search", "Search / Fetch skin...", browser->search, sizeof(browser->search), 0, NULL, NULL);
   igSameLine(0.f, 8.f);
-  if (igButton("Fetch", (ImVec2){76.f, 0.f})) {
+  if (igButton(ICON_FA_DOWNLOAD " Fetch", (ImVec2){button_width, 0.f})) {
     char path[1024];
     if (fetch_skin(game, browser->search, path, sizeof(path))) {
       char fetched_name[sizeof(browser->search)];
       snprintf(fetched_name, sizeof(fetched_name), "%s", browser->search);
       scan_skins(game);
       snprintf(browser->search, sizeof(browser->search), "%s", fetched_name);
-      snprintf(browser->status, sizeof(browser->status), "Fetched '%s'.", fetched_name);
       if (frame->state.selected_player >= 0) {
         dd_gfx_load_skin_path(game, fetched_name, path);
         game->engine->set_player_appearance(frame->state.selected_player, fetched_name);
       }
-    } else {
-      snprintf(browser->status, sizeof(browser->status), "Could not fetch '%s'.", browser->search);
     }
   }
+  if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("Fetch skin online by name");
   igSameLine(0.f, 8.f);
-  if (igButton("Refresh", (ImVec2){76.f, 0.f})) {
-    scan_skins(game);
-    snprintf(browser->status, sizeof(browser->status), "Local skin folders rescanned.");
-  }
+  if (igButton(ICON_FA_ROTATE " Refresh", (ImVec2){button_width, 0.f})) scan_skins(game);
+  if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("Rescan local skins directories");
 
-  if (frame->state.selected_player < 0) igTextDisabled("Select a player to choose its skin.");
-  if (browser->status[0]) igTextWrapped("%s", browser->status);
   igSeparator();
 
-  const float card_width = 88.f;
+  const float card_width = 114.f * dpi;
+  const float card_height = 92.f * dpi;
+  int preview_budget = DD_BROWSER_PREVIEWS_PER_FRAME;
   const float available = igGetContentRegionAvail().x;
-  int columns = (int)(available / (card_width + 14.f));
+  int columns = (int)(available / (card_width + 12.f));
   if (columns < 1) columns = 1;
   dd_browser_skin_t **filtered = browser->count ? malloc((size_t)browser->count * sizeof(*filtered)) : NULL;
   int filtered_count = 0;
-  for (int i = 0; filtered && i < browser->count; ++i) {
-    browser->skins[i].visible = false;
-    if (contains_case_insensitive(browser->skins[i].name, browser->search)) filtered[filtered_count++] = &browser->skins[i];
+  for (int i = 0; i < browser->count; ++i) {
+    if (filtered && contains_case_insensitive(browser->skins[i].name, browser->search)) filtered[filtered_count++] = &browser->skins[i];
   }
+  dd_browser_card_draw_t *card_draws = filtered_count ? malloc((size_t)filtered_count * sizeof(*card_draws)) : NULL;
+  int card_draw_count = 0;
+  const ImVec2 grid_clip_min = igGetCursorScreenPos();
+  const ImVec2 grid_size = igGetContentRegionAvail();
+  const ImVec2 grid_clip_max = {grid_clip_min.x + grid_size.x, grid_clip_min.y + grid_size.y};
 
-  if (igBeginTable("##ddnet_skin_grid", columns, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_ScrollY, (ImVec2){0.f, 0.f}, 0.f)) {
+  igPushStyleVar_Vec2(ImGuiStyleVar_CellPadding, (ImVec2){8.f, 10.f});
+  if (igBeginTable("SkinGrid", columns, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_ScrollY, (ImVec2){0.f, 0.f}, 0.f)) {
     if (filtered_count == 0) {
       igTableNextColumn();
       igTextDisabled("No matching skins found.");
     } else {
       const int rows = (filtered_count + columns - 1) / columns;
       ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
-      ImGuiListClipper_Begin(clipper, rows, card_width + 42.f);
+      ImGuiListClipper_Begin(clipper, rows, card_height + 20.f * dpi);
       while (ImGuiListClipper_Step(clipper)) {
         for (int row = clipper->DisplayStart; row < clipper->DisplayEnd; ++row) {
           igTableNextRow(0, 0.f);
@@ -357,18 +459,35 @@ void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
             if (filtered_index >= filtered_count) break;
             dd_browser_skin_t *skin = filtered[filtered_index];
             igTableNextColumn();
-            draw_skin_card(game, frame, skin, (int)(skin - browser->skins), card_width);
+            dd_browser_card_draw_t fallback_draw;
+            dd_browser_card_draw_t *card_draw = card_draws ? &card_draws[card_draw_count] : &fallback_draw;
+            layout_skin_card(game, frame, skin, (int)(skin - browser->skins), card_width, card_height, &preview_budget, card_draw);
+            if (card_draws) ++card_draw_count;
           }
         }
       }
       ImGuiListClipper_End(clipper);
       ImGuiListClipper_destroy(clipper);
     }
+    // Give the final cards breathing room at the maximum scroll position.
+    // Without a real footer row, the table's scrolling child clips their
+    // rounded lower edge against the window border.
+    igTableNextRow(0, 12.f * dpi);
+    igTableNextColumn();
+    igDummy((ImVec2){0.f, 4.f * dpi});
     igEndTable();
   }
+  if (card_draw_count > 0) {
+    ImDrawList *draw_list = igGetWindowDrawList();
+    ImDrawList_PushClipRect(draw_list, grid_clip_min, grid_clip_max, true);
+    draw_card_backgrounds(draw_list, card_draws, card_draw_count);
+    draw_card_previews(draw_list, browser, card_draws, card_draw_count);
+    draw_card_labels(draw_list, card_draws, card_draw_count);
+    ImDrawList_PopClipRect(draw_list);
+  }
+  igPopStyleVar(1);
+  free(card_draws);
   free(filtered);
-  for (int i = 0; i < browser->count; ++i)
-    if (!browser->skins[i].visible && browser->skins[i].preview) release_preview(game, &browser->skins[i]);
   igEnd();
 }
 

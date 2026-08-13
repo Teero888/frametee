@@ -144,6 +144,25 @@ static void api_texture_destroy(ft_texture *texture) {
   renderer_destroy_texture(g_engine, AS_TEXTURE(texture));
 }
 
+static ft_texture *api_render_instances_preview(const ft_instance_preview_desc *desc) {
+  if (!have_graphics() || !desc || desc->struct_size < sizeof(*desc) || !desc->pipeline || !desc->instances ||
+      desc->instance_count == 0 || desc->update_count > MAX_TEXTURES_PER_DRAW || (desc->update_count > 0 && !desc->updates))
+    return NULL;
+  renderer_texture_layer_update_t updates[MAX_TEXTURES_PER_DRAW];
+  for (uint32_t i = 0; i < desc->update_count; ++i) {
+    updates[i] = (renderer_texture_layer_update_t){.texture = AS_TEXTURE(desc->updates[i].texture),
+                                                   .layer = desc->updates[i].layer,
+                                                   .pixels = desc->updates[i].pixels,
+                                                   .width = desc->updates[i].width,
+                                                   .height = desc->updates[i].height};
+  }
+  vec4 clear = {desc->clear_color.r, desc->clear_color.g, desc->clear_color.b, desc->clear_color.a};
+  return (ft_texture *)renderer_render_instances_preview(g_engine, AS_PIPELINE(desc->pipeline), (texture_t *const *)desc->textures,
+                                                         desc->texture_count, desc->instances, desc->instance_count, desc->width,
+                                                         desc->height, clear, updates, desc->update_count, AS_TEXTURE(desc->destination),
+                                                         desc->destination_x, desc->destination_y);
+}
+
 static ft_atlas *api_atlas_create(const ft_atlas_desc *desc) {
   if (!have_graphics() || !desc || !desc->texture) return NULL;
   // ft_sprite_rect and sprite_definition_t are the same four uint32s, but the
@@ -385,7 +404,7 @@ static uint64_t api_imgui_texture_id(ft_texture *texture) {
 
 static void api_imgui_texture_release(uint64_t texture_id) {
   if (!have_graphics() || !texture_id) return;
-  ImGui_ImplVulkan_RemoveTexture((VkDescriptorSet)texture_id);
+  gfx_retire_imgui_texture(g_engine, texture_id);
 }
 
 static void api_mark_dirty(void) {
@@ -595,6 +614,7 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .timeline_world_info = api_timeline_world_info,
       .timeline_world_pair = api_timeline_world_pair,
       .timeline_player_track = api_timeline_player_track,
+      .render_instances_preview = api_render_instances_preview,
   };
   return &api;
 }

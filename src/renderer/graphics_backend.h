@@ -50,6 +50,7 @@ bool gfx_end_frame(gfx_handler_t *handler);
 void gfx_cleanup(gfx_handler_t *handler);
 void gfx_toggle_fullscreen(gfx_handler_t *handler);
 float gfx_get_ui_scale(void);
+void gfx_retire_imgui_texture(gfx_handler_t *handler, uint64_t texture_id);
 
 struct gfx_handler_t {
   // Backend Stuffs
@@ -93,15 +94,22 @@ struct gfx_handler_t {
   // The unit quad every instanced technique is laid over.
   mesh_t *quad_mesh;
 
-  // retirement list for delayed frees
+  // Retirement is keyed by a monotonic serial, not the swapchain image index
+  // (which wraps between 0 and ImageCount - 1).
+  uint64_t frame_serial;
   struct {
     VkImage image;
     VkImageView image_view;
     VkSampler sampler;
     VkDeviceMemory memory;
-    uint32_t frame_index;
+    uint64_t frame_serial;
   } retire_textures[256];
   uint32_t retire_count;
+  struct {
+    VkDescriptorSet descriptor_set;
+    uint64_t frame_serial;
+  } retire_imgui_textures[256];
+  uint32_t retire_imgui_count;
 
   // Offscreen rendering (for ImGui game view)
   VkImage offscreen_image;

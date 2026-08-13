@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 6;
+pub const FT_GAME_ABI_VERSION: u32 = 7;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -307,6 +307,7 @@ pub struct ft_engine_api {
     pub timeline_world_info: *const c_void,
     pub timeline_world_pair: *const c_void,
     pub timeline_player_track: *const c_void,
+    pub render_instances_preview: *const c_void,
 }
 
 /// The module vtable. Field order and count must match `ft_game_module`

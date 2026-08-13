@@ -9,7 +9,9 @@
 #include <vulkan/vulkan_core.h>
 
 #define MAX_SHADERS 16
-#define MAX_TEXTURES 256
+// Runtime textures include game-owned thumbnail atlas pages. Handles are
+// stable and never evicted, so leave ample room beside texture-heavy levels.
+#define MAX_TEXTURES 512
 #define MAX_MESHES 64
 #define MAX_TEXTURES_PER_DRAW 8
 #define MAX_UBOS_PER_DRAW 2
@@ -101,6 +103,14 @@ struct custom_pipeline_t {
   uint8_t *instance_ptr;
   uint32_t instance_count;
 };
+
+typedef struct renderer_texture_layer_update_t {
+  texture_t *texture;
+  uint32_t layer;
+  const void *pixels;
+  uint32_t width;
+  uint32_t height;
+} renderer_texture_layer_update_t;
 
 struct vertex_t {
   vec2 pos;
@@ -250,7 +260,11 @@ struct renderer_state_t {
   mesh_t meshes[MAX_MESHES];
   uint32_t mesh_count;
 
-  pipeline_cache_entry_t pipeline_cache[MAX_SHADERS][2];
+  pipeline_cache_entry_t pipeline_cache[MAX_SHADERS][3];
+
+  // A load/store pass for drawing RGBA preview tiles into thumbnail atlases.
+  VkRenderPass preview_render_pass;
+  VkFormat preview_render_format;
 
   VkDescriptorPool frame_descriptor_pools[3];
   VkCommandPool transfer_command_pool;
@@ -349,6 +363,14 @@ custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void 
 void renderer_destroy_custom_pipeline(gfx_handler_t *h, custom_pipeline_t *pipe);
 void renderer_submit_instances(gfx_handler_t *h, custom_pipeline_t *pipe, float z, texture_t *const *textures, uint32_t texture_count,
                                const void *instances, uint32_t count);
+// Immediately renders module instances with their normal pipeline into a
+// standalone sampled texture or a region of an existing destination. Preview
+// coordinates are centred at the origin; a unit quad at scale 1 fills the tile.
+texture_t *renderer_render_instances_preview(gfx_handler_t *h, custom_pipeline_t *pipe, texture_t *const *textures,
+                                             uint32_t texture_count, const void *instances, uint32_t count, uint32_t width,
+                                             uint32_t height, const vec4 clear_color,
+                                             const renderer_texture_layer_update_t *updates, uint32_t update_count,
+                                             texture_t *destination, uint32_t destination_x, uint32_t destination_y);
 // Queues a mesh draw so it sorts with everything else. A game's level pass goes
 // through here, which is what lets it sit above or below the entities by z.
 void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh, texture_t *const *textures,

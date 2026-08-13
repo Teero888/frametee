@@ -43,7 +43,7 @@ static const ft_player_setup *setup_for(const ft_render_frame *frame, int index)
 // --- tee parts ---------------------------------------------------------------
 
 static void submit_tee_hand(ft_game *game, const vec2 center_phys, const vec2 dir, float angle_offset, float off_x, float off_y,
-                            int skin, const vec3 col_body, bool custom) {
+                            int skin, const vec3 col_body, bool custom, bool hook_hand) {
   vec2 dir_y = {-dir[1], dir[0]};
   if (dir[0] < 0.0f) {
     dir_y[0] = -dir_y[0];
@@ -55,7 +55,7 @@ static void submit_tee_hand(ft_game *game, const vec2 center_phys, const vec2 di
   // Mirrored into the renderer's angle convention, the same way aim_angle is.
   const float sign = dir[0] < 0.0f ? -1.0f : 1.0f;
   const float render_angle = atan2f(-dir[1], dir[0]) - sign * angle_offset;
-  dd_hand_push(game, hand, 10.0f / PX_PER_TILE, skin, render_angle, (float *)col_body, custom);
+  dd_hand_push(game, hand, 10.0f / PX_PER_TILE, skin, render_angle, (float *)col_body, custom, hook_hand);
 }
 
 static void render_fastcap_flag(ft_game *game, int team, vec2 pos) {
@@ -320,9 +320,9 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
 
   // Only these three are held with a visible hand in DDNet.
   switch (core->m_ActiveWeapon) {
-  case WEAPON_GUN: submit_tee_hand(game, weapon_pos, tee->dir, -3.0f * M_PI / 4.0f, -15.0f, 4.0f, tee->skin, tee->body_col, tee->custom); break;
-  case WEAPON_SHOTGUN: submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -5.0f, 4.0f, tee->skin, tee->body_col, tee->custom); break;
-  case WEAPON_GRENADE: submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -4.0f, 7.0f, tee->skin, tee->body_col, tee->custom); break;
+  case WEAPON_GUN: submit_tee_hand(game, weapon_pos, tee->dir, -3.0f * M_PI / 4.0f, -15.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false); break;
+  case WEAPON_SHOTGUN: submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -5.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false); break;
+  case WEAPON_GRENADE: submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -4.0f, 7.0f, tee->skin, tee->body_col, tee->custom, false); break;
   default: break;
   }
 }
@@ -371,7 +371,7 @@ static void render_hook(ft_game *game, const SWorldCore *world, const SCharacter
   }
 
   vec2 hook_center = {pos[0] * PX_PER_TILE, pos[1] * PX_PER_TILE};
-  submit_tee_hand(game, hook_center, direction, -M_PI / 2.0f, 20.0f, 0.0f, tee->skin, tee->body_col, tee->custom);
+  submit_tee_hand(game, hook_center, direction, -M_PI / 2.0f, 20.0f, 0.0f, tee->skin, tee->body_col, tee->custom, true);
 }
 
 // --- entities ----------------------------------------------------------------
@@ -662,7 +662,7 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
       }
     }
 
-    dd_skins_flush(game, DD_Z_HANDS, DD_Z_SKINS);
+    dd_skins_flush(game);
   }
 
   render_projectiles_and_lasers(game, world, intra);

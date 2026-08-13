@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 6u
+#define FT_GAME_ABI_VERSION 7u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -654,6 +654,44 @@ typedef struct ft_pipeline_desc {
   bool alpha_blend;
 } ft_pipeline_desc;
 
+/* Describes a small, immediate offscreen instance draw. It uses the exact
+ * pipeline and textures supplied by the game, with preview coordinates centred
+ * at {0,0}: a unit quad at scale 1 fills the target. This is intended for
+ * shader-accurate thumbnails in game-owned UI, not normal viewport rendering.
+ * Without a destination, the returned texture is newly owned by the caller;
+ * with one, the same caller-owned destination handle is returned. */
+typedef struct ft_texture_layer_update {
+  ft_texture *texture;
+  uint32_t layer;
+  const void *pixels;
+  uint32_t width;
+  uint32_t height;
+} ft_texture_layer_update;
+
+typedef struct ft_instance_preview_desc {
+  uint32_t struct_size;
+  ft_pipeline *pipeline;
+  ft_texture *const *textures;
+  uint32_t texture_count;
+  const void *instances;
+  uint32_t instance_count;
+  uint32_t width;
+  uint32_t height;
+  ft_color clear_color;
+  /* Optional texture-array updates recorded immediately before the draw in
+   * the same GPU submission. This avoids stalling once per streamed layer when
+   * a preview needs freshly generated material. Pixel data only has to remain
+   * valid for the duration of this call. */
+  const ft_texture_layer_update *updates;
+  uint32_t update_count;
+  /* When non-NULL, renders the preview into this texture at the given pixel
+   * offset and returns the destination instead of allocating a separate result
+   * texture. Intended for thumbnail atlas pages. */
+  ft_texture *destination;
+  uint32_t destination_x;
+  uint32_t destination_y;
+} ft_instance_preview_desc;
+
 typedef struct ft_camera {
   uint32_t struct_size;
   ft_vec2 position;
@@ -794,6 +832,10 @@ typedef struct ft_engine_api {
   bool (*timeline_world_info)(uint32_t world_index, ft_timeline_world_info *out);
   bool (*timeline_world_pair)(uint32_t world_index, int32_t global_tick, const ft_world **out_previous, const ft_world **out_current);
   int32_t (*timeline_player_track)(uint32_t world_index, uint32_t local_player);
+
+  /* Immediately renders instances through the game's existing pipeline into a
+   * sampled 2D texture. Valid outside render callbacks, including game UI. */
+  ft_texture *(*render_instances_preview)(const ft_instance_preview_desc *desc);
 } ft_engine_api;
 
 /* -------------------------------------------------------------------------
