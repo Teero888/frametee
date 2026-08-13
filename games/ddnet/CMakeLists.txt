@@ -73,3 +73,10 @@ target_sources(ddnet_game PRIVATE ${CMAKE_SOURCE_DIR}/libs/cjson/cJSON.c)
 if(NOT MSVC)
     target_compile_options(ddnet_game PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()
+
+# Windows resolves every symbol at link time, so the ig* calls above cannot be
+# left dangling for the loader the way they are on ELF. The module links the
+# host executable's import library instead, exactly as the bundled plugins do.
+if(WIN32 AND TARGET frametee)
+    target_link_libraries(ddnet_game PRIVATE frametee)
+endif()

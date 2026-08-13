@@ -37,6 +37,7 @@
 
 #include <cimgui.h>
 
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -179,7 +180,7 @@ struct ft_game {
 namespace {
 
 int coin_count(const ft_level *level) { return level ? static_cast<int>(level->coins.size()) : 0; }
-int coins_taken(const ft_world *world) { return world ? __builtin_popcount(world->coins_taken) : 0; }
+int coins_taken(const ft_world *world) { return world ? static_cast<int>(std::popcount(world->coins_taken)) : 0; }
 
 ft_vec2 to_ft(Vector2 value) { return {value.x, value.y}; }
 Vector2 to_ray(ft_vec2 value) { return {value.x, value.y}; }
@@ -754,23 +755,23 @@ void ui(ft_game *game, const ft_ui_frame *frame) {
     igPushID_Int(i);
     igBeginGroup();
 
-    const bool clicked = igInvisibleButton("##level", (ImVec2){card_width, 92.f}, 0);
+    const bool clicked = igInvisibleButton("##level", ImVec2{card_width, 92.f}, 0);
     const bool hovered = igIsItemHovered(0);
 
     const ImVec2 min = igGetItemRectMin();
     const ImVec2 max = igGetItemRectMax();
     ImDrawList *draw = igGetWindowDrawList();
-    const ImU32 background = hovered ? igGetColorU32_Vec4((ImVec4){38.f / 255.f, 46.f / 255.f, 62.f / 255.f, 1.f})
-                                     : igGetColorU32_Vec4((ImVec4){28.f / 255.f, 33.f / 255.f, 45.f / 255.f, 1.f});
-    const ImU32 border = hovered ? igGetColorU32_Vec4((ImVec4){90.f / 255.f, 175.f / 255.f, 1.f, 1.f})
-                                 : igGetColorU32_Vec4((ImVec4){48.f / 255.f, 56.f / 255.f, 75.f / 255.f, 140.f / 255.f});
-    const ImU32 title = igGetColorU32_Vec4((ImVec4){235.f / 255.f, 240.f / 255.f, 250.f / 255.f, 1.f});
-    const ImU32 description = igGetColorU32_Vec4((ImVec4){150.f / 255.f, 160.f / 255.f, 180.f / 255.f, 1.f});
+    const ImU32 background = hovered ? igGetColorU32_Vec4(ImVec4{38.f / 255.f, 46.f / 255.f, 62.f / 255.f, 1.f})
+                                     : igGetColorU32_Vec4(ImVec4{28.f / 255.f, 33.f / 255.f, 45.f / 255.f, 1.f});
+    const ImU32 border = hovered ? igGetColorU32_Vec4(ImVec4{90.f / 255.f, 175.f / 255.f, 1.f, 1.f})
+                                 : igGetColorU32_Vec4(ImVec4{48.f / 255.f, 56.f / 255.f, 75.f / 255.f, 140.f / 255.f});
+    const ImU32 title = igGetColorU32_Vec4(ImVec4{235.f / 255.f, 240.f / 255.f, 250.f / 255.f, 1.f});
+    const ImU32 description = igGetColorU32_Vec4(ImVec4{150.f / 255.f, 160.f / 255.f, 180.f / 255.f, 1.f});
 
     ImDrawList_AddRectFilled(draw, min, max, background, 6.f, 0);
     ImDrawList_AddRect(draw, min, max, border, 6.f, 0, 1.f);
-    ImDrawList_AddText_Vec2(draw, (ImVec2){min.x + 12.f, min.y + 12.f}, title, kBuiltinLevels[i].name, nullptr);
-    ImDrawList_AddText_Vec2(draw, (ImVec2){min.x + 12.f, min.y + 34.f}, description, kBuiltinLevels[i].description, nullptr);
+    ImDrawList_AddText_Vec2(draw, ImVec2{min.x + 12.f, min.y + 12.f}, title, kBuiltinLevels[i].name, nullptr);
+    ImDrawList_AddText_Vec2(draw, ImVec2{min.x + 12.f, min.y + 34.f}, description, kBuiltinLevels[i].description, nullptr);
 
     if (clicked) game->engine->request_level(kBuiltinLevels[i].id);
 

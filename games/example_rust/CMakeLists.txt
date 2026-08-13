@@ -25,9 +25,21 @@ endif()
 get_filename_component(RUST_MODULE_EXT "${RUST_MODULE_BUILT}" EXT)
 set(RUST_MODULE_INSTALLED "${CMAKE_BINARY_DIR}/games/example_bouncer${RUST_MODULE_EXT}")
 
+# The module calls a handful of ig* functions. On Windows those cannot stay
+# unresolved in a DLL, so rustc is pointed at the host executable's import
+# library; on ELF the loader binds them against the host at load time.
+set(RUST_CARGO_LAUNCHER ${CARGO_EXECUTABLE})
+if(WIN32 AND TARGET frametee)
+    set(RUST_CARGO_LAUNCHER
+        ${CMAKE_COMMAND} -E env
+        "RUSTFLAGS=-Lnative=$<TARGET_LINKER_FILE_DIR:frametee> -ldylib=frametee"
+        ${CARGO_EXECUTABLE}
+    )
+endif()
+
 add_custom_command(
     OUTPUT "${RUST_MODULE_INSTALLED}"
-    COMMAND ${CARGO_EXECUTABLE} build --release --locked --quiet
+    COMMAND ${RUST_CARGO_LAUNCHER} build --release --locked --quiet
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/games"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RUST_MODULE_BUILT}" "${RUST_MODULE_INSTALLED}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -38,3 +50,8 @@ add_custom_command(
 )
 
 add_custom_target(example_rust_game ALL DEPENDS "${RUST_MODULE_INSTALLED}")
+
+# cargo links against frametee.lib, so the executable has to exist first.
+if(WIN32 AND TARGET frametee)
+    add_dependencies(example_rust_game frametee)
+endif()

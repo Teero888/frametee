@@ -441,7 +441,12 @@ if(BUILD_GAMES)
                     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/games"
                     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/games"
                 )
-                add_dependencies(${PROJECT_NAME} ${GAME_TARGET})
+                # On Windows the modules link the executable's import library,
+                # so the dependency runs the other way and adding it here would
+                # close a cycle. They are ALL targets either way.
+                if(NOT WIN32)
+                    add_dependencies(${PROJECT_NAME} ${GAME_TARGET})
+                endif()
             endforeach()
         endif()
     endforeach()

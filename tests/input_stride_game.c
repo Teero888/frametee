@@ -4,9 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { INPUT_MAGIC = 0x4654494e50555431ULL };
+#define INPUT_MAGIC UINT64_C(0x4654494e50555431)
 
-typedef struct __attribute__((aligned(8))) stride_input_t {
+#if defined(_MSC_VER)
+#define STRIDE_ALIGNED(n) __declspec(align(n))
+#else
+#define STRIDE_ALIGNED(n) __attribute__((aligned(n)))
+#endif
+
+typedef struct STRIDE_ALIGNED(8) stride_input_t {
   uint64_t magic;
   uint32_t value;
   uint32_t padding;
