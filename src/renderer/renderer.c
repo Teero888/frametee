@@ -69,11 +69,15 @@ static void renderer_flush_custom_instances(gfx_handler_t *h, VkCommandBuffer cm
 static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t base_layer,
                           uint32_t layer_count);
 static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer);
+static void flush_primitives3d(gfx_handler_t *h, VkCommandBuffer command_buffer);
+static primitive_ubo_t world_ubo(gfx_handler_t *h);
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 
 // vertex description helpers
 static VkVertexInputBindingDescription primitive_binding_description;
 static VkVertexInputAttributeDescription primitive_attribute_descriptions[2];
+static VkVertexInputBindingDescription primitive3d_binding_description;
+static VkVertexInputAttributeDescription primitive3d_attribute_descriptions[2];
 static VkVertexInputBindingDescription mesh_binding_description;
 static VkVertexInputAttributeDescription mesh_attribute_descriptions[3];
 
@@ -302,6 +306,22 @@ void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint3
 
   err = vkBindImageMemory(handler->g_device, *image, *image_memory, 0);
   check_vk_result_line(err, __LINE__);
+}
+
+VkImageView create_image_view_aspect(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels,
+                                     uint32_t layer_count, VkImageAspectFlags aspect) {
+  VkImageViewCreateInfo view_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                     .image = image,
+                                     .viewType = view_type,
+                                     .format = format,
+                                     .subresourceRange = {.aspectMask = aspect,
+                                                          .baseMipLevel = 0,
+                                                          .levelCount = mip_levels,
+                                                          .baseArrayLayer = 0,
+                                                          .layerCount = layer_count}};
+  VkImageView view;
+  check_vk_result(vkCreateImageView(handler->g_device, &view_info, handler->g_allocator, &view));
+  return view;
 }
 
 VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels,
@@ -542,6 +562,20 @@ int renderer_init(gfx_handler_t *handler) {
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_vertex_buffer);
   vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->vertex_buffer_ptr);
 
+  renderer->primitive3d_shader =
+      renderer_load_shader(handler, "data/shaders/primitive3d.vert.spv", "data/shaders/primitive3d.frag.spv");
+  create_buffer(handler, MAX_PRIMITIVE3D_VERTICES * sizeof(primitive3d_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_vertex_buffer3d);
+  vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer3d.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->vertex3d_buffer_ptr);
+
+  // Sensible orbit for a game that has not moved the camera yet.
+  renderer->camera3.distance = 40.f;
+  renderer->camera3.yaw = -1.57f;
+  renderer->camera3.pitch = 0.5f;
+  renderer->camera3.fov_y = 1.0f;
+  renderer->camera3.near_z = 0.1f;
+  renderer->camera3.far_z = 5000.f;
+
   create_buffer(handler, MAX_PRIMITIVE_INDICES * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_index_buffer);
   vkMapMemory(handler->g_device, renderer->dynamic_index_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->index_buffer_ptr);
@@ -726,6 +760,11 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
     b_desc_count = 1;
     attrib_descs = primitive_attribute_descriptions;
     a_desc_count = 2;
+  } else if (shader == renderer->primitive3d_shader) {
+    binding_descs = &primitive3d_binding_description;
+    b_desc_count = 1;
+    attrib_descs = primitive3d_attribute_descriptions;
+    a_desc_count = 2;
   } else {
     binding_descs = &mesh_binding_description;
     b_desc_count = 1;
@@ -785,11 +824,17 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
   VkPipelineMultisampleStateCreateInfo multisampling = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
 
-  VkPipelineDepthStencilStateCreateInfo depth_stencil = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, .depthTestEnable = VK_FALSE, .depthWriteEnable = VK_FALSE};
+  // 2D draws are ordered by the z a game supplies, so they must not depth-test
+  // against each other. 3D geometry has no such ordering and depends on it.
+  const bool depth_3d = shader == renderer->primitive3d_shader;
+  VkPipelineDepthStencilStateCreateInfo depth_stencil = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                                                         .depthTestEnable = depth_3d ? VK_TRUE : VK_FALSE,
+                                                         .depthWriteEnable = depth_3d ? VK_TRUE : VK_FALSE,
+                                                         .depthCompareOp = VK_COMPARE_OP_LESS,
+                                                         .maxDepthBounds = 1.0f};
 
   VkBlendFactor src_color_factor = VK_BLEND_FACTOR_ONE;
-  if (shader == renderer->primitive_shader) {
+  if (shader == renderer->primitive_shader || shader == renderer->primitive3d_shader) {
     src_color_factor = VK_BLEND_FACTOR_SRC_ALPHA;
   }
 
@@ -1228,6 +1273,7 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
   renderer->primitive_vertex_count = 0;
   renderer->primitive_index_count = 0;
   renderer->primitive_index_offset_drawn = 0;
+  renderer->primitive3d_vertex_count = 0;
   renderer->ubo_buffer_offset = 0;
   renderer->current_command_buffer = command_buffer;
   renderer->transient_offset = 0;
@@ -1320,7 +1366,12 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   VLA_FREE(descriptor_writes);
 }
 
-void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) { flush_primitives(handler, command_buffer); }
+void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
+  // 3D first: it owns the depth buffer, and the 2D primitives a game draws on
+  // top are overlays that should not be occluded by the world behind them.
+  flush_primitives3d(handler, command_buffer);
+  flush_primitives(handler, command_buffer);
+}
 
 void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex) {
   if (!tex || !tex->active) return;
@@ -1473,6 +1524,13 @@ static void setup_vertex_descriptions(void) {
       .binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(primitive_vertex_t, pos)};
   primitive_attribute_descriptions[1] = (VkVertexInputAttributeDescription){
       .binding = 0, .location = 1, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = offsetof(primitive_vertex_t, color)};
+
+  primitive3d_binding_description =
+      (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(primitive3d_vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+  primitive3d_attribute_descriptions[0] = (VkVertexInputAttributeDescription){
+      .binding = 0, .location = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(primitive3d_vertex_t, pos)};
+  primitive3d_attribute_descriptions[1] = (VkVertexInputAttributeDescription){
+      .binding = 0, .location = 1, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = offsetof(primitive3d_vertex_t, color)};
 
   mesh_binding_description = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
   mesh_attribute_descriptions[0] =
@@ -2016,7 +2074,195 @@ static primitive_ubo_t world_ubo(gfx_handler_t *h) {
   ubo.mapSize[1] = h->world_height;
   ubo.lod_bias = renderer->lod_bias;
   glm_ortho_rh_zo(-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, ubo.proj);
+  renderer_camera3_view_proj(h, ubo.view_proj);
   return ubo;
+}
+
+
+// --- 3D primitives -----------------------------------------------------------
+//
+// A 3D game's geometry is resolved by the depth buffer, so unlike the 2D path
+// there is no command queue and no sorting: vertices go straight into a stream
+// that is drawn once per frame.
+
+
+// The direction from the target out to an orbiting eye. The camera looks back
+// along it, which is what makes yaw and pitch mean the same thing in both modes.
+static void camera3_offset(const camera3_t *c, vec3 out) {
+  const float cp = cosf(c->pitch);
+  out[0] = cp * cosf(c->yaw);
+  out[1] = sinf(c->pitch);
+  out[2] = cp * sinf(c->yaw);
+}
+
+void renderer_camera3_eye(gfx_handler_t *h, vec3 out) {
+  const camera3_t *c = &h->renderer.camera3;
+  if (c->free_mode) {
+    glm_vec3_copy((float *)c->eye, out);
+    return;
+  }
+  vec3 offset;
+  camera3_offset(c, offset);
+  glm_vec3_scale(offset, c->distance, offset);
+  glm_vec3_add((float *)c->target, offset, out);
+}
+
+void renderer_camera3_forward(gfx_handler_t *h, vec3 out) {
+  vec3 offset;
+  camera3_offset(&h->renderer.camera3, offset);
+  glm_vec3_negate_to(offset, out);
+  glm_vec3_normalize(out);
+}
+
+void renderer_camera3_toggle_free(gfx_handler_t *h) {
+  camera3_t *c = &h->renderer.camera3;
+  if (!c->free_mode) {
+    // Entering the freecam: stand where the orbit already is.
+    renderer_camera3_eye(h, c->eye);
+    c->free_mode = true;
+    return;
+  }
+  // Leaving it: orbit whatever is currently in front, at the current distance,
+  // so the view is unchanged at the instant of the swap.
+  vec3 forward;
+  renderer_camera3_forward(h, forward);
+  glm_vec3_scale(forward, c->distance, forward);
+  glm_vec3_add(c->eye, forward, c->target);
+  c->free_mode = false;
+}
+
+void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
+  const camera3_t *c = &h->renderer.camera3;
+  vec3 eye;
+  renderer_camera3_eye(h, eye);
+
+  vec3 target;
+  if (c->free_mode) {
+    vec3 forward;
+    renderer_camera3_forward(h, forward);
+    glm_vec3_add(eye, forward, target);
+  } else {
+    glm_vec3_copy((float *)c->target, target);
+  }
+
+  mat4 view, proj;
+  glm_lookat(eye, target, (vec3){0.f, 1.f, 0.f}, view);
+
+  const float aspect = h->viewport[1] > 0.f ? h->viewport[0] / h->viewport[1] : 1.f;
+  glm_perspective(c->fov_y, aspect, c->near_z, c->far_z, proj);
+  // Vulkan's clip space has Y pointing down relative to OpenGL's, which is what
+  // cglm builds for.
+  proj[1][1] *= -1.f;
+  glm_mat4_mul(proj, view, out);
+}
+
+static void push_vertex3(renderer_state_t *r, vec3 pos, vec4 color) {
+  if (r->primitive3d_vertex_count >= MAX_PRIMITIVE3D_VERTICES || !r->vertex3d_buffer_ptr) return;
+  primitive3d_vertex_t *v = &r->vertex3d_buffer_ptr[r->primitive3d_vertex_count++];
+  glm_vec3_copy(pos, v->pos);
+  glm_vec4_copy(color, v->color);
+}
+
+void renderer_submit_triangle3(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec4 color) {
+  renderer_state_t *r = &h->renderer;
+  push_vertex3(r, a, color);
+  push_vertex3(r, b, color);
+  push_vertex3(r, c, color);
+}
+
+void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float thickness) {
+  // A line with width is a quad turned to face the viewer: there is no line
+  // width to rely on without the wideLines feature, and a camera-facing quad
+  // reads the same from every angle.
+  vec3 eye;
+  renderer_camera3_eye(h, eye);
+
+  vec3 dir, to_eye, side;
+  glm_vec3_sub(b, a, dir);
+  if (glm_vec3_norm(dir) <= 1e-6f) return;
+  glm_vec3_sub(eye, a, to_eye);
+  glm_vec3_cross(dir, to_eye, side);
+  if (glm_vec3_norm(side) <= 1e-6f) glm_vec3_cross(dir, (vec3){0.f, 1.f, 0.f}, side);
+  glm_vec3_normalize(side);
+  glm_vec3_scale(side, thickness * 0.5f, side);
+
+  vec3 a0, a1, b0, b1;
+  glm_vec3_add(a, side, a0);
+  glm_vec3_sub(a, side, a1);
+  glm_vec3_add(b, side, b0);
+  glm_vec3_sub(b, side, b1);
+
+  renderer_submit_triangle3(h, a0, a1, b0, color);
+  renderer_submit_triangle3(h, b0, a1, b1, color);
+}
+
+void renderer_submit_box3(gfx_handler_t *h, vec3 center, vec3 size, vec4 color, bool wire) {
+  const float hx = size[0] * 0.5f, hy = size[1] * 0.5f, hz = size[2] * 0.5f;
+  vec3 corner[8];
+  for (int i = 0; i < 8; ++i) {
+    corner[i][0] = center[0] + ((i & 1) ? hx : -hx);
+    corner[i][1] = center[1] + ((i & 2) ? hy : -hy);
+    corner[i][2] = center[2] + ((i & 4) ? hz : -hz);
+  }
+
+  if (wire) {
+    static const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3},
+                                     {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+    const float thickness = fmaxf(fmaxf(size[0], size[1]), size[2]) * 0.01f;
+    for (int i = 0; i < 12; ++i)
+      renderer_submit_line3(h, corner[edges[i][0]], corner[edges[i][1]], color, thickness > 0.f ? thickness : 0.02f);
+    return;
+  }
+
+  // Two triangles per face, wound so the box is solid from any side. Faces are
+  // shaded slightly apart so a solid box reads as a volume rather than a
+  // silhouette without any lighting in the pipeline.
+  static const int faces[6][4] = {{0, 1, 3, 2}, {4, 6, 7, 5}, {0, 4, 5, 1}, {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 5, 7, 3}};
+  static const float shade[6] = {0.75f, 0.95f, 0.6f, 1.0f, 0.7f, 0.85f};
+  for (int f = 0; f < 6; ++f) {
+    vec4 tinted = {color[0] * shade[f], color[1] * shade[f], color[2] * shade[f], color[3]};
+    renderer_submit_triangle3(h, corner[faces[f][0]], corner[faces[f][1]], corner[faces[f][2]], tinted);
+    renderer_submit_triangle3(h, corner[faces[f][0]], corner[faces[f][2]], corner[faces[f][3]], tinted);
+  }
+}
+
+static void flush_primitives3d(gfx_handler_t *h, VkCommandBuffer command_buffer) {
+  renderer_state_t *renderer = &h->renderer;
+  if (renderer->primitive3d_vertex_count == 0 || !renderer->primitive3d_shader) return;
+
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive3d_shader, 1, 0, h->g_main_window_data.RenderPass);
+  if (!pso) return;
+
+  primitive_ubo_t ubo = world_ubo(h);
+
+  VkDeviceSize aligned = (sizeof(ubo) + renderer->min_ubo_alignment - 1) & ~(renderer->min_ubo_alignment - 1);
+  if (renderer->ubo_buffer_offset + aligned > DYNAMIC_UBO_BUFFER_SIZE) return;
+  uint32_t dyn_offset = renderer->ubo_buffer_offset;
+  memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, sizeof(ubo));
+  renderer->ubo_buffer_offset += (uint32_t)aligned;
+
+  uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
+  VkDescriptorSet desc;
+  VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                    .descriptorPool = renderer->frame_descriptor_pools[pool_idx],
+                                    .descriptorSetCount = 1,
+                                    .pSetLayouts = &pso->descriptor_set_layout};
+  if (vkAllocateDescriptorSets(h->g_device, &ai, &desc) != VK_SUCCESS) return;
+
+  VkDescriptorBufferInfo b_info = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
+  VkWriteDescriptorSet write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                .dstSet = desc,
+                                .dstBinding = 0,
+                                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                .descriptorCount = 1,
+                                .pBufferInfo = &b_info};
+  vkUpdateDescriptorSets(h->g_device, 1, &write, 0, NULL);
+
+  vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
+  vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0, NULL);
+  VkDeviceSize offset = 0;
+  vkCmdBindVertexBuffers(command_buffer, 0, 1, &renderer->dynamic_vertex_buffer3d.buffer, &offset);
+  vkCmdDraw(command_buffer, renderer->primitive3d_vertex_count, 1, 0, 0);
 }
 
 void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas_renderer_t *ar, uint32_t start_index, uint32_t count, bool screen_space) {

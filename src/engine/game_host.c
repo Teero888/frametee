@@ -203,7 +203,9 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
       if (!id_is_valid(descriptor->id)) FAIL("property %u of entity class '%s' has an invalid id", prop, entity_class->id);
       if (!descriptor->display_name || !*descriptor->display_name)
         FAIL("property '%s' of entity class '%s' has no display name", descriptor->id, entity_class->id);
-      if (descriptor->kind < FT_VALUE_BOOL || descriptor->kind > FT_VALUE_STRING)
+      // FT_VALUE_VEC3 sits above STRING in the enum, so this bound is the
+      // highest kind rather than the last one that reads naturally.
+      if (descriptor->kind < FT_VALUE_BOOL || descriptor->kind > FT_VALUE_VEC3)
         FAIL("property '%s' of entity class '%s' has invalid kind %d", descriptor->id, entity_class->id, descriptor->kind);
       for (uint32_t previous = 0; previous < prop; ++previous)
         if (strcmp(entity_class->props[previous].id, descriptor->id) == 0)
@@ -529,6 +531,13 @@ bool game_can_remove_player(const game_host_t *host, int current_count) {
   const ft_game_constraints *c = constraints_of(host);
   if (!c || !(c->caps & FT_CAP_DYNAMIC_PLAYERS)) return false;
   return current_count > c->min_players;
+}
+
+bool game_is_3d(const game_host_t *host) {
+  const ft_game_constraints *c = constraints_of(host);
+  // Anything that does not say otherwise is a plane, which is what every game
+  // written before dimensions existed assumes.
+  return c && c->dimensions == FT_DIMENSIONS_3D;
 }
 
 int game_ticks_per_second(const game_host_t *host) {

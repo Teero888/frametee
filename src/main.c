@@ -93,12 +93,18 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
 
 int main(int argc, char **argv) {
   const char *auto_script = NULL;
+  // Opens a level straight away, skipping the start screen. The active game
+  // decides what the string means, exactly as it does for the level a start
+  // screen requests.
+  const char *level_path = NULL;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--auto") == 0 && i + 1 < argc) {
       g_is_headless = true;
       auto_script = argv[++i];
     } else if (strcmp(argv[i], "--game") == 0 && i + 1 < argc) {
       g_forced_game_id = argv[++i];
+    } else if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
+      level_path = argv[++i];
     } else if (strcmp(argv[i], "--list-games") == 0) {
       g_list_games = true;
       g_is_headless = true;
@@ -126,6 +132,14 @@ int main(int argc, char **argv) {
     log_info("ScriptEngine", "Auto script finished.");
     gfx_cleanup(&handler);
     return 0;
+  }
+
+  if (level_path) {
+    on_level_load_path(&handler, level_path);
+    if (handler.level)
+      handler.user_interface.show_splash = false;
+    else
+      log_error("Main", "Could not open level '%s'", level_path);
   }
 
   bool viewport_hovered = false;

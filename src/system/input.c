@@ -291,13 +291,18 @@ int input_glfw_key_from_imgui(ImGuiKey key) {
 }
 
 ImGuiKey input_capture_pressed_key(void) {
+  // A modifier is normally part of a combo rather than its key, so a real key
+  // always wins. On its own, though, it is a perfectly good bind — a freecam
+  // wants Shift to sprint — so it is remembered and used when nothing else was
+  // pressed.
+  ImGuiKey modifier_only = ImGuiKey_None;
+
   for (int i = 0; i < g_input.poll_key_count; ++i) {
     int keycode = g_input.poll_keys[i];
     if (!input_key_pressed(keycode, false)) continue;
 
     ImGuiKey key = glfw_key_to_imgui(keycode);
     switch (key) {
-    // Modifiers are recorded as part of the combo, never as the key itself.
     case ImGuiKey_LeftCtrl:
     case ImGuiKey_RightCtrl:
     case ImGuiKey_LeftShift:
@@ -306,6 +311,7 @@ ImGuiKey input_capture_pressed_key(void) {
     case ImGuiKey_RightAlt:
     case ImGuiKey_LeftSuper:
     case ImGuiKey_RightSuper:
+      if (modifier_only == ImGuiKey_None) modifier_only = key;
       continue;
     default: return key;
     }
@@ -317,7 +323,7 @@ ImGuiKey input_capture_pressed_key(void) {
   if (input_mouse_pressed(GLFW_MOUSE_BUTTON_4)) return ImGuiKey_MouseX1;
   if (input_mouse_pressed(GLFW_MOUSE_BUTTON_5)) return ImGuiKey_MouseX2;
 
-  return ImGuiKey_None;
+  return modifier_only;
 }
 
 int input_glfw_button_from_imgui(ImGuiKey key) {

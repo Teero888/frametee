@@ -820,6 +820,8 @@ static MODULE: ft_game_module = ft_game_module {
         struct_size: std::mem::size_of::<ft_game_constraints>() as u32,
         // One Bevy-controlled ball, no dynamic cast. The editor adapts.
         caps: FT_CAP_WORLD_SERIALIZE | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS,
+        // A plane: this example's arena is flat, and Bevy renders it with a 2D camera.
+        dimensions: 0,
         min_players: 1,
         max_players: 1,
         ticks_per_second: 50,

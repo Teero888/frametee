@@ -36,6 +36,10 @@ typedef struct {
   int timeline_tick;
   int world_tick;
   ft_vec2 position;
+  // A 3D game reports its position as one vec3, so the viewport marker needs
+  // the third component to sit in the right place.
+  ft_vec3 position3;
+  bool position_is_3d;
 
   entity_prop_view_t props[ENTITY_INSPECTOR_MAX_PROPS];
   int prop_count;

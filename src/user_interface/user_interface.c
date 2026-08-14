@@ -601,8 +601,80 @@ void render_player_manager(ui_handler_t *ui) {
   igEnd();
 }
 
+// The viewport camera for a game whose world is a volume: drag to orbit, scroll
+// to pull in and out. The 2D path below is left exactly as it was, because
+// panning a plane and orbiting a volume have nothing useful in common.
+static void on_camera3_update(gfx_handler_t *handler, bool hovered) {
+  camera3_t *c = &handler->renderer.camera3;
+  keybind_manager_t *keys = &handler->user_interface.keybinds;
+  const bool typing = igIsAnyItemActive();
+
+  if (!typing && keybinds_is_action_pressed(keys, ACTION_TOGGLE_FREECAM, false)) renderer_camera3_toggle_free(handler);
+
+  float scroll_y = !hovered ? 0.f : (float)input_scroll_y();
+  if (!typing) {
+    if (keybinds_is_action_pressed(keys, ACTION_ZOOM_IN, true)) scroll_y = 1.f;
+    if (keybinds_is_action_pressed(keys, ACTION_ZOOM_OUT, true)) scroll_y = -1.f;
+  }
+
+  double raw_dx = 0.0, raw_dy = 0.0;
+  input_mouse_delta(&raw_dx, &raw_dy);
+  // The same button that pans a 2D view turns a 3D one, so the gesture a user
+  // already knows carries over into both modes.
+  const bool drag_down = input_mouse_down(GLFW_MOUSE_BUTTON_RIGHT);
+  if (drag_down && (hovered || c->orbiting)) {
+    c->orbiting = true;
+    c->yaw += (float)raw_dx * 0.005f;
+    c->pitch += (float)raw_dy * 0.005f;
+    // Stop just short of the poles: looking straight down makes the up vector
+    // ambiguous and the view flips.
+    c->pitch = glm_clamp(c->pitch, -1.5f, 1.5f);
+  } else {
+    c->orbiting = false;
+  }
+
+  if (!c->free_mode) {
+    // Orbiting: the wheel changes how far out the camera sits.
+    if (scroll_y != 0.f) c->distance = glm_clamp(c->distance * (1.f - scroll_y * 0.1f), 1.f, 100000.f);
+    return;
+  }
+
+  // Flying: the wheel trims how fast, because a speed that suits crossing a
+  // level is unusable for lining up a shot next to a body.
+  if (scroll_y != 0.f) c->move_speed = glm_clamp(c->move_speed * (1.f + scroll_y * 0.15f), 0.5f, 10000.f);
+  if (typing) return;
+
+  vec3 forward, right, up;
+  renderer_camera3_forward(handler, forward);
+  glm_vec3_cross(forward, (vec3){0.f, 1.f, 0.f}, right);
+  glm_vec3_normalize(right);
+  // The camera's own up, so rising while pitched moves along the view rather
+  // than along the world axis.
+  glm_vec3_cross(right, forward, up);
+  glm_vec3_normalize(up);
+
+  vec3 move = {0.f, 0.f, 0.f};
+  if (keybinds_is_action_held(keys, ACTION_FREECAM_FORWARD)) glm_vec3_add(move, forward, move);
+  if (keybinds_is_action_held(keys, ACTION_FREECAM_BACK)) glm_vec3_sub(move, forward, move);
+  if (keybinds_is_action_held(keys, ACTION_FREECAM_RIGHT)) glm_vec3_add(move, right, move);
+  if (keybinds_is_action_held(keys, ACTION_FREECAM_LEFT)) glm_vec3_sub(move, right, move);
+  if (keybinds_is_action_held(keys, ACTION_FREECAM_UP)) glm_vec3_add(move, up, move);
+  if (keybinds_is_action_held(keys, ACTION_FREECAM_DOWN)) glm_vec3_sub(move, up, move);
+  if (glm_vec3_norm(move) <= 0.f) return;
+
+  glm_vec3_normalize(move);
+  float speed = c->move_speed * igGetIO_Nil()->DeltaTime;
+  if (keybinds_is_action_held(keys, ACTION_FREECAM_FAST)) speed *= 4.f;
+  glm_vec3_scale(move, speed, move);
+  glm_vec3_add(c->eye, move, c->eye);
+}
+
 void on_camera_update(gfx_handler_t *handler, bool hovered, float intra) {
   if (!handler->level) return;
+  if (game_is_3d(&handler->game_host)) {
+    on_camera3_update(handler, hovered);
+    return;
+  }
   camera_t *camera = &handler->renderer.camera;
   ImGuiIO *io = igGetIO_Nil();
 

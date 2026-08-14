@@ -317,6 +317,27 @@ static void api_draw_texture(float z, ft_texture *texture, ft_rect dst, ft_color
   renderer_submit_atlas_batch(g_engine, tex->alias_atlas, z, &inst, 1, false);
 }
 
+static void api_draw_line3(ft_vec3 a, ft_vec3 b, ft_color color, float thickness) {
+  if (!have_graphics()) return;
+  vec4 col;
+  copy_color(&color, col);
+  renderer_submit_line3(g_engine, (vec3){a.x, a.y, a.z}, (vec3){b.x, b.y, b.z}, col, thickness);
+}
+
+static void api_draw_triangle3(ft_vec3 a, ft_vec3 b, ft_vec3 c, ft_color color) {
+  if (!have_graphics()) return;
+  vec4 col;
+  copy_color(&color, col);
+  renderer_submit_triangle3(g_engine, (vec3){a.x, a.y, a.z}, (vec3){b.x, b.y, b.z}, (vec3){c.x, c.y, c.z}, col);
+}
+
+static void api_draw_box3(ft_vec3 center, ft_vec3 size, ft_color color, bool wire) {
+  if (!have_graphics()) return;
+  vec4 col;
+  copy_color(&color, col);
+  renderer_submit_box3(g_engine, (vec3){center.x, center.y, center.z}, (vec3){size.x, size.y, size.z}, col, wire);
+}
+
 static void api_draw_line(float z, ft_vec2 a, ft_vec2 b, ft_color color, float thickness) {
   if (!have_graphics()) return;
   vec4 col;
@@ -400,6 +421,25 @@ static void api_camera_get(ft_camera *out) {
   const float min_y = fminf(top, bottom);
   const float max_y = fmaxf(top, bottom);
   out->visible = (ft_rect){min_x, min_y, max_x - min_x, max_y - min_y};
+
+  // A 3D game gets the orbit camera it is actually being rendered with, down to
+  // the exact view-projection, so a module drawing with its own device lines up
+  // with the engine's own primitives instead of guessing at a matrix.
+  if (game_is_3d(&g_engine->game_host)) {
+    const camera3_t *c = &g_engine->renderer.camera3;
+    vec3 eye;
+    renderer_camera3_eye(g_engine, eye);
+    out->eye = (ft_vec3){eye[0], eye[1], eye[2]};
+    out->target = (ft_vec3){c->target[0], c->target[1], c->target[2]};
+    out->up = (ft_vec3){0.f, 1.f, 0.f};
+    out->fov_y = c->fov_y;
+    out->near_z = c->near_z;
+    out->far_z = c->far_z;
+
+    mat4 vp;
+    renderer_camera3_view_proj(g_engine, vp);
+    memcpy(out->view_proj, vp, sizeof(out->view_proj));
+  }
 }
 
 static void api_camera_set(const ft_camera *camera) {
@@ -680,6 +720,9 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .gpu_device = api_gpu_device,
       .texture_gpu_image = api_texture_gpu_image,
       .draw_texture = api_draw_texture,
+      .draw_line3 = api_draw_line3,
+      .draw_triangle3 = api_draw_triangle3,
+      .draw_box3 = api_draw_box3,
   };
   return &api;
 }

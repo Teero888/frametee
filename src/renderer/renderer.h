@@ -17,6 +17,7 @@
 #define MAX_UBOS_PER_DRAW 2
 #define MAX_PRIMITIVE_VERTICES 100000
 #define MAX_PRIMITIVE_INDICES 200000
+#define MAX_PRIMITIVE3D_VERTICES 200000
 #define MAX_RENDER_COMMANDS 65536
 #define MAX_ATLAS_INSTANCES 1000000
 // Resources a game module may create at runtime, on top of the engine's own.
@@ -131,6 +132,13 @@ struct primitive_vertex_t {
   vec4 color;
 };
 
+// The same thing in a volume. Kept separate from primitive_vertex_t so a 2D
+// game pays nothing for the third component.
+struct primitive3d_vertex_t {
+  vec3 pos;
+  vec4 color;
+};
+
 struct primitive_ubo_t {
   vec2 camPos; // normalized [0..1] camera center
   float zoom;
@@ -140,6 +148,10 @@ struct primitive_ubo_t {
   mat4 proj;
   vec2 mapSize; // width, height
   float lod_bias;
+  float _pad2;
+  // View-projection for the 3D primitive path. Identity for a 2D game, which
+  // never binds a shader that reads it.
+  mat4 view_proj;
 };
 
 typedef struct line_segment_t {
@@ -163,6 +175,30 @@ struct pipeline_cache_entry_t {
   VkRenderPass render_pass;
   uint32_t ubo_count;
   uint32_t texture_count;
+};
+
+// The viewport camera for a game that declared FT_DIMENSIONS_3D. It has two
+// modes, because inspecting a run and moving through one want different things:
+// an orbit circles a point, which is right for watching a body from outside,
+// and a freecam goes where it is pointed, which is the only way to get inside
+// the geometry or look at somewhere the orbit cannot reach.
+//
+// `yaw` and `pitch` mean the same in both, so switching preserves the view.
+struct camera3_t {
+  vec3 target;   // what an orbit circles
+  vec3 eye;      // where a freecam is; derived from the orbit otherwise
+  float yaw;
+  float pitch;
+  float distance; // orbit radius
+  float fov_y;
+  float near_z;
+  float far_z;
+  bool free_mode;
+  // World units per second at full tilt, scaled from the level so the same
+  // controls suit an arena and a landscape.
+  float move_speed;
+  bool orbiting;
+  vec2 drag_start;
 };
 
 struct camera_t {
@@ -296,6 +332,12 @@ struct renderer_state_t {
   VkCommandPool transfer_command_pool;
 
   shader_t *primitive_shader;
+  // 3D primitives are not sorted: the depth buffer resolves them, so they need
+  // no index buffer and no queue, just a vertex stream flushed once per frame.
+  shader_t *primitive3d_shader;
+  buffer_t dynamic_vertex_buffer3d;
+  primitive3d_vertex_t *vertex3d_buffer_ptr;
+  uint32_t primitive3d_vertex_count;
   buffer_t dynamic_vertex_buffer;
   buffer_t dynamic_index_buffer;
   primitive_vertex_t *vertex_buffer_ptr;
@@ -311,6 +353,9 @@ struct renderer_state_t {
   VkDeviceSize min_ubo_alignment;
 
   camera_t camera;
+  // Viewport camera for a 3D game: an orbit around a point, which is what an
+  // editor wants for inspecting a run from the outside.
+  camera3_t camera3;
   float lod_bias;
   texture_t *default_texture;
   gfx_handler_t *gfx;
@@ -357,6 +402,8 @@ void renderer_unlock(void);
 
 
 void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_layers, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory);
+VkImageView create_image_view_aspect(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels,
+                                     uint32_t layer_count, VkImageAspectFlags aspect);
 VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count);
 VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
 
@@ -382,6 +429,21 @@ bool renderer_update_texture_layer(gfx_handler_t *h, texture_t *tex, uint32_t la
 
 // Hands a texture's contents to a game module that renders with its own
 // renderer on this device, and parks it in the layout that module draws into.
+// 3D primitives. World-space, depth-tested, no z argument: submit order does
+// not matter because the depth buffer decides what is in front.
+void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float thickness);
+void renderer_submit_triangle3(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec4 color);
+void renderer_submit_box3(gfx_handler_t *h, vec3 center, vec3 size, vec4 color, bool wire);
+// Builds the view-projection the 3D paths render with, from the orbit camera.
+void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out);
+void renderer_camera3_eye(gfx_handler_t *h, vec3 out);
+// Where the camera is looking, as a unit vector. Movement and the view both
+// derive from it, so the two can never disagree.
+void renderer_camera3_forward(gfx_handler_t *h, vec3 out);
+// Swaps between orbit and freecam, carrying the current view across so the
+// image does not jump at the moment of switching.
+void renderer_camera3_toggle_free(gfx_handler_t *h);
+
 bool renderer_mark_texture_external(gfx_handler_t *h, texture_t *tex);
 // An atlas that samples `src` live rather than copying it, for drawing an image
 // whose contents change after creation.

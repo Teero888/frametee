@@ -20,6 +20,7 @@ typedef struct pipeline_cache_entry_t pipeline_cache_entry_t;
 typedef struct sprite_definition_t sprite_definition_t;
 typedef struct map_buffer_object_t map_buffer_object_t;
 typedef struct primitive_vertex_t primitive_vertex_t;
+typedef struct primitive3d_vertex_t primitive3d_vertex_t;
 typedef struct render_command_t render_command_t;
 typedef struct render_queue_t render_queue_t;
 typedef struct renderer_state_t renderer_state_t;
@@ -31,6 +32,7 @@ typedef struct texture_t texture_t;
 typedef struct vertex_t vertex_t;
 typedef struct shader_t shader_t;
 typedef struct camera_t camera_t;
+typedef struct camera3_t camera3_t;
 typedef struct buffer_t buffer_t;
 typedef struct mesh_t mesh_t;
 

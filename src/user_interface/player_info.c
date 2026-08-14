@@ -56,6 +56,7 @@ void render_player_info(struct gfx_handler_t *h) {
         case FT_VALUE_INT: igText("%s: %lld %s", label, (long long)value.as.i, unit); break;
         case FT_VALUE_FLOAT: igText("%s: %.3f %s", label, value.as.f, unit); break;
         case FT_VALUE_VEC2: igText("%s: %.2f, %.2f %s", label, value.as.v.x, value.as.v.y, unit); break;
+        case FT_VALUE_VEC3: igText("%s: %.2f, %.2f, %.2f %s", label, value.as.v3.x, value.as.v3.y, value.as.v3.z, unit); break;
         case FT_VALUE_STRING: igText("%s: %s", label, value.as.s ? value.as.s : ""); break;
         default: break;
         }

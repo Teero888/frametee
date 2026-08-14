@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 9;
+pub const FT_GAME_ABI_VERSION: u32 = 10;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -40,6 +40,14 @@ pub const FT_LOG_INFO: c_int = 1;
 pub struct ft_vec2 {
     pub x: f32,
     pub y: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub struct ft_vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }
 
 #[repr(C)]
@@ -129,6 +137,8 @@ pub struct ft_game_variant {
 pub struct ft_game_constraints {
     pub struct_size: u32,
     pub caps: u32,
+    /// FT_DIMENSIONS_2D / _3D. Zero means a plane.
+    pub dimensions: u32,
     pub min_players: i32,
     pub max_players: i32,
     pub ticks_per_second: i32,
@@ -192,6 +202,14 @@ pub struct ft_camera {
     pub mode: u32,
     pub viewport: ft_vec2,
     pub visible: ft_rect,
+    // Filled only for a game that declared three dimensions.
+    pub eye: ft_vec3,
+    pub target: ft_vec3,
+    pub up: ft_vec3,
+    pub fov_y: f32,
+    pub near_z: f32,
+    pub far_z: f32,
+    pub view_proj: [f32; 16],
 }
 
 #[repr(C)]
@@ -339,6 +357,16 @@ pub struct ft_engine_api {
     >,
     pub draw_triangle: *const c_void,
     pub draw_text: *const c_void,
+
+    // The header declares the 3D primitives here, between draw_text and
+    // draw_instances. Position is the contract: appending them at the end
+    // instead shifts every later entry and the module calls the wrong function.
+    pub draw_line3:
+        Option<unsafe extern "C" fn(a: ft_vec3, b: ft_vec3, color: ft_color, thickness: f32)>,
+    pub draw_triangle3:
+        Option<unsafe extern "C" fn(a: ft_vec3, b: ft_vec3, c: ft_vec3, color: ft_color)>,
+    pub draw_box3:
+        Option<unsafe extern "C" fn(center: ft_vec3, size: ft_vec3, color: ft_color, wire: bool)>,
     pub draw_instances: *const c_void,
     pub draw_mesh: *const c_void,
 
