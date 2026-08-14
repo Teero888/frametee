@@ -13,13 +13,15 @@ single symbol. It links no engine code, shares no allocator, and needs no build
 system of ours, so it can be written in any language that can produce a
 C-callable shared library.
 
-Three modules ship in [`games/`](../games), deliberately in three languages:
+Four modules ship in [`games/`](../games), deliberately in different languages
+and different dimensions:
 
 | Module | Language | What it shows |
 | --- | --- | --- |
 | `ddnet` | C | The real one: DDNet physics, four rulesets, up to 64 players |
 | `example_platformer` | C++ / raylib | A complete fixed-player platformer using raylib math, colours and collision |
 | `example_rust` | Rust / Bevy | A deterministic Bevy ECS world stepped through an ordered schedule |
+| `example_cube` | C | A 3D game: a volume, an orbit camera and depth-tested primitives |
 
 ```
 $ frametee --list-games
@@ -210,13 +212,44 @@ C++ and Rust. The engine length-delimits these blobs and never interprets them.
 
 ---
 
+## Two dimensions or three
+
+A game says which world it lives in through `ft_game_constraints.dimensions`.
+Leave it zero and the game is a plane, which is what every module written before
+this existed expects; set `FT_DIMENSIONS_3D` and three things change:
+
+* The viewport camera gains two modes, toggled with `F` (rebindable, listed
+  under Camera):
+  * **Orbit** — right-drag to turn, wheel to pull in and out, framed on the
+    level's bounds, which a 3D game describes as its ground plane. Right for
+    watching a run from outside.
+  * **Freecam** — right-drag to look, `WASD` to fly, `E`/`Space` and
+    `Q`/`Ctrl` for world up and down, `Shift` to sprint, wheel to trim speed.
+    The only way to get inside the geometry or look from somewhere the orbit
+    cannot reach.
+
+  Switching carries the current view across, so the image never jumps.
+* The renderer builds a perspective view-projection and turns on depth testing,
+  so the `*3` primitives are resolved by the depth buffer rather than by a sort
+  key. There is no `z` argument on them for that reason.
+* `ft_camera` carries `eye`, `target`, `up`, the field of view and the exact
+  `view_proj` the engine renders with, so a module drawing with its own device
+  can line its frame up with the engine's own primitives.
+
+Positions in a volume are `FT_VALUE_VEC3`, which the inspector, the starting
+state overrides and the project format all understand.
+
+The 2D and 3D paths are independent: a 3D game may still use the plane
+primitives for screen-space overlays, and a 2D game pays nothing for any of it.
+
 ## Rendering
 
 The engine owns the graphics API; the game owns what goes through it. A module
 draws through `ft_engine_api`, which offers, in rising order of power:
 
 1. **Primitives** — `draw_rect`, `draw_circle`, `draw_line`, `draw_triangle`,
-   `draw_text`. Enough for a whole game, as the two examples show.
+   `draw_text` in the plane, and `draw_line3`, `draw_triangle3`, `draw_box3` in
+   a volume. Enough for a whole game, as the examples show.
 2. **Sprite atlases** — `texture_create` + `atlas_create`, then `draw_sprites`
    with an array of instances. The engine batches every draw sharing an atlas,
    which is how a game gets thousands of particles or tiles per frame without

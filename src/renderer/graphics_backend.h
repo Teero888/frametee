@@ -120,6 +120,14 @@ struct gfx_handler_t {
   VkRenderPass offscreen_render_pass;
   // ImGui texture id returned by ImGui_ImplVulkan_AddTexture
   ImTextureRef *offscreen_texture;
+  // Depth for the offscreen pass. A 2D game never touches it — its draws are
+  // ordered by the z the game supplies — but a 3D game's geometry has to be
+  // resolved by depth, so the attachment always exists and 2D pipelines simply
+  // leave the test off.
+  VkImage offscreen_depth_image;
+  VkDeviceMemory offscreen_depth_memory;
+  VkImageView offscreen_depth_view;
+  VkFormat offscreen_depth_format;
   uint32_t offscreen_width;
   uint32_t offscreen_height;
   bool offscreen_initialized;

@@ -29,8 +29,18 @@ static bool combo_blocked_by_ui(const key_combo_t *combo) {
   return igGetIO_Nil()->WantTextInput;
 }
 
+static bool key_is_ctrl(ImGuiKey key) { return key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl; }
+static bool key_is_shift(ImGuiKey key) { return key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift; }
+static bool key_is_alt(ImGuiKey key) { return key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt; }
+
 static bool combo_modifiers_match(const key_combo_t *combo) {
-  return combo->ctrl == input_ctrl_down() && combo->alt == input_alt_down() && combo->shift == input_shift_down();
+  // A bind whose key is itself a modifier implies that modifier is held: asking
+  // for Shift and then rejecting the match because Shift is down is how a
+  // modifier-only bind ends up never firing.
+  const bool ctrl = combo->ctrl || key_is_ctrl(combo->key);
+  const bool shift = combo->shift || key_is_shift(combo->key);
+  const bool alt = combo->alt || key_is_alt(combo->key);
+  return ctrl == input_ctrl_down() && alt == input_alt_down() && shift == input_shift_down();
 }
 
 // check if a key combination is pressed for single-press actions
@@ -42,6 +52,27 @@ bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
   if (button != -1) return input_mouse_pressed(button);
 
   return input_key_pressed(input_glfw_key_from_imgui(combo->key), repeat);
+}
+
+// Held, ignoring modifiers the bind did not ask for. Exact matching is right
+// for a discrete shortcut, where Ctrl+S must not also fire S, but wrong for
+// anything held continuously: a freecam's forward key has to keep working while
+// sprint or descend — themselves modifiers — are held down.
+static bool combo_modifiers_satisfied(const key_combo_t *combo) {
+  if ((combo->ctrl || key_is_ctrl(combo->key)) && !input_ctrl_down()) return false;
+  if ((combo->shift || key_is_shift(combo->key)) && !input_shift_down()) return false;
+  if ((combo->alt || key_is_alt(combo->key)) && !input_alt_down()) return false;
+  return true;
+}
+
+bool is_key_combo_held(const key_combo_t *combo) {
+  if (combo->key == ImGuiKey_None) return false;
+  if (!combo_modifiers_satisfied(combo) || combo_blocked_by_ui(combo)) return false;
+
+  int button = input_glfw_button_from_imgui(combo->key);
+  if (button != -1) return input_mouse_down(button);
+
+  return input_key_down(input_glfw_key_from_imgui(combo->key));
 }
 
 // check if a key combination is held down
@@ -108,6 +139,15 @@ bool keybinds_is_action_pressed(keybind_manager_t *kb, action_t action, bool rep
   for (int i = 0; i < kb->bind_count; i++) {
     if (kb->bindings[i].action_id == action) {
       if (is_key_combo_pressed(&kb->bindings[i].combo, repeat)) return true;
+    }
+  }
+  return false;
+}
+
+bool keybinds_is_action_held(keybind_manager_t *kb, action_t action) {
+  for (int i = 0; i < kb->bind_count; i++) {
+    if (kb->bindings[i].action_id == action) {
+      if (is_key_combo_held(&kb->bindings[i].combo)) return true;
     }
   }
   return false;
@@ -187,6 +227,14 @@ void keybinds_init(keybind_manager_t *manager) {
   set_action_info(manager, ACTION_TOGGLE_LINKED_COPY, "toggle_linked_copy", "Toggle Linked Input Copy", "Recording");
   set_action_info(manager, ACTION_ZOOM_IN, "zoom_in", "Zoom in", "Camera");
   set_action_info(manager, ACTION_ZOOM_OUT, "zoom_out", "Zoom out", "Camera");
+  set_action_info(manager, ACTION_TOGGLE_FREECAM, "toggle_freecam", "Toggle freecam (3D)", "Camera");
+  set_action_info(manager, ACTION_FREECAM_FORWARD, "freecam_forward", "Freecam forward", "Camera");
+  set_action_info(manager, ACTION_FREECAM_BACK, "freecam_back", "Freecam back", "Camera");
+  set_action_info(manager, ACTION_FREECAM_LEFT, "freecam_left", "Freecam left", "Camera");
+  set_action_info(manager, ACTION_FREECAM_RIGHT, "freecam_right", "Freecam right", "Camera");
+  set_action_info(manager, ACTION_FREECAM_UP, "freecam_up", "Freecam up", "Camera");
+  set_action_info(manager, ACTION_FREECAM_DOWN, "freecam_down", "Freecam down", "Camera");
+  set_action_info(manager, ACTION_FREECAM_FAST, "freecam_fast", "Freecam sprint", "Camera");
 
   set_action_info(manager, ACTION_SWITCH_TRACK_1, "switch_track_1", "Switch to Track 1", "Tracks");
   set_action_info(manager, ACTION_SWITCH_TRACK_2, "switch_track_2", "Switch to Track 2", "Tracks");
@@ -226,6 +274,16 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_TOGGLE_LINKED_COPY, (key_combo_t){ImGuiKey_R, false, false, false});
   keybinds_add(manager, ACTION_ZOOM_IN, (key_combo_t){ImGuiKey_Equal, false, false, false});
   keybinds_add(manager, ACTION_ZOOM_OUT, (key_combo_t){ImGuiKey_Minus, false, false, false});
+  keybinds_add(manager, ACTION_TOGGLE_FREECAM, (key_combo_t){ImGuiKey_F, false, false, false});
+  keybinds_add(manager, ACTION_FREECAM_FORWARD, (key_combo_t){ImGuiKey_W, false, false, false});
+  keybinds_add(manager, ACTION_FREECAM_BACK, (key_combo_t){ImGuiKey_S, false, false, false});
+  keybinds_add(manager, ACTION_FREECAM_LEFT, (key_combo_t){ImGuiKey_A, false, false, false});
+  keybinds_add(manager, ACTION_FREECAM_RIGHT, (key_combo_t){ImGuiKey_D, false, false, false});
+  // Two defaults each for up and down: the pair a flying camera usually uses,
+  // and the pair a hand already on WASD can reach.
+  keybinds_add(manager, ACTION_FREECAM_UP, (key_combo_t){ImGuiKey_Space, false, false, false});
+  keybinds_add(manager, ACTION_FREECAM_DOWN, (key_combo_t){ImGuiKey_LeftShift, false, false, false});
+  keybinds_add(manager, ACTION_FREECAM_FAST, (key_combo_t){ImGuiKey_LeftCtrl, false, false, false});
 
   for (int i = 0; i < 9; ++i) {
     keybinds_add(manager, ACTION_SWITCH_TRACK_1 + i, (key_combo_t){ImGuiKey_1 + i, false, true, false});
@@ -545,6 +603,11 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
             new_combo.ctrl = input_ctrl_down();
             new_combo.alt = input_alt_down();
             new_combo.shift = input_shift_down();
+            // Binding a modifier on its own records it as the key, not as the
+            // key and its own flag, which would read back as "Shift+Shift".
+            if (key_is_ctrl(key)) new_combo.ctrl = false;
+            if (key_is_shift(key)) new_combo.shift = false;
+            if (key_is_alt(key)) new_combo.alt = false;
 
             // Check for perfect duplicate
             if (has_perfect_duplicate(manager, manager->action_to_rebind, new_combo)) {

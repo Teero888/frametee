@@ -50,6 +50,17 @@ typedef enum {
   // camera
   ACTION_ZOOM_IN,
   ACTION_ZOOM_OUT,
+  // 3D only: swaps the viewport between orbiting a point and flying freely,
+  // and drives the freecam once it is on. These are held rather than tapped,
+  // so they are read with keybinds_is_action_down.
+  ACTION_TOGGLE_FREECAM,
+  ACTION_FREECAM_FORWARD,
+  ACTION_FREECAM_BACK,
+  ACTION_FREECAM_LEFT,
+  ACTION_FREECAM_RIGHT,
+  ACTION_FREECAM_UP,
+  ACTION_FREECAM_DOWN,
+  ACTION_FREECAM_FAST,
 
   ACTION_ENGINE_COUNT,
   ACTION_GAME_FIRST = ACTION_ENGINE_COUNT,
@@ -106,6 +117,7 @@ const char *keybind_get_combo_string(const key_combo_t *combo);
 
 bool is_key_combo_pressed(const key_combo_t *combo, bool repeat);
 bool is_key_combo_down(const key_combo_t *combo);
+bool is_key_combo_held(const key_combo_t *combo);
 
 // Helper functions for multiple bindings
 void keybinds_add(keybind_manager_t *kb, action_t action, key_combo_t combo);
@@ -113,6 +125,10 @@ void keybinds_remove(keybind_manager_t *kb, int index); // Index in the global a
 void keybinds_clear_action(keybind_manager_t *kb, action_t action);
 bool keybinds_is_action_pressed(keybind_manager_t *kb, action_t action, bool repeat);
 bool keybinds_is_action_down(keybind_manager_t *kb, action_t action);
+// Held, but tolerant of modifiers the bind did not ask for. For actions that
+// run continuously and may overlap with a modifier bind, such as moving a
+// freecam while sprinting.
+bool keybinds_is_action_held(keybind_manager_t *kb, action_t action);
 int keybinds_get_count_for_action(keybind_manager_t *kb, action_t action);
 keybind_entry_t *keybinds_get_binding_for_action(keybind_manager_t *kb, action_t action, int n); // Get n-th binding for action
 int keybinds_get_global_index_for_action(keybind_manager_t *kb, action_t action, int n);

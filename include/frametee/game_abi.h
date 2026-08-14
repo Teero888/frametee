@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 9u
+#define FT_GAME_ABI_VERSION 10u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -84,6 +84,10 @@ typedef struct ft_vec2 {
   float x, y;
 } ft_vec2;
 
+typedef struct ft_vec3 {
+  float x, y, z;
+} ft_vec3;
+
 typedef struct ft_rect {
   float x, y, w, h;
 } ft_rect;
@@ -101,6 +105,7 @@ typedef enum ft_value_kind {
   FT_VALUE_INT = 1,
   FT_VALUE_FLOAT = 2,
   FT_VALUE_VEC2 = 3,
+  FT_VALUE_VEC3 = 5,
   FT_VALUE_STRING = 4,
 } ft_value_kind;
 
@@ -111,6 +116,7 @@ typedef struct ft_value {
     int64_t i;
     double f;
     ft_vec2 v;
+    ft_vec3 v3;
     const char *s;
   } as;
 } ft_value;
@@ -214,10 +220,23 @@ typedef struct ft_game_variant {
 /* What the game allows the engine to do. The engine treats these as hard
  * limits: it clamps its own UI and refuses operations that would violate them,
  * so a game never has to defend against impossible configurations. */
+/* Whether a game's world is a plane or a volume. This is the one thing the
+ * engine cannot infer: it decides how the viewport camera behaves, which
+ * projection the renderer builds, and whether depth testing is on. A game that
+ * leaves it zero is treated as 2D, which is what every game written before this
+ * existed expects. */
+typedef enum ft_dimensions {
+  FT_DIMENSIONS_2D = 0,
+  FT_DIMENSIONS_3D = 3,
+} ft_dimensions;
+
 typedef struct ft_game_constraints {
   uint32_t struct_size;
 
   uint32_t caps; /* bitmask of ft_game_caps */
+
+  /* Plane or volume. See ft_dimensions. */
+  ft_dimensions dimensions;
 
   /* Player-count envelope. Setting both to 1 pins the game to exactly one
    * player and the engine drops all multi-player affordances. max_players
@@ -749,8 +768,25 @@ typedef struct ft_camera {
    * impossible to do correctly from the outside. */
   ft_vec2 viewport;
   /* World-space rectangle currently visible, already computed for the common
-   * case. Cull against this rather than deriving it. */
+   * case. Cull against this rather than deriving it. Meaningful for a 2D game;
+   * a 3D one culls against the frustum implied by view_proj instead. */
   ft_rect visible;
+
+  /* --- 3D ---
+   * Filled for a game that declared FT_DIMENSIONS_3D, and left zeroed
+   * otherwise. `position` and `zoom` above still track the camera's ground
+   * position and distance, so an editor control that only understands the
+   * plane keeps working. */
+  ft_vec3 eye;    /* camera position in world space */
+  ft_vec3 target; /* the point it looks at */
+  ft_vec3 up;
+  float fov_y;  /* vertical field of view, radians */
+  float near_z;
+  float far_z;
+  /* View-projection the engine renders with, column-major, ready to hand to a
+   * shader. A game rendering with its own device needs exactly this to line its
+   * frame up with the engine's own drawing. */
+  float view_proj[16];
 } ft_camera;
 
 /* Read-only snapshot of engine state a module may want while drawing or
@@ -813,6 +849,19 @@ typedef struct ft_engine_api {
   void (*draw_circle)(float z, ft_vec2 center, float radius, ft_color color, uint32_t segments);
   void (*draw_triangle)(float z, ft_vec2 a, ft_vec2 b, ft_vec2 c, ft_color color);
   void (*draw_text)(float z, ft_vec2 pos, float size, ft_color color, const char *text);
+
+  /* --- drawing in three dimensions (only valid inside render callbacks) ---
+   * The same primitives, positioned in the volume a 3D game lives in. These
+   * are depth-tested against each other and against anything else drawn in 3D,
+   * so there is no `z` ordering argument: depth comes from the geometry. A 2D
+   * game never calls them, and a 3D game can still use the 2D calls above for
+   * screen-space overlays. */
+  void (*draw_line3)(ft_vec3 a, ft_vec3 b, ft_color color, float thickness);
+  void (*draw_triangle3)(ft_vec3 a, ft_vec3 b, ft_vec3 c, ft_color color);
+  /* An axis-aligned box given by its centre and full extents. Filled when
+   * `wire` is false, twelve edges when true — the shape an editor wants for
+   * bounds, triggers and hitboxes. */
+  void (*draw_box3)(ft_vec3 center, ft_vec3 size, ft_color color, bool wire);
   void (*draw_instances)(ft_pipeline *pipeline, float z, ft_texture *const *textures, uint32_t texture_count,
                          const void *instances, uint32_t count);
   void (*draw_mesh)(ft_pipeline *pipeline, float z, ft_mesh *mesh, ft_texture *const *textures, uint32_t texture_count,

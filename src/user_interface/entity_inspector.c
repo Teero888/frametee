@@ -20,6 +20,9 @@ static void format_value(const ft_value *value, const char *unit, char *out, siz
   case FT_VALUE_INT: snprintf(out, out_size, "%lld%s%s", (long long)value->as.i, *suffix ? " " : "", suffix); break;
   case FT_VALUE_FLOAT: snprintf(out, out_size, "%.4f%s%s", value->as.f, *suffix ? " " : "", suffix); break;
   case FT_VALUE_VEC2: snprintf(out, out_size, "%.4f, %.4f%s%s", value->as.v.x, value->as.v.y, *suffix ? " " : "", suffix); break;
+  case FT_VALUE_VEC3:
+    snprintf(out, out_size, "%.4f, %.4f, %.4f%s%s", value->as.v3.x, value->as.v3.y, value->as.v3.z, *suffix ? " " : "", suffix);
+    break;
   case FT_VALUE_STRING: snprintf(out, out_size, "%s", value->as.s ? value->as.s : ""); break;
   default: snprintf(out, out_size, "?"); break;
   }
@@ -43,7 +46,15 @@ static void snapshot_entity(entity_inspector_t *inspector, game_host_t *host, co
     if (!gh_entity_prop_get(host, world, entity_class, index, i, &value)) continue;
 
     // Remember where it is, so the viewport can ring the selection.
-    if (value.kind == FT_VALUE_VEC2 && desc->props[i].id && strcmp(desc->props[i].id, "position") == 0) inspector->position = value.as.v;
+    if (desc->props[i].id && strcmp(desc->props[i].id, "position") == 0) {
+      if (value.kind == FT_VALUE_VEC2) {
+        inspector->position = value.as.v;
+        inspector->position_is_3d = false;
+      } else if (value.kind == FT_VALUE_VEC3) {
+        inspector->position3 = value.as.v3;
+        inspector->position_is_3d = true;
+      }
+    }
 
     entity_prop_view_t *view = &inspector->props[inspector->prop_count++];
     snprintf(view->label, sizeof(view->label), "%s", desc->props[i].display_name ? desc->props[i].display_name : desc->props[i].id);
@@ -143,5 +154,12 @@ void entity_inspector_render(entity_inspector_t *inspector) {
 
 void entity_inspector_render_highlight(const entity_inspector_t *inspector, struct gfx_handler_t *gfx) {
   if (!inspector->valid || !inspector->show || !gfx) return;
+  if (inspector->position_is_3d) {
+    // A ring around a point means nothing in a volume, so the selection is
+    // marked with a wire box the depth buffer places correctly.
+    renderer_submit_box3(gfx, (vec3){inspector->position3.x, inspector->position3.y, inspector->position3.z}, (vec3){1.4f, 1.4f, 1.4f},
+                         (vec4){1.f, 0.9f, 0.2f, 0.9f}, true);
+    return;
+  }
   renderer_submit_circle_filled(gfx, 9.5f, (vec2){inspector->position.x, inspector->position.y}, 0.35f, (vec4){1.f, 0.9f, 0.2f, 0.5f}, 12);
 }

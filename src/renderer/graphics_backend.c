@@ -320,6 +320,9 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->offscreen_sampler = VK_NULL_HANDLE;
   handler->offscreen_framebuffer = VK_NULL_HANDLE;
   handler->offscreen_render_pass = VK_NULL_HANDLE;
+  handler->offscreen_depth_image = VK_NULL_HANDLE;
+  handler->offscreen_depth_memory = VK_NULL_HANDLE;
+  handler->offscreen_depth_view = VK_NULL_HANDLE;
   handler->offscreen_texture = NULL;
 
   if (init_window(handler) != 0) {
@@ -466,14 +469,15 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
   // Begin offscreen render pass (for game rendering)
   if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE && handler->offscreen_framebuffer != VK_NULL_HANDLE) {
-    VkClearValue clear = {.color = {.float32 = {handler->user_interface.bg_color[0], handler->user_interface.bg_color[1],
-                                                handler->user_interface.bg_color[2], 1.0f}}};
+    VkClearValue clears[2] = {{.color = {.float32 = {handler->user_interface.bg_color[0], handler->user_interface.bg_color[1],
+                                                     handler->user_interface.bg_color[2], 1.0f}}},
+                              {.depthStencil = {.depth = 1.0f, .stencil = 0}}};
     VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                                      .renderPass = handler->offscreen_render_pass,
                                      .framebuffer = handler->offscreen_framebuffer,
                                      .renderArea = {{0, 0}, {handler->offscreen_width, handler->offscreen_height}},
-                                     .clearValueCount = 1,
-                                     .pClearValues = &clear};
+                                     .clearValueCount = 2,
+                                     .pClearValues = clears};
     vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
   }
 
@@ -681,6 +685,23 @@ static void on_level_loaded(gfx_handler_t *handler) {
   ft_level_info info;
   if (gh_level_info(&handler->game_host, handler->level, &info) && info.bounds.w > 0.f && info.bounds.h > 0.f) {
     engine_api_set_world_extent(handler, info.bounds.w, info.bounds.h);
+    // A 3D game's bounds describe its ground plane, so the orbit camera frames
+    // that plane: centred on it, backed off far enough to see all of it, and
+    // looking slightly down. Without this the orbit sits at the origin and the
+    // level is off to one side.
+    if (game_is_3d(&handler->game_host)) {
+      camera3_t *c = &handler->renderer.camera3;
+      const float span = fmaxf(info.bounds.w, info.bounds.h);
+      c->target[0] = info.bounds.x + info.bounds.w * 0.5f;
+      c->target[1] = span * 0.2f;
+      c->target[2] = info.bounds.y + info.bounds.h * 0.5f;
+      c->distance = span * 1.6f;
+      c->far_z = fmaxf(c->far_z, span * 20.f);
+      // Crossing the level in a couple of seconds is a reasonable starting
+      // point; the wheel trims it from there while flying.
+      c->move_speed = span * 0.5f;
+      c->free_mode = false;
+    }
     snprintf(handler->user_interface.loaded_level_name, sizeof(handler->user_interface.loaded_level_name), "%s", info.name ? info.name : "level");
   } else {
     engine_api_set_world_extent(handler, 1.f, 1.f);
@@ -1059,10 +1080,27 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
       .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
   };
 
+  handler->offscreen_depth_format = VK_FORMAT_D32_SFLOAT;
+  VkAttachmentDescription depth_attachment = {
+      .format = handler->offscreen_depth_format,
+      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+      .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+      .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+  };
+  VkAttachmentReference depth_attachment_ref = {
+      .attachment = 1,
+      .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+  };
+
   VkSubpassDescription subpass = {
       .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
       .colorAttachmentCount = 1,
       .pColorAttachments = &color_attachment_ref,
+      .pDepthStencilAttachment = &depth_attachment_ref,
   };
 
   VkSubpassDependency dependency = {
@@ -1075,10 +1113,11 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
       .dependencyFlags = 0,
   };
 
+  const VkAttachmentDescription offscreen_attachments[2] = {color_attachment, depth_attachment};
   VkRenderPassCreateInfo rp_info = {
       .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-      .attachmentCount = 1,
-      .pAttachments = &color_attachment,
+      .attachmentCount = 2,
+      .pAttachments = offscreen_attachments,
       .subpassCount = 1,
       .pSubpasses = &subpass,
       .dependencyCount = 1,
@@ -1091,14 +1130,23 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
     return 1;
   }
 
+  // Depth image for that attachment, matching the colour target's extent.
+  create_image(handler, handler->offscreen_width, handler->offscreen_height, 1, 1, handler->offscreen_depth_format,
+               VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+               &handler->offscreen_depth_image, &handler->offscreen_depth_memory);
+  handler->offscreen_depth_view =
+      create_image_view_aspect(handler, handler->offscreen_depth_image, handler->offscreen_depth_format, VK_IMAGE_VIEW_TYPE_2D, 1, 1,
+                               VK_IMAGE_ASPECT_DEPTH_BIT);
+
   // Create framebuffer
-  VkImageView attachments[1];
+  VkImageView attachments[2];
   attachments[0] = handler->offscreen_image_view;
+  attachments[1] = handler->offscreen_depth_view;
 
   VkFramebufferCreateInfo fb_info = {
       .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
       .renderPass = handler->offscreen_render_pass,
-      .attachmentCount = 1,
+      .attachmentCount = 2,
       .pAttachments = attachments,
       .width = width,
       .height = height,
@@ -1142,6 +1190,18 @@ static void destroy_offscreen_resources(gfx_handler_t *handler) {
   if (handler->offscreen_sampler != VK_NULL_HANDLE) {
     vkDestroySampler(handler->g_device, handler->offscreen_sampler, handler->g_allocator);
     handler->offscreen_sampler = VK_NULL_HANDLE;
+  }
+  if (handler->offscreen_depth_view != VK_NULL_HANDLE) {
+    vkDestroyImageView(handler->g_device, handler->offscreen_depth_view, handler->g_allocator);
+    handler->offscreen_depth_view = VK_NULL_HANDLE;
+  }
+  if (handler->offscreen_depth_image != VK_NULL_HANDLE) {
+    vkDestroyImage(handler->g_device, handler->offscreen_depth_image, handler->g_allocator);
+    handler->offscreen_depth_image = VK_NULL_HANDLE;
+  }
+  if (handler->offscreen_depth_memory != VK_NULL_HANDLE) {
+    vkFreeMemory(handler->g_device, handler->offscreen_depth_memory, handler->g_allocator);
+    handler->offscreen_depth_memory = VK_NULL_HANDLE;
   }
   if (handler->offscreen_image_view != VK_NULL_HANDLE) {
     vkDestroyImageView(handler->g_device, handler->offscreen_image_view, handler->g_allocator);

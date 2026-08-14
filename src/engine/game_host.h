@@ -85,6 +85,9 @@ bool game_can_remove_player(const game_host_t *host, int current_count);
 // engine hides its add/remove affordances entirely in that case.
 bool game_has_fixed_players(const game_host_t *host);
 int game_ticks_per_second(const game_host_t *host);
+// Whether the active game's world is a volume. Decides the viewport camera, the
+// projection the renderer builds and whether depth testing is on.
+bool game_is_3d(const game_host_t *host);
 float game_units_per_tile(const game_host_t *host);
 float game_default_camera_height(const game_host_t *host);
 

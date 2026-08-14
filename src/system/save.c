@@ -391,6 +391,8 @@ static bool write_value(byte_buffer_t *buffer, const starting_override_t *overri
   case FT_VALUE_INT: return buffer_i64(buffer, value->as.i);
   case FT_VALUE_FLOAT: return buffer_f64(buffer, value->as.f);
   case FT_VALUE_VEC2: return buffer_f32(buffer, value->as.v.x) && buffer_f32(buffer, value->as.v.y);
+  case FT_VALUE_VEC3:
+    return buffer_f32(buffer, value->as.v3.x) && buffer_f32(buffer, value->as.v3.y) && buffer_f32(buffer, value->as.v3.z);
   case FT_VALUE_STRING: {
     const char *text = value->as.s ? value->as.s : override->string_value;
     if (strlen(text) >= MAX_STARTING_STRING) return false;
@@ -594,6 +596,9 @@ static bool read_value(byte_reader_t *reader, starting_override_t *override) {
   case FT_VALUE_FLOAT: return reader_f64(reader, &override->value.as.f);
   case FT_VALUE_VEC2:
     return reader_f32(reader, &override->value.as.v.x) && reader_f32(reader, &override->value.as.v.y);
+  case FT_VALUE_VEC3:
+    return reader_f32(reader, &override->value.as.v3.x) && reader_f32(reader, &override->value.as.v3.y) &&
+           reader_f32(reader, &override->value.as.v3.z);
   case FT_VALUE_STRING:
     if (!reader_string(reader, override->string_value, sizeof(override->string_value))) return false;
     override->value.as.s = override->string_value;
