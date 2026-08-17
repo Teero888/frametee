@@ -1,12 +1,17 @@
 // Loading a challenge and turning the validator's render scene into something
 // the engine's immediate 3D primitives can draw.
 //
-// ForeverValidator hands over the real authored geometry: meshes, instances and
-// materials. It does not hand over pixels, and the material paths come back
-// empty, so colour here is classified from the physical surface id and the
-// lighting is baked into each triangle at load. The engine's 3D path is flat
-// unlit vertex colour drawn one triangle at a time, so anything that can be
-// decided once must be decided here.
+// ForeverValidator hands over the real authored geometry: meshes, instances,
+// materials and texture coordinates. What it does not hand over is which
+// picture goes on a surface, because its material paths come back empty — so
+// that one link is made separately (tmnf_scene.cpp) and the texture itself is
+// decoded from the installed game (tmnf_texture.cpp). A surface whose picture
+// cannot be found falls back to a colour classified from its physical surface
+// id, which is the distinction a driver cares about anyway.
+//
+// The engine's 3D path draws one triangle at a time with no lighting of its
+// own, so the sun is baked into every triangle here at load and costs nothing
+// per frame.
 
 #include "tmnf_internal.h"
 
@@ -78,10 +83,10 @@ ft_color HashedColor(std::uint64_t id) {
                   0.44f + 0.16f * std::sin(hue * 2.f * kPi + 4.188f), 1.f};
 }
 
-// What a surface looks like. The scene carries no texture paths and no material
-// colours — every path field comes back empty — so the only thing to go on is
-// the physical surface id, which is exactly the distinction a driver cares
-// about anyway: what the car will do when it touches this.
+// What a surface looks like when its picture could not be found. The scene
+// carries no material colours, so the only thing to go on is the physical
+// surface id, which is exactly the distinction a driver cares about anyway:
+// what the car will do when it touches this.
 //
 // Block names are deliberately not used to colour anything. A block name names
 // a whole thirty-two metre tile, so keying a colour on "this is the start line"
@@ -92,54 +97,37 @@ struct MaterialLook {
   bool emissive = false;
 };
 
-MaterialLook ClassifyMaterial(const fve::PhysicsSandboxRenderMaterial *material) {
+MaterialLook ClassifyMaterial(const TrackMaterial &material, std::uint32_t index) {
   MaterialLook look;
-  if (!material) {
-    look.color = ft_color{0.5f, 0.5f, 0.52f, 1.f};
-    return look;
-  }
-
-  if (material->water) {
+  if (material.water) {
     look.color = ft_color{0.16f, 0.40f, 0.60f, 0.72f};
     return look;
   }
 
   bool known = false;
-  look.color = SurfaceColor(material->surfaceMaterialId, &known);
+  look.color = SurfaceColor(material.surface, &known);
   if (known) {
     // A booster is the one surface that has to be seen before it is driven on.
-    look.emissive = material->surfaceMaterialId == 26u;
+    look.emissive = material.surface == 26u;
     return look;
   }
 
   // An unrecognised surface still gets a colour of its own rather than joining
   // everything else in the same grey.
-  look.color = HashedColor(material->id);
+  look.color = HashedColor(index);
   return look;
 }
 
 // --- geometry ----------------------------------------------------------------
 
-ft_vec3 TransformPoint(const fve::PhysicsSandboxTransform &t, const fv::Vector3 &p) {
-  return ft_vec3{
-      t.basisX.x * p.x + t.basisY.x * p.y + t.basisZ.x * p.z + t.translation.x,
-      t.basisX.y * p.x + t.basisY.y * p.y + t.basisZ.y * p.z + t.translation.y,
-      t.basisX.z * p.x + t.basisY.z * p.y + t.basisZ.z * p.z + t.translation.z,
-  };
+ft_vec3 TransformNormal(const TrackTransform &t, ft_vec3 n) {
+  return Add(Add(Scale(t.basis_x, n.x), Scale(t.basis_y, n.y)), Scale(t.basis_z, n.z));
 }
 
-ft_vec3 TransformNormal(const fve::PhysicsSandboxTransform &t, const fv::Vector3 &n) {
-  return ft_vec3{
-      t.basisX.x * n.x + t.basisY.x * n.y + t.basisZ.x * n.z,
-      t.basisX.y * n.x + t.basisY.y * n.y + t.basisZ.y * n.z,
-      t.basisX.z * n.x + t.basisY.z * n.y + t.basisZ.z * n.z,
-  };
-}
+ft_vec3 TransformPoint(const TrackTransform &t, ft_vec3 p) { return Add(TransformNormal(t, p), t.translation); }
 
-float BasisDeterminant(const fve::PhysicsSandboxTransform &t) {
-  return t.basisX.x * (t.basisY.y * t.basisZ.z - t.basisY.z * t.basisZ.y) -
-         t.basisY.x * (t.basisX.y * t.basisZ.z - t.basisX.z * t.basisZ.y) +
-         t.basisZ.x * (t.basisX.y * t.basisY.z - t.basisX.z * t.basisY.y);
+float BasisDeterminant(const TrackTransform &t) {
+  return Dot(t.basis_x, Cross(t.basis_y, t.basis_z));
 }
 
 // Lighting, baked once. A hemisphere term keeps undersides from going flat
@@ -150,18 +138,6 @@ ft_color ApplyLight(ft_color base, ft_vec3 normal, bool emissive) {
   const float sky = 0.5f + 0.5f * normal.y;
   const float light = 0.26f + 0.30f * sky + 0.52f * sun;
   return ft_color{base.r * light, base.g * light, base.b * light, base.a};
-}
-
-bool ShouldDrawPurpose(fve::PhysicsSandboxScenePurpose purpose) {
-  switch (purpose) {
-  // Collision-only and editor-only objects have no business on screen: they
-  // are the invisible walls, gate triggers and placement helpers.
-  case fve::PhysicsSandboxScenePurpose::Clip:
-  case fve::PhysicsSandboxScenePurpose::Helper:
-  case fve::PhysicsSandboxScenePurpose::CheckpointTrigger:
-  case fve::PhysicsSandboxScenePurpose::DedicatedInitialCollision: return false;
-  default: return true;
-  }
 }
 
 // Möller-Trumbore, used only by the camera's line of sight.
@@ -268,7 +244,7 @@ std::string ResolveTracks(const ft_engine_api *api) {
     api->resolve_data_path("Tracks", buffer, sizeof(buffer));
     if (usable(buffer)) return buffer;
   }
-  for (const char *candidate : {"games/tmnf/Tracks", "../games/tmnf/Tracks"})
+  for (const char *candidate : {"games/tmnf/GameData/Tracks", "../games/tmnf/GameData/Tracks"})
     if (usable(candidate)) return candidate;
   return {};
 }
@@ -318,19 +294,9 @@ namespace {
 // environment is painted on.
 constexpr float kSceneryFootprint = 1500.f;
 
-bool IsDistantScenery(const fve::PhysicsSandboxRenderScene &scene, const fve::PhysicsSandboxRenderInstance &instance) {
-  if (instance.meshIndex >= scene.meshes.size()) return false;
-  const auto &mesh = scene.meshes[instance.meshIndex];
-
-  // The mesh already carries its own bounds; transforming the eight corners is
-  // enough and costs nothing next to walking every vertex.
+bool IsDistantScenery(const TrackMesh &mesh, const TrackInstance &instance) {
   Aabb box;
-  for (int i = 0; i < 8; ++i) {
-    const fv::Vector3 corner{(i & 1) ? mesh.boundsMax.x : mesh.boundsMin.x,
-                             (i & 2) ? mesh.boundsMax.y : mesh.boundsMin.y,
-                             (i & 4) ? mesh.boundsMax.z : mesh.boundsMin.z};
-    box.Add(TransformPoint(instance.worldTransform, corner));
-  }
+  for (const TrackVertex &vertex : mesh.vertices) box.Add(TransformPoint(instance.transform, vertex.position));
   if (!box.Valid()) return false;
   return box.mx.x - box.mn.x > kSceneryFootprint || box.mx.z - box.mn.z > kSceneryFootprint;
 }
@@ -356,9 +322,8 @@ constexpr float kSlabHeight = 2.0f;
 constexpr float kSlabFootprint = 4.0f;
 
 // Grass, dirt, sand and snow: the surfaces TrackMania draws as fields of cards.
-bool IsGroundSurface(const fve::PhysicsSandboxRenderMaterial *material) {
-  if (!material) return false;
-  switch (material->surfaceMaterialId) {
+bool IsGroundSurface(const TrackMaterial &material) {
+  switch (material.surface) {
   case 2:  // grass
   case 5:  // sand
   case 6:  // dirt
@@ -369,14 +334,13 @@ bool IsGroundSurface(const fve::PhysicsSandboxRenderMaterial *material) {
   }
 }
 
-bool AppendGroundSlab(const fve::PhysicsSandboxRenderMesh &mesh, const fve::PhysicsSandboxRenderInstance &instance,
-                      const fve::PhysicsSandboxRenderMaterial *material, ft_color color, std::vector<Triangle> &out,
-                      Aabb &bounds) {
+bool AppendGroundSlab(const TrackMesh &mesh, const TrackInstance &instance, const TrackMaterial &material,
+                      ft_color color, std::vector<Triangle> &out, Aabb &bounds) {
   if (!IsGroundSurface(material)) return false;
   if (mesh.indices.size() / 3u <= kSlabTriangleThreshold) return false;
 
   Aabb box;
-  for (const auto &vertex : mesh.vertices) box.Add(TransformPoint(instance.worldTransform, vertex.position));
+  for (const TrackVertex &vertex : mesh.vertices) box.Add(TransformPoint(instance.transform, vertex.position));
   if (!box.Valid()) return false;
   // Short, and wide enough that a quad is a fair description of it.
   if (box.mx.y - box.mn.y > kSlabHeight) return false;
@@ -388,9 +352,9 @@ bool AppendGroundSlab(const fve::PhysicsSandboxRenderMesh &mesh, const fve::Phys
   for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
     const std::uint32_t i0 = mesh.indices[i], i1 = mesh.indices[i + 1], i2 = mesh.indices[i + 2];
     if (i0 >= mesh.vertices.size() || i1 >= mesh.vertices.size() || i2 >= mesh.vertices.size()) continue;
-    const ft_vec3 a = TransformPoint(instance.worldTransform, mesh.vertices[i0].position);
-    const ft_vec3 b = TransformPoint(instance.worldTransform, mesh.vertices[i1].position);
-    const ft_vec3 c = TransformPoint(instance.worldTransform, mesh.vertices[i2].position);
+    const ft_vec3 a = TransformPoint(instance.transform, mesh.vertices[i0].position);
+    const ft_vec3 b = TransformPoint(instance.transform, mesh.vertices[i1].position);
+    const ft_vec3 c = TransformPoint(instance.transform, mesh.vertices[i2].position);
     const ft_vec3 face = Cross(Sub(b, a), Sub(c, a));
     const float area = Length(face) * 0.5f;
     if (area < 1e-6f) continue;
@@ -436,20 +400,19 @@ bool AppendGroundSlab(const fve::PhysicsSandboxRenderMesh &mesh, const fve::Phys
   return true;
 }
 
-void AppendInstance(const fve::PhysicsSandboxRenderScene &scene, const fve::PhysicsSandboxRenderInstance &instance,
+void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std::uint32_t layer,
                     std::vector<Triangle> &out, Aabb &bounds) {
-  if (instance.meshIndex >= scene.meshes.size()) return;
-  const auto &mesh = scene.meshes[instance.meshIndex];
-  const auto *material =
-      instance.materialIndex < scene.materials.size() ? &scene.materials[instance.materialIndex] : nullptr;
-  const MaterialLook look = ClassifyMaterial(material);
+  if (instance.mesh >= scene.meshes.size() || instance.material >= scene.materials.size()) return;
+  const TrackMesh &mesh = scene.meshes[instance.mesh];
+  const TrackMaterial &material = scene.materials[instance.material];
+  const MaterialLook look = ClassifyMaterial(material, instance.material);
 
   if (AppendGroundSlab(mesh, instance, material, look.color, out, bounds)) return;
 
   // A mirrored placement reverses triangle winding. Where the mesh carries
   // authored normals the winding is fixed per triangle against them instead,
   // which is exact; the determinant is the fallback for meshes that do not.
-  const bool mirrored = BasisDeterminant(instance.worldTransform) < 0.f;
+  const bool mirrored = BasisDeterminant(instance.transform) < 0.f;
 
   // Not reserve(): asking for exactly what is needed, once per instance, makes
   // the vector reallocate on every instance and turns a load into minutes.
@@ -465,35 +428,43 @@ void AppendInstance(const fve::PhysicsSandboxRenderScene &scene, const fve::Phys
     const auto &v2 = mesh.vertices[i2];
 
     Triangle tri;
-    tri.a = TransformPoint(instance.worldTransform, v0.position);
-    tri.b = TransformPoint(instance.worldTransform, v1.position);
-    tri.c = TransformPoint(instance.worldTransform, v2.position);
+    tri.a = TransformPoint(instance.transform, v0.position);
+    tri.b = TransformPoint(instance.transform, v1.position);
+    tri.c = TransformPoint(instance.transform, v2.position);
+    if (mesh.has_uv && layer != kNoTextureLayer) {
+      tri.layer = layer;
+      tri.uv[0] = v0.uv;
+      tri.uv[1] = v1.uv;
+      tri.uv[2] = v2.uv;
+    }
 
     ft_vec3 face = Cross(Sub(tri.b, tri.a), Sub(tri.c, tri.a));
     if (LengthSq(face) < 1e-12f) continue;
     ft_vec3 normal = Normalize(face);
 
-    if (mesh.hasNormals) {
+    if (mesh.has_normal) {
       // Authored normals say which way the surface faces no matter how the
       // indices are wound, so they decide both the shading and, by swapping the
       // last two corners when they disagree, the front face the renderer keeps.
-      const ft_vec3 authored = Normalize(TransformNormal(
-          instance.worldTransform,
-          fv::Vector3{v0.normal.x + v1.normal.x + v2.normal.x, v0.normal.y + v1.normal.y + v2.normal.y,
-                      v0.normal.z + v1.normal.z + v2.normal.z}));
+      const ft_vec3 authored =
+          Normalize(TransformNormal(instance.transform, Add(Add(v0.normal, v1.normal), v2.normal)));
       if (Dot(face, authored) < 0.f) {
         std::swap(tri.b, tri.c);
+        std::swap(tri.uv[1], tri.uv[2]);
         face = Scale(face, -1.f);
       }
       normal = authored;
     }
 
-    ft_color base = look.color;
-    if (mesh.hasVertexColors) {
+    // On a textured surface the colour is only the light: the picture is the
+    // appearance, and multiplying it by a guess at the appearance would be
+    // painting the same thing twice.
+    ft_color base = tri.layer != kNoTextureLayer ? ft_color{1.f, 1.f, 1.f, look.color.a} : look.color;
+    if (mesh.has_color) {
       // Authored vertex colour is what paints the stadium's own detail; it is
       // tinted rather than replaced so the surface still reads as its material.
-      const auto &c = v0.color;
-      base = MixColor(base, ft_color{base.r * c.x * 2.f, base.g * c.y * 2.f, base.b * c.z * 2.f, base.a}, 0.6f);
+      const ft_color &c = v0.color;
+      base = MixColor(base, ft_color{base.r * c.r * 2.f, base.g * c.g * 2.f, base.b * c.b * 2.f, base.a}, 0.6f);
     }
 
     tri.color = PackColor(ApplyLight(base, normal, look.emissive));
@@ -565,6 +536,14 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   // simulation actually pushes around rather than a guess at one.
   if (auto scene = game->sandbox->ReadScene()) level->car_shape = std::move(scene).Value().carEllipsoids;
 
+  // The installed packs, opened for what the sandbox never reads: the pictures.
+  // The environment's own pack holds the track, and the two shared ones hold
+  // what every environment draws from.
+  if (!game->packs_open.IsOpen()) {
+    if (const std::string pack = EnvironmentPackName(level->start.mapEnvironment); !pack.empty())
+      game->packs_open.Open(game->packs, {pack, VehiclePackName(level->start.vehicleModel), "Game", "Resource"});
+  }
+
   // The car's authored model. Decoding it costs about as much as one track
   // block, and the same car serves every track that uses it, so it is loaded
   // once and kept. A failure here is not a failure to open the track: the
@@ -572,8 +551,50 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   if (const std::string pack = VehiclePackName(level->start.vehicleModel);
       !pack.empty() && game->vehicle.pack != pack) {
     game->vehicle.pack = pack;
-    game->vehicle.loaded = LoadVehicleModel(game, pack, &game->vehicle);
+    game->vehicle.loaded = LoadVehicleModel(game, game->packs_open, game->textures, pack, &game->vehicle);
     if (!game->vehicle.loaded) game->vehicle.faces.clear();
+  }
+
+  // The track itself, decoded from the installed game rather than taken from
+  // the sandbox. The sandbox's own scene is the same geometry, but it carries no
+  // material paths and, on several environments, no materials at all: the
+  // materials live in each tile's solid and are only reachable by reading them
+  // (see tmnf_scene.cpp). Everything on screen therefore comes from here.
+  TrackScene scene;
+  const bool decoded = !EnvironmentPackName(level->start.mapEnvironment).empty() && game->packs_open.IsOpen() &&
+                       BuildTrackScene(game, game->packs_open, bytes.data(), bytes.size(),
+                                       EnvironmentPackName(level->start.mapEnvironment), &scene);
+
+  // Each material's picture, decoded once and kept as a page of one array.
+  std::vector<std::uint32_t> material_layers;
+  if (decoded) {
+    material_layers.assign(scene.materials.size(), kNoTextureLayer);
+    std::size_t textured = 0;
+    for (std::size_t i = 0; i < scene.materials.size(); ++i) {
+      if (scene.materials[i].path.empty()) continue;
+      if (const std::optional<std::uint32_t> layer = game->textures.Layer(game->packs_open, scene.materials[i].path)) {
+        material_layers[i] = *layer;
+        ++textured;
+      }
+    }
+    std::size_t named = 0;
+    for (const TrackMaterial &material : scene.materials)
+      if (!material.path.empty()) ++named;
+    // A handful of textures do live in the packs, so "none at all" is not the
+    // symptom; "almost none of the ones a track actually names" is.
+    if (named != 0u && textured * 4u < named) {
+      // The packs alone cannot draw a track. Saying so is the difference
+      // between a five minute fix and an afternoon wondering why every surface
+      // is one flat colour.
+      Log(game, FT_LOG_WARN,
+          "Only %zu of %zu track materials found a texture. The packs hold the descriptors; the images themselves "
+          "live in the installed game's GameData, beside its Packs. Point FRAMETEE_TMNF_PACKS at a full TrackMania "
+          "installation, or set FRAMETEE_TMNF_GAMEDATA to its GameData directory. Until then the track is drawn in "
+          "flat surface colours.",
+          textured, named);
+    } else {
+      Log(game, FT_LOG_INFO, "Textured %zu of %zu track materials.", textured, scene.materials.size());
+    }
   }
 
   BuildStats stats;
@@ -581,41 +602,38 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   // The blocks the track is actually built from, as opposed to the hills and
   // scenery around them. This is what the editor should frame its camera on.
   Aabb played_bounds;
-  if (auto handle = game->sandbox->ReadRenderScene(); handle && handle.Value()) {
-    const auto &scene = *handle.Value();
-    for (const auto &instance : scene.instances) {
-      if (!instance.visible) {
-        ++stats.instances_skipped;
-        continue;
-      }
-      // The scene carries every level of detail for a block. Drawing more than
-      // the finest one triples the triangle count and makes the coarser shells
-      // fight the real surface for the depth buffer.
-      if (instance.lodLevel != 0u) {
-        ++stats.lod_skipped;
-        continue;
-      }
-      if (!ShouldDrawPurpose(instance.purpose)) {
-        ++stats.instances_skipped;
-        continue;
-      }
+  for (const TrackInstance &instance : scene.instances) {
+    if (!instance.visible || instance.purpose == TRACK_PURPOSE_HIDDEN) {
+      ++stats.instances_skipped;
+      continue;
+    }
+    // The scene carries every level of detail for a block. Drawing more than
+    // the finest one triples the triangle count and makes the coarser shells
+    // fight the real surface for the depth buffer.
+    if (instance.lod != 0u) {
+      ++stats.lod_skipped;
+      continue;
+    }
+    if (instance.mesh >= scene.meshes.size()) continue;
 
-      ++stats.instances_drawn;
-      // A stadium scene ends in a few kilometre-wide sky and ground planes.
-      // They belong on screen, but not in the level's bounds: the engine frames
-      // its camera on those, and a track that is really three hundred metres
-      // across would otherwise open five kilometres away.
-      if (instance.renderLayer == fve::PhysicsSandboxRenderLayer::Background || IsDistantScenery(scene, instance)) {
-        AppendInstance(scene, instance, level->backdrop, backdrop_bounds);
-      } else {
-        const std::size_t before = level->track.size();
-        AppendInstance(scene, instance, level->track, level->world_bounds);
-        if (instance.purpose == fve::PhysicsSandboxScenePurpose::PlacedBlock) {
-          for (std::size_t i = before; i < level->track.size(); ++i) {
-            played_bounds.Add(level->track[i].a);
-            played_bounds.Add(level->track[i].b);
-            played_bounds.Add(level->track[i].c);
-          }
+    ++stats.instances_drawn;
+    const std::uint32_t layer =
+        instance.material < material_layers.size() ? material_layers[instance.material] : kNoTextureLayer;
+
+    // A stadium scene ends in a few kilometre-wide sky and ground planes. They
+    // belong on screen, but not in the level's bounds: the engine frames its
+    // camera on those, and a track that is really three hundred metres across
+    // would otherwise open five kilometres away.
+    if (IsDistantScenery(scene.meshes[instance.mesh], instance)) {
+      AppendInstance(scene, instance, layer, level->backdrop, backdrop_bounds);
+    } else {
+      const std::size_t before = level->track.size();
+      AppendInstance(scene, instance, layer, level->track, level->world_bounds);
+      if (instance.purpose == TRACK_PURPOSE_BLOCK) {
+        for (std::size_t i = before; i < level->track.size(); ++i) {
+          played_bounds.Add(level->track[i].a);
+          played_bounds.Add(level->track[i].b);
+          played_bounds.Add(level->track[i].c);
         }
       }
     }
@@ -631,6 +649,11 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     level->world_bounds.Add(Sub(spawn, ft_vec3{64.f, 8.f, 64.f}));
     level->world_bounds.Add(Add(spawn, ft_vec3{64.f, 64.f, 64.f}));
   }
+
+  game->textures.Upload(game);
+  // A hundred megabytes of pack, held open only to decode from. Everything that
+  // needed it has been decoded, and the next track will open it again.
+  game->packs_open.Close();
 
   level->track_grid.Build(level->track, level->world_bounds);
   if (!level->backdrop.empty()) level->backdrop_grid.Build(level->backdrop, backdrop_bounds);

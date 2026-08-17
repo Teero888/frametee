@@ -260,14 +260,24 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
     // Body panels come out of the pack unpainted, and the editor's colour for
     // this world is what they are painted with; the wheels keep the black they
     // were decoded with and only carry their state on top.
-    ft_color color = wheel ? face.color
-                           : ft_color{face.color.r * livery.r, face.color.g * livery.g, face.color.b * livery.b,
-                                      face.color.a};
+    // A panel that carries its own picture is already painted; only the parts
+    // that came back bare take the editor's colour for this world.
+    const bool painted = face.layer != kNoTextureLayer;
+    ft_color color = wheel || painted
+                         ? face.color
+                         : ft_color{face.color.r * livery.r, face.color.g * livery.g, face.color.b * livery.b,
+                                    face.color.a};
     if (wheel) {
       const ft_color state = tint[face.part];
       color = replace[face.part] ? state : MixColor(color, state, 0.35f);
     }
-    api->draw_triangle3(place(face.a), place(face.b), place(face.c), Lit(color, normal, opacity));
+    const ft_color lit = Lit(color, normal, opacity);
+    if (painted && api->draw_triangle3_textured) {
+      api->draw_triangle3_textured(place(face.a), place(face.b), place(face.c), face.uv[0], face.uv[1], face.uv[2],
+                                   face.layer, lit);
+    } else {
+      api->draw_triangle3(place(face.a), place(face.b), place(face.c), lit);
+    }
   }
 }
 

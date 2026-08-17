@@ -331,6 +331,21 @@ static void api_draw_triangle3(ft_vec3 a, ft_vec3 b, ft_vec3 c, ft_color color) 
   renderer_submit_triangle3(g_engine, (vec3){a.x, a.y, a.z}, (vec3){b.x, b.y, b.z}, (vec3){c.x, c.y, c.z}, col);
 }
 
+static void api_set_texture3(ft_texture *texture) {
+  if (!have_graphics()) return;
+  renderer_set_texture3(g_engine, texture ? AS_TEXTURE(texture) : NULL);
+}
+
+static void api_draw_triangle3_textured(ft_vec3 a, ft_vec3 b, ft_vec3 c, ft_vec2 uv_a, ft_vec2 uv_b, ft_vec2 uv_c,
+                                        uint32_t layer, ft_color tint) {
+  if (!have_graphics()) return;
+  vec4 col;
+  copy_color(&tint, col);
+  renderer_submit_triangle3_textured(g_engine, (vec3){a.x, a.y, a.z}, (vec3){b.x, b.y, b.z}, (vec3){c.x, c.y, c.z},
+                                     (vec2){uv_a.x, uv_a.y}, (vec2){uv_b.x, uv_b.y}, (vec2){uv_c.x, uv_c.y}, layer,
+                                     col);
+}
+
 static void api_draw_box3(ft_vec3 center, ft_vec3 size, ft_color color, bool wire) {
   if (!have_graphics()) return;
   vec4 col;
@@ -722,6 +737,8 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .draw_texture = api_draw_texture,
       .draw_line3 = api_draw_line3,
       .draw_triangle3 = api_draw_triangle3,
+      .set_texture3 = api_set_texture3,
+      .draw_triangle3_textured = api_draw_triangle3_textured,
       .draw_box3 = api_draw_box3,
   };
   return &api;

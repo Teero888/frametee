@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 10u
+#define FT_GAME_ABI_VERSION 11u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -858,6 +858,21 @@ typedef struct ft_engine_api {
    * screen-space overlays. */
   void (*draw_line3)(ft_vec3 a, ft_vec3 b, ft_color color, float thickness);
   void (*draw_triangle3)(ft_vec3 a, ft_vec3 b, ft_vec3 c, ft_color color);
+  /* The world's textures, as one array texture whose layers a game addresses
+   * per triangle. Set it once per frame before drawing; passing NULL goes back
+   * to untextured. The texture must have been created through texture_create
+   * with `layers` > 0 and stays owned by the game. */
+  void (*set_texture3)(ft_texture *texture);
+  /* A textured triangle. `layer` selects a layer of the texture set above, and
+   * `tint` multiplies what is sampled — white leaves the texture as authored.
+   * Coordinates are taken as given and repeat outside [0,1], which is what a
+   * road surface tiling along a track needs. Out-of-range layers, or no texture
+   * set, draw the tint alone rather than sampling nothing.
+   *
+   * Textured and untextured 3D draws share one depth-tested stream, so they can
+   * be interleaved freely and resolve against each other by geometry. */
+  void (*draw_triangle3_textured)(ft_vec3 a, ft_vec3 b, ft_vec3 c, ft_vec2 uv_a, ft_vec2 uv_b, ft_vec2 uv_c,
+                                  uint32_t layer, ft_color tint);
   /* An axis-aligned box given by its centre and full extents. Filled when
    * `wire` is false, twelve edges when true — the shape an editor wants for
    * bounds, triggers and hitboxes. */

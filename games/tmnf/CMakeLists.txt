@@ -44,6 +44,9 @@ add_library(tmnf_game MODULE
     tmnf_camera.cpp
     tmnf_ui.cpp
     tmnf_vehicle_model.cpp
+    tmnf_pack.cpp
+    tmnf_texture.cpp
+    tmnf_scene.cpp
 )
 
 set_target_properties(tmnf_game PROPERTIES
