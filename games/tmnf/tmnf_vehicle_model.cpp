@@ -1,0 +1,390 @@
+// The car, as TrackMania authored it.
+//
+// ForeverValidator decodes the vehicle for physics only: its public API hands
+// back wheel definitions and collision ellipsoids, and never touches the visual
+// half of the same file. The model is there in the pack though, and the
+// validator already contains everything needed to reach it — a pack reader, a
+// solid-archive decoder and a scene-tree assembler, all of which it uses to
+// build the track's meshes.
+//
+// So this file decodes that solid the way the track's own meshes are decoded,
+// and reads the visual half of it where the validator's vehicle loader reads
+// the collision half. It is the only place in this module that reaches past
+// ForeverValidator's published headers into its internals; the submodule itself
+// is untouched. That coupling is deliberate and contained here: if an upstream
+// change breaks it, the car falls back to the modelled one and nothing else in
+// the module notices.
+
+#include "tmnf_internal.h"
+
+// ForeverValidator internals. Everything below this line is private to the
+// validator and carries no compatibility promise.
+#include "engine/core/gm_types.h"
+#include "engine/core/mw_id.h"
+#include "engine/rendering/plug_material.h"
+#include "engine/rendering/plug_tree.h"
+#include "engine/rendering/plug_visual.h"
+#include "format/pack/installed/installed_pack_key_catalog.h"
+#include "format/pack/installed/plug_file_pack.h"
+#include "format/pack/installed_vehicle_asset_graph.h"
+#include "format/static_solid/static_scene_archive_loader.h"
+#include "format/static_solid/static_scene_archive_models.h"
+#include "format/static_solid/static_solid_archive_assembler.h"
+#include "format/static_solid/static_solid_archive_id.h"
+#include "format/static_solid/static_solid_descriptor_dependency_queue.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <fstream>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace tmnf {
+namespace {
+
+std::vector<std::byte> ReadWholeFile(const std::string &path) {
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file) return {};
+  const auto size = static_cast<std::size_t>(file.tellg());
+  file.seekg(0);
+  std::vector<std::byte> bytes(size);
+  file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size));
+  return bytes;
+}
+
+// A tree node carries its authored name in its own id, which is how the
+// validator finds the collision surfaces. The visuals are named the same way,
+// so the four wheels can be told apart from the body and turned with the
+// steering.
+const char *TreeName(const CPlugTree &tree) {
+  const CMwId &id = tree.PlugId();
+  return id.IsLocalName() != 0 ? id.GetString() : nullptr;
+}
+
+// The turning parts. Names are prefixed with the detail level they belong to —
+// "1FLWheel", "2FLWheel" — and only the wheel itself turns: the suspension arms
+// and the hub around it are anchored to the chassis and would swing out of the
+// bodywork if they were turned about the wheel's own centre.
+//
+// Front left, front right, rear right, rear left: the order the simulation
+// reports wheel contact in.
+std::uint8_t PartForName(const char *name) {
+  if (name == nullptr) return VEHICLE_PART_BODY;
+  const std::string_view value(name);
+  if (value.find("FLWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_FL;
+  if (value.find("FRWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_FR;
+  if (value.find("RRWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_RR;
+  if (value.find("RLWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_RL;
+  return VEHICLE_PART_BODY;
+}
+
+// The vehicle is authored once per detail level, and the levels hang off the
+// root as sibling subtrees named by their number, finest first. Drawing all of
+// them would draw four cars inside each other.
+std::optional<unsigned long> DetailLevel(const char *name) {
+  if (name == nullptr || *name == '\0') return std::nullopt;
+  unsigned long level = 0u;
+  for (const char *c = name; *c != '\0'; ++c) {
+    if (*c < '0' || *c > '9') return std::nullopt;
+    level = level * 10u + static_cast<unsigned long>(*c - '0');
+  }
+  return level;
+}
+
+// The root's detail levels, finest first. Empty when the root is not a set of
+// detail levels, in which case it is the model itself.
+std::vector<CPlugTree *> DetailLevels(const CPlugTree &root) {
+  std::vector<std::pair<unsigned long, CPlugTree *>> levels;
+  for (unsigned long i = 0; i < root.GetChildCount(); ++i) {
+    CPlugTree *child = root.GetChild(i);
+    if (child == nullptr) continue;
+    if (const std::optional<unsigned long> level = DetailLevel(TreeName(*child))) levels.emplace_back(*level, child);
+  }
+  if (levels.size() < 2u) return {};
+  std::sort(levels.begin(), levels.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+  std::vector<CPlugTree *> ordered;
+  ordered.reserve(levels.size());
+  for (const auto &level : levels) ordered.push_back(level.second);
+  return ordered;
+}
+
+// The surfaces the physics uses. They sit in the same tree as the visuals and
+// are not meant to be seen.
+bool IsCollisionOnlyName(const char *name) {
+  if (name == nullptr) return false;
+  const std::string_view value(name);
+  return value.find("Surf") != std::string_view::npos || value.rfind("Sphere", 0u) == 0u;
+}
+
+ft_vec3 ToVec(const GmVec3 &v) { return ft_vec3{v.x, v.y, v.z}; }
+
+ft_vec3 TransformPoint(const GmIso4 &iso, const GmVec3 &p) {
+  GmVec3 out;
+  out.SetMult(p, iso);
+  return ToVec(out);
+}
+
+ft_vec3 TransformDirection(const GmIso4 &iso, const GmVec3 &d) {
+  GmVec3 out;
+  out.SetMult(d, iso.rotation);
+  return ToVec(out);
+}
+
+// What a face is painted with before lighting.
+//
+// The car's real appearance is in its textures, and the module has no textured
+// path to put them through, so there is nothing to sample. The materials do not
+// help either: the validator only attaches them when a pack-wide material
+// repository is installed on the load session, which it does for the map and
+// not for a solid decoded on its own — so every node here comes back with a
+// null material, and asking it for a surface id would be asking nothing.
+//
+// So the tyres are black, and the rest is left white for the caller to paint
+// with the editor's colour for the world. A flat body reads better than a flat
+// grey one, and it tells the ghosts apart, which is what the colour is for.
+ft_color BaseColorFor(const CPlugMaterial *material, std::uint8_t part) {
+  constexpr ft_color kTyre{0.09f, 0.09f, 0.10f, 1.f};
+  if (material != nullptr) {
+    bool known = false;
+    const ft_color color = SurfaceColor(static_cast<std::uint8_t>(material->SurfaceMaterialId()), &known);
+    if (known) return color;
+  }
+  return IsWheelPart(part) ? kTyre : ft_color{1.f, 1.f, 1.f, 1.f};
+}
+
+struct Walker {
+  VehicleModel *out = nullptr;
+  // Visuals with no usable vertex or index stream. Reported so a silently
+  // half-decoded car is distinguishable from a car that simply has few parts.
+  std::uint32_t skipped = 0;
+
+  void Visit(CPlugTree &tree, const GmIso4 &parent_iso, const CPlugMaterial *inherited, bool visible,
+             std::uint8_t part) {
+    GmIso4 iso;
+    tree.ComposeCollisionIso(parent_iso, iso);
+
+    const char *name = TreeName(tree);
+    const bool node_visible = visible && tree.IsVisible();
+    const CPlugMaterial *material = tree.Material() != nullptr ? tree.Material() : inherited;
+    const std::uint8_t node_part = part == VEHICLE_PART_BODY ? PartForName(name) : part;
+
+    if (CPlugVisual *visual = tree.Visual(); visual != nullptr && node_visible && !IsCollisionOnlyName(name)) {
+      Append(*visual, iso, material, node_part);
+    }
+
+    // A visual mip node holds the same shape at several detail levels, ordered
+    // nearest first and appended after the node's ordinary children. Only the
+    // finest is wanted; the rest would be drawn inside it.
+    const auto *mip = dynamic_cast<const CPlugTreeVisualMip *>(&tree);
+    const unsigned long base_children =
+        mip != nullptr ? tree.GetChildCount() - mip->LevelCount() : tree.GetChildCount();
+    const unsigned long child_count = mip != nullptr && mip->LevelCount() > 0u ? base_children + 1u : base_children;
+
+    for (unsigned long i = 0; i < child_count; ++i) {
+      if (CPlugTree *child = tree.GetChild(i); child != nullptr) {
+        Visit(*child, iso, material, node_visible, node_part);
+      }
+    }
+  }
+
+private:
+  void Append(CPlugVisual &visual, const GmIso4 &iso, const CPlugMaterial *material, std::uint8_t part) {
+    const unsigned long vertex_count = visual.GetTotalVertexCount();
+    const std::vector<GxVertex> vertices = visual.CanonicalVertices(1, 1, 1);
+    unsigned long index_count = 0u;
+    unsigned short *indices = nullptr;
+    visual.GetVertexIndexation(index_count, indices);
+    if (vertex_count == 0u || vertices.size() != vertex_count || index_count < 3u || indices == nullptr) {
+      ++skipped;
+      return;
+    }
+
+    const ft_color base = BaseColorFor(material, part);
+    const bool has_color = visual.HasVertexColor();
+    const bool has_normal = visual.HasVertexNormal();
+
+    for (unsigned long i = 0; i + 2 < index_count; i += 3) {
+      const unsigned short i0 = indices[i], i1 = indices[i + 1], i2 = indices[i + 2];
+      if (i0 >= vertex_count || i1 >= vertex_count || i2 >= vertex_count) continue;
+
+      VehicleFace face;
+      face.a = TransformPoint(iso, vertices[i0].position);
+      face.b = TransformPoint(iso, vertices[i1].position);
+      face.c = TransformPoint(iso, vertices[i2].position);
+
+      const ft_vec3 geometric = Cross(Sub(face.b, face.a), Sub(face.c, face.a));
+      if (LengthSq(geometric) < 1e-14f) continue;
+
+      // Authored normals decide which way a face points, and the winding is
+      // corrected against them so back faces can be culled.
+      face.normal = Normalize(geometric);
+      if (has_normal) {
+        const ft_vec3 authored = Add(Add(TransformDirection(iso, vertices[i0].normal),
+                                         TransformDirection(iso, vertices[i1].normal)),
+                                     TransformDirection(iso, vertices[i2].normal));
+        if (LengthSq(authored) > 1e-12f) {
+          if (Dot(geometric, authored) < 0.f) {
+            std::swap(face.b, face.c);
+            face.normal = Scale(face.normal, -1.f);
+          }
+          face.normal = Normalize(authored, face.normal);
+        }
+      }
+
+      // Authored vertex colour is what carries the livery's own shading.
+      face.color = base;
+      if (has_color) {
+        const auto &c = vertices[i0].color;
+        const auto tint = [](float v) { return std::clamp(v * 2.f, 0.f, 2.f); };
+        face.color = ft_color{base.r * tint(c[0]), base.g * tint(c[1]), base.b * tint(c[2]), base.a};
+      }
+      face.part = part;
+      out->faces.push_back(face);
+    }
+  }
+};
+
+} // namespace
+
+std::string VehiclePackName(fv::VehicleModel vehicle) {
+  switch (vehicle) {
+  case fv::VehicleModel::SnowCar: return "Alpine";
+  case fv::VehicleModel::DesertCar: return "Speed";
+  case fv::VehicleModel::RallyCar: return "Rally";
+  case fv::VehicleModel::IslandCar: return "Island";
+  case fv::VehicleModel::CoastCar: return "Coast";
+  case fv::VehicleModel::BayCar: return "Bay";
+  case fv::VehicleModel::StadiumCar: return "Stadium";
+  case fv::VehicleModel::Unknown: break;
+  }
+  return {};
+}
+
+bool LoadVehicleModel(ft_game *game, const std::string &pack_name, VehicleModel *out) {
+  if (out == nullptr || game->packs.empty() || pack_name.empty()) return false;
+  out->faces.clear();
+
+  const std::vector<std::byte> packlist = ReadWholeFile(game->packs + "/packlist.dat");
+  const std::vector<std::byte> pak = ReadWholeFile(game->packs + "/" + pack_name + ".pak");
+  if (packlist.empty() || pak.empty()) {
+    Log(game, FT_LOG_WARN, "Could not read %s.pak; drawing the modelled car instead.", pack_name.c_str());
+    return false;
+  }
+
+  InstalledPackKeyCatalog keys;
+  CPlugFilePack pack;
+  if (!keys.LoadFromMemory(packlist.data(), packlist.size(), "") ||
+      !pack.OpenFromMemory(pak.data(), pak.size(), keys, pack_name.c_str())) {
+    Log(game, FT_LOG_WARN, "Could not open %s.pak; drawing the modelled car instead.", pack_name.c_str());
+    return false;
+  }
+
+  const std::optional<InstalledVehicleAssetGraph> assets = InstalledVehicleAssetGraph::ResolveFromPack(pack);
+  if (!assets.has_value() || !assets->solid.IsValid()) {
+    Log(game, FT_LOG_WARN, "%s.pak has no vehicle solid reference.", pack_name.c_str());
+    return false;
+  }
+
+  // The validator's own vehicle loader decodes this solid a shorter way, but
+  // that path hands the decoded bytes back to its caller without keeping them in
+  // the session, and the geometry is stored as offsets into exactly those bytes.
+  // It works for the collision surfaces, whose shapes are in the archive graph,
+  // and leaves every visual without vertices. Going through the dependency queue
+  // instead is the path the track's meshes take: it retains each payload and
+  // pulls in whatever the solid references.
+  StaticSolidArchiveCatalog catalog;
+  if (!catalog.LoadFromInstalledPack(&pack)) {
+    Log(game, FT_LOG_WARN, "%s.pak has no solid catalogue.", pack_name.c_str());
+    return false;
+  }
+
+  StaticSolidArchiveLoadSession archive;
+  if (!archive.InstallPackSource(pack)) return false;
+
+  CGameCtnReplayStaticSolidDescriptorDependencyQueue queue;
+  CGameCtnReplayArchiveStaticModelCollection models;
+  std::uint32_t missing = 0u;
+  if (!queue.RequireDescriptor(assets->solid.selectedPath.c_str()) ||
+      !queue.DecodeReachablePayloadGraph(&catalog, &archive, &models, &missing) || !archive.HasPayloads()) {
+    Log(game, FT_LOG_WARN, "The vehicle solid in %s.pak could not be decoded.", pack_name.c_str());
+    return false;
+  }
+
+  StaticSolidArchiveAssembler assembler;
+  if (!assembler.Assemble(archive.ArchiveGraph(), archive)) return false;
+
+  const StaticSolidArchiveId id = archive.SelectPayloadForDescriptor(assets->solid.selectedPath.c_str());
+  CPlugTree *root = assembler.ModelRoot(id, std::nullopt);
+  if (root == nullptr) root = assembler.CollisionRoot(id);
+  if (root == nullptr) {
+    Log(game, FT_LOG_WARN, "The vehicle solid in %s.pak has no model tree.", pack_name.c_str());
+    return false;
+  }
+  assembler.ApplyReplacementMaterials(root, id);
+
+  GmIso4 identity;
+  identity.SetIdentity();
+  GmIso4 root_iso;
+  root->ComposeCollisionIso(identity, root_iso);
+
+  // The finest level the module is willing to draw. The car is submitted a
+  // triangle at a time, once per world on screen, so the most detailed stadium
+  // car — fifty thousand triangles, most of them in bodywork panel gaps — costs
+  // more than the whole track in view and shows nothing extra at the distance
+  // the camera actually sits at. The coarser levels are the game's own, authored
+  // for exactly this.
+  constexpr std::size_t kBudget = 12000;
+  const std::vector<CPlugTree *> levels = DetailLevels(*root);
+  std::size_t chosen = 0;
+  std::uint32_t skipped = 0;
+  for (; chosen < std::max<std::size_t>(levels.size(), 1u); ++chosen) {
+    out->faces.clear();
+    Walker walker;
+    walker.out = out;
+    if (levels.empty()) {
+      walker.Visit(*root, identity, nullptr, true, VEHICLE_PART_BODY);
+    } else {
+      walker.Visit(*levels[chosen], root_iso, root->Material(), root->IsVisible(), VEHICLE_PART_BODY);
+    }
+    skipped = walker.skipped;
+    if (out->faces.size() <= kBudget || chosen + 1u >= levels.size()) break;
+  }
+
+  if (out->faces.empty()) {
+    Log(game, FT_LOG_WARN, "The vehicle model in %s.pak decoded to no geometry.", pack_name.c_str());
+    return false;
+  }
+
+  // The wheels are drawn in their own space so they can be turned, so each one
+  // needs the hub it turns about.
+  std::size_t wheel_faces = 0;
+  for (std::uint8_t part = VEHICLE_PART_WHEEL_FL; part <= VEHICLE_PART_WHEEL_RL; ++part) {
+    Aabb box;
+    for (const VehicleFace &face : out->faces) {
+      if (face.part != part) continue;
+      box.Add(face.a);
+      box.Add(face.b);
+      box.Add(face.c);
+      ++wheel_faces;
+    }
+    if (!box.Valid()) continue;
+    const ft_vec3 hub = box.Center();
+    out->hub[part] = hub;
+    for (VehicleFace &face : out->faces) {
+      if (face.part != part) continue;
+      face.a = Sub(face.a, hub);
+      face.b = Sub(face.b, hub);
+      face.c = Sub(face.c, hub);
+    }
+  }
+
+  Log(game, FT_LOG_INFO, "Loaded the %s car model at detail level %zu of %zu: %zu triangles (%zu on the wheels).",
+      pack_name.c_str(), chosen + 1u, std::max<std::size_t>(levels.size(), 1u), out->faces.size(), wheel_faces);
+  if (skipped != 0u) Log(game, FT_LOG_TRACE, "Skipped %u vehicle parts with no readable geometry.", skipped);
+  return true;
+}
+
+} // namespace tmnf

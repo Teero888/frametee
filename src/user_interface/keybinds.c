@@ -459,11 +459,13 @@ void keybinds_process_inputs(ui_handler_t *ui) {
     // own per-tick effects before the frame is drawn.
     model_world_at_tick(ts, ts->current_tick);
   }
-  if (keybinds_is_action_pressed(kb, ACTION_INC_TPS, true)) {
-    ++ts->gui_playback_speed;
-  }
-  if (keybinds_is_action_pressed(kb, ACTION_DEC_TPS, true)) {
-    --ts->gui_playback_speed;
+  if (!ts->recording) {
+    if (keybinds_is_action_pressed(kb, ACTION_INC_TPS, true)) {
+      ++ts->gui_playback_speed;
+    }
+    if (keybinds_is_action_pressed(kb, ACTION_DEC_TPS, true)) {
+      --ts->gui_playback_speed;
+    }
   }
   if (game_has_cap(&ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS) &&
       keybinds_is_action_pressed(kb, ACTION_TOGGLE_LINKED_COPY, false)) {

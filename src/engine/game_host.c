@@ -374,10 +374,9 @@ int game_host_discover(game_host_t *host, const char *directory) {
   }
   fs_closedir(dir);
 
-  // Directory order is whatever the filesystem feels like, and "start the first
-  // game that loaded" has to mean the same thing on every machine and every
-  // run, so order the list by id. Unusable modules sort last.
-  qsort(host->slots, (size_t)host->count, sizeof(*host->slots), compare_slots);
+  if (host->slots && host->count > 1) {
+    qsort(host->slots, (size_t)host->count, sizeof(*host->slots), compare_slots);
+  }
 
   int usable = 0;
   for (int i = 0; i < host->count; ++i)

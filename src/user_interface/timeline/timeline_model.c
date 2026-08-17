@@ -178,8 +178,10 @@ void model_init(timeline_state_t *ts, ui_handler_t *ui) {
 
   prediction_settings_default(&ts->prediction);
 
-  ts->gui_playback_speed = 50;
-  ts->playback_speed = 50;
+  int tps = (ui && ui->gfx_handler) ? game_ticks_per_second(&ui->gfx_handler->game_host) : 50;
+  if (tps <= 0) tps = 50;
+  ts->gui_playback_speed = tps;
+  ts->playback_speed = tps;
   ts->zoom = 1.0f;
   ts->track_height = DEFAULT_TRACK_HEIGHT;
   ts->selected_player_track_index = -1;
@@ -451,7 +453,7 @@ void model_resize_snippet_inputs(timeline_state_t *ts, input_snippet_t *snippet,
   snippet->source_count = new_duration;
 
   int preserve_count = (old_count < new_duration) ? old_count : new_duration;
-  if (snippet->end_tick <= ts->current_tick) model_recalc_physics(ts, snippet->start_tick + preserve_count);
+  if (!ts->recording && snippet->end_tick <= ts->current_tick) model_recalc_physics(ts, snippet->start_tick + preserve_count);
 }
 
 void model_free_snippet_inputs(input_snippet_t *snippet) {
@@ -976,7 +978,15 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
     return;
   }
 
-  if (group->cached_tick != local_tick) {
+  if (group->cached_tick == local_tick - 1) {
+    // Fast path for sequential forward playback: the current world becomes previous,
+    // and we only simulate the 1 single new tick!
+    ts->simulation_group_index = group_index;
+    gh_world_copy(host, group->prev_world_cached, group->world_cached);
+    simulate_to(ts, group_index, group->world_cached, local_tick);
+    gh_world_copy(host, group->previous_world, group->world_cached);
+    group->cached_tick = local_tick;
+  } else if (group->cached_tick != local_tick) {
     // Reach the tick before the wanted one first, keep it, then take the last
     // step. That gives both worlds for interpolation from one simulation run.
     ts->simulation_group_index = group_index;

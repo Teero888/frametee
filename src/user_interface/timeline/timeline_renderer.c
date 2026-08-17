@@ -165,7 +165,9 @@ void renderer_draw_controls(timeline_state_t *ts) {
   igText("Speed");
   igSameLine(0, 4 * dpi_scale);
   igSetNextItemWidth(75 * dpi_scale);
-  igSliderInt("##Speed", &ts->gui_playback_speed, 1, 100, "%d", ImGuiSliderFlags_None);
+  const int active_tps = game_ticks_per_second(&ts->ui->gfx_handler->game_host);
+  const int max_speed = active_tps > 50 ? active_tps * 2 : 100;
+  igSliderInt("##Speed", &ts->gui_playback_speed, 1, max_speed, "%d", ImGuiSliderFlags_None);
 
   igSameLine(0, 14 * dpi_scale);
 

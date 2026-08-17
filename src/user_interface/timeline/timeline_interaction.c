@@ -189,8 +189,6 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     if (steps > 0) {
       for (int i = 0; i < steps; ++i)
         model_advance_tick(ts, dir);
-      // Pull the new tick so the game runs its per-tick effects before drawing.
-      if (dir > 0) model_world_at_tick(ts, ts->current_tick);
       ts->last_update_time += (double)steps * tick_interval;
     }
   }
