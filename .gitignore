@@ -15,3 +15,12 @@ todo.txt
 build-pgo
 # Rust example game module build output
 games/*/target/
+games/tmnf/Packs
+games/tmnf/Tracks
+
+# Untracked project checkouts & scratch files
+scratch/
+ddnet/
+plugins/ultraforce/
+*.auto
+*.log

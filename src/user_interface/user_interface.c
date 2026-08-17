@@ -604,7 +604,7 @@ void render_player_manager(ui_handler_t *ui) {
 // The viewport camera for a game whose world is a volume: drag to orbit, scroll
 // to pull in and out. The 2D path below is left exactly as it was, because
 // panning a plane and orbiting a volume have nothing useful in common.
-static void on_camera3_update(gfx_handler_t *handler, bool hovered) {
+static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra) {
   camera3_t *c = &handler->renderer.camera3;
   keybind_manager_t *keys = &handler->user_interface.keybinds;
   const bool typing = igIsAnyItemActive();
@@ -636,6 +636,63 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered) {
   if (!c->free_mode) {
     // Orbiting: the wheel changes how far out the camera sits.
     if (scroll_y != 0.f) c->distance = glm_clamp(c->distance * (1.f - scroll_y * 0.1f), 1.f, 100000.f);
+
+    timeline_state_t *ts = &handler->user_interface.timeline;
+    const int group_index = model_track_group_index(ts, ts->selected_player_track_index);
+    const ft_world *previous = NULL;
+    const ft_world *current = NULL;
+    if (group_index >= 0) model_group_world_pair(ts, group_index, ts->current_tick, &previous, &current);
+
+    ft_camera_frame frame = {0};
+    frame.struct_size = sizeof(frame);
+    frame.mode = handler->renderer.camera.mode;
+    frame.world = current;
+    frame.previous_world = previous;
+    frame.alpha = intra;
+    frame.player = model_group_local_track_index(ts, ts->selected_player_track_index);
+    frame.recording = ts->recording;
+
+    ft_camera view;
+    engine_api_camera_get(&view);
+    if (gh_camera_update(&handler->game_host, &frame, &view)) {
+      c->target[0] = view.target.x;
+      c->target[1] = view.target.y;
+      c->target[2] = view.target.z;
+
+      vec3 offset;
+      offset[0] = view.eye.x - view.target.x;
+      offset[1] = view.eye.y - view.target.y;
+      offset[2] = view.eye.z - view.target.z;
+      float dist = glm_vec3_norm(offset);
+      if (dist > 0.01f && !c->orbiting) {
+        c->distance = dist;
+        c->pitch = asinf(glm_clamp(offset[1] / dist, -1.5f, 1.5f));
+        c->yaw = atan2f(offset[2], offset[0]);
+      }
+    } else if (current) {
+      ft_value pos_val;
+      int player_idx = frame.player >= 0 ? frame.player : 0;
+      if (gh_entity_prop_get(&handler->game_host, current, FT_ENTITY_CLASS_PLAYER, player_idx, 0, &pos_val) &&
+          pos_val.kind == FT_VALUE_VEC3) {
+        if (previous) {
+          ft_value prev_val;
+          if (gh_entity_prop_get(&handler->game_host, previous, FT_ENTITY_CLASS_PLAYER, player_idx, 0, &prev_val) &&
+              prev_val.kind == FT_VALUE_VEC3) {
+            c->target[0] = glm_lerp(prev_val.as.v3.x, pos_val.as.v3.x, intra);
+            c->target[1] = glm_lerp(prev_val.as.v3.y, pos_val.as.v3.y, intra);
+            c->target[2] = glm_lerp(prev_val.as.v3.z, pos_val.as.v3.z, intra);
+          } else {
+            c->target[0] = pos_val.as.v3.x;
+            c->target[1] = pos_val.as.v3.y;
+            c->target[2] = pos_val.as.v3.z;
+          }
+        } else {
+          c->target[0] = pos_val.as.v3.x;
+          c->target[1] = pos_val.as.v3.y;
+          c->target[2] = pos_val.as.v3.z;
+        }
+      }
+    }
     return;
   }
 
@@ -672,7 +729,7 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered) {
 void on_camera_update(gfx_handler_t *handler, bool hovered, float intra) {
   if (!handler->level) return;
   if (game_is_3d(&handler->game_host)) {
-    on_camera3_update(handler, hovered);
+    on_camera3_update(handler, hovered, intra);
     return;
   }
   camera_t *camera = &handler->renderer.camera;

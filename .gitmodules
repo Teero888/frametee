@@ -16,3 +16,6 @@
 [submodule "libs/toml"]
 	path = libs/toml
 	url = https://github.com/cktan/tomlc17.git
+[submodule "games/tmnf/ForeverValidator"]
+	path = games/tmnf/ForeverValidator
+	url = https://github.com/Skycrafter-dev/ForeverValidator

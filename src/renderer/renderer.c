@@ -830,13 +830,10 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
   VkPipelineDepthStencilStateCreateInfo depth_stencil = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
                                                          .depthTestEnable = depth_3d ? VK_TRUE : VK_FALSE,
                                                          .depthWriteEnable = depth_3d ? VK_TRUE : VK_FALSE,
-                                                         .depthCompareOp = VK_COMPARE_OP_LESS,
+                                                         .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
                                                          .maxDepthBounds = 1.0f};
 
   VkBlendFactor src_color_factor = VK_BLEND_FACTOR_ONE;
-  if (shader == renderer->primitive_shader || shader == renderer->primitive3d_shader) {
-    src_color_factor = VK_BLEND_FACTOR_SRC_ALPHA;
-  }
 
   // CORRECTED: Standard Alpha Blending
   VkPipelineColorBlendAttachmentState color_blend = {
@@ -1288,7 +1285,10 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   if (!mesh || !shader || !mesh->active || !shader->active) return;
   renderer_state_t *renderer = &handler->renderer;
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, shader, ubo_count, texture_count, handler->g_main_window_data.RenderPass);
+  VkRenderPass target_pass = handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE
+                                 ? handler->offscreen_render_pass
+                                 : handler->g_main_window_data.RenderPass;
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(handler, shader, ubo_count, texture_count, target_pass);
   if (!pso) return;
 
   // Allocate a descriptor set for this pipeline
@@ -1579,7 +1579,10 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   }
 
   // Get or create the pipeline
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive_shader, 1, 0, h->g_main_window_data.RenderPass);
+  VkRenderPass target_pass = h->offscreen_initialized && h->offscreen_render_pass != VK_NULL_HANDLE
+                                 ? h->offscreen_render_pass
+                                 : h->g_main_window_data.RenderPass;
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive_shader, 1, 0, target_pass);
   if (!pso) {
     log_error(LOG_SOURCE, "Failed to get primitive pipeline");
     return;
@@ -2157,7 +2160,17 @@ void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
 }
 
 static void push_vertex3(renderer_state_t *r, vec3 pos, vec4 color) {
-  if (r->primitive3d_vertex_count >= MAX_PRIMITIVE3D_VERTICES || !r->vertex3d_buffer_ptr) return;
+  if (r->primitive3d_vertex_count >= MAX_PRIMITIVE3D_VERTICES || !r->vertex3d_buffer_ptr) {
+    // Dropping geometry without saying so looks like a bug in the game rather
+    // than a limit in the renderer, so say it once.
+    static bool reported = false;
+    if (r->vertex3d_buffer_ptr && !reported) {
+      reported = true;
+      log_warn("Renderer", "3D vertex buffer full at %d vertices; geometry past this is not drawn",
+               MAX_PRIMITIVE3D_VERTICES);
+    }
+    return;
+  }
   primitive3d_vertex_t *v = &r->vertex3d_buffer_ptr[r->primitive3d_vertex_count++];
   glm_vec3_copy(pos, v->pos);
   glm_vec4_copy(color, v->color);
@@ -2230,7 +2243,10 @@ static void flush_primitives3d(gfx_handler_t *h, VkCommandBuffer command_buffer)
   renderer_state_t *renderer = &h->renderer;
   if (renderer->primitive3d_vertex_count == 0 || !renderer->primitive3d_shader) return;
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive3d_shader, 1, 0, h->g_main_window_data.RenderPass);
+  VkRenderPass target_pass = h->offscreen_initialized && h->offscreen_render_pass != VK_NULL_HANDLE
+                                 ? h->offscreen_render_pass
+                                 : h->g_main_window_data.RenderPass;
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive3d_shader, 1, 0, target_pass);
   if (!pso) return;
 
   primitive_ubo_t ubo = world_ubo(h);
@@ -2270,7 +2286,10 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
   if (count == 0 || !ar->shader || !ar->atlas_texture) return;
 
   mesh_t *quad = h->quad_mesh;
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, ar->shader, 1, 1, h->g_main_window_data.RenderPass);
+  VkRenderPass target_pass = h->offscreen_initialized && h->offscreen_render_pass != VK_NULL_HANDLE
+                                 ? h->offscreen_render_pass
+                                 : h->g_main_window_data.RenderPass;
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, ar->shader, 1, 1, target_pass);
   if (!pso) return;
 
   primitive_ubo_t ubo;

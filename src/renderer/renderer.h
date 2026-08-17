@@ -17,7 +17,13 @@
 #define MAX_UBOS_PER_DRAW 2
 #define MAX_PRIMITIVE_VERTICES 100000
 #define MAX_PRIMITIVE_INDICES 200000
-#define MAX_PRIMITIVE3D_VERTICES 200000
+// A 3D game submits its world one triangle at a time and there is no retained
+// mesh path for it, so this ceiling is the whole of how much world can be on
+// screen at once. Two hundred thousand vertices is sixty-six thousand
+// triangles, which a real track passes several times over; the buffer costs
+// twenty-eight bytes a vertex, so the room is cheap and running out of it is
+// silent.
+#define MAX_PRIMITIVE3D_VERTICES 1200000
 #define MAX_RENDER_COMMANDS 65536
 #define MAX_ATLAS_INSTANCES 1000000
 // Resources a game module may create at runtime, on top of the engine's own.

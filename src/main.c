@@ -54,7 +54,11 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
 
       const ft_world *previous = NULL;
       const ft_world *current = NULL;
-      if (per_world) model_group_world_pair(ts, group_index, ts->current_tick, &previous, &current);
+      if (per_world) {
+        model_group_world_pair(ts, group_index, ts->current_tick, &previous, &current);
+      } else if (ts->active_group_index >= 0 && ts->active_group_index < ts->group_count) {
+        model_group_world_pair(ts, ts->active_group_index, ts->current_tick, &previous, &current);
+      }
 
       ft_render_frame frame = {0};
       frame.struct_size = sizeof(frame);
