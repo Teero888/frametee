@@ -34,21 +34,22 @@ float DistanceSq(const Aabb &box, ft_vec3 p) {
 }
 
 std::size_t DrawGrid(const ft_engine_api *api, const std::vector<Triangle> &triangles, const TriangleGrid &grid,
-                     const Frustum &frustum, bool have_frustum, ft_vec3 eye, float view_distance, bool backface_cull,
-                     float opacity, std::size_t budget) {
+                     const Frustum &frustum, bool have_frustum, ft_vec3 eye, bool backface_cull, float opacity,
+                     std::size_t budget) {
   if (triangles.empty() || grid.cells.empty() || budget == 0) return 0;
 
   static thread_local std::vector<VisibleCell> visible;
   visible.clear();
   visible.reserve(grid.cells.size() / 4u + 8u);
 
-  const float max_distance_sq = view_distance * view_distance;
+  // Only what is off screen is dropped. Distance orders the work rather than
+  // refusing it: a track is a thing you look across, and cutting it off at a
+  // radius takes the far half of a stadium away while it is being looked at.
+  // What keeps the frame affordable is the budget below, spent nearest first.
   for (const GridCell &cell : grid.cells) {
     if (cell.count == 0) continue;
-    const float distance_sq = DistanceSq(cell.bounds, eye);
-    if (distance_sq > max_distance_sq) continue;
     if (have_frustum && !frustum.Intersects(cell.bounds)) continue;
-    visible.push_back(VisibleCell{&cell, distance_sq});
+    visible.push_back(VisibleCell{&cell, DistanceSq(cell.bounds, eye)});
   }
 
   std::sort(visible.begin(), visible.end(),
@@ -69,7 +70,11 @@ std::size_t DrawGrid(const ft_engine_api *api, const std::vector<Triangle> &tria
       }
       ft_color color = UnpackColor(tri.color);
       color.a *= opacity;
-      api->draw_triangle3(tri.a, tri.b, tri.c, color);
+      if (tri.layer != kNoTextureLayer && api->draw_triangle3_textured) {
+        api->draw_triangle3_textured(tri.a, tri.b, tri.c, tri.uv[0], tri.uv[1], tri.uv[2], tri.layer, color);
+      } else {
+        api->draw_triangle3(tri.a, tri.b, tri.c, color);
+      }
       ++drawn;
     }
   }
@@ -80,6 +85,11 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
   const ft_engine_api *api = game->engine;
   const ft_level *level = frame->level;
   if (!level || !api->draw_triangle3) return;
+
+  // The track's own pictures, for the whole of this frame's 3D. A triangle
+  // names a page of it and the renderer does the rest; nothing here has to sort
+  // or batch by texture.
+  if (api->set_texture3) api->set_texture3(game->textures.Texture());
 
   const ft_camera &camera = frame->state.camera;
   const Frustum frustum = Frustum::FromViewProj(camera.view_proj);
@@ -97,13 +107,13 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
 
   std::size_t budget = kTriangleBudget;
   budget -= std::min(budget, DrawGrid(api, level->track, level->track_grid, frustum, have_frustum, eye,
-                                      settings.view_distance, settings.backface_cull, opacity, budget));
+                                      settings.backface_cull, opacity, budget));
 
   // The stadium shell is drawn last and only with what the track left over: it
   // is scenery, and losing part of it costs nothing a driver can feel.
   if (settings.draw_background && budget > 0) {
-    DrawGrid(api, level->backdrop, level->backdrop_grid, frustum, have_frustum, eye, settings.view_distance * 2.f,
-             settings.backface_cull, opacity, budget);
+    DrawGrid(api, level->backdrop, level->backdrop_grid, frustum, have_frustum, eye, settings.backface_cull, opacity,
+             budget);
   }
 }
 

@@ -77,7 +77,7 @@ void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 static VkVertexInputBindingDescription primitive_binding_description;
 static VkVertexInputAttributeDescription primitive_attribute_descriptions[2];
 static VkVertexInputBindingDescription primitive3d_binding_description;
-static VkVertexInputAttributeDescription primitive3d_attribute_descriptions[2];
+static VkVertexInputAttributeDescription primitive3d_attribute_descriptions[4];
 static VkVertexInputBindingDescription mesh_binding_description;
 static VkVertexInputAttributeDescription mesh_attribute_descriptions[3];
 
@@ -341,16 +341,31 @@ VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat fo
 }
 
 VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter) {
+  return create_texture_sampler_wrapped(handler, mip_levels, filter, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+}
+
+VkSampler create_texture_sampler_wrapped(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter,
+                                         VkSamplerAddressMode address_mode) {
+  // Repeating means a world surface, and a world surface is usually looked at
+  // along its length rather than face on. That is the case anisotropy exists
+  // for, and without it a road is a grey smear a few metres ahead of the car.
+  VkPhysicalDeviceFeatures features = {0};
+  VkPhysicalDeviceProperties properties;
+  vkGetPhysicalDeviceFeatures(handler->g_physical_device, &features);
+  vkGetPhysicalDeviceProperties(handler->g_physical_device, &properties);
+  const bool anisotropic = address_mode == VK_SAMPLER_ADDRESS_MODE_REPEAT && features.samplerAnisotropy;
+  const float max_anisotropy = anisotropic ? fminf(16.f, properties.limits.maxSamplerAnisotropy) : 1.f;
+
   VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                                       .magFilter = (VkFilter)filter,
                                       .minFilter = (VkFilter)filter,
                                       .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                                      .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                                      .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                                      .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                                      .addressModeU = address_mode,
+                                      .addressModeV = address_mode,
+                                      .addressModeW = address_mode,
                                       .mipLodBias = 0.0f,
-                                      .anisotropyEnable = VK_FALSE,
-                                      .maxAnisotropy = 1.0f,
+                                      .anisotropyEnable = anisotropic ? VK_TRUE : VK_FALSE,
+                                      .maxAnisotropy = max_anisotropy,
                                       .compareEnable = VK_FALSE,
                                       .compareOp = VK_COMPARE_OP_ALWAYS,
                                       .minLod = 0.0f,
@@ -568,6 +583,18 @@ int renderer_init(gfx_handler_t *handler) {
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_vertex_buffer3d);
   vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer3d.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->vertex3d_buffer_ptr);
 
+  renderer->primitive3d_sampler =
+      create_texture_sampler_wrapped(handler, 16, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+
+  // One white page, bound whenever a game draws in 3D without a texture array
+  // of its own. The 3D fragment stage declares a sampler either way.
+  renderer->primitive3d_fallback_texture =
+      renderer_create_texture_2d_array(handler, 1, 1, 1, VK_FORMAT_R8G8B8A8_UNORM);
+  if (renderer->primitive3d_fallback_texture) {
+    const uint8_t white[4] = {255, 255, 255, 255};
+    renderer_update_texture_layer(handler, renderer->primitive3d_fallback_texture, 0, white, 1, 1);
+  }
+
   // Sensible orbit for a game that has not moved the camera yet.
   renderer->camera3.distance = 40.f;
   renderer->camera3.yaw = -1.57f;
@@ -764,7 +791,7 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
     binding_descs = &primitive3d_binding_description;
     b_desc_count = 1;
     attrib_descs = primitive3d_attribute_descriptions;
-    a_desc_count = 2;
+    a_desc_count = 4;
   } else {
     binding_descs = &mesh_binding_description;
     b_desc_count = 1;
@@ -1531,6 +1558,10 @@ static void setup_vertex_descriptions(void) {
       .binding = 0, .location = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(primitive3d_vertex_t, pos)};
   primitive3d_attribute_descriptions[1] = (VkVertexInputAttributeDescription){
       .binding = 0, .location = 1, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = offsetof(primitive3d_vertex_t, color)};
+  primitive3d_attribute_descriptions[2] = (VkVertexInputAttributeDescription){
+      .binding = 0, .location = 2, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(primitive3d_vertex_t, uv)};
+  primitive3d_attribute_descriptions[3] = (VkVertexInputAttributeDescription){
+      .binding = 0, .location = 3, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(primitive3d_vertex_t, layer)};
 
   mesh_binding_description = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
   mesh_attribute_descriptions[0] =
@@ -2159,7 +2190,11 @@ void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
   glm_mat4_mul(proj, view, out);
 }
 
-static void push_vertex3(renderer_state_t *r, vec3 pos, vec4 color) {
+// A layer this negative is never a real page, and the shader reads it as "no
+// texture" rather than clamping into page zero.
+#define PRIMITIVE3D_NO_TEXTURE (-1.f)
+
+static void push_vertex3(renderer_state_t *r, vec3 pos, vec4 color, vec2 uv, float layer) {
   if (r->primitive3d_vertex_count >= MAX_PRIMITIVE3D_VERTICES || !r->vertex3d_buffer_ptr) {
     // Dropping geometry without saying so looks like a bug in the game rather
     // than a limit in the renderer, so say it once.
@@ -2174,14 +2209,31 @@ static void push_vertex3(renderer_state_t *r, vec3 pos, vec4 color) {
   primitive3d_vertex_t *v = &r->vertex3d_buffer_ptr[r->primitive3d_vertex_count++];
   glm_vec3_copy(pos, v->pos);
   glm_vec4_copy(color, v->color);
+  glm_vec2_copy(uv, v->uv);
+  v->layer = layer;
 }
 
 void renderer_submit_triangle3(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec4 color) {
   renderer_state_t *r = &h->renderer;
-  push_vertex3(r, a, color);
-  push_vertex3(r, b, color);
-  push_vertex3(r, c, color);
+  vec2 no_uv = {0.f, 0.f};
+  push_vertex3(r, a, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(r, b, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(r, c, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
 }
+
+void renderer_submit_triangle3_textured(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec2 uv_a, vec2 uv_b, vec2 uv_c,
+                                        uint32_t layer, vec4 tint) {
+  renderer_state_t *r = &h->renderer;
+  // Without an array bound there is nothing to sample, and a page index into
+  // nothing would read as garbage; the tint alone is the honest fallback.
+  const texture_t *bound = r->primitive3d_texture;
+  const float page = bound && layer < bound->layer_count ? (float)layer : PRIMITIVE3D_NO_TEXTURE;
+  push_vertex3(r, a, tint, uv_a, page);
+  push_vertex3(r, b, tint, uv_b, page);
+  push_vertex3(r, c, tint, uv_c, page);
+}
+
+void renderer_set_texture3(gfx_handler_t *h, texture_t *texture) { h->renderer.primitive3d_texture = texture; }
 
 void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float thickness) {
   // A line with width is a quad turned to face the viewer: there is no line
@@ -2246,7 +2298,14 @@ static void flush_primitives3d(gfx_handler_t *h, VkCommandBuffer command_buffer)
   VkRenderPass target_pass = h->offscreen_initialized && h->offscreen_render_pass != VK_NULL_HANDLE
                                  ? h->offscreen_render_pass
                                  : h->g_main_window_data.RenderPass;
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive3d_shader, 1, 0, target_pass);
+  // The fragment stage always samples an array, so one is always bound: the
+  // game's when it set one, a single white page otherwise. Leaving the binding
+  // empty is undefined behaviour, not a shortcut.
+  texture_t *bound = renderer->primitive3d_texture;
+  if (!bound || !bound->active || bound->image_view == VK_NULL_HANDLE) bound = renderer->primitive3d_fallback_texture;
+  if (!bound) return;
+
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, renderer->primitive3d_shader, 1, 1, target_pass);
   if (!pso) return;
 
   primitive_ubo_t ubo = world_ubo(h);
@@ -2266,13 +2325,22 @@ static void flush_primitives3d(gfx_handler_t *h, VkCommandBuffer command_buffer)
   if (vkAllocateDescriptorSets(h->g_device, &ai, &desc) != VK_SUCCESS) return;
 
   VkDescriptorBufferInfo b_info = {.buffer = renderer->dynamic_ubo_buffer.buffer, .offset = dyn_offset, .range = sizeof(primitive_ubo_t)};
-  VkWriteDescriptorSet write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                .dstSet = desc,
-                                .dstBinding = 0,
-                                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                .descriptorCount = 1,
-                                .pBufferInfo = &b_info};
-  vkUpdateDescriptorSets(h->g_device, 1, &write, 0, NULL);
+  VkDescriptorImageInfo i_info = {.sampler = renderer->primitive3d_sampler ? renderer->primitive3d_sampler : bound->sampler,
+                                  .imageView = bound->image_view,
+                                  .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  VkWriteDescriptorSet writes[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                     .dstSet = desc,
+                                     .dstBinding = 0,
+                                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                     .descriptorCount = 1,
+                                     .pBufferInfo = &b_info},
+                                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                     .dstSet = desc,
+                                     .dstBinding = 1,
+                                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                     .descriptorCount = 1,
+                                     .pImageInfo = &i_info}};
+  vkUpdateDescriptorSets(h->g_device, 2, writes, 0, NULL);
 
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
   vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0, NULL);

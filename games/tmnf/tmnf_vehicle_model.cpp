@@ -31,6 +31,11 @@
 #include "format/static_solid/static_scene_archive_models.h"
 #include "format/static_solid/static_solid_archive_assembler.h"
 #include "format/static_solid/static_solid_archive_id.h"
+#include "format/pack/block_info_catalog/installed_pack_asset_repository.h"
+#include "format/static_solid/static_solid_archive_definitions.h"
+#include "format/archive/archive_class_ids.h"
+#include "format/static_solid/static_solid_archive_graph.h"
+#include "format/static_solid/static_solid_archive_graph_writer.h"
 #include "format/static_solid/static_solid_descriptor_dependency_queue.h"
 
 #include <algorithm>
@@ -155,8 +160,68 @@ ft_color BaseColorFor(const CPlugMaterial *material, std::uint8_t part) {
   return IsWheelPart(part) ? kTyre : ft_color{1.f, 1.f, 1.f, 1.f};
 }
 
+// The vehicle's materials, attached to the archive graph by hand.
+//
+// A track's materials are linked for us: the load session is given a material
+// repository and the validator resolves each material node against it. A solid
+// decoded on its own gets no repository — there is nowhere to hand one in — so
+// nothing ever classifies its material nodes, no definitions are made, and every
+// tree comes back with no material at all. That is why the car had no picture on
+// it while the track around it did.
+//
+// The two halves of the answer are both kept. The solid's reference table names
+// the materials it uses, in order; the tree links record which material node
+// each part of the car draws with, in the same order. Pairing them off is what
+// the validator's own linker does with the transient node graph, and the counts
+// are required to agree first: an off-by-one here would not fail, it would paint
+// the windscreen with the tyre.
+void NameVehicleMaterials(InstalledPackAssetRepository &assets, const PackSet &packs,
+                          const std::string &solid_path, StaticSolidArchiveLoadSession &archive,
+                          StaticSolidArchiveId payload) {
+  GbxFile solid;
+  if (!packs.References(solid_path, &solid)) return;
+
+  std::vector<std::string> material_paths;
+  for (const GbxReference &reference : solid.references) {
+    if (reference.name.find(".Material.") == std::string::npos) continue;
+    material_paths.push_back(reference.path);
+  }
+  if (material_paths.empty()) return;
+
+  // The nodes the trees actually draw with, first seen first. A vehicle names
+  // its materials through its shaders rather than directly, which is the
+  // fallback the tree assembler itself takes, so either kind counts.
+  std::vector<CGameCtnReplayStaticSolidArchiveNodeIdentity> material_nodes;
+  archive.ArchiveGraph().TreeGraph().ForEachTreeSourceLink(
+      [&](const CGameCtnReplayStaticSolidArchiveTreeSourceLink &link) {
+        const auto node = link.HasMaterialNode() ? link.Material() : link.Shader();
+        if ((!link.HasMaterialNode() && !link.HasShaderNode()) || !node.MatchesPayload(payload)) return 1;
+        for (const auto &seen : material_nodes)
+          if (seen.Matches(node)) return 1;
+        material_nodes.push_back(node);
+        return 1;
+      });
+  if (material_nodes.size() != material_paths.size()) return;
+
+  CGameCtnReplayStaticSolidArchiveGraphWriter writer(&archive.MutableArchiveGraph(), payload);
+  CGameCtnReplayStaticSolidArchiveSurfaceGraph &graph = archive.MutableArchiveGraph().SurfaceGraph();
+  for (std::size_t i = 0; i < material_nodes.size(); ++i) {
+    std::optional<ResolvedMaterialDefinition> resolved = assets.ResolveMaterialPath(material_paths[i]);
+    if (!resolved) continue;
+    resolved->material.render.SetMaterialPaths(material_paths[i], std::string());
+    // The node has to be declared a material as well as defined as one: the
+    // assembler counts material nodes before it allocates any.
+    if (!writer.AppendNode(material_nodes[i].ArchiveNode(), TMNF_CLASS_CPlugMaterial)) continue;
+    CGameCtnReplayStaticSolidArchiveMaterialDefinition definition;
+    definition.InstallResolved(material_nodes[i], *resolved);
+    graph.AddMaterialDefinition(definition);
+  }
+}
+
 struct Walker {
   VehicleModel *out = nullptr;
+  const PackSet *packs = nullptr;
+  TextureLibrary *textures = nullptr;
   // Visuals with no usable vertex or index stream. Reported so a silently
   // half-decoded car is distinguishable from a car that simply has few parts.
   std::uint32_t skipped = 0;
@@ -206,6 +271,18 @@ private:
     const bool has_color = visual.HasVertexColor();
     const bool has_normal = visual.HasVertexNormal();
 
+    // The surface's own picture, when the material could be named. Its first
+    // coordinate set is the one that carries it.
+    GxTexCoordSet uv;
+    const bool has_uv = visual.VStreamOrClassic_GetTexCoordSet(uv, 0u, nullptr) != 0 && uv.Count() == vertex_count;
+    std::uint32_t layer = kNoTextureLayer;
+    if (has_uv && material != nullptr && packs != nullptr && textures != nullptr) {
+      const std::string &path = material->ReplayRenderDefinition().MaterialPlainPath();
+      if (!path.empty()) {
+        if (const std::optional<std::uint32_t> found = textures->Layer(*packs, path)) layer = *found;
+      }
+    }
+
     for (unsigned long i = 0; i + 2 < index_count; i += 3) {
       const unsigned short i0 = indices[i], i1 = indices[i + 1], i2 = indices[i + 2];
       if (i0 >= vertex_count || i1 >= vertex_count || i2 >= vertex_count) continue;
@@ -214,6 +291,16 @@ private:
       face.a = TransformPoint(iso, vertices[i0].position);
       face.b = TransformPoint(iso, vertices[i1].position);
       face.c = TransformPoint(iso, vertices[i2].position);
+      face.layer = layer;
+      if (layer != kNoTextureLayer) {
+        const unsigned short corner[3] = {i0, i1, i2};
+        for (int k = 0; k < 3; ++k) {
+          const GxTexCoord4 coord = uv.Coordinate4At(corner[k]);
+          // v runs the other way in the game's meshes than in a DDS; see the
+          // same turn in the track walker.
+          face.uv[k] = ft_vec2{coord.u, 1.0f - coord.v};
+        }
+      }
 
       const ft_vec3 geometric = Cross(Sub(face.b, face.a), Sub(face.c, face.a));
       if (LengthSq(geometric) < 1e-14f) continue;
@@ -228,15 +315,17 @@ private:
         if (LengthSq(authored) > 1e-12f) {
           if (Dot(geometric, authored) < 0.f) {
             std::swap(face.b, face.c);
+            std::swap(face.uv[1], face.uv[2]);
             face.normal = Scale(face.normal, -1.f);
           }
           face.normal = Normalize(authored, face.normal);
         }
       }
 
-      // Authored vertex colour is what carries the livery's own shading.
-      face.color = base;
-      if (has_color) {
+      // On a textured panel the picture is the appearance and the colour is only
+      // what shades it; elsewhere the authored vertex colour is all there is.
+      face.color = layer != kNoTextureLayer ? ft_color{1.f, 1.f, 1.f, base.a} : base;
+      if (has_color && layer == kNoTextureLayer) {
         const auto &c = vertices[i0].color;
         const auto tint = [](float v) { return std::clamp(v * 2.f, 0.f, 2.f); };
         face.color = ft_color{base.r * tint(c[0]), base.g * tint(c[1]), base.b * tint(c[2]), base.a};
@@ -263,7 +352,8 @@ std::string VehiclePackName(fv::VehicleModel vehicle) {
   return {};
 }
 
-bool LoadVehicleModel(ft_game *game, const std::string &pack_name, VehicleModel *out) {
+bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, const std::string &pack_name,
+                      VehicleModel *out) {
   if (out == nullptr || game->packs.empty() || pack_name.empty()) return false;
   out->faces.clear();
 
@@ -313,6 +403,15 @@ bool LoadVehicleModel(ft_game *game, const std::string &pack_name, VehicleModel 
     return false;
   }
 
+  // The materials, before the trees are built from them.
+  {
+    InstalledPackAssetRepository repository;
+    if (repository.Configure(pak.data(), pak.size(), keys, pack_name.c_str())) {
+      NameVehicleMaterials(repository, packs, assets->solid.logicalPath, archive,
+                           archive.SelectPayloadForDescriptor(assets->solid.selectedPath.c_str()));
+    }
+  }
+
   StaticSolidArchiveAssembler assembler;
   if (!assembler.Assemble(archive.ArchiveGraph(), archive)) return false;
 
@@ -344,6 +443,8 @@ bool LoadVehicleModel(ft_game *game, const std::string &pack_name, VehicleModel 
     out->faces.clear();
     Walker walker;
     walker.out = out;
+    walker.packs = &packs;
+    walker.textures = &textures;
     if (levels.empty()) {
       walker.Visit(*root, identity, nullptr, true, VEHICLE_PART_BODY);
     } else {

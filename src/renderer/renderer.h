@@ -140,9 +140,17 @@ struct primitive_vertex_t {
 
 // The same thing in a volume. Kept separate from primitive_vertex_t so a 2D
 // game pays nothing for the third component.
+//
+// `layer` selects a page of the bound texture array, and is negative on a
+// triangle that has no texture. Textured and untextured 3D geometry therefore
+// share one vertex stream and one draw, which is what lets a game draw an
+// untextured marker over a textured world and have the depth buffer resolve the
+// two against each other.
 struct primitive3d_vertex_t {
   vec3 pos;
   vec4 color;
+  vec2 uv;
+  float layer;
 };
 
 struct primitive_ubo_t {
@@ -344,6 +352,15 @@ struct renderer_state_t {
   buffer_t dynamic_vertex_buffer3d;
   primitive3d_vertex_t *vertex3d_buffer_ptr;
   uint32_t primitive3d_vertex_count;
+  // The texture array the 3D path samples this frame. A game sets it once and
+  // then addresses pages of it per triangle. NULL means nothing textured was
+  // drawn, and the fallback below is bound so the descriptor is still complete.
+  texture_t *primitive3d_texture;
+  texture_t *primitive3d_fallback_texture;
+  // World surfaces repeat their texture across a face, which every other
+  // sampler in the engine deliberately does not, so the 3D path brings its own
+  // rather than depending on how a game happened to create its texture.
+  VkSampler primitive3d_sampler;
   buffer_t dynamic_vertex_buffer;
   buffer_t dynamic_index_buffer;
   primitive_vertex_t *vertex_buffer_ptr;
@@ -412,6 +429,10 @@ VkImageView create_image_view_aspect(gfx_handler_t *handler, VkImage image, VkFo
                                      uint32_t layer_count, VkImageAspectFlags aspect);
 VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count);
 VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
+// The same, with the wrap mode spelled out. World textures repeat across a
+// surface; UI and sprite sheets clamp.
+VkSampler create_texture_sampler_wrapped(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter,
+                                         VkSamplerAddressMode address_mode);
 
 void renderer_submit_atlas_batch(gfx_handler_t *h, atlas_renderer_t *ar, float z, const atlas_instance_t *instances, uint32_t count, bool screen_space);
 void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, atlas_instance_t *out_inst);
@@ -439,6 +460,13 @@ bool renderer_update_texture_layer(gfx_handler_t *h, texture_t *tex, uint32_t la
 // not matter because the depth buffer decides what is in front.
 void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float thickness);
 void renderer_submit_triangle3(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec4 color);
+// The same triangle with a texture on it. `layer` indexes the array set by
+// renderer_set_texture3(); the coordinates are taken as authored and wrap.
+void renderer_submit_triangle3_textured(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec2 uv_a, vec2 uv_b, vec2 uv_c,
+                                        uint32_t layer, vec4 tint);
+// The texture array every textured 3D triangle this frame samples from. Set it
+// before drawing; passing NULL goes back to untextured.
+void renderer_set_texture3(gfx_handler_t *h, texture_t *texture);
 void renderer_submit_box3(gfx_handler_t *h, vec3 center, vec3 size, vec4 color, bool wire);
 // Builds the view-projection the 3D paths render with, from the orbit camera.
 void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out);

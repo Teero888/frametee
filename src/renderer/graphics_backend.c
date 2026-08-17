@@ -1352,12 +1352,21 @@ static void create_logical_device(gfx_handler_t *handler) {
       .queueCount = 1,
       .pQueuePriorities = queue_priority,
   }};
+  // Anisotropic filtering, when the device has it. A ground plane seen at a
+  // grazing angle — which is most of what a driving game shows — collapses to a
+  // flat average without it, however much detail the texture has.
+  VkPhysicalDeviceFeatures supported = {0};
+  vkGetPhysicalDeviceFeatures(handler->g_physical_device, &supported);
+  VkPhysicalDeviceFeatures enabled = {0};
+  enabled.samplerAnisotropy = supported.samplerAnisotropy;
+
   VkDeviceCreateInfo create_info = {
       .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
       .queueCreateInfoCount = ARRAYSIZE(queue_info),
       .pQueueCreateInfos = queue_info,
       .enabledExtensionCount = device_extensions_count,
       .ppEnabledExtensionNames = device_extensions,
+      .pEnabledFeatures = &enabled,
   };
   VkResult err = vkCreateDevice(handler->g_physical_device, &create_info, handler->g_allocator, &handler->g_device);
   check_vk_result(err);

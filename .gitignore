@@ -16,7 +16,7 @@ build-pgo
 # Rust example game module build output
 games/*/target/
 games/tmnf/Packs
-games/tmnf/Tracks
+games/tmnf/GameData
 
 # Untracked project checkouts & scratch files
 scratch/
