@@ -35,6 +35,56 @@ add_subdirectory(ForeverValidator ${CMAKE_BINARY_DIR}/forevervalidator EXCLUDE_F
 # The validator's objects are linked into a loadable module.
 set_target_properties(forevervalidator_core forevervalidator_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# One copy of the validator at runtime rather than one per binary.
+#
+# Game modules are dlopened privately, so a plugin that wants to simulate this
+# game cannot borrow the module's validator and would otherwise link its own
+# static copy -- sixty megabytes of it, with its own set of every global, vtable
+# and typeinfo the library has. Restoring a capture the module produced into a
+# sandbox built by a second copy works only because those layouts happen to
+# agree; sharing one library removes the question.
+#
+# The submodule builds static archives only and carries no export decoration, so
+# the shared library is assembled here out of them rather than by patching it,
+# which is also why this is a POSIX-only arrangement: on Windows nothing in the
+# archives is marked for export and the module keeps linking them statically.
+if(NOT WIN32)
+    set(FV_SHARED_STUB "${CMAKE_CURRENT_BINARY_DIR}/forevervalidator_shared.cpp")
+    file(WRITE "${FV_SHARED_STUB}"
+        "// Assembled from the validator's archives; see games/tmnf/CMakeLists.txt.\n")
+
+    add_library(forevervalidator_shared SHARED "${FV_SHARED_STUB}")
+    add_library(ForeverValidator::shared ALIAS forevervalidator_shared)
+    add_dependencies(forevervalidator_shared forevervalidator_native forevervalidator_core)
+
+    # Whole-archive by file rather than by target: the archives have to land
+    # inside the flags, in this order, and naming the targets would let the link
+    # line's de-duplication move them out from between them.
+    target_link_options(forevervalidator_shared PRIVATE
+        "-Wl,--whole-archive"
+        "$<TARGET_FILE:forevervalidator_native>"
+        "$<TARGET_FILE:forevervalidator_core>"
+        "-Wl,--no-whole-archive")
+
+    # Linked again by target, privately: that is what carries the archives' own
+    # dependencies -- OpenSSL and zlib, whose imported targets belong to the
+    # submodule's scope and cannot be named from here. Naming them a second time
+    # costs nothing, since the whole-archive pass above has already taken every
+    # object out of them.
+    target_link_libraries(forevervalidator_shared PRIVATE
+        forevervalidator_native
+        forevervalidator_core)
+
+    # Private linkage keeps the archives out of a consumer's link line, so the
+    # one usage requirement they did carry is restated here.
+    target_include_directories(forevervalidator_shared INTERFACE
+        "${CMAKE_CURRENT_SOURCE_DIR}/ForeverValidator/include")
+
+    set(TMNF_VALIDATOR_LIBS ForeverValidator::shared)
+else()
+    set(TMNF_VALIDATOR_LIBS ForeverValidator::native ForeverValidator::core)
+endif()
+
 add_library(tmnf_game MODULE
     tmnf_game.cpp
     tmnf_sandbox.cpp
@@ -61,6 +111,9 @@ set_target_properties(tmnf_game PROPERTIES
 target_include_directories(tmnf_game PRIVATE
     ${FRAMETEE_ABI_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
+    # What this game promises its own plugins. The module compiles against the
+    # same header they do, so the two cannot disagree about a layout.
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/libs/cimgui
     ${CMAKE_SOURCE_DIR}/libs/cimgui/imgui
     # Track thumbnails are JPEGs embedded in the challenge files.
@@ -73,10 +126,7 @@ target_include_directories(tmnf_game PRIVATE
 
 target_compile_definitions(tmnf_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
 
-target_link_libraries(tmnf_game PRIVATE
-    ForeverValidator::native
-    ForeverValidator::core
-)
+target_link_libraries(tmnf_game PRIVATE ${TMNF_VALIDATOR_LIBS})
 
 if(NOT MSVC)
     target_compile_options(tmnf_game PRIVATE -Wall -Wextra -Wno-unused-parameter)

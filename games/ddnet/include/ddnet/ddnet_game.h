@@ -24,6 +24,9 @@ extern "C" {
 struct ft_world {
   SWorldCore core;
   ft_level *level;
+  // Which editor world this belongs to. Every cached copy of one shares it, so
+  // effects raised while stepping land in the right particle system.
+  int index;
 };
 
 // Reads a world handed over by the engine, e.g. from tas_api_t::get_world_state_at.

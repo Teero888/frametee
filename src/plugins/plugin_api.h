@@ -86,7 +86,18 @@ struct tas_api_t {
   void (*draw_rect_filled_world)(vec2 pos, vec2 size, float z, vec4 color);
   void (*draw_text_world)(vec2 pos, const char *text, vec4 color);
 
+  // The same, for a game that declared FT_DIMENSIONS_3D. These are world-space
+  // and depth-tested, so submit order does not matter and there is no z to
+  // order them by. A plugin built for a 3D game has nowhere to put its third
+  // axis in the plane API above, which is the only reason these exist.
+  void (*draw_line_world3)(vec3 start, vec3 end, vec4 color, float thickness);
+  void (*draw_box_world3)(vec3 center, vec3 size, vec4 color, bool wire);
+
   void (*screen_to_world)(float screen_x, float screen_y, float *world_x, float *world_y);
+  // The world-space ray under a screen position, which is what picking in a 3D
+  // level needs: there is no single world point under a cursor when the level
+  // has depth. False when there is no usable camera.
+  bool (*screen_ray_world3)(float screen_x, float screen_y, vec3 out_origin, vec3 out_dir);
   void (*world_to_screen)(float world_x, float world_y, float *screen_x, float *screen_y);
 
   double (*get_time)(void);

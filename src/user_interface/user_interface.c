@@ -704,6 +704,12 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
   // level is unusable for lining up a shot next to a body.
   if (scroll_y != 0.f) c->move_speed = glm_clamp(c->move_speed * (1.f + scroll_y * 0.15f), 0.5f, 10000.f);
   if (typing) return;
+  // Flying is driven entirely from the keyboard, and letters are what other
+  // panels are being used with: a shortcut that flies the camera while someone
+  // is working in the timeline or a plugin window is a bug, not a shortcut.
+  // Orbiting needs no such gate, because it is driven by the mouse and already
+  // asks whether the cursor is over the viewport.
+  if (!handler->user_interface.viewport_focused) return;
 
   vec3 forward, right, up;
   renderer_camera3_forward(handler, forward);

@@ -635,13 +635,19 @@ void renderer_cleanup(gfx_handler_t *handler) {
 
   vkDeviceWaitIdle(device);
 
+  // One row per shader, one slot per render pass the shader can be drawn into.
+  // The bound comes from the array so it cannot drift away from it: walking a
+  // slot too far runs off the end of a row and straight into the next row's
+  // first entry, which destroys every pipeline a second time.
+  const uint32_t pipeline_slots = (uint32_t)(sizeof(renderer->pipeline_cache[0]) / sizeof(renderer->pipeline_cache[0][0]));
   for (uint32_t i = 0; i < MAX_SHADERS; ++i) {
-    for (uint32_t j = 0; j < 4; j++) {
+    for (uint32_t j = 0; j < pipeline_slots; j++) {
       pipeline_cache_entry_t *entry = &renderer->pipeline_cache[i][j];
       if (entry->initialized) {
         vkDestroyPipeline(device, entry->pipeline, allocator);
         vkDestroyPipelineLayout(device, entry->pipeline_layout, allocator);
         vkDestroyDescriptorSetLayout(device, entry->descriptor_set_layout, allocator);
+        entry->initialized = false;
       }
     }
   }
@@ -1539,6 +1545,45 @@ void screen_to_world(gfx_handler_t *h, float sx, float sy, float *wx, float *wy)
   *wy = cam->pos[1] + (ndc_y / (cam->zoom * max_map_size * aspect));
   *wx *= h->world_width;
   *wy *= h->world_height;
+}
+
+bool screen_ray3(gfx_handler_t *h, float sx, float sy, vec3 out_origin, vec3 out_dir) {
+  if (h->viewport[0] <= 0 || h->viewport[1] <= 0) return false;
+
+  mat4 view_proj, inverse;
+  renderer_camera3_view_proj(h, view_proj);
+  glm_mat4_inv(view_proj, inverse);
+
+  const float ndc_x = (2.0f * sx / (float)h->viewport[0]) - 1.0f;
+  const float ndc_y = (2.0f * sy / (float)h->viewport[1]) - 1.0f;
+
+  // Both ends of the depth range, so this does not care which of them the
+  // reversed projection puts the near plane at.
+  vec4 ends[2] = {{ndc_x, ndc_y, 0.0f, 1.0f}, {ndc_x, ndc_y, 1.0f, 1.0f}};
+  vec3 world[2];
+  for (int i = 0; i < 2; ++i) {
+    vec4 p;
+    glm_mat4_mulv(inverse, ends[i], p);
+    if (fabsf(p[3]) < 1e-6f) return false;
+    world[i][0] = p[0] / p[3];
+    world[i][1] = p[1] / p[3];
+    world[i][2] = p[2] / p[3];
+  }
+
+  vec3 eye;
+  renderer_camera3_eye(h, eye);
+  const float d0 = glm_vec3_distance(eye, world[0]);
+  const float d1 = glm_vec3_distance(eye, world[1]);
+  const int near_index = d0 <= d1 ? 0 : 1;
+
+  vec3 direction;
+  glm_vec3_sub(world[near_index ^ 1], world[near_index], direction);
+  if (glm_vec3_norm(direction) < 1e-6f) return false;
+  glm_vec3_normalize(direction);
+
+  glm_vec3_copy(eye, out_origin);
+  glm_vec3_copy(direction, out_dir);
+  return true;
 }
 
 void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy) {

@@ -202,6 +202,18 @@ static void api_draw_text_world(vec2 pos, const char *text, vec4 color) {
   (void)pos; (void)text; (void)color;
 }
 
+static void api_draw_line_world3(vec3 start, vec3 end, vec4 color, float thickness) {
+  extern bool g_is_headless;
+  if (g_is_headless) return;
+  renderer_submit_line3(g_ui_handler_for_api->gfx_handler, start, end, color, thickness);
+}
+
+static void api_draw_box_world3(vec3 center, vec3 size, vec4 color, bool wire) {
+  extern bool g_is_headless;
+  if (g_is_headless) return;
+  renderer_submit_box3(g_ui_handler_for_api->gfx_handler, center, size, color, wire);
+}
+
 static void api_screen_to_world(float screen_x, float screen_y, float *world_x, float *world_y) {
   float lx = screen_x - g_ui_handler_for_api->viewport_window_pos.x;
   float ly = screen_y - g_ui_handler_for_api->viewport_window_pos.y;
@@ -216,6 +228,24 @@ static void api_screen_to_world(float screen_x, float screen_y, float *world_x, 
   }
   
   screen_to_world(g_ui_handler_for_api->gfx_handler, lx, ly, world_x, world_y);
+}
+
+static bool api_screen_ray_world3(float screen_x, float screen_y, vec3 out_origin, vec3 out_dir) {
+  // Same viewport-local correction as api_screen_to_world: the coordinates come
+  // from ImGui and are relative to the whole window.
+  float lx = screen_x - g_ui_handler_for_api->viewport_window_pos.x;
+  float ly = screen_y - g_ui_handler_for_api->viewport_window_pos.y;
+
+  static ImGuiWindow *s_viewport_window = NULL;
+  if (!s_viewport_window) {
+    s_viewport_window = igFindWindowByName("Viewport");
+  }
+  if (s_viewport_window) {
+    lx -= s_viewport_window->DecoOuterSizeX1;
+    ly -= s_viewport_window->DecoOuterSizeY1;
+  }
+
+  return screen_ray3(g_ui_handler_for_api->gfx_handler, lx, ly, out_origin, out_dir);
 }
 
 static void api_world_to_screen(float world_x, float world_y, float *screen_x, float *screen_y) {
@@ -300,7 +330,10 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .draw_circle_world = api_draw_circle_world,
       .draw_rect_filled_world = api_draw_rect_filled_world,
       .draw_text_world = api_draw_text_world,
+      .draw_line_world3 = api_draw_line_world3,
+      .draw_box_world3 = api_draw_box_world3,
       .screen_to_world = api_screen_to_world,
+      .screen_ray_world3 = api_screen_ray_world3,
       .world_to_screen = api_world_to_screen,
       .get_time = api_get_time,
       .get_camera_info = api_get_camera_info,

@@ -6,13 +6,39 @@
 
 cmake_minimum_required(VERSION 3.14)
 
+# One copy of the physics at runtime rather than one per binary.
+#
+# Game modules are dlopened privately, so anything that wants this game's
+# physics used to have to link its own static copy -- which meant its own set of
+# every mutable global the library has, the tile dispatch table among them, and
+# its own vtables and typeinfo. A shared library gives the module and every
+# plugin written for this game the same one.
+#
+# Windows keeps the static arrangement: there the decoration below is real and
+# the existing import-library path already works.
+if(NOT WIN32)
+    set(SHARED_LIB ON CACHE BOOL "Build ddnet_physics as a shared library" FORCE)
+endif()
+
 if(NOT TARGET ddnet_physics)
     add_subdirectory(${CMAKE_SOURCE_DIR}/libs/ddnet_physics ${CMAKE_BINARY_DIR}/libs/ddnet_physics)
 endif()
 
-# The module links the physics library statically, so its objects must be
-# usable inside a shared library.
+# The library's own shared branch decorates its API for MSVC unconditionally,
+# which is meaningless to an ELF build and does not compile there. The submodule
+# is never patched from here, so it is corrected from this side instead.
+if(NOT WIN32)
+    set_property(TARGET ddnet_physics PROPERTY COMPILE_DEFINITIONS "")
+    set_property(TARGET ddnet_physics PROPERTY INTERFACE_COMPILE_DEFINITIONS "")
+    target_compile_definitions(ddnet_physics PUBLIC "DDNET_PHYSICS_API=")
+endif()
+
+# Its objects have to be usable inside a shared library, and so do the map
+# loader's: that is a static library the physics links and therefore carries.
 set_target_properties(ddnet_physics PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(TARGET ddnet_map_loader)
+    set_target_properties(ddnet_map_loader PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
 if(NOT MSVC)
     target_compile_options(ddnet_physics PRIVATE -ftls-model=initial-exec)
 endif()
