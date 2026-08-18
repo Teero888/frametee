@@ -977,6 +977,9 @@ typedef struct ft_engine_api {
   void (*draw_texture)(float z, ft_texture *texture, ft_rect dst, ft_color tint);
 } ft_engine_api;
 
+/* The layer a 3D triangle names when it carries no texture. */
+#define FT_LAYER_UNTEXTURED 0xFFFFFFFFu
+
 /* -------------------------------------------------------------------------
  * Render and UI callback payloads
  * ------------------------------------------------------------------------- */

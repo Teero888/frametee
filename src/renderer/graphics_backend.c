@@ -467,20 +467,6 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   // render pass, which is why this sits ahead of it.
   renderer_sync_external_textures(handler, fd->CommandBuffer, true);
 
-  // Begin offscreen render pass (for game rendering)
-  if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE && handler->offscreen_framebuffer != VK_NULL_HANDLE) {
-    VkClearValue clears[2] = {{.color = {.float32 = {handler->user_interface.bg_color[0], handler->user_interface.bg_color[1],
-                                                     handler->user_interface.bg_color[2], 1.0f}}},
-                              {.depthStencil = {.depth = 1.0f, .stencil = 0}}};
-    VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                                     .renderPass = handler->offscreen_render_pass,
-                                     .framebuffer = handler->offscreen_framebuffer,
-                                     .renderArea = {{0, 0}, {handler->offscreen_width, handler->offscreen_height}},
-                                     .clearValueCount = 2,
-                                     .pClearValues = clears};
-    vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
-  }
-
   // Start ImGui and Renderer Frames
   ImGui_ImplVulkan_NewFrame();
   ImGui_ImplGlfw_NewFrame();
@@ -491,6 +477,22 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   igGetIO_Nil()->ConfigInputTrickleEventQueue = imgui_queue_needs_trickling();
   igNewFrame();
   renderer_begin_frame(handler, handler->current_frame_command_buffer);
+
+  // Begin offscreen render pass (for game rendering)
+  if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE && handler->offscreen_framebuffer != VK_NULL_HANDLE) {
+    // Depth clears to zero because the 3D path runs on a reversed range, where
+    // zero is the far plane. See renderer_camera3_view_proj.
+    VkClearValue clears[2] = {{.color = {.float32 = {handler->user_interface.bg_color[0], handler->user_interface.bg_color[1],
+                                                     handler->user_interface.bg_color[2], 1.0f}}},
+                              {.depthStencil = {.depth = 0.0f, .stencil = 0}}};
+    VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                     .renderPass = handler->offscreen_render_pass,
+                                     .framebuffer = handler->offscreen_framebuffer,
+                                     .renderArea = {{0, 0}, {handler->offscreen_width, handler->offscreen_height}},
+                                     .clearValueCount = 2,
+                                     .pClearValues = clears};
+    vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+  }
 
   return FRAME_OK;
 }

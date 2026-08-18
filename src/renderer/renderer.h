@@ -336,6 +336,8 @@ struct renderer_state_t {
   mesh_t meshes[MAX_MESHES];
   uint32_t mesh_count;
 
+  // One entry per shader and render pass: the swapchain, the offscreen target,
+  // and the thumbnail preview pass.
   pipeline_cache_entry_t pipeline_cache[MAX_SHADERS][3];
 
   // A load/store pass for drawing RGBA preview tiles into thumbnail atlases.
@@ -361,6 +363,7 @@ struct renderer_state_t {
   // sampler in the engine deliberately does not, so the 3D path brings its own
   // rather than depending on how a game happened to create its texture.
   VkSampler primitive3d_sampler;
+
   buffer_t dynamic_vertex_buffer;
   buffer_t dynamic_index_buffer;
   primitive_vertex_t *vertex_buffer_ptr;

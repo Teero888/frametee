@@ -63,7 +63,12 @@ inline constexpr std::uint32_t kMaxHorizonMs = 1800000u;
 // This is well past what a view of a decimated track normally needs; it exists
 // so that a huge map degrades by losing its far side rather than by dropping to
 // single figures of frames a second.
-inline constexpr std::size_t kTriangleBudget = 200000u;
+inline constexpr std::size_t kTriangleBudget = 380000u;
+// Reserved off the top of it for the sky and the ground plane behind the track.
+// A stadium's shell is a few thousand triangles and the track around it is
+// hundreds of thousands, so spending what the track leaves over left the sky
+// undrawn on every real map.
+inline constexpr std::size_t kBackdropBudget = 30000u;
 
 // --- input record ------------------------------------------------------------
 
@@ -121,11 +126,6 @@ std::vector<fve::PhysicsSandboxInputEvent> BuildInputEvents(const std::vector<fv
 // kilometres per hour.
 inline float ToKmh(float metres_per_second) { return metres_per_second * 3.6f; }
 
-// The single directional light the whole game is lit by. The renderer's 3D
-// path is flat unlit vertex colour, so every surface bakes its shade against
-// this at load and pays nothing per frame.
-inline const ft_vec3 kSunDirection = Normalize(ft_vec3{0.38f, 0.86f, 0.34f});
-
 // --- track geometry ----------------------------------------------------------
 
 // A layer this large is never a real page of the texture array, and marks a
@@ -134,12 +134,15 @@ inline constexpr std::uint32_t kNoTextureLayer = 0xFFFFFFFFu;
 
 struct Triangle {
   ft_vec3 a, b, c;
-  // The colour is the light baked in at load; on a textured triangle it is what
-  // multiplies the texture, which is how one flat sun still shades a track that
-  // the renderer lights not at all.
+  // The surface's own colour. On a textured triangle it is white and
+  // only carries the alpha, because the picture is the appearance.
   std::uint32_t color = 0xFFFFFFFFu;
   ft_vec2 uv[3]{};
   std::uint32_t layer = kNoTextureLayer;
+  // Looked at from both sides, so it survives the back-face cull whichever way
+  // it is wound. Fences, banners and the sky are all sheets with nothing behind
+  // them, and culling a sheet is the same as deleting it half the time.
+  bool two_sided = false;
 };
 
 // Triangles are bucketed by centroid into columns of a flat grid; each bucket
@@ -230,7 +233,67 @@ private:
   mutable std::unordered_map<std::string, std::unordered_map<std::string, std::string>> directories_;
 };
 
+// --- what a material binds where ---------------------------------------------
+
+// One texture a material names, under the sampler it binds it to. The sampler
+// is the only thing that says what the texture is *for*: "Diffuse" is the
+// surface's own picture and everything beside it — "Normal", "Specular",
+// "Occlusion", the environment cubes — modifies it. File names cannot be used
+// for this, because plenty of them end in the same letters for other reasons.
+struct MaterialTextureSlot {
+  std::string sampler;
+  std::string name;             // as the material spells it
+  std::uint32_t node_index = 0; // where it sat in the file's reference table
+  std::string path;             // resolved plain path of the .Texture.gbx
+};
+
+// Every texture a material names. See tmnf_material.cpp.
+bool ReadMaterialTextures(const PackSet &packs, const std::string &material_path,
+                          std::vector<MaterialTextureSlot> *out);
+// The one of them that is the surface's own picture, by the sampler it is bound
+// to rather than by what it is called.
+std::optional<std::string> DiffuseTextureOf(const std::vector<MaterialTextureSlot> &slots);
+
 // --- the track's materials ---------------------------------------------------
+
+// How a material is meant to be drawn, as opposed to what picture is on it.
+//
+// TrackMania puts this in the shader a material is built from rather than in the
+// material itself: "TDiff PX2 Trans 2Sided" is a transparent, two-sided surface
+// and "Techno/Media/Material/Sky" is the sky, whatever texture either happens to
+// name. The shader is referenced by path, so the path is what these are read
+// from; see MaterialDrawStyle in tmnf_texture.cpp for the table.
+//
+// The vocabulary and the classifications follow GbxTools3D, which is a viewer
+// for these same environments and has already worked out which shader means
+// what: https://github.com/BigBang1112/gbx-tools-3d
+struct MaterialStyle {
+  // A shell drawn behind everything rather than a surface standing in the
+  // world: the sky, and the glows and flares that go with it. These are routed
+  // into the backdrop bucket, which is drawn out of a reserve of its own.
+  bool unlit = false;
+  // Looked at from both sides, so the winding says nothing about which faces
+  // are worth drawing.
+  bool double_sided = false;
+  // Keeps the alpha its texture carries. Everything else is forced opaque,
+  // because a stray alpha channel on a surface that was never meant to use one
+  // is what turns a wall into a window.
+  bool transparent = false;
+  // Never drawn: collision proxies, fence depth stand-ins, fake shadow skirts.
+  // These are in the geometry and were never meant to be seen.
+  bool invisible = false;
+  // Textured by where a surface is in the world rather than by its authored
+  // coordinates. Terrain is laid out this way — a grass tile carries no useful
+  // coordinates of its own and is expected to take them from the ground plane.
+  bool world_uv = false;
+  // Adds its light to what is behind it: glows, lit signs, spot flares.
+  bool additive = false;
+  bool water = false;
+};
+
+// World-space texturing divides the coordinate by this, so one tile of the
+// picture covers sixteen metres of ground. It is the game's own constant.
+inline constexpr float kWorldUvScale = 1.f / 16.f;
 
 struct TrackMaterial {
   // Where the material was resolved from. Empty when it could not be named,
@@ -305,11 +368,24 @@ std::string EnvironmentPackName(fv::MapEnvironment environment);
 // --- textures ----------------------------------------------------------------
 
 // Every layer of a texture array is the same size, and the game's textures run
-// from 32 to 1024 pixels. The page has to be big enough that a road surface
-// still reads as concrete a few metres ahead of the car: at 256 the mip chain
-// had turned every surface back into the flat colour this whole path exists to
-// replace. At 512 a full track costs about forty megabytes of pages.
-inline constexpr std::uint32_t kTexturePageSize = 512u;
+// from 32 to 2048 pixels, so one size has to be chosen for all of them. It is
+// picked at upload time from what the track actually decoded rather than fixed
+// here, because the two things that go wrong pull in opposite directions: a
+// page smaller than the textures blurs a road into the flat colour this whole
+// path exists to replace, and a page larger than the memory available fails to
+// allocate. See TextureLibrary::Upload.
+//
+// The ceiling on the page. Stadium's own surfaces are authored at 1024 and its
+// advertising boards at 2048; past 1024 the difference is a logo's edge on a
+// hoarding, and the cost is four times the memory for it.
+inline constexpr std::uint32_t kMaxTexturePageSize = 1024u;
+// Below this a track stops reading as its own textures at all, so a level that
+// cannot afford the pages loses layers rather than resolution.
+inline constexpr std::uint32_t kMinTexturePageSize = 256u;
+// What the array as a whole may cost. A stadium track decodes about forty
+// textures and an island one about a hundred and fifty, so this is what decides
+// whether they land at 1024 or at 512.
+inline constexpr std::size_t kTextureMemoryBudget = 320u * 1024u * 1024u;
 // The ceiling is the engine's array limit rather than anything about the game;
 // a full stadium track uses about a hundred and fifty.
 inline constexpr std::size_t kMaxTextureLayers = 512u;
@@ -328,6 +404,18 @@ public:
   // this is the first time it has been asked for. Empty when the material names
   // no surface texture, or names one this module cannot read.
   std::optional<std::uint32_t> Layer(const PackSet &packs, const std::string &material_path);
+  // How the material is meant to be drawn, read from the shader it is built
+  // from. Cached alongside the layer, because both come from the same file.
+  MaterialStyle Style(const PackSet &packs, const std::string &material_path);
+  // The sky, composed from the environment's mood.
+  //
+  // The dome in a track's scene carries no material at all, so there is nothing
+  // to look a picture up by. The picture is not in the packs either: it is a
+  // property of the time of day the map was saved with, and lives beside the
+  // rest of that mood's assets in the installed game. Two of them, in fact —
+  // a ceiling over the whole sky and a panorama that fades in towards the
+  // horizon — which is why this composes rather than just loads.
+  std::optional<std::uint32_t> SkyLayer(const PackSet &packs, const std::string &environment, const std::string &mood);
   // Hands the decoded layers to the engine as one array texture. Called once,
   // after everything a level needs has been decoded.
   bool Upload(ft_game *game);
@@ -339,12 +427,68 @@ public:
 
 private:
   static std::optional<std::string> DiffuseImagePath(const PackSet &packs, const std::string &material_path);
+  std::uint32_t ChoosePageSize() const;
 
-  std::vector<std::vector<std::uint8_t>> layers_;
+  // A decoded image at the size it was authored. Resampling to the array's page
+  // is left until upload, when what the whole track needs is known: deciding it
+  // one texture at a time is what forced every page to a guess made before any
+  // of them had been read.
+  struct Page {
+    std::vector<std::uint8_t> rgba;
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+    // Whether any material that paints with this image is actually transparent.
+    // TrackMania stores specular strength in the alpha channel of plenty of
+    // ordinary opaque textures, so sampling alpha everywhere turns walls into
+    // windows and takes most of the car with it. A page nothing draws
+    // transparently is forced opaque at upload.
+    bool alpha_used = false;
+  };
+
+  std::vector<Page> layers_;
   std::unordered_map<std::string, std::optional<std::uint32_t>> by_material_;
   std::unordered_map<std::string, std::optional<std::uint32_t>> by_image_;
+  std::unordered_map<std::string, MaterialStyle> style_by_material_;
   ft_texture *texture_ = nullptr;
   std::size_t uploaded_ = 0u;
+  std::uint32_t page_size_ = 0u;
+};
+
+// --- the wheels turning ------------------------------------------------------
+
+// The editor draws several worlds at once — the run and its prediction ghosts —
+// and each turns its own wheels.
+inline constexpr std::size_t kMaxSpinnyWorlds = 16u;
+
+// How far a car's wheels have rolled.
+//
+// The simulation reports how fast the car is going and never how far a wheel
+// has turned, so the angle is integrated from the speed. That makes it
+// presentation state rather than part of the run, and it has to behave when the
+// timeline is not simply playing forwards: scrubbing, stepping back, jumping to
+// a checkpoint. The rule is that a step small enough to be playback advances
+// the angle and anything larger just re-anchors, because catching up across a
+// ten second jump would spin the wheel through a thousand revolutions nobody
+// asked to see.
+struct WheelSpin {
+  float angle = 0.f;
+  std::uint64_t time_ms = 0u;
+  bool anchored = false;
+
+  // The angle at `now`, given the speed the car is doing there.
+  float Advance(std::uint64_t now, float metres_per_second, float wheel_radius) {
+    // Anything past this is a seek rather than a frame.
+    constexpr std::uint64_t kContinuousMs = 250u;
+    if (anchored && now > time_ms && now - time_ms <= kContinuousMs && wheel_radius > 1e-3f) {
+      const float seconds = static_cast<float>(now - time_ms) * 0.001f;
+      angle += metres_per_second * seconds / wheel_radius;
+      // Kept in range so the float never loses the precision a slow roll needs.
+      angle = std::fmod(angle, 2.f * kPi);
+    }
+    time_ms = now;
+    anchored = true;
+    return angle;
+  }
 };
 
 // --- the vehicle model -------------------------------------------------------
@@ -364,6 +508,8 @@ inline bool IsWheelPart(std::uint8_t part) { return part < VEHICLE_PART_BODY; }
 
 struct VehicleFace {
   ft_vec3 a, b, c;
+  // The plane the face lies in, corrected against the authored normals at
+  // decode so a mirrored part is still wound outwards.
   ft_vec3 normal;
   ft_color color{1.f, 1.f, 1.f, 1.f};
   ft_vec2 uv[3]{};
@@ -488,6 +634,12 @@ struct ft_game {
 
   // The car's authored model, decoded from the pack the vehicle comes from.
   tmnf::VehicleModel vehicle;
+
+  // How far each world's wheels have turned. The simulation reports a speed but
+  // never an angle, so it is integrated here — which means it belongs to the
+  // presentation and not to the run, and a timeline that jumps must not try to
+  // catch up across the gap. See tmnf::WheelSpin.
+  tmnf::WheelSpin wheel_spin[tmnf::kMaxSpinnyWorlds];
 
   // The installed packs, and the pictures pulled out of them. Both belong to
   // the level rather than to the game, but a car is shared between tracks that

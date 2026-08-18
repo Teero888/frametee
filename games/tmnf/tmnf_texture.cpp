@@ -122,7 +122,8 @@ bool DecodeDds(const std::vector<unsigned char> &bytes, std::uint32_t *width, st
   if (!ParseDds(bytes, &dds)) return false;
   // Something the size of a whole level is not a surface texture; it is a
   // lightmap atlas or a cube map face strip, and unpacking one costs more than
-  // it can possibly be worth on screen.
+  // it can possibly be worth on screen. Stadium's advertising hoardings are
+  // genuinely 2048, so that is the line rather than anything below it.
   if (dds.width > 2048u || dds.height > 2048u) return false;
 
   *width = dds.width;
@@ -172,6 +173,45 @@ bool DecodeDds(const std::vector<unsigned char> &bytes, std::uint32_t *width, st
     return true;
   }
   return false;
+}
+
+// --- what a texture's alpha channel is for -----------------------------------
+
+// TrackMania puts two completely different things in the alpha of a diffuse
+// texture, and which one it is decides whether sampling it as opacity produces
+// a fence or a hole in a wall.
+//
+// A cut-out — a chain-link fence, a railing, a tree card, a sign with a shaped
+// edge — has alpha that is almost entirely on or off. Everything else is using
+// the channel to carry specular strength or gloss, which varies smoothly and
+// means nothing as an opacity: sample that and a car body turns to glass.
+//
+// The shader would say which, but a TrackMania material references its shader as
+// an embedded node rather than a file, so there is no shader name to look up.
+// The distribution of the channel says it just as well.
+enum class AlphaUse : std::uint8_t {
+  Opaque, // nothing there: the channel is unused or solid
+  Cutout, // an opacity, and the surface has to be drawn with it
+  Gloss,  // a material property that happens to live in this channel
+};
+
+AlphaUse ClassifyAlpha(const std::vector<std::uint8_t> &rgba) {
+  const std::size_t texels = rgba.size() / 4u;
+  if (texels == 0u) return AlphaUse::Opaque;
+
+  std::size_t clear = 0u, solid = 0u;
+  for (std::size_t i = 0; i < texels; ++i) {
+    const std::uint8_t a = rgba[i * 4u + 3u];
+    if (a < 16u) ++clear;
+    else if (a > 240u) ++solid;
+  }
+  if (clear == 0u) return solid == texels ? AlphaUse::Opaque : AlphaUse::Gloss;
+
+  // Some of it is see-through. That is only an opacity if the rest is not a
+  // ramp: a twentieth of the picture in between is the soft edge a cut-out has,
+  // and more than that is a gradient nobody meant as transparency.
+  const std::size_t between = texels - clear - solid;
+  return between * 20u <= texels ? AlphaUse::Cutout : AlphaUse::Gloss;
 }
 
 // --- resampling --------------------------------------------------------------
@@ -266,6 +306,104 @@ struct TextureCandidate {
   TextureRole role = TEXTURE_ROLE_PLAIN;
 };
 
+// --- how a material is drawn -------------------------------------------------
+
+// TrackMania's shaders, and what each one means on screen.
+//
+// A material is a texture plus a shader, and it is the shader that says whether
+// the surface is transparent, two-sided, unlit, textured from the world, or not
+// meant to be drawn at all. Shaders are shared across every environment — the
+// same "TDiff PX2 Trans 2Sided" is behind a stadium fence and an island railing
+// — so this table is short and covers all of them.
+//
+// The classifications are taken from GbxTools3D, a viewer for these same
+// environments, which has already established which shader means what:
+// https://github.com/BigBang1112/gbx-tools-3d. The names are matched with the
+// extension stripped and separators normalised, so a reference written
+// "Techno\Media\Material\Sky.Shader.Gbx" finds "techno/media/material/sky".
+struct ShaderStyleEntry {
+  const char *name;
+  MaterialStyle style;
+};
+
+const ShaderStyleEntry kShaderStyles[] = {
+    // Terrain: textured by where it is rather than by authored coordinates.
+    {"techno/media/material/pdiff pdiff pa px2", MaterialStyle{.world_uv = true}},
+    {"techno2/media/material/pdiff pdiff pa px2 grass2", MaterialStyle{.world_uv = true}},
+    {"techno2/media/material/pdiff pdiff pa tocc px2 grass", MaterialStyle{.world_uv = true}},
+    {"techno2/media/material/pdiff pdiff pa tocc px2 grass nolightv", MaterialStyle{.world_uv = true}},
+    {"techno/media/material/pdiff fresnel px2", MaterialStyle{.world_uv = true}},
+    {"techno/media/material/pdisp pdiff px2", MaterialStyle{.world_uv = true}},
+    {"techno2/media/material/soilgen21", MaterialStyle{.world_uv = true}},
+    {"techno3/media/material/tech3 block pdiff_spec_norm", MaterialStyle{.world_uv = true}},
+    {"techno3/media/material/tech3 block pdiff_spec_norm grassx2", MaterialStyle{.world_uv = true}},
+    {"techno3/media/material/tech3 warp pyapxzdiff", MaterialStyle{.world_uv = true}},
+    {"techno3/media/material/tech3 warp_pyadiff_to_pdiffpgrassx2", MaterialStyle{.world_uv = true}},
+
+    // The sky, drawn as authored from inside the shell it is painted on.
+    {"techno/media/material/sky", MaterialStyle{.unlit = true, .double_sided = true}},
+    {"sky/media/material/skyday", MaterialStyle{.unlit = true, .double_sided = true}},
+    {"island/media/material/islandsky", MaterialStyle{.unlit = true, .double_sided = true}},
+    {"techno3/media/material/sky/tech3 sky", MaterialStyle{.unlit = true, .double_sided = true}},
+
+    // Alpha-cut surfaces: fences, railings, foliage cards, glass.
+    {"techno/media/material/tdiff px2 trans", MaterialStyle{.double_sided = true, .transparent = true}},
+    {"techno/media/material/tdiff px2 trans 2sided", MaterialStyle{.double_sided = true, .transparent = true}},
+    {"techno/media/material/tdiff px2 trans normy pc3only", MaterialStyle{.double_sided = true, .transparent = true}},
+    {"techno/media/material/tdiffg px2 cspec fcout trans", MaterialStyle{.transparent = true}},
+    {"techno/media/material/tdiffg px2 cspecl trans", MaterialStyle{.transparent = true}},
+    {"techno2/media/material/tdiff_spec_nrm tocc cspecsoft", MaterialStyle{.transparent = true}},
+    {"techno2/media/material/tdiff_spec_nrm tocc cspecsoft nolightv", MaterialStyle{.transparent = true}},
+    {"techno2/media/material/tdiff_spec_nrm tocc cspecsoft trans", MaterialStyle{.transparent = true}},
+    {"techno3/media/material/tech3 block tdiffa_spec_norm", MaterialStyle{.transparent = true}},
+    {"techno3/media/material/tech3_block_tdiffablend_specnorm_cubeout", MaterialStyle{.transparent = true}},
+    {"island/media/material/modelalpha1sidedlight", MaterialStyle{.transparent = true}},
+    {"island/media/material/modelalpha2sidednolight",
+     MaterialStyle{.double_sided = true, .transparent = true}},
+    {"island/media/material/islandwindowsmip", MaterialStyle{.transparent = true}},
+    {"vehicles/media/material/sportcarglass", MaterialStyle{.transparent = true}},
+
+    // Light that adds to what is behind it.
+    {"techno/media/material/tadd", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+    {"techno/media/material/tadd zbias", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+    {"techno/media/material/tadd night", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+    {"techno/media/material/tadd night zbias",
+     MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+    {"techno2/media/material/tselfi add", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+    {"island/media/material/modellightvolume",
+     MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+    {"alpine/media/material/alpinesignsselfillum",
+     MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+    {"island/media/material/islandbeachfoam", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+
+    // Never drawn. These are collision and depth stand-ins that live in the
+    // same geometry as the surfaces around them, which is why leaving them in
+    // gives a track a layer of flat panels fighting it for the depth buffer.
+    {"techno2/media/material/vdep fence", MaterialStyle{.invisible = true}},
+    {"techno/media/material/shadowskirt", MaterialStyle{.invisible = true}},
+
+    {"techno/media/material/sea", MaterialStyle{.transparent = true, .water = true}},
+    {"techno/media/material/seamultiy", MaterialStyle{.transparent = true, .water = true}},
+    {"techno3/media/material/tech3 sea", MaterialStyle{.transparent = true, .water = true}},
+};
+
+// A resolved plain path, as the table spells it: lowercased, forward slashes,
+// and everything from the first extension dot onwards removed.
+std::string ShaderKey(std::string_view path) {
+  std::string key = Lower(path);
+  for (char &c : key)
+    if (c == '\\') c = '/';
+  const std::size_t dot = key.find('.');
+  if (dot != std::string::npos) key.resize(dot);
+  return key;
+}
+
+const MaterialStyle *StyleForKey(const std::string &key) {
+  for (const ShaderStyleEntry &entry : kShaderStyles)
+    if (key == entry.name) return &entry.style;
+  return nullptr;
+}
+
 // Every texture a file names, with the ones named outright as support dropped.
 void CollectTextures(const GbxFile &file, std::vector<TextureCandidate> *out) {
   for (const GbxReference &reference : file.references) {
@@ -309,7 +447,32 @@ void ScoreCandidates(std::vector<TextureCandidate> *candidates) {
 TextureLibrary::TextureLibrary() = default;
 TextureLibrary::~TextureLibrary() = default;
 
+// The image a `.Texture.gbx` descriptor points at. A texture file is itself
+// only a reference to a picture plus the sampling state the engine here has no
+// use for.
+std::optional<std::string> ImageOfTexture(const PackSet &packs, const std::string &texture_path) {
+  GbxFile texture;
+  if (!packs.References(texture_path, &texture)) return std::nullopt;
+  for (const GbxReference &image : texture.references) {
+    const std::string lower = Lower(image.name);
+    if (lower.find(".dds") != std::string::npos || lower.find(".tga") != std::string::npos) return image.path;
+  }
+  return std::nullopt;
+}
+
 std::optional<std::string> TextureLibrary::DiffuseImagePath(const PackSet &packs, const std::string &material_path) {
+  // What the material actually says. A sampler named "Diffuse" is the surface's
+  // own picture, and nothing about a file name is as reliable as that.
+  std::vector<MaterialTextureSlot> slots;
+  if (ReadMaterialTextures(packs, material_path, &slots)) {
+    if (const std::optional<std::string> diffuse = DiffuseTextureOf(slots)) {
+      if (std::optional<std::string> image = ImageOfTexture(packs, *diffuse)) return image;
+    }
+  }
+
+  // Falling back to reading the names. Some materials bind their pictures
+  // through routes this module does not decode, and a track drawn from a good
+  // guess is worth more than one drawn in flat colours.
   GbxFile material;
   if (!packs.References(material_path, &material)) return std::nullopt;
 
@@ -341,17 +504,44 @@ std::optional<std::string> TextureLibrary::DiffuseImagePath(const PackSet &packs
   std::stable_sort(candidates.begin(), candidates.end(),
                    [](const TextureCandidate &a, const TextureCandidate &b) { return a.role > b.role; });
 
-  // A texture file is itself only a reference to an image, plus the sampling
-  // state the engine here has no use for.
   for (const TextureCandidate &candidate : candidates) {
-    GbxFile texture;
-    if (!packs.References(candidate.path, &texture)) continue;
-    for (const GbxReference &image : texture.references) {
-      const std::string lower = Lower(image.name);
-      if (lower.find(".dds") != std::string::npos || lower.find(".tga") != std::string::npos) return image.path;
-    }
+    if (std::optional<std::string> image = ImageOfTexture(packs, candidate.path)) return image;
   }
   return std::nullopt;
+}
+
+MaterialStyle TextureLibrary::Style(const PackSet &packs, const std::string &material_path) {
+  const auto cached = style_by_material_.find(material_path);
+  if (cached != style_by_material_.end()) return cached->second;
+
+  MaterialStyle style;
+  GbxFile material;
+  if (packs.References(material_path, &material)) {
+    // A material is usually a texture plus a shader, and it is the shader that
+    // says how the surface behaves. A few materials are shaders themselves and
+    // are named in the table directly, so both spellings are tried.
+    for (const GbxReference &reference : material.references) {
+      if (Lower(reference.name).find(".shader.gbx") == std::string::npos) continue;
+      if (const MaterialStyle *found = StyleForKey(ShaderKey(reference.path))) {
+        style = *found;
+        break;
+      }
+    }
+  }
+  if (const MaterialStyle *found = StyleForKey(ShaderKey(material_path))) style = *found;
+
+  // A picture whose alpha is a cut-out says what the missing shader would have:
+  // this is a fence, a railing, a shaped sign — a sheet, drawn with its opacity
+  // and looked at from both sides.
+  if (const std::optional<std::uint32_t> layer = Layer(packs, material_path)) {
+    if (layers_[*layer].alpha_used) {
+      style.transparent = true;
+      style.double_sided = true;
+    }
+  }
+
+  style_by_material_.emplace(material_path, style);
+  return style;
 }
 
 std::optional<std::uint32_t> TextureLibrary::Layer(const PackSet &packs, const std::string &material_path) {
@@ -386,17 +576,86 @@ std::optional<std::uint32_t> TextureLibrary::Layer(const PackSet &packs, const s
     return std::nullopt;
   }
 
-  std::vector<std::uint8_t> page;
-  if (width == kTexturePageSize && height == kTexturePageSize) {
-    page = std::move(rgba);
-  } else {
-    Resample(rgba, width, height, &page, kTexturePageSize, kTexturePageSize);
+  // Kept at the size it was authored. What page it ends up on is decided once,
+  // when the whole track's textures are known; see Upload.
+  const std::uint32_t layer = static_cast<std::uint32_t>(layers_.size());
+  const bool cutout = ClassifyAlpha(rgba) == AlphaUse::Cutout;
+  layers_.push_back(Page{std::move(rgba), width, height, cutout});
+  by_image_.emplace(*image, layer);
+  by_material_.emplace(material_path, layer);
+  return layer;
+}
+
+std::optional<std::uint32_t> TextureLibrary::SkyLayer(const PackSet &packs, const std::string &environment,
+                                                      const std::string &mood) {
+  if (environment.empty() || mood.empty()) return std::nullopt;
+  // Not a file, so it cannot collide with one: the pack paths this is keyed
+  // beside all start with an environment name.
+  const std::string key = "@sky\\" + environment + "\\" + mood;
+  if (const auto shared = by_image_.find(key); shared != by_image_.end()) return shared->second;
+
+  struct Image {
+    std::uint32_t width = 0u, height = 0u;
+    std::vector<std::uint8_t> rgba;
+    bool ok = false;
+  };
+  const auto load = [&](const char *name) {
+    Image image;
+    std::vector<unsigned char> bytes;
+    const std::string path = environment + "\\Media\\Moods\\" + mood + "\\" + name;
+    image.ok = packs.Read(path, &bytes) && DecodeDds(bytes, &image.width, &image.height, &image.rgba);
+    return image;
+  };
+
+  const Image ceiling = load("SkyCeiling.dds");
+  const Image panoramic = load("SkyPanoramic.dds");
+  if (!ceiling.ok && !panoramic.ok) {
+    by_image_.emplace(key, std::nullopt);
+    return std::nullopt;
+  }
+  if (layers_.size() >= kMaxTextureLayers) return std::nullopt;
+
+  // Both are mapped the same way on the dome — the coordinate runs from the
+  // pole at zero to the horizon at one — so compositing them is a straight
+  // per-pixel blend at whichever of the two is the larger.
+  const std::uint32_t width = std::max(ceiling.width, panoramic.width);
+  const std::uint32_t height = std::max(ceiling.height, panoramic.height);
+  Page page;
+  page.width = width;
+  page.height = height;
+  page.alpha_used = false;
+  page.rgba.assign(static_cast<std::size_t>(width) * height * 4u, 255u);
+
+  const auto sample = [&](const Image &image, std::uint32_t x, std::uint32_t y, std::uint8_t out[4]) {
+    const std::uint32_t sx = std::min(image.width - 1u, static_cast<std::uint32_t>(
+                                                            static_cast<std::uint64_t>(x) * image.width / width));
+    const std::uint32_t sy = std::min(image.height - 1u, static_cast<std::uint32_t>(
+                                                             static_cast<std::uint64_t>(y) * image.height / height));
+    std::memcpy(out, &image.rgba[(static_cast<std::size_t>(sy) * image.width + sx) * 4u], 4);
+  };
+
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      std::uint8_t *dst = &page.rgba[(static_cast<std::size_t>(y) * width + x) * 4u];
+      std::uint8_t base[4] = {128u, 150u, 200u, 255u};
+      if (ceiling.ok) sample(ceiling, x, y, base);
+      std::memcpy(dst, base, 3);
+      if (panoramic.ok) {
+        // The panorama is transparent at the pole and opaque at the horizon,
+        // which is exactly the sunset band lying over the ceiling behind it.
+        std::uint8_t over[4];
+        sample(panoramic, x, y, over);
+        const std::uint32_t a = over[3];
+        for (int c = 0; c < 3; ++c)
+          dst[c] = static_cast<std::uint8_t>((over[c] * a + dst[c] * (255u - a)) / 255u);
+      }
+      dst[3] = 255u;
+    }
   }
 
   const std::uint32_t layer = static_cast<std::uint32_t>(layers_.size());
   layers_.push_back(std::move(page));
-  by_image_.emplace(*image, layer);
-  by_material_.emplace(material_path, layer);
+  by_image_.emplace(key, layer);
   return layer;
 }
 
@@ -404,7 +663,36 @@ void TextureLibrary::Clear() {
   layers_.clear();
   by_material_.clear();
   by_image_.clear();
+  style_by_material_.clear();
   uploaded_ = 0u;
+  page_size_ = 0u;
+}
+
+// The one size every layer of the array is stored at.
+//
+// The array cannot hold layers of different sizes, so this is a single choice
+// made for the whole track. It is the largest side any of its textures were
+// actually authored at, because anything smaller throws away detail that is
+// there — the stadium's road and its hoardings are 1024 and 2048, and squashing
+// them to a fixed 512 is what made every surface read as a blur a few metres
+// ahead of the car. It is then halved until the array fits the memory budget,
+// which is what keeps an environment with a hundred and fifty textures from
+// asking for a gigabyte of them.
+std::uint32_t TextureLibrary::ChoosePageSize() const {
+  std::uint32_t largest = kMinTexturePageSize;
+  for (const Page &page : layers_) largest = std::max({largest, page.width, page.height});
+
+  // Round up to a power of two: a mip chain is exact on one and lopsided on
+  // anything else, and every one of the game's own textures is one already.
+  std::uint32_t size = kMinTexturePageSize;
+  while (size < largest && size < kMaxTexturePageSize) size *= 2u;
+
+  const std::size_t bytes_per_page = 4u; // RGBA8
+  while (size > kMinTexturePageSize &&
+         static_cast<std::size_t>(size) * size * bytes_per_page * layers_.size() > kTextureMemoryBudget) {
+    size /= 2u;
+  }
+  return size;
 }
 
 bool TextureLibrary::Upload(ft_game *game) {
@@ -420,11 +708,13 @@ bool TextureLibrary::Upload(ft_game *game) {
     texture_ = nullptr;
   }
 
+  page_size_ = ChoosePageSize();
+
   ft_texture_desc desc{};
   desc.struct_size = sizeof(desc);
   desc.pixels = nullptr;
-  desc.width = kTexturePageSize;
-  desc.height = kTexturePageSize;
+  desc.width = page_size_;
+  desc.height = page_size_;
   desc.layers = static_cast<std::uint32_t>(layers_.size());
   desc.format = FT_TEXTURE_RGBA8;
   desc.mipmaps = true;
@@ -432,12 +722,34 @@ bool TextureLibrary::Upload(ft_game *game) {
   texture_ = api->texture_create(&desc);
   if (texture_ == nullptr) return false;
 
+  // A texture that is not square is stretched onto a square page rather than
+  // letterboxed. Coordinates are normalised, so the picture comes out the shape
+  // the surface asks for either way; what a stretch costs is resolution along
+  // the shorter side, and what letterboxing would cost is bleeding at the seam
+  // of every tiled surface on the track.
+  std::vector<std::uint8_t> scratch;
+  std::size_t rescaled = 0u;
   for (std::size_t i = 0; i < layers_.size(); ++i) {
-    api->texture_update_layer(texture_, static_cast<std::uint32_t>(i), layers_[i].data(), kTexturePageSize,
-                              kTexturePageSize);
+    Page &page = layers_[i];
+    // Alpha is only an opacity where a material says so. Everywhere else the
+    // game is using the channel to carry specular strength, and plenty of
+    // ordinary surfaces store a zero in it — sampling that as opacity is what
+    // made the car, its wheels and a good deal of the stadium see-through.
+    if (!page.alpha_used) {
+      for (std::size_t p = 3u; p < page.rgba.size(); p += 4u) page.rgba[p] = 255u;
+    }
+
+    const std::uint8_t *pixels = page.rgba.data();
+    if (page.width != page_size_ || page.height != page_size_) {
+      Resample(page.rgba, page.width, page.height, &scratch, page_size_, page_size_);
+      pixels = scratch.data();
+      ++rescaled;
+    }
+    api->texture_update_layer(texture_, static_cast<std::uint32_t>(i), pixels, page_size_, page_size_);
   }
   uploaded_ = layers_.size();
-  Log(game, FT_LOG_INFO, "Loaded %zu track textures at %ux%u.", layers_.size(), kTexturePageSize, kTexturePageSize);
+  Log(game, FT_LOG_INFO, "Loaded %zu track textures at %ux%u (%zu resampled).", layers_.size(), page_size_, page_size_,
+      rescaled);
   return true;
 }
 

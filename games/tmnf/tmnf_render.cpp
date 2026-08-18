@@ -61,10 +61,12 @@ std::size_t DrawGrid(const ft_engine_api *api, const std::vector<Triangle> &tria
     const GridCell &cell = *entry.cell;
     for (std::uint32_t i = 0; i < cell.count && drawn < budget; ++i) {
       const Triangle &tri = triangles[cell.first + i];
-      if (backface_cull) {
+      if (backface_cull && !tri.two_sided) {
         // The renderer never culls back faces itself, so half the triangles of
         // a solid track are drawn purely to be overwritten. Winding was made
-        // consistent at load, which is what makes this safe.
+        // consistent at load, which is what makes this safe — and the surfaces
+        // that are sheets rather than solids say so, because a sheet looked at
+        // from behind is still meant to be there.
         const ft_vec3 face = Cross(Sub(tri.b, tri.a), Sub(tri.c, tri.a));
         if (Dot(face, Sub(eye, tri.a)) <= 0.f) continue;
       }
@@ -106,15 +108,22 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
   const float opacity = std::clamp(frame->opacity, 0.f, 1.f);
 
   std::size_t budget = kTriangleBudget;
-  budget -= std::min(budget, DrawGrid(api, level->track, level->track_grid, frustum, have_frustum, eye,
-                                      settings.backface_cull, opacity, budget));
 
-  // The stadium shell is drawn last and only with what the track left over: it
-  // is scenery, and losing part of it costs nothing a driver can feel.
-  if (settings.draw_background && budget > 0) {
-    DrawGrid(api, level->backdrop, level->backdrop_grid, frustum, have_frustum, eye, settings.backface_cull, opacity,
-             budget);
+  // The sky and the ground plane the environment is painted on come first, and
+  // out of a reserve of their own. Drawing them from what the track left over
+  // meant they were never drawn at all on any track big enough to spend the
+  // budget — which is exactly what a stadium is, and why the sky was missing.
+  //
+  // They are also never back-face culled. A sky is a shell with the viewer
+  // inside it, so every one of its triangles faces away; culling it is what
+  // made it invisible from the only place it is ever seen from.
+  if (settings.draw_background) {
+    const std::size_t reserve = std::min(budget, kBackdropBudget);
+    budget -= std::min(budget, DrawGrid(api, level->backdrop, level->backdrop_grid, frustum, have_frustum, eye,
+                                        /*backface_cull=*/false, opacity, reserve));
   }
+
+  DrawGrid(api, level->track, level->track_grid, frustum, have_frustum, eye, settings.backface_cull, opacity, budget);
 }
 
 // --- the car -----------------------------------------------------------------
@@ -164,17 +173,6 @@ void RenderCar(ft_game *game, const ft_render_frame *frame) {
   const ft_level *level = frame->level ? frame->level : game->level;
   if (game->settings.draw_collision && level && !level->car_shape.empty()) {
     DrawCollisionShape(api, level, pose, opacity);
-  }
-
-  if (!api->draw_line3) return;
-
-  // Heading and velocity. They only differ while the car is sliding, which is
-  // exactly when the difference is worth seeing.
-  const ft_vec3 origin = Add(pose.position, Scale(pose.up, 0.2f));
-  api->draw_line3(origin, Add(origin, Scale(pose.forward, 4.f)), ft_color{1.f, 0.86f, 0.32f, 0.85f * opacity}, 0.08f);
-  if (LengthSq(pose.velocity) > 0.5f) {
-    api->draw_line3(origin, Add(origin, Scale(pose.velocity, 0.25f)), ft_color{0.42f, 0.85f, 1.f, 0.85f * opacity},
-                    0.07f);
   }
 }
 

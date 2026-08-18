@@ -322,8 +322,8 @@ private:
         }
       }
 
-      // On a textured panel the picture is the appearance and the colour is only
-      // what shades it; elsewhere the authored vertex colour is all there is.
+      // On a textured panel the picture is the appearance and the colour only
+      // carries the alpha; elsewhere the authored vertex colour is all there is.
       face.color = layer != kNoTextureLayer ? ft_color{1.f, 1.f, 1.f, base.a} : base;
       if (has_color && layer == kNoTextureLayer) {
         const auto &c = vertices[i0].color;
@@ -482,8 +482,17 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
     }
   }
 
-  Log(game, FT_LOG_INFO, "Loaded the %s car model at detail level %zu of %zu: %zu triangles (%zu on the wheels).",
-      pack_name.c_str(), chosen + 1u, std::max<std::size_t>(levels.size(), 1u), out->faces.size(), wheel_faces);
+  // How much of the car found its own picture. A body drawn in flat white is
+  // what this looks like when it is zero, and that is a material-naming problem
+  // rather than a rendering one, so it is worth saying which.
+  std::size_t painted = 0u;
+  for (const VehicleFace &face : out->faces)
+    if (face.layer != kNoTextureLayer) ++painted;
+
+  Log(game, FT_LOG_INFO,
+      "Loaded the %s car model at detail level %zu of %zu: %zu triangles (%zu on the wheels, %zu textured).",
+      pack_name.c_str(), chosen + 1u, std::max<std::size_t>(levels.size(), 1u), out->faces.size(), wheel_faces,
+      painted);
   if (skipped != 0u) Log(game, FT_LOG_TRACE, "Skipped %u vehicle parts with no readable geometry.", skipped);
   return true;
 }

@@ -77,7 +77,7 @@ void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 static VkVertexInputBindingDescription primitive_binding_description;
 static VkVertexInputAttributeDescription primitive_attribute_descriptions[2];
 static VkVertexInputBindingDescription primitive3d_binding_description;
-static VkVertexInputAttributeDescription primitive3d_attribute_descriptions[4];
+static VkVertexInputAttributeDescription primitive3d_attribute_descriptions[5];
 static VkVertexInputBindingDescription mesh_binding_description;
 static VkVertexInputAttributeDescription mesh_attribute_descriptions[3];
 
@@ -600,8 +600,13 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->camera3.yaw = -1.57f;
   renderer->camera3.pitch = 0.5f;
   renderer->camera3.fov_y = 1.0f;
-  renderer->camera3.near_z = 0.1f;
-  renderer->camera3.far_z = 5000.f;
+  // The reversed depth range makes a near plane this close free, and a far
+  // plane this distant costs nothing either: what would be a precision problem
+  // in an ordinary depth buffer is where a reversed one is most exact. The far
+  // plane has to clear a sky, and a sky is drawn on a dome tens of kilometres
+  // across — clip it and the world ends in the clear colour.
+  renderer->camera3.near_z = 0.05f;
+  renderer->camera3.far_z = 200000.f;
 
   create_buffer(handler, MAX_PRIMITIVE_INDICES * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_index_buffer);
@@ -631,7 +636,7 @@ void renderer_cleanup(gfx_handler_t *handler) {
   vkDeviceWaitIdle(device);
 
   for (uint32_t i = 0; i < MAX_SHADERS; ++i) {
-    for (uint32_t j = 0; j < 3; j++) {
+    for (uint32_t j = 0; j < 4; j++) {
       pipeline_cache_entry_t *entry = &renderer->pipeline_cache[i][j];
       if (entry->initialized) {
         vkDestroyPipeline(device, entry->pipeline, allocator);
@@ -752,7 +757,9 @@ static VkRenderPass get_or_create_preview_render_pass(gfx_handler_t *handler, Vk
 static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, shader_t *shader, uint32_t ubo_count, uint32_t texture_count, VkRenderPass target_render_pass) {
   if (!shader) return NULL;
   renderer_state_t *renderer = &handler->renderer;
-  int rp_idx = target_render_pass == handler->offscreen_render_pass ? 1 : target_render_pass == renderer->preview_render_pass ? 2 : 0;
+  int rp_idx = target_render_pass == handler->offscreen_render_pass  ? 1
+               : target_render_pass == renderer->preview_render_pass ? 2
+                                                                     : 0;
   pipeline_cache_entry_t *entry = &renderer->pipeline_cache[shader->id][rp_idx];
 
   if (entry->initialized && entry->ubo_count == ubo_count && entry->texture_count == texture_count && entry->render_pass == target_render_pass) {
@@ -846,19 +853,28 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
       .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
 
   VkPipelineRasterizationStateCreateInfo rasterizer = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE, .lineWidth = 1.0f};
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+      .polygonMode = VK_POLYGON_MODE_FILL,
+      .cullMode = VK_CULL_MODE_NONE,
+      .lineWidth = 1.0f};
 
   VkPipelineMultisampleStateCreateInfo multisampling = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
 
   // 2D draws are ordered by the z a game supplies, so they must not depth-test
   // against each other. 3D geometry has no such ordering and depends on it.
+  //
+  // The world pass runs on a reversed depth range — the near plane at one, the
+  // far plane at zero — which is what puts a float depth buffer's precision
+  // where a perspective divide takes it away. Without it a track a kilometre
+  // long z-fights with itself a few hundred metres out.
   const bool depth_3d = shader == renderer->primitive3d_shader;
-  VkPipelineDepthStencilStateCreateInfo depth_stencil = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-                                                         .depthTestEnable = depth_3d ? VK_TRUE : VK_FALSE,
-                                                         .depthWriteEnable = depth_3d ? VK_TRUE : VK_FALSE,
-                                                         .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
-                                                         .maxDepthBounds = 1.0f};
+  VkPipelineDepthStencilStateCreateInfo depth_stencil = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+      .depthTestEnable = depth_3d ? VK_TRUE : VK_FALSE,
+      .depthWriteEnable = depth_3d ? VK_TRUE : VK_FALSE,
+      .depthCompareOp = depth_3d ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
+      .maxDepthBounds = 1.0f};
 
   VkBlendFactor src_color_factor = VK_BLEND_FACTOR_ONE;
 
@@ -874,8 +890,9 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
       .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
   };
 
-  VkPipelineColorBlendStateCreateInfo color_blending = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &color_blend};
+  VkPipelineColorBlendStateCreateInfo color_blending = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                                                        .attachmentCount = 1,
+                                                        .pAttachments = &color_blend};
 
   VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
   VkPipelineDynamicStateCreateInfo dynamic_state = {
@@ -2183,7 +2200,13 @@ void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
   glm_lookat(eye, target, (vec3){0.f, 1.f, 0.f}, view);
 
   const float aspect = h->viewport[1] > 0.f ? h->viewport[0] / h->viewport[1] : 1.f;
-  glm_perspective(c->fov_y, aspect, c->near_z, c->far_z, proj);
+  // Reversed depth: the near plane lands on one and the far plane on zero.
+  // Swapping the two distances is all a zero-to-one projection needs to produce
+  // it, and it pairs a float depth buffer's dense range near zero with the
+  // perspective divide's sparse range far away — which is the difference
+  // between a track that z-fights past a hundred metres and one that does not.
+  // The pipeline compares greater-or-equal and the pass clears depth to zero.
+  glm_perspective_rh_zo(c->fov_y, aspect, c->far_z, c->near_z, proj);
   // Vulkan's clip space has Y pointing down relative to OpenGL's, which is what
   // cglm builds for.
   proj[1][1] *= -1.f;
@@ -2221,13 +2244,18 @@ void renderer_submit_triangle3(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec4 co
   push_vertex3(r, c, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
 }
 
+// The page a triangle names, or the "no texture" marker when nothing is bound
+// or the page is past the end of what is: a page index into nothing would read
+// as garbage, and the tint alone is the honest fallback.
+static float primitive3d_page(const renderer_state_t *r, uint32_t layer) {
+  const texture_t *bound = r->primitive3d_texture;
+  return bound && layer < bound->layer_count ? (float)layer : PRIMITIVE3D_NO_TEXTURE;
+}
+
 void renderer_submit_triangle3_textured(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec2 uv_a, vec2 uv_b, vec2 uv_c,
                                         uint32_t layer, vec4 tint) {
   renderer_state_t *r = &h->renderer;
-  // Without an array bound there is nothing to sample, and a page index into
-  // nothing would read as garbage; the tint alone is the honest fallback.
-  const texture_t *bound = r->primitive3d_texture;
-  const float page = bound && layer < bound->layer_count ? (float)layer : PRIMITIVE3D_NO_TEXTURE;
+  const float page = primitive3d_page(r, layer);
   push_vertex3(r, a, tint, uv_a, page);
   push_vertex3(r, b, tint, uv_b, page);
   push_vertex3(r, c, tint, uv_c, page);
@@ -2257,8 +2285,14 @@ void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float t
   glm_vec3_add(b, side, b0);
   glm_vec3_sub(b, side, b1);
 
-  renderer_submit_triangle3(h, a0, a1, b0, color);
-  renderer_submit_triangle3(h, b0, a1, b1, color);
+  renderer_state_t *r = &h->renderer;
+  vec2 no_uv = {0.f, 0.f};
+  push_vertex3(r, a0, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(r, a1, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(r, b0, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(r, b0, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(r, a1, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(r, b1, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
 }
 
 void renderer_submit_box3(gfx_handler_t *h, vec3 center, vec3 size, vec4 color, bool wire) {
@@ -2279,15 +2313,11 @@ void renderer_submit_box3(gfx_handler_t *h, vec3 center, vec3 size, vec4 color, 
     return;
   }
 
-  // Two triangles per face, wound so the box is solid from any side. Faces are
-  // shaded slightly apart so a solid box reads as a volume rather than a
-  // silhouette without any lighting in the pipeline.
+  // Two triangles per face, wound so the box is solid from any side.
   static const int faces[6][4] = {{0, 1, 3, 2}, {4, 6, 7, 5}, {0, 4, 5, 1}, {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 5, 7, 3}};
-  static const float shade[6] = {0.75f, 0.95f, 0.6f, 1.0f, 0.7f, 0.85f};
   for (int f = 0; f < 6; ++f) {
-    vec4 tinted = {color[0] * shade[f], color[1] * shade[f], color[2] * shade[f], color[3]};
-    renderer_submit_triangle3(h, corner[faces[f][0]], corner[faces[f][1]], corner[faces[f][2]], tinted);
-    renderer_submit_triangle3(h, corner[faces[f][0]], corner[faces[f][2]], corner[faces[f][3]], tinted);
+    renderer_submit_triangle3(h, corner[faces[f][0]], corner[faces[f][1]], corner[faces[f][2]], color);
+    renderer_submit_triangle3(h, corner[faces[f][0]], corner[faces[f][2]], corner[faces[f][3]], color);
   }
 }
 

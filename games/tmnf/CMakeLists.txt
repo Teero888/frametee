@@ -45,6 +45,7 @@ add_library(tmnf_game MODULE
     tmnf_ui.cpp
     tmnf_vehicle_model.cpp
     tmnf_pack.cpp
+    tmnf_material.cpp
     tmnf_texture.cpp
     tmnf_scene.cpp
 )

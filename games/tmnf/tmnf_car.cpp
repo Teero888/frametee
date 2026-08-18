@@ -37,15 +37,13 @@ constexpr float kMaxSteerAngle = 0.38f;
 
 struct Face {
   ft_vec3 a, b, c;
-  ft_vec3 normal;
   ft_color color;
 };
 
-// Adds a quad wound so its normal points out of the solid.
+// Adds a quad wound so its face points out of the solid.
 void Quad(std::vector<Face> &out, ft_vec3 a, ft_vec3 b, ft_vec3 c, ft_vec3 d, ft_color color) {
-  const ft_vec3 normal = Normalize(Cross(Sub(b, a), Sub(c, a)));
-  out.push_back(Face{a, b, c, normal, color});
-  out.push_back(Face{a, c, d, normal, color});
+  out.push_back(Face{a, b, c, color});
+  out.push_back(Face{a, c, d, color});
 }
 
 // A box given by two opposite corners.
@@ -100,18 +98,17 @@ std::vector<Face> BuildWheel() {
     const float hy1 = std::cos(t1) * hub, hz1 = std::sin(t1) * hub;
     for (int side = 0; side < 2; ++side) {
       const float x = side ? kWheelHalfWidth : -kWheelHalfWidth;
-      const ft_vec3 normal{side ? 1.f : -1.f, 0.f, 0.f};
       const ft_vec3 outer0{x, y0, z0}, outer1{x, y1, z1};
       const ft_vec3 inner0{x, hy0, hz0}, inner1{x, hy1, hz1};
       const ft_vec3 centre{x, 0.f, 0.f};
       if (side) {
-        faces.push_back(Face{inner0, outer0, outer1, normal, sidewall});
-        faces.push_back(Face{inner0, outer1, inner1, normal, sidewall});
-        faces.push_back(Face{centre, inner0, inner1, normal, rim});
+        faces.push_back(Face{inner0, outer0, outer1, sidewall});
+        faces.push_back(Face{inner0, outer1, inner1, sidewall});
+        faces.push_back(Face{centre, inner0, inner1, rim});
       } else {
-        faces.push_back(Face{outer0, inner0, outer1, normal, sidewall});
-        faces.push_back(Face{outer1, inner0, inner1, normal, sidewall});
-        faces.push_back(Face{inner0, centre, inner1, normal, rim});
+        faces.push_back(Face{outer0, inner0, outer1, sidewall});
+        faces.push_back(Face{outer1, inner0, inner1, sidewall});
+        faces.push_back(Face{inner0, centre, inner1, rim});
       }
     }
   }
@@ -187,12 +184,10 @@ const CarMesh &Mesh(ft_color livery) {
   return mesh;
 }
 
-ft_color Lit(ft_color base, ft_vec3 normal, float opacity) {
-  const float sun = std::max(0.f, Dot(normal, kSunDirection));
-  const float sky = 0.5f + 0.5f * normal.y;
-  const float light = 0.32f + 0.24f * sky + 0.52f * sun;
-  return ft_color{base.r * light, base.g * light, base.b * light, base.a * opacity};
-}
+// The renderer lights the world per pixel, so a colour handed to it is the
+// surface's own: all that happens here is the opacity a prediction ghost is
+// drawn with.
+ft_color Faded(ft_color base, float opacity) { return ft_color{base.r, base.g, base.b, base.a * opacity}; }
 
 void Submit(const ft_engine_api *api, const std::vector<Face> &faces, const CarPose &pose, ft_vec3 offset,
             const Quat *local_rotation, const ft_color *override_color, float opacity) {
@@ -202,14 +197,9 @@ void Submit(const ft_engine_api *api, const std::vector<Face> &faces, const CarP
     p = Add(p, offset);
     return Add(pose.position, Rotate(pose.rotation, p));
   };
-  const auto direction = [&](ft_vec3 n) {
-    if (local_rotation) n = Rotate(*local_rotation, n);
-    return Rotate(pose.rotation, n);
-  };
-
   for (const Face &face : faces) {
-    const ft_color base = override_color ? *override_color : face.color;
-    api->draw_triangle3(place(face.a), place(face.b), place(face.c), Lit(base, direction(face.normal), opacity));
+    const ft_color base = Faded(override_color ? *override_color : face.color, opacity);
+    api->draw_triangle3(place(face.a), place(face.b), place(face.c), base);
   }
 }
 
@@ -232,9 +222,9 @@ ft_color WheelStateColor(const fve::PhysicsSandboxCarState &car, std::size_t whe
   return kTyre;
 }
 
-// The authored model, drawn part by part so the front wheels can be turned.
+// The authored model, drawn part by part so the wheels can be turned and rolled.
 void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_render_frame *frame,
-                  const CarPose &pose, const Quat &steered, ft_color livery, float opacity) {
+                  const CarPose &pose, const Quat &steered, const Quat &rolled, ft_color livery, float opacity) {
   const auto &car = frame->world->view.car;
 
   // The four wheels are turned about their own hubs and tinted by their state;
@@ -243,20 +233,19 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
   bool replace[VEHICLE_PART_COUNT] = {};
   for (std::size_t i = 0; i < 4; ++i) tint[i] = WheelStateColor(car, i, &replace[i]);
 
-  const Quat straight{};
+  // A wheel rolls about its own axle and the front pair is then steered on top
+  // of that, so the roll is applied first.
+  const Quat front_wheel = Concat(steered, rolled);
+  static const Quat kNoRotation{};
   for (const VehicleFace &face : model.faces) {
     const bool wheel = IsWheelPart(face.part);
     const bool front = face.part == VEHICLE_PART_WHEEL_FL || face.part == VEHICLE_PART_WHEEL_FR;
-    const Quat &local = wheel && front ? steered : straight;
+    const Quat &local = !wheel ? kNoRotation : (front ? front_wheel : rolled);
 
     const auto place = [&](ft_vec3 p) {
       if (wheel) p = Add(Rotate(local, p), model.hub[face.part]);
       return Add(pose.position, Rotate(pose.rotation, p));
     };
-    ft_vec3 normal = face.normal;
-    if (wheel) normal = Rotate(local, normal);
-    normal = Rotate(pose.rotation, normal);
-
     // Body panels come out of the pack unpainted, and the editor's colour for
     // this world is what they are painted with; the wheels keep the black they
     // were decoded with and only carry their state on top.
@@ -271,12 +260,12 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
       const ft_color state = tint[face.part];
       color = replace[face.part] ? state : MixColor(color, state, 0.35f);
     }
-    const ft_color lit = Lit(color, normal, opacity);
+    color.a *= opacity;
     if (painted && api->draw_triangle3_textured) {
       api->draw_triangle3_textured(place(face.a), place(face.b), place(face.c), face.uv[0], face.uv[1], face.uv[2],
-                                   face.layer, lit);
+                                   face.layer, color);
     } else {
-      api->draw_triangle3(place(face.a), place(face.b), place(face.c), lit);
+      api->draw_triangle3(place(face.a), place(face.b), place(face.c), color);
     }
   }
 }
@@ -297,19 +286,32 @@ void DrawCar(ft_game *game, const ft_render_frame *frame, const CarPose &pose) {
   // negation of the axis. Getting this backwards points the wheels out of the
   // corner, which looks fine standing still and wrong the moment it matters.
   const float steer = -std::clamp(view.steering, -1.f, 1.f) * kMaxSteerAngle;
-  const Quat steered{0.f, std::sin(steer * 0.5f), 0.f, std::cos(steer * 0.5f)};
+  const Quat steered = QuatFromAxisAngle(ft_vec3{0.f, 1.f, 0.f}, steer);
+
+  // And all four roll. The simulation never says how far a wheel has turned, so
+  // the angle is carried between frames per world — see WheelSpin — and the
+  // wheels of a prediction ghost turn independently of the run's.
+  const std::size_t spin_slot =
+      frame->world_index >= 0 ? static_cast<std::size_t>(frame->world_index) % kMaxSpinnyWorlds : 0u;
+  const std::uint64_t now_ms = view.timeMs + static_cast<std::uint64_t>(std::clamp(frame->alpha, 0.f, 1.f) * kTickMs);
+  // The car looks down +Z with +X to its right, so a wheel rolls about its own
+  // +X. Turning that way carries the top of the wheel towards +Z, which is what
+  // rolling forwards does — the contact patch goes backwards and the top goes
+  // the way the car is going.
+  const float roll = game->wheel_spin[spin_slot].Advance(now_ms, view.car.signedSpeed, kWheelRadius);
+  const Quat rolled = QuatFromAxisAngle(ft_vec3{1.f, 0.f, 0.f}, roll);
 
   const ft_color livery = frame->accent.a > 0.01f ? frame->accent : ft_color{0.20f, 0.58f, 1.f, 1.f};
 
   if (game->vehicle.loaded) {
-    DrawAuthored(api, game->vehicle, frame, pose, steered, livery, opacity);
+    DrawAuthored(api, game->vehicle, frame, pose, steered, rolled, livery, opacity);
     return;
   }
 
   const CarMesh &mesh = Mesh(livery);
   Submit(api, mesh.body, pose, ft_vec3{0.f, 0.f, 0.f}, nullptr, nullptr, opacity);
 
-  const Quat straight{};
+  const Quat front_wheel = Concat(steered, rolled);
   struct Wheel {
     ft_vec3 hub;
     bool front;
@@ -325,7 +327,7 @@ void DrawCar(ft_game *game, const ft_render_frame *frame, const CarPose &pose) {
   for (std::size_t i = 0; i < 4; ++i) {
     bool replace = false;
     const ft_color color = WheelStateColor(view.car, i, &replace);
-    Submit(api, mesh.wheel, pose, wheels[i].hub, wheels[i].front ? &steered : &straight, &color, opacity);
+    Submit(api, mesh.wheel, pose, wheels[i].hub, wheels[i].front ? &front_wheel : &rolled, &color, opacity);
   }
 }
 

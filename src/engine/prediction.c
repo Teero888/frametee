@@ -19,6 +19,19 @@
 enum { MAX_PREDICTION_SEGMENTS = 250000 };
 static const float PREDICTION_Z = 50.f;
 
+// Where a player stands in a 3D world. The player view the 2D path reads only
+// carries a plane's worth of it, so a game with a volume is asked for the
+// property the engine's own camera follows instead.
+static bool player_position3(game_host_t *host, const ft_world *world, int player, vec3 out) {
+  ft_value value;
+  if (!gh_entity_prop_get(host, world, FT_ENTITY_CLASS_PLAYER, player, 0, &value)) return false;
+  if (value.kind != FT_VALUE_VEC3) return false;
+  out[0] = value.as.v3.x;
+  out[1] = value.as.v3.y;
+  out[2] = value.as.v3.z;
+  return true;
+}
+
 static const float s_line_colors[][4] = {
     {0.25f, 0.72f, 1.00f, 0.78f}, {1.00f, 0.48f, 0.18f, 0.82f}, {0.35f, 0.95f, 0.48f, 0.82f},
     {0.95f, 0.35f, 0.72f, 0.82f}, {0.75f, 0.48f, 1.00f, 0.82f}, {1.00f, 0.85f, 0.25f, 0.82f},
@@ -131,12 +144,19 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
   if (length > safe_length) length = safe_length;
   if (length <= 0) return;
 
+  // A 3D game's prediction is a line through the world, not a stripe on a map.
+  const bool is_3d = game_is_3d(host);
+  // The 2D thickness is a fraction of a normalised playfield; in a volume it is
+  // metres, and a line thinner than a wheel is one nobody can see.
+  const float thickness3 = fmaxf(settings->thickness * 4.f, 0.12f);
+
   uint8_t *packed_inputs = calloc((size_t)players, input_size);
   input_record_t *held_inputs = calloc((size_t)players, sizeof(*held_inputs));
   ft_vec2 *positions = calloc((size_t)players, sizeof(*positions));
+  vec3 *positions3 = calloc((size_t)players, sizeof(*positions3));
   bool *have_position = calloc((size_t)players, sizeof(*have_position));
   line_segment_t *segments = malloc(sizeof(*segments) * (size_t)length * (size_t)selected);
-  if (!packed_inputs || !held_inputs || !positions || !have_position || !segments) goto cleanup;
+  if (!packed_inputs || !held_inputs || !positions || !positions3 || !have_position || !segments) goto cleanup;
 
   alpha = fmaxf(0.f, fminf(alpha, 1.f));
   for (int player = 0; player < players; ++player) {
@@ -158,6 +178,15 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
     for (int player = 0; player < players; ++player) {
       const int track = model_group_track_index(timeline, group_index, player);
       if (track < 0 || !timeline->player_tracks[track].prediction_enabled) continue;
+      if (is_3d) {
+        vec3 current_pos, previous_pos;
+        if (!player_position3(host, current, player, current_pos)) continue;
+        glm_vec3_copy(current_pos, positions3[player]);
+        if (previous && player_position3(host, previous, player, previous_pos))
+          glm_vec3_lerp(previous_pos, current_pos, alpha, positions3[player]);
+        have_position[player] = true;
+        continue;
+      }
       ft_player_view current_view, previous_view;
       if (!gh_world_player_view(host, current, player, &current_view)) continue;
       positions[player] = current_view.position;
@@ -190,6 +219,26 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
       for (int player = 0; player < players; ++player) {
         const int track = model_group_track_index(timeline, group_index, player);
         if (track < 0 || !timeline->player_tracks[track].prediction_enabled) continue;
+
+        if (is_3d) {
+          // A 3D world's players move in a volume, and the two-dimensional view
+          // the 2D path draws from is a shadow of that with the height thrown
+          // away. Drawn flat on a plane, the line ends up nowhere near the run
+          // it is predicting, which is what made these look broken in 3D.
+          vec3 next;
+          if (!player_position3(host, world, player, next)) {
+            have_position[player] = false;
+            continue;
+          }
+          if (have_position[player]) {
+            vec4 color = {line->color[0], line->color[1], line->color[2], line->color[3]};
+            renderer_submit_line3(ui->gfx_handler, positions3[player], next, color, thickness3);
+          }
+          glm_vec3_copy(next, positions3[player]);
+          have_position[player] = true;
+          continue;
+        }
+
         ft_player_view view;
         if (!gh_world_player_view(host, world, player, &view)) {
           have_position[player] = false;
@@ -208,12 +257,14 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
         have_position[player] = true;
       }
     }
-    renderer_submit_line_batch(ui->gfx_handler, PREDICTION_Z + (float)line_index * 0.001f, segments, segment_count);
+    if (!is_3d)
+      renderer_submit_line_batch(ui->gfx_handler, PREDICTION_Z + (float)line_index * 0.001f, segments, segment_count);
   }
 
 cleanup:
   free(segments);
   free(have_position);
+  free(positions3);
   free(positions);
   free(held_inputs);
   free(packed_inputs);
