@@ -183,6 +183,8 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
   for (uint32_t i = 0; i < m->constraints.camera_mode_count; ++i) {
     const ft_camera_mode *mode = &m->constraints.camera_modes[i];
     if (!id_is_valid(mode->id)) FAIL("camera mode %u has an invalid id", i);
+    if (strcmp(mode->id, FT_CAMERA_MODE_FREECAM_ID) == 0)
+      FAIL("camera mode id '%s' is the engine's own freecam", mode->id);
     if (!mode->display_name || !*mode->display_name) FAIL("camera mode '%s' has no display name", mode->id);
     for (uint32_t previous = 0; previous < i; ++previous)
       if (strcmp(m->constraints.camera_modes[previous].id, mode->id) == 0) FAIL("duplicate camera mode id '%s'", mode->id);
@@ -891,17 +893,38 @@ bool gh_project_load(game_host_t *host, const void *data, size_t size) {
 // to special-case "no modes at all".
 static const ft_camera_mode g_default_camera_mode = {"free", "Free view", "Pan and zoom freely", FT_CAMERA_MODE_FREE};
 
-unsigned game_camera_mode_count(const game_host_t *host) {
+// Flying through a volume is the engine's camera, not a game's: it asks the
+// simulation for nothing and every 3D game wants it. So it is appended to
+// whatever modes the game declared, which makes it selected, cycled and stored
+// exactly like one of them instead of living on a hotkey of its own. Its index
+// is one past the game's list and is never handed to camera_update — the
+// engine flies the camera itself in this mode.
+static const ft_camera_mode g_freecam_mode = {FT_CAMERA_MODE_FREECAM_ID, "Freecam",
+                                              "Fly the camera: WASD to move, space and shift for up and down",
+                                              FT_CAMERA_MODE_FREE};
+
+// How many modes the game itself declares, counting the stand-in it gets when
+// it declares none.
+static unsigned game_own_camera_mode_count(const game_host_t *host) {
   const ft_game_constraints *c = constraints_of(host);
-  if (!c || c->camera_mode_count == 0) return 1;
-  return c->camera_mode_count;
+  return (!c || c->camera_mode_count == 0) ? 1u : c->camera_mode_count;
+}
+
+unsigned game_camera_mode_count(const game_host_t *host) {
+  return game_own_camera_mode_count(host) + (game_is_3d(host) ? 1u : 0u);
 }
 
 const ft_camera_mode *game_camera_mode(const game_host_t *host, unsigned index) {
   const ft_game_constraints *c = constraints_of(host);
+  const unsigned own = game_own_camera_mode_count(host);
+  if (index >= own && game_is_3d(host)) return &g_freecam_mode;
   if (!c || c->camera_mode_count == 0) return &g_default_camera_mode;
-  if (index >= c->camera_mode_count) return &c->camera_modes[0];
+  if (index >= own) return &c->camera_modes[0];
   return &c->camera_modes[index];
+}
+
+bool game_camera_mode_is_freecam(const game_host_t *host, unsigned index) {
+  return game_camera_mode(host, index) == &g_freecam_mode;
 }
 
 bool gh_camera_update(game_host_t *host, const ft_camera_frame *frame, ft_camera *inout) {

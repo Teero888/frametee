@@ -208,6 +208,12 @@ typedef struct ft_camera_mode {
   uint32_t flags;
 } ft_camera_mode;
 
+/* Reserved for the engine. A 3D game's mode list is presented with the engine's
+ * own freecam appended to it, so a game declaring this id is rejected at load.
+ * The appended mode is never passed to camera_update: the engine flies that one
+ * itself. */
+#define FT_CAMERA_MODE_FREECAM_ID "freecam"
+
 /* A selectable ruleset within a game: DDNet's DDRace/FastCap, a console game's
  * region revisions, a speedrun category. Chosen before a level is loaded and
  * stored in the project. */
@@ -759,9 +765,11 @@ typedef struct ft_camera {
   ft_vec2 position;
   float zoom;
   float aspect;
-  /* Which of the game's own camera modes is active, indexing
-   * constraints.camera_modes. A game compares it against its own list to decide
-   * things like whether to draw a crosshair. */
+  /* Which camera mode is active, indexing constraints.camera_modes. A game
+   * compares it against its own list to decide things like whether to draw a
+   * crosshair. For a 3D game the engine appends its own freecam after the
+   * declared modes, so this may be camera_mode_count: check the range before
+   * using it as an index. */
   uint32_t mode;
   /* Size of the render target in pixels. A game needs it to turn screen
    * coordinates into world ones for its own culling, which is otherwise

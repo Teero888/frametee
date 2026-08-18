@@ -625,10 +625,9 @@ struct ft_game {
 
   tmnf::Settings settings;
 
-  // The original game's own race cameras, decoded from the installed packs.
+  // The original game's own race camera, decoded from the installed packs.
   std::optional<tmnf::fv::camera::RaceCameraEnvironment> race_cameras;
   std::unique_ptr<tmnf::fv::camera::RaceCameraSession> race_session;
-  std::uint32_t race_session_profile = 0xFFFFFFFFu;
   std::uint64_t race_session_time_ms = 0u;
   bool race_session_started = false;
 
