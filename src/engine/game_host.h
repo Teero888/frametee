@@ -161,8 +161,13 @@ bool game_provides_splash(const game_host_t *host);
 
 // Camera modes the active game offers. Falls back to a single free view when a
 // game declares none, so the engine always has something to show.
+// The mode list a 3D game exposes ends with the engine's own freecam, which is
+// why these are the only correct way to count and read modes.
 unsigned game_camera_mode_count(const game_host_t *host);
 const ft_camera_mode *game_camera_mode(const game_host_t *host, unsigned index);
+// Whether the given index is that freecam, which the engine flies itself
+// instead of asking the game where to point.
+bool game_camera_mode_is_freecam(const game_host_t *host, unsigned index);
 bool gh_camera_update(game_host_t *host, const ft_camera_frame *frame, ft_camera *inout);
 
 // Game settings the engine renders and persists on the game's behalf.

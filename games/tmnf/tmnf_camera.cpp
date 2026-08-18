@@ -1,7 +1,7 @@
 // Placing the viewport camera.
 //
-// ForeverValidator decodes the original game's three race cameras out of the
-// installed packs and exposes them as stateful controllers, so the chase view
+// ForeverValidator decodes the original game's race camera out of the
+// installed packs and exposes it as a stateful controller, so the chase view
 // here is not an approximation of TrackMania's camera — it is TrackMania's
 // camera, fed the same vehicle signals the game feeds it. That matters for a
 // TAS tool: judging a jump or a wall ride against a hand-rolled camera means
@@ -22,32 +22,14 @@
 namespace tmnf {
 namespace {
 
-enum CameraModeIndex { CAMERA_RACE = 0, CAMERA_RACE2, CAMERA_RACE3, CAMERA_ORBIT, CAMERA_MODE_COUNT };
+enum CameraModeIndex { CAMERA_RACE = 0, CAMERA_ORBIT, CAMERA_MODE_COUNT };
 
-fv::camera::RaceCameraProfile ProfileOf(std::uint32_t mode) {
-  switch (mode) {
-  case CAMERA_RACE2: return fv::camera::RaceCameraProfile::Race2;
-  case CAMERA_RACE3: return fv::camera::RaceCameraProfile::Race3;
-  default: return fv::camera::RaceCameraProfile::Race;
-  }
-}
-
-// How far behind and above the car each mode sits when the game's own cameras
+// How far behind and above the car the view sits when the game's own camera
 // could not be decoded. Rough, but it keeps a track drivable rather than
 // leaving the view stuck at the origin.
-struct FallbackShape {
-  float distance;
-  float height;
-  float look_ahead;
-};
-
-FallbackShape FallbackFor(std::uint32_t mode) {
-  switch (mode) {
-  case CAMERA_RACE2: return FallbackShape{12.5f, 4.2f, 6.f};
-  case CAMERA_RACE3: return FallbackShape{5.5f, 1.9f, 12.f};
-  default: return FallbackShape{8.5f, 3.0f, 5.f};
-  }
-}
+constexpr float kFallbackDistance = 8.5f;
+constexpr float kFallbackHeight = 3.0f;
+constexpr float kFallbackLookAhead = 5.f;
 
 fv::camera::RaceCameraVehicleState VehicleState(const ft_world *world, const CarPose &pose, std::uint32_t time_ms) {
   fv::camera::RaceCameraVehicleState vehicle;
@@ -83,35 +65,34 @@ ft_vec3 ForwardOf(const fv::camera::Quaternion &q) {
   return Rotate(Quat{q.x, q.y, q.z, q.w}, ft_vec3{0.f, 0.f, 1.f});
 }
 
-bool EnsureSession(ft_game *game, std::uint32_t mode) {
+bool EnsureSession(ft_game *game) {
   if (!game->race_cameras) return false;
-  const fv::camera::RaceCameraProfile profile = ProfileOf(mode);
-  if (!game->race_cameras->HasProfile(profile)) return false;
+  constexpr fv::camera::RaceCameraProfile kProfile = fv::camera::RaceCameraProfile::Race;
+  if (!game->race_cameras->HasProfile(kProfile)) return false;
 
-  if (game->race_session && game->race_session_profile == mode) return true;
+  if (game->race_session) return true;
   try {
-    game->race_session = std::make_unique<fv::camera::RaceCameraSession>(*game->race_cameras, profile);
+    game->race_session = std::make_unique<fv::camera::RaceCameraSession>(*game->race_cameras, kProfile);
   } catch (const std::exception &error) {
-    Log(game, FT_LOG_WARN, "Could not start the %s camera: %s", kCameraModes[mode].display_name, error.what());
+    Log(game, FT_LOG_WARN, "Could not start the %s camera: %s", kCameraModes[CAMERA_RACE].display_name,
+        error.what());
     game->race_session.reset();
     return false;
   }
-  game->race_session_profile = mode;
   game->race_session_started = false;
   return true;
 }
 
-// A plain chase view, used only when the packs did not yield the real cameras.
+// A plain chase view, used only when the packs did not yield the real camera.
 // It is deliberately built from a heading rather than the car's own forward:
 // the engine rebuilds its view with a fixed world up, so a rolled basis would
 // only produce a camera that swings for no visible reason.
-bool FallbackCamera(std::uint32_t mode, const CarPose &pose, ft_camera *inout) {
-  const FallbackShape shape = FallbackFor(mode);
+bool FallbackCamera(const CarPose &pose, ft_camera *inout) {
   const ft_vec3 heading = FlattenY(LengthSq(pose.velocity) > 9.f ? pose.velocity : pose.forward, pose.forward);
   const ft_vec3 focus = Add(pose.position, ft_vec3{0.f, 1.f, 0.f});
 
-  inout->target = Add(focus, Scale(heading, shape.look_ahead));
-  inout->eye = Add(Sub(focus, Scale(heading, shape.distance)), ft_vec3{0.f, shape.height, 0.f});
+  inout->target = Add(focus, Scale(heading, kFallbackLookAhead));
+  inout->eye = Add(Sub(focus, Scale(heading, kFallbackDistance)), ft_vec3{0.f, kFallbackHeight, 0.f});
   return true;
 }
 
@@ -119,8 +100,6 @@ bool FallbackCamera(std::uint32_t mode, const CarPose &pose, ft_camera *inout) {
 
 const ft_camera_mode kCameraModes[] = {
     {"chase", "Chase", "The game's own race camera", FT_CAMERA_MODE_DIRECTED},
-    {"chase_far", "Chase (far)", "The game's second race camera", FT_CAMERA_MODE_DIRECTED},
-    {"onboard", "Onboard", "The game's third race camera", FT_CAMERA_MODE_DIRECTED},
     {"orbit", "Orbit", "Drag to turn around the car, scroll to pull back", FT_CAMERA_MODE_FREE},
 };
 const std::uint32_t kCameraModeCount = CAMERA_MODE_COUNT;
@@ -128,7 +107,6 @@ const std::uint32_t kCameraModeCount = CAMERA_MODE_COUNT;
 void CameraReset(ft_game *game) {
   if (!game) return;
   game->race_session.reset();
-  game->race_session_profile = 0xFFFFFFFFu;
   game->race_session_time_ms = 0u;
   game->race_session_started = false;
 
@@ -140,11 +118,11 @@ void CameraReset(ft_game *game) {
 
   auto loaded = fv::LoadInstalledRaceCameraEnvironment(game->packs, environment);
   if (!loaded) {
-    Log(game, FT_LOG_WARN, "No race cameras for the %s environment; using a plain chase view.", environment);
+    Log(game, FT_LOG_WARN, "No race camera for the %s environment; using a plain chase view.", environment);
     return;
   }
   game->race_cameras.emplace(std::move(loaded).Value());
-  Log(game, FT_LOG_INFO, "Loaded the %s race cameras.", environment);
+  Log(game, FT_LOG_INFO, "Loaded the %s race camera.", environment);
 }
 
 bool CameraUpdate(ft_game *game, const ft_camera_frame *frame, ft_camera *inout) {
@@ -155,7 +133,7 @@ bool CameraUpdate(ft_game *game, const ft_camera_frame *frame, ft_camera *inout)
 
   const CarPose pose = InterpolateCar(frame->previous_world, frame->world, frame->alpha);
 
-  if (!EnsureSession(game, frame->mode)) return FallbackCamera(frame->mode, pose, inout);
+  if (!EnsureSession(game)) return FallbackCamera(pose, inout);
 
   // The controllers integrate, so they want time moving forward in small steps.
   // Scrubbing the timeline does neither, and a seek is answered by restarting

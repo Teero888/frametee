@@ -128,7 +128,6 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
   timeline_state_t *timeline = &ui->timeline;
   prediction_settings_t *settings = &timeline->prediction;
   if (!settings->enabled || settings->length <= 0 || group_index < 0 || group_index >= timeline->group_count) return;
-  if (timeline->is_playing || timeline->is_reversing || timeline->recording) return;
   timeline_group_t *group = timeline->groups[group_index];
   if (!group->prediction_enabled) return;
 

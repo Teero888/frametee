@@ -609,7 +609,11 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
   keybind_manager_t *keys = &handler->user_interface.keybinds;
   const bool typing = igIsAnyItemActive();
 
-  if (!typing && keybinds_is_action_pressed(keys, ACTION_TOGGLE_FREECAM, false)) renderer_camera3_toggle_free(handler);
+  // Flying is a camera mode, so selecting it is what turns it on. The renderer
+  // carries the view across the swap; noticing that the mode changed is all
+  // there is to do here.
+  const bool want_free = game_camera_mode_is_freecam(&handler->game_host, handler->renderer.camera.mode);
+  if (want_free != c->free_mode) renderer_camera3_toggle_free(handler);
 
   float scroll_y = !hovered ? 0.f : (float)input_scroll_y();
   if (!typing) {

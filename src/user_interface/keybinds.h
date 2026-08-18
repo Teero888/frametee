@@ -50,10 +50,8 @@ typedef enum {
   // camera
   ACTION_ZOOM_IN,
   ACTION_ZOOM_OUT,
-  // 3D only: swaps the viewport between orbiting a point and flying freely,
-  // and drives the freecam once it is on. These are held rather than tapped,
-  // so they are read with keybinds_is_action_down.
-  ACTION_TOGGLE_FREECAM,
+  // 3D only: drives the freecam while that camera mode is selected. These are
+  // held rather than tapped, so they are read with keybinds_is_action_down.
   ACTION_FREECAM_FORWARD,
   ACTION_FREECAM_BACK,
   ACTION_FREECAM_LEFT,
