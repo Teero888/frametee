@@ -6,7 +6,7 @@
 // 2D primitive path.
 //
 // `in_layer` selects a page of the bound texture array, or is negative when the
-// triangle carries no texture. Textured and untextured geometry share the one
+// triangle carries no texture. Textured and untextured triangles share the one
 // stream so the depth buffer resolves them against each other.
 layout(location = 0) in vec3 in_pos;
 layout(location = 1) in vec4 in_color;

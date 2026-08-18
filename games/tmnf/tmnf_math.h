@@ -98,6 +98,21 @@ inline Quat Slerp(Quat q0, Quat q1, float t) {
   return Quat{s0 * q0.x + s1 * q1.x, s0 * q0.y + s1 * q1.y, s0 * q0.z + s1 * q1.z, s0 * q0.w + s1 * q1.w};
 }
 
+// The rotation `a` followed by `b`, in the sense that Rotate(Concat(b, a), v)
+// applies `a` first. A steered, spinning wheel needs exactly this: it turns
+// about its own axle and the whole assembly is then turned by the steering.
+inline Quat Concat(Quat b, Quat a) {
+  return Quat{b.w * a.x + b.x * a.w + b.y * a.z - b.z * a.y, b.w * a.y - b.x * a.z + b.y * a.w + b.z * a.x,
+              b.w * a.z + b.x * a.y - b.y * a.x + b.z * a.w, b.w * a.w - b.x * a.x - b.y * a.y - b.z * a.z};
+}
+
+// A rotation of `angle` radians about a unit axis.
+inline Quat QuatFromAxisAngle(ft_vec3 axis, float angle) {
+  const float half = angle * 0.5f;
+  const float s = std::sin(half);
+  return Quat{axis.x * s, axis.y * s, axis.z * s, std::cos(half)};
+}
+
 inline ft_vec3 Rotate(Quat q, ft_vec3 v) {
   const ft_vec3 u{q.x, q.y, q.z};
   const float s = q.w;
@@ -167,6 +182,11 @@ struct Frustum {
     set(1, r3[0] - r0[0], r3[1] - r0[1], r3[2] - r0[2], r3[3] - r0[3]); // right
     set(2, r3[0] + r1[0], r3[1] + r1[1], r3[2] + r1[2], r3[3] + r1[3]); // bottom
     set(3, r3[0] - r1[0], r3[1] - r1[1], r3[2] - r1[2], r3[3] - r1[3]); // top
+    // Zero-to-one clip space, so the two depth planes are z >= 0 and w - z >= 0
+    // rather than the symmetric pair the OpenGL convention uses. The engine
+    // renders with a reversed range, which swaps which of these is the near
+    // plane and which is the far one — and leaves the volume they bound
+    // identical, which is why nothing here has to know about it.
     set(4, r2[0], r2[1], r2[2], r2[3]);                                 // near
     set(5, r3[0] - r2[0], r3[1] - r2[1], r3[2] - r2[2], r3[3] - r2[3]); // far
     return f;
