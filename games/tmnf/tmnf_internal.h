@@ -15,6 +15,10 @@
 
 #include <frametee/game_abi.h>
 
+// The layouts a TMNF plugin is allowed to see live here, so this header and the
+// one plugins compile against can never disagree about them.
+#include <tmnf/tmnf_game.h>
+
 #include <forevervalidator/camera.h>
 #include <forevervalidator/experimental/physics_sandbox.h>
 #include <forevervalidator/native.h>
@@ -41,13 +45,6 @@ using forevervalidator::SimulationBackend;
 namespace fv = forevervalidator;
 namespace fve = forevervalidator::experimental;
 
-// A TMNF tick is 10 ms, so the engine runs this game at 100 ticks per second.
-inline constexpr std::uint32_t kTickMs = 10u;
-// The countdown the original game plays before the clock starts. The sandbox
-// simulates it for us and reports tick 0 at the moment the race begins, so it
-// never shows up in the timeline.
-inline constexpr std::uint32_t kPrestartMs = 2600u;
-
 // How far ahead the sandbox's control plan reaches. Rebuilding a plan is linear
 // in the horizon, so this is a real trade between how long a run may be and how
 // cheap an input edit is; three minutes covers every Nations track with room to
@@ -70,28 +67,6 @@ inline constexpr std::size_t kTriangleBudget = 380000u;
 // undrawn on every real map.
 inline constexpr std::size_t kBackdropBudget = 30000u;
 
-// --- input record ------------------------------------------------------------
-
-enum InputField { FIELD_ACCELERATE = 0, FIELD_BRAKE, FIELD_STEER, FIELD_RESPAWN, FIELD_COUNT };
-
-// Laid out so the record is eight bytes with natural alignment; the engine
-// stores arrays of these in snippets and project files.
-struct TmnfInput {
-  std::uint8_t accelerate = 0;
-  std::uint8_t brake = 0;
-  std::uint8_t respawn = 0;
-  std::uint8_t reserved = 0;
-  // Full lock either way, matching the game's own analog range.
-  std::int32_t steer = 0;
-
-  bool operator==(const TmnfInput &o) const {
-    return accelerate == o.accelerate && brake == o.brake && respawn == o.respawn && steer == o.steer;
-  }
-  bool operator!=(const TmnfInput &o) const { return !(*this == o); }
-};
-
-static_assert(sizeof(TmnfInput) == 8, "the input record must stay a fixed eight bytes");
-
 // --- input plans -------------------------------------------------------------
 
 // The sandbox is driven by an event timeline rather than a per-tick array, and
@@ -112,7 +87,6 @@ struct InputPlan {
   }
 };
 
-using InputPlanPtr = std::shared_ptr<const InputPlan>;
 
 // `base` is whatever the sandbox seeded its own timeline with when the
 // scenario loaded — for a canonical timeline that is the event which starts the
@@ -592,19 +566,7 @@ struct ft_level {
   std::vector<tmnf::fve::PhysicsSandboxEllipsoid> car_shape;
 };
 
-struct ft_world {
-  std::optional<tmnf::fve::PhysicsSandboxState> state;
-  tmnf::fve::PhysicsSandboxStateView view{};
-  // The plan this world's state was produced under. Copying a world only
-  // touches a refcount.
-  tmnf::InputPlanPtr plan;
-  // Which editor world this belongs to; -1 marks a scratch world the engine
-  // simulates to answer a question rather than to show.
-  std::int32_t index = -1;
-  // The editor track this world's single player is recorded on, so authored
-  // input can be read ahead instead of discovered one tick at a time.
-  std::int32_t track = -1;
-};
+// ft_world is defined by <tmnf/tmnf_game.h>, included above.
 
 struct ft_game {
   const ft_engine_api *engine = nullptr;

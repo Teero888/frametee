@@ -233,7 +233,7 @@ void Ui(ft_game *game, const ft_ui_frame *frame) {
 
   if (game->packs.empty()) {
     igTextUnformatted("No installed packs found.", nullptr);
-    igTextUnformatted("Set FRAMETEE_TMNF_PACKS to a TrackMania Packs directory and reopen.", nullptr);
+    igTextUnformatted("Set FRAMETEE_TMNF_PACKS to a TrackMania United Forever Packs directory and reopen.", nullptr);
     return;
   }
 

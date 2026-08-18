@@ -180,6 +180,10 @@ ft_world *WorldCreate(ft_game *game, const ft_world_desc *desc) {
   if (!game) return nullptr;
   auto *world = new ft_world();
   world->index = desc ? desc->world_index : -1;
+  // Handed on so a game-specific plugin can build a sandbox that matches this
+  // one; see tmnf/tmnf_game.h.
+  world->sandbox = game->sandbox ? &*game->sandbox : nullptr;
+  world->packs = game->packs.empty() ? nullptr : game->packs.c_str();
   world->track = ResolveTrack(game, world);
   if (desc && desc->level && desc->level->initial) {
     world->state = desc->level->initial;
@@ -192,6 +196,8 @@ void WorldDestroy(ft_game *, ft_world *world) { delete world; }
 
 void WorldCopy(ft_game *, ft_world *dst, const ft_world *src) {
   if (!dst || !src) return;
+  dst->sandbox = src->sandbox;
+  dst->packs = src->packs;
   // A captured state and a plan are both refcounted handles, so the engine's
   // constant snapshotting only touches counters. The destination keeps its own
   // identity: prediction worlds are index -1 and must stay that way.
@@ -282,6 +288,10 @@ void WorldStep(ft_game *game, ft_world *world, const void *inputs, std::uint32_t
 
   std::lock_guard<std::mutex> lock(game->mutex);
   if (!game->sandbox) return;
+  // A world created before the level opened has none yet, and reopening a level
+  // replaces the one it does have.
+  world->sandbox = &*game->sandbox;
+  world->packs = game->packs.empty() ? nullptr : game->packs.c_str();
 
   auto restored = game->sandbox->RestoreState(*world->state);
   if (!restored) return;

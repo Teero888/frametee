@@ -592,7 +592,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
       // is one flat colour.
       Log(game, FT_LOG_WARN,
           "Only %zu of %zu track materials found a texture. The packs hold the descriptors; the images themselves "
-          "live in the installed game's GameData, beside its Packs. Point FRAMETEE_TMNF_PACKS at a full TrackMania "
+          "live in the installed game's GameData, beside its Packs. Point FRAMETEE_TMNF_PACKS at a full TrackMania United Forever "
           "installation, or set FRAMETEE_TMNF_GAMEDATA to its GameData directory. Until then the track is drawn in "
           "flat surface colours.",
           textured, named);

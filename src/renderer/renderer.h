@@ -473,6 +473,10 @@ void renderer_set_texture3(gfx_handler_t *h, texture_t *texture);
 void renderer_submit_box3(gfx_handler_t *h, vec3 center, vec3 size, vec4 color, bool wire);
 // Builds the view-projection the 3D paths render with, from the orbit camera.
 void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out);
+// The world-space ray under a viewport-local screen position, for picking in a
+// 3D level. Returns false when the projection cannot be inverted, which is what
+// an uninitialised camera looks like.
+bool screen_ray3(gfx_handler_t *h, float sx, float sy, vec3 out_origin, vec3 out_dir);
 void renderer_camera3_eye(gfx_handler_t *h, vec3 out);
 // Where the camera is looking, as a unit vector. Movement and the view both
 // derive from it, so the two can never disagree.
