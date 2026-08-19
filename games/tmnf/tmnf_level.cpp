@@ -466,10 +466,9 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
 // Everything the render scene could not give us. A track that decodes no
 // authored visuals is still drivable, so its collision hull is drawn instead.
 void AppendCollisionFallback(ft_game *game, ft_level *level) {
-  auto scene = game->sandbox->ReadScene();
-  if (!scene) return;
+  if (!game->world) return;
 
-  for (const auto &triangle : scene.Value().collisionTriangles) {
+  for (const auto &triangle : game->world->Collision()) {
     Triangle tri;
     tri.a = ToVec3(triangle.a);
     tri.b = ToVec3(triangle.b);
@@ -505,25 +504,18 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   std::lock_guard<std::mutex> lock(game->mutex);
   if (!OpenSandbox(game, bytes.data(), bytes.size(), path)) return nullptr;
 
-  auto initial = game->sandbox->CaptureState();
-  if (!initial) {
-    Log(game, FT_LOG_ERROR, "Could not capture the starting state.");
-    game->sandbox.reset();
-    return nullptr;
-  }
-
   auto *level = new ft_level();
-  level->initial.emplace(std::move(initial).Value());
-  level->start = level->initial->View();
-
-  auto name = game->sandbox->ReadMapName();
-  level->name = name ? name.Value() : "TrackMania track";
+  level->path = path;
+  level->initial = game->world->Start();
+  level->start = level->initial.View();
+  level->name = game->world->MapName().empty() ? "TrackMania track" : game->world->MapName();
 
   // The car's own collision ellipsoids, so what is drawn is the shape the
   // simulation actually pushes around rather than a guess at one.
-  if (auto scene = game->sandbox->ReadScene()) level->car_shape = std::move(scene).Value().carEllipsoids;
+  level->car_shape = game->world->CarShape();
 
-  // The installed packs, opened for what the sandbox never reads: the pictures.
+  // The installed packs, opened for what the simulation never reads: the
+  // pictures.
   // The environment's own pack holds the track, and the two shared ones hold
   // what every environment draws from.
   if (!game->packs_open.IsOpen()) {
@@ -543,7 +535,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   }
 
   // The track itself, decoded from the installed game rather than taken from
-  // the sandbox. The sandbox's own scene is the same geometry, but it carries no
+  // the simulation. Its own scene is the same geometry, but it carries no
   // material paths and, on several environments, no materials at all: the
   // materials live in each tile's solid and are only reachable by reading them
   // (see tmnf_scene.cpp). Everything on screen therefore comes from here.

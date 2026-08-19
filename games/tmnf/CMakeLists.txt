@@ -87,6 +87,7 @@ endif()
 
 add_library(tmnf_game MODULE
     tmnf_game.cpp
+    tmnf_sim.cpp
     tmnf_sandbox.cpp
     tmnf_level.cpp
     tmnf_render.cpp
@@ -118,9 +119,11 @@ target_include_directories(tmnf_game PRIVATE
     ${CMAKE_SOURCE_DIR}/libs/cimgui/imgui
     # Track thumbnails are JPEGs embedded in the challenge files.
     ${CMAKE_SOURCE_DIR}/libs/stb
-    # The car's visual model is decoded through the validator's internal scene
-    # headers, which it only exposes to itself. Reading them changes nothing in
-    # the submodule; see tmnf_vehicle_model.cpp for why this is worth it.
+    # The validator's internal headers, which it only exposes to itself. Reading
+    # them changes nothing in the submodule. Two files need them: the car's
+    # visual model (tmnf_vehicle_model.cpp) and the simulation itself
+    # (tmnf_sim.cpp), which drives ReplaySimulationSession rather than the
+    # published sandbox -- see tmnf/tmnf_sim.h for why.
     ${CMAKE_CURRENT_SOURCE_DIR}/ForeverValidator/src
 )
 

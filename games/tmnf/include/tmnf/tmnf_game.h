@@ -16,8 +16,8 @@
 // a copy: tmnf_internal.h includes it, so the layout a plugin compiles against
 // is by construction the layout the module was built with.
 
-#include <forevervalidator/experimental/physics_sandbox.h>
 #include <frametee/game_abi.h>
+#include <tmnf/tmnf_sim.h>
 
 #include <cstdint>
 #include <memory>
@@ -25,13 +25,30 @@
 
 namespace tmnf {
 
-namespace fve = forevervalidator::experimental;
-
 // How the module drives the simulation. A TMNF tick is 10 ms, so the engine
 // runs this game at 100 ticks per second; the countdown before the clock starts
-// is simulated by the sandbox and never reaches the timeline.
+// is simulated internally and never reaches the timeline.
 inline constexpr std::uint32_t kTickMs = 10u;
 inline constexpr std::uint32_t kPrestartMs = 2600u;
+
+// Which backend the whole project simulates on.
+//
+// Not a local performance knob: a state captured by one tmnf::sim::World is
+// restored into another, so the module and every plugin that opens a World of
+// its own have to agree on this, which is why it lives in the header they share.
+// Nothing checks it at runtime -- see tmnf::sim::State.
+//
+// OptimizedCpu rather than Reference: it is roughly four times faster
+// per tick. Upstream names
+// Reference as its parity target and does not claim corpus parity for the other
+// backends -- see ForeverValidator/docs/reference-determinism.md, whose one
+// documented divergence is a checkpoint-contact rule enabled only on a Reference
+// leaf. Measured against that: the 209 runnable stock campaign replays, each run
+// to its recorded end, agree bit for bit on position, checkpoints, laps, finish
+// flag and finish time. Validation that has to be authoritative rather than fast
+// should still ask for Reference explicitly.
+inline constexpr forevervalidator::SimulationBackend kSimulationBackend =
+    forevervalidator::SimulationBackend::OptimizedCpu;
 
 // --- input record ------------------------------------------------------------
 
@@ -56,7 +73,7 @@ struct TmnfInput {
 static_assert(sizeof(TmnfInput) == 8, "the input record must stay a fixed eight bytes");
 
 // What a wheel is rolling on, as the simulation reports it per wheel in
-// PhysicsSandboxCarState::wheelSurface. The values are the game's own
+// tmnf::sim::CarState::wheelSurface. The values are the game's own
 // EPlugSurfaceMaterialId; only the few a plugin is likely to reason about are
 // named here, and a wheel touching nothing reports kSurfaceNone rather than a
 // material.
@@ -79,61 +96,48 @@ inline bool SurfaceIsGrass(std::uint16_t surface) {
   return surface == kSurfaceGrass || surface == kSurfaceWetGrass;
 }
 
-// The module's own input timeline. Only the handle crosses this header: a
-// plugin carries a world's plan around with it but never looks inside one.
-struct InputPlan;
-using InputPlanPtr = std::shared_ptr<const InputPlan>;
-
 } // namespace tmnf
 
 // The layout the engine hands around as an opaque pointer.
+//
+// A world is a snapshot, not a simulation: the game owns one tmnf::sim::World
+// per level and every ft_world is a state it can be put back on. Copying one is
+// a refcount.
 struct ft_world {
-  std::optional<tmnf::fve::PhysicsSandboxState> state;
-  tmnf::fve::PhysicsSandboxStateView view{};
-  // The plan this world's state was produced under. Copying a world only
-  // touches a refcount.
-  tmnf::InputPlanPtr plan;
+  tmnf::sim::State state;
+  tmnf::sim::StateView view{};
   // Which editor world this belongs to; -1 marks a scratch world the engine
   // simulates to answer a question rather than to show.
   std::int32_t index = -1;
-  // The editor track this world's single player is recorded on, so authored
-  // input can be read ahead instead of discovered one tick at a time.
+  // The editor track this world's single player is recorded on.
   std::int32_t track = -1;
-  // The sandbox this world was captured from.
-  //
-  // A plugin that wants to simulate on its own cannot share this one -- it is
-  // the editor's, and serialised behind the game's lock -- and cannot clone it
-  // either, because ClonePhysicsSandbox serves only OptimizedCpu sandboxes and
-  // this game runs Reference, which is the backend the validator claims parity
-  // for. What a plugin can do is build a second sandbox over the same scenario,
-  // which RestoreState will accept: it matches captures by fingerprint and
-  // options rather than by identity. This is here so those options can be read
-  // off the real thing instead of guessed. Borrowed, and dies with the level.
-  tmnf::fve::PhysicsSandbox *sandbox = nullptr;
-  // Where the game found the installed packs, so a plugin building a sandbox of
-  // its own reads the same installation the editor did rather than repeating the
-  // search and possibly landing somewhere else. Borrowed from the game.
+  // What a plugin needs to open a tmnf::sim::World of its own, because the
+  // game's belongs to the editor and is serialised behind its lock. Reading the
+  // same installation and the same track file is what makes a state captured
+  // here restore there -- and nothing checks it, so it is on the plugin to use
+  // these rather than to go looking for a track itself. Both are borrowed and
+  // die with the level.
   const char *packs = nullptr;
+  const char *level_path = nullptr;
 };
 
 // Reads a world handed over by the engine, e.g. from tas_api_t::get_world_state_at.
-// The view is everything the simulation reports about a tick; the state is the
-// capture a sandbox can be restored to, which is what a plugin running its own
+// The view is everything the simulation reports about a tick; the state is what
+// a tmnf::sim::World can be restored to, which is what a plugin running its own
 // simulation needs.
-static inline const tmnf::fve::PhysicsSandboxStateView *tmnf_world(const ft_world *world) {
+static inline const tmnf::sim::StateView *tmnf_world(const ft_world *world) {
   return world ? &world->view : nullptr;
 }
-static inline const tmnf::fve::PhysicsSandboxState *tmnf_world_state(const ft_world *world) {
-  return world && world->state ? &*world->state : nullptr;
-}
-// The editor's sandbox for this world, to copy simulation options from. Null
-// before a level is open.
-static inline tmnf::fve::PhysicsSandbox *tmnf_world_sandbox(const ft_world *world) {
-  return world ? world->sandbox : nullptr;
+static inline const tmnf::sim::State *tmnf_world_state(const ft_world *world) {
+  return world && world->state ? &world->state : nullptr;
 }
 // The packs directory the game is running against, or null when it found none.
 static inline const char *tmnf_world_packs(const ft_world *world) {
   return world ? world->packs : nullptr;
+}
+// The track file this world is simulating, or null before a level is open.
+static inline const char *tmnf_world_level_path(const ft_world *world) {
+  return world ? world->level_path : nullptr;
 }
 
 // Input records the engine stores are the module's own TmnfInput. The engine

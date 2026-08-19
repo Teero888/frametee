@@ -76,6 +76,18 @@ struct tas_api_t {
                                           size_t record_stride);
   void (*register_undo_command)(struct undo_command_t *command);
 
+  // Lays one run out in a group of its own: a new group holding a single track
+  // that carries `count` input records starting at `start_tick`. Returns the
+  // group's index, or -1.
+  //
+  // A group is the engine's unit of parallel simulation, so for a game that
+  // seats one player per world it is the only way to show two runs at once.
+  // This is a structural edit, undone by restoring the timeline rather than by
+  // inverting each step, and the whole call lands as a single entry in the
+  // history -- which is what makes it usable in a loop.
+  int (*do_export_run_to_group)(const char *name, int start_tick, int count, const void *records,
+                                size_t record_stride);
+
   const char *(*get_level_name)(void);
   const char *(*get_level_path)(void);
   bool (*viewport_accepts_input)(bool continuing_drag);

@@ -38,21 +38,9 @@ namespace tmnf {
 
 using forevervalidator::AnalogInputState;
 using forevervalidator::kAnalogInputScale;
-using forevervalidator::OpenInstalledPackDirectory;
-using forevervalidator::ReplayIdentity;
-using forevervalidator::SimulationBackend;
 
 namespace fv = forevervalidator;
 namespace fve = forevervalidator::experimental;
-
-// How far ahead the sandbox's control plan reaches. Rebuilding a plan is linear
-// in the horizon, so this is a real trade between how long a run may be and how
-// cheap an input edit is; three minutes covers every Nations track with room to
-// spare and is adjustable in the editor's settings.
-inline constexpr std::uint32_t kDefaultHorizonMs = 180000u;
-inline constexpr std::uint32_t kHorizonGrowthMs = 120000u;
-inline constexpr std::uint32_t kMinHorizonMs = 30000u;
-inline constexpr std::uint32_t kMaxHorizonMs = 1800000u;
 
 // The renderer's 3D stream is a fixed size and silently drops whatever does not
 // fit, so the module keeps a budget of its own a comfortable margin below it and
@@ -66,35 +54,6 @@ inline constexpr std::size_t kTriangleBudget = 380000u;
 // hundreds of thousands, so spending what the track leaves over left the sky
 // undrawn on every real map.
 inline constexpr std::size_t kBackdropBudget = 30000u;
-
-// --- input plans -------------------------------------------------------------
-
-// The sandbox is driven by an event timeline rather than a per-tick array, and
-// a captured state carries the plan it was produced with. A plan is therefore
-// immutable once installed and shared by pointer between every world that was
-// simulated under it, which is what makes the engine's constant snapshotting
-// affordable.
-struct InputPlan {
-  // Authored input for ticks [0, ticks.size()).
-  std::vector<TmnfInput> ticks;
-  // What every later tick holds. Speculating that the current input keeps being
-  // held is what makes prediction lines, which feed one constant record for
-  // hundreds of ticks, cost a single plan rebuild instead of one per tick.
-  TmnfInput tail{};
-
-  const TmnfInput &At(std::size_t tick) const {
-    return tick < ticks.size() ? ticks[tick] : tail;
-  }
-};
-
-
-// `base` is whatever the sandbox seeded its own timeline with when the
-// scenario loaded — for a canonical timeline that is the event which starts the
-// race. Replacing the input list replaces all of it, so those events have to be
-// carried into every plan or the race never begins and nothing that depends on
-// it, from respawns to the finish line, ever fires.
-std::vector<fve::PhysicsSandboxInputEvent> BuildInputEvents(const std::vector<fve::PhysicsSandboxInputEvent> &base,
-                                                            const InputPlan &plan, std::uint32_t horizon_ms);
 
 // Speed is reported in metres per second; the editor shows the game's own
 // kilometres per hour.
@@ -540,7 +499,6 @@ struct Settings {
   bool backface_cull = true;
   // Off by default: it is an inspection aid, not a way to drive.
   bool draw_collision = false;
-  int horizon_seconds = static_cast<int>(kDefaultHorizonMs / 1000u);
 };
 
 } // namespace tmnf
@@ -551,8 +509,11 @@ struct ft_level {
   std::string name;
   ft_rect bounds{};
   tmnf::Aabb world_bounds;
-  tmnf::fve::PhysicsSandboxStateView start{};
-  std::optional<tmnf::fve::PhysicsSandboxState> initial;
+  tmnf::sim::StateView start{};
+  tmnf::sim::State initial;
+  // Where the track was loaded from, handed to plugins that open a
+  // tmnf::sim::World of their own; see tmnf/tmnf_game.h.
+  std::string path;
 
   // Foreground track geometry and the stadium shell behind it, kept apart so
   // the shell can be skipped without walking it every frame.
@@ -563,7 +524,7 @@ struct ft_level {
 
   // The car's own collision ellipsoids, in vehicle space. Drawing these is what
   // makes the car on screen the same shape the simulation is pushing around.
-  std::vector<tmnf::fve::PhysicsSandboxEllipsoid> car_shape;
+  std::vector<tmnf::sim::Ellipsoid> car_shape;
 };
 
 // ft_world is defined by <tmnf/tmnf_game.h>, included above.
@@ -572,14 +533,10 @@ struct ft_game {
   const ft_engine_api *engine = nullptr;
   bool headless = false;
 
-  // One sandbox serves every world: a world is a captured state, and stepping
-  // one restores it, advances a tick and captures the result.
-  std::optional<tmnf::fve::PhysicsSandbox> sandbox;
+  // One simulation serves every world: an ft_world is a captured state, and
+  // stepping one restores it, advances a tick and captures the result.
+  std::unique_ptr<tmnf::sim::World> world;
   std::mutex mutex;
-  std::uint32_t horizon_ms = tmnf::kDefaultHorizonMs;
-  // The sandbox's own seeded events, kept so that rewriting the input timeline
-  // never drops them.
-  std::vector<tmnf::fve::PhysicsSandboxInputEvent> base_events;
 
   std::string packs;
   std::string status;
@@ -677,7 +634,7 @@ void ReleaseThumbnails(ft_game *game);
 
 inline ft_vec3 ToVec3(const fv::Vector3 &v) { return ft_vec3{v.x, v.y, v.z}; }
 
-inline Quat CarRotation(const fve::PhysicsSandboxCarState &car) {
+inline Quat CarRotation(const sim::CarState &car) {
   return Quat{car.rotationX, car.rotationY, car.rotationZ, car.rotationW};
 }
 
