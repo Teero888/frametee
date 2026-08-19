@@ -8,9 +8,9 @@
 # The module additionally needs an installed TrackMania Packs directory at
 # runtime; see FRAMETEE_TMNF_PACKS in tmnf_sandbox.cpp.
 #
-# ForeverValidator is a submodule pinned to its own upstream and is never
-# patched from here: everything this module does goes through its published
-# API, so the submodule stays byte for byte what upstream shipped.
+# ForeverValidator is a submodule pinned to its own upstream. Nothing here
+# patches it -- how it is built is set from this file, but what it compiles is
+# whatever the pinned commit says.
 
 cmake_minimum_required(VERSION 3.14)
 
@@ -30,10 +30,69 @@ endif()
 set(FOREVERVALIDATOR_BUILD_CLI OFF CACHE BOOL "" FORCE)
 set(FOREVERVALIDATOR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FOREVERVALIDATOR_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+
+# Interprocedural optimization for the validator.
+#
+# The submodule turns its own IPO on only for GCC -- see
+# FOREVERVALIDATOR_ENABLE_RELEASE_IPO in its CMakeLists -- so a Clang build,
+# which is what this project recommends, gets none. That is expensive here in a
+# way it would not be for most libraries: the validator is three hundred
+# translation units of small leaf math (GmMath::TransformPoint, GmIso4::Mult,
+# Binary32::FromDouble, CIsqrt) that the physics calls millions of times a
+# second, and it is assembled below into one shared object with default
+# visibility, so without IPO every one of those is a real PLT-indirected call.
+# Roughly a third of the simulation's retired branches were call/ret.
+#
+# Deliberately not folded into ENABLE_AGGRESSIVE_OPTIM: that also turns on
+# -march=native, and the module has to keep running on machines this one was not
+# built on. This part is portable and bit-exact -- the submodule compiles with
+# -ffp-contract=off, so no fused multiply-add can be formed no matter how much
+# gets inlined, and IPO changes only inlining, layout and branch order.
+#
+# Full -flto rather than -flto=thin: ThinLTO promotes the validator's
+# anonymous-namespace thread_locals to global names, and bfd's LLVM plugin then
+# rejects the result ("TLS definition ... mismatches non-TLS reference"). With
+# lld installed, -flto=thin links a good deal faster and is equivalent here.
+option(FRAMETEE_TMNF_VALIDATOR_LTO
+       "Build ForeverValidator with link-time optimization (Clang; GCC has its own)" ON)
+
+set(TMNF_VALIDATOR_LTO OFF)
+if(FRAMETEE_TMNF_VALIDATOR_LTO AND NOT ENABLE_SANITIZERS AND
+   CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Clang's -flto emits LLVM bitcode objects, which only llvm-ar can index.
+    # Set for this directory's scope alone, so the rest of the build keeps the
+    # archiver it was configured with.
+    find_program(FRAMETEE_LLVM_AR NAMES llvm-ar)
+    find_program(FRAMETEE_LLVM_RANLIB NAMES llvm-ranlib)
+    if(FRAMETEE_LLVM_AR AND FRAMETEE_LLVM_RANLIB)
+        set(CMAKE_CXX_ARCHIVE_CREATE "${FRAMETEE_LLVM_AR} qc <TARGET> <LINK_FLAGS> <OBJECTS>")
+        set(CMAKE_CXX_ARCHIVE_APPEND "${FRAMETEE_LLVM_AR} q <TARGET> <LINK_FLAGS> <OBJECTS>")
+        set(CMAKE_CXX_ARCHIVE_FINISH "${FRAMETEE_LLVM_RANLIB} <TARGET>")
+        set(TMNF_VALIDATOR_LTO ON)
+    else()
+        message(STATUS "TMNF: validator LTO off (llvm-ar/llvm-ranlib not found)")
+    endif()
+endif()
+
 add_subdirectory(ForeverValidator ${CMAKE_BINARY_DIR}/forevervalidator EXCLUDE_FROM_ALL)
 
 # The validator's objects are linked into a loadable module.
 set_target_properties(forevervalidator_core forevervalidator_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# The validator is where this game spends essentially all of its time, so it is
+# where both of these are worth having: see the note above -flto, and note that
+# before this the two PGO stages profiled the host and its plugins but never the
+# library underneath them. cmake/PGO.cmake's function is a no-op unless
+# PGO_STAGE is set; scripts/pgo_build.sh drives the two stages.
+foreach(fv_target forevervalidator_core forevervalidator_native)
+    if(TMNF_VALIDATOR_LTO)
+        target_compile_options(${fv_target} PRIVATE $<$<CONFIG:Release>:-flto>)
+        target_link_options(${fv_target} PRIVATE $<$<CONFIG:Release>:-flto>)
+    endif()
+    if(COMMAND frametee_enable_pgo)
+        frametee_enable_pgo(${fv_target})
+    endif()
+endforeach()
 
 # One copy of the validator at runtime rather than one per binary.
 #
@@ -79,6 +138,32 @@ if(NOT WIN32)
     # one usage requirement they did carry is restated here.
     target_include_directories(forevervalidator_shared INTERFACE
         "${CMAKE_CURRENT_SOURCE_DIR}/ForeverValidator/include")
+
+    # Bind the library's own calls to its own definitions.
+    #
+    # Everything above is exported at default visibility on purpose -- that is
+    # what lets the module and a plugin share one copy -- but the side effect is
+    # that a call from one validator translation unit to another goes out to the
+    # PLT and can be interposed by whatever was loaded first. Only functions are
+    # bound, so every global, vtable and typeinfo stays as interposable as it
+    # was and the one-copy arrangement is untouched. Nothing about code
+    # generation changes, so physics results cannot move.
+    #
+    # It also closes a hazard: this module and the UltraForce plugin both
+    # compile tmnf_sim.cpp against the validator's headers, with different
+    # floating-point flags (see plugins/ultraforce/CMakeLists.txt), and the
+    # inline functions that produces are weak definitions of symbols the
+    # validator also defines. Without this the validator can end up calling the
+    # plugin's copy, compiled under flags the physics was never certified for.
+    target_link_options(forevervalidator_shared PRIVATE "-Wl,-Bsymbolic-functions")
+
+    if(TMNF_VALIDATOR_LTO)
+        target_compile_options(forevervalidator_shared PRIVATE $<$<CONFIG:Release>:-flto>)
+        target_link_options(forevervalidator_shared PRIVATE $<$<CONFIG:Release>:-flto>)
+    endif()
+    if(COMMAND frametee_enable_pgo)
+        frametee_enable_pgo(forevervalidator_shared)
+    endif()
 
     set(TMNF_VALIDATOR_LIBS ForeverValidator::shared)
 else()
@@ -133,6 +218,13 @@ target_link_libraries(tmnf_game PRIVATE ${TMNF_VALIDATOR_LIBS})
 
 if(NOT MSVC)
     target_compile_options(tmnf_game PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
+# tmnf_sim.cpp is the module's simulation and is on the hot path for anything
+# that drives the game headlessly, so it wants the same treatment the validator
+# gets.
+if(COMMAND frametee_enable_pgo)
+    frametee_enable_pgo(tmnf_game)
 endif()
 
 # On Windows the ig* calls must resolve at link time against the host.

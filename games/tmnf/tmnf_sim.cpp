@@ -129,6 +129,10 @@ struct World::Impl {
   StateView view{};
   const State::Impl *resident = nullptr;
 
+  // The one-tick block Advance hands to the session, kept so that stepping
+  // never allocates.
+  std::vector<ReplayControlTick> block{ReplayControlTick{}};
+
   void ReadView();
   bool Advance(const ReplayControlTick &tick);
 };
@@ -207,15 +211,21 @@ void World::Impl::ReadView() {
 // game's random sequence and restores both afterwards.
 //
 // It is taken per advance rather than held, which is what ForeverValidator's own
-// sandbox does around every AdvanceTicks. Holding one would be a few
-// microseconds a tick cheaper, but the scope is a process-wide singleton: a
-// World that kept one would stop every other World from simulating at all, and
-// the editor and a searching plugin each own one.
+// sandbox does around every AdvanceTicks: the scope is a process-wide singleton,
+// so a World that kept one would stop every other World from simulating at all,
+// and the editor and a searching plugin each own one. Entering and leaving it
+// is cheap -- see DeterministicExecutionScope's constructor in the submodule,
+// which does no work at all when the environment it wants is already installed,
+// which after the first tick it always is.
+//
+// `block` is a member rather than a local because AdvanceIncremental takes a
+// vector: a local would malloc and free once per tick, and this is called once
+// per tick for the whole length of every candidate a search evaluates.
 bool World::Impl::Advance(const ReplayControlTick &tick) {
   tmnf::simulation::DeterministicExecutionScope deterministic;
   if (!deterministic.Established()) return false;
-  std::vector<ReplayControlTick> one(1, tick);
-  const bool ok = session->AdvanceIncremental(one, 0u, 1u).result == ReplaySimulationRunResult::Success;
+  block[0] = tick;
+  const bool ok = session->AdvanceIncremental(block, 0u, 1u).result == ReplaySimulationRunResult::Success;
   return deterministic.Restore() && ok;
 }
 

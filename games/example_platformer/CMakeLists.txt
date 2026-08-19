@@ -7,6 +7,11 @@
 
 cmake_minimum_required(VERSION 3.14)
 
+option(FRAMETEE_BUILD_PLATFORMER_EXAMPLE "Build the Platformer example game module" OFF)
+if(NOT FRAMETEE_BUILD_PLATFORMER_EXAMPLE)
+    return()
+endif()
+
 find_package(raylib 5.5 QUIET)
 if(NOT raylib_FOUND)
     include(FetchContent)
