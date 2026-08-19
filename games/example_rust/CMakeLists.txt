@@ -7,6 +7,11 @@
 
 cmake_minimum_required(VERSION 3.14)
 
+option(FRAMETEE_BUILD_RUST_EXAMPLE "Build the Rust example game module" OFF)
+if(NOT FRAMETEE_BUILD_RUST_EXAMPLE)
+    return()
+endif()
+
 find_program(CARGO_EXECUTABLE cargo)
 
 if(NOT CARGO_EXECUTABLE)

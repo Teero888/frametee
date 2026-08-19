@@ -4,6 +4,11 @@
 
 cmake_minimum_required(VERSION 3.14)
 
+option(FRAMETEE_BUILD_CUBE_EXAMPLE "Build the Cube example game module" OFF)
+if(NOT FRAMETEE_BUILD_CUBE_EXAMPLE)
+    return()
+endif()
+
 add_library(example_cube_game MODULE cube_game.c)
 
 set_target_properties(example_cube_game PROPERTIES
