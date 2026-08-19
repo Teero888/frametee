@@ -206,7 +206,7 @@ void Submit(const ft_engine_api *api, const std::vector<Face> &faces, const CarP
 // How a wheel's state shows on it. The authored model already has its own
 // colours, so its wheels are tinted rather than repainted; the modelled car has
 // nothing worth keeping and is painted outright.
-ft_color WheelStateColor(const fve::PhysicsSandboxCarState &car, std::size_t wheel, bool *replace) {
+ft_color WheelStateColor(const sim::CarState &car, std::size_t wheel, bool *replace) {
   constexpr ft_color kTyre{0.12f, 0.12f, 0.13f, 1.f};
   constexpr ft_color kAirborne{0.42f, 0.46f, 0.55f, 1.f};
   constexpr ft_color kSliding{0.95f, 0.42f, 0.12f, 1.f};

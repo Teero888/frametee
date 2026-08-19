@@ -123,7 +123,6 @@ enum SettingIndex {
   SETTING_BACKGROUND = 0,
   SETTING_BACKFACE_CULL,
   SETTING_COLLISION,
-  SETTING_HORIZON,
   SETTING_COUNT,
 };
 
@@ -135,10 +134,6 @@ const ft_setting_desc kSettings[SETTING_COUNT] = {
      "Rendering", FT_VALUE_BOOL, 0.0, 0.0},
     {"draw_collision", "Show the collision shape",
      "Draw the ellipsoids the simulation collides with, over the car.", "Rendering", FT_VALUE_BOOL, 0.0, 0.0},
-    {"horizon_seconds", "Simulation length",
-     "The longest run the simulation is prepared for, in seconds. Editing an input rebuilds a plan covering all of it, "
-     "so a shorter setting makes editing cheaper. Applied when a track is next loaded.",
-     "Simulation", FT_VALUE_INT, static_cast<double>(kMinHorizonMs / 1000u), static_cast<double>(kMaxHorizonMs / 1000u)},
 };
 
 // --- lifecycle ---------------------------------------------------------------
@@ -260,13 +255,13 @@ std::int32_t EntityCount(ft_game *, const ft_world *world, std::uint32_t entity_
   return (world && entity_class == FT_ENTITY_CLASS_PLAYER) ? 1 : 0;
 }
 
-int WheelsOnGround(const fve::PhysicsSandboxCarState &car) {
+int WheelsOnGround(const sim::CarState &car) {
   int count = 0;
   for (bool contact : car.wheelContact) count += contact ? 1 : 0;
   return count;
 }
 
-bool AnyWheelSliding(const fve::PhysicsSandboxCarState &car) {
+bool AnyWheelSliding(const sim::CarState &car) {
   for (bool sliding : car.wheelSliding)
     if (sliding) return true;
   return car.sliding;
@@ -435,10 +430,6 @@ bool SettingGet(ft_game *game, std::uint32_t index, ft_value *out) {
     out->kind = FT_VALUE_BOOL;
     out->as.b = game->settings.draw_collision;
     return true;
-  case SETTING_HORIZON:
-    out->kind = FT_VALUE_INT;
-    out->as.i = game->settings.horizon_seconds;
-    return true;
   default: return false;
   }
 }
@@ -449,11 +440,6 @@ bool SettingSet(ft_game *game, std::uint32_t index, const ft_value *value) {
   case SETTING_BACKGROUND: game->settings.draw_background = value->as.b; return true;
   case SETTING_BACKFACE_CULL: game->settings.backface_cull = value->as.b; return true;
   case SETTING_COLLISION: game->settings.draw_collision = value->as.b; return true;
-  case SETTING_HORIZON:
-    game->settings.horizon_seconds =
-        std::clamp(static_cast<int>(value->as.i), static_cast<int>(kMinHorizonMs / 1000u),
-                   static_cast<int>(kMaxHorizonMs / 1000u));
-    return true;
   default: return false;
   }
 }

@@ -167,6 +167,64 @@ static struct undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset,
   return command;
 }
 
+// A command whose change has already been applied but whose history entry is not
+// wanted: the bulk edit below records itself as one snapshot instead.
+static void discard_undo_command(undo_command_t *command) {
+  if (!command) return;
+  if (command->cleanup) command->cleanup(command);
+  free(command);
+}
+
+static int api_do_export_run_to_group(const char *name, int start_tick, int count, const void *records,
+                                      size_t record_stride) {
+  ui_handler_t *ui = g_ui_handler_for_api;
+  timeline_state_t *ts = &ui->timeline;
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const size_t record_size = game_input_size(host);
+  if (!records || count <= 0 || record_stride < record_size || start_tick < 0) return -1;
+
+  timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
+  if (!before) return -1;
+
+  char group_name[MAX_TIMELINE_GROUP_NAME];
+  snprintf(group_name, sizeof(group_name), "%s", name && name[0] ? name : "Run");
+  if (!model_add_group(ts, group_name)) {
+    commands_free_timeline_data_snapshot(before);
+    return -1;
+  }
+
+  const int group_index = ts->group_count - 1;
+  model_set_active_group(ts, group_index);
+  model_sync_tracks_to_world(ts, group_index);
+
+  // The track lands in the active group, which is the one just made.
+  int track_index = -1;
+  discard_undo_command(timeline_api_create_track(ui, NULL, &track_index));
+  if (track_index < 0) {
+    commands_free_timeline_data_snapshot(before);
+    return -1;
+  }
+
+  int snippet_id = -1;
+  discard_undo_command(timeline_api_create_snippet(ui, track_index, start_tick, count, &snippet_id));
+  input_snippet_t *snippet = snippet_id >= 0 ? model_find_snippet_by_id(ts, snippet_id, NULL) : NULL;
+  if (!snippet) {
+    commands_free_timeline_data_snapshot(before);
+    return -1;
+  }
+
+  input_record_t *window = snippet_window(snippet);
+  const int writable = count < snippet->input_count ? count : snippet->input_count;
+  for (int i = 0; i < writable; ++i)
+    memcpy(window[i].bytes, (const uint8_t *)records + (size_t)i * record_stride, record_size);
+
+  model_recalc_physics(ts, start_tick);
+
+  undo_command_t *change = commands_create_timeline_data_change(ui, before, "Export Run to Group");
+  if (change) undo_manager_register_command(&ui->undo_manager, change);
+  return group_index;
+}
+
 static const char *api_get_level_name(void) { return g_ui_handler_for_api->loaded_level_name; }
 static const char *api_get_level_path(void) { return g_ui_handler_for_api->loaded_level_path; }
 static bool api_viewport_accepts_input(bool continuing_drag) {
@@ -320,6 +378,7 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .input_set_vec2 = api_input_set_vec2,
       .do_create_track = api_do_create_track,
       .register_undo_command = api_register_undo_command,
+      .do_export_run_to_group = api_do_export_run_to_group,
       .do_create_snippet = api_do_create_snippet,
       .find_snippet_at = api_find_snippet_at,
       .do_set_inputs = api_do_set_inputs,
