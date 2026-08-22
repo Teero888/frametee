@@ -949,7 +949,10 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->loaded_level_path[0] = '\0';
   ui->current_project_path[0] = '\0';
   ui->has_unsaved_changes = false;
-  ui->show_timeline = true;
+  // The viewport is what the editor is for; the panels around it are opened
+  // from the menu when they are wanted. Starting with the timeline up hid a
+  // third of the render behind a panel nobody had asked for yet.
+  ui->show_timeline = false;
   ui->show_timeline_events_window = false;
   ui->show_plugin_manager = false;
   entity_inspector_clear(&ui->entity_inspector);
@@ -1573,6 +1576,21 @@ bool ui_render_late(ui_handler_t *ui) {
   ImVec2 start = igGetCursorScreenPos();
   const ImVec2 viewport_content_pos = start;
   *(ImVec2_c *)&ui->gfx_handler->viewport[0] = igGetContentRegionAvail();
+  // A capture is only worth comparing against another one taken the same way,
+  // and the window manager is free to ignore the size the window asked for --
+  // it may tile it, or half it. Pinning the drawn region here fixes both the
+  // aspect the camera projects with and the pixels --screenshot reads back,
+  // whatever the window ended up being.
+  {
+    const char *forced = getenv("FRAMETEE_VIEWPORT_SIZE");
+    if (forced != NULL) {
+      int w = 0, h = 0;
+      if (sscanf(forced, "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+        ui->gfx_handler->viewport[0] = (float)w;
+        ui->gfx_handler->viewport[1] = (float)h;
+      }
+    }
+  }
 
   ImVec2 img_size = {ui->gfx_handler->viewport[0], ui->gfx_handler->viewport[1]};
   ImVec2 uv0 = {0, 0};

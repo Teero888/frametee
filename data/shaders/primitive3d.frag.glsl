@@ -11,20 +11,19 @@ layout(location = 2) flat in float frag_layer;
 layout(location = 0) out vec4 out_color;
 
 void main() {
+  bool additive = frag_color.a <= 0.0;
+
   vec4 col = frag_color;
-  // A negative page is how a triangle says it has no texture, which is what
-  // every 2D-turned-3D marker, line and box uses.
   if (frag_layer >= 0.0) {
-    // Authored world textures tile across a surface, so the coordinate is taken
-    // as given and wrapped by the sampler rather than clamped into a sub-rect.
     col *= texture(tex_array, vec3(frag_uv, frag_layer));
   }
 
-  // Everything here is drawn in one unsorted pass that writes depth, so a
-  // fully transparent texel would otherwise punch a hole through whatever
-  // stands behind it. Cutting those fragments out is also what a fence, a
-  // railing or a tree card actually wants: they are alpha-tested surfaces, not
-  // blended ones.
+  if (additive) {
+    if (max(max(col.r, col.g), col.b) < 0.02) discard;
+    out_color = vec4(col.rgb, 0.0);
+    return;
+  }
+
   if (col.a < 0.02) discard;
 
   out_color = vec4(col.rgb * col.a, col.a);

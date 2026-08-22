@@ -454,6 +454,11 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
       base = MixColor(base, ft_color{base.r * c.r * 2.f, base.g * c.g * 2.f, base.b * c.b * 2.f, base.a}, 0.6f);
     }
 
+    // Zero alpha is the pass's signal for an additive draw; see
+    // data/shaders/primitive3d.frag.glsl. A glow carries no coverage of its
+    // own -- it only adds light to whatever it is mounted on.
+    if (look.style.additive) base.a = 0.f;
+
     tri.color = PackColor(base);
     out.push_back(tri);
 
@@ -648,7 +653,13 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     //
     // The sky goes there whatever size its mesh is, because what makes a
     // backdrop is being behind everything rather than being wide.
-    if (style.unlit || IsDistantScenery(scene.meshes[instance.mesh], instance)) {
+    //
+    // An additive glow is unlit too, but it is not a shell: the lamps on the
+    // start gantry and the flares on the spot housings stand in the world, at a
+    // place, and sending them to the backdrop draws them behind the very thing
+    // they are lit on. Only a shell that is not adding light to something is a
+    // backdrop.
+    if ((style.unlit && !style.additive) || IsDistantScenery(scene.meshes[instance.mesh], instance)) {
       AppendInstance(scene, instance, layer, style, level->backdrop, backdrop_bounds);
     } else {
       const std::size_t before = level->track.size();

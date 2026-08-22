@@ -97,6 +97,14 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
 
 int main(int argc, char **argv) {
   const char *auto_script = NULL;
+  // Renders the level for a few frames, writes the viewport to a file and
+  // exits. This is how a render gets checked without a person looking at it.
+  const char *screenshot_path = NULL;
+  int screenshot_frames = 60;
+  // "x,y" in captured-image pixels. Reports the world-space ray under that
+  // pixel, which is how a question about a render ("what is that grey?") turns
+  // into a question about the level.
+  const char *pick_pixel = NULL;
   // Opens a level straight away, skipping the start screen. The active game
   // decides what the string means, exactly as it does for the level a start
   // screen requests.
@@ -109,6 +117,18 @@ int main(int argc, char **argv) {
       g_forced_game_id = argv[++i];
     } else if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
       level_path = argv[++i];
+    } else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
+      screenshot_path = argv[++i];
+    } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+      screenshot_frames = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--pick") == 0 && i + 1 < argc) {
+      pick_pixel = argv[++i];
+    } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
+      // Read back out of the environment by the window creation in
+      // graphics_backend.c, which runs before this loop's result is available
+      // to it any other way.
+      setenv("FRAMETEE_WINDOW_SIZE", argv[i + 1], 1);
+      setenv("FRAMETEE_VIEWPORT_SIZE", argv[++i], 1);
     } else if (strcmp(argv[i], "--list-games") == 0) {
       g_list_games = true;
       g_is_headless = true;
@@ -212,6 +232,30 @@ int main(int argc, char **argv) {
     }
 
     viewport_hovered = gfx_end_frame(&handler);
+
+    if (screenshot_path != NULL && --screenshot_frames <= 0) {
+      // A few frames in, so the level has settled and the viewport has been
+      // sized by the layout rather than by its initial guess.
+      if (renderer_capture_offscreen_ppm(&handler, screenshot_path) == 0) {
+        log_info("Main", "Wrote %s", screenshot_path);
+        // Where a pixel of that capture lands in the world, so a render can be
+        // interrogated ("what is that grey?") instead of guessed at.
+        if (pick_pixel) {
+          const char *pick = pick_pixel;
+          float sx = 0.f, sy = 0.f;
+          if (sscanf(pick, "%f,%f", &sx, &sy) == 2) {
+            vec3 origin, dir;
+            if (screen_ray3(&handler, sx, sy, origin, dir)) {
+              log_info("Main", "pick ray origin=(%.2f %.2f %.2f) dir=(%.4f %.4f %.4f)", (double)origin[0],
+                       (double)origin[1], (double)origin[2], (double)dir[0], (double)dir[1], (double)dir[2]);
+            }
+          }
+        }
+      }
+      else
+        log_error("Main", "Could not capture the viewport to '%s'", screenshot_path);
+      break;
+    }
   }
 
   gfx_cleanup(&handler);

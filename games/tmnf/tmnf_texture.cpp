@@ -517,11 +517,23 @@ MaterialStyle TextureLibrary::Style(const PackSet &packs, const std::string &mat
   MaterialStyle style;
   GbxFile material;
   if (packs.References(material_path, &material)) {
-    // A material is usually a texture plus a shader, and it is the shader that
-    // says how the surface behaves. A few materials are shaders themselves and
-    // are named in the table directly, so both spellings are tried.
+    // A material is a texture plus the thing that says how the surface behaves,
+    // and environments disagree about what that thing is called. Techno and
+    // Island name a .Shader.Gbx; Stadium names another .Material.Gbx and
+    // inherits from it -- StadiumWarpSpotsGlow is "TAdd Night ZBias", which is
+    // the additive shader the table already knows under that name. Looking only
+    // for the first spelling left every Stadium surface on the default opaque
+    // style: no additive glows, no world-space grass, no cut-out signs.
+    //
+    // Textures are always .Texture.Gbx, so the two kinds of reference cannot be
+    // confused with a material's pictures.
     for (const GbxReference &reference : material.references) {
-      if (Lower(reference.name).find(".shader.gbx") == std::string::npos) continue;
+      const std::string lower = Lower(reference.name);
+      const bool is_base = lower.find(".shader.gbx") != std::string::npos ||
+                           lower.find(".material.gbx") != std::string::npos;
+      if (!is_base) continue;
+      // A material that names itself says nothing about itself.
+      if (Lower(reference.path) == Lower(material_path)) continue;
       if (const MaterialStyle *found = StyleForKey(ShaderKey(reference.path))) {
         style = *found;
         break;
@@ -543,6 +555,42 @@ MaterialStyle TextureLibrary::Style(const PackSet &packs, const std::string &mat
   style_by_material_.emplace(material_path, style);
   return style;
 }
+
+namespace {
+
+// A signal lamp's glow is not one picture but three, laid out corner to corner
+// along the texture's diagonal: green, then amber, then red, each in its own
+// third. The game slides the sampled window down that diagonal to light one
+// colour at a time, and the mesh it does that on carries UVs spanning the whole
+// sheet -- so drawing the sheet as-is puts all three lamps on the quad at once,
+// which is what the start gantry has been showing.
+//
+// There is no race clock here to slide the window with, so the frame the track
+// is left sitting in is the one that gets drawn: green, the same one the game
+// leaves lit once a run is under way.
+bool CropDiagonalLampFrame(const std::string &image, std::uint32_t *width, std::uint32_t *height,
+                           std::vector<std::uint8_t> *rgba) {
+  constexpr std::uint32_t kFrames = 3u;
+  const std::string lower = Lower(image);
+  if (lower.find("stadiumstartsignglow") == std::string::npos) return false;
+  if (*width != *height || *width < kFrames * 4u) return false;
+
+  // The sheet does not divide evenly (the stadium's is 64 across), so the frame
+  // is the floor of a third: a hair inside the cell, which keeps the next lamp
+  // out rather than letting a sliver of it bleed in.
+  const std::uint32_t side = *width / kFrames;
+  std::vector<std::uint8_t> lit(static_cast<std::size_t>(side) * side * 4u);
+  for (std::uint32_t y = 0; y < side; ++y)
+    std::memcpy(&lit[static_cast<std::size_t>(y) * side * 4u],
+                &(*rgba)[static_cast<std::size_t>(y) * *width * 4u],
+                static_cast<std::size_t>(side) * 4u);
+  *rgba = std::move(lit);
+  *width = side;
+  *height = side;
+  return true;
+}
+
+}  // namespace
 
 std::optional<std::uint32_t> TextureLibrary::Layer(const PackSet &packs, const std::string &material_path) {
   const auto cached = by_material_.find(material_path);
@@ -570,6 +618,8 @@ std::optional<std::uint32_t> TextureLibrary::Layer(const PackSet &packs, const s
     by_material_.emplace(material_path, std::nullopt);
     return std::nullopt;
   }
+
+  CropDiagonalLampFrame(*image, &width, &height, &rgba);
 
   if (layers_.size() >= kMaxTextureLayers) {
     by_material_.emplace(material_path, std::nullopt);
