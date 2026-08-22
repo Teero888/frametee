@@ -84,10 +84,36 @@ set_target_properties(forevervalidator_core forevervalidator_native PROPERTIES P
 # before this the two PGO stages profiled the host and its plugins but never the
 # library underneath them. cmake/PGO.cmake's function is a no-op unless
 # PGO_STAGE is set; scripts/pgo_build.sh drives the two stages.
+# ENABLE_AGGRESSIVE_OPTIM means "build for this machine" and already says so
+# for the host and its plugins; the validator is where the time actually goes,
+# so it belongs here too. Kept separate from the LTO above because that stays
+# portable and this does not: a module built with it will not start on a CPU
+# without the instructions it was compiled for. Worth about three percent on
+# this simulation, and bit-exact -- -ffp-contract=off still forbids the fused
+# multiply-add that a wider instruction set would otherwise make available.
+set(TMNF_VALIDATOR_NATIVE_OPTIONS)
+if(ENABLE_AGGRESSIVE_OPTIM AND NOT ENABLE_SANITIZERS AND
+   CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # -mno-fma is load-bearing, and the claim above that -ffp-contract=off is
+    # sufficient on its own is not true. That flag governs contraction of
+    # expressions written in the source; it does not stop clang synthesising
+    # fmod as x - trunc(x/y)*y and fusing its own multiply-add. Building this
+    # module with -march=native and without -mno-fma puts 20 fused instructions
+    # into Binary32::TruncateToUint32Modulo and GmMap2::IsInside, where a plain
+    # x86-64 baseline has none -- so the results are not the same. Denying the
+    # instruction restores the bit-exactness the comment above promises, and
+    # measures no slower.
+    set(TMNF_VALIDATOR_NATIVE_OPTIONS
+        $<$<CONFIG:Release>:-march=native -mtune=native -mno-fma>)
+endif()
+
 foreach(fv_target forevervalidator_core forevervalidator_native)
     if(TMNF_VALIDATOR_LTO)
         target_compile_options(${fv_target} PRIVATE $<$<CONFIG:Release>:-flto>)
         target_link_options(${fv_target} PRIVATE $<$<CONFIG:Release>:-flto>)
+    endif()
+    if(TMNF_VALIDATOR_NATIVE_OPTIONS)
+        target_compile_options(${fv_target} PRIVATE ${TMNF_VALIDATOR_NATIVE_OPTIONS})
     endif()
     if(COMMAND frametee_enable_pgo)
         frametee_enable_pgo(${fv_target})
@@ -125,6 +151,18 @@ if(NOT WIN32)
         "$<TARGET_FILE:forevervalidator_core>"
         "-Wl,--no-whole-archive")
 
+    # The archives are LTO bitcode, so the code generation that would contract
+    # a*b+c into an FMA happens here, at the link, not where -ffp-contract=off
+    # was given. On a plain x86-64 baseline that never showed, because there is
+    # no FMA to contract into. Raising the baseline makes it reachable, so both
+    # flags have to be restated on the link line or results move.
+    if(FOREVERVALIDATOR_RAISE_ISA_BASELINE)
+        target_link_options(forevervalidator_shared PRIVATE
+            "-ffp-contract=off"
+            "-march=x86-64-v3"
+            "-mno-fma")
+    endif()
+
     # Linked again by target, privately: that is what carries the archives' own
     # dependencies -- OpenSSL and zlib, whose imported targets belong to the
     # submodule's scope and cannot be named from here. Naming them a second time
@@ -160,6 +198,10 @@ if(NOT WIN32)
     if(TMNF_VALIDATOR_LTO)
         target_compile_options(forevervalidator_shared PRIVATE $<$<CONFIG:Release>:-flto>)
         target_link_options(forevervalidator_shared PRIVATE $<$<CONFIG:Release>:-flto>)
+    endif()
+    if(TMNF_VALIDATOR_NATIVE_OPTIONS)
+        target_compile_options(forevervalidator_shared PRIVATE ${TMNF_VALIDATOR_NATIVE_OPTIONS})
+        target_link_options(forevervalidator_shared PRIVATE ${TMNF_VALIDATOR_NATIVE_OPTIONS})
     endif()
     if(COMMAND frametee_enable_pgo)
         frametee_enable_pgo(forevervalidator_shared)

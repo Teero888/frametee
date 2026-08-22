@@ -21,6 +21,5 @@ games/tmnf/GameData
 # Untracked project checkouts & scratch files
 scratch/
 ddnet/
-plugins/ultraforce/
 *.auto
 *.log

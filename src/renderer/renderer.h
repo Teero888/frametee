@@ -518,5 +518,10 @@ void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, me
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t layer_count, VkFormat format);
 
+// Write the viewport -- the offscreen colour target, without any editor
+// chrome -- to a binary PPM. Returns 0 on success. Meant for --screenshot and
+// for checking a render from a script rather than by eye.
+int renderer_capture_offscreen_ppm(gfx_handler_t *handler, const char *path);
+
 
 #endif // RENDERER_H

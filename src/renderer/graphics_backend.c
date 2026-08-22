@@ -791,7 +791,20 @@ static int init_window(gfx_handler_t *handler) {
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 
-  handler->window = glfwCreateWindow(1920, 1080, "frametee", NULL, NULL);
+  // A capture is only comparable against another one at the same size, and the
+  // window manager does not have to honour the size asked for here -- so
+  // --size pins it and the viewport, and with it the offscreen target that
+  // --screenshot reads.
+  int window_width = 1920, window_height = 1080;
+  const char *size = getenv("FRAMETEE_WINDOW_SIZE");
+  if (size != NULL) {
+    int w = 0, h = 0;
+    if (sscanf(size, "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+      window_width = w;
+      window_height = h;
+    }
+  }
+  handler->window = glfwCreateWindow(window_width, window_height, "frametee", NULL, NULL);
   if (!handler->window) {
     glfwTerminate();
     return 1;
@@ -1055,7 +1068,11 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
   VkFormat format = handler->g_main_window_data.SurfaceFormat.format;
 
   // create image (color attachment + sampled)
-  create_image(handler, width, height, 1, 1, format, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+  // TRANSFER_SRC so the viewport can be read back to a file. That is what
+  // --screenshot uses: the offscreen image is the viewport and nothing else,
+  // so a capture of it carries no editor chrome.
+  create_image(handler, width, height, 1, 1, format, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &handler->offscreen_image, &handler->offscreen_memory);
 
   // create image view

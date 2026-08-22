@@ -3546,3 +3546,84 @@ void renderer_sync_external_textures(gfx_handler_t *h, VkCommandBuffer cmd, bool
     vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &barrier);
   }
 }
+
+int renderer_capture_offscreen_ppm(gfx_handler_t *handler, const char *path) {
+  if (!handler || !handler->offscreen_initialized || handler->offscreen_image == VK_NULL_HANDLE) return 1;
+
+  // The offscreen target is the size of the whole framebuffer, but only the
+  // top-left viewport-sized corner of it is ever drawn -- the editor samples
+  // exactly that much when it composites. Capturing the rest would frame the
+  // render in whatever the last resize left behind.
+  const uint32_t width = handler->viewport[0] > 0.f && (uint32_t)handler->viewport[0] < handler->offscreen_width
+                                 ? (uint32_t)handler->viewport[0]
+                                 : handler->offscreen_width;
+  const uint32_t height = handler->viewport[1] > 0.f && (uint32_t)handler->viewport[1] < handler->offscreen_height
+                                  ? (uint32_t)handler->viewport[1]
+                                  : handler->offscreen_height;
+  if (width == 0 || height == 0) return 1;
+
+  vkDeviceWaitIdle(handler->g_device);
+
+  const VkDeviceSize size = (VkDeviceSize)handler->offscreen_width * height * 4u;
+  buffer_t staging;
+  create_buffer(handler, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging);
+
+  const VkFormat format = handler->g_main_window_data.SurfaceFormat.format;
+  VkCommandPool pool = handler->renderer.transfer_command_pool;
+
+  // The offscreen pass leaves the image ready for the sampler that composites
+  // it into the editor, so it has to come back out of that layout to be read
+  // and be put back afterwards.
+  transition_image_layout(handler, pool, handler->offscreen_image, format, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 1, 0, 1);
+
+  VkCommandBuffer cmd = begin_single_time_commands(handler, pool);
+  VkBufferImageCopy region = {
+      .bufferOffset = 0,
+      .bufferRowLength = 0,
+      .bufferImageHeight = 0,
+      .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1},
+      .imageOffset = {0, 0, 0},
+      .imageExtent = {handler->offscreen_width, height, 1},
+  };
+  vkCmdCopyImageToBuffer(cmd, handler->offscreen_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.buffer, 1, &region);
+  end_single_time_commands(handler, pool, cmd);
+
+  transition_image_layout(handler, pool, handler->offscreen_image, format, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1, 0, 1);
+
+  void *mapped = NULL;
+  vkMapMemory(handler->g_device, staging.memory, 0, size, 0, &mapped);
+
+  int result = 1;
+  FILE *file = fopen(path, "wb");
+  if (file) {
+    // The swapchain is usually BGRA, so the two orderings are told apart here
+    // rather than baked in; anything else is written as-is and will look wrong
+    // in a way that is obvious.
+    const bool bgra = (format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB);
+    fprintf(file, "P6\n%u %u\n255\n", width, height);
+    const uint8_t *src = (const uint8_t *)mapped;
+    uint8_t *row = (uint8_t *)malloc((size_t)width * 3u);
+    if (row) {
+      for (uint32_t y = 0; y < height; ++y) {
+        for (uint32_t x = 0; x < width; ++x) {
+          const uint8_t *p = src + ((size_t)y * handler->offscreen_width + x) * 4u;
+          row[x * 3u + 0u] = bgra ? p[2] : p[0];
+          row[x * 3u + 1u] = p[1];
+          row[x * 3u + 2u] = bgra ? p[0] : p[2];
+        }
+        fwrite(row, 1, (size_t)width * 3u, file);
+      }
+      free(row);
+      result = 0;
+    }
+    fclose(file);
+  }
+
+  vkUnmapMemory(handler->g_device, staging.memory);
+  vkDestroyBuffer(handler->g_device, staging.buffer, handler->g_allocator);
+  vkFreeMemory(handler->g_device, staging.memory, handler->g_allocator);
+  return result;
+}

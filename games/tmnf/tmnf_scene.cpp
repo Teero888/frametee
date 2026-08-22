@@ -24,6 +24,9 @@
 
 #include "tmnf_internal.h"
 
+#include <algorithm>
+#include <cctype>
+
 // ForeverValidator internals; see tmnf_vehicle_model.cpp for why this module
 // reads them and what that costs.
 #include "engine/game/material_render_definition.h"
@@ -169,8 +172,23 @@ void NameMaterials(const std::unordered_map<std::uint32_t, std::string> &by_inde
 //
 // So the pairing is made here, per tile. The reference table names the
 // materials in order and the tree links say which node each part draws with;
-// both come off the same list. The counts have to agree before any of it is
-// used, and a node that the validator already resolved is left alone.
+// both come off the same list. Most of the table is already spoken for by
+// nodes the validator did resolve, though, so those entries are struck off
+// first -- pairing against the whole table would line the wrong names up and
+// was why this pass used to decline every tile on a stadium track. What is
+// left has to match the unresolved nodes one-for-one before any of it is used.
+namespace {
+std::string LowerAscii(std::string value) {
+  for (char &c : value) c = (char)std::tolower((unsigned char)c);
+  return value;
+}
+
+std::string BaseName(const std::string &path) {
+  const std::size_t slash = path.find_last_of("\\/");
+  return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+}  // namespace
+
 void NameMaterialsFromSolids(InstalledPackAssetRepository &assets, const PackSet &packs,
                              const std::string &pack_name, StaticSolidArchiveLoadSession &session) {
   std::vector<CGameCtnReplayStaticSolidArchiveNodeIdentity> already;
@@ -218,7 +236,29 @@ void NameMaterialsFromSolids(InstalledPackAssetRepository &assets, const PackSet
           nodes.push_back(node);
           return 1;
         });
-    if (nodes.size() != material_paths.size()) continue;
+    // A solid's reference table lists every material the tile can use, but most
+    // of them are already spoken for by nodes the assembler named on its own.
+    // Strike those off and what remains lines up one-for-one, in file order,
+    // with the nodes it could not name -- which is the pairing we want.
+    std::vector<std::string> claimed;
+    session.ArchiveGraph().SurfaceGraph().ForEachMaterialDefinition(
+        [&](const CGameCtnReplayStaticSolidArchiveMaterialDefinition &definition) {
+          if (definition.MatchesPayload(id))
+            claimed.push_back(LowerAscii(BaseName(definition.Render().MaterialPlainPath())));
+          return 1;
+        });
+    std::vector<std::string> unclaimed;
+    for (const std::string &path : material_paths) {
+      const std::string name = LowerAscii(BaseName(path));
+      const auto taken = std::find(claimed.begin(), claimed.end(), name);
+      if (taken != claimed.end())
+        claimed.erase(taken);
+      else
+        unclaimed.push_back(path);
+    }
+    // Anything else would be a guess, and a wrong texture reads worse than none.
+    if (nodes.size() != unclaimed.size()) continue;
+    material_paths = std::move(unclaimed);
 
     CGameCtnReplayStaticSolidArchiveGraphWriter writer(&session.MutableArchiveGraph(), id);
     CGameCtnReplayStaticSolidArchiveSurfaceGraph &graph = session.MutableArchiveGraph().SurfaceGraph();
@@ -264,9 +304,42 @@ TrackPurpose ToPurpose(StaticScenePurpose purpose) {
 // a block laid down fifty times costs one mesh and fifty transforms — which is
 // how the game stores it and the only way a whole track fits in memory twice
 // over.
+// What a surface looks like when the tile never said.
+//
+// A solid names most of its materials by file, but some of its surfaces carry
+// nothing except the physics id the game grades them by -- concrete, metal,
+// rubber, asphalt. The assembler builds those a material with a surface and no
+// picture at all, and they come out of the walk below with an empty path: on a
+// stadium track that is the concrete every dirt-road tile is founded on, the
+// rubber of its kerbs and the metal of its rails, which is tens of thousands of
+// triangles left in flat grey.
+//
+// The id is a good enough name to draw by. It is what the surface is made of,
+// and each environment paints one thing per material -- so the environment's
+// own material for that substance is the picture the tile would have named if
+// it had named one. Wrong in detail where a tile meant a variant, right about
+// what the surface is, and either is worth more than grey.
+std::string DefaultMaterialForSurface(const std::string &pack_name, std::uint8_t surface) {
+  if (LowerAscii(pack_name) != "stadium") return std::string();
+  const char *name = nullptr;
+  switch (surface) {
+    case 0: name = "StadiumPlatform"; break;      // Concrete
+    case 1: name = "StadiumPlatform"; break;      // Pavement
+    case 2: name = "StadiumGrass"; break;         // Grass
+    case 4: name = "StadiumRoadBorderMetal"; break;  // Metal
+    case 6: name = "StadiumDirt"; break;          // Dirt
+    case 8: name = "StadiumDirtRoad"; break;      // DirtRoad
+    case 9: name = "StadiumRoadBorderRubber"; break; // Rubber
+    case 16: name = "StadiumRoad"; break;         // Asphalt
+    default: return std::string();
+  }
+  return pack_name + "\\Media\\Material\\" + name + ".Material.Gbx";
+}
+
 class TreeWalker {
 public:
-  explicit TreeWalker(TrackScene *scene) : scene_(scene) {}
+  TreeWalker(TrackScene *scene, std::string pack_name)
+      : scene_(scene), pack_name_(std::move(pack_name)) {}
 
   void Walk(CPlugTree &tree, const GmIso4 &parent_iso, const CPlugMaterial *inherited, bool visible,
             std::uint32_t lod, TrackPurpose purpose) {
@@ -317,6 +390,9 @@ private:
       out.path = material->ReplayRenderDefinition().MaterialPlainPath();
       out.surface = static_cast<std::uint8_t>(material->SurfaceMaterialId());
       out.water = material->ReplayRenderDefinition().HasBitmapRenderWater();
+      // Only when the tile really did say nothing. A material that names a file
+      // is drawn by that file even if the file turns out to have no picture.
+      if (out.path.empty()) out.path = DefaultMaterialForSurface(pack_name_, out.surface);
     }
     const auto index = static_cast<std::uint32_t>(scene_->materials.size());
     scene_->materials.push_back(std::move(out));
@@ -382,6 +458,7 @@ private:
   }
 
   TrackScene *scene_;
+  std::string pack_name_;
   std::unordered_map<const CPlugMaterial *, std::uint32_t> materials_;
   std::unordered_map<const CPlugVisual *, std::optional<std::uint32_t>> meshes_;
 };
@@ -475,7 +552,7 @@ bool BuildTrackScene(ft_game *game, const PackSet &packs, const void *challenge_
     return false;
   }
 
-  TreeWalker walker(out);
+  TreeWalker walker(out, pack_name);
   for (const StaticSceneModel &model : models.Models()) {
     const TrackPurpose purpose = ToPurpose(model.Purpose());
     if (purpose == TRACK_PURPOSE_HIDDEN) continue;

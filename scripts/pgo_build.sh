@@ -7,11 +7,11 @@
 
 set -euo pipefail
 
-NAME=ultraforce
+NAME=bench
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT/build-pgo"
-TRAIN_SCRIPT="$ROOT/plugins/$NAME/scripts/aipgores.ftee"
+TRAIN_SCRIPT="$ROOT/plugins/$NAME/scripts/A02.ftee"
 VERBOSE=false
 
 usage() {
@@ -20,7 +20,7 @@ usage: pgo_build.sh [-b BUILD_DIR] [-s TRAINING_SCRIPT] [-v]
 
   -b  build directory (default: <repo>/build-pgo)
   -s  .ftee script used as the training workload
-      (default: plugins/$NAME/scripts/aipgores.ftee)
+      (default: plugins/$NAME/scripts/A02.ftee)
   -v  show build and run output
 EOF
 }
@@ -89,7 +89,7 @@ run cmake --build "$BUILD_DIR" -j"$(nproc)"
 echo "==> [2/4] running training workload"
 (
   cd "$BUILD_DIR"
-  run ./frametee --auto "$TRAIN_SCRIPT"
+  run ./frametee --game tmnf --auto "$TRAIN_SCRIPT"
 )
 
 shopt -s nullglob
@@ -123,4 +123,4 @@ echo ""
 echo "Done. Optimized binary: $BUILD_DIR/frametee"
 echo ""
 echo "Compare against your existing build, pinned, median of a few runs:"
-echo "  taskset -c 0 $BUILD_DIR/frametee --auto $TRAIN_SCRIPT"
+echo "  taskset -c 0 $BUILD_DIR/frametee --game tmnf --auto $TRAIN_SCRIPT"
