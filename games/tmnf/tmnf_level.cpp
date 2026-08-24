@@ -239,6 +239,39 @@ std::string ResolveTracks(const ft_engine_api *api) {
   return {};
 }
 
+bool DescribeCampaign(const std::filesystem::path &relative, Campaign *campaign) {
+  std::vector<std::string> parts;
+  for (const std::filesystem::path &part : relative) {
+    const std::string value = part.string();
+    if (!value.empty() && value != ".") parts.push_back(value);
+  }
+
+  std::size_t first = 0;
+  if (!parts.empty() && Lowered(parts[0]) == "campaigns") first = 1;
+  if (first < parts.size() && Lowered(parts[first]) == "baseeditorsimple") return false;
+
+  campaign->path = relative.generic_string();
+  campaign->collection = first < parts.size() ? parts[first++] : "Tracks";
+
+  if (campaign->collection == "Nations") {
+    if (first < parts.size()) campaign->difficulty = parts[first];
+  } else if (campaign->collection == "StarTrack") {
+    if (first < parts.size()) campaign->environment = parts[first++];
+    if (first < parts.size()) campaign->difficulty = parts[first];
+  } else if (campaign->collection == "United") {
+    if (first < parts.size()) campaign->mode = parts[first++];
+    if (campaign->mode == "Race" && first < parts.size()) campaign->environment = parts[first++];
+    if (first < parts.size()) campaign->difficulty = parts[first];
+  } else if (first < parts.size()) {
+    // A custom installation may contain additional collections. Treat the
+    // remaining folder as a mode so those tracks stay reachable without
+    // leaking the complete system path into the UI.
+    campaign->mode = parts[first];
+  }
+
+  return true;
+}
+
 void ScanTracks(ft_game *game) {
   game->scanned = true;
   game->campaigns.clear();
@@ -257,10 +290,14 @@ void ScanTracks(ft_game *game) {
   std::sort(files.begin(), files.end());
 
   for (const auto &file : files) {
-    std::string campaign = std::filesystem::relative(file.parent_path(), root, error).string();
-    if (campaign.empty() || campaign == ".") campaign = "Tracks";
-    if (game->campaigns.empty() || game->campaigns.back().name != campaign)
-      game->campaigns.push_back(Campaign{campaign, {}});
+    std::filesystem::path relative = std::filesystem::relative(file.parent_path(), root, error);
+    if (relative.empty() || relative == ".") relative = "Tracks";
+    const std::string campaign_path = relative.generic_string();
+    if (game->campaigns.empty() || game->campaigns.back().path != campaign_path) {
+      Campaign campaign;
+      if (!DescribeCampaign(relative, &campaign)) continue;
+      game->campaigns.push_back(std::move(campaign));
+    }
 
     std::string name = file.filename().string();
     const std::size_t dot = name.find('.');
@@ -272,7 +309,18 @@ void ScanTracks(ft_game *game) {
     game->campaigns.back().tracks.push_back(std::move(entry));
   }
 
-  Log(game, FT_LOG_INFO, "Found %zu tracks in %zu campaigns under %s", files.size(), game->campaigns.size(),
+  game->selected_campaign = 0;
+  for (int index = 0; index < static_cast<int>(game->campaigns.size()); ++index) {
+    const Campaign &campaign = game->campaigns[static_cast<std::size_t>(index)];
+    if (campaign.collection == "Nations" && campaign.difficulty == "White") {
+      game->selected_campaign = index;
+      break;
+    }
+  }
+
+  std::size_t track_count = 0;
+  for (const Campaign &campaign : game->campaigns) track_count += campaign.tracks.size();
+  Log(game, FT_LOG_INFO, "Found %zu playable tracks in %zu campaigns under %s", track_count, game->campaigns.size(),
       game->tracks_root.c_str());
 }
 

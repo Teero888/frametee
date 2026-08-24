@@ -223,7 +223,13 @@ int main(int argc, char **argv) {
 
     // Mouse locking logic for recording
     ImGuiIO *io = igGetIO_Nil();
-    if (handler.user_interface.timeline.recording) {
+    // Cursor-driven games such as DDNet record relative mouse motion and need
+    // the old capture behaviour. Keyboard-only games such as TMNF do not: a
+    // normal cursor lets their recording continue while the user works in the
+    // rest of the editor.
+    const bool capture_recording_cursor =
+        handler.user_interface.timeline.recording && engine_input_cursor_field() >= 0;
+    if (capture_recording_cursor) {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
       io->ConfigFlags |= ImGuiConfigFlags_NoMouse;
     } else {
