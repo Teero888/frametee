@@ -984,6 +984,12 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   const ft_input_schema *schema = game_input_schema(host);
   if (!schema) return;
 
+  // A game that records a world-space cursor captures the mouse for the whole
+  // recording session. Without such a field the editor stays interactive, so
+  // game controls belong to the viewport only: clicking another panel releases
+  // the car instead of typing or editing there while still driving it.
+  const bool accept_game_controls = engine_input_cursor_field() >= 0 || ui->viewport_focused;
+
   // Preserve one-shot edges while the rest of the input is rebuilt from the
   // current physical controls. They are consumed by model_advance_tick, not by
   // an arbitrary render frame.
@@ -1013,8 +1019,9 @@ void interaction_update_recording_input(ui_handler_t *ui) {
     const ft_input_control *control = &schema->controls[i];
     if (control->field >= schema->field_count) continue;
     const action_t action = keybinds_game_action(i);
-    const bool active = (control->flags & FT_CONTROL_PRESSED) ? keybinds_is_action_pressed(kb, action, false)
-                                                              : keybinds_is_action_down(kb, action);
+    const bool active = accept_game_controls &&
+                        ((control->flags & FT_CONTROL_PRESSED) ? keybinds_is_action_pressed(kb, action, false)
+                                                              : keybinds_is_action_down(kb, action));
     if (!active) continue;
     const ft_input_field *field = &schema->fields[control->field];
     if (field->kind == FT_INPUT_FLOAT) {

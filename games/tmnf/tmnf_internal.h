@@ -488,7 +488,14 @@ struct TrackEntry {
 };
 
 struct Campaign {
-  std::string name;
+  // The installed game stores campaigns as nested folders. Keep that path for
+  // diagnostics, but give the browser the actual concepts it represents so it
+  // never has to present a filesystem path as a campaign name.
+  std::string path;
+  std::string collection;
+  std::string mode;
+  std::string environment;
+  std::string difficulty;
   std::vector<TrackEntry> tracks;
 };
 
