@@ -121,7 +121,6 @@ pub struct ft_game_info {
     pub display_name: *const c_char,
     pub version: *const c_char,
     pub author: *const c_char,
-    pub description: *const c_char,
     pub url: *const c_char,
     pub thumbnail: *const c_char,
 }

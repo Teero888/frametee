@@ -591,10 +591,10 @@ static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop,
 // -----------------------------------------------------------------------------
 
 static const ft_game_variant variants[] = {
-    {.id = "ddrace", .display_name = "DDRace", .description = "Standard DDNet race physics"},
-    {.id = "race", .display_name = "Race", .description = "Vanilla race rules"},
-    {.id = "fastcap", .display_name = "FastCap", .description = "Capture the flag against the clock"},
-    {.id = "fastcap_no_weapons", .display_name = "FastCap (no weapons)", .description = "FastCap without weapon pickups"},
+    {.id = "ddrace", .display_name = "DDRace"},
+    {.id = "race", .display_name = "Race"},
+    {.id = "fastcap", .display_name = "FastCap"},
+    {.id = "fastcap_no_weapons", .display_name = "FastCap (no weapons)"},
 };
 
 static EGameMode variant_to_mode(const char *variant_id) {
@@ -1141,7 +1141,6 @@ static const ft_game_module module = {
              .display_name = "DDNet",
              .version = "1.0.0",
              .author = "Teero",
-             .description = "DDraceNetwork race physics, rendering and demo export.",
              .url = "https://ddnet.org",
              .thumbnail = "thumbnail.png"},
 

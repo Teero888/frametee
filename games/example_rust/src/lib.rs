@@ -28,8 +28,6 @@ const NAME: &[u8] = b"Bevy Bouncer (Rust)\0";
 const VERSION: &[u8] = b"2.0.0\0";
 const AUTHOR: &[u8] = b"FrameTee\0";
 const THUMBNAIL: &[u8] = b"thumbnail.png\0";
-const DESCRIPTION: &[u8] =
-    b"A complete Rust reference game using Bevy ECS and schedules through the FrameTee ABI.\0";
 
 const FIELD_PUSH_X: &[u8] = b"push_x\0";
 const FIELD_PUSH_X_NAME: &[u8] = b"Push X\0";
@@ -811,7 +809,6 @@ static MODULE: ft_game_module = ft_game_module {
         display_name: cstr(NAME),
         version: cstr(VERSION),
         author: cstr(AUTHOR),
-        description: cstr(DESCRIPTION),
         url: std::ptr::null(),
         thumbnail: cstr(THUMBNAIL),
     },

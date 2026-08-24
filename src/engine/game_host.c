@@ -313,8 +313,13 @@ static void try_load(game_host_t *host, const char *path) {
   } u;
   u.sym = fs_get_symbol(handle, FT_GAME_MODULE_ENTRY_NAME);
   if (!u.entry) {
-    snprintf(slot->error, sizeof(slot->error), "no %s symbol", FT_GAME_MODULE_ENTRY_NAME);
+    // A game may keep shared runtime dependencies beside its module so the
+    // platform loader can resolve them through $ORIGIN. They are not broken
+    // games merely because they use the same file extension, so leave them out
+    // of the picker entirely. Libraries that do export the entry point still
+    // go through full validation below and report genuine module errors.
     fs_free_library(handle);
+    --host->count;
     return;
   }
 

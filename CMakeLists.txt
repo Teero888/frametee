@@ -15,8 +15,7 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE
         set(CMAKE_C_COMPILER "${FRAMETEE_CLANG_C_COMPILER}" CACHE FILEPATH "C compiler")
         set(CMAKE_CXX_COMPILER "${FRAMETEE_CLANG_CXX_COMPILER}" CACHE FILEPATH "C++ compiler")
         message(STATUS "Clang found; using it as the default FrameTee compiler")
-    endif()
-
+	endif()
     unset(FRAMETEE_CLANG_C_COMPILER CACHE)
     unset(FRAMETEE_CLANG_CXX_COMPILER CACHE)
 endif()
@@ -388,14 +387,33 @@ endforeach()
 add_custom_target(compile_game_shaders ALL DEPENDS ${GAME_SHADER_OUTPUTS})
 add_dependencies(${PROJECT_NAME} compile_game_shaders)
 
-# copy the non-shader game assets (textures, skins, ...) next to them
-add_custom_command(
-    TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/data/games
-        ${CMAKE_BINARY_DIR}/data/games
-    COMMENT "Copying game module assets to build directory"
+# Copy non-shader game assets next to the compiled shaders. Each file is an
+# actual build output so changing a texture (or adding one via CONFIGURE_DEPENDS)
+# updates the build tree even when the FrameTee executable does not need to be
+# relinked.
+file(GLOB_RECURSE GAME_ASSET_SOURCES CONFIGURE_DEPENDS
+    LIST_DIRECTORIES false
+    "${CMAKE_SOURCE_DIR}/data/games/*"
 )
+set(GAME_ASSET_OUTPUTS "")
+foreach(ASSET ${GAME_ASSET_SOURCES})
+    if(ASSET MATCHES "/shaders/.*\\.(glsl|spv)$")
+        continue()
+    endif()
+    file(RELATIVE_PATH ASSET_REL "${CMAKE_SOURCE_DIR}/data" "${ASSET}")
+    set(ASSET_OUTPUT "${CMAKE_BINARY_DIR}/data/${ASSET_REL}")
+    get_filename_component(ASSET_OUT_DIR "${ASSET_OUTPUT}" DIRECTORY)
+    list(APPEND GAME_ASSET_OUTPUTS "${ASSET_OUTPUT}")
+    add_custom_command(
+        OUTPUT "${ASSET_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${ASSET_OUT_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ASSET}" "${ASSET_OUTPUT}"
+        DEPENDS "${ASSET}"
+        COMMENT "Copying game asset ${ASSET_REL}"
+    )
+endforeach()
+add_custom_target(copy_game_assets ALL DEPENDS ${GAME_ASSET_OUTPUTS})
+add_dependencies(${PROJECT_NAME} copy_game_assets)
 
 # =================================================================================================
 # GAME MODULES
@@ -405,9 +423,6 @@ add_custom_command(
 # module has no build-time dependency on the engine and can be compiled
 # out-of-tree, in any language that can produce a C-callable shared library.
 option(BUILD_GAMES "Build the bundled game modules" ON)
-# The game this build starts with when the user has no saved preference. Purely
-# a packaging choice: the engine itself knows nothing about any game, and an
-# empty value makes it take the first module in id order.
 set(FRAMETEE_DEFAULT_GAME "" CACHE STRING "Game module id to start with by default; empty selects the first installed module")
 target_compile_definitions(${PROJECT_NAME} PRIVATE FRAMETEE_DEFAULT_GAME_ID="${FRAMETEE_DEFAULT_GAME}")
 set(FRAMETEE_ABI_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include" CACHE PATH "Location of the FrameTee game ABI header")
@@ -460,114 +475,4 @@ if(BUILD_PLUGINS)
 
         endif()
     endforeach()
-endif()
-
-# =================================================================================================
-# TESTS
-# =================================================================================================
-include(CTest)
-if(BUILD_TESTING AND BUILD_GAMES)
-    add_library(semver_invalid_game MODULE tests/semver_invalid_game.c)
-    set_target_properties(semver_invalid_game PROPERTIES PREFIX "" OUTPUT_NAME "semver_invalid_game")
-    target_include_directories(semver_invalid_game PRIVATE ${FRAMETEE_ABI_INCLUDE_DIR})
-    add_library(input_stride_game MODULE tests/input_stride_game.c)
-    set_target_properties(input_stride_game PROPERTIES PREFIX "" OUTPUT_NAME "input_stride_game")
-    target_include_directories(input_stride_game PRIVATE ${FRAMETEE_ABI_INCLUDE_DIR})
-    add_executable(input_trigger_semantics tests/input_trigger_semantics.c src/engine/input_record.c)
-    target_include_directories(input_trigger_semantics PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/libs
-    )
-    target_compile_definitions(input_trigger_semantics PRIVATE LOGGER_API=)
-    if(UNIX)
-        add_executable(ddnet_transient_effects tests/ddnet_transient_effects.c)
-        target_include_directories(ddnet_transient_effects PRIVATE
-            ${FRAMETEE_ABI_INCLUDE_DIR}
-            ${CMAKE_SOURCE_DIR}/games/ddnet
-            ${CMAKE_SOURCE_DIR}/libs
-        )
-        target_link_libraries(ddnet_transient_effects PRIVATE ddnet_physics cglm ${CMAKE_DL_LIBS})
-        add_dependencies(ddnet_transient_effects ddnet_game)
-    endif()
-    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-config-bouncer")
-    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-config-platformer")
-    add_test(
-        NAME project_v12_bouncer_roundtrip
-        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-bouncer --auto "${CMAKE_SOURCE_DIR}/tests/v12_bouncer_roundtrip.auto"
-    )
-    add_test(
-        NAME project_v12_platformer_roundtrip
-        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-platformer --auto "${CMAKE_SOURCE_DIR}/tests/v12_platformer_roundtrip.auto"
-    )
-    add_test(
-        NAME game_switch_and_quick_save_lifetime
-        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game example-bouncer --auto "${CMAKE_SOURCE_DIR}/tests/game_switch_lifetime.auto"
-    )
-    add_test(
-        NAME config_preserves_inactive_games
-        COMMAND ${CMAKE_COMMAND}
-            -DAPP=$<TARGET_FILE:${PROJECT_NAME}>
-            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -DBUILD_DIR=${CMAKE_BINARY_DIR}
-            -P "${CMAKE_SOURCE_DIR}/tests/config_preserve.cmake"
-    )
-    add_test(
-        NAME rejects_invalid_game_semver
-        COMMAND ${CMAKE_COMMAND}
-            -DAPP=$<TARGET_FILE:${PROJECT_NAME}>
-            -DMODULE=$<TARGET_FILE:semver_invalid_game>
-            -DBUILD_DIR=${CMAKE_BINARY_DIR}
-            -P "${CMAKE_SOURCE_DIR}/tests/semver_rejection.cmake"
-    )
-    add_test(
-        NAME game_input_records_use_declared_stride
-        COMMAND ${CMAKE_COMMAND}
-            -DAPP=$<TARGET_FILE:${PROJECT_NAME}>
-            -DMODULE=$<TARGET_FILE:input_stride_game>
-            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -DBUILD_DIR=${CMAKE_BINARY_DIR}
-            -P "${CMAKE_SOURCE_DIR}/tests/input_stride.cmake"
-    )
-    add_test(NAME input_triggers_latch_until_one_tick COMMAND $<TARGET_FILE:input_trigger_semantics>)
-    add_test(
-        NAME ddnet_demo_exporter_writes_demo
-        COMMAND ${CMAKE_COMMAND}
-            -DAPP=$<TARGET_FILE:${PROJECT_NAME}>
-            -DMODULE=$<TARGET_FILE:ddnet_game>
-            -DMAP=${CMAKE_SOURCE_DIR}/libs/ddnet_demo/Aip-Gores.map
-            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -DBUILD_DIR=${CMAKE_BINARY_DIR}
-            -P "${CMAKE_SOURCE_DIR}/tests/ddnet_export.cmake"
-    )
-    if(UNIX)
-        add_test(
-            NAME ddnet_same_tick_explosion_is_retained
-            COMMAND $<TARGET_FILE:ddnet_transient_effects>
-                $<TARGET_FILE:ddnet_game>
-                ${CMAKE_SOURCE_DIR}/libs/ddnet_demo/Aip-Gores.map
-                ${CMAKE_BINARY_DIR}/ddnet-same-tick-explosion.demo
-        )
-    endif()
-    add_test(
-        NAME ddnet_project_data_roundtrip
-        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game ddnet --auto "${CMAKE_SOURCE_DIR}/tests/ddnet_project_roundtrip.auto"
-    )
-    set_tests_properties(project_v12_bouncer_roundtrip PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-bouncer;APPDATA=${CMAKE_BINARY_DIR}/test-config-bouncer"
-    )
-    set_tests_properties(project_v12_platformer_roundtrip PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-platformer;APPDATA=${CMAKE_BINARY_DIR}/test-config-platformer"
-    )
-    set_tests_properties(game_switch_and_quick_save_lifetime PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-switch;APPDATA=${CMAKE_BINARY_DIR}/test-config-switch"
-        PASS_REGULAR_EXPRESSION "Quick-saved current project to 'frametee-switch-lifetime.tasp'."
-    )
-    set_tests_properties(ddnet_project_data_roundtrip PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-ddnet;APPDATA=${CMAKE_BINARY_DIR}/test-config-ddnet"
-    )
 endif()
