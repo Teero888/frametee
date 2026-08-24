@@ -36,8 +36,11 @@ fv::camera::RaceCameraVehicleState VehicleState(const ft_world *world, const Car
   vehicle.targetId = 1u;
   vehicle.timeMs = time_ms;
   vehicle.transform.position = fv::camera::Vector3{pose.position.x, pose.position.y, pose.position.z};
+  // The camera controller is TrackMania code and expects the original
+  // row-vector quaternion, while CarPose is kept in renderer convention.
+  const Quat game_rotation = Conjugate(pose.rotation);
   vehicle.transform.rotation =
-      fv::camera::Quaternion{pose.rotation.w, pose.rotation.x, pose.rotation.y, pose.rotation.z};
+      fv::camera::Quaternion{game_rotation.w, game_rotation.x, game_rotation.y, game_rotation.z};
   vehicle.linearSpeed = fv::camera::Vector3{pose.velocity.x, pose.velocity.y, pose.velocity.z};
 
   const auto &view = world->view;
@@ -62,7 +65,8 @@ fv::camera::RaceCameraVehicleState VehicleState(const ft_world *world, const Car
 // with the car's rotation and place the eye at the car's -Z, and the car looks
 // down +Z.
 ft_vec3 ForwardOf(const fv::camera::Quaternion &q) {
-  return Rotate(Quat{q.x, q.y, q.z, q.w}, ft_vec3{0.f, 0.f, 1.f});
+  const Quat renderer_rotation = Conjugate(Quat{q.x, q.y, q.z, q.w});
+  return Rotate(renderer_rotation, ft_vec3{0.f, 0.f, 1.f});
 }
 
 bool EnsureSession(ft_game *game) {
