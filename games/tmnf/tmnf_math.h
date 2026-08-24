@@ -73,6 +73,8 @@ struct Quat {
   float x = 0.f, y = 0.f, z = 0.f, w = 1.f;
 };
 
+inline Quat Conjugate(Quat q) { return Quat{-q.x, -q.y, -q.z, q.w}; }
+
 inline Quat NormalizeQuat(Quat q) {
   const float len = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
   if (len <= 1e-8f) return Quat{};
