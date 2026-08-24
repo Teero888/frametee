@@ -18,13 +18,7 @@ games/*/target/
 games/tmnf/Packs
 games/tmnf/GameData
 
-# Untracked project checkouts & scratch files
-scratch/
-ddnet/
-!games/ddnet/
-games/ddnet/*
-!games/ddnet/dd_events.c
-!games/ddnet/dd_export.c
+# Untracked project checkouts
 *.auto
 !tests/ddnet_project_roundtrip.auto
 *.log

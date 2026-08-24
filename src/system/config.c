@@ -394,9 +394,6 @@ void config_save(ui_handler_t *ui) {
     int def_count = keybinds_get_count_for_action(&defaults, i);
     if (count == def_count) {
       bool all_match = true;
-      // Simple comparison: check if all bindings match exactly in order (not perfect but acceptable)
-      // Or check if every binding in UI exists in default.
-      // Given that init adds them in order, if user hasn't changed, order matches.
       for (int k = 0; k < count; k++) {
         keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, i, k);
         keybind_entry_t *def = keybinds_get_binding_for_action(&defaults, i, k);

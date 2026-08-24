@@ -791,7 +791,6 @@ const ft_game_module kModule = {
              .display_name = "Raylib Platformer (C++)",
              .version = "2.0.0",
              .author = "FrameTee",
-             .description = "A complete C++ reference game powered by raylib math and collision through the FrameTee ABI.",
              .url = nullptr,
              .thumbnail = "thumbnail.png"},
 

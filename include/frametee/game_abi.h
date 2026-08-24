@@ -147,7 +147,6 @@ typedef struct ft_game_info {
    * "0.3.1" or "2.0.0-beta.1+git.42". Stored in project files. */
   const char *version;
   const char *author;
-  const char *description;
   /* Optional: URL shown in the game picker. */
   const char *url;
   /* Optional: a thumbnail for the game picker, as a path relative to this
@@ -220,7 +219,6 @@ typedef struct ft_camera_mode {
 typedef struct ft_game_variant {
   const char *id; /* stable, stored in project files */
   const char *display_name;
-  const char *description;
 } ft_game_variant;
 
 /* What the game allows the engine to do. The engine treats these as hard

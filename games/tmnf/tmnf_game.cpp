@@ -457,7 +457,7 @@ ft_game_module BuildModule() {
   module.info.display_name = "TrackMania Nations Forever";
   module.info.version = "1.0.0";
   module.info.author = "FrameTee";
-  module.info.description = "The original TMNF physics through ForeverValidator, driven tick by tick.";
+  module.info.thumbnail = "thumbnail.png";
 
   module.constraints.struct_size = sizeof(ft_game_constraints);
   module.constraints.caps = FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS | FT_CAP_TIMELINE_EVENTS;

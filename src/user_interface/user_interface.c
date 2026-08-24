@@ -1091,7 +1091,7 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
   // A grid of whole-card click targets drawn straight to the draw list, with no
   // nested buttons.
   const ImVec2 grid_avail = igGetContentRegionAvail();
-  const float card_width = 195.0f;
+  const float card_width = 320.0f;
   const float card_margin = 5.0f;
   int columns = (int)(grid_avail.x / (card_width + card_margin * 2.0f));
   if (columns < 1) columns = 1;
@@ -1105,11 +1105,18 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
       igTableNextColumn();
       igPushID_Int(i);
 
+      struct ImTextureRef_c *thumbnail = splash_game_thumbnail(ui->gfx_handler, slot, i);
+      float thumbnail_aspect = 9.0f / 16.0f;
+      if (i >= 0 && i < (int)(sizeof(g_game_thumbnails) / sizeof(g_game_thumbnails[0]))) {
+        const texture_t *texture = g_game_thumbnails[i].texture;
+        if (texture && texture->width > 0) thumbnail_aspect = (float)texture->height / (float)texture->width;
+      }
+
       const ImVec2 cursor_pos = igGetCursorScreenPos();
       float actual_card_w = igGetColumnWidth(-1) - 4.0f;
       if (actual_card_w < 110.0f) actual_card_w = card_width;
-      const float actual_thumb_h = actual_card_w * (9.0f / 16.0f);
-      const float total_item_h = actual_thumb_h + 46.0f;
+      const float actual_thumb_h = actual_card_w * thumbnail_aspect;
+      const float total_item_h = actual_thumb_h;
 
       const ImVec2 card_min = cursor_pos;
       const ImVec2 card_max = {cursor_pos.x + actual_card_w, cursor_pos.y + total_item_h};
@@ -1123,12 +1130,11 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
 
       const ImVec2 thumb_min = card_min;
       const ImVec2 thumb_max = {card_min.x + actual_card_w, card_min.y + actual_thumb_h};
-      struct ImTextureRef_c *thumbnail = splash_game_thumbnail(ui->gfx_handler, slot, i);
       if (thumbnail) {
         ImDrawList_AddImageRounded(draw_list, *thumbnail, thumb_min, thumb_max, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xFFFFFFFF, 8.0f,
-                                   ImDrawFlags_RoundCornersTop);
+                                   ImDrawFlags_RoundCornersAll);
       } else {
-        ImDrawList_AddRectFilled(draw_list, thumb_min, thumb_max, IM_COL32(18, 22, 30, 240), 8.0f, ImDrawFlags_RoundCornersTop);
+        ImDrawList_AddRectFilled(draw_list, thumb_min, thumb_max, IM_COL32(18, 22, 30, 240), 8.0f, ImDrawFlags_RoundCornersAll);
         const char *status_txt = "No Image";
         const ImVec2 txt_sz = igCalcTextSize(status_txt, NULL, false, -1.0f);
         const ImVec2 txt_pos = {thumb_min.x + actual_card_w * 0.5f - txt_sz.x * 0.5f,
@@ -1136,29 +1142,8 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
         ImDrawList_AddText_Vec2(draw_list, txt_pos, IM_COL32(140, 150, 170, 255), status_txt, NULL);
       }
 
-      const ImVec2 name_pos = {card_min.x + 8.0f, card_min.y + actual_thumb_h + 6.0f};
-      ImDrawList_AddText_Vec2(draw_list, name_pos, IM_COL32(235, 240, 250, 255), slot->display_name, NULL);
-
-      // Meta row: the constraints published by this module.
-      const ft_game_constraints *c = &slot->module->constraints;
-      char meta_str[128];
-      if (c->max_players > 0 && c->max_players == c->min_players)
-        snprintf(meta_str, sizeof(meta_str), "%d player • %d ticks/s", c->min_players, c->ticks_per_second);
-      else if (c->max_players > 0)
-        snprintf(meta_str, sizeof(meta_str), "up to %d players • %d ticks/s", c->max_players, c->ticks_per_second);
-      else
-        snprintf(meta_str, sizeof(meta_str), "%d ticks/s", c->ticks_per_second);
-
-      const ImVec2 meta_pos = {card_min.x + 8.0f, card_min.y + actual_thumb_h + 24.0f};
-      ImDrawList_AddText_Vec2(draw_list, meta_pos, IM_COL32(150, 160, 180, 255), meta_str, NULL);
-
-      // No card is pre-lit. The editor activates a remembered game at startup so
-      // it has something to work with, but the user has not chosen anything yet
-      // and highlighting one here would claim they had.
       const ImU32 border_color = hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140);
       ImDrawList_AddRect(draw_list, card_min, card_max, border_color, 8.0f, ImDrawFlags_None, hovered ? 1.8f : 1.0f);
-
-      if (hovered && slot->module->info.description) igSetTooltip("%s", slot->module->info.description);
 
       if (clicked) {
         if (i == host->active || gfx_activate_game(ui->gfx_handler, i)) {
@@ -1186,6 +1171,33 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
   if (!any_usable) igTextDisabled("No game modules found in games/.");
 
   return chosen;
+}
+
+static void render_splash_variant_selector(game_host_t *host) {
+  const ft_game_module *module = host->module;
+  if (!module || !module->constraints.variants || module->constraints.variant_count <= 1) return;
+
+  const char *current = game_host_variant(host);
+  const ft_game_variant *current_variant = &module->constraints.variants[0];
+  for (uint32_t i = 0; i < module->constraints.variant_count; ++i) {
+    if (current && strcmp(module->constraints.variants[i].id, current) == 0) {
+      current_variant = &module->constraints.variants[i];
+      break;
+    }
+  }
+
+  igAlignTextToFramePadding();
+  igTextDisabled("Game mode");
+  igSameLine(0.0f, 10.0f);
+  igSetNextItemWidth(220.0f);
+  if (igBeginCombo("##SplashGameMode", current_variant->display_name, 0)) {
+    for (uint32_t i = 0; i < module->constraints.variant_count; ++i) {
+      const ft_game_variant *variant = &module->constraints.variants[i];
+      if (igSelectable_Bool(variant->display_name, variant == current_variant, 0, (ImVec2){0, 0}))
+        game_host_set_variant(host, variant->id);
+    }
+    igEndCombo();
+  }
 }
 
 static void render_splash_screen(ui_handler_t *ui) {
@@ -1226,45 +1238,11 @@ static void render_splash_screen(ui_handler_t *ui) {
       igPushFont(ui->font, 48.0f);
       igTextColored((ImVec4){0.35f, 0.75f, 1.00f, 1.00f}, "%s", "FrameTee");
       igPopFont();
-      igTextDisabled("Tool-Assisted Speedrun editor");
+      igTextDisabled("A TAS Engine and Editor");
 
       igSpacing();
       igSeparator();
       igSpacing();
-
-      if (ui->splash_stage == SPLASH_STAGE_START) {
-        game_host_t *splash_host = &ui->gfx_handler->game_host;
-        const ft_game_module *splash_module = splash_host->module;
-
-        // Which game is active is obvious from the screen it is showing, so it
-        // is not repeated here.
-
-        // A ruleset belongs to the game, so it lives with the game here rather
-        // than in the general part or on top of the game's own screen.
-        if (splash_module && splash_module->constraints.variant_count > 1) {
-          const char *current = game_host_variant(splash_host);
-          const ft_game_variant *current_variant = &splash_module->constraints.variants[0];
-          for (uint32_t i = 0; i < splash_module->constraints.variant_count; ++i)
-            if (current && strcmp(splash_module->constraints.variants[i].id, current) == 0)
-              current_variant = &splash_module->constraints.variants[i];
-
-          igSpacing();
-          igSetNextItemWidth(igGetContentRegionAvail().x);
-          if (igBeginCombo("##SplashRuleset", current_variant->display_name, 0)) {
-            for (uint32_t i = 0; i < splash_module->constraints.variant_count; ++i) {
-              const ft_game_variant *variant = &splash_module->constraints.variants[i];
-              if (igSelectable_Bool(variant->display_name, variant == current_variant, 0, (ImVec2){0, 0}))
-                game_host_set_variant(splash_host, variant->id);
-              if (variant->description && igIsItemHovered(0)) igSetTooltip("%s", variant->description);
-            }
-            igEndCombo();
-          }
-        }
-
-        igSpacing();
-        igSeparator();
-        igSpacing();
-      }
 
       igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.10f, 0.5f});
       igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f);
@@ -1374,6 +1352,8 @@ static void render_splash_screen(ui_handler_t *ui) {
       if (ui->splash_stage == SPLASH_STAGE_GAME) {
         if (render_splash_game_picker(ui, avail.x)) ui->splash_stage = SPLASH_STAGE_START;
       } else {
+        render_splash_variant_selector(&ui->gfx_handler->game_host);
+
         ft_ui_frame frame = {0};
         frame.struct_size = sizeof(frame);
         frame.slot = FT_UI_SPLASH;
