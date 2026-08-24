@@ -834,9 +834,9 @@ typedef struct ft_engine_api {
   void (*log)(ft_log_level level, const char *category, const char *message);
 
   /* --- filesystem ---
-   * Resolves a path relative to this game's data directory
-   * (data/games/<id>/...). Returns the number of bytes needed; truncates when
-   * out_size is too small. */
+   * Resolves a path relative to this game's data directory beside the running
+   * executable (<executable>/data/games/<id>/...). Returns the number of bytes
+   * needed; truncates when out_size is too small. */
   size_t (*resolve_data_path)(const char *relative, char *out, size_t out_size);
   /* Reads a whole file. The buffer must be released with free_file_data. */
   bool (*read_file)(const char *path, void **out_data, size_t *out_size);

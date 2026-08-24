@@ -18,7 +18,6 @@
 #include "tmnf_internal.h"
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <utility>
@@ -44,16 +43,10 @@ std::int32_t ResolveTrack(const ft_game *game, const ft_world *world) {
 // --- packs -------------------------------------------------------------------
 
 std::string ResolvePacks(const ft_engine_api *api) {
-  if (const char *env = std::getenv("FRAMETEE_TMNF_PACKS"); env && DirectoryHasPacks(env)) return env;
-
-  if (api && api->resolve_data_path) {
-    char buffer[1024];
-    api->resolve_data_path("Packs", buffer, sizeof(buffer));
-    if (DirectoryHasPacks(buffer)) return buffer;
-  }
-
-  for (const char *candidate : {"games/tmnf/Packs", "../games/tmnf/Packs"})
-    if (DirectoryHasPacks(candidate)) return candidate;
+  if (!api || !api->resolve_data_path) return {};
+  char buffer[1024];
+  api->resolve_data_path("Packs", buffer, sizeof(buffer));
+  if (DirectoryHasPacks(buffer)) return buffer;
   return {};
 }
 

@@ -60,10 +60,15 @@ static void api_log(ft_log_level level, const char *category, const char *messag
 
 static size_t api_resolve_data_path(const char *relative, char *out, size_t out_size) {
   // Every game keeps its assets under data/games/<id>/, so a module can ship
-  // textures and shaders without knowing where the editor was installed.
+  // textures and shaders without knowing where the editor was installed. The
+  // data directory belongs to the executable, not to whichever working
+  // directory happened to launch it.
   const char *id = game_host_active_id(&g_engine->game_host);
+  char executable_dir[GAME_HOST_MAX_PATH];
+  if (!fs_get_executable_dir(executable_dir, sizeof(executable_dir))) snprintf(executable_dir, sizeof(executable_dir), ".");
   char buffer[GAME_HOST_MAX_PATH];
-  const int needed = snprintf(buffer, sizeof(buffer), "data/games/%s/%s", id, relative ? relative : "");
+  const int needed = snprintf(buffer, sizeof(buffer), "%s%cdata%cgames%c%s%c%s", executable_dir, PATH_SEP, PATH_SEP,
+                              PATH_SEP, id, PATH_SEP, relative ? relative : "");
   if (out && out_size > 0) snprintf(out, out_size, "%s", buffer);
   return needed > 0 ? (size_t)needed : 0;
 }

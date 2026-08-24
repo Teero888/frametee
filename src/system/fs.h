@@ -28,6 +28,14 @@ FILE *fs_open(const char *path, const char *mode);
 bool fs_get_config_dir(char *out_path, size_t size);
 
 /**
+ * @brief Gets the directory containing the running executable.
+ *
+ * Returns true if successful and writes an absolute UTF-8 path without a
+ * trailing separator.
+ */
+bool fs_get_executable_dir(char *out_path, size_t size);
+
+/**
  * @brief Platform-independent directory scanning types and functions.
  */
 typedef struct fs_dir_t fs_dir_t;

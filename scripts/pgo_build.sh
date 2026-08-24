@@ -4,7 +4,6 @@
 #   ./scripts/pgo_build.sh                        # build into ./build-pgo
 #   ./scripts/pgo_build.sh -s path/to/other.ftee  # different training workload
 #   ./scripts/pgo_build.sh -b /tmp/pgo -v         # different build dir, verbose
-#   ./scripts/pgo_build.sh -p /games/TMUF/Packs   # explicit installed packs
 
 set -euo pipefail
 
@@ -13,28 +12,25 @@ NAME=***********
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT/build-pgo"
 TRAIN_SCRIPT="$ROOT/plugins/$NAME/scripts/A02-bench.ftee"
-PACKS_DIR="${FRAMETEE_TMNF_PACKS:-$ROOT/games/tmnf/Packs}"
+TMNF_DATA_DIR="$ROOT/data/games/tmnf"
 TRAIN_CONFIG_TEMPLATE="$ROOT/scripts/pgo_training_config.toml"
 VERBOSE=false
 
 usage() {
   cat <<'EOF'
-usage: pgo_build.sh [-b BUILD_DIR] [-s TRAINING_SCRIPT] [-p PACKS_DIR] [-v]
+usage: pgo_build.sh [-b BUILD_DIR] [-s TRAINING_SCRIPT] [-v]
 
   -b  build directory (default: <repo>/build-pgo)
   -s  .ftee script used as the training workload
       (default: plugins/$NAME/scripts/A02-bench.ftee)
-  -p  installed TrackMania Packs directory
-      (default: $FRAMETEE_TMNF_PACKS, then <repo>/games/tmnf/Packs)
   -v  show build and run output
 EOF
 }
 
-while getopts ":b:s:p:vh" opt; do
+while getopts ":b:s:vh" opt; do
   case $opt in
     b) BUILD_DIR="$OPTARG" ;;
     s) TRAIN_SCRIPT="$OPTARG" ;;
-    p) PACKS_DIR="$OPTARG" ;;
     v) VERBOSE=true ;;
     h) usage; exit 0 ;;
     *) usage >&2; exit 1 ;;
@@ -62,9 +58,12 @@ if [ ! -f "$TRAIN_CONFIG_TEMPLATE" ]; then
   echo "ERROR: training config not found: $TRAIN_CONFIG_TEMPLATE" >&2
   exit 1
 fi
-if [ ! -f "$PACKS_DIR/packlist.dat" ]; then
-  echo "ERROR: TrackMania packs not found: $PACKS_DIR" >&2
-  echo "       Pass -p or set FRAMETEE_TMNF_PACKS." >&2
+if [ ! -f "$TMNF_DATA_DIR/Packs/packlist.dat" ]; then
+  echo "ERROR: TrackMania packs not found: $TMNF_DATA_DIR/Packs" >&2
+  exit 1
+fi
+if [ ! -d "$TMNF_DATA_DIR/GameData" ]; then
+  echo "ERROR: TrackMania GameData not found: $TMNF_DATA_DIR/GameData" >&2
   exit 1
 fi
 
@@ -74,7 +73,7 @@ TRAIN_CONFIG_HOME="$PGO_DIR/config"
 
 echo "==> build dir:       $BUILD_DIR"
 echo "==> training script: $TRAIN_SCRIPT"
-echo "==> packs dir:       $PACKS_DIR"
+echo "==> TMNF data:       $TMNF_DATA_DIR"
 
 # ---------------------------------------------------------------------------
 # Stage 1: instrumented build
@@ -107,7 +106,6 @@ echo "==> [2/4] running training workload"
 (
   cd "$BUILD_DIR"
   run env XDG_CONFIG_HOME="$TRAIN_CONFIG_HOME" \
-    FRAMETEE_TMNF_PACKS="$PACKS_DIR" \
     ./frametee --game tmnf --auto "$TRAIN_SCRIPT"
 )
 

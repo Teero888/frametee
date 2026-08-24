@@ -36,7 +36,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 
@@ -77,26 +76,11 @@ std::string NormalizePath(std::string_view path) {
 // lives on disk under GameData, which is why a copy of Packs on its own is
 // enough to simulate a track and not enough to draw one.
 //
-// So this looks where an installed game would put it, and takes an explicit
-// answer over any of them.
+// FrameTee keeps both directories in one fixed per-game data directory.
 std::string FindGameData(const std::string &packs_dir) {
-  std::vector<std::string> candidates;
-  if (const char *env = std::getenv("FRAMETEE_TMNF_GAMEDATA"); env != nullptr && *env != '\0')
-    candidates.emplace_back(env);
-
-  const std::size_t slash = packs_dir.find_last_of("/\\");
-  const std::string install = slash == std::string::npos ? std::string(".") : packs_dir.substr(0u, slash);
-  // Beside the packs, as an install has it; then inside them, and beside the
-  // module's own directory, which is where a copied Packs folder tends to sit.
-  candidates.push_back(install + "/GameData");
-  candidates.push_back(packs_dir + "/GameData");
-  candidates.push_back(install + "/../GameData");
-  candidates.push_back(install);
-
-  for (const std::string &candidate : candidates) {
-    std::error_code error;
-    if (std::filesystem::is_directory(candidate, error)) return candidate;
-  }
+  const std::filesystem::path candidate = std::filesystem::path(packs_dir).parent_path() / "GameData";
+  std::error_code error;
+  if (std::filesystem::is_directory(candidate, error)) return candidate.string();
   return {};
 }
 

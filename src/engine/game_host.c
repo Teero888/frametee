@@ -408,20 +408,28 @@ bool game_host_activate_index(game_host_t *host, int index) {
 
   game_host_deactivate(host);
 
+  // Module construction may resolve its own data files. Publish the module's
+  // identity before calling create so those paths already belong to the game
+  // being activated, rather than to the previous game (or to an empty id on
+  // startup).
+  host->active = index;
+  host->module = slot->module;
+  host->variant_id[0] = '\0';
+  snprintf(host->active_id, sizeof(host->active_id), "%s", slot->id);
+
   ft_game *instance = slot->module->create(host->engine_api);
   if (!instance) {
     log_error(LOG_SOURCE, "Game '%s' failed to initialize.", slot->id);
+    host->active = -1;
+    host->module = NULL;
+    host->active_id[0] = '\0';
     return false;
   }
 
-  host->active = index;
-  host->module = slot->module;
   host->instance = instance;
   // Bind the module-declared control table to its schema before recording can
   // write any fields.
   engine_input_bind(host);
-  host->variant_id[0] = '\0';
-  snprintf(host->active_id, sizeof(host->active_id), "%s", slot->id);
   game_host_set_variant(host, NULL);
   log_info(LOG_SOURCE, "Activated game '%s'.", slot->display_name);
   return true;
