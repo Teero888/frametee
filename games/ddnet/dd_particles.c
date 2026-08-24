@@ -368,7 +368,6 @@ void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer) {
   }
 }
 
-
 void dd_particles_create_explosion(dd_particle_system_t *ps, vec2 pos) {
   flow_add(ps, pos, 5000.0f);
   dd_particle_t p = {0};
@@ -640,7 +639,8 @@ dd_particle_system_t *dd_particles_for(ft_game *game, int world_index) {
     dd_particle_system_t *grown = realloc(game->particles, (size_t)(world_index + 1) * sizeof(*grown));
     if (!grown) return NULL;
     game->particles = grown;
-    for (int i = game->particle_count; i <= world_index; ++i) dd_particles_init(&game->particles[i]);
+    for (int i = game->particle_count; i <= world_index; ++i)
+      dd_particles_init(&game->particles[i]);
     game->particle_count = world_index + 1;
   }
   return &game->particles[world_index];
@@ -648,42 +648,123 @@ dd_particle_system_t *dd_particles_for(ft_game *game, int world_index) {
 
 // The physics raises effects through these while a tick runs. Routing them by
 // world index is what keeps two timeline groups from sharing one set of sparks.
-typedef struct {
-  ft_game *game;
-  int world_index;
-} dd_effect_sink_t;
+static dd_physics_particle_event_t *append_physics_particle_event(ft_world *world) {
+  if (world->physics_particle_event_count == world->physics_particle_event_capacity) {
+    const int capacity = world->physics_particle_event_capacity ? world->physics_particle_event_capacity * 2 : 16;
+    dd_physics_particle_event_t *events =
+        realloc(world->physics_particle_events, (size_t)capacity * sizeof(*world->physics_particle_events));
+    if (!events) return NULL;
+    world->physics_particle_events = events;
+    world->physics_particle_event_capacity = capacity;
+  }
+  return &world->physics_particle_events[world->physics_particle_event_count++];
+}
 
-static dd_effect_sink_t g_effect_sinks[64];
+static dd_physics_damage_event_t *append_physics_damage_event(ft_world *world) {
+  if (world->physics_damage_event_count == world->physics_damage_event_capacity) {
+    const int capacity = world->physics_damage_event_capacity ? world->physics_damage_event_capacity * 2 : 16;
+    dd_physics_damage_event_t *events =
+        realloc(world->physics_damage_events, (size_t)capacity * sizeof(*world->physics_damage_events));
+    if (!events) return NULL;
+    world->physics_damage_events = events;
+    world->physics_damage_event_capacity = capacity;
+  }
+  return &world->physics_damage_events[world->physics_damage_event_count++];
+}
+
+static dd_physics_sound_event_t *append_physics_sound_event(ft_world *world) {
+  if (world->physics_sound_event_count == world->physics_sound_event_capacity) {
+    const int capacity = world->physics_sound_event_capacity ? world->physics_sound_event_capacity * 2 : 16;
+    dd_physics_sound_event_t *events =
+        realloc(world->physics_sound_events, (size_t)capacity * sizeof(*world->physics_sound_events));
+    if (!events) return NULL;
+    world->physics_sound_events = events;
+    world->physics_sound_event_capacity = capacity;
+  }
+  return &world->physics_sound_events[world->physics_sound_event_count++];
+}
 
 static void on_particle(mvec2 pos, int type, int cid, void *user_data) {
-  const dd_effect_sink_t *sink = user_data;
-  if (!sink) return;
-  dd_particle_system_t *ps = dd_particles_for(sink->game, sink->world_index);
+  ft_world *world = user_data;
+  if (!world || !world->game) return;
+
+  switch (type) {
+  case PARTICLE_TYPE_PLAYER_SPAWN:
+  case PARTICLE_TYPE_PLAYER_DEATH:
+  case PARTICLE_TYPE_HAMMER_HIT:
+  case PARTICLE_TYPE_EXPLOSION:
+  case PARTICLE_TYPE_AIR_JUMP: {
+    dd_physics_particle_event_t *event = append_physics_particle_event(world);
+    if (event)
+      *event = (dd_physics_particle_event_t){.x = vgetx(pos), .y = vgety(pos), .type = type, .client_id = cid};
+  } break;
+  default:
+    break;
+  }
+
+  if (!world->render_physics_effects) return;
+  dd_particle_system_t *ps = dd_particles_for(world->game, world->index);
   if (!ps) return;
-  (void)cid;
 
   vec2 p = {vgetx(pos), vgety(pos)};
   const vec2 zero_vel = {0, -1};
 
   switch (type) {
-  case PARTICLE_TYPE_SMOKE: dd_particles_create_smoke(ps, p, (float *)zero_vel, 1.0f, 0.0f); break;
-  case PARTICLE_TYPE_PLAYER_SPAWN: dd_particles_create_player_spawn(ps, p, 1.0f); break;
-  case PARTICLE_TYPE_PLAYER_DEATH: dd_particles_create_player_death(ps, p, (vec4){1, 1, 1, 1}); break;
-  case PARTICLE_TYPE_AIR_JUMP: dd_particles_create_air_jump(ps, p, 1.0f); break;
-  case PARTICLE_TYPE_BULLET_TRAIL: dd_particles_create_bullet_trail(ps, p, 1.0f, 0.0f); break;
-  case PARTICLE_TYPE_BULLET_STARS: dd_particles_create_star(ps, p); break;
-  case PARTICLE_TYPE_EXPLOSION: dd_particles_create_explosion(ps, p); break;
-  case PARTICLE_TYPE_HAMMER_HIT: dd_particles_create_hammer_hit(ps, p, 1.0f); break;
-  case PARTICLE_TYPE_CONFETTI: dd_particles_create_confetti(ps, p, 1.0f); break;
-  default: break;
+  case PARTICLE_TYPE_SMOKE:
+    dd_particles_create_smoke(ps, p, (float *)zero_vel, 1.0f, 0.0f);
+    break;
+  case PARTICLE_TYPE_PLAYER_SPAWN:
+    dd_particles_create_player_spawn(ps, p, 1.0f);
+    break;
+  case PARTICLE_TYPE_PLAYER_DEATH: {
+    vec4 color = {1, 1, 1, 1};
+    const int track = world->game->engine->timeline_player_track
+                          ? world->game->engine->timeline_player_track((uint32_t)world->index, (uint32_t)cid)
+                          : -1;
+    ft_player_setup setup = {.struct_size = sizeof(setup)};
+    if (track >= 0 && world->game->engine->get_player_setup(track, &setup) && setup.use_custom_color) {
+      color[0] = setup.primary_color.r;
+      color[1] = setup.primary_color.g;
+      color[2] = setup.primary_color.b;
+      color[3] = setup.primary_color.a;
+    }
+    dd_particles_create_player_death(ps, p, color);
+    break;
+  }
+  case PARTICLE_TYPE_AIR_JUMP:
+    dd_particles_create_air_jump(ps, p, 1.0f);
+    break;
+  case PARTICLE_TYPE_BULLET_TRAIL:
+    dd_particles_create_bullet_trail(ps, p, 1.0f, 0.0f);
+    break;
+  case PARTICLE_TYPE_BULLET_STARS:
+    dd_particles_create_star(ps, p);
+    break;
+  case PARTICLE_TYPE_EXPLOSION:
+    dd_particles_create_explosion(ps, p);
+    break;
+  case PARTICLE_TYPE_HAMMER_HIT:
+    dd_particles_create_hammer_hit(ps, p, 1.0f);
+    break;
+  case PARTICLE_TYPE_CONFETTI:
+    dd_particles_create_confetti(ps, p, 1.0f);
+    break;
+  default:
+    break;
   }
 }
 
 static void on_damage_indicator(mvec2 pos, float angle, int amount, int cid, void *user_data) {
-  const dd_effect_sink_t *sink = user_data;
-  (void)cid;
-  if (!sink) return;
-  dd_particle_system_t *ps = dd_particles_for(sink->game, sink->world_index);
+  ft_world *world = user_data;
+  if (!world || !world->game) return;
+  {
+    dd_physics_damage_event_t *event = append_physics_damage_event(world);
+    if (event)
+      *event = (dd_physics_damage_event_t){.x = vgetx(pos), .y = vgety(pos), .angle = angle, .amount = amount, .client_id = cid};
+  }
+
+  if (!world->render_physics_effects) return;
+  dd_particle_system_t *ps = dd_particles_for(world->game, world->index);
   if (!ps) return;
 
   vec2 p = {vgetx(pos), vgety(pos)};
@@ -698,21 +779,41 @@ static void on_damage_indicator(mvec2 pos, float angle, int amount, int cid, voi
   }
 }
 
+static void on_sound(mvec2 pos, int sound_id, int cid, void *user_data) {
+  ft_world *world = user_data;
+  if (!world || !world->game) return;
+  dd_physics_sound_event_t *event = append_physics_sound_event(world);
+  if (event)
+    *event = (dd_physics_sound_event_t){.x = vgetx(pos), .y = vgety(pos), .sound_id = sound_id, .client_id = cid};
+}
+
 bool dd_particles_bind(ft_game *game, ft_world *world) {
   if (!world) return false;
+  world->physics_particle_event_count = 0;
+  world->physics_damage_event_count = 0;
+  world->physics_sound_event_count = 0;
+  world->game = game;
+  world->core.user_data = world;
+  world->core.particle = on_particle;
+  world->core.damage_indicator = on_damage_indicator;
+  world->core.sound = on_sound;
+
+  const bool presentation_enabled =
+      !game->engine->presentation_effects_enabled || game->engine->presentation_effects_enabled();
   const int index = world->index;
-  if (index < 0 || index >= (int)(sizeof(g_effect_sinks) / sizeof(g_effect_sinks[0]))) {
-    world->core.particle = NULL;
-    world->core.damage_indicator = NULL;
+  world->render_physics_effects = presentation_enabled && index >= 0 && !game->headless && game->settings.render_particles;
+  if (!world->render_physics_effects) return false;
+
+  dd_particle_system_t *ps = dd_particles_for(game, index);
+  if (!ps) {
+    world->render_physics_effects = false;
     return false;
   }
 
-  dd_particle_system_t *ps = dd_particles_for(game, index);
-  if (!ps || game->headless || !game->settings.render_particles) {
-    world->core.particle = NULL;
-    world->core.damage_indicator = NULL;
-    return false;
-  }
+  // A fresh world may reuse an index from a group that was removed. Tick zero
+  // is an unambiguous new presentation history, so no particles from the old
+  // occupant may survive it.
+  if (world->core.m_GameTick == 0 && ps->last_simulated_tick >= 0) dd_particles_reset(ps);
 
   // Re-simulating a tick that already ran means the editor rewound or replayed.
   // Drop everything newer than this moment and resume from here: without this
@@ -724,14 +825,8 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
     ps->last_simulated_tick = world->core.m_GameTick - 1;
   }
 
-  g_effect_sinks[index].game = game;
-  g_effect_sinks[index].world_index = index;
   ps->rng_seed = (uint32_t)world->core.m_GameTick;
   ps->current_time = (double)world->core.m_GameTick / (double)GAME_TICK_SPEED;
-
-  world->core.user_data = &g_effect_sinks[index];
-  world->core.particle = on_particle;
-  world->core.damage_indicator = on_damage_indicator;
   return true;
 }
 
@@ -741,10 +836,33 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
 void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool bound) {
   world->core.particle = NULL;
   world->core.damage_indicator = NULL;
+  world->core.sound = NULL;
+  world->core.user_data = NULL;
+  world->render_physics_effects = false;
   if (!bound) return;
 
   dd_particle_system_t *ps = dd_particles_for(game, world->index);
-  if (ps) ps->last_simulated_tick = tick_before;
+  if (!ps) return;
+
+  // DDNet's client adds these presentation-only effects after the physics
+  // tick; they are not raised by gamecore callbacks.
+  if (world->core.m_GameTick % 5 == 0) {
+    for (int player = 0; player < world->core.m_NumCharacters; ++player) {
+      const SCharacterCore *character = &world->core.m_pCharacters[player];
+      if (character->m_FreezeTime > 0) {
+        vec2 pos = {vgetx(character->m_Pos), vgety(character->m_Pos)};
+        dd_particles_create_freezing_flakes(ps, pos, (vec2){32.f, 32.f}, 1.f);
+      }
+    }
+  }
+  if (!world->core.m_UniqueRace && world->level) {
+    for (int i = 0; i < world->level->num_ninja_pickups; ++i) {
+      const int pickup = world->level->ninja_pickup_indices[i];
+      vec2 pos = {vgetx(world->level->pickup_positions[pickup]), vgety(world->level->pickup_positions[pickup])};
+      dd_particles_create_powerup_shine(ps, pos, (vec2){96.f, 18.f}, 1.f);
+    }
+  }
+  ps->last_simulated_tick = tick_before;
 }
 
 void dd_particles_advance(ft_game *game, int world_index, const ft_level *level, int tick, float alpha) {

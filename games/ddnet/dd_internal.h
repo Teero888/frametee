@@ -42,6 +42,33 @@
 
 // --- handles ----------------------------------------------------------------
 
+// Physics callbacks are transient, but a demo snapshot is assembled after the
+// step that raised them. Keep the callback output on the DDNet world itself so
+// effects from entities that were created and destroyed in one tick are not
+// lost. Only callback types that become demo events need to be retained here;
+// smoke, bullet trails and confetti are client-side presentation effects.
+typedef struct {
+  float x;
+  float y;
+  int type;
+  int client_id;
+} dd_physics_particle_event_t;
+
+typedef struct {
+  float x;
+  float y;
+  float angle;
+  int amount;
+  int client_id;
+} dd_physics_damage_event_t;
+
+typedef struct {
+  float x;
+  float y;
+  int sound_id;
+  int client_id;
+} dd_physics_sound_event_t;
+
 struct ft_level {
   SCollision collision;
   STeeGrid grid;
@@ -66,9 +93,20 @@ struct ft_level {
 struct ft_world {
   SWorldCore core;
   ft_level *level;
+  ft_game *game;
   // Which editor world this belongs to. Every cached copy of one shares it, so
   // effects raised while stepping land in the right particle system.
   int index;
+  dd_physics_particle_event_t *physics_particle_events;
+  int physics_particle_event_count;
+  int physics_particle_event_capacity;
+  dd_physics_damage_event_t *physics_damage_events;
+  int physics_damage_event_count;
+  int physics_damage_event_capacity;
+  dd_physics_sound_event_t *physics_sound_events;
+  int physics_sound_event_count;
+  int physics_sound_event_capacity;
+  bool render_physics_effects;
 };
 
 // --- sprites ----------------------------------------------------------------
@@ -144,9 +182,19 @@ typedef enum {
 } dd_particle_sprite_t;
 
 // extras.png, 16x16 grid
-typedef enum { EXTRA_SNOWFLAKE, EXTRA_SPARKLE, EXTRA_PULLEY, EXTRA_HECTAGON, EXTRA_SPRITE_COUNT } dd_extra_sprite_t;
+typedef enum { EXTRA_SNOWFLAKE,
+               EXTRA_SPARKLE,
+               EXTRA_PULLEY,
+               EXTRA_HECTAGON,
+               EXTRA_SPRITE_COUNT } dd_extra_sprite_t;
 
-typedef enum { CURSOR_HAMMER, CURSOR_GUN, CURSOR_SHOTGUN, CURSOR_GRENADE, CURSOR_LASER, CURSOR_NINJA, CURSOR_SPRITE_COUNT } dd_cursor_sprite_t;
+typedef enum { CURSOR_HAMMER,
+               CURSOR_GUN,
+               CURSOR_SHOTGUN,
+               CURSOR_GRENADE,
+               CURSOR_LASER,
+               CURSOR_NINJA,
+               CURSOR_SPRITE_COUNT } dd_cursor_sprite_t;
 
 // The particle system tags a sprite with which sheet it came from by offsetting
 // the index, the same way the engine's renderer used to.
@@ -286,8 +334,8 @@ void dd_particles_reset(dd_particle_system_t *ps);
 void dd_particles_cleanup(dd_particle_system_t *ps);
 void dd_particles_update_sim(dd_particle_system_t *ps, const map_data_t *map);
 void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer);
-// Installs the physics' effect callbacks so a step spawns particles into the
-// system belonging to `world`.
+// Installs the physics' effect callbacks. Every step retains its demo events on
+// `world`; visible worlds additionally spawn into their particle system.
 bool dd_particles_bind(ft_game *game, ft_world *world);
 // Call after the tick with the tick number from before it, and whatever
 // dd_particles_bind returned.
@@ -310,6 +358,51 @@ void dd_particles_create_damage_ind(dd_particle_system_t *ps, vec2 pos, vec2 dir
 void dd_particles_create_powerup_shine(dd_particle_system_t *ps, vec2 pos, vec2 size, float alpha);
 void dd_particles_create_freezing_flakes(dd_particle_system_t *ps, vec2 pos, vec2 size, float alpha);
 
+// --- DDNet demo timeline events ---------------------------------------------
+
+typedef enum {
+  DD_EVENT_CHAT = 0,
+  DD_EVENT_BROADCAST,
+  DD_EVENT_KILLMSG,
+  DD_EVENT_SOUND_GLOBAL,
+  DD_EVENT_EMOTICON,
+  DD_EVENT_VOTE_SET,
+  DD_EVENT_VOTE_STATUS,
+  DD_EVENT_DDRACE_TIME,
+  DD_EVENT_RECORD,
+  DD_EVENT_COUNT
+} dd_event_type_t;
+
+#define DD_EVENT_PAYLOAD_MAGIC 0x44444556u /* "DDEV" */
+
+typedef struct {
+  uint32_t magic;
+  int32_t type;
+  int32_t team;
+  int32_t client_id;
+  char message[256];
+  int32_t killer;
+  int32_t victim;
+  int32_t weapon;
+  int32_t mode_special;
+  int32_t sound_id;
+  int32_t emoticon;
+  int32_t vote_timeout;
+  char reason[256];
+  int32_t vote_yes;
+  int32_t vote_no;
+  int32_t vote_pass;
+  int32_t vote_total;
+  int32_t time;
+  int32_t check;
+  int32_t finish;
+  int32_t server_time_best;
+  int32_t player_time_best;
+} dd_event_payload_t;
+
+void dd_events_render(ft_game *game, const ft_ui_frame *frame);
+bool dd_event_decode(const ft_timeline_event *event, dd_event_payload_t *out);
+
 // --- graphics ---------------------------------------------------------------
 
 // Instance layout of the tee shader. Must match data/games/ddnet/shaders/skin.vert.
@@ -329,7 +422,8 @@ typedef struct {
   int mode; // 0 whole tee, 1 just a hand
 } dd_skin_instance_t;
 
-enum { DD_SKIN_MODE_TEE = 0, DD_SKIN_MODE_HAND = 1 };
+enum { DD_SKIN_MODE_TEE = 0,
+       DD_SKIN_MODE_HAND = 1 };
 
 typedef struct {
   char name[64];
@@ -393,6 +487,13 @@ typedef struct {
   float cursor_scale;
 } dd_settings_t;
 
+typedef struct {
+  bool enabled;
+  int track_count;
+  bool *tracks;
+  int32_t *pings;
+} dd_demo_export_world_t;
+
 struct ft_game {
   const ft_engine_api *engine;
   ft_level *current_level;
@@ -408,6 +509,18 @@ struct ft_game {
   struct online_map_manager_t *maps;
   struct dd_skin_browser_t *skin_browser;
   bool show_skin_browser;
+  bool show_events;
+  bool auto_finish_events;
+
+  // DDNet owns its demo configuration: ranges, group/track selection and
+  // protocol-specific ping values never enter the game-independent editor.
+  bool open_demo_export;
+  int demo_export_start_tick;
+  int demo_export_end_tick;
+  char demo_export_error[160];
+  dd_demo_export_world_t *demo_export_worlds;
+  int demo_export_world_count;
+  bool preserve_demo_export_on_level_load;
 };
 
 void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...);
@@ -427,6 +540,12 @@ bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *pat
 void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame);
 void dd_skin_browser_cleanup(ft_game *game);
 bool dd_demo_export(ft_game *game, const ft_export_request *request);
+bool dd_demo_export_with_pings(ft_game *game, const ft_export_request *request, const int32_t *player_pings);
+void dd_export_window_open(ft_game *game);
+void dd_export_window_render(ft_game *game);
+void dd_export_window_cleanup(ft_game *game);
+size_t dd_export_project_save(ft_game *game, void *out, size_t out_size);
+bool dd_export_project_load(ft_game *game, const void *data, size_t size);
 
 void dd_draw_sprite(ft_game *game, ft_atlas *atlas, float z, vec2 pos, vec2 size, float rotation, uint32_t sprite, vec4 color);
 void dd_draw_sprites(ft_game *game, ft_atlas *atlas, float z, const ft_sprite_draw *draws, uint32_t count);
@@ -445,7 +564,9 @@ const ft_sprite_rect *dd_sprite_rect(ft_game *game, ft_atlas *atlas, uint32_t in
 
 void dd_render(ft_game *game, const ft_render_frame *frame);
 
-enum { DD_CAMERA_FREE = 0, DD_CAMERA_FOLLOW, DD_CAMERA_MODE_COUNT };
+enum { DD_CAMERA_FREE = 0,
+       DD_CAMERA_FOLLOW,
+       DD_CAMERA_MODE_COUNT };
 extern const ft_camera_mode dd_camera_modes[DD_CAMERA_MODE_COUNT];
 bool dd_camera_update(ft_game *game, const ft_camera_frame *frame, ft_camera *inout);
 bool dd_player_label(ft_game *game, const ft_world *world, int32_t player, char *out, size_t out_size);

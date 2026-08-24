@@ -835,7 +835,12 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
     }
   }
 
-  if (tick > last_input_tick && last_input_tick != -1) return last_valid_input;
+  if (tick > last_input_tick && last_input_tick != -1) {
+    // Stateful controls carry beyond the end of a snippet, but one-shot
+    // requests must only exist on the authored tick.
+    engine_input_reset_triggers(model_host(ts), &last_valid_input);
+    return last_valid_input;
+  }
   return blank;
 }
 
@@ -862,10 +867,15 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
           int needed = relative_tick;
           model_resize_snippet_inputs(ts, active_rec_snip, needed);
 
-          // Fill the gap (which should be 'steps' wide) with the current input
+          // Fill the first new tick with the current input, then consume any
+          // one-shot fields. This also keeps a lag frame that advances several
+          // ticks from turning one press into several trigger ticks.
+          input_record_t sampled_input = track->current_input;
           for (int s = old_count; s < needed; ++s) {
-            active_rec_snip->inputs[s] = track->current_input;
+            active_rec_snip->inputs[s] = sampled_input;
+            engine_input_reset_triggers(model_host(ts), &sampled_input);
           }
+          track->current_input = sampled_input;
         }
       }
     }

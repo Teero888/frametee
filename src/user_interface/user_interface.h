@@ -7,10 +7,10 @@
 #include <engine/game_host.h>
 #include <engine/input_record.h>
 #include <plugins/plugin_manager.h>
-#include <user_interface/timeline/timeline.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <types.h>
+#include <user_interface/timeline/timeline.h>
 
 struct ui_handler_t {
   struct gfx_handler_t *gfx_handler;
@@ -24,7 +24,6 @@ struct ui_handler_t {
   tas_context_t plugin_context;
   tas_api_t plugin_api;
   entity_inspector_t entity_inspector;
-
 
   ImVec2 viewport_window_pos;
   vec2 last_render_pos;
@@ -56,7 +55,8 @@ struct ui_handler_t {
 
   // The start screen runs in two stages: pick a game, then whatever that game
   // starts a run with. Choosing is only offered here, where nothing is open.
-  enum { SPLASH_STAGE_GAME = 0, SPLASH_STAGE_START = 1 } splash_stage;
+  enum { SPLASH_STAGE_GAME = 0,
+         SPLASH_STAGE_START = 1 } splash_stage;
 
   char recent_projects[10][1024];
   int num_recent_projects;
@@ -94,8 +94,6 @@ bool ui_render_late(ui_handler_t *ui);
 void ui_post_level_load(ui_handler_t *ui);
 void ui_cleanup(ui_handler_t *ui);
 void ui_add_recent_project(ui_handler_t *ui, const char *path);
-// Runs one of the active game's exporters, asking for a destination first.
-void ui_run_exporter(ui_handler_t *ui, unsigned exporter_index);
 // Draws the active game's own settings, described by the game and rendered here.
 void ui_render_game_settings(ui_handler_t *ui);
 bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size);

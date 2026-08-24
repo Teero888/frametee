@@ -265,11 +265,20 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
     }
   } else {
     switch (core->m_ActiveWeapon) {
-    case WEAPON_GUN: weapon_sprite_id = GAMESKIN_GUN_BODY; break;
-    case WEAPON_SHOTGUN: weapon_sprite_id = GAMESKIN_SHOTGUN_BODY; break;
-    case WEAPON_GRENADE: weapon_sprite_id = GAMESKIN_GRENADE_BODY; break;
-    case WEAPON_LASER: weapon_sprite_id = GAMESKIN_LASER_BODY; break;
-    default: break;
+    case WEAPON_GUN:
+      weapon_sprite_id = GAMESKIN_GUN_BODY;
+      break;
+    case WEAPON_SHOTGUN:
+      weapon_sprite_id = GAMESKIN_SHOTGUN_BODY;
+      break;
+    case WEAPON_GRENADE:
+      weapon_sprite_id = GAMESKIN_GRENADE_BODY;
+      break;
+    case WEAPON_LASER:
+      weapon_sprite_id = GAMESKIN_LASER_BODY;
+      break;
+    default:
+      break;
     }
 
     float recoil = 0.0f;
@@ -320,10 +329,17 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
 
   // Only these three are held with a visible hand in DDNet.
   switch (core->m_ActiveWeapon) {
-  case WEAPON_GUN: submit_tee_hand(game, weapon_pos, tee->dir, -3.0f * M_PI / 4.0f, -15.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false); break;
-  case WEAPON_SHOTGUN: submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -5.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false); break;
-  case WEAPON_GRENADE: submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -4.0f, 7.0f, tee->skin, tee->body_col, tee->custom, false); break;
-  default: break;
+  case WEAPON_GUN:
+    submit_tee_hand(game, weapon_pos, tee->dir, -3.0f * M_PI / 4.0f, -15.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false);
+    break;
+  case WEAPON_SHOTGUN:
+    submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -5.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false);
+    break;
+  case WEAPON_GRENADE:
+    submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -4.0f, 7.0f, tee->skin, tee->body_col, tee->custom, false);
+    break;
+  default:
+    break;
   }
 }
 
@@ -573,31 +589,36 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
 
   render_projectiles_and_lasers(game, world, intra);
   render_fastcap_flags(game, world, intra);
-
 }
 
 void dd_render(ft_game *game, const ft_render_frame *frame) {
   if (!game->gfx.ready || !frame) return;
 
   switch (frame->pass) {
-  case FT_PASS_LEVEL_BACKGROUND: dd_map_render(game, frame); break;
-  case FT_PASS_ENTITIES: render_entities(game, frame); break;
+  case FT_PASS_LEVEL_BACKGROUND:
+    dd_map_render(game, frame);
+    break;
+  case FT_PASS_ENTITIES: {
+    // Entity passes are per world. The old port tried to draw particles from a
+    // shared level pass, whose world_index is deliberately -1, so none could
+    // ever be selected or rendered.
+    dd_particle_system_t *particles = NULL;
+    if (game->settings.render_particles && frame->world_index >= 0) {
+      dd_particles_advance(game, frame->world_index, frame->level, frame->tick, frame->alpha);
+      particles = dd_particles_for(game, frame->world_index);
+      if (particles) dd_particles_render(particles, game, 0);
+    }
+    render_entities(game, frame);
+    if (particles) dd_particles_render(particles, game, 1);
+    break;
+  }
   case FT_PASS_OVERLAY:
     if (frame->active) render_cursor(game, frame);
     break;
-  case FT_PASS_LEVEL_FOREGROUND: {
-    // Particles ride above the level but below the HUD. The simulation is
-    // advanced to the rendered moment first, then both layers are drawn.
-    if (!game->settings.render_particles || frame->world_index < 0) break;
-    dd_particles_advance(game, frame->world_index, frame->level, frame->tick, frame->alpha);
-    dd_particle_system_t *ps = dd_particles_for(game, frame->world_index);
-    if (ps) {
-      dd_particles_render(ps, game, 0);
-      dd_particles_render(ps, game, 1);
-    }
+  case FT_PASS_LEVEL_FOREGROUND:
     break;
-  }
-  default: break;
+  default:
+    break;
   }
 }
 
@@ -722,11 +743,11 @@ uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, f
   const SCharacterCore *c = &world->core.m_pCharacters[player];
 
   uint32_t count = 0;
-#define LINE(...)                                                       \
-  do {                                                                  \
-    if (count >= max_lines) return count;                               \
-    snprintf(out + (size_t)count * line_size, line_size, __VA_ARGS__);   \
-    ++count;                                                            \
+#define LINE(...)                                                      \
+  do {                                                                 \
+    if (count >= max_lines) return count;                              \
+    snprintf(out + (size_t)count * line_size, line_size, __VA_ARGS__); \
+    ++count;                                                           \
   } while (0)
 
   // Positions are reported relative to the map's origin, the same way DDNet's

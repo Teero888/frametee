@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 11u
+#define FT_GAME_ABI_VERSION 12u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -65,9 +65,9 @@ extern "C" {
 #define FT_GAME_MODULE_ENTRY_NAME "ft_game_module_entry"
 
 #if defined(_WIN32)
-  #define FT_GAME_EXPORT __declspec(dllexport)
+#define FT_GAME_EXPORT __declspec(dllexport)
 #else
-  #define FT_GAME_EXPORT __attribute__((visibility("default")))
+#define FT_GAME_EXPORT __attribute__((visibility("default")))
 #endif
 
 /* Maximum length, including the terminator, of the identifiers that end up in
@@ -341,8 +341,9 @@ typedef struct ft_input_field {
  *
  * Held controls reset their target field to its schema default every frame,
  * then write `value` while down. Pressed controls only write on the edge and
- * therefore preserve values such as a selected weapon between ticks; a field
- * marked FT_INPUT_FLAG_TRIGGER is reset even when its control is pressed.
+ * therefore preserve values such as a selected weapon between ticks. A field
+ * marked FT_INPUT_FLAG_TRIGGER latches that edge until one timeline tick
+ * consumes it, then returns to its schema default.
  * Multiple FT_CONTROL_ADD controls may target one numeric field (e.g. -1/+1
  * steering).
  */
@@ -352,7 +353,7 @@ enum ft_input_control_flags {
 };
 
 typedef struct ft_input_control {
-  const char *id;              /* stable, used in the user's config */
+  const char *id; /* stable, used in the user's config */
   const char *display_name;
   const char *description;     /* tooltip, may be NULL */
   const char *category;        /* controls-window heading, may be NULL */
@@ -481,19 +482,19 @@ typedef struct ft_player_setup {
  * ------------------------------------------------------------------------- */
 
 enum ft_prop_flags {
-  FT_PROP_WRITABLE = 1u << 0,  /* the engine may offer an editor for it */
-  FT_PROP_STARTING = 1u << 1,  /* meaningful as a starting-state override */
-  FT_PROP_SUMMARY = 1u << 2,   /* worth showing in the compact status bar */
+  FT_PROP_WRITABLE = 1u << 0, /* the engine may offer an editor for it */
+  FT_PROP_STARTING = 1u << 1, /* meaningful as a starting-state override */
+  FT_PROP_SUMMARY = 1u << 2,  /* worth showing in the compact status bar */
   FT_PROP_READ_ONLY_UI = 1u << 3,
 };
 
 typedef struct ft_prop_desc {
   const char *id; /* stable; used by scripts, plugins and project files */
   const char *display_name;
-  const char *group;       /* optional heading, e.g. "Movement" */
-  const char *unit;        /* optional suffix, e.g. "px/tick" */
+  const char *group; /* optional heading, e.g. "Movement" */
+  const char *unit;  /* optional suffix, e.g. "px/tick" */
   ft_value_kind kind;
-  uint32_t flags;          /* ft_prop_flags */
+  uint32_t flags;              /* ft_prop_flags */
   double min_value, max_value; /* editor clamp; equal means unbounded */
 } ft_prop_desc;
 
@@ -533,12 +534,26 @@ typedef struct ft_setting_desc {
 
 typedef struct ft_timeline_event {
   uint32_t struct_size;
+  /* Index of the timeline world this event belongs to. A game leaves this at
+   * -1 while reporting simulation events through collect_events; the engine
+   * supplies the world that was being scanned. Authored events use an explicit
+   * world index. */
+  int32_t world_index;
   int32_t tick;
-  int32_t player; /* -1 for world-wide events */
+  int32_t player;       /* -1 for world-wide events */
   const char *category; /* "chat", "death", "checkpoint", ... */
   const char *text;
   ft_color color;
+  /* Optional game-defined, pointer-free payload. The engine copies it into the
+   * project and gives it back unchanged. This is what lets a DDNet module keep
+   * editable protocol messages without teaching the engine their fields. */
+  const void *data;
+  uint32_t data_size;
 } ft_timeline_event;
+
+/* Large enough for rich protocol events while still keeping timeline records
+ * fixed-size and trivially copyable for undo snapshots. */
+#define FT_TIMELINE_EVENT_DATA_MAX 640u
 
 /* -------------------------------------------------------------------------
  * Exporters
@@ -571,6 +586,8 @@ typedef struct ft_timeline_world_info {
   int32_t world_index;
   int32_t start_offset;
   uint32_t player_count;
+  /* Engine-owned, valid until the timeline is mutated. */
+  const char *name;
 } ft_timeline_world_info;
 
 typedef struct ft_directory_entry {
@@ -788,7 +805,7 @@ typedef struct ft_camera {
   ft_vec3 eye;    /* camera position in world space */
   ft_vec3 target; /* the point it looks at */
   ft_vec3 up;
-  float fov_y;  /* vertical field of view, radians */
+  float fov_y; /* vertical field of view, radians */
   float near_z;
   float far_z;
   /* View-projection the engine renders with, column-major, ready to hand to a
@@ -983,6 +1000,23 @@ typedef struct ft_engine_api {
    * array once, which is right for a sprite sheet and wrong for an image whose
    * contents change every frame. `dst` is in world units; `tint` multiplies. */
   void (*draw_texture)(float z, ft_texture *texture, ft_rect dst, ft_color tint);
+
+  /* --- authored timeline events ---
+   * Games that have format-specific event payloads manage them through these
+   * services. Returned strings and data remain engine-owned until the next
+   * event mutation. add/update copy every pointed-to field immediately. */
+  uint32_t (*timeline_event_count)(void);
+  bool (*timeline_event_get)(uint32_t index, ft_timeline_event *out);
+  bool (*timeline_event_add)(const ft_timeline_event *event);
+  bool (*timeline_event_update)(uint32_t index, const ft_timeline_event *event);
+  bool (*timeline_event_remove)(uint32_t index);
+  int32_t (*timeline_active_world)(void);
+  /* Inclusive global range covered by the authored timeline. */
+  bool (*timeline_range)(int32_t *out_start_tick, int32_t *out_end_tick);
+  /* True only when a world step is advancing presentation visible in the
+   * viewport. Export/scanning queries step the same physics with this false so
+   * they cannot fill or rewind particle, sound or trail state. */
+  bool (*presentation_effects_enabled)(void);
 } ft_engine_api;
 
 /* The layer a 3D triangle names when it carries no texture. */
@@ -1048,11 +1082,11 @@ typedef struct ft_camera_frame {
 } ft_camera_frame;
 
 typedef enum ft_ui_slot {
-  FT_UI_MAIN_MENU = 0,   /* inside the engine's menu bar */
-  FT_UI_PANELS = 1,      /* free-floating windows */
-  FT_UI_SETTINGS = 2,    /* inside the engine's settings window */
-  FT_UI_PLAYER_ROW = 3,  /* inline, next to a timeline track's controls */
-  FT_UI_STATUS_BAR = 4,  /* inline, in the engine's status bar */
+  FT_UI_MAIN_MENU = 0,  /* inside the engine's menu bar */
+  FT_UI_PANELS = 1,     /* free-floating windows */
+  FT_UI_SETTINGS = 2,   /* inside the engine's settings window */
+  FT_UI_PLAYER_ROW = 3, /* inline, next to a timeline track's controls */
+  FT_UI_STATUS_BAR = 4, /* inline, in the engine's status bar */
   /* The start screen, after the user has picked this game. Whatever a run
    * begins with belongs here: a level browser, a track list, a category picker.
    * The engine draws the general half — games, recent projects — and hands the
@@ -1180,8 +1214,8 @@ typedef struct ft_game_module {
   /* ---- exporters (optional; needs FT_CAP_EXPORTERS) ---- */
   uint32_t (*exporter_count)(ft_game *game);
   const ft_exporter_desc *(*exporter_desc)(ft_game *game, uint32_t index);
-  /* Exports ticks [start_tick, end_tick). The game pulls the input and world
-   * data it needs through the engine API. */
+  /* Exports the inclusive range [start_tick, end_tick]. The game pulls the
+   * input and world data it needs through the engine API. */
   bool (*export_run)(ft_game *game, uint32_t index, const ft_export_request *request);
 
   /* ---- status readout (optional) ----

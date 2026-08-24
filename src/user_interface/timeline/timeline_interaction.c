@@ -91,6 +91,10 @@ void interaction_apply_linked_inputs(ui_handler_t *ui) {
       }
     }
 
+    // Linked input is rebuilt from defaults every frame. Overlay a trigger
+    // that was pressed on an earlier frame and has not reached a tick yet.
+    engine_input_merge_pending_triggers(host, &track->current_input, &final_input);
+
     for (uint32_t control_index = 0; control_index < schema->control_count; ++control_index) {
       const ft_input_control *control = &schema->controls[control_index];
       if (control->field >= schema->field_count) continue;
@@ -980,6 +984,11 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   const ft_input_schema *schema = game_input_schema(host);
   if (!schema) return;
 
+  // Preserve one-shot edges while the rest of the input is rebuilt from the
+  // current physical controls. They are consumed by model_advance_tick, not by
+  // an arbitrary render frame.
+  const input_record_t pending_input = *input;
+
   // Held actions describe the complete value for this frame. Reset each field
   // they target once, then let active controls write or add their values.
   bool reset[256] = {false};
@@ -988,17 +997,17 @@ void interaction_update_recording_input(ui_handler_t *ui) {
   for (uint32_t i = 0; i < control_count; ++i) {
     const ft_input_control *control = &schema->controls[i];
     if (control->field >= schema->field_count || control->field >= 256 || reset[control->field]) continue;
-    const bool persistent_pressed = (control->flags & FT_CONTROL_PRESSED) &&
-                                    (schema->fields[control->field].flags & FT_INPUT_FLAG_TRIGGER) == 0;
-    if (persistent_pressed)
-      continue;
     const ft_input_field *field = &schema->fields[control->field];
+    const bool persistent_pressed = (control->flags & FT_CONTROL_PRESSED) && (field->flags & FT_INPUT_FLAG_TRIGGER) == 0;
+    if (persistent_pressed) continue;
     if (field->kind == FT_INPUT_FLOAT)
       engine_input_set_float(host, input, (int)control->field, field->default_float);
     else
       engine_input_set(host, input, (int)control->field, field->default_value);
     reset[control->field] = true;
   }
+
+  engine_input_merge_pending_triggers(host, &pending_input, input);
 
   for (uint32_t i = 0; i < control_count; ++i) {
     const ft_input_control *control = &schema->controls[i];

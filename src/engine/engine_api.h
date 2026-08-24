@@ -22,4 +22,8 @@ void engine_api_camera_get(ft_camera *out);
 // Called when a level finishes loading, from the level's own reported bounds.
 void engine_api_set_world_extent(struct gfx_handler_t *handler, float width, float height);
 
+// Suppresses game-owned presentation effects around read-only timeline scans.
+// Returns the previous state so callers can restore nested scopes safely.
+bool engine_api_set_presentation_effects(bool enabled);
+
 #endif // ENGINE_API_H

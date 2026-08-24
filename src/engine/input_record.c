@@ -67,3 +67,42 @@ void engine_input_default(game_host_t *host, input_record_t *record) {
   memset(record, 0, sizeof(*record));
   gh_input_default(host, record->bytes);
 }
+
+static void input_set_field_default(game_host_t *host, input_record_t *record, uint32_t field_index, const ft_input_field *field) {
+  if (field->kind == FT_INPUT_FLOAT)
+    engine_input_set_float(host, record, (int)field_index, field->default_float);
+  else if (field->kind == FT_INPUT_VEC2)
+    engine_input_set_vec2(host, record, (int)field_index, (ft_vec2){field->default_float, field->default_float});
+  else
+    engine_input_set(host, record, (int)field_index, field->default_value);
+}
+
+void engine_input_reset_triggers(game_host_t *host, input_record_t *record) {
+  const ft_input_schema *schema = game_input_schema(host);
+  if (!schema || !record) return;
+  for (uint32_t field_index = 0; field_index < schema->field_count; ++field_index) {
+    const ft_input_field *field = &schema->fields[field_index];
+    if (field->flags & FT_INPUT_FLAG_TRIGGER) input_set_field_default(host, record, field_index, field);
+  }
+}
+
+void engine_input_merge_pending_triggers(game_host_t *host, const input_record_t *pending, input_record_t *record) {
+  const ft_input_schema *schema = game_input_schema(host);
+  if (!schema || !pending || !record) return;
+  for (uint32_t field_index = 0; field_index < schema->field_count; ++field_index) {
+    const ft_input_field *field = &schema->fields[field_index];
+    if ((field->flags & FT_INPUT_FLAG_TRIGGER) == 0) continue;
+
+    if (field->kind == FT_INPUT_FLOAT) {
+      const float value = engine_input_get_float(host, pending, (int)field_index);
+      if (value != field->default_float) engine_input_set_float(host, record, (int)field_index, value);
+    } else if (field->kind == FT_INPUT_VEC2) {
+      const ft_vec2 value = engine_input_get_vec2(host, pending, (int)field_index);
+      if (value.x != field->default_float || value.y != field->default_float)
+        engine_input_set_vec2(host, record, (int)field_index, value);
+    } else {
+      const long long value = engine_input_get(host, pending, (int)field_index);
+      if (value != field->default_value) engine_input_set(host, record, (int)field_index, value);
+    }
+  }
+}

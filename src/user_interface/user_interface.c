@@ -1,18 +1,18 @@
-#include <engine/int_math.h>
 #include "user_interface.h"
-#include <engine/engine_api.h>
-#include <system/fs.h>
 #include "cglm/vec2.h"
 #include "cimgui.h"
-#include "timeline_events.h"
 #include "player_info.h"
 #include "snippet_editor.h"
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
+#include "timeline_events.h"
 #include "undo_redo.h"
 #include "widgets/imcol.h"
 #include <GLFW/glfw3.h>
+#include <engine/engine_api.h>
+#include <engine/int_math.h>
+#include <frametee/icons.h>
 #include <limits.h>
 #include <logger/logger.h>
 #include <math.h>
@@ -24,8 +24,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <frametee/icons.h>
 #include <system/config.h>
+#include <system/fs.h>
 #include <system/include_cimgui.h>
 #include <system/input.h>
 #include <system/save.h>
@@ -79,22 +79,6 @@ void render_menu_bar(ui_handler_t *ui) {
           save_project(ui, save_path);
           NFD_FreePathU8(save_path);
         }
-      }
-      igSeparator();
-      // One entry per exporter the game offers; the engine picks the range and
-      // the file, the game writes the format.
-      game_host_t *export_host = &ui->gfx_handler->game_host;
-      const unsigned exporter_count = gh_exporter_count(export_host);
-      if (exporter_count == 0) {
-        igMenuItem_Bool("Export...", NULL, false, false);
-        if (igIsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) igSetTooltip("%s provides no exporters.", ui->plugin_context.active_game_id);
-      }
-      for (unsigned i = 0; i < exporter_count; ++i) {
-        const ft_exporter_desc *desc = gh_exporter_desc(export_host, i);
-        if (!desc) continue;
-        char label[96];
-        snprintf(label, sizeof(label), "Export %s...", desc->display_name ? desc->display_name : desc->id);
-        if (igMenuItem_Bool(label, NULL, false, ui->gfx_handler->level != NULL)) ui_run_exporter(ui, i);
       }
       igEndMenu();
     }
@@ -492,7 +476,7 @@ void render_player_manager(ui_handler_t *ui) {
           igPushStyleColor_Vec4(ImGuiCol_HeaderHovered, row_hovered_color);
           igPushStyleColor_Vec4(ImGuiCol_HeaderActive, row_active_color);
           bool track_clicked = igSelectable_Bool(row_label, selected, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns,
-                                                  (ImVec2){0, 0});
+                                                 (ImVec2){0, 0});
           igPopStyleColor(3);
           igUnindent(row_left_padding);
 
@@ -578,7 +562,6 @@ void render_player_manager(ui_handler_t *ui) {
       if (before && model_remove_group(ts, pending_group_remove)) register_timeline_data_change(ui, before, "Delete Group");
       else commands_free_timeline_data_snapshot(before);
     }
-
   }
   if (igBeginPopupModal("Confirm remove player", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
     igText("This player has inputs. Remove anyway?");
@@ -949,10 +932,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->loaded_level_path[0] = '\0';
   ui->current_project_path[0] = '\0';
   ui->has_unsaved_changes = false;
-  // The viewport is what the editor is for; the panels around it are opened
-  // from the menu when they are wanted. Starting with the timeline up hid a
-  // third of the render behind a panel nobody had asked for yet.
-  ui->show_timeline = false;
+  ui->show_timeline = true;
   ui->show_timeline_events_window = false;
   ui->show_plugin_manager = false;
   entity_inspector_clear(&ui->entity_inspector);
@@ -971,7 +951,6 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->plugin_context.active_game_id = game_host_active_id(&gfx_handler->game_host);
   plugin_manager_init(&ui->plugin_manager, &ui->plugin_context, &ui->plugin_api, ui);
   plugin_manager_load_all(&ui->plugin_manager, "plugins");
-
 }
 
 void ui_add_recent_project(ui_handler_t *ui, const char *path) {
@@ -1061,7 +1040,6 @@ static void splash_on_level_picked(ui_handler_t *ui) {
   ui->last_auto_save_time = 0.0;
   ui->show_splash = false;
 }
-
 
 // --- splash: choosing a game -------------------------------------------------
 
@@ -1288,7 +1266,6 @@ static void render_splash_screen(ui_handler_t *ui) {
         igSpacing();
       }
 
-
       igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.10f, 0.5f});
       igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f);
 
@@ -1470,7 +1447,6 @@ void ui_render(ui_handler_t *ui) {
     render_game_ui_slot(ui, FT_UI_PANELS, ui->timeline.selected_player_track_index);
   }
 
-
   render_new_project_prompt(ui);
 
   // with nothing loaded the splash is the only thing to show, otherwise it is up because
@@ -1517,10 +1493,12 @@ static void draw_character_inspector(ui_handler_t *ui, ImVec2 start) {
     float alpha = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
     if (ui->timeline.is_reversing) alpha = 1.f - alpha;
 
-    enum { MAX_STATUS_LINES = 24, STATUS_LINE_SIZE = 128 };
+    enum { MAX_STATUS_LINES = 24,
+           STATUS_LINE_SIZE = 128 };
     static char lines[MAX_STATUS_LINES][STATUS_LINE_SIZE];
     const unsigned count = gh_status_lines(host, world, local_index, alpha, &lines[0][0], MAX_STATUS_LINES, STATUS_LINE_SIZE);
-    for (unsigned i = 0; i < count; ++i) igText("%s", lines[i]);
+    for (unsigned i = 0; i < count; ++i)
+      igText("%s", lines[i]);
   }
 
   // input state
@@ -1826,32 +1804,6 @@ void ui_check_auto_save(ui_handler_t *ui) {
   }
 }
 
-// Runs one of the active game's exporters over the whole timeline. The engine
-// contributes the range and the destination; everything about the format is the
-// game's.
-void ui_run_exporter(ui_handler_t *ui, unsigned exporter_index) {
-  game_host_t *host = &ui->gfx_handler->game_host;
-  const ft_exporter_desc *desc = gh_exporter_desc(host, exporter_index);
-  if (!desc) return;
-
-  char default_name[256];
-  snprintf(default_name, sizeof(default_name), "%s.%s", ui->loaded_level_name[0] ? ui->loaded_level_name : "run",
-           desc->file_extension ? desc->file_extension : "out");
-
-  nfdu8filteritem_t filter = {desc->filter_name ? desc->filter_name : desc->display_name, desc->file_extension};
-  nfdu8char_t *path = NULL;
-  if (NFD_SaveDialogU8(&path, desc->file_extension ? &filter : NULL, desc->file_extension ? 1 : 0, NULL, default_name) != NFD_OKAY || !path)
-    return;
-
-  ft_export_request request = {.struct_size = sizeof(request),
-                               .path = path,
-                               .start_tick = 0,
-                               .end_tick = model_get_max_timeline_tick(&ui->timeline) + 500};
-  if (gh_export_run(host, exporter_index, &request)) log_info("UI", "Exported to '%s'", path);
-  else log_error("UI", "Export to '%s' failed", path);
-  NFD_FreePathU8(path);
-}
-
 // Draws a control for every setting the active game publishes, grouped by the
 // headings it gave them, and saves on change.
 void ui_render_game_settings(ui_handler_t *ui) {
@@ -1874,7 +1826,9 @@ void ui_render_game_settings(ui_handler_t *ui) {
     const char *label = desc->display_name ? desc->display_name : desc->id;
     bool changed = false;
     switch (value.kind) {
-    case FT_VALUE_BOOL: changed = igCheckbox(label, &value.as.b); break;
+    case FT_VALUE_BOOL:
+      changed = igCheckbox(label, &value.as.b);
+      break;
     case FT_VALUE_INT: {
       int v = (int)value.as.i;
       changed = igDragInt(label, &v, 1.f, (int)desc->min_value, (int)desc->max_value, "%d", 0);
@@ -1887,7 +1841,8 @@ void ui_render_game_settings(ui_handler_t *ui) {
       value.as.f = v;
       break;
     }
-    default: break;
+    default:
+      break;
     }
 
     if (desc->description && igIsItemHovered(0)) igSetTooltip("%s", desc->description);

@@ -473,6 +473,23 @@ if(BUILD_TESTING AND BUILD_GAMES)
     add_library(input_stride_game MODULE tests/input_stride_game.c)
     set_target_properties(input_stride_game PROPERTIES PREFIX "" OUTPUT_NAME "input_stride_game")
     target_include_directories(input_stride_game PRIVATE ${FRAMETEE_ABI_INCLUDE_DIR})
+    add_executable(input_trigger_semantics tests/input_trigger_semantics.c src/engine/input_record.c)
+    target_include_directories(input_trigger_semantics PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/libs
+    )
+    target_compile_definitions(input_trigger_semantics PRIVATE LOGGER_API=)
+    if(UNIX)
+        add_executable(ddnet_transient_effects tests/ddnet_transient_effects.c)
+        target_include_directories(ddnet_transient_effects PRIVATE
+            ${FRAMETEE_ABI_INCLUDE_DIR}
+            ${CMAKE_SOURCE_DIR}/games/ddnet
+            ${CMAKE_SOURCE_DIR}/libs
+        )
+        target_link_libraries(ddnet_transient_effects PRIVATE ddnet_physics cglm ${CMAKE_DL_LIBS})
+        add_dependencies(ddnet_transient_effects ddnet_game)
+    endif()
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-config-bouncer")
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-config-platformer")
     add_test(
@@ -512,6 +529,7 @@ if(BUILD_TESTING AND BUILD_GAMES)
             -DBUILD_DIR=${CMAKE_BINARY_DIR}
             -P "${CMAKE_SOURCE_DIR}/tests/input_stride.cmake"
     )
+    add_test(NAME input_triggers_latch_until_one_tick COMMAND $<TARGET_FILE:input_trigger_semantics>)
     add_test(
         NAME ddnet_demo_exporter_writes_demo
         COMMAND ${CMAKE_COMMAND}
@@ -521,6 +539,19 @@ if(BUILD_TESTING AND BUILD_GAMES)
             -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
             -DBUILD_DIR=${CMAKE_BINARY_DIR}
             -P "${CMAKE_SOURCE_DIR}/tests/ddnet_export.cmake"
+    )
+    if(UNIX)
+        add_test(
+            NAME ddnet_same_tick_explosion_is_retained
+            COMMAND $<TARGET_FILE:ddnet_transient_effects>
+                $<TARGET_FILE:ddnet_game>
+                ${CMAKE_SOURCE_DIR}/libs/ddnet_demo/Aip-Gores.map
+                ${CMAKE_BINARY_DIR}/ddnet-same-tick-explosion.demo
+        )
+    endif()
+    add_test(
+        NAME ddnet_project_data_roundtrip
+        COMMAND $<TARGET_FILE:${PROJECT_NAME}> --game ddnet --auto "${CMAKE_SOURCE_DIR}/tests/ddnet_project_roundtrip.auto"
     )
     set_tests_properties(project_v12_bouncer_roundtrip PROPERTIES
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -534,5 +565,9 @@ if(BUILD_TESTING AND BUILD_GAMES)
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-switch;APPDATA=${CMAKE_BINARY_DIR}/test-config-switch"
         PASS_REGULAR_EXPRESSION "Quick-saved current project to 'frametee-switch-lifetime.tasp'."
+    )
+    set_tests_properties(ddnet_project_data_roundtrip PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config-ddnet;APPDATA=${CMAKE_BINARY_DIR}/test-config-ddnet"
     )
 endif()

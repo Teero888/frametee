@@ -143,17 +143,28 @@ static int64_t ddnet_input_get(ft_game *game, const void *record, uint32_t field
   (void)game;
   const SPlayerInput *in = record;
   switch (field) {
-  case IN_DIRECTION: return in->m_Direction;
-  case IN_JUMP: return in->m_Jump != 0;
-  case IN_FIRE: return (in->m_Fire & 1) != 0;
-  case IN_HOOK: return in->m_Hook != 0;
-  case IN_WEAPON: return in->m_WantedWeapon;
-  case IN_KILL: return get_flag_kill(in) != 0;
-  case IN_EYES: return get_flag_eye_state(in);
-  case IN_EMOTE: return get_flag_emote_index(in);
-  case IN_SIT: return get_flag_sit(in) != 0;
-  case IN_TELE_OUT: return in->m_TeleOut;
-  default: return 0;
+  case IN_DIRECTION:
+    return in->m_Direction;
+  case IN_JUMP:
+    return in->m_Jump != 0;
+  case IN_FIRE:
+    return (in->m_Fire & 1) != 0;
+  case IN_HOOK:
+    return in->m_Hook != 0;
+  case IN_WEAPON:
+    return in->m_WantedWeapon;
+  case IN_KILL:
+    return get_flag_kill(in) != 0;
+  case IN_EYES:
+    return get_flag_eye_state(in);
+  case IN_EMOTE:
+    return get_flag_emote_index(in);
+  case IN_SIT:
+    return get_flag_sit(in) != 0;
+  case IN_TELE_OUT:
+    return in->m_TeleOut;
+  default:
+    return 0;
   }
 }
 
@@ -161,22 +172,41 @@ static void ddnet_input_set(ft_game *game, void *record, uint32_t field, int64_t
   (void)game;
   SPlayerInput *in = record;
   switch (field) {
-  case IN_DIRECTION: in->m_Direction = (int8_t)(value < -1 ? -1 : (value > 1 ? 1 : value)); break;
-  case IN_JUMP: in->m_Jump = value ? 1 : 0; break;
+  case IN_DIRECTION:
+    in->m_Direction = (int8_t)(value < -1 ? -1 : (value > 1 ? 1 : value));
+    break;
+  case IN_JUMP:
+    in->m_Jump = value ? 1 : 0;
+    break;
   // Fire is a counter in the protocol: the physics acts on odd values, so
   // toggling the low bit is what "pressed this tick" means.
-  case IN_FIRE: in->m_Fire = value ? (in->m_Fire | 1) : (uint8_t)(in->m_Fire & ~1); break;
-  case IN_HOOK: in->m_Hook = value ? 1 : 0; break;
-  case IN_WEAPON: in->m_WantedWeapon = (uint8_t)(value < 0 ? 0 : (value >= NUM_WEAPONS ? NUM_WEAPONS - 1 : value)); break;
-  case IN_KILL: set_flag_kill(in, value != 0); break;
-  case IN_EYES: set_flag_eye_state(in, (uint8_t)value); break;
+  case IN_FIRE:
+    in->m_Fire = value ? (in->m_Fire | 1) : (uint8_t)(in->m_Fire & ~1);
+    break;
+  case IN_HOOK:
+    in->m_Hook = value ? 1 : 0;
+    break;
+  case IN_WEAPON:
+    in->m_WantedWeapon = (uint8_t)(value < 0 ? 0 : (value >= NUM_WEAPONS ? NUM_WEAPONS - 1 : value));
+    break;
+  case IN_KILL:
+    set_flag_kill(in, value != 0);
+    break;
+  case IN_EYES:
+    set_flag_eye_state(in, (uint8_t)value);
+    break;
   case IN_EMOTE:
     set_flag_emote_index(in, (uint8_t)value);
     set_flag_emote_trigger(in, value != 0);
     break;
-  case IN_SIT: set_flag_sit(in, value != 0); break;
-  case IN_TELE_OUT: in->m_TeleOut = (uint8_t)value; break;
-  default: break;
+  case IN_SIT:
+    set_flag_sit(in, value != 0);
+    break;
+  case IN_TELE_OUT:
+    in->m_TeleOut = (uint8_t)value;
+    break;
+  default:
+    break;
   }
 }
 
@@ -319,7 +349,10 @@ static const ft_prop_desc laser_props[LASER_PROP_COUNT] = {
     [LASER_EVAL_TICK] = {"eval_tick", "Eval tick", "Timing", NULL, FT_VALUE_INT, 0, 0, 0},
 };
 
-enum { DD_CLASS_PLAYER = 0, DD_CLASS_PROJECTILE, DD_CLASS_LASER, DD_CLASS_COUNT };
+enum { DD_CLASS_PLAYER = 0,
+       DD_CLASS_PROJECTILE,
+       DD_CLASS_LASER,
+       DD_CLASS_COUNT };
 
 static const ft_entity_class entity_classes[] = {
     [DD_CLASS_PLAYER] = {.id = "player", .display_name = "Tee", .props = player_props, .prop_count = PROP_COUNT},
@@ -344,7 +377,8 @@ static SEntity *entity_at(const ft_world *world, int type, int32_t index) {
 static int32_t entity_list_count(const ft_world *world, int type) {
   if (!world) return 0;
   int32_t count = 0;
-  for (SEntity *ent = world->core.m_apFirstEntityTypes[type]; ent; ent = ent->m_pNextTypeEntity) ++count;
+  for (SEntity *ent = world->core.m_apFirstEntityTypes[type]; ent; ent = ent->m_pNextTypeEntity)
+    ++count;
   return count;
 }
 
@@ -365,21 +399,50 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   case PROP_POSITION:
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(c->m_Pos) / PX_PER_TILE, vgety(c->m_Pos) / PX_PER_TILE}};
     return true;
-  case PROP_VELOCITY: *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(c->m_Vel), vgety(c->m_Vel)}}; return true;
-  case PROP_ACTIVE_WEAPON: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_ActiveWeapon}; return true;
-  case PROP_HEALTH: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_Health}; return true;
-  case PROP_ARMOR: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_Armor}; return true;
-  case PROP_FREEZE_TIME: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_FreezeTime}; return true;
-  case PROP_JUMPS_LEFT: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_JumpedTotal}; return true;
-  case PROP_GROUNDED: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Grounded}; return true;
-  case PROP_HOOK_STATE: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_HookState}; return true;
-  case PROP_HOOKED_PLAYER: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_HookedPlayer}; return true;
-  case PROP_RACE_TIME: *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = c->m_RaceTime}; return true;
-  case PROP_DEEP_FROZEN: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_DeepFrozen}; return true;
-  case PROP_JETPACK: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Jetpack}; return true;
-  case PROP_ENDLESS_HOOK: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_EndlessHook}; return true;
-  case PROP_SOLO: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Solo}; return true;
-  default: return false;
+  case PROP_VELOCITY:
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(c->m_Vel), vgety(c->m_Vel)}};
+    return true;
+  case PROP_ACTIVE_WEAPON:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_ActiveWeapon};
+    return true;
+  case PROP_HEALTH:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_Health};
+    return true;
+  case PROP_ARMOR:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_Armor};
+    return true;
+  case PROP_FREEZE_TIME:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_FreezeTime};
+    return true;
+  case PROP_JUMPS_LEFT:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_JumpedTotal};
+    return true;
+  case PROP_GROUNDED:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Grounded};
+    return true;
+  case PROP_HOOK_STATE:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_HookState};
+    return true;
+  case PROP_HOOKED_PLAYER:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_HookedPlayer};
+    return true;
+  case PROP_RACE_TIME:
+    *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = c->m_RaceTime};
+    return true;
+  case PROP_DEEP_FROZEN:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_DeepFrozen};
+    return true;
+  case PROP_JETPACK:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Jetpack};
+    return true;
+  case PROP_ENDLESS_HOOK:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_EndlessHook};
+    return true;
+  case PROP_SOLO:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Solo};
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -397,21 +460,40 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
     // tee keeps colliding against wherever it used to be.
     cc_calc_indices(c);
     return true;
-  case PROP_VELOCITY: c->m_Vel = vec2_init(value->as.v.x, value->as.v.y); return true;
+  case PROP_VELOCITY:
+    c->m_Vel = vec2_init(value->as.v.x, value->as.v.y);
+    return true;
   case PROP_ACTIVE_WEAPON:
     if (value->as.i < 0 || value->as.i >= NUM_WEAPONS) return false;
     c->m_ActiveWeapon = (unsigned char)value->as.i;
     c->m_aWeaponGot[value->as.i] = true;
     return true;
-  case PROP_HEALTH: c->m_Health = (int8_t)value->as.i; return true;
-  case PROP_ARMOR: c->m_Armor = (int8_t)value->as.i; return true;
-  case PROP_FREEZE_TIME: c->m_FreezeTime = (int)value->as.i; return true;
-  case PROP_JUMPS_LEFT: c->m_JumpedTotal = (int)value->as.i; return true;
-  case PROP_DEEP_FROZEN: c->m_DeepFrozen = value->as.b; return true;
-  case PROP_JETPACK: c->m_Jetpack = value->as.b; return true;
-  case PROP_ENDLESS_HOOK: c->m_EndlessHook = value->as.b; return true;
-  case PROP_SOLO: c->m_Solo = value->as.b; return true;
-  default: return false;
+  case PROP_HEALTH:
+    c->m_Health = (int8_t)value->as.i;
+    return true;
+  case PROP_ARMOR:
+    c->m_Armor = (int8_t)value->as.i;
+    return true;
+  case PROP_FREEZE_TIME:
+    c->m_FreezeTime = (int)value->as.i;
+    return true;
+  case PROP_JUMPS_LEFT:
+    c->m_JumpedTotal = (int)value->as.i;
+    return true;
+  case PROP_DEEP_FROZEN:
+    c->m_DeepFrozen = value->as.b;
+    return true;
+  case PROP_JETPACK:
+    c->m_Jetpack = value->as.b;
+    return true;
+  case PROP_ENDLESS_HOOK:
+    c->m_EndlessHook = value->as.b;
+    return true;
+  case PROP_SOLO:
+    c->m_Solo = value->as.b;
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -419,10 +501,14 @@ static int32_t ddnet_entity_count(ft_game *game, const ft_world *world, uint32_t
   (void)game;
   if (!world) return 0;
   switch (entity_class) {
-  case DD_CLASS_PLAYER: return world->core.m_NumCharacters;
-  case DD_CLASS_PROJECTILE: return entity_list_count(world, WORLD_ENTTYPE_PROJECTILE);
-  case DD_CLASS_LASER: return entity_list_count(world, WORLD_ENTTYPE_LASER);
-  default: return 0;
+  case DD_CLASS_PLAYER:
+    return world->core.m_NumCharacters;
+  case DD_CLASS_PROJECTILE:
+    return entity_list_count(world, WORLD_ENTTYPE_PROJECTILE);
+  case DD_CLASS_LASER:
+    return entity_list_count(world, WORLD_ENTTYPE_LASER);
+  default:
+    return 0;
   }
 }
 
@@ -442,14 +528,29 @@ static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t 
   case PROJ_DIRECTION:
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(proj->m_Direction), vgety(proj->m_Direction)}};
     return true;
-  case PROJ_TYPE: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_Type}; return true;
-  case PROJ_OWNER: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_Owner}; return true;
-  case PROJ_START_TICK: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_StartTick}; return true;
-  case PROJ_LIFESPAN: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_LifeSpan}; return true;
-  case PROJ_EXPLOSIVE: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = proj->m_Explosive}; return true;
-  case PROJ_FREEZE: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = proj->m_Freeze}; return true;
-  case PROJ_BOUNCING: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_Bouncing}; return true;
-  default: return false;
+  case PROJ_TYPE:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_Type};
+    return true;
+  case PROJ_OWNER:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_Owner};
+    return true;
+  case PROJ_START_TICK:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_StartTick};
+    return true;
+  case PROJ_LIFESPAN:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_LifeSpan};
+    return true;
+  case PROJ_EXPLOSIVE:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = proj->m_Explosive};
+    return true;
+  case PROJ_FREEZE:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = proj->m_Freeze};
+    return true;
+  case PROJ_BOUNCING:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_Bouncing};
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -465,12 +566,23 @@ static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop,
   case LASER_FROM:
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(laser->m_From) / PX_PER_TILE, vgety(laser->m_From) / PX_PER_TILE}};
     return true;
-  case LASER_ENERGY: *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = laser->m_Energy}; return true;
-  case LASER_BOUNCES: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_Bounces}; return true;
-  case LASER_OWNER: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_Owner}; return true;
-  case LASER_TYPE: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_Type}; return true;
-  case LASER_EVAL_TICK: *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_EvalTick}; return true;
-  default: return false;
+  case LASER_ENERGY:
+    *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = laser->m_Energy};
+    return true;
+  case LASER_BOUNCES:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_Bounces};
+    return true;
+  case LASER_OWNER:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_Owner};
+    return true;
+  case LASER_TYPE:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_Type};
+    return true;
+  case LASER_EVAL_TICK:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_EvalTick};
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -512,6 +624,12 @@ static ft_level *level_finish(ft_game *game, map_data_t *map, const char *varian
   dd_level_build_pickups(level);
   dd_map_create(game, level);
   level->loaded = true;
+  for (int i = 0; i < game->particle_count; ++i)
+    dd_particles_reset(&game->particles[i]);
+  if (game->preserve_demo_export_on_level_load)
+    game->preserve_demo_export_on_level_load = false;
+  else
+    dd_export_window_cleanup(game);
   game->current_level = level;
   return level;
 }
@@ -542,8 +660,16 @@ static ft_level *ddnet_level_load_path(ft_game *game, const char *path, const ch
 
 static ft_level *ddnet_level_load_memory(ft_game *game, const void *data, size_t size, const char *variant_id) {
   if (!data || size == 0) return NULL;
-  map_data_t map = load_map_from_memory((unsigned char *)data, size);
+  // The DDNet map loader takes ownership of its input buffer. Project data is
+  // engine-owned and released as soon as loading finishes, so hand the loader
+  // a private copy instead of leaving the level with a dangling/double-owned
+  // map pointer.
+  unsigned char *owned_data = malloc(size);
+  if (!owned_data) return NULL;
+  memcpy(owned_data, data, size);
+  map_data_t map = load_map_from_memory(owned_data, size);
   if (!map.game_layer.data) {
+    free(owned_data);
     dd_log(game, FT_LOG_ERROR, "Failed to parse an in-memory map of %zu bytes.", size);
     return NULL;
   }
@@ -601,6 +727,7 @@ static ft_world *ddnet_world_create(ft_game *game, const ft_world_desc *desc) {
   if (!world) return NULL;
   world->core = wc_empty();
   world->level = level;
+  world->game = game;
   world->index = desc->world_index;
   wc_copy_world(&world->core, &level->prototype);
 
@@ -617,20 +744,56 @@ static void ddnet_world_destroy(ft_game *game, ft_world *world) {
   (void)game;
   if (!world) return;
   wc_free(&world->core);
+  free(world->physics_particle_events);
+  free(world->physics_damage_events);
+  free(world->physics_sound_events);
   free(world);
 }
 
+static bool copy_effect_events(void **destination, int *capacity, const void *source, int count, size_t item_size) {
+  if (count <= 0) return true;
+  if (*capacity < count) {
+    void *events = realloc(*destination, (size_t)count * item_size);
+    if (!events) return false;
+    *destination = events;
+    *capacity = count;
+  }
+  memcpy(*destination, source, (size_t)count * item_size);
+  return true;
+}
+
 static void ddnet_world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
-  (void)game;
   if (!dst || !src) return;
   const int world_index = dst->index;
   dst->level = src->level;
+  dst->game = game;
   // Keep the destination's identity. Prediction worlds use index -1 so their
   // speculative ticks cannot emit particles into a visible simulation group.
   dst->index = world_index;
   // wc_copy_world reuses whatever dst already allocated, which is what keeps
   // the engine's constant snapshotting affordable.
   wc_copy_world(&dst->core, (SWorldCore *)&src->core);
+  dst->physics_particle_event_count =
+      copy_effect_events((void **)&dst->physics_particle_events, &dst->physics_particle_event_capacity,
+                         src->physics_particle_events, src->physics_particle_event_count,
+                         sizeof(*dst->physics_particle_events))
+          ? src->physics_particle_event_count
+          : 0;
+  dst->physics_damage_event_count =
+      copy_effect_events((void **)&dst->physics_damage_events, &dst->physics_damage_event_capacity,
+                         src->physics_damage_events, src->physics_damage_event_count, sizeof(*dst->physics_damage_events))
+          ? src->physics_damage_event_count
+          : 0;
+  dst->physics_sound_event_count =
+      copy_effect_events((void **)&dst->physics_sound_events, &dst->physics_sound_event_capacity,
+                         src->physics_sound_events, src->physics_sound_event_count, sizeof(*dst->physics_sound_events))
+          ? src->physics_sound_event_count
+          : 0;
+  dst->render_physics_effects = false;
+  dst->core.user_data = NULL;
+  dst->core.particle = NULL;
+  dst->core.damage_indicator = NULL;
+  dst->core.sound = NULL;
 }
 
 static void ddnet_world_step(ft_game *game, ft_world *world, const void *inputs, uint32_t player_count) {
@@ -683,7 +846,7 @@ static void ddnet_collect_events(ft_game *game, const ft_world *previous, const 
   if (!previous || !world || !emit) return;
 
   const int count = world->core.m_NumCharacters < previous->core.m_NumCharacters ? world->core.m_NumCharacters
-                                                                                  : previous->core.m_NumCharacters;
+                                                                                 : previous->core.m_NumCharacters;
   for (int player = 0; player < count; ++player) {
     const SCharacterCore *before = &previous->core.m_pCharacters[player];
     const SCharacterCore *after = &world->core.m_pCharacters[player];
@@ -752,7 +915,8 @@ static bool ddnet_world_remove_player(ft_game *game, ft_world *world, int32_t pl
   (void)game;
   if (!world || player < 0 || player >= world->core.m_NumCharacters) return false;
   wc_remove_character(&world->core, player);
-  for (int i = 0; i < world->core.m_NumCharacters; ++i) world->core.m_pCharacters[i].m_Id = i;
+  for (int i = 0; i < world->core.m_NumCharacters; ++i)
+    world->core.m_pCharacters[i].m_Id = i;
   return true;
 }
 
@@ -804,7 +968,8 @@ static bool ddnet_world_deserialize(ft_game *game, ft_world *world, const void *
   if (header.character_count < 0) return false;
   if (size < sizeof(header) + (size_t)header.character_count * sizeof(SCharacterCore)) return false;
 
-  while (world->core.m_NumCharacters > header.character_count) wc_remove_character(&world->core, world->core.m_NumCharacters - 1);
+  while (world->core.m_NumCharacters > header.character_count)
+    wc_remove_character(&world->core, world->core.m_NumCharacters - 1);
   if (header.character_count > world->core.m_NumCharacters)
     if (!wc_add_character(&world->core, header.character_count - world->core.m_NumCharacters)) return false;
 
@@ -824,6 +989,14 @@ static bool ddnet_world_deserialize(ft_game *game, ft_world *world, const void *
     cc_calc_indices(live);
   }
   world->core.m_GameTick = header.game_tick;
+  world->physics_particle_event_count = 0;
+  world->physics_damage_event_count = 0;
+  world->physics_sound_event_count = 0;
+  world->render_physics_effects = false;
+  world->core.user_data = NULL;
+  world->core.particle = NULL;
+  world->core.damage_indicator = NULL;
+  world->core.sound = NULL;
   return true;
 }
 
@@ -837,9 +1010,9 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out);
 static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *value);
 
 static const ft_exporter_desc ddnet_exporter = {.id = "demo",
-                                                 .display_name = "DDNet Demo",
-                                                 .file_extension = "demo",
-                                                 .filter_name = "DDNet Demo"};
+                                                .display_name = "DDNet Demo",
+                                                .file_extension = "demo",
+                                                .filter_name = "DDNet Demo"};
 
 static uint32_t ddnet_exporter_count(ft_game *game) {
   (void)game;
@@ -869,6 +1042,7 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
                                    .render_cursor_follow = true,
                                    .center_dot = false,
                                    .cursor_scale = 1.0f};
+  game->auto_finish_events = true;
 
   ft_engine_state state;
   memset(&state, 0, sizeof(state));
@@ -882,7 +1056,9 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
 static void ddnet_destroy(ft_game *game) {
   if (!game) return;
   dd_skin_browser_cleanup(game);
-  for (int i = 0; i < game->particle_count; ++i) dd_particles_cleanup(&game->particles[i]);
+  dd_export_window_cleanup(game);
+  for (int i = 0; i < game->particle_count; ++i)
+    dd_particles_cleanup(&game->particles[i]);
   free(game->particles);
   free(game);
 }
@@ -912,11 +1088,17 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
   case FT_UI_MAIN_MENU:
     if (igBeginMenu("DDNet", true)) {
       igMenuItem_BoolPtr("Skin Browser", NULL, &game->show_skin_browser, true);
+      igMenuItem_BoolPtr("Timeline Events", NULL, &game->show_events, true);
+      if (igMenuItem_Bool("Export Demo...", NULL, false, game->current_level != NULL)) dd_export_window_open(game);
       igEndMenu();
     }
     break;
   case FT_UI_PANELS:
     if (game->show_skin_browser) dd_skin_browser_render(game, frame);
+    // Finish-event generation follows recording even while its editor is
+    // closed, so let the manager handle this slot every frame.
+    dd_events_render(game, frame);
+    dd_export_window_render(game);
     break;
   case FT_UI_SPLASH: {
     if (!game->maps) {
@@ -928,7 +1110,8 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
     render_online_map_browser(game, game->maps, avail.x, avail.y);
     break;
   }
-  default: break;
+  default:
+    break;
   }
 }
 
@@ -938,7 +1121,8 @@ static void ensure_particle_systems(ft_game *game, int count) {
   dd_particle_system_t *grown = realloc(game->particles, (size_t)count * sizeof(*grown));
   if (!grown) return;
   game->particles = grown;
-  for (int i = game->particle_count; i < count; ++i) dd_particles_init(&game->particles[i]);
+  for (int i = game->particle_count; i < count; ++i)
+    dd_particles_init(&game->particles[i]);
   game->particle_count = count;
 }
 
@@ -1031,6 +1215,9 @@ static const ft_game_module module = {
     .setting_get = ddnet_setting_get,
     .setting_set = ddnet_setting_set,
 
+    .project_save = dd_export_project_save,
+    .project_load = dd_export_project_load,
+
     .input_get_float = NULL,
     .input_set_float = NULL,
     .linked_actions = linked_actions,
@@ -1059,6 +1246,7 @@ enum ddnet_setting {
   SET_CURSOR_SCALE,
   SET_CURSOR_FOLLOW,
   SET_CENTER_DOT,
+  SET_AUTO_FINISH_EVENTS,
   SET_COUNT
 };
 
@@ -1070,6 +1258,8 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_CURSOR_SCALE] = {"cursor_scale", "Crosshair scale", NULL, "Crosshair", FT_VALUE_FLOAT, 0.1, 2.0},
     [SET_CURSOR_FOLLOW] = {"cursor_follow", "Crosshair in follow camera", NULL, "Crosshair", FT_VALUE_BOOL, 0, 0},
     [SET_CENTER_DOT] = {"center_dot", "Show center dot", "Marks the tee's exact position", "Rendering", FT_VALUE_BOOL, 0, 0},
+    [SET_AUTO_FINISH_EVENTS] = {"auto_finish_events", "Generate finish events while recording", NULL, "Timeline events",
+                                FT_VALUE_BOOL, 0, 0},
 };
 
 static uint32_t ddnet_setting_count(ft_game *game) {
@@ -1085,27 +1275,63 @@ static const ft_setting_desc *ddnet_setting_desc(ft_game *game, uint32_t index) 
 static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
   const dd_settings_t *s = &game->settings;
   switch (index) {
-  case SET_RENDER_PLAYERS: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_players}; return true;
-  case SET_RENDER_WEAPONS: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_weapons}; return true;
-  case SET_RENDER_PARTICLES: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_particles}; return true;
-  case SET_RENDER_PICKUPS: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_pickups}; return true;
-  case SET_CURSOR_SCALE: *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = s->cursor_scale}; return true;
-  case SET_CURSOR_FOLLOW: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_cursor_follow}; return true;
-  case SET_CENTER_DOT: *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->center_dot}; return true;
-  default: return false;
+  case SET_RENDER_PLAYERS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_players};
+    return true;
+  case SET_RENDER_WEAPONS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_weapons};
+    return true;
+  case SET_RENDER_PARTICLES:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_particles};
+    return true;
+  case SET_RENDER_PICKUPS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_pickups};
+    return true;
+  case SET_CURSOR_SCALE:
+    *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = s->cursor_scale};
+    return true;
+  case SET_CURSOR_FOLLOW:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_cursor_follow};
+    return true;
+  case SET_CENTER_DOT:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->center_dot};
+    return true;
+  case SET_AUTO_FINISH_EVENTS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = game->auto_finish_events};
+    return true;
+  default:
+    return false;
   }
 }
 
 static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *value) {
   dd_settings_t *s = &game->settings;
   switch (index) {
-  case SET_RENDER_PLAYERS: s->render_players = value->as.b; return true;
-  case SET_RENDER_WEAPONS: s->render_weapons = value->as.b; return true;
-  case SET_RENDER_PARTICLES: s->render_particles = value->as.b; return true;
-  case SET_RENDER_PICKUPS: s->render_pickups = value->as.b; return true;
-  case SET_CURSOR_SCALE: s->cursor_scale = (float)value->as.f; return true;
-  case SET_CURSOR_FOLLOW: s->render_cursor_follow = value->as.b; return true;
-  case SET_CENTER_DOT: s->center_dot = value->as.b; return true;
-  default: return false;
+  case SET_RENDER_PLAYERS:
+    s->render_players = value->as.b;
+    return true;
+  case SET_RENDER_WEAPONS:
+    s->render_weapons = value->as.b;
+    return true;
+  case SET_RENDER_PARTICLES:
+    s->render_particles = value->as.b;
+    return true;
+  case SET_RENDER_PICKUPS:
+    s->render_pickups = value->as.b;
+    return true;
+  case SET_CURSOR_SCALE:
+    s->cursor_scale = (float)value->as.f;
+    return true;
+  case SET_CURSOR_FOLLOW:
+    s->render_cursor_follow = value->as.b;
+    return true;
+  case SET_CENTER_DOT:
+    s->center_dot = value->as.b;
+    return true;
+  case SET_AUTO_FINISH_EVENTS:
+    game->auto_finish_events = value->as.b;
+    return true;
+  default:
+    return false;
   }
 }

@@ -64,6 +64,8 @@ add_library(ddnet_game MODULE
     dd_maps.c
     dd_imgui.c
     dd_skin_browser.c
+    dd_events.c
+    dd_export.c
     dd_demo.c
 )
 

@@ -19,11 +19,13 @@
 #include <string.h>
 #include <system/fs.h>
 #include <user_interface/timeline/timeline_model.h>
+#include <user_interface/timeline_events.h>
 #include <user_interface/user_interface.h>
 
 extern bool g_is_headless;
 
 static gfx_handler_t *g_engine = NULL;
+static bool g_presentation_effects = true;
 static const char *LOG_SOURCE = "GameAPI";
 
 // Handles handed across the ABI are the engine's own resource types. They stay
@@ -40,11 +42,17 @@ static bool have_graphics(void) { return g_engine && !g_is_headless; }
 static void api_log(ft_log_level level, const char *category, const char *message) {
   const char *cat = category ? category : "Game";
   switch (level) {
-  case FT_LOG_ERROR: log_error(cat, "%s", message); break;
-  case FT_LOG_WARN: log_warn(cat, "%s", message); break;
+  case FT_LOG_ERROR:
+    log_error(cat, "%s", message);
+    break;
+  case FT_LOG_WARN:
+    log_warn(cat, "%s", message);
+    break;
   case FT_LOG_TRACE:
   case FT_LOG_INFO:
-  default: log_info(cat, "%s", message); break;
+  default:
+    log_info(cat, "%s", message);
+    break;
   }
 }
 
@@ -120,9 +128,11 @@ static size_t api_resolve_cache_path(const char *relative, char *out, size_t out
 
 static VkFormat abi_texture_format(ft_texture_format format) {
   switch (format) {
-  case FT_TEXTURE_RG8: return VK_FORMAT_R8G8_UNORM;
+  case FT_TEXTURE_RG8:
+    return VK_FORMAT_R8G8_UNORM;
   case FT_TEXTURE_RGBA8:
-  default: return VK_FORMAT_R8G8B8A8_UNORM;
+  default:
+    return VK_FORMAT_R8G8B8A8_UNORM;
   }
 }
 
@@ -659,7 +669,8 @@ static bool api_timeline_world_info(uint32_t world_index, ft_timeline_world_info
   *out = (ft_timeline_world_info){.struct_size = sizeof(*out),
                                   .world_index = (int32_t)world_index,
                                   .start_offset = timeline->groups[world_index]->start_offset,
-                                  .player_count = (uint32_t)model_group_track_count(timeline, (int)world_index)};
+                                  .player_count = (uint32_t)model_group_track_count(timeline, (int)world_index),
+                                  .name = timeline->groups[world_index]->name};
   return true;
 }
 
@@ -670,7 +681,9 @@ static bool api_timeline_world_pair(uint32_t world_index, int32_t global_tick, c
   if (!g_engine) return false;
   timeline_state_t *timeline = &g_engine->user_interface.timeline;
   if (world_index >= (uint32_t)timeline->group_count) return false;
+  const bool previous_effects = engine_api_set_presentation_effects(false);
   model_group_world_pair(timeline, (int)world_index, global_tick, out_previous, out_current);
+  engine_api_set_presentation_effects(previous_effects);
   return out_current && *out_current;
 }
 
@@ -678,6 +691,67 @@ static int32_t api_timeline_player_track(uint32_t world_index, uint32_t local_pl
   if (!g_engine || world_index >= (uint32_t)g_engine->user_interface.timeline.group_count) return -1;
   return model_group_track_index(&g_engine->user_interface.timeline, (int)world_index, (int)local_player);
 }
+
+static uint32_t api_timeline_event_count(void) {
+  return g_engine ? (uint32_t)g_engine->user_interface.timeline.event_count : 0;
+}
+
+static bool api_timeline_event_get(uint32_t index, ft_timeline_event *out) {
+  if (!g_engine || !out) return false;
+  const timeline_state_t *timeline = &g_engine->user_interface.timeline;
+  if (index >= (uint32_t)timeline->event_count) return false;
+  timeline_event_to_abi(&timeline->events[index], out);
+  return true;
+}
+
+static bool api_timeline_event_add(const ft_timeline_event *event) {
+  if (!g_engine || !event) return false;
+  timeline_state_t *timeline = &g_engine->user_interface.timeline;
+  timeline_event_t stored;
+  if (!timeline_event_from_abi(&stored, event, timeline->active_group_index) || stored.group_index < 0 ||
+      stored.group_index >= timeline->group_count)
+    return false;
+  const int before = timeline->event_count;
+  timeline_events_add(timeline, stored);
+  if (timeline->event_count == before) return false;
+  api_mark_dirty();
+  return true;
+}
+
+static bool api_timeline_event_update(uint32_t index, const ft_timeline_event *event) {
+  if (!g_engine || !event) return false;
+  timeline_state_t *timeline = &g_engine->user_interface.timeline;
+  if (index >= (uint32_t)timeline->event_count) return false;
+  timeline_event_t stored;
+  if (!timeline_event_from_abi(&stored, event, timeline->active_group_index) || stored.group_index < 0 ||
+      stored.group_index >= timeline->group_count)
+    return false;
+  timeline->events[index] = stored;
+  timeline_events_sort(timeline);
+  api_mark_dirty();
+  return true;
+}
+
+static bool api_timeline_event_remove(uint32_t index) {
+  if (!g_engine || index >= (uint32_t)g_engine->user_interface.timeline.event_count) return false;
+  timeline_events_remove(&g_engine->user_interface.timeline, (int)index);
+  api_mark_dirty();
+  return true;
+}
+
+static int32_t api_timeline_active_world(void) {
+  return g_engine ? g_engine->user_interface.timeline.active_group_index : -1;
+}
+
+static bool api_timeline_range(int32_t *out_start_tick, int32_t *out_end_tick) {
+  if (!g_engine || !out_start_tick || !out_end_tick) return false;
+  timeline_state_t *timeline = &g_engine->user_interface.timeline;
+  *out_start_tick = model_get_min_global_tick(timeline);
+  *out_end_tick = model_get_max_timeline_tick(timeline);
+  return true;
+}
+
+static bool api_presentation_effects_enabled(void) { return g_presentation_effects; }
 
 // --- assembly ----------------------------------------------------------------
 
@@ -740,8 +814,22 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .set_texture3 = api_set_texture3,
       .draw_triangle3_textured = api_draw_triangle3_textured,
       .draw_box3 = api_draw_box3,
+      .timeline_event_count = api_timeline_event_count,
+      .timeline_event_get = api_timeline_event_get,
+      .timeline_event_add = api_timeline_event_add,
+      .timeline_event_update = api_timeline_event_update,
+      .timeline_event_remove = api_timeline_event_remove,
+      .timeline_active_world = api_timeline_active_world,
+      .timeline_range = api_timeline_range,
+      .presentation_effects_enabled = api_presentation_effects_enabled,
   };
   return &api;
+}
+
+bool engine_api_set_presentation_effects(bool enabled) {
+  const bool previous = g_presentation_effects;
+  g_presentation_effects = enabled;
+  return previous;
 }
 
 void engine_api_set_world_extent(gfx_handler_t *handler, float width, float height) {

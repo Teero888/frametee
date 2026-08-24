@@ -16,18 +16,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-enum { MAX_HAMMERHITS_PER_TICK = 128, MAX_DAMAGE_INDICATORS_PER_TICK = 128 };
-
-typedef struct dd_demo_events_t {
-  mvec2 hammerhits[MAX_HAMMERHITS_PER_TICK];
-  int num_hammerhits;
-  mvec2 damage_indicator_positions[MAX_DAMAGE_INDICATORS_PER_TICK];
-  float damage_indicator_angles[MAX_DAMAGE_INDICATORS_PER_TICK];
-  int num_damage_indicators;
-} dd_demo_events_t;
-
 static float demo_clampf(float value, float minimum, float maximum) {
-  return value < minimum ? minimum : value > maximum ? maximum : value;
+  return value < minimum ? minimum : value > maximum ? maximum
+                                                     : value;
 }
 
 static uint32_t rgb_to_ddnet_color(ft_color color) {
@@ -220,8 +211,9 @@ static int remap_client_id(const int *client_ids, int client_count, int local_id
 }
 
 static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, const int *client_ids, int client_count,
-                       SWorldCore *prev, SWorldCore *cur, dd_demo_events_t *events, bool include_static, int demo_tick, int tick_delta,
-                       int *next_item_id) {
+                       const int *client_options, SWorldCore *prev, const ft_world *current_world, bool include_static, int demo_tick,
+                       int tick_delta, int *next_item_id) {
+  SWorldCore *cur = (SWorldCore *)&current_world->core;
   int first_exported_local = -1;
   for (int i = 0; i < client_count; ++i) {
     if (client_ids[i] >= 0) {
@@ -261,20 +253,20 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
   }
   dd_netobj_game_info_ex *game_info_ex = include_static ? demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEINFOEX, 0, sizeof(dd_netobj_game_info_ex)) : NULL;
   if (game_info_ex) {
-  game_info_ex->m_Version = 10;
-  game_info_ex->m_Flags = DD_GAMEINFOFLAG_TIMESCORE | DD_GAMEINFOFLAG_GAMETYPE_RACE | DD_GAMEINFOFLAG_GAMETYPE_DDRACE |
-                          DD_GAMEINFOFLAG_GAMETYPE_DDNET | DD_GAMEINFOFLAG_UNLIMITED_AMMO | DD_GAMEINFOFLAG_RACE_RECORD_MESSAGE |
-                          DD_GAMEINFOFLAG_ALLOW_EYE_WHEEL | DD_GAMEINFOFLAG_ALLOW_HOOK_COLL | DD_GAMEINFOFLAG_ALLOW_ZOOM |
-                          DD_GAMEINFOFLAG_BUG_DDRACE_GHOST | DD_GAMEINFOFLAG_BUG_DDRACE_INPUT | DD_GAMEINFOFLAG_PREDICT_DDRACE |
-                          DD_GAMEINFOFLAG_PREDICT_DDRACE_TILES | DD_GAMEINFOFLAG_ENTITIES_DDNET | DD_GAMEINFOFLAG_ENTITIES_DDRACE |
-                          DD_GAMEINFOFLAG_ENTITIES_RACE | DD_GAMEINFOFLAG_RACE;
-  game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_DDRACE;
-  if (cur->m_pConfig->m_SvHealthAndAmmo) {
-    game_info_ex->m_Flags &=
-        ~(DD_GAMEINFOFLAG_UNLIMITED_AMMO | DD_GAMEINFOFLAG_GAMETYPE_DDNET | DD_GAMEINFOFLAG_GAMETYPE_DDRACE | DD_GAMEINFOFLAG_PREDICT_DDRACE);
-    game_info_ex->m_Flags |= DD_GAMEINFOFLAG_GAMETYPE_VANILLA | DD_GAMEINFOFLAG_PREDICT_VANILLA;
-    game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_HEALTH_ARMOR | DD_GAMEINFOFLAG2_HUD_AMMO;
-  }
+    game_info_ex->m_Version = 10;
+    game_info_ex->m_Flags = DD_GAMEINFOFLAG_TIMESCORE | DD_GAMEINFOFLAG_GAMETYPE_RACE | DD_GAMEINFOFLAG_GAMETYPE_DDRACE |
+                            DD_GAMEINFOFLAG_GAMETYPE_DDNET | DD_GAMEINFOFLAG_UNLIMITED_AMMO | DD_GAMEINFOFLAG_RACE_RECORD_MESSAGE |
+                            DD_GAMEINFOFLAG_ALLOW_EYE_WHEEL | DD_GAMEINFOFLAG_ALLOW_HOOK_COLL | DD_GAMEINFOFLAG_ALLOW_ZOOM |
+                            DD_GAMEINFOFLAG_BUG_DDRACE_GHOST | DD_GAMEINFOFLAG_BUG_DDRACE_INPUT | DD_GAMEINFOFLAG_PREDICT_DDRACE |
+                            DD_GAMEINFOFLAG_PREDICT_DDRACE_TILES | DD_GAMEINFOFLAG_ENTITIES_DDNET | DD_GAMEINFOFLAG_ENTITIES_DDRACE |
+                            DD_GAMEINFOFLAG_ENTITIES_RACE | DD_GAMEINFOFLAG_RACE;
+    game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_DDRACE;
+    if (cur->m_pConfig->m_SvHealthAndAmmo) {
+      game_info_ex->m_Flags &=
+          ~(DD_GAMEINFOFLAG_UNLIMITED_AMMO | DD_GAMEINFOFLAG_GAMETYPE_DDNET | DD_GAMEINFOFLAG_GAMETYPE_DDRACE | DD_GAMEINFOFLAG_PREDICT_DDRACE);
+      game_info_ex->m_Flags |= DD_GAMEINFOFLAG_GAMETYPE_VANILLA | DD_GAMEINFOFLAG_PREDICT_VANILLA;
+      game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_HEALTH_ARMOR | DD_GAMEINFOFLAG2_HUD_AMMO;
+    }
   }
   if (include_static && game_info_ex && cur->m_pConfig->m_SvFastcap) {
     game_info_ex->m_Flags |= DD_GAMEINFOFLAG_GAMETYPE_FASTCAP | DD_GAMEINFOFLAG_FLAG_STARTS_RACE;
@@ -319,7 +311,7 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     ci->m_ColorFeet = setup.use_custom_color ? rgb_to_ddnet_color(setup.secondary_color) : 0;
 
     dd_netobj_player_info *pi = demo_sb_add_item(sb, DD_NETOBJTYPE_PLAYERINFO, client_id, sizeof(dd_netobj_player_info));
-    pi->m_Latency = 0;
+    pi->m_Latency = client_options ? client_options[client_id] : 0;
     pi->m_Score = -9999;
     pi->m_Local = 0;
     pi->m_ClientId = client_id;
@@ -402,26 +394,6 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     dc->m_TargetX = c_cur->m_Input.m_TargetX;
     dc->m_TargetY = c_cur->m_Input.m_TargetY;
 
-    if (c_cur->m_RespawnDelay > c_prev->m_RespawnDelay) {
-      dd_netevent_sound_world *nss;
-      nss = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-      nss->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
-      nss->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
-      nss->m_SoundId = DD_SOUND_PLAYER_SPAWN;
-      nss = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-      nss->common.m_X = vgetx(c_prev->m_Pos) - MAP_EXPAND32;
-      nss->common.m_Y = vgety(c_prev->m_Pos) - MAP_EXPAND32;
-      nss->m_SoundId = DD_SOUND_PLAYER_DIE;
-
-      dd_netevent_spawn *ns = demo_sb_add_item(sb, DD_NETEVENTTYPE_SPAWN, (*next_item_id)++, sizeof(dd_netevent_spawn));
-      ns->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
-      ns->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
-
-      dd_netevent_death *nd = demo_sb_add_item(sb, DD_NETEVENTTYPE_DEATH, (*next_item_id)++, sizeof(dd_netevent_death));
-      nd->common.m_X = vgetx(c_prev->m_Pos) - MAP_EXPAND32;
-      nd->common.m_Y = vgety(c_prev->m_Pos) - MAP_EXPAND32;
-      nd->m_ClientId = client_id;
-    }
     if (c_cur->m_StartTick != -1 && c_prev->m_FinishTick == -1 && c_cur->m_FinishTick != -1) {
       dd_netevent_finish *nf = demo_sb_add_item(sb, DD_NETEVENTTYPE_FINISH, (*next_item_id)++, sizeof(dd_netevent_finish));
       if (nf) {
@@ -429,40 +401,72 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
         nf->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
       }
     }
-    if (c_prev->m_HookState != HOOK_GRABBED && c_cur->m_HookState == HOOK_GRABBED) {
-      dd_netevent_sound_world *nhs = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-      nhs->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
-      nhs->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
-      if (c_prev->m_HookedPlayer == -1 && c_cur->m_HookedPlayer != -1) nhs->m_SoundId = DD_SOUND_HOOK_ATTACH_PLAYER;
-      else nhs->m_SoundId = DD_SOUND_HOOK_ATTACH_GROUND;
-    }
-    if (c_cur->m_Jumped && c_cur->m_Grounded) {
-      dd_netevent_sound_world *njs = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-      njs->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
-      njs->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
-      njs->m_SoundId = DD_SOUND_PLAYER_JUMP;
-    }
-    if (c_cur->m_ReloadTimer > c_prev->m_ReloadTimer) {
-      if (c_cur->m_ActiveWeapon <= 1) {
-        dd_netevent_sound_world *nhs = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-        nhs->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
-        nhs->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
-        nhs->m_SoundId = c_cur->m_ActiveWeapon == WEAPON_HAMMER ? DD_SOUND_HAMMER_FIRE : DD_SOUND_GUN_FIRE;
-      }
-    }
   }
 
-  for (int i = 0; i < events->num_hammerhits; ++i) {
-    dd_netevent_hammer_hit *nhh = demo_sb_add_item(sb, DD_NETEVENTTYPE_HAMMERHIT, (*next_item_id)++, sizeof(dd_netevent_hammer_hit));
-    nhh->common.m_X = vgetx(events->hammerhits[i]) - MAP_EXPAND32;
-    nhh->common.m_Y = vgety(events->hammerhits[i]) - MAP_EXPAND32;
+  // Snapshot events come from the callbacks raised by the physics step. They
+  // must not be reconstructed from the surviving entities below: an explosive
+  // projectile can be spawned, hit a wall and be removed in the same tick.
+  for (int i = 0; i < current_world->physics_particle_event_count; ++i) {
+    const dd_physics_particle_event_t *event = &current_world->physics_particle_events[i];
+    const int client_id = remap_client_id(client_ids, client_count, event->client_id);
+    if (event->client_id >= 0 && client_id < 0) continue;
+    const int x = (int)event->x - MAP_EXPAND32;
+    const int y = (int)event->y - MAP_EXPAND32;
+    switch (event->type) {
+    case PARTICLE_TYPE_PLAYER_SPAWN: {
+      dd_netevent_spawn *spawn = demo_sb_add_item(sb, DD_NETEVENTTYPE_SPAWN, (*next_item_id)++, sizeof(*spawn));
+      spawn->common.m_X = x;
+      spawn->common.m_Y = y;
+      break;
+    }
+    case PARTICLE_TYPE_PLAYER_DEATH: {
+      dd_netevent_death *death = demo_sb_add_item(sb, DD_NETEVENTTYPE_DEATH, (*next_item_id)++, sizeof(*death));
+      death->common.m_X = x;
+      death->common.m_Y = y;
+      death->m_ClientId = client_id;
+      break;
+    }
+    case PARTICLE_TYPE_HAMMER_HIT: {
+      dd_netevent_hammer_hit *hit = demo_sb_add_item(sb, DD_NETEVENTTYPE_HAMMERHIT, (*next_item_id)++, sizeof(*hit));
+      hit->common.m_X = x;
+      hit->common.m_Y = y;
+      break;
+    }
+    case PARTICLE_TYPE_EXPLOSION: {
+      dd_netevent_explosion *explosion = demo_sb_add_item(sb, DD_NETEVENTTYPE_EXPLOSION, (*next_item_id)++, sizeof(*explosion));
+      explosion->common.m_X = x;
+      explosion->common.m_Y = y;
+      break;
+    }
+    case PARTICLE_TYPE_AIR_JUMP:
+      break;
+    default:
+      break;
+    }
   }
-  for (int i = 0; i < events->num_damage_indicators; ++i) {
-    dd_netevent_damage_ind *damage =
-        demo_sb_add_item(sb, DD_NETEVENTTYPE_DAMAGEIND, (*next_item_id)++, sizeof(dd_netevent_damage_ind));
-    damage->common.m_X = vgetx(events->damage_indicator_positions[i]) - MAP_EXPAND32;
-    damage->common.m_Y = vgety(events->damage_indicator_positions[i]) - MAP_EXPAND32;
-    damage->m_Angle = (int)(events->damage_indicator_angles[i] * 256.0f);
+  for (int i = 0; i < current_world->physics_sound_event_count; ++i) {
+    const dd_physics_sound_event_t *event = &current_world->physics_sound_events[i];
+    if (event->client_id >= 0 && remap_client_id(client_ids, client_count, event->client_id) < 0) continue;
+    dd_netevent_sound_world *sound =
+        demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(*sound));
+    sound->common.m_X = (int)event->x - MAP_EXPAND32;
+    sound->common.m_Y = (int)event->y - MAP_EXPAND32;
+    sound->m_SoundId = event->sound_id;
+  }
+  for (int i = 0; i < current_world->physics_damage_event_count; ++i) {
+    const dd_physics_damage_event_t *event = &current_world->physics_damage_events[i];
+    if (event->client_id >= 0 && remap_client_id(client_ids, client_count, event->client_id) < 0) continue;
+    const float center = 3.0f * (float)M_PI / 2.0f + event->angle;
+    const float start = center - (float)M_PI / 3.0f;
+    const float end = center + (float)M_PI / 3.0f;
+    for (int indicator = 0; indicator < event->amount; ++indicator) {
+      const float angle = start + (end - start) * (float)(indicator + 1) / (float)(event->amount + 1);
+      dd_netevent_damage_ind *damage =
+          demo_sb_add_item(sb, DD_NETEVENTTYPE_DAMAGEIND, (*next_item_id)++, sizeof(*damage));
+      damage->common.m_X = (int)event->x - MAP_EXPAND32;
+      damage->common.m_Y = (int)event->y - MAP_EXPAND32;
+      damage->m_Angle = (int)(angle * 256.0f);
+    }
   }
 
   // do entities
@@ -498,36 +502,6 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       p->m_SwitchNumber = proj->m_Base.m_Number;
       p->m_TuneZone = 0;
     }
-
-    const mvec2 pos = prj_get_pos(proj, (cur->m_GameTick - proj->m_StartTick) / (float)GAME_TICK_SPEED);
-    const mvec2 next_pos = prj_get_pos(proj, (cur->m_GameTick - proj->m_StartTick + 1) / (float)GAME_TICK_SPEED);
-    if (proj->m_Owner >= 0 && proj->m_Base.m_Spawned) {
-      dd_netevent_sound_world *nf = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-      nf->common.m_X = vgetx(pos) - MAP_EXPAND32;
-      nf->common.m_Y = vgety(pos) - MAP_EXPAND32;
-      nf->m_SoundId = DD_SOUND_GRENADE_FIRE;
-    }
-    if (proj->m_Explosive) {
-      mvec2 out, _out;
-      if (intersect_line(proj->m_Base.m_pCollision, pos, next_pos, &out, &_out)) {
-        dd_netevent_explosion *ne = demo_sb_add_item(sb, DD_NETEVENTTYPE_EXPLOSION, (*next_item_id)++, sizeof(dd_netevent_explosion));
-        ne->common.m_X = vgetx(out) - MAP_EXPAND32;
-        ne->common.m_Y = vgety(out) - MAP_EXPAND32;
-        dd_netevent_sound_world *nes = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-        nes->common.m_X = vgetx(out) - MAP_EXPAND32;
-        nes->common.m_Y = vgety(out) - MAP_EXPAND32;
-        nes->m_SoundId = DD_SOUND_GRENADE_EXPLODE;
-      }
-      if (proj->m_LifeSpan <= 0) {
-        dd_netevent_explosion *ne = demo_sb_add_item(sb, DD_NETEVENTTYPE_EXPLOSION, (*next_item_id)++, sizeof(dd_netevent_explosion));
-        ne->common.m_X = vgetx(pos) - MAP_EXPAND32;
-        ne->common.m_Y = vgety(pos) - MAP_EXPAND32;
-        dd_netevent_sound_world *nes = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-        nes->common.m_X = vgetx(pos) - MAP_EXPAND32;
-        nes->common.m_Y = vgety(pos) - MAP_EXPAND32;
-        nes->m_SoundId = DD_SOUND_GRENADE_EXPLODE;
-      }
-    }
   }
 
   for (SLaser *laser = (SLaser *)cur->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; laser; laser = (SLaser *)laser->m_Base.m_pNextTypeEntity) {
@@ -547,25 +521,8 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       l->m_SwitchNumber = laser->m_Base.m_Number;
       l->m_Flags = 0;
     }
-    // sounds
-    if (laser->m_Owner >= 0 && laser->m_Base.m_Spawned) {
-      dd_netevent_sound_world *nlss = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-      if (nlss) {
-        nlss->common.m_X = vgetx(laser->m_From) - MAP_EXPAND32;
-        nlss->common.m_Y = vgety(laser->m_From) - MAP_EXPAND32;
-        nlss->m_SoundId = laser->m_Type == DD_WEAPON_LASER ? DD_SOUND_LASER_FIRE : DD_SOUND_SHOTGUN_FIRE;
-      }
-    } else if (laser->m_EvalTick >= cur->m_GameTick) {
-      dd_netevent_sound_world *nlbs = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(dd_netevent_sound_world));
-      if (nlbs) {
-        nlbs->common.m_X = vgetx(laser->m_From) - MAP_EXPAND32;
-        nlbs->common.m_Y = vgety(laser->m_From) - MAP_EXPAND32;
-        nlbs->m_SoundId = DD_SOUND_LASER_BOUNCE;
-      }
-    }
   }
 }
-
 
 static bool request_includes_track(const ft_export_request *request, int32_t track) {
   if (!request->players || request->player_count == 0) return true;
@@ -574,14 +531,79 @@ static bool request_includes_track(const ft_export_request *request, int32_t tra
   return false;
 }
 
+static int request_player_option(const ft_export_request *request, const int32_t *player_options, int32_t track) {
+  if (!request->players || !player_options) return 0;
+  for (uint32_t i = 0; i < request->player_count; ++i)
+    if (request->players[i] == track) return player_options[i];
+  return 0;
+}
+
+static bool world_has_exported_client(const int *client_ids, int client_count) {
+  for (int i = 0; i < client_count; ++i)
+    if (client_ids[i] >= 0) return true;
+  return false;
+}
+
+static bool write_timeline_event(dd_demo_writer *writer, const dd_event_payload_t *event, const int *client_ids, int client_count) {
+  const int client_id = remap_client_id(client_ids, client_count, event->client_id);
+  const int killer = remap_client_id(client_ids, client_count, event->killer);
+  const int victim = remap_client_id(client_ids, client_count, event->victim);
+  switch ((dd_event_type_t)event->type) {
+  case DD_EVENT_CHAT:
+    if (event->client_id >= 0 && client_id < 0) return false;
+    demo_w_write_msg_sv_chat(writer, event->team, client_id, event->message);
+    break;
+  case DD_EVENT_BROADCAST:
+    demo_w_write_msg_sv_broadcast(writer, event->message);
+    break;
+  case DD_EVENT_KILLMSG:
+    if ((event->killer >= 0 && killer < 0) || (event->victim >= 0 && victim < 0)) return false;
+    demo_w_write_msg_sv_killmsg(writer, killer, victim, event->weapon, event->mode_special);
+    break;
+  case DD_EVENT_SOUND_GLOBAL:
+    demo_w_write_msg_sv_sound_global(writer, event->sound_id);
+    break;
+  case DD_EVENT_EMOTICON:
+    if (event->client_id >= 0 && client_id < 0) return false;
+    demo_w_write_msg_sv_emoticon(writer, client_id, event->emoticon);
+    break;
+  case DD_EVENT_VOTE_SET:
+    demo_w_write_msg_sv_vote_set(writer, event->vote_timeout, event->message, event->reason);
+    break;
+  case DD_EVENT_VOTE_STATUS:
+    demo_w_write_msg_sv_vote_status(writer, event->vote_yes, event->vote_no, event->vote_pass, event->vote_total);
+    break;
+  case DD_EVENT_DDRACE_TIME: {
+    demo_w_write_msg_sv_ddrace_time_legacy(writer, event->time, event->check, event->finish);
+    int race_client = -1;
+    for (int i = 0; i < client_count; ++i) {
+      if (client_ids[i] >= 0) {
+        race_client = client_ids[i];
+        break;
+      }
+    }
+    if (race_client >= 0) demo_w_write_msg_sv_racefinish(writer, race_client, event->time * 10, 0, 1, 1);
+    break;
+  }
+  case DD_EVENT_RECORD:
+    demo_w_write_msg_sv_record_legacy(writer, event->server_time_best, event->player_time_best);
+    demo_w_write_msg_sv_record(writer, event->server_time_best, event->player_time_best);
+    break;
+  default:
+    return false;
+  }
+  return true;
+}
+
 static void free_client_maps(int **maps, int *counts, uint32_t world_count) {
   if (maps)
-    for (uint32_t i = 0; i < world_count; ++i) free(maps[i]);
+    for (uint32_t i = 0; i < world_count; ++i)
+      free(maps[i]);
   free(maps);
   free(counts);
 }
 
-bool dd_demo_export(ft_game *game, const ft_export_request *request) {
+static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request, const int32_t *player_options) {
   if (!game || !request || !request->path || !game->current_level || !game->engine->timeline_world_count ||
       !game->engine->timeline_world_info || !game->engine->timeline_world_pair || !game->engine->timeline_player_track)
     return false;
@@ -602,6 +624,7 @@ bool dd_demo_export(ft_game *game, const ft_export_request *request) {
 
   int exported_clients = 0;
   int selected_clients = 0;
+  int client_options[64] = {0};
   for (uint32_t world_index = 0; world_index < world_count; ++world_index) {
     worlds[world_index].struct_size = sizeof(worlds[world_index]);
     if (!game->engine->timeline_world_info(world_index, &worlds[world_index])) continue;
@@ -618,7 +641,12 @@ bool dd_demo_export(ft_game *game, const ft_export_request *request) {
       const int32_t track = game->engine->timeline_player_track(world_index, (uint32_t)local);
       const bool selected = track >= 0 && request_includes_track(request, track);
       if (selected) ++selected_clients;
-      client_maps[world_index][local] = selected && exported_clients < 64 ? exported_clients++ : -1;
+      if (selected && exported_clients < 64) {
+        client_options[exported_clients] = request_player_option(request, player_options, track);
+        client_maps[world_index][local] = exported_clients++;
+      } else {
+        client_maps[world_index][local] = -1;
+      }
     }
   }
 
@@ -674,10 +702,7 @@ bool dd_demo_export(ft_game *game, const ft_export_request *request) {
     int next_item_id = 64 + game->current_level->num_pickups;
     bool include_static = true;
     for (uint32_t world_index = 0; world_index < world_count; ++world_index) {
-      bool active = false;
-      for (int local = 0; local < client_counts[world_index]; ++local)
-        if (client_maps[world_index][local] >= 0) active = true;
-      if (!active) continue;
+      if (!world_has_exported_client(client_maps[world_index], client_counts[world_index])) continue;
 
       const ft_world *previous = NULL;
       const ft_world *current = NULL;
@@ -685,10 +710,9 @@ bool dd_demo_export(ft_game *game, const ft_export_request *request) {
         ok = false;
         break;
       }
-      dd_demo_events_t events = {0};
-      snap_world(builder, game, (int)world_index, client_maps[world_index], client_counts[world_index],
-                 (SWorldCore *)&previous->core, (SWorldCore *)&current->core, &events, include_static,
-                 tick - start_tick, worlds[world_index].start_offset - start_tick, &next_item_id);
+      snap_world(builder, game, (int)world_index, client_maps[world_index], client_counts[world_index], client_options,
+                 (SWorldCore *)&previous->core, current, include_static, tick - start_tick,
+                 worlds[world_index].start_offset - start_tick, &next_item_id);
       include_static = false;
     }
     if (!ok) break;
@@ -697,6 +721,24 @@ bool dd_demo_export(ft_game *game, const ft_export_request *request) {
     if (snapshot_size <= 0 || !demo_w_write_snap(writer, tick - start_tick, snapshot, snapshot_size)) {
       ok = false;
       break;
+    }
+
+    // Authored protocol messages are stored by the engine as opaque DDNet
+    // payloads. Translate their local group clocks to the demo's global clock
+    // and write them immediately after the matching snapshot, as DDNet does.
+    if (game->engine->timeline_event_count && game->engine->timeline_event_get) {
+      const uint32_t event_count = game->engine->timeline_event_count();
+      for (uint32_t event_index = 0; event_index < event_count; ++event_index) {
+        ft_timeline_event timeline_event = {.struct_size = sizeof(timeline_event)};
+        dd_event_payload_t payload;
+        if (!game->engine->timeline_event_get(event_index, &timeline_event) || !dd_event_decode(&timeline_event, &payload) ||
+            timeline_event.world_index < 0 || (uint32_t)timeline_event.world_index >= world_count)
+          continue;
+        const int world_index = timeline_event.world_index;
+        if (!world_has_exported_client(client_maps[world_index], client_counts[world_index])) continue;
+        if (timeline_event.tick + worlds[world_index].start_offset != tick) continue;
+        write_timeline_event(writer, &payload, client_maps[world_index], client_counts[world_index]);
+      }
     }
     if (request->progress && ((tick - start_tick) % 50 == 0 || tick == end_tick))
       request->progress(request->progress_user, (float)(tick - start_tick + 1) / (float)tick_span, "Writing DDNet demo");
@@ -710,4 +752,10 @@ bool dd_demo_export(ft_game *game, const ft_export_request *request) {
   free(worlds);
   if (!ok) dd_log(game, FT_LOG_ERROR, "DDNet demo export failed while writing snapshots.");
   return ok;
+}
+
+bool dd_demo_export(ft_game *game, const ft_export_request *request) { return dd_demo_export_impl(game, request, NULL); }
+
+bool dd_demo_export_with_pings(ft_game *game, const ft_export_request *request, const int32_t *player_pings) {
+  return dd_demo_export_impl(game, request, player_pings);
 }

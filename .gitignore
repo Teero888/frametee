@@ -21,5 +21,10 @@ games/tmnf/GameData
 # Untracked project checkouts & scratch files
 scratch/
 ddnet/
+!games/ddnet/
+games/ddnet/*
+!games/ddnet/dd_events.c
+!games/ddnet/dd_export.c
 *.auto
+!tests/ddnet_project_roundtrip.auto
 *.log
