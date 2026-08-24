@@ -410,6 +410,7 @@ foreach(ASSET ${GAME_ASSET_SOURCES})
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ASSET}" "${ASSET_OUTPUT}"
         DEPENDS "${ASSET}"
         COMMENT "Copying game asset ${ASSET_REL}"
+        VERBATIM
     )
 endforeach()
 add_custom_target(copy_game_assets ALL DEPENDS ${GAME_ASSET_OUTPUTS})

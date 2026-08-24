@@ -33,6 +33,15 @@ constexpr float kLabelHeight = 22.f;
 
 ImTextureRef *AsRef(void *thumbnail) { return static_cast<ImTextureRef *>(thumbnail); }
 
+void DrawMissingGameData() {
+  igTextWrapped("TrackMania game data is not installed.");
+  igSpacing();
+  igTextWrapped("Get an official release at:");
+  igTextLinkOpenURL(kOfficialReleaseUrl, kOfficialReleaseUrl);
+  igSpacing();
+  igTextWrapped("Copy its Packs and GameData folders into data/games/tmnf/ beside FrameTee, then reopen FrameTee.");
+}
+
 bool ExtractThumbnail(const std::vector<std::byte> &file, const std::byte **out, std::size_t *size) {
   static constexpr std::string_view kOpen = "<Thumbnail.jpg>";
   static constexpr std::string_view kClose = "</Thumbnail.jpg>";
@@ -388,16 +397,14 @@ void Ui(ft_game *game, const ft_ui_frame *frame) {
   igSpacing();
 
   if (game->packs.empty()) {
-    igTextUnformatted("No installed packs found.", nullptr);
-    igTextUnformatted("Set FRAMETEE_TMNF_PACKS to a TrackMania United Forever Packs directory and reopen.", nullptr);
+    DrawMissingGameData();
     return;
   }
 
   if (!game->scanned) ScanTracks(game);
 
   if (game->campaigns.empty()) {
-    igTextUnformatted("No tracks found.", nullptr);
-    igTextUnformatted("Set FRAMETEE_TMNF_TRACKS to a directory containing .Challenge.Gbx files.", nullptr);
+    DrawMissingGameData();
     return;
   }
 

@@ -15,8 +15,8 @@ todo.txt
 build-pgo
 # Rust example game module build output
 games/*/target/
-games/tmnf/Packs
-games/tmnf/GameData
+data/games/tmnf/Packs
+data/games/tmnf/GameData
 
 # Untracked project checkouts
 *.auto

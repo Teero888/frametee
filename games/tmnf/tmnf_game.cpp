@@ -144,8 +144,9 @@ ft_game *GameCreate(const ft_engine_api *engine) {
   game->headless = !engine || !engine->texture_create;
   game->packs = ResolvePacks(engine);
 
-  if (game->packs.empty()) {
-    game->status = "No TrackMania packs found. Set FRAMETEE_TMNF_PACKS to an installed Packs directory.";
+  if (game->packs.empty() || ResolveTracks(engine).empty()) {
+    game->status = "TrackMania game data is missing. ";
+    game->status += kGameDataInstallHint;
     Log(game, FT_LOG_WARN, "%s", game->status.c_str());
   } else {
     game->status = "Packs: " + game->packs;

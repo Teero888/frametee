@@ -13,6 +13,11 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#else
+#include <unistd.h>
+#endif
 #endif
 
 FILE *fs_open(const char *path, const char *mode) {
@@ -56,6 +61,47 @@ bool fs_get_config_dir(char *out_path, size_t size) {
     }
 #endif
     return false;
+}
+
+bool fs_get_executable_dir(char *out_path, size_t size) {
+    if (!out_path || size == 0) return false;
+    out_path[0] = '\0';
+
+#ifdef _WIN32
+    wchar_t wide_path[4096];
+    const DWORD length = GetModuleFileNameW(NULL, wide_path, (DWORD)(sizeof(wide_path) / sizeof(wide_path[0])));
+    if (length == 0 || length >= sizeof(wide_path) / sizeof(wide_path[0])) return false;
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, wide_path, -1, NULL, 0, NULL, NULL);
+    if (needed <= 0 || (size_t)needed > size) return false;
+    if (WideCharToMultiByte(CP_UTF8, 0, wide_path, -1, out_path, (int)size, NULL, NULL) <= 0) return false;
+#elif defined(__APPLE__)
+    uint32_t path_size = (uint32_t)size;
+    if (_NSGetExecutablePath(out_path, &path_size) != 0) {
+        out_path[0] = '\0';
+        return false;
+    }
+#else
+    const ssize_t length = readlink("/proc/self/exe", out_path, size - 1);
+    if (length <= 0 || (size_t)length >= size - 1) return false;
+    out_path[length] = '\0';
+#endif
+
+    char *separator = strrchr(out_path, '/');
+#ifdef _WIN32
+    char *backslash = strrchr(out_path, '\\');
+    if (!separator || (backslash && backslash > separator)) separator = backslash;
+#endif
+    if (!separator) {
+        out_path[0] = '\0';
+        return false;
+    }
+#ifdef _WIN32
+    if (separator == out_path + 2 && out_path[1] == ':') separator[1] = '\0';
+    else
+#endif
+    if (separator == out_path) separator[1] = '\0';
+    else *separator = '\0';
+    return true;
 }
 
 // Directory scanning structure definition

@@ -5,8 +5,8 @@
 # compiles in seconds, and CI has no game data to run it against anyway. Turn it
 # on with -DFRAMETEE_BUILD_TMNF=ON.
 #
-# The module additionally needs an installed TrackMania Packs directory at
-# runtime; see FRAMETEE_TMNF_PACKS in tmnf_sandbox.cpp.
+# The module additionally needs Packs and GameData under
+# data/games/tmnf beside the executable at runtime.
 #
 # ForeverValidator is a submodule pinned to its own upstream. Nothing here
 # patches it -- how it is built is set from this file, but what it compiles is

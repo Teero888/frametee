@@ -18,7 +18,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -223,19 +222,11 @@ std::vector<std::byte> ReadFileBytes(const char *path) {
 }
 
 std::string ResolveTracks(const ft_engine_api *api) {
-  const auto usable = [](const std::string &directory) {
-    std::error_code error;
-    return !directory.empty() && std::filesystem::is_directory(directory, error);
-  };
-
-  if (const char *env = std::getenv("FRAMETEE_TMNF_TRACKS"); env && usable(env)) return env;
-  if (api && api->resolve_data_path) {
-    char buffer[1024];
-    api->resolve_data_path("Tracks", buffer, sizeof(buffer));
-    if (usable(buffer)) return buffer;
-  }
-  for (const char *candidate : {"games/tmnf/GameData/Tracks", "../games/tmnf/GameData/Tracks"})
-    if (usable(candidate)) return candidate;
+  if (!api || !api->resolve_data_path) return {};
+  char buffer[1024];
+  api->resolve_data_path("GameData/Tracks", buffer, sizeof(buffer));
+  std::error_code error;
+  if (std::filesystem::is_directory(buffer, error)) return buffer;
   return {};
 }
 
@@ -544,7 +535,7 @@ void AppendCollisionFallback(ft_game *game, ft_level *level) {
 ft_level *LevelLoad(ft_game *game, const char *path) {
   if (!game || !path) return nullptr;
   if (game->packs.empty()) {
-    Log(game, FT_LOG_ERROR, "Cannot open a track without the installed game packs.");
+    Log(game, FT_LOG_ERROR, "Cannot open a track without the installed game data. %s", kGameDataInstallHint);
     return nullptr;
   }
 
@@ -637,10 +628,9 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
       // is one flat colour.
       Log(game, FT_LOG_WARN,
           "Only %zu of %zu track materials found a texture. The packs hold the descriptors; the images themselves "
-          "live in the installed game's GameData, beside its Packs. Point FRAMETEE_TMNF_PACKS at a full TrackMania United Forever "
-          "installation, or set FRAMETEE_TMNF_GAMEDATA to its GameData directory. Until then the track is drawn in "
-          "flat surface colours.",
-          textured, named);
+          "must be in data/games/tmnf/GameData beside data/games/tmnf/Packs. Until then the track is drawn in flat "
+          "surface colours. %s",
+          textured, named, kGameDataInstallHint);
     } else {
       Log(game, FT_LOG_INFO, "Textured %zu of %zu track materials.", textured, scene.materials.size());
     }
