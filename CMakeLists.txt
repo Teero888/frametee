@@ -228,18 +228,6 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<AND:$<BOOL:${ENABLE_SANITIZERS}>,$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-fsanitize=address,undefined>
 )
 
-# Aggressive host optimizations. Game modules configure their own optimization
-# and link options independently.
-if(ENABLE_AGGRESSIVE_OPTIM AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT ENABLE_SANITIZERS)
-    target_compile_options(${PROJECT_NAME} PRIVATE
-        $<$<CONFIG:Release>:-flto -march=native -mtune=native>
-    )
-    target_link_options(${PROJECT_NAME} PRIVATE
-        $<$<CONFIG:Release>:-flto -march=native -mtune=native>
-    )
-endif()
-
-frametee_enable_pgo(${PROJECT_NAME})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/src)
 # The game module ABI. Kept in its own root so a game module can consume it

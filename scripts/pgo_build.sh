@@ -4,31 +4,37 @@
 #   ./scripts/pgo_build.sh                        # build into ./build-pgo
 #   ./scripts/pgo_build.sh -s path/to/other.ftee  # different training workload
 #   ./scripts/pgo_build.sh -b /tmp/pgo -v         # different build dir, verbose
+#   ./scripts/pgo_build.sh -p /games/TMUF/Packs   # explicit installed packs
 
 set -euo pipefail
 
-NAME=bench
+NAME=***********
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT/build-pgo"
-TRAIN_SCRIPT="$ROOT/plugins/$NAME/scripts/A02.ftee"
+TRAIN_SCRIPT="$ROOT/plugins/$NAME/scripts/A02-bench.ftee"
+PACKS_DIR="${FRAMETEE_TMNF_PACKS:-$ROOT/games/tmnf/Packs}"
+TRAIN_CONFIG_TEMPLATE="$ROOT/scripts/pgo_training_config.toml"
 VERBOSE=false
 
 usage() {
   cat <<'EOF'
-usage: pgo_build.sh [-b BUILD_DIR] [-s TRAINING_SCRIPT] [-v]
+usage: pgo_build.sh [-b BUILD_DIR] [-s TRAINING_SCRIPT] [-p PACKS_DIR] [-v]
 
   -b  build directory (default: <repo>/build-pgo)
   -s  .ftee script used as the training workload
-      (default: plugins/$NAME/scripts/A02.ftee)
+      (default: plugins/$NAME/scripts/A02-bench.ftee)
+  -p  installed TrackMania Packs directory
+      (default: $FRAMETEE_TMNF_PACKS, then <repo>/games/tmnf/Packs)
   -v  show build and run output
 EOF
 }
 
-while getopts ":b:s:vh" opt; do
+while getopts ":b:s:p:vh" opt; do
   case $opt in
     b) BUILD_DIR="$OPTARG" ;;
     s) TRAIN_SCRIPT="$OPTARG" ;;
+    p) PACKS_DIR="$OPTARG" ;;
     v) VERBOSE=true ;;
     h) usage; exit 0 ;;
     *) usage >&2; exit 1 ;;
@@ -52,28 +58,40 @@ if [ ! -f "$TRAIN_SCRIPT" ]; then
   echo "ERROR: training script not found: $TRAIN_SCRIPT" >&2
   exit 1
 fi
+if [ ! -f "$TRAIN_CONFIG_TEMPLATE" ]; then
+  echo "ERROR: training config not found: $TRAIN_CONFIG_TEMPLATE" >&2
+  exit 1
+fi
+if [ ! -f "$PACKS_DIR/packlist.dat" ]; then
+  echo "ERROR: TrackMania packs not found: $PACKS_DIR" >&2
+  echo "       Pass -p or set FRAMETEE_TMNF_PACKS." >&2
+  exit 1
+fi
 
 PGO_DIR="$BUILD_DIR/pgo"
 PGO_MERGED="$PGO_DIR/merged.profdata"
+TRAIN_CONFIG_HOME="$PGO_DIR/config"
 
 echo "==> build dir:       $BUILD_DIR"
 echo "==> training script: $TRAIN_SCRIPT"
+echo "==> packs dir:       $PACKS_DIR"
 
 # ---------------------------------------------------------------------------
 # Stage 1: instrumented build
 #
-# Deliberately without ENABLE_AGGRESSIVE_OPTIM. The instrumented binary only has
-# to produce counters, and building it without LTO is far quicker; clang keys
-# counters on the function CFG, so the optimization levels of the two stages do
-# not have to match.
+# Keep every optimization and ISA option matched to the profile-use build.
+# Clang rejects counters when optimization changes a function's control-flow
+# hash between the generate and use stages; a faster, mismatched instrumented
+# build therefore leaves precisely the hot counters unavailable to PGO.
 # ---------------------------------------------------------------------------
 echo "==> [1/4] configuring + building instrumented binaries"
 rm -rf "$PGO_DIR"
-mkdir -p "$PGO_DIR"
+mkdir -p "$TRAIN_CONFIG_HOME/frametee"
+cp "$TRAIN_CONFIG_TEMPLATE" "$TRAIN_CONFIG_HOME/frametee/config.toml"
 run cmake -S "$ROOT" -B "$BUILD_DIR" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=On \
-  -DENABLE_AGGRESSIVE_OPTIM=Off \
+  -DENABLE_AGGRESSIVE_OPTIM=On \
   -DPGO_STAGE=GENERATE \
   -DPGO_PROFILE_DIR="$PGO_DIR"
 run cmake --build "$BUILD_DIR" -j"$(nproc)"
@@ -83,13 +101,14 @@ run cmake --build "$BUILD_DIR" -j"$(nproc)"
 #
 # Run from the build directory so the freshly built plugins/ are the ones that
 # get loaded -- the plugin is about half the profile, so training without it
-# loaded would leave that half cold. Each image writes its own .profraw thanks
-# to the %m pattern clang applies to -fprofile-generate=<dir>.
+# loaded would leave that half cold.
 # ---------------------------------------------------------------------------
 echo "==> [2/4] running training workload"
 (
   cd "$BUILD_DIR"
-  run ./frametee --game tmnf --auto "$TRAIN_SCRIPT"
+  run env XDG_CONFIG_HOME="$TRAIN_CONFIG_HOME" \
+    FRAMETEE_TMNF_PACKS="$PACKS_DIR" \
+    ./frametee --game tmnf --auto "$TRAIN_SCRIPT"
 )
 
 shopt -s nullglob

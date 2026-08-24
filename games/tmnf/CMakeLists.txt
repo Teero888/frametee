@@ -55,6 +55,8 @@ set(FOREVERVALIDATOR_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
 # lld installed, -flto=thin links a good deal faster and is equivalent here.
 option(FRAMETEE_TMNF_VALIDATOR_LTO
        "Build ForeverValidator with link-time optimization (Clang; GCC has its own)" ON)
+option(FRAMETEE_TMNF_VALIDATOR_RELEASE_DEBUG_INFO
+       "Emit full DWARF for the optimized ForeverValidator Release build" OFF)
 
 set(TMNF_VALIDATOR_LTO OFF)
 if(FRAMETEE_TMNF_VALIDATOR_LTO AND NOT ENABLE_SANITIZERS AND
@@ -108,6 +110,14 @@ if(ENABLE_AGGRESSIVE_OPTIM AND NOT ENABLE_SANITIZERS AND
 endif()
 
 foreach(fv_target forevervalidator_core forevervalidator_native)
+    if(FRAMETEE_TMNF_VALIDATOR_RELEASE_DEBUG_INFO AND
+       CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${fv_target} PRIVATE $<$<CONFIG:Release>:-g>)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${fv_target} PRIVATE
+                $<$<CONFIG:Release>:-fstandalone-debug>)
+        endif()
+    endif()
     if(TMNF_VALIDATOR_LTO)
         target_compile_options(${fv_target} PRIVATE $<$<CONFIG:Release>:-flto>)
         target_link_options(${fv_target} PRIVATE $<$<CONFIG:Release>:-flto>)
@@ -177,27 +187,22 @@ if(NOT WIN32)
     target_include_directories(forevervalidator_shared INTERFACE
         "${CMAKE_CURRENT_SOURCE_DIR}/ForeverValidator/include")
 
-    # Bind the library's own calls to its own definitions.
-    #
-    # Everything above is exported at default visibility on purpose -- that is
-    # what lets the module and a plugin share one copy -- but the side effect is
-    # that a call from one validator translation unit to another goes out to the
-    # PLT and can be interposed by whatever was loaded first. Only functions are
-    # bound, so every global, vtable and typeinfo stays as interposable as it
-    # was and the one-copy arrangement is untouched. Nothing about code
-    # generation changes, so physics results cannot move.
-    #
-    # It also closes a hazard: this module and the UltraForce plugin both
-    # compile tmnf_sim.cpp against the validator's headers, with different
-    # floating-point flags (see plugins/ultraforce/CMakeLists.txt), and the
-    # inline functions that produces are weak definitions of symbols the
-    # validator also defines. Without this the validator can end up calling the
-    # plugin's copy, compiled under flags the physics was never certified for.
     target_link_options(forevervalidator_shared PRIVATE "-Wl,-Bsymbolic-functions")
 
     if(TMNF_VALIDATOR_LTO)
         target_compile_options(forevervalidator_shared PRIVATE $<$<CONFIG:Release>:-flto>)
         target_link_options(forevervalidator_shared PRIVATE $<$<CONFIG:Release>:-flto>)
+    endif()
+    if(FRAMETEE_TMNF_VALIDATOR_RELEASE_DEBUG_INFO AND
+       CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(forevervalidator_shared PRIVATE
+            $<$<CONFIG:Release>:-g>)
+        target_link_options(forevervalidator_shared PRIVATE
+            $<$<CONFIG:Release>:-g>)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(forevervalidator_shared PRIVATE
+                $<$<CONFIG:Release>:-fstandalone-debug>)
+        endif()
     endif()
     if(TMNF_VALIDATOR_NATIVE_OPTIONS)
         target_compile_options(forevervalidator_shared PRIVATE ${TMNF_VALIDATOR_NATIVE_OPTIONS})
