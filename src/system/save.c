@@ -15,9 +15,9 @@
 #include <string.h>
 #include <user_interface/entity_inspector.h>
 #include <user_interface/snippet_editor.h>
-#include <user_interface/timeline_events.h>
 #include <user_interface/timeline/timeline.h>
 #include <user_interface/timeline/timeline_model.h>
+#include <user_interface/timeline_events.h>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -138,7 +138,8 @@ static bool buffer_i32(byte_buffer_t *buffer, int32_t value) { return buffer_u32
 
 static bool buffer_u64(byte_buffer_t *buffer, uint64_t value) {
   uint8_t bytes[8];
-  for (unsigned i = 0; i < 8; ++i) bytes[i] = (uint8_t)(value >> (i * 8));
+  for (unsigned i = 0; i < 8; ++i)
+    bytes[i] = (uint8_t)(value >> (i * 8));
   return buffer_write(buffer, bytes, sizeof(bytes));
 }
 
@@ -167,7 +168,8 @@ static bool buffer_string(byte_buffer_t *buffer, const char *text) {
 
 static bool buffer_patch_u64(byte_buffer_t *buffer, size_t offset, uint64_t value) {
   if (!buffer->ok || offset > buffer->size || buffer->size - offset < 8) return false;
-  for (unsigned i = 0; i < 8; ++i) buffer->data[offset + i] = (uint8_t)(value >> (i * 8));
+  for (unsigned i = 0; i < 8; ++i)
+    buffer->data[offset + i] = (uint8_t)(value >> (i * 8));
   return true;
 }
 
@@ -201,7 +203,8 @@ static bool reader_u64(byte_reader_t *reader, uint64_t *out) {
   uint8_t bytes[8];
   if (!reader_bytes(reader, bytes, sizeof(bytes))) return false;
   uint64_t value = 0;
-  for (unsigned i = 0; i < 8; ++i) value |= (uint64_t)bytes[i] << (i * 8);
+  for (unsigned i = 0; i < 8; ++i)
+    value |= (uint64_t)bytes[i] << (i * 8);
   *out = value;
   return true;
 }
@@ -262,10 +265,12 @@ static void project_document_free(project_document_t *document) {
   if (!document) return;
   for (int i = 0; i < document->track_count; ++i) {
     player_track_t *track = &document->tracks[i];
-    for (int j = 0; j < track->snippet_count; ++j) free(track->snippets[j].inputs);
+    for (int j = 0; j < track->snippet_count; ++j)
+      free(track->snippets[j].inputs);
     free(track->snippets);
   }
-  for (int i = 0; i < document->group_count; ++i) free(document->groups[i].world_data);
+  for (int i = 0; i < document->group_count; ++i)
+    free(document->groups[i].world_data);
   free(document->groups);
   free(document->tracks);
   free(document->events);
@@ -387,10 +392,14 @@ static bool write_value(byte_buffer_t *buffer, const starting_override_t *overri
   const ft_value *value = &override->value;
   if (!buffer_u32(buffer, (uint32_t)value->kind)) return false;
   switch (value->kind) {
-  case FT_VALUE_BOOL: return buffer_u8(buffer, value->as.b ? 1 : 0);
-  case FT_VALUE_INT: return buffer_i64(buffer, value->as.i);
-  case FT_VALUE_FLOAT: return buffer_f64(buffer, value->as.f);
-  case FT_VALUE_VEC2: return buffer_f32(buffer, value->as.v.x) && buffer_f32(buffer, value->as.v.y);
+  case FT_VALUE_BOOL:
+    return buffer_u8(buffer, value->as.b ? 1 : 0);
+  case FT_VALUE_INT:
+    return buffer_i64(buffer, value->as.i);
+  case FT_VALUE_FLOAT:
+    return buffer_f64(buffer, value->as.f);
+  case FT_VALUE_VEC2:
+    return buffer_f32(buffer, value->as.v.x) && buffer_f32(buffer, value->as.v.y);
   case FT_VALUE_VEC3:
     return buffer_f32(buffer, value->as.v3.x) && buffer_f32(buffer, value->as.v3.y) && buffer_f32(buffer, value->as.v3.z);
   case FT_VALUE_STRING: {
@@ -493,6 +502,9 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
       return false;
     for (int c = 0; c < 4; ++c)
       if (!buffer_f32(buffer, event->color[c])) return false;
+    if (event->data_size > FT_TIMELINE_EVENT_DATA_MAX || !buffer_u32(buffer, event->data_size) ||
+        !buffer_write(buffer, event->data, event->data_size))
+      return false;
   }
   return buffer->ok;
 }
@@ -592,8 +604,10 @@ static bool read_value(byte_reader_t *reader, starting_override_t *override) {
     override->value.as.b = value != 0;
     return true;
   }
-  case FT_VALUE_INT: return reader_i64(reader, &override->value.as.i);
-  case FT_VALUE_FLOAT: return reader_f64(reader, &override->value.as.f);
+  case FT_VALUE_INT:
+    return reader_i64(reader, &override->value.as.i);
+  case FT_VALUE_FLOAT:
+    return reader_f64(reader, &override->value.as.f);
   case FT_VALUE_VEC2:
     return reader_f32(reader, &override->value.as.v.x) && reader_f32(reader, &override->value.as.v.y);
   case FT_VALUE_VEC3:
@@ -607,7 +621,7 @@ static bool read_value(byte_reader_t *reader, starting_override_t *override) {
   return false;
 }
 
-static bool read_timeline(byte_reader_t *reader, project_document_t *document) {
+static bool read_timeline(byte_reader_t *reader, project_document_t *document, uint32_t project_version) {
   uint8_t boolean;
   uint32_t count;
   if (!reader_i32(reader, &document->current_tick) || !reader_i32(reader, &document->active_group_index) ||
@@ -730,6 +744,11 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document) {
       return false;
     for (int c = 0; c < 4; ++c)
       if (!reader_f32(reader, &event->color[c])) return false;
+    if (project_version >= 13) {
+      if (!reader_u32(reader, &event->data_size) || event->data_size > FT_TIMELINE_EVENT_DATA_MAX ||
+          !reader_bytes(reader, event->data, event->data_size))
+        return false;
+    }
   }
   return reader->ok && reader->pos == reader->size;
 }
@@ -775,8 +794,9 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
     log_error(LOG_SOURCE, "Not a FrameTee project: '%s'", path);
     goto done;
   }
-  if (version != TAS_PROJECT_FILE_VERSION) {
-    log_error(LOG_SOURCE, "Project '%s' is version %u; this build reads version %u.", path, version, TAS_PROJECT_FILE_VERSION);
+  if (version < 12 || version > TAS_PROJECT_FILE_VERSION) {
+    log_error(LOG_SOURCE, "Project '%s' is version %u; this build reads versions 12 through %u.", path, version,
+              TAS_PROJECT_FILE_VERSION);
     goto done;
   }
   if (!reader_u32(&reader, &flags) || flags != 0 || !reader_u64(&reader, &document->input_schema_hash) ||
@@ -808,7 +828,7 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
 
   byte_reader_t timeline_reader = {.data = reader.data + reader.pos, .size = (size_t)timeline_size, .ok = true};
   reader.pos += (size_t)timeline_size;
-  if (!read_timeline(&timeline_reader, document) || reader.pos != reader.size) goto malformed;
+  if (!read_timeline(&timeline_reader, document, version) || reader.pos != reader.size) goto malformed;
 
   if (document->active_group_index < 0 || document->active_group_index >= document->group_count ||
       document->selected_track_index < -1 || document->selected_track_index >= document->track_count)
@@ -844,7 +864,8 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
   ui_handler_t *ui = timeline->ui;
   game_host_t *host = &ui->gfx_handler->game_host;
 
-  for (int i = timeline->player_track_count - 1; i >= 0; --i) model_remove_track_logic(timeline, i);
+  for (int i = timeline->player_track_count - 1; i >= 0; --i)
+    model_remove_track_logic(timeline, i);
   while (timeline->group_count < document->group_count)
     if (!model_add_group(timeline, document->groups[timeline->group_count].name)) return false;
 
@@ -1103,7 +1124,8 @@ bool import_project_as_group(ui_handler_t *ui, const char *path) {
       to->recording_snippet_count = 0;
       to->recording_snippet_capacity = 0;
       model_rebind_starting_strings(&to->starting_config);
-      for (int snippet = 0; snippet < to->snippet_count; ++snippet) to->snippets[snippet].id = timeline->next_snippet_id++;
+      for (int snippet = 0; snippet < to->snippet_count; ++snippet)
+        to->snippets[snippet].id = timeline->next_snippet_id++;
       from->snippets = NULL;
       from->snippet_count = 0;
       from->snippet_capacity = 0;

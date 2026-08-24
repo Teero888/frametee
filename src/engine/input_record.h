@@ -52,6 +52,13 @@ ft_vec2 engine_input_get_vec2(game_host_t *host, const input_record_t *record, i
 void engine_input_set_vec2(game_host_t *host, input_record_t *record, int field, ft_vec2 value);
 void engine_input_default(game_host_t *host, input_record_t *record);
 
+// One-shot fields live long enough for the next simulation tick even when the
+// UI renders faster than the game runs. Consuming code resets them afterwards;
+// linked inputs use the merge helper to retain an already pending trigger while
+// rebuilding the rest of their input from defaults every frame.
+void engine_input_reset_triggers(game_host_t *host, input_record_t *record);
+void engine_input_merge_pending_triggers(game_host_t *host, const input_record_t *pending, input_record_t *record);
+
 // True when the game's records fit the engine's storage. Checked once when a
 // game is activated.
 bool engine_input_record_fits(const game_host_t *host);

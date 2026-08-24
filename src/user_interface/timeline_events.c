@@ -1,16 +1,54 @@
-#include <engine/int_math.h>
 #include "timeline_events.h"
+#include "timeline/timeline_model.h"
+#include <engine/engine_api.h>
+#include <engine/int_math.h>
 #include <renderer/graphics_backend.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <system/include_cimgui.h>
-#include "timeline/timeline_model.h"
 
 static int compare_timeline_events(const void *a, const void *b) {
   const timeline_event_t *ev_a = (const timeline_event_t *)a;
   const timeline_event_t *ev_b = (const timeline_event_t *)b;
-  return ev_a->tick - ev_b->tick;
+  if (ev_a->tick < ev_b->tick) return -1;
+  if (ev_a->tick > ev_b->tick) return 1;
+  if (ev_a->group_index < ev_b->group_index) return -1;
+  if (ev_a->group_index > ev_b->group_index) return 1;
+  return 0;
+}
+
+bool timeline_event_from_abi(timeline_event_t *out, const ft_timeline_event *event, int fallback_group_index) {
+  if (!out || !event || event->struct_size != sizeof(*event) || event->data_size > FT_TIMELINE_EVENT_DATA_MAX ||
+      (event->data_size > 0 && !event->data))
+    return false;
+
+  memset(out, 0, sizeof(*out));
+  out->tick = event->tick;
+  out->group_index = event->world_index >= 0 ? event->world_index : fallback_group_index;
+  out->player = event->player;
+  snprintf(out->category, sizeof(out->category), "%s", event->category ? event->category : "event");
+  snprintf(out->message, sizeof(out->message), "%s", event->text ? event->text : "");
+  out->color[0] = event->color.r;
+  out->color[1] = event->color.g;
+  out->color[2] = event->color.b;
+  out->color[3] = event->color.a;
+  out->data_size = event->data_size;
+  if (event->data_size > 0) memcpy(out->data, event->data, event->data_size);
+  return true;
+}
+
+void timeline_event_to_abi(const timeline_event_t *event, ft_timeline_event *out) {
+  if (!event || !out) return;
+  *out = (ft_timeline_event){.struct_size = sizeof(*out),
+                             .world_index = event->group_index,
+                             .tick = event->tick,
+                             .player = event->player,
+                             .category = event->category,
+                             .text = event->message,
+                             .color = {event->color[0], event->color[1], event->color[2], event->color[3]},
+                             .data = event->data_size > 0 ? event->data : NULL,
+                             .data_size = event->data_size};
 }
 
 void timeline_events_sort(timeline_state_t *ts) {
@@ -38,7 +76,6 @@ void timeline_events_remove(timeline_state_t *ts, int index) {
   }
   ts->event_count--;
 }
-
 
 // A plain list of whatever the active game reported. Editing the payload of an
 // event is a game concern and now lives in the game's own panels; the engine
@@ -123,16 +160,13 @@ void timeline_event_tooltip_content(const timeline_event_t *ev) {
 static void collect_emit(void *user, const ft_timeline_event *event) {
   if (!user || !event || event->struct_size != sizeof(*event)) return;
   timeline_state_t *ts = user;
-  timeline_event_t ev = {0};
-  ev.tick = event->tick;
-  ev.group_index = ts->simulation_group_index;
-  snprintf(ev.category, sizeof(ev.category), "%s", event->category ? event->category : "event");
-  snprintf(ev.message, sizeof(ev.message), "%s", event->text ? event->text : "");
-  ev.player = event->player;
-  ev.color[0] = event->color.r;
-  ev.color[1] = event->color.g;
-  ev.color[2] = event->color.b;
-  ev.color[3] = event->color.a;
+  timeline_event_t ev;
+  ft_timeline_event reported = *event;
+  // collect_events describes the world passed to the callback; a zero-filled
+  // event from older source code must not accidentally pin everything to group
+  // zero now that authored events can carry an explicit world index.
+  reported.world_index = -1;
+  if (!timeline_event_from_abi(&ev, &reported, ts->simulation_group_index)) return;
 
   // Games may report the same event on every re-simulation, so identical
   // entries are folded rather than piling up.
@@ -149,7 +183,15 @@ void timeline_rescan_events(timeline_state_t *ts) {
   game_host_t *host = ts->ui ? &ts->ui->gfx_handler->game_host : NULL;
   if (!host || !game_has_cap(host, FT_CAP_TIMELINE_EVENTS)) return;
 
-  ts->event_count = 0;
+  // A rescan replaces observations derived from simulation, not authored
+  // game payloads such as DDNet chat and race messages.
+  int authored = 0;
+  for (int i = 0; i < ts->event_count; ++i) {
+    if (ts->events[i].data_size == 0) continue;
+    if (authored != i) ts->events[authored] = ts->events[i];
+    ++authored;
+  }
+  ts->event_count = authored;
   const int max_ticks = model_get_max_timeline_tick(ts);
   if (max_ticks <= 0) {
     ts->ui->has_unsaved_changes = true;
@@ -157,6 +199,7 @@ void timeline_rescan_events(timeline_state_t *ts) {
   }
 
   const int previous_simulation_group = ts->simulation_group_index;
+  const bool previous_effects = engine_api_set_presentation_effects(false);
   for (int group_index = 0; group_index < ts->group_count; ++group_index) {
     ts->simulation_group_index = group_index;
     const int local_max = imax(0, max_ticks - ts->groups[group_index]->start_offset);
@@ -169,6 +212,7 @@ void timeline_rescan_events(timeline_state_t *ts) {
       previous = world;
     }
   }
+  engine_api_set_presentation_effects(previous_effects);
   ts->simulation_group_index = previous_simulation_group;
   ts->ui->has_unsaved_changes = true;
 }

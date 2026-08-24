@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 10;
+pub const FT_GAME_ABI_VERSION: u32 = 12;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -365,6 +365,8 @@ pub struct ft_engine_api {
         Option<unsafe extern "C" fn(a: ft_vec3, b: ft_vec3, color: ft_color, thickness: f32)>,
     pub draw_triangle3:
         Option<unsafe extern "C" fn(a: ft_vec3, b: ft_vec3, c: ft_vec3, color: ft_color)>,
+    pub set_texture3: *const c_void,
+    pub draw_triangle3_textured: *const c_void,
     pub draw_box3:
         Option<unsafe extern "C" fn(center: ft_vec3, size: ft_vec3, color: ft_color, wire: bool)>,
     pub draw_instances: *const c_void,
@@ -401,6 +403,14 @@ pub struct ft_engine_api {
         Option<unsafe extern "C" fn(texture: *mut c_void, out: *mut ft_gpu_image) -> bool>,
     pub draw_texture:
         Option<unsafe extern "C" fn(z: f32, texture: *mut c_void, dst: ft_rect, tint: ft_color)>,
+    pub timeline_event_count: *const c_void,
+    pub timeline_event_get: *const c_void,
+    pub timeline_event_add: *const c_void,
+    pub timeline_event_update: *const c_void,
+    pub timeline_event_remove: *const c_void,
+    pub timeline_active_world: *const c_void,
+    pub timeline_range: *const c_void,
+    pub presentation_effects_enabled: *const c_void,
 }
 
 /// The module vtable. Field order and count must match `ft_game_module`

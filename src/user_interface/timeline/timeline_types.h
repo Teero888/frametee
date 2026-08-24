@@ -34,9 +34,9 @@ struct input_snippet_t {
   bool is_active;
   int layer;
   input_record_t *inputs; // source buffer, may extend past the window on either side
-  int input_count;      // length of the visible window
-  int source_offset;    // index in `inputs` of the tick played at start_tick
-  int source_count;     // total ticks held in `inputs`
+  int input_count;        // length of the visible window
+  int source_offset;      // index in `inputs` of the tick played at start_tick
+  int source_count;       // total ticks held in `inputs`
 };
 
 // An override the user pinned on a track's starting state. The engine stores it
@@ -141,6 +141,8 @@ struct timeline_event_t {
   char category[32];
   char message[256];
   float color[4];
+  uint32_t data_size;
+  unsigned char data[FT_TIMELINE_EVENT_DATA_MAX];
 };
 
 // A group owns an entirely separate physics history. Tracks remain in one flat array so existing
