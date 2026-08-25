@@ -81,6 +81,15 @@ add_subdirectory(ForeverValidator ${CMAKE_BINARY_DIR}/forevervalidator EXCLUDE_F
 # The validator's objects are linked into a loadable module.
 set_target_properties(forevervalidator_core forevervalidator_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# GCC exposes _xgetbv as an always-inline intrinsic and refuses to compile a
+# call unless XSAVE is enabled for that translation unit. ForeverValidator
+# uses it only after CPUID reports OSXSAVE, so this enables the intrinsic rather
+# than raising the runtime CPU baseline.
+if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(forevervalidator_core PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:-mxsave>")
+endif()
+
 # The validator is where this game spends essentially all of its time, so it is
 # where both of these are worth having: see the note above -flto, and note that
 # before this the two PGO stages profiled the host and its plugins but never the

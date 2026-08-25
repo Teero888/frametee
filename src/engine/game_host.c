@@ -334,7 +334,8 @@ static void try_load(game_host_t *host, const char *path) {
   // first one discovered wins and the second is reported rather than shadowed.
   for (int i = 0; i < host->count - 1; ++i) {
     if (host->slots[i].usable && strcmp(host->slots[i].id, module->info.id) == 0) {
-      snprintf(slot->error, sizeof(slot->error), "duplicate game id '%s', already provided by %s", module->info.id, host->slots[i].path);
+      snprintf(slot->error, sizeof(slot->error), "duplicate game id '%.31s', already provided by %.400s", module->info.id,
+               host->slots[i].path);
       log_warn(LOG_SOURCE, "%s", slot->error);
       fs_free_library(handle);
       return;

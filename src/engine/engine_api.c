@@ -14,6 +14,7 @@
 #include <nfd.h>
 #include <renderer/graphics_backend.h>
 #include <renderer/renderer.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +59,14 @@ static void api_log(ft_log_level level, const char *category, const char *messag
 
 // --- filesystem --------------------------------------------------------------
 
+static size_t api_format_path(char *out, size_t out_size, const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  const int needed = vsnprintf(out, out ? out_size : 0, format, args);
+  va_end(args);
+  return needed > 0 ? (size_t)needed : 0;
+}
+
 static size_t api_resolve_data_path(const char *relative, char *out, size_t out_size) {
   // Every game keeps its assets under data/games/<id>/, so a module can ship
   // textures and shaders without knowing where the editor was installed. The
@@ -66,11 +75,8 @@ static size_t api_resolve_data_path(const char *relative, char *out, size_t out_
   const char *id = game_host_active_id(&g_engine->game_host);
   char executable_dir[GAME_HOST_MAX_PATH];
   if (!fs_get_executable_dir(executable_dir, sizeof(executable_dir))) snprintf(executable_dir, sizeof(executable_dir), ".");
-  char buffer[GAME_HOST_MAX_PATH];
-  const int needed = snprintf(buffer, sizeof(buffer), "%s%cdata%cgames%c%s%c%s", executable_dir, PATH_SEP, PATH_SEP,
-                              PATH_SEP, id, PATH_SEP, relative ? relative : "");
-  if (out && out_size > 0) snprintf(out, out_size, "%s", buffer);
-  return needed > 0 ? (size_t)needed : 0;
+  return api_format_path(out, out_size, "%s%cdata%cgames%c%s%c%s", executable_dir, PATH_SEP, PATH_SEP, PATH_SEP, id,
+                         PATH_SEP, relative ? relative : "");
 }
 
 static bool api_read_file(const char *path, void **out_data, size_t *out_size) {
@@ -115,18 +121,16 @@ static size_t api_resolve_cache_path(const char *relative, char *out, size_t out
   if (!fs_get_config_dir(base, sizeof(base))) snprintf(base, sizeof(base), ".");
 
   char directory[GAME_HOST_MAX_PATH];
-  snprintf(directory, sizeof(directory), "%s%cgames%c%s", base, PATH_SEP, PATH_SEP, id);
+  const size_t directory_size = api_format_path(directory, sizeof(directory), "%s%cgames%c%s", base, PATH_SEP, PATH_SEP, id);
 
   // Create the chain lazily; a game should not have to think about it.
   char partial[GAME_HOST_MAX_PATH];
-  snprintf(partial, sizeof(partial), "%s%cgames", base, PATH_SEP);
-  fs_mkdir(partial);
-  fs_mkdir(directory);
+  const size_t partial_size = api_format_path(partial, sizeof(partial), "%s%cgames", base, PATH_SEP);
+  if (partial_size < sizeof(partial)) fs_mkdir(partial);
+  if (directory_size < sizeof(directory)) fs_mkdir(directory);
 
-  char full[GAME_HOST_MAX_PATH];
-  const int needed = snprintf(full, sizeof(full), "%s%c%s", directory, PATH_SEP, relative ? relative : "");
-  if (out && out_size > 0) snprintf(out, out_size, "%s", full);
-  return needed > 0 ? (size_t)needed : 0;
+  return api_format_path(out, out_size, "%s%cgames%c%s%c%s", base, PATH_SEP, PATH_SEP, id, PATH_SEP,
+                         relative ? relative : "");
 }
 
 // --- resources ---------------------------------------------------------------

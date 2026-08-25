@@ -99,14 +99,13 @@ static inline int pthread_mutexattr_destroy(pthread_mutexattr_t *attr) { (void)a
 static inline BOOL CALLBACK pthread_win32_init_once_callback(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *Context) {
     (void)InitOnce;
     (void)Context;
-    void (*init_routine)(void) = (void (*)(void))Parameter;
-    init_routine();
+    void (**init_routine)(void) = (void (**)(void))Parameter;
+    (*init_routine)();
     return TRUE;
 }
 
 static inline int pthread_once(pthread_once_t *once_control, void (*init_routine)(void)) {
-    InitOnceExecuteOnce(once_control, pthread_win32_init_once_callback, (PVOID)init_routine, NULL);
-    return 0;
+    return InitOnceExecuteOnce(once_control, pthread_win32_init_once_callback, &init_routine, NULL) ? 0 : -1;
 }
 
 #else

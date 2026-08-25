@@ -41,7 +41,9 @@ bool fs_get_executable_dir(char *out_path, size_t size);
 typedef struct fs_dir_t fs_dir_t;
 
 typedef struct {
-    char name[256];
+    // Large enough for WIN32_FIND_DATA::cFileName as well as the usual POSIX
+    // NAME_MAX, without silently turning a real entry into a different name.
+    char name[1024];
     bool is_directory;
 } fs_dirent_t;
 

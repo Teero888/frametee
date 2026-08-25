@@ -271,8 +271,9 @@ cleanup:
 
 static void add_prediction_line(timeline_state_t *timeline) {
   prediction_settings_t *settings = &timeline->prediction;
-  if (settings->line_count >= MAX_PREDICTION_LINES) return;
-  const int index = settings->line_count++;
+  const int index = settings->line_count;
+  if (index < 1 || index >= MAX_PREDICTION_LINES) return;
+  settings->line_count = index + 1;
   prediction_line_t *line = &settings->lines[index];
   memset(line, 0, sizeof(*line));
   snprintf(line->name, sizeof(line->name), "Alternative %d", index);
