@@ -168,8 +168,20 @@ set(IMGUI_SOURCES
 )
 add_executable(${PROJECT_NAME} ${SRCS} ${IMGUI_SOURCES})
 
+# Force-include the cached GLFW monitor wrappers instead of renaming the GLFW
+# entry points with -D: a -D rename also hits their declarations in glfw3.h, so
+# on Windows (where glfw3.h marks them __declspec(dllimport)) the wrappers turn
+# into unresolved __imp_mock_glfw* imports at link time.
+set(IMGUI_GLFW_MONITOR_CACHE_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/imgui_glfw_monitor_cache.h")
+if(MSVC)
+    set(IMGUI_GLFW_MONITOR_CACHE_FLAGS "/FI${IMGUI_GLFW_MONITOR_CACHE_HEADER}")
+else()
+    set(IMGUI_GLFW_MONITOR_CACHE_FLAGS "-include;${IMGUI_GLFW_MONITOR_CACHE_HEADER}")
+endif()
 set_source_files_properties(libs/cimgui/imgui/backends/imgui_impl_glfw.cpp PROPERTIES
-    COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\";glfwGetMonitors=mock_glfwGetMonitors;glfwGetMonitorPos=mock_glfwGetMonitorPos;glfwGetVideoMode=mock_glfwGetVideoMode;glfwGetMonitorWorkarea=mock_glfwGetMonitorWorkarea;glfwGetMonitorContentScale=mock_glfwGetMonitorContentScale"
+    COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\""
+    COMPILE_OPTIONS "${IMGUI_GLFW_MONITOR_CACHE_FLAGS}"
+    OBJECT_DEPENDS "${IMGUI_GLFW_MONITOR_CACHE_HEADER}"
 )
 set_source_files_properties(libs/cimgui/imgui/backends/imgui_impl_vulkan.cpp PROPERTIES
     COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\""
@@ -182,7 +194,7 @@ elseif(WIN32)
     # On Windows, this enables the executable to export symbols like a DLL
     set_target_properties(${PROJECT_NAME} PROPERTIES ENABLE_EXPORTS ON)
     set_property(SOURCE ${IMGUI_SOURCES} PROPERTY COMPILE_DEFINITIONS "IMGUI_API=__declspec(dllexport)")
-    set_property(SOURCE libs/cimgui/imgui/backends/imgui_impl_glfw.cpp APPEND PROPERTY COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\";glfwGetMonitors=mock_glfwGetMonitors;glfwGetMonitorPos=mock_glfwGetMonitorPos;glfwGetVideoMode=mock_glfwGetVideoMode;glfwGetMonitorWorkarea=mock_glfwGetMonitorWorkarea;glfwGetMonitorContentScale=mock_glfwGetMonitorContentScale")
+    set_property(SOURCE libs/cimgui/imgui/backends/imgui_impl_glfw.cpp APPEND PROPERTY COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\"")
     set_property(SOURCE libs/cimgui/imgui/backends/imgui_impl_vulkan.cpp APPEND PROPERTY COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\"")
 endif()
 
