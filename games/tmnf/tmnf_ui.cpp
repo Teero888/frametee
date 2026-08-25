@@ -170,7 +170,6 @@ void DrawTrackGrid(ft_game *game, Campaign &campaign, const char *filter) {
                               nullptr);
     }
 
-    if (hovered) igSetTooltip("%s", track.path.c_str());
     if (clicked && game->engine && game->engine->request_level) game->engine->request_level(track.path.c_str());
 
     igEndGroup();

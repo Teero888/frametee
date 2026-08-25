@@ -382,7 +382,7 @@ bool Cursor::SkipDeviceSets(u32 chunk) {
 // terrain and tiling blades across the whole field instead of the ground.
 const char *const kDiffuseSamplers[] = {
     "Diffuse", "Blend1", "Panorama", "Advert",    "Glow",      "Soil",
-    "Foam 1",  "GDiffuse", "PxzDiffuse", "PyDiffuse", "BaseColor",
+    "Foam 1",  "GDiffuse", "PxzDiffuse", "PyDiffuse", "BaseColor", "PxzBaseColor",
 };
 
 } // namespace

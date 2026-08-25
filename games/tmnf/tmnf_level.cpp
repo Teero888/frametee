@@ -415,7 +415,9 @@ struct BuildStats {
 };
 
 void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std::uint32_t layer,
-                    const MaterialStyle &style, std::vector<Triangle> &out, Aabb &bounds) {
+                    TextureAnimation animation, std::optional<std::uint32_t> start_advert_layer,
+                    const MaterialStyle &style,
+                    std::vector<Triangle> &out, Aabb &bounds) {
   if (instance.mesh >= scene.meshes.size() || instance.material >= scene.materials.size()) return;
   // Collision proxies, fence depth stand-ins and fake shadow skirts sit in the
   // same geometry as the surfaces they belong to. Drawing them puts a layer of
@@ -426,6 +428,18 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
   const TrackMesh &mesh = scene.meshes[instance.mesh];
   const TrackMaterial &material = scene.materials[instance.material];
   const MaterialLook look = ClassifyMaterial(material, instance.material, style);
+
+  Aabb billboard_bounds;
+  if (instance.start_billboard && start_advert_layer) {
+    for (const TrackVertex &vertex : mesh.vertices) billboard_bounds.Add(vertex.position);
+  }
+  const float billboard_size_x = billboard_bounds.Valid() ? billboard_bounds.mx.x - billboard_bounds.mn.x : 0.f;
+  const float billboard_size_z = billboard_bounds.Valid() ? billboard_bounds.mx.z - billboard_bounds.mn.z : 0.f;
+  const bool billboard_long_x = billboard_size_x >= billboard_size_z;
+  const float billboard_advert_min_y = billboard_bounds.Valid()
+                                           ? billboard_bounds.mn.y +
+                                                 (billboard_bounds.mx.y - billboard_bounds.mn.y) * 0.32f
+                                           : 0.f;
 
   // A mirrored placement reverses triangle winding. Where the mesh carries
   // authored normals the winding is fixed per triangle against them instead,
@@ -445,14 +459,46 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
     const auto &v1 = mesh.vertices[i1];
     const auto &v2 = mesh.vertices[i2];
 
+    std::uint32_t triangle_layer = layer;
+    TextureAnimation triangle_animation = animation;
+    bool race_advert = false;
+    if (billboard_bounds.Valid()) {
+      const ft_vec3 local_face = Cross(Sub(v1.position, v0.position), Sub(v2.position, v0.position));
+      const float normal_to_panel = billboard_long_x ? local_face.z : local_face.x;
+      const float centre_y = (v0.position.y + v1.position.y + v2.position.y) / 3.f;
+      // Broad front/back faces point along the shallow axis. Leave the carrier's
+      // rim and brackets on their metal material.
+      race_advert = normal_to_panel * normal_to_panel > LengthSq(local_face) * 0.35f &&
+                    centre_y >= billboard_advert_min_y;
+      if (race_advert) {
+        triangle_layer = *start_advert_layer;
+        triangle_animation = TextureAnimation{};
+      }
+    }
+
     Triangle tri;
     tri.a = TransformPoint(instance.transform, v0.position);
     tri.b = TransformPoint(instance.transform, v1.position);
     tri.c = TransformPoint(instance.transform, v2.position);
     tri.two_sided = look.style.double_sided;
-    if (layer != kNoTextureLayer && (mesh.has_uv || look.style.world_uv)) {
-      tri.layer = layer;
-      if (look.style.world_uv) {
+    tri.animation = triangle_animation;
+    if (triangle_layer != kNoTextureLayer && (race_advert || mesh.has_uv || look.style.world_uv)) {
+      tri.layer = triangle_layer;
+      if (race_advert) {
+        const float minimum = billboard_long_x ? billboard_bounds.mn.x : billboard_bounds.mn.z;
+        const float horizontal = billboard_long_x ? billboard_size_x : billboard_size_z;
+        const float vertical = billboard_bounds.mx.y - billboard_advert_min_y;
+        const auto project = [&](const ft_vec3 &position) {
+          const float along = billboard_long_x ? position.x : position.z;
+          return ft_vec2{horizontal > 1e-5f ? std::clamp(1.f - (along - minimum) / horizontal, 0.f, 1.f) : 0.f,
+                         vertical > 1e-5f
+                             ? std::clamp((billboard_bounds.mx.y - position.y) / vertical, 0.f, 1.f)
+                             : 0.f};
+        };
+        tri.uv[0] = project(v0.position);
+        tri.uv[1] = project(v1.position);
+        tri.uv[2] = project(v2.position);
+      } else if (look.style.world_uv) {
         // Terrain carries no useful coordinates of its own: it is textured by
         // where it stands, one tile of the picture every sixteen metres. Reading
         // its authored coordinates instead is what smeared a single texel across
@@ -496,7 +542,10 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
     // Zero alpha is the pass's signal for an additive draw; see
     // data/shaders/primitive3d.frag.glsl. A glow carries no coverage of its
     // own -- it only adds light to whatever it is mounted on.
-    if (look.style.additive) base.a = 0.f;
+    // The start-light archive only places its glow face, so that layer also
+    // carries the recovered opaque lens/housing texture. Other glow materials
+    // retain the zero-alpha additive convention.
+    if (look.style.additive && animation.kind != TextureAnimationKind::StartLights) base.a = 0.f;
 
     tri.color = PackColor(base);
     out.push_back(tri);
@@ -604,19 +653,39 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   // beside it how the material's shader says the surface is drawn.
   static const MaterialStyle kDefaultStyle;
   std::vector<std::uint32_t> material_layers;
+  std::vector<TextureAnimation> material_animations;
   std::vector<MaterialStyle> material_styles;
+  std::optional<std::uint32_t> start_advert_layer;
   if (decoded) {
     material_layers.assign(scene.materials.size(), kNoTextureLayer);
+    material_animations.assign(scene.materials.size(), TextureAnimation{});
     material_styles.assign(scene.materials.size(), MaterialStyle{});
     std::size_t textured = 0;
+    std::optional<std::uint32_t> direction_sign_layer;
     for (std::size_t i = 0; i < scene.materials.size(); ++i) {
       if (scene.materials[i].path.empty()) continue;
       material_styles[i] = game->textures.Style(game->packs_open, scene.materials[i].path);
       if (const std::optional<std::uint32_t> layer = game->textures.Layer(game->packs_open, scene.materials[i].path)) {
         material_layers[i] = *layer;
+        if (material_styles[i].transparent && !material_styles[i].additive) game->textures.UseAlpha(*layer);
         ++textured;
       }
+
+      const std::string lower = Lowered(scene.materials[i].path);
+      if (lower.find("stadiumscreen2x1east.material.gbx") != std::string::npos ||
+          lower.find("stadiumscreen2x1west.material.gbx") != std::string::npos ||
+          lower.find("stadiumwarpscreen2x1east.material.gbx") != std::string::npos ||
+          lower.find("stadiumwarpscreen2x1west.material.gbx") != std::string::npos) {
+        if (!direction_sign_layer) direction_sign_layer = game->textures.DirectionSignLayer(game->packs_open);
+        if (direction_sign_layer) material_layers[i] = *direction_sign_layer;
+      }
+      if (material_layers[i] != kNoTextureLayer)
+        material_animations[i] = game->textures.Animation(material_layers[i]);
     }
+
+    if (std::any_of(scene.instances.begin(), scene.instances.end(),
+                    [](const TrackInstance &instance) { return instance.start_billboard; }))
+      start_advert_layer = game->textures.StartAdvertLayer(game->packs_open);
     std::size_t named = 0;
     for (const TrackMaterial &material : scene.materials)
       if (!material.path.empty()) ++named;
@@ -671,6 +740,19 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
         instance.material < material_layers.size() ? material_layers[instance.material] : kNoTextureLayer;
     MaterialStyle style =
         instance.material < material_styles.size() ? material_styles[instance.material] : kDefaultStyle;
+    TextureAnimation animation = instance.material < material_animations.size()
+                                     ? material_animations[instance.material]
+                                     : TextureAnimation{};
+
+    // The game enables these flare passes only for the Night mood. Their
+    // diffuse lamp faces remain in the scene for every mood, so suppressing the
+    // extra daytime halo both matches the original and saves an additive draw.
+    // Start lights are stateful race presentation rather than mood lighting;
+    // keep their recovered face even if an archive happens to inherit a
+    // night-only additive shader.
+    if (style.night_only && Lowered(mood) != "night" &&
+        animation.kind != TextureAnimationKind::StartLights)
+      style.invisible = true;
 
     // The sky. It is the one thing in the scene with no material on it at all,
     // so nothing above could have found its picture; what it gets instead is the
@@ -698,10 +780,12 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     // they are lit on. Only a shell that is not adding light to something is a
     // backdrop.
     if ((style.unlit && !style.additive) || IsDistantScenery(scene.meshes[instance.mesh], instance)) {
-      AppendInstance(scene, instance, layer, style, level->backdrop, backdrop_bounds);
+      AppendInstance(scene, instance, layer, animation, start_advert_layer, style,
+                     level->backdrop, backdrop_bounds);
     } else {
       const std::size_t before = level->track.size();
-      AppendInstance(scene, instance, layer, style, level->track, level->world_bounds);
+      AppendInstance(scene, instance, layer, animation, start_advert_layer, style,
+                     level->track, level->world_bounds);
       if (instance.purpose == TRACK_PURPOSE_BLOCK) {
         for (std::size_t i = before; i < level->track.size(); ++i) {
           played_bounds.Add(level->track[i].a);

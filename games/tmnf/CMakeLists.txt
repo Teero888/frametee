@@ -263,6 +263,23 @@ target_compile_definitions(tmnf_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
 
 target_link_libraries(tmnf_game PRIVATE ${TMNF_VALIDATOR_LIBS})
 
+# TMNF's animated advertising boards are Bink videos. Decode them once while a
+# level loads, pack their frames into the same texture array as static DDS
+# pages, and keep the render path free of video work. FFmpeg is optional so a
+# minimal or Windows build still gets the static renderer; it only loses the
+# animated boards when the development libraries are unavailable.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(TMNF_FFMPEG QUIET IMPORTED_TARGET
+        libavformat libavcodec libavutil libswscale)
+endif()
+if(TARGET PkgConfig::TMNF_FFMPEG)
+    target_link_libraries(tmnf_game PRIVATE PkgConfig::TMNF_FFMPEG)
+    target_compile_definitions(tmnf_game PRIVATE TMNF_HAS_FFMPEG=1)
+else()
+    message(STATUS "TMNF: FFmpeg not found; Bink advertising boards will use static fallbacks")
+endif()
+
 if(NOT MSVC)
     target_compile_options(tmnf_game PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()

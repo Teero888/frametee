@@ -70,6 +70,30 @@ inline float ToKmh(float metres_per_second) { return metres_per_second * 3.6f; }
 // triangle drawn with its colour alone.
 inline constexpr std::uint32_t kNoTextureLayer = 0xFFFFFFFFu;
 
+// A texture can be a small authored atlas rather than one still picture. The
+// transform stays on the triangle so the renderer can select a frame while it
+// submits the existing batch; animated boards therefore cost no texture upload
+// and no extra draw call during playback.
+enum class TextureAnimationKind : std::uint8_t {
+  None,
+  StartLights,
+  SpriteSheet,
+};
+
+struct TextureAnimation {
+  TextureAnimationKind kind = TextureAnimationKind::None;
+  std::uint16_t frame_count = 1u;
+  std::uint16_t columns = 1u;
+  std::uint16_t rows = 1u;
+  // Start-light frames are separate array layers because their three authored
+  // atlas regions share one mesh UV layout. Sprite-sheet video leaves this at
+  // the default and changes UVs instead.
+  std::uint32_t first_layer = kNoTextureLayer;
+  // TMNF runs at 100 ticks per second. Keeping the rate in frames per tick
+  // makes animation deterministic while scrubbing and exporting.
+  float frames_per_tick = 0.f;
+};
+
 struct Triangle {
   ft_vec3 a, b, c;
   // The surface's own colour. On a textured triangle it is white and
@@ -77,6 +101,7 @@ struct Triangle {
   std::uint32_t color = 0xFFFFFFFFu;
   ft_vec2 uv[3]{};
   std::uint32_t layer = kNoTextureLayer;
+  TextureAnimation animation{};
   // Looked at from both sides, so it survives the back-face cull whichever way
   // it is wound. Fences, banners and the sky are all sheets with nothing behind
   // them, and culling a sheet is the same as deleting it half the time.
@@ -226,6 +251,10 @@ struct MaterialStyle {
   bool world_uv = false;
   // Adds its light to what is behind it: glows, lit signs, spot flares.
   bool additive = false;
+  // An additive pass authored for the Night mood. The daytime diffuse face is
+  // still present underneath; drawing this pass in Day/Sunrise/Sunset is what
+  // turns the Stadium start arch's individual lamps into broad white smears.
+  bool night_only = false;
   bool water = false;
 };
 
@@ -284,6 +313,13 @@ struct TrackInstance {
   TrackPurpose purpose = TRACK_PURPOSE_SCENERY;
   std::uint32_t lod = 0u;
   bool visible = true;
+  // Provenance is retained so runtime presentation that belongs exclusively to
+  // the authored race start cannot leak onto visually similar scenery.
+  bool start_line = false;
+  // The curved metal carrier above the start arch. TMNF overlays the race
+  // advert on its broad faces at runtime rather than assigning a distinct
+  // material in the solid archive.
+  bool start_billboard = false;
 };
 
 // A track's geometry and materials, decoded from the installed game. Meshes are
@@ -342,6 +378,15 @@ public:
   // this is the first time it has been asked for. Empty when the material names
   // no surface texture, or names one this module cannot read.
   std::optional<std::uint32_t> Layer(const PackSet &packs, const std::string &material_path);
+  // Marks a decoded page's alpha channel as coverage. Most TMNF diffuse maps
+  // use that channel for gloss instead, so it is enabled from the material's
+  // shader rather than guessed from the pixels.
+  void UseAlpha(std::uint32_t layer);
+  TextureAnimation Animation(std::uint32_t layer) const;
+  std::optional<std::uint32_t> StartAdvertLayer(const PackSet &packs);
+  // The standard Stadium 2:1 direction screens are a Bink animation. All
+  // frames are decoded and packed once while loading the level.
+  std::optional<std::uint32_t> DirectionSignLayer(const PackSet &packs);
   // How the material is meant to be drawn, read from the shader it is built
   // from. Cached alongside the layer, because both come from the same file.
   MaterialStyle Style(const PackSet &packs, const std::string &material_path);
@@ -365,6 +410,7 @@ public:
 
 private:
   static std::optional<std::string> DiffuseImagePath(const PackSet &packs, const std::string &material_path);
+  std::optional<std::uint32_t> ImageLayer(const PackSet &packs, const std::string &image_path);
   std::uint32_t ChoosePageSize() const;
 
   // A decoded image at the size it was authored. Resampling to the array's page
@@ -381,6 +427,7 @@ private:
     // windows and takes most of the car with it. A page nothing draws
     // transparently is forced opaque at upload.
     bool alpha_used = false;
+    TextureAnimation animation{};
   };
 
   std::vector<Page> layers_;

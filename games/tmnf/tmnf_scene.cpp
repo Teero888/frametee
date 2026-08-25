@@ -342,7 +342,7 @@ public:
       : scene_(scene), pack_name_(std::move(pack_name)) {}
 
   void Walk(CPlugTree &tree, const GmIso4 &parent_iso, const CPlugMaterial *inherited, bool visible,
-            std::uint32_t lod, TrackPurpose purpose) {
+            std::uint32_t lod, TrackPurpose purpose, bool start_line) {
     GmIso4 iso;
     tree.ComposeCollisionIso(parent_iso, iso);
     const bool node_visible = visible && tree.IsVisible();
@@ -357,6 +357,22 @@ public:
         instance.purpose = purpose;
         instance.lod = lod;
         instance.visible = node_visible;
+        instance.start_line = start_line;
+        if (start_line) {
+          const std::string &path = scene_->materials[instance.material].path;
+          if (LowerAscii(path).find("stadiumroadbordermetal.material.gbx") != std::string::npos) {
+            Aabb bounds;
+            for (const TrackVertex &vertex : scene_->meshes[instance.mesh].vertices) bounds.Add(vertex.position);
+            const float size_x = bounds.mx.x - bounds.mn.x;
+            const float size_y = bounds.mx.y - bounds.mn.y;
+            const float size_z = bounds.mx.z - bounds.mn.z;
+            // The runtime-ad carrier is the only RoadBorderMetal visual in the
+            // start solid which is broad, upright and shallow. Its archive has
+            // no separate advert material, so retain that identity here.
+            instance.start_billboard = std::max(size_x, size_z) > 16.f &&
+                                       std::min(size_x, size_z) < 6.f && size_y > 3.f;
+          }
+        }
         scene_->instances.push_back(instance);
       }
     }
@@ -377,7 +393,7 @@ public:
           }
         }
       }
-      Walk(*child, iso, material, node_visible, child_lod, purpose);
+      Walk(*child, iso, material, node_visible, child_lod, purpose, start_line);
     }
   }
 
@@ -554,12 +570,13 @@ bool BuildTrackScene(ft_game *game, const PackSet &packs, const void *challenge_
 
   TreeWalker walker(out, pack_name);
   for (const StaticSceneModel &model : models.Models()) {
+    const bool start_line = LowerAscii(model.Provenance().blockName) == "stadiumroadmainstartline";
     const TrackPurpose purpose = ToPurpose(model.Purpose());
     if (purpose == TRACK_PURPOSE_HIDDEN) continue;
     CPlugSolid *solid = model.Prototype().SourceSolid();
     CPlugTree *root = solid != nullptr ? solid->CollisionTree() : nullptr;
     if (root == nullptr) continue;
-    walker.Walk(*root, model.WorldIso(), nullptr, true, 0u, purpose);
+    walker.Walk(*root, model.WorldIso(), nullptr, true, 0u, purpose, start_line);
   }
 
   if (out->instances.empty()) return false;
