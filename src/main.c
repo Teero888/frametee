@@ -11,6 +11,7 @@
 #include <user_interface/timeline/timeline_model.h>
 #include <time.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define GLFW_INCLUDE_NONE
@@ -28,6 +29,14 @@ bool g_list_games = false;
 // choice outranks the config so a project can be opened under a specific game
 // without editing settings first.
 const char *g_forced_game_id = NULL;
+
+static int set_environment_variable(const char *name, const char *value) {
+#ifdef _WIN32
+  return SetEnvironmentVariableA(name, value) ? 0 : -1;
+#else
+  return setenv(name, value, 1);
+#endif
+}
 
 
 // Walks the game through one frame of rendering: every visible world, in every
@@ -127,8 +136,8 @@ int main(int argc, char **argv) {
       // Read back out of the environment by the window creation in
       // graphics_backend.c, which runs before this loop's result is available
       // to it any other way.
-      setenv("FRAMETEE_WINDOW_SIZE", argv[i + 1], 1);
-      setenv("FRAMETEE_VIEWPORT_SIZE", argv[++i], 1);
+      set_environment_variable("FRAMETEE_WINDOW_SIZE", argv[i + 1]);
+      set_environment_variable("FRAMETEE_VIEWPORT_SIZE", argv[++i]);
     } else if (strcmp(argv[i], "--list-games") == 0) {
       g_list_games = true;
       g_is_headless = true;

@@ -35,9 +35,15 @@ endif()
 
 # Its objects have to be usable inside a shared library, and so do the map
 # loader's: that is a static library the physics links and therefore carries.
-set_target_properties(ddnet_physics PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(ddnet_physics PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    BUILD_RPATH_USE_ORIGIN ON
+)
 if(TARGET ddnet_map_loader)
-    set_target_properties(ddnet_map_loader PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    set_target_properties(ddnet_map_loader PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        BUILD_RPATH_USE_ORIGIN ON
+    )
 endif()
 if(NOT MSVC)
     target_compile_options(ddnet_physics PRIVATE -ftls-model=initial-exec)

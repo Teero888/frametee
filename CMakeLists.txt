@@ -444,6 +444,11 @@ if(BUILD_GAMES)
                 set_target_properties(${GAME_TARGET} PROPERTIES
                     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/games"
                     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/games"
+                    # Keep build-tree runtime paths relocatable. Release
+                    # artifacts preserve the build's games/ and libs/ layout,
+                    # so bundled game dependencies continue to resolve after
+                    # the artifact is moved away from the CI checkout.
+                    BUILD_RPATH_USE_ORIGIN ON
                 )
                 # On Windows the modules link the executable's import library,
                 # so the dependency runs the other way and adding it here would
@@ -471,6 +476,7 @@ if(BUILD_PLUGINS)
                 set_target_properties(${TARGET} PROPERTIES
                     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
                     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+                    BUILD_RPATH_USE_ORIGIN ON
                 )
             endforeach()
 
