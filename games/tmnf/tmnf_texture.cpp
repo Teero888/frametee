@@ -14,8 +14,18 @@
 #include "tmnf_internal.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstring>
+
+#ifdef TMNF_HAS_FFMPEG
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
+}
+#endif
 
 namespace tmnf {
 namespace {
@@ -175,44 +185,161 @@ bool DecodeDds(const std::vector<unsigned char> &bytes, std::uint32_t *width, st
   return false;
 }
 
-// --- what a texture's alpha channel is for -----------------------------------
+// --- Bink --------------------------------------------------------------------
 
-// TrackMania puts two completely different things in the alpha of a diffuse
-// texture, and which one it is decides whether sampling it as opacity produces
-// a fence or a hole in a wall.
-//
-// A cut-out — a chain-link fence, a railing, a tree card, a sign with a shaped
-// edge — has alpha that is almost entirely on or off. Everything else is using
-// the channel to carry specular strength or gloss, which varies smoothly and
-// means nothing as an opacity: sample that and a car body turns to glass.
-//
-// The shader would say which, but a TrackMania material references its shader as
-// an embedded node rather than a file, so there is no shader name to look up.
-// The distribution of the channel says it just as well.
-enum class AlphaUse : std::uint8_t {
-  Opaque, // nothing there: the channel is unused or solid
-  Cutout, // an opacity, and the surface has to be drawn with it
-  Gloss,  // a material property that happens to live in this channel
+// Animated signs are tiny Bink videos. They are decoded once here and packed
+// into a sprite sheet; rendering only changes UVs, which is deterministic when
+// the timeline is scrubbed and avoids a texture upload on every frame.
+#ifdef TMNF_HAS_FFMPEG
+struct MemoryVideo {
+  const std::uint8_t *bytes = nullptr;
+  std::size_t size = 0u;
+  std::size_t position = 0u;
 };
 
-AlphaUse ClassifyAlpha(const std::vector<std::uint8_t> &rgba) {
-  const std::size_t texels = rgba.size() / 4u;
-  if (texels == 0u) return AlphaUse::Opaque;
-
-  std::size_t clear = 0u, solid = 0u;
-  for (std::size_t i = 0; i < texels; ++i) {
-    const std::uint8_t a = rgba[i * 4u + 3u];
-    if (a < 16u) ++clear;
-    else if (a > 240u) ++solid;
-  }
-  if (clear == 0u) return solid == texels ? AlphaUse::Opaque : AlphaUse::Gloss;
-
-  // Some of it is see-through. That is only an opacity if the rest is not a
-  // ramp: a twentieth of the picture in between is the soft edge a cut-out has,
-  // and more than that is a gradient nobody meant as transparency.
-  const std::size_t between = texels - clear - solid;
-  return between * 20u <= texels ? AlphaUse::Cutout : AlphaUse::Gloss;
+int ReadVideo(void *opaque, std::uint8_t *buffer, int buffer_size) {
+  auto *video = static_cast<MemoryVideo *>(opaque);
+  if (video == nullptr || buffer_size <= 0 || video->position >= video->size) return AVERROR_EOF;
+  const std::size_t count = std::min<std::size_t>(static_cast<std::size_t>(buffer_size),
+                                                  video->size - video->position);
+  std::memcpy(buffer, video->bytes + video->position, count);
+  video->position += count;
+  return static_cast<int>(count);
 }
+
+std::int64_t SeekVideo(void *opaque, std::int64_t offset, int whence) {
+  auto *video = static_cast<MemoryVideo *>(opaque);
+  if (video == nullptr) return AVERROR(EINVAL);
+  if ((whence & ~AVSEEK_FORCE) == AVSEEK_SIZE) return static_cast<std::int64_t>(video->size);
+  whence &= ~AVSEEK_FORCE;
+  std::int64_t base = 0;
+  if (whence == SEEK_CUR) base = static_cast<std::int64_t>(video->position);
+  else if (whence == SEEK_END) base = static_cast<std::int64_t>(video->size);
+  else if (whence != SEEK_SET) return AVERROR(EINVAL);
+  if (offset < -base || base + offset < 0 ||
+      static_cast<std::uint64_t>(base + offset) > video->size) return AVERROR(EINVAL);
+  video->position = static_cast<std::size_t>(base + offset);
+  return static_cast<std::int64_t>(video->position);
+}
+
+bool DecodeBink(const std::vector<unsigned char> &bytes, std::uint32_t *width, std::uint32_t *height,
+                std::vector<std::uint8_t> *rgba, TextureAnimation *animation) {
+  constexpr std::size_t kIoBufferSize = 32768u;
+  constexpr std::size_t kMaximumFrames = 256u;
+  if (bytes.empty() || width == nullptr || height == nullptr || rgba == nullptr || animation == nullptr)
+    return false;
+
+  MemoryVideo video{bytes.data(), bytes.size(), 0u};
+  auto *io_buffer = static_cast<std::uint8_t *>(av_malloc(kIoBufferSize));
+  AVIOContext *io = io_buffer != nullptr
+                          ? avio_alloc_context(io_buffer, static_cast<int>(kIoBufferSize), 0, &video,
+                                               &ReadVideo, nullptr, &SeekVideo)
+                          : nullptr;
+  AVFormatContext *format = avformat_alloc_context();
+  AVCodecContext *codec = nullptr;
+  AVPacket *packet = nullptr;
+  AVFrame *frame = nullptr;
+  SwsContext *scale = nullptr;
+  bool opened = false;
+  bool ok = false;
+  std::vector<std::vector<std::uint8_t>> frames;
+  int stream_index = -1;
+  int frame_width = 0, frame_height = 0;
+  AVRational frame_rate{12, 1};
+
+  if (io == nullptr || format == nullptr) goto cleanup;
+  format->pb = io;
+  format->flags |= AVFMT_FLAG_CUSTOM_IO;
+  if (avformat_open_input(&format, nullptr, nullptr, nullptr) < 0) goto cleanup;
+  opened = true;
+  if (avformat_find_stream_info(format, nullptr) < 0) goto cleanup;
+  stream_index = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+  if (stream_index < 0) goto cleanup;
+  {
+    AVStream *stream = format->streams[stream_index];
+    const AVCodec *decoder = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (decoder == nullptr) goto cleanup;
+    codec = avcodec_alloc_context3(decoder);
+    if (codec == nullptr || avcodec_parameters_to_context(codec, stream->codecpar) < 0 ||
+        avcodec_open2(codec, decoder, nullptr) < 0) goto cleanup;
+    const AVRational guessed = av_guess_frame_rate(format, stream, nullptr);
+    if (guessed.num > 0 && guessed.den > 0) frame_rate = guessed;
+  }
+  frame_width = codec->width;
+  frame_height = codec->height;
+  if (frame_width <= 0 || frame_height <= 0 || frame_width > 2048 || frame_height > 2048) goto cleanup;
+  packet = av_packet_alloc();
+  frame = av_frame_alloc();
+  scale = sws_getContext(frame_width, frame_height, codec->pix_fmt, frame_width, frame_height, AV_PIX_FMT_RGBA,
+                         SWS_BILINEAR, nullptr, nullptr, nullptr);
+  if (packet == nullptr || frame == nullptr || scale == nullptr) goto cleanup;
+
+  {
+    const auto receive = [&]() {
+      while (frames.size() < kMaximumFrames) {
+        const int result = avcodec_receive_frame(codec, frame);
+        if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) return true;
+        if (result < 0) return false;
+        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(frame_width) * frame_height * 4u);
+        std::uint8_t *destination[] = {pixels.data()};
+        int destination_stride[] = {frame_width * 4};
+        sws_scale(scale, frame->data, frame->linesize, 0, frame_height, destination, destination_stride);
+        frames.push_back(std::move(pixels));
+      }
+      return true;
+    };
+
+    while (frames.size() < kMaximumFrames && av_read_frame(format, packet) >= 0) {
+      if (packet->stream_index == stream_index &&
+          (avcodec_send_packet(codec, packet) < 0 || !receive())) {
+        av_packet_unref(packet);
+        goto cleanup;
+      }
+      av_packet_unref(packet);
+    }
+    if (avcodec_send_packet(codec, nullptr) < 0 || !receive()) goto cleanup;
+  }
+  if (frames.empty()) goto cleanup;
+
+  {
+    const std::uint32_t columns = static_cast<std::uint32_t>(std::ceil(std::sqrt(frames.size())));
+    const std::uint32_t rows = static_cast<std::uint32_t>((frames.size() + columns - 1u) / columns);
+    *width = columns * static_cast<std::uint32_t>(frame_width);
+    *height = rows * static_cast<std::uint32_t>(frame_height);
+    rgba->assign(static_cast<std::size_t>(*width) * *height * 4u, 0u);
+    for (std::size_t index = 0; index < frames.size(); ++index) {
+      const std::uint32_t cell_x = static_cast<std::uint32_t>(index % columns) * frame_width;
+      const std::uint32_t cell_y = static_cast<std::uint32_t>(index / columns) * frame_height;
+      for (int y = 0; y < frame_height; ++y) {
+        std::memcpy(&(*rgba)[(static_cast<std::size_t>(cell_y + y) * *width + cell_x) * 4u],
+                    &frames[index][static_cast<std::size_t>(y) * frame_width * 4u],
+                    static_cast<std::size_t>(frame_width) * 4u);
+      }
+    }
+    animation->kind = TextureAnimationKind::SpriteSheet;
+    animation->frame_count = static_cast<std::uint16_t>(frames.size());
+    animation->columns = static_cast<std::uint16_t>(columns);
+    animation->rows = static_cast<std::uint16_t>(rows);
+    animation->frames_per_tick = static_cast<float>(av_q2d(frame_rate) / 100.0);
+    ok = true;
+  }
+
+cleanup:
+  sws_freeContext(scale);
+  av_frame_free(&frame);
+  av_packet_free(&packet);
+  avcodec_free_context(&codec);
+  if (opened) avformat_close_input(&format);
+  else avformat_free_context(format);
+  avio_context_free(&io);
+  return ok;
+}
+#else
+bool DecodeBink(const std::vector<unsigned char> &, std::uint32_t *, std::uint32_t *,
+                std::vector<std::uint8_t> *, TextureAnimation *) {
+  return false;
+}
+#endif
 
 // --- resampling --------------------------------------------------------------
 
@@ -366,12 +493,13 @@ const ShaderStyleEntry kShaderStyles[] = {
     // Light that adds to what is behind it.
     {"techno/media/material/tadd", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
     {"techno/media/material/tadd zbias", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
-    {"techno/media/material/tadd night", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+    {"techno/media/material/tadd night",
+     MaterialStyle{.unlit = true, .transparent = true, .additive = true, .night_only = true}},
     {"techno/media/material/tadd night zbias",
-     MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+     MaterialStyle{.unlit = true, .transparent = true, .additive = true, .night_only = true}},
     {"techno2/media/material/tselfi add", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
     {"island/media/material/modellightvolume",
-     MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
+     MaterialStyle{.unlit = true, .transparent = true, .additive = true, .night_only = true}},
     {"alpine/media/material/alpinesignsselfillum",
      MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
     {"island/media/material/islandbeachfoam", MaterialStyle{.unlit = true, .transparent = true, .additive = true}},
@@ -542,55 +670,9 @@ MaterialStyle TextureLibrary::Style(const PackSet &packs, const std::string &mat
   }
   if (const MaterialStyle *found = StyleForKey(ShaderKey(material_path))) style = *found;
 
-  // A picture whose alpha is a cut-out says what the missing shader would have:
-  // this is a fence, a railing, a shaped sign — a sheet, drawn with its opacity
-  // and looked at from both sides.
-  if (const std::optional<std::uint32_t> layer = Layer(packs, material_path)) {
-    if (layers_[*layer].alpha_used) {
-      style.transparent = true;
-      style.double_sided = true;
-    }
-  }
-
   style_by_material_.emplace(material_path, style);
   return style;
 }
-
-namespace {
-
-// A signal lamp's glow is not one picture but three, laid out corner to corner
-// along the texture's diagonal: green, then amber, then red, each in its own
-// third. The game slides the sampled window down that diagonal to light one
-// colour at a time, and the mesh it does that on carries UVs spanning the whole
-// sheet -- so drawing the sheet as-is puts all three lamps on the quad at once,
-// which is what the start gantry has been showing.
-//
-// There is no race clock here to slide the window with, so the frame the track
-// is left sitting in is the one that gets drawn: green, the same one the game
-// leaves lit once a run is under way.
-bool CropDiagonalLampFrame(const std::string &image, std::uint32_t *width, std::uint32_t *height,
-                           std::vector<std::uint8_t> *rgba) {
-  constexpr std::uint32_t kFrames = 3u;
-  const std::string lower = Lower(image);
-  if (lower.find("stadiumstartsignglow") == std::string::npos) return false;
-  if (*width != *height || *width < kFrames * 4u) return false;
-
-  // The sheet does not divide evenly (the stadium's is 64 across), so the frame
-  // is the floor of a third: a hair inside the cell, which keeps the next lamp
-  // out rather than letting a sliver of it bleed in.
-  const std::uint32_t side = *width / kFrames;
-  std::vector<std::uint8_t> lit(static_cast<std::size_t>(side) * side * 4u);
-  for (std::uint32_t y = 0; y < side; ++y)
-    std::memcpy(&lit[static_cast<std::size_t>(y) * side * 4u],
-                &(*rgba)[static_cast<std::size_t>(y) * *width * 4u],
-                static_cast<std::size_t>(side) * 4u);
-  *rgba = std::move(lit);
-  *width = side;
-  *height = side;
-  return true;
-}
-
-}  // namespace
 
 std::optional<std::uint32_t> TextureLibrary::Layer(const PackSet &packs, const std::string &material_path) {
   const auto cached = by_material_.find(material_path);
@@ -602,38 +684,137 @@ std::optional<std::uint32_t> TextureLibrary::Layer(const PackSet &packs, const s
     return std::nullopt;
   }
 
+  const std::optional<std::uint32_t> layer = ImageLayer(packs, *image);
+  by_material_.emplace(material_path, layer);
+  return layer;
+}
+
+std::optional<std::uint32_t> TextureLibrary::ImageLayer(const PackSet &packs, const std::string &image_path) {
   // Two materials very often paint the same picture, so layers are keyed on the
   // image rather than on the material that asked for it.
-  const auto shared = by_image_.find(*image);
-  if (shared != by_image_.end()) {
-    by_material_.emplace(material_path, shared->second);
-    return shared->second;
-  }
+  const auto shared = by_image_.find(image_path);
+  if (shared != by_image_.end()) return shared->second;
 
   std::vector<unsigned char> bytes;
   std::uint32_t width = 0u, height = 0u;
   std::vector<std::uint8_t> rgba;
-  if (!packs.Read(*image, &bytes) || !DecodeDds(bytes, &width, &height, &rgba)) {
-    by_image_.emplace(*image, std::nullopt);
-    by_material_.emplace(material_path, std::nullopt);
+  TextureAnimation animation;
+  const std::string lower = Lower(image_path);
+  const bool decoded = packs.Read(image_path, &bytes) &&
+                       (lower.find(".bik") != std::string::npos
+                            ? DecodeBink(bytes, &width, &height, &rgba, &animation)
+                            : DecodeDds(bytes, &width, &height, &rgba));
+  if (!decoded) {
+    by_image_.emplace(image_path, std::nullopt);
     return std::nullopt;
   }
 
-  CropDiagonalLampFrame(*image, &width, &height, &rgba);
+  if (lower.find("stadiumstartsignglow") != std::string::npos) {
+    // The archive only places the additive glow visual; the opaque traffic
+    // light face used beneath it is not a separate scene placement. Recover
+    // that authored face here so the lamps retain their round lenses and
+    // housing detail instead of stretching the tiny glow dots themselves.
+    std::vector<unsigned char> face_bytes;
+    std::uint32_t face_width = 0u, face_height = 0u;
+    std::vector<std::uint8_t> face;
+    if (!packs.Read("Stadium\\Media\\Texture\\Image\\StadiumStartSignD.dds", &face_bytes) ||
+        !DecodeDds(face_bytes, &face_width, &face_height, &face)) {
+      by_image_.emplace(image_path, std::nullopt);
+      return std::nullopt;
+    }
+
+    animation.kind = TextureAnimationKind::StartLights;
+    animation.frame_count = 3u;
+    animation.first_layer = static_cast<std::uint32_t>(layers_.size());
+
+    if (layers_.size() + animation.frame_count > kMaxTextureLayers) {
+      by_image_.emplace(image_path, std::nullopt);
+      return std::nullopt;
+    }
+
+    // StartSignD is vertical while the glow visual maps U along the long axis.
+    // Rotate it once into that authored orientation. One page per phase varies
+    // only lens intensity, so playback remains an array-layer selection.
+    constexpr float kInactiveLight = 0.55f;
+    constexpr float kActiveLight = 2.4f;
+    const std::uint32_t output_width = face_height;
+    const std::uint32_t output_height = face_width;
+    for (std::uint32_t active = 0u; active < animation.frame_count; ++active) {
+      std::vector<std::uint8_t> frame(static_cast<std::size_t>(output_width) * output_height * 4u, 0u);
+      for (std::uint32_t y = 0u; y < output_height; ++y) {
+        for (std::uint32_t x = 0u; x < output_width; ++x) {
+          const std::uint32_t source_x = y * face_width / output_height;
+          const std::uint32_t source_y = x * face_height / output_width;
+          const std::uint32_t lens = std::min(2u, source_y * 3u / face_height);
+          std::uint8_t *pixel = &frame[(static_cast<std::size_t>(y) * output_width + x) * 4u];
+          const std::uint8_t *source = &face[(static_cast<std::size_t>(source_y) * face_width + source_x) * 4u];
+          const float intensity = lens == active ? kActiveLight : kInactiveLight;
+          for (int channel = 0; channel < 3; ++channel)
+            pixel[channel] = static_cast<std::uint8_t>(std::min(255.f, source[channel] * intensity));
+          pixel[3] = source[3];
+        }
+      }
+      layers_.push_back(Page{std::move(frame), output_width, output_height, false, animation});
+    }
+    by_image_.emplace(image_path, animation.first_layer);
+    return animation.first_layer;
+  }
 
   if (layers_.size() >= kMaxTextureLayers) {
-    by_material_.emplace(material_path, std::nullopt);
+    by_image_.emplace(image_path, std::nullopt);
     return std::nullopt;
   }
 
   // Kept at the size it was authored. What page it ends up on is decided once,
   // when the whole track's textures are known; see Upload.
   const std::uint32_t layer = static_cast<std::uint32_t>(layers_.size());
-  const bool cutout = ClassifyAlpha(rgba) == AlphaUse::Cutout;
-  layers_.push_back(Page{std::move(rgba), width, height, cutout});
-  by_image_.emplace(*image, layer);
-  by_material_.emplace(material_path, layer);
+  layers_.push_back(Page{std::move(rgba), width, height, false, animation});
+  by_image_.emplace(image_path, layer);
   return layer;
+}
+
+void TextureLibrary::UseAlpha(std::uint32_t layer) {
+  if (layer < layers_.size()) layers_[layer].alpha_used = true;
+}
+
+TextureAnimation TextureLibrary::Animation(std::uint32_t layer) const {
+  return layer < layers_.size() ? layers_[layer].animation : TextureAnimation{};
+}
+
+std::optional<std::uint32_t> TextureLibrary::StartAdvertLayer(const PackSet &packs) {
+  constexpr const char *kKey = "@stadium-start-advert";
+  if (const auto cached = by_image_.find(kKey); cached != by_image_.end()) return cached->second;
+  if (layers_.size() >= kMaxTextureLayers) return std::nullopt;
+
+  std::vector<unsigned char> bytes;
+  std::uint32_t width = 0u, height = 0u;
+  std::vector<std::uint8_t> advert;
+  if (!packs.Read("Interface\\Advertising\\RaceAd8x1A.dds", &bytes) ||
+      !DecodeDds(bytes, &width, &height, &advert)) {
+    by_image_.emplace(kKey, std::nullopt);
+    return std::nullopt;
+  }
+
+  // The runtime screen has a little more white carrier either side than the
+  // 8:1 source picture itself. Building that margin into this one load-time
+  // page keeps the projection simple and matches the original gantry.
+  Page page;
+  page.width = width + width / 4u;
+  page.height = height;
+  page.rgba.assign(static_cast<std::size_t>(page.width) * page.height * 4u, 255u);
+  const std::uint32_t offset = (page.width - width) / 2u;
+  for (std::uint32_t y = 0; y < height; ++y)
+    std::memcpy(&page.rgba[(static_cast<std::size_t>(y) * page.width + offset) * 4u],
+                &advert[static_cast<std::size_t>(y) * width * 4u], static_cast<std::size_t>(width) * 4u);
+
+  const std::uint32_t layer = static_cast<std::uint32_t>(layers_.size());
+  layers_.push_back(std::move(page));
+  by_image_.emplace(kKey, layer);
+  return layer;
+}
+
+std::optional<std::uint32_t> TextureLibrary::DirectionSignLayer(const PackSet &packs) {
+  return ImageLayer(packs, "Stadium\\Media\\Texture\\Image\\SignRight.bik");
 }
 
 std::optional<std::uint32_t> TextureLibrary::SkyLayer(const PackSet &packs, const std::string &environment,

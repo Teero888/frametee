@@ -1,3 +1,5 @@
+This doc is AI-generated, don't 100% trust it, i'm too lazy to write one myself right now. It should be relatively correct at least
+
 # The game layer
 
 FrameTee is split into an **engine** and a **game**. The engine is a TAS editor:

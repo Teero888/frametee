@@ -33,9 +33,36 @@ float DistanceSq(const Aabb &box, ft_vec3 p) {
   return dx * dx + dy * dy + dz * dz;
 }
 
+ft_vec2 AnimatedUv(ft_vec2 uv, const TextureAnimation &animation, std::int32_t tick) {
+  if (animation.kind == TextureAnimationKind::SpriteSheet && animation.frame_count > 1u &&
+      animation.columns > 0u && animation.rows > 0u) {
+    const double position = std::floor(static_cast<double>(tick) * animation.frames_per_tick);
+    std::int64_t frame = static_cast<std::int64_t>(position) % animation.frame_count;
+    if (frame < 0) frame += animation.frame_count;
+    const std::uint32_t column = static_cast<std::uint32_t>(frame) % animation.columns;
+    const std::uint32_t row = static_cast<std::uint32_t>(frame) / animation.columns;
+    return ft_vec2{(static_cast<float>(column) + std::clamp(uv.x, 0.f, 1.f)) / animation.columns,
+                   (static_cast<float>(row) + std::clamp(uv.y, 0.f, 1.f)) / animation.rows};
+  }
+  return uv;
+}
+
+std::uint32_t StartLightFrame(std::int32_t tick) {
+  // The hidden physics pre-roll ends at timeline tick zero. Negative ticks,
+  // when a caller exposes that pre-roll, show the authored red/amber phases;
+  // a normal run starts and remains on green instead of cycling mid-race.
+  return tick < -100 ? 2u : tick < 0 ? 1u : 0u;
+}
+
+std::uint32_t AnimatedLayer(std::uint32_t layer, const TextureAnimation &animation, std::int32_t tick) {
+  if (animation.kind == TextureAnimationKind::StartLights && animation.first_layer != kNoTextureLayer)
+    return animation.first_layer + StartLightFrame(tick);
+  return layer;
+}
+
 std::size_t DrawGrid(const ft_engine_api *api, const std::vector<Triangle> &triangles, const TriangleGrid &grid,
                      const Frustum &frustum, bool have_frustum, ft_vec3 eye, bool backface_cull, float opacity,
-                     std::size_t budget) {
+                     std::int32_t tick, std::size_t budget) {
   if (triangles.empty() || grid.cells.empty() || budget == 0) return 0;
 
   static thread_local std::vector<VisibleCell> visible;
@@ -73,7 +100,11 @@ std::size_t DrawGrid(const ft_engine_api *api, const std::vector<Triangle> &tria
       ft_color color = UnpackColor(tri.color);
       color.a *= opacity;
       if (tri.layer != kNoTextureLayer && api->draw_triangle3_textured) {
-        api->draw_triangle3_textured(tri.a, tri.b, tri.c, tri.uv[0], tri.uv[1], tri.uv[2], tri.layer, color);
+        const ft_vec2 uv0 = AnimatedUv(tri.uv[0], tri.animation, tick);
+        const ft_vec2 uv1 = AnimatedUv(tri.uv[1], tri.animation, tick);
+        const ft_vec2 uv2 = AnimatedUv(tri.uv[2], tri.animation, tick);
+        api->draw_triangle3_textured(tri.a, tri.b, tri.c, uv0, uv1, uv2,
+                                     AnimatedLayer(tri.layer, tri.animation, tick), color);
       } else {
         api->draw_triangle3(tri.a, tri.b, tri.c, color);
       }
@@ -120,10 +151,11 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
   if (settings.draw_background) {
     const std::size_t reserve = std::min(budget, kBackdropBudget);
     budget -= std::min(budget, DrawGrid(api, level->backdrop, level->backdrop_grid, frustum, have_frustum, eye,
-                                        /*backface_cull=*/false, opacity, reserve));
+                                        /*backface_cull=*/false, opacity, frame->tick, reserve));
   }
 
-  DrawGrid(api, level->track, level->track_grid, frustum, have_frustum, eye, settings.backface_cull, opacity, budget);
+  DrawGrid(api, level->track, level->track_grid, frustum, have_frustum, eye, settings.backface_cull, opacity,
+           frame->tick, budget);
 }
 
 // --- the car -----------------------------------------------------------------
