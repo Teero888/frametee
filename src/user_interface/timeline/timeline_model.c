@@ -1079,7 +1079,8 @@ player_track_t *model_clone_track_to_group(timeline_state_t *ts, int track_index
     }
   }
   copy.group_index = group_index;
-  snprintf(copy.name, sizeof(copy.name), "%s copy", source->name[0] ? source->name : "Track");
+  snprintf(copy.name, sizeof(copy.name), "%.*s copy", (int)sizeof(copy.name) - 6,
+           source->name[0] ? source->name : "Track");
 
   int old_active = ts->active_group_index;
   ts->active_group_index = group_index;

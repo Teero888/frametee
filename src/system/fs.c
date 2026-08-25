@@ -40,23 +40,25 @@ FILE *fs_open(const char *path, const char *mode) {
 }
 
 bool fs_get_config_dir(char *out_path, size_t size) {
+    if (!out_path || size == 0) return false;
+    out_path[0] = '\0';
 #ifdef _WIN32
     const char *config_home = getenv("APPDATA");
     if (!config_home) config_home = getenv("USERPROFILE");
     if (config_home) {
-        snprintf(out_path, size, "%s\\frametee", config_home);
-        return true;
+        const int needed = snprintf(out_path, size, "%s\\frametee", config_home);
+        return needed >= 0 && (size_t)needed < size;
     }
 #else
     const char *config_home = getenv("XDG_CONFIG_HOME");
     if (config_home) {
-        snprintf(out_path, size, "%s/frametee", config_home);
-        return true;
+        const int needed = snprintf(out_path, size, "%s/frametee", config_home);
+        return needed >= 0 && (size_t)needed < size;
     } else {
         config_home = getenv("HOME");
         if (config_home) {
-            snprintf(out_path, size, "%s/.config/frametee", config_home);
-            return true;
+            const int needed = snprintf(out_path, size, "%s/.config/frametee", config_home);
+            return needed >= 0 && (size_t)needed < size;
         }
     }
 #endif
@@ -215,7 +217,15 @@ void *fs_load_library(const char *path) {
 
 void *fs_get_symbol(void *handle, const char *name) {
 #ifdef _WIN32
-    return GetProcAddress((HMODULE)handle, name);
+    // ISO C keeps data and function pointers distinct, while Win32's loader
+    // represents both with pointer-sized addresses. A union contains that
+    // platform conversion without an invalid direct cast.
+    union {
+        FARPROC function;
+        void *object;
+    } symbol = {0};
+    symbol.function = GetProcAddress((HMODULE)handle, name);
+    return symbol.object;
 #else
     return dlsym(handle, name);
 #endif
