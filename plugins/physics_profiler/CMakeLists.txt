@@ -41,8 +41,11 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     "TRACY_CALLSTACK=10"
 )
 
-if(OpenMP_FOUND)
-    target_compile_options(${PROJECT_NAME} PRIVATE ${OpenMP_CXX_FLAGS})
+# The imported target carries the runtime library as well as -fopenmp. Adding
+# only the compile flags leaves GOMP_parallel & co. unresolved, which ELF hides
+# until dlopen() but a Windows DLL cannot link at all.
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(${PROJECT_NAME} PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
 
