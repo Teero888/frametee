@@ -13,6 +13,10 @@
 extern bool g_is_headless;
 
 #include <GLFW/glfw3.h>
+// prototypes for the cached monitor wrappers defined below; NO_REDIRECT keeps the
+// real GLFW entry points visible here, only imgui_impl_glfw.cpp gets the redirects
+#define IMGUI_GLFW_MONITOR_CACHE_NO_REDIRECT
+#include "imgui_glfw_monitor_cache.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>

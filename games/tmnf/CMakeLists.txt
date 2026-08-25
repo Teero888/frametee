@@ -87,7 +87,12 @@ set_target_properties(forevervalidator_core forevervalidator_native PROPERTIES P
 # than raising the runtime CPU baseline.
 if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(forevervalidator_core PRIVATE
-        "$<$<COMPILE_LANGUAGE:CXX>:-mxsave>")
+        "$<$<COMPILE_LANGUAGE:CXX>:-mxsave>"
+        # These are release-only artifacts in the pinned validator: the two
+        # variables exist solely in assertions removed by NDEBUG, and template
+        # specialization can compile away every jump to a shared label.
+        "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release,RelWithDebInfo>>:-Wno-unused-variable>"
+        "$<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-label>")
 endif()
 
 # The validator is where this game spends essentially all of its time, so it is
