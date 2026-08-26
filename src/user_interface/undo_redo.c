@@ -86,6 +86,23 @@ void undo_manager_redo(undo_manager_t *manager, void *ts) {
   }
 }
 
+// Both stacks grow with the session and are read newest first, so the rows are
+// clipped: the child only builds the entries its 150px actually shows.
+static void render_history_stack(const char *id, undo_command_t **stack, int count) {
+  igBeginChild_Str(id, (ImVec2){0, 150}, true, 0);
+  ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
+  ImGuiListClipper_Begin(clipper, count, -1.f);
+  while (ImGuiListClipper_Step(clipper)) {
+    for (int row = clipper->DisplayStart; row < clipper->DisplayEnd; ++row) {
+      const int i = count - 1 - row;
+      igText("%d. %s", i + 1, stack[i]->description);
+    }
+  }
+  ImGuiListClipper_End(clipper);
+  ImGuiListClipper_destroy(clipper);
+  igEndChild();
+}
+
 void undo_manager_render_history_window(undo_manager_t *manager) {
   if (!manager->show_history_window) return;
 
@@ -98,19 +115,11 @@ void undo_manager_render_history_window(undo_manager_t *manager) {
     igSeparator();
 
     igText("Undo Stack:");
-    igBeginChild_Str("UndoStack", (ImVec2){0, 150}, true, 0);
-    for (int i = manager->undo_count - 1; i >= 0; i--) {
-      igText("%d. %s", i + 1, manager->undo_stack[i]->description);
-    }
-    igEndChild();
+    render_history_stack("UndoStack", manager->undo_stack, manager->undo_count);
 
     igSeparator();
     igText("Redo Stack:");
-    igBeginChild_Str("RedoStack", (ImVec2){0, 150}, true, 0);
-    for (int i = manager->redo_count - 1; i >= 0; i--) {
-      igText("%d. %s", i + 1, manager->redo_stack[i]->description);
-    }
-    igEndChild();
+    render_history_stack("RedoStack", manager->redo_stack, manager->redo_count);
   }
   igEnd();
 }

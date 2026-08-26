@@ -23,4 +23,22 @@ bool starting_state_draw(ui_handler_t *ui, int track_index);
 // FT_CAP_HOSTS_STARTING_STATE. One that does has already placed it itself.
 void starting_state_render_window(ui_handler_t *ui);
 
+// True while "Pick position" is waiting for a click in the viewport, so the
+// viewport can say what it is waiting for.
+bool starting_state_is_picking(void);
+
+// Offers a viewport click to that wait. True when it was taken, which is when
+// the caller must not also read the click as a selection. Coordinates are world
+// units, the space games report positions in. The position is staged like every
+// other edit here: it lands on the run when Apply does.
+bool starting_state_take_world_click(ui_handler_t *ui, float world_x, float world_y);
+
+// Drops the wait, for Escape or for anything that makes it meaningless.
+void starting_state_cancel_pick(void);
+
+// Marks every overridden start in the level itself, in its group's colour, so a
+// start that was taken over is visible where it will put the player. Call it
+// from the render path, after the game has drawn.
+void starting_state_render_markers(ui_handler_t *ui, struct gfx_handler_t *gfx);
+
 #endif // STARTING_STATE_H

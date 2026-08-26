@@ -2,6 +2,7 @@
 #include "timeline/timeline_model.h"
 #include <engine/engine_api.h>
 #include <engine/int_math.h>
+#include <frametee/icons.h>
 #include <renderer/graphics_backend.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,63 +81,132 @@ void timeline_events_remove(timeline_state_t *ts, int index) {
 // A plain list of whatever the active game reported. Editing the payload of an
 // event is a game concern and now lives in the game's own panels; the engine
 // only shows what happened and lets the user jump to it or drop it.
+static void timeline_event_jump_to(timeline_state_t *ts, const timeline_event_t *event) {
+  if (!ts || !event) return;
+  const int group = event->group_index >= 0 && event->group_index < ts->group_count ? event->group_index : 0;
+  const int offset = ts->group_count > 0 ? ts->groups[group]->start_offset : 0;
+  ts->current_tick = event->tick + offset;
+}
+
+static const char *timeline_event_group_name(const timeline_state_t *ts, const timeline_event_t *event, char *fallback,
+                                             size_t fallback_size) {
+  if (event->group_index >= 0 && event->group_index < ts->group_count && ts->groups[event->group_index])
+    return ts->groups[event->group_index]->name;
+  if (event->group_index >= 0) snprintf(fallback, fallback_size, "Group %d", event->group_index + 1);
+  else snprintf(fallback, fallback_size, "Unknown group");
+  return fallback;
+}
+
 void render_timeline_events_window(ui_handler_t *ui) {
   if (!ui->show_timeline_events_window) return;
   timeline_state_t *ts = &ui->timeline;
 
-  igSetNextWindowSize((ImVec2){560, 420}, ImGuiCond_FirstUseEver);
+  const float initial_scale = gfx_get_ui_scale();
+  igSetNextWindowSize((ImVec2){680.f * initial_scale, 440.f * initial_scale}, ImGuiCond_FirstUseEver);
   if (igBegin("Timeline Events", &ui->show_timeline_events_window, 0)) {
+    const float dpi = igGetFontSize() > 0.f ? igGetFontSize() / 19.f : 1.f;
     game_host_t *host = &ui->gfx_handler->game_host;
     if (!game_has_cap(host, FT_CAP_TIMELINE_EVENTS)) {
-      igTextDisabled("%s does not report timeline events.", ui->plugin_context.active_game_id);
+      igSpacing();
+      igTextDisabled(ICON_FA_CIRCLE_INFO "  %s does not report timeline events.", ui->plugin_context.active_game_id);
       igEnd();
       return;
     }
 
-    if (igButton("Rescan", (ImVec2){0, 0})) timeline_rescan_events(ts);
-    igSameLine(0, 8.f);
-    if (igButton("Clear", (ImVec2){0, 0})) {
+    const bool toolbar_inline = igGetContentRegionAvail().x >= 440.f * dpi;
+    if (igButton(ICON_FA_ARROWS_ROTATE " Rescan", (ImVec2){0.f, 0.f})) timeline_rescan_events(ts);
+    // Clearing empties the list the guard reads, so the two halves of the
+    // disabled scope have to agree on one value taken before the button runs.
+    const bool has_events = ts->event_count > 0;
+    if (!has_events) igBeginDisabled(true);
+    igSameLine(0.f, 6.f * dpi);
+    if (igButton(ICON_FA_TRASH " Clear all", (ImVec2){0.f, 0.f})) {
       ts->event_count = 0;
       ui_mark_unsaved(ui);
     }
+    if (!has_events) igEndDisabled();
+    if (toolbar_inline) igSameLine(0.f, 12.f * dpi);
+    else igSpacing();
+    igTextDisabled("%d event%s  |  %s", ts->event_count, ts->event_count == 1 ? "" : "s",
+                   ui->plugin_context.active_game_id);
     igSeparator();
 
     if (ts->event_count == 0) {
-      igTextDisabled("No events recorded yet.");
+      igTextDisabled(ICON_FA_LIST "  No timeline events yet. Rescan after simulating the timeline.");
       igEnd();
       return;
     }
 
-    if (igBeginTable("EventsTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, (ImVec2){0, 0}, 0.f)) {
-      igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 70.f, 0);
-      igTableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 110.f, 0);
+    const bool wide = igGetContentRegionAvail().x >= 620.f * dpi;
+    const int columns = wide ? 6 : 4;
+    const ImGuiStyle *style = igGetStyle();
+    // A fixed column is given exactly the width requested here, and anything the
+    // cell draws past it is clipped, so the request has to cover both buttons at
+    // their real widths: the two icons differ, and each carries frame padding.
+    const float action_spacing = 4.f * dpi;
+    const float jump_width = igCalcTextSize(ICON_FA_LOCATION_CROSSHAIRS, NULL, false, -1.f).x + style->FramePadding.x * 2.f;
+    const float remove_width = igCalcTextSize(ICON_FA_TRASH, NULL, false, -1.f).x + style->FramePadding.x * 2.f;
+    const float action_width = jump_width + remove_width + action_spacing + 2.f;
+    const ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+    // Renamed from "EventsTable": ImGui persists per-column widths for resizable
+    // tables and replays them over the widths set up here, so the stale (too
+    // narrow) action column saved by earlier builds has to be left behind.
+    if (igBeginTable("TimelineEventsTable", columns, flags, (ImVec2){0.f, 0.f}, 0.f)) {
+      if (wide) igTableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 105.f * dpi, 0);
+      igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 66.f * dpi, 0);
+      if (wide) igTableSetupColumn("Player", ImGuiTableColumnFlags_WidthFixed, 58.f * dpi, 0);
+      igTableSetupColumn("Event", ImGuiTableColumnFlags_WidthFixed, 112.f * dpi, 0);
       igTableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch, 0.f, 0);
-      igTableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 60.f, 0);
+      igTableSetupColumn("", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, action_width, 0);
       igTableHeadersRow();
 
       int pending_remove = -1;
-      for (int i = 0; i < ts->event_count; ++i) {
-        const timeline_event_t *ev = &ts->events[i];
-        igTableNextRow(0, 0.f);
-        igPushID_Int(i);
+      // The list is as long as the run is: only the rows the clipper hands back
+      // are laid out, so scrolling cost stays flat instead of tracking the event
+      // count. Rows have to stay one line tall for that estimate to hold, which
+      // is why the detail column no longer wraps.
+      ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
+      ImGuiListClipper_Begin(clipper, ts->event_count, -1.f);
+      while (ImGuiListClipper_Step(clipper)) {
+        for (int i = clipper->DisplayStart; i < clipper->DisplayEnd; ++i) {
+          const timeline_event_t *ev = &ts->events[i];
+          igTableNextRow(0, 0.f);
+          igPushID_Int(i);
 
-        igTableSetColumnIndex(0);
-        char label[32];
-        snprintf(label, sizeof(label), "%d", ev->tick);
-        if (igSelectable_Bool(label, false, ImGuiSelectableFlags_SpanAllColumns, (ImVec2){0, 0})) {
-          ts->current_tick = ev->tick + ts->groups[ev->group_index >= 0 && ev->group_index < ts->group_count ? ev->group_index : 0]->start_offset;
+          int column = 0;
+          if (wide) {
+            igTableSetColumnIndex(column++);
+            char fallback[32];
+            igTextUnformatted(timeline_event_group_name(ts, ev, fallback, sizeof(fallback)), NULL);
+          }
+
+          igTableSetColumnIndex(column++);
+          igText("%d", ev->tick);
+
+          if (wide) {
+            igTableSetColumnIndex(column++);
+            if (ev->player >= 0) igText("%d", ev->player);
+            else igTextDisabled("--");
+          }
+
+          igTableSetColumnIndex(column++);
+          igTextColored((ImVec4){ev->color[0], ev->color[1], ev->color[2], ev->color[3] > 0.f ? ev->color[3] : 1.f}, "%s", ev->category);
+
+          igTableSetColumnIndex(column++);
+          igTextUnformatted(ev->message, NULL);
+
+          igTableSetColumnIndex(column);
+          if (igSmallButton(ICON_FA_LOCATION_CROSSHAIRS "##jump")) timeline_event_jump_to(ts, ev);
+          if (igIsItemHovered(0)) igSetTooltip("Jump to this event");
+          igSameLine(0.f, action_spacing);
+          if (igSmallButton(ICON_FA_TRASH "##remove")) pending_remove = i;
+          if (igIsItemHovered(0)) igSetTooltip("Remove this event");
+          igPopID();
         }
-
-        igTableSetColumnIndex(1);
-        igTextColored((ImVec4){ev->color[0], ev->color[1], ev->color[2], ev->color[3] > 0.f ? ev->color[3] : 1.f}, "%s", ev->category);
-
-        igTableSetColumnIndex(2);
-        igTextWrapped("%s", ev->message);
-
-        igTableSetColumnIndex(3);
-        if (igSmallButton("Remove")) pending_remove = i;
-        igPopID();
       }
+      ImGuiListClipper_End(clipper);
+      ImGuiListClipper_destroy(clipper);
       igEndTable();
 
       if (pending_remove >= 0) {
