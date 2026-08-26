@@ -43,6 +43,10 @@ struct undo_command_t *commands_create_group_name_change(ui_handler_t *ui, int g
 struct undo_command_t *commands_create_group_color_change(ui_handler_t *ui, int group_index, const float before[4]);
 struct undo_command_t *commands_create_group_visibility_change(ui_handler_t *ui, int group_index, bool before);
 struct undo_command_t *commands_create_group_start_offset_change(ui_handler_t *ui, int group_index, int before);
+// One edit to what a track starts as. Returns NULL when nothing actually
+// changed, which is what a drag that ended where it began amounts to.
+struct undo_command_t *commands_create_starting_config_change(ui_handler_t *ui, int track_index, const starting_config_t *before,
+                                                              const char *description);
 struct undo_command_t *commands_create_group_export_change(ui_handler_t *ui, int group_index, bool before);
 struct undo_command_t *commands_create_track_name_change(ui_handler_t *ui, int track_index, const char *before);
 struct undo_command_t *commands_create_track_export_change(ui_handler_t *ui, int track_index, bool before);
@@ -53,7 +57,7 @@ struct undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, cons
                                                   const input_record_t *before_states, const input_record_t *after_states);
 
 // API-level commands
-struct undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t *info, int *out_track_index);
+struct undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_profile_t *profile, int *out_track_index);
 struct undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, int start_tick, int duration, int *out_snippet_id);
 struct undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id, int tick_offset, int count,
                                                        const input_record_t *new_inputs);

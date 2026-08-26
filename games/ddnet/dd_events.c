@@ -1,4 +1,5 @@
 #include "dd_internal.h"
+#include "dd_profile.h"
 
 #include "dd_imgui.h"
 #include <float.h>
@@ -150,9 +151,8 @@ static int current_local_tick(ft_game *game, const ft_ui_frame *frame, int world
 static void generate_finish_events(ft_game *game, int world_index, int local_tick, int local_player, const SCharacterCore *character) {
   if (!character || character->m_RaceTime <= 0.f) return;
   const int track = game->engine->timeline_player_track((uint32_t)world_index, (uint32_t)local_player);
-  ft_player_setup setup = {.struct_size = sizeof(setup)};
-  const char *name = "nameless tee";
-  if (track >= 0 && game->engine->get_player_setup(track, &setup) && setup.name && setup.name[0]) name = setup.name;
+  char name[32];
+  dd_profile_display_name(game, track, name, sizeof(name));
 
   if (!has_event(game, world_index, local_tick, DD_EVENT_CHAT)) {
     dd_event_payload_t payload = {.magic = DD_EVENT_PAYLOAD_MAGIC, .type = DD_EVENT_CHAT, .team = 0, .client_id = -1};

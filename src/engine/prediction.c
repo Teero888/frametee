@@ -389,9 +389,8 @@ void prediction_render_menu(timeline_state_t *timeline) {
     for (int track_index = 0; track_index < timeline->player_track_count; ++track_index) {
       player_track_t *track = &timeline->player_tracks[track_index];
       if (track->group_index != group_index) continue;
-      const char *label = track->name[0] ? track->name : track->player_info.name;
       igPushID_Int(track_index);
-      changed |= igCheckbox(label && *label ? label : "Player", &track->prediction_enabled);
+      changed |= igCheckbox(track->name[0] ? track->name : "Track", &track->prediction_enabled);
       igPopID();
     }
     igUnindent(18.f * dpi);

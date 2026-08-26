@@ -155,7 +155,7 @@ void timeline_event_tooltip_content(const timeline_event_t *ev) {
 }
 
 // Walks the timeline once and records everything the active game reports along
-// the way. What counts as an event — a finish, a checkpoint, a death — is the
+// the way. What counts as an event (a finish, a checkpoint, a death) is the
 // game's decision; the engine only stores and shows them.
 static void collect_emit(void *user, const ft_timeline_event *event) {
   if (!user || !event || event->struct_size != sizeof(*event)) return;

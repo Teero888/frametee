@@ -185,6 +185,24 @@ int coins_taken(const ft_world *world) { return world ? static_cast<int>(std::po
 ft_vec2 to_ft(Vector2 value) { return {value.x, value.y}; }
 Vector2 to_ray(ft_vec2 value) { return {value.x, value.y}; }
 
+struct PlayerProfile {
+  uint32_t version;
+  float body[3];
+};
+
+constexpr uint32_t kProfileVersion = 1u;
+
+PlayerProfile default_profile() {
+  return PlayerProfile{kProfileVersion, {230.f / 255.f, 140.f / 255.f, 40.f / 255.f}};
+}
+
+PlayerProfile decode_profile(const ft_player_setup *setup) {
+  if (!setup || !setup->data || setup->data_size != sizeof(PlayerProfile)) return default_profile();
+  PlayerProfile stored{};
+  memcpy(&stored, setup->data, sizeof(stored));
+  return stored.version == kProfileVersion ? stored : default_profile();
+}
+
 ft_color to_ft(Color value, float opacity = 1.f) {
   const Vector4 normalized = ColorNormalize(value);
   return {normalized.x, normalized.y, normalized.z, normalized.w * opacity};
@@ -347,7 +365,7 @@ size_t level_serialize(ft_game *, const ft_level *level, void *out, size_t out_s
   const size_t needed = std::strlen(id);
   if (!out) return needed;
   if (out_size < needed) return 0;
-  std::memcpy(out, id, needed);
+  memcpy(out, id, needed);
   return needed;
 }
 
@@ -379,7 +397,7 @@ void world_copy(ft_game *, ft_world *dst, const ft_world *src) {
 void world_step(ft_game *, ft_world *world, const void *inputs, uint32_t player_count) {
   if (!world || !world->level) return;
   PlatformerInput in{};
-  if (inputs && player_count > 0) std::memcpy(&in, inputs, sizeof(in));
+  if (inputs && player_count > 0) memcpy(&in, inputs, sizeof(in));
 
   const float wanted = (in.right ? 1.f : 0.f) - (in.left ? 1.f : 0.f);
   world->velocity.x = Clamp((world->velocity.x + wanted * kMoveAccel) * kFriction, -kMaxSpeed, kMaxSpeed);
@@ -429,14 +447,14 @@ size_t world_serialize(ft_game *, const ft_world *world, void *out, size_t out_s
   const size_t needed = sizeof(ft_world);
   if (!out) return needed;
   if (out_size < needed) return 0;
-  std::memcpy(out, world, needed);
+  memcpy(out, world, needed);
   return needed;
 }
 
 bool world_deserialize(ft_game *, ft_world *world, const void *data, size_t size) {
   if (!world || !data || size < sizeof(ft_world)) return false;
   const ft_level *level = world->level; // the level belongs to this session
-  std::memcpy(world, data, sizeof(ft_world));
+  memcpy(world, data, sizeof(ft_world));
   world->level = level;
   return true;
 }
@@ -449,7 +467,7 @@ constexpr uint8_t kProjectData[] = {'R', 'A', 'Y', 'P', 1, 0, 0, 0};
 size_t project_save(ft_game *, void *out, size_t out_size) {
   if (!out) return sizeof(kProjectData);
   if (out_size < sizeof(kProjectData)) return 0;
-  std::memcpy(out, kProjectData, sizeof(kProjectData));
+  memcpy(out, kProjectData, sizeof(kProjectData));
   return sizeof(kProjectData);
 }
 
@@ -607,12 +625,8 @@ void render(ft_game *game, const ft_render_frame *frame) {
 
   const Vector2 pos = Vector2Lerp(before->position, now->position, a);
 
-  ft_color body = to_ft(ORANGE, opacity);
-  if (frame->player_setup_count > 0) {
-    body.r = frame->player_setups[0].primary_color.r;
-    body.g = frame->player_setups[0].primary_color.g;
-    body.b = frame->player_setups[0].primary_color.b;
-  }
+  const PlayerProfile profile = decode_profile(frame->player_setup_count > 0 ? &frame->player_setups[0] : nullptr);
+  const ft_color body{profile.body[0], profile.body[1], profile.body[2], opacity};
   api->draw_rect(6.f, {pos.x - 0.4f, pos.y - 0.4f}, {0.8f, 0.8f}, body);
   // A dot that leans the way the runner is moving, so direction reads at a glance.
   const float lean = now->velocity.x > 0.f ? 0.14f : (now->velocity.x < 0.f ? -0.14f : 0.f);
@@ -737,8 +751,40 @@ bool setting_set(ft_game *game, uint32_t index, const ft_value *value) {
 // built into it. The ig* symbols resolve against the editor at load time, so
 // nothing here links ImGui: only the headers are needed.
 
+// The panel for the selected runner. The editor opens no window of its own for
+// this: a game draws whatever its own customisation happens to be.
+void player_panel(ft_game *game, const ft_ui_frame *frame) {
+  if (!igBegin("Player Info", nullptr, ImGuiWindowFlags_NoFocusOnAppearing)) {
+    igEnd();
+    return;
+  }
+  const int32_t track = frame->state.selected_player;
+  if (track < 0) {
+    igTextDisabled("No player track selected.");
+    igEnd();
+    return;
+  }
+
+  ft_player_setup setup{};
+  setup.struct_size = sizeof(setup);
+  const bool have = game->engine->get_player_setup && game->engine->get_player_setup(track, &setup);
+  PlayerProfile profile = decode_profile(have ? &setup : nullptr);
+
+  igTextDisabled("Track: %s", have && setup.track_name ? setup.track_name : "?");
+  if (igColorEdit3("Runner color", profile.body, 0) && game->engine->set_player_profile) {
+    profile.version = kProfileVersion;
+    game->engine->set_player_profile(track, &profile, static_cast<uint32_t>(sizeof(profile)));
+  }
+  igEnd();
+}
+
 void ui(ft_game *game, const ft_ui_frame *frame) {
-  if (!game || !game->engine || !frame || frame->slot != FT_UI_SPLASH) return;
+  if (!game || !game->engine || !frame) return;
+  if (frame->slot == FT_UI_PANELS) {
+    player_panel(game, frame);
+    return;
+  }
+  if (frame->slot != FT_UI_SPLASH) return;
 
   igPushFont(nullptr, 22.f);
   igTextUnformatted("Raylib Platformer", nullptr);
@@ -780,6 +826,10 @@ void ui(ft_game *game, const ft_ui_frame *frame) {
     if (card_width < avail.x && i + 1 < kBuiltinLevelCount) igSameLine(0.f, 12.f);
   }
 }
+
+constexpr ft_panel_desc kPanels[] = {
+    {"Player Info", FT_DOCK_LEFT},
+};
 
 const ft_game_module kModule = {
     .struct_size = sizeof(ft_game_module),
@@ -853,6 +903,8 @@ const ft_game_module kModule = {
     .resources_destroy = nullptr,
 
     .ui = ui,
+    .panels = kPanels,
+    .panel_count = static_cast<uint32_t>(sizeof(kPanels) / sizeof(kPanels[0])),
     .collect_events = collect_events,
 
     .exporter_count = nullptr,

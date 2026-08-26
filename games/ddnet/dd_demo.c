@@ -1,4 +1,5 @@
 #include "dd_internal.h"
+#include "dd_profile.h"
 
 #include <ddnet_physics/collision.h>
 #include <ddnet_physics/gamecore.h>
@@ -16,34 +17,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-static float demo_clampf(float value, float minimum, float maximum) {
-  return value < minimum ? minimum : value > maximum ? maximum
-                                                     : value;
-}
-
-static uint32_t rgb_to_ddnet_color(ft_color color) {
-  const float r = demo_clampf(color.r, 0.f, 1.f);
-  const float g = demo_clampf(color.g, 0.f, 1.f);
-  const float b = demo_clampf(color.b, 0.f, 1.f);
-  const float maximum = fmaxf(r, fmaxf(g, b));
-  const float minimum = fminf(r, fminf(g, b));
-  const float delta = maximum - minimum;
-  float hue = 0.f;
-  const float lightness = (maximum + minimum) * 0.5f;
-  const float saturation = delta == 0.f ? 0.f : delta / (1.f - fabsf(2.f * lightness - 1.f));
-  if (delta != 0.f) {
-    if (maximum == r) hue = fmodf((g - b) / delta, 6.f);
-    else if (maximum == g) hue = (b - r) / delta + 2.f;
-    else hue = (r - g) / delta + 4.f;
-    hue /= 6.f;
-    if (hue < 0.f) hue += 1.f;
-  }
-  const float encoded_lightness = demo_clampf((lightness - 0.5f) / 0.5f, 0.f, 1.f);
-  const uint32_t h = (uint32_t)lroundf(hue * 255.f);
-  const uint32_t s = (uint32_t)lroundf(demo_clampf(saturation, 0.f, 1.f) * 255.f);
-  const uint32_t l = (uint32_t)lroundf(encoded_lightness * 255.f);
-  return (h << 16) | (s << 8) | l;
-}
 
 // SHA-256 Implementation
 // Necessary for creating a valid demo header
@@ -295,20 +268,25 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     if (p >= client_count || client_ids[p] < 0) continue;
     const int client_id = client_ids[p];
     const int track_index = game->engine->timeline_player_track((uint32_t)world_index, (uint32_t)p);
-    ft_player_setup setup = {0};
-    if (track_index < 0 || !game->engine->get_player_setup(track_index, &setup)) continue;
+    if (track_index < 0) continue;
+    dd_player_profile_t profile;
+    dd_profile_for_track(game, track_index, &profile);
     SCharacterCore *c_cur = &cur->m_pCharacters[p];
     SCharacterCore *c_prev = &prev->m_pCharacters[p];
 
     dd_netobj_client_info *ci = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, client_id, sizeof(dd_netobj_client_info));
-    const char *name = setup.name && setup.name[0] ? setup.name : "nameless tee";
+    char name[sizeof(profile.name)];
+    if (profile.name[0]) snprintf(name, sizeof(name), "%s", profile.name);
+    else dd_profile_display_name(game, track_index, name, sizeof(name));
     str_to_ints(ci->m_aName, 4, name);
-    str_to_ints(ci->m_aClan, 3, setup.tag ? setup.tag : "");
-    str_to_ints(ci->m_aSkin, 6, setup.appearance_id && setup.appearance_id[0] ? setup.appearance_id : "default");
+    str_to_ints(ci->m_aClan, 3, profile.clan);
+    str_to_ints(ci->m_aSkin, 6, profile.skin[0] ? profile.skin : "default");
     ci->m_Country = 0;
-    ci->m_UseCustomColor = setup.use_custom_color ? 1 : 0;
-    ci->m_ColorBody = setup.use_custom_color ? rgb_to_ddnet_color(setup.primary_color) : 0;
-    ci->m_ColorFeet = setup.use_custom_color ? rgb_to_ddnet_color(setup.secondary_color) : 0;
+    // The profile already holds what the protocol wants: DDNet's own packed
+    // hue/saturation/lightness, never converted to anything else on the way.
+    ci->m_UseCustomColor = profile.use_custom_color ? 1 : 0;
+    ci->m_ColorBody = profile.use_custom_color ? profile.color_body : 0;
+    ci->m_ColorFeet = profile.use_custom_color ? profile.color_feet : 0;
 
     dd_netobj_player_info *pi = demo_sb_add_item(sb, DD_NETOBJTYPE_PLAYERINFO, client_id, sizeof(dd_netobj_player_info));
     pi->m_Latency = client_options ? client_options[client_id] : 0;

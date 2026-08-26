@@ -5,7 +5,7 @@
 The editor itself is game-agnostic: it owns the timeline, snippets, undo/redo,
 projects and rendering, while a **game module** supplies the physics, the level
 format, the visuals and the rules. Modules are shared libraries that implement
-one C ABI, so they can be written in any language that compiles to one — the
+one C ABI, so they can be written in any language that compiles to one. the
 bundled examples are in C, C++ and Rust. [DDNet](https://github.com/ddnet/ddnet)
 is the game FrameTee ships with. See [docs/game-modules.md](docs/game-modules.md).
 
@@ -196,7 +196,7 @@ startup:
 
 The bundled modules are `ddnet` (C), a raylib-backed C++ platformer, and a
 Bevy ECS-backed Rust bouncer. Writing your own means implementing
-`include/frametee/game_abi.h` and exporting `ft_game_module_entry` — no engine
+`include/frametee/game_abi.h` and exporting `ft_game_module_entry`. no engine
 sources, no Vulkan, no ImGui required. Full guide:
 [docs/game-modules.md](docs/game-modules.md).
 

@@ -241,20 +241,43 @@ enum ddnet_player_prop {
   PROP_POSITION = 0,
   PROP_VELOCITY,
   PROP_ACTIVE_WEAPON,
+  PROP_HAS_HAMMER,
+  PROP_HAS_GUN,
+  PROP_HAS_SHOTGUN,
+  PROP_HAS_GRENADE,
+  PROP_HAS_LASER,
+  PROP_HAS_NINJA,
   PROP_HEALTH,
   PROP_ARMOR,
   PROP_FREEZE_TIME,
+  PROP_JUMPS,
   PROP_JUMPS_LEFT,
+  PROP_ENDLESS_JUMP,
   PROP_GROUNDED,
   PROP_HOOK_STATE,
   PROP_HOOKED_PLAYER,
   PROP_RACE_TIME,
   PROP_DEEP_FROZEN,
+  PROP_LIVE_FROZEN,
   PROP_JETPACK,
   PROP_ENDLESS_HOOK,
   PROP_SOLO,
+  PROP_COLLIDE_OTHERS,
+  PROP_HOOK_OTHERS,
+  PROP_HAMMER_HITS_OTHERS,
+  PROP_SHOTGUN_HITS_OTHERS,
+  PROP_GRENADE_HITS_OTHERS,
+  PROP_LASER_HITS_OTHERS,
+  PROP_TELEGUN,
+  PROP_TELEGRENADE,
+  PROP_TELELASER,
   PROP_COUNT
 };
+
+// Every flag below is a starting override the editor can offer, because every
+// one of them is something a run can be set up with: a tee that begins with a
+// jetpack, on its third jump, unable to hook anyone.
+#define DD_PROP_START (FT_PROP_WRITABLE | FT_PROP_STARTING)
 
 static const ft_prop_desc player_props[PROP_COUNT] = {
     [PROP_POSITION] = {.id = "position",
@@ -266,7 +289,7 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
     [PROP_VELOCITY] = {.id = "velocity",
                        .display_name = "Velocity",
                        .group = "Movement",
-                       .unit = "px/tick",
+                       .unit = "units/tick",
                        .kind = FT_VALUE_VEC2,
                        .flags = FT_PROP_WRITABLE | FT_PROP_STARTING | FT_PROP_SUMMARY},
     [PROP_ACTIVE_WEAPON] = {.id = "active_weapon",
@@ -276,6 +299,12 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
                             .flags = FT_PROP_WRITABLE | FT_PROP_STARTING | FT_PROP_SUMMARY,
                             .min_value = 0,
                             .max_value = NUM_WEAPONS - 1},
+    [PROP_HAS_HAMMER] = {.id = "has_hammer", .display_name = "Hammer", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_HAS_GUN] = {.id = "has_gun", .display_name = "Gun", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_HAS_SHOTGUN] = {.id = "has_shotgun", .display_name = "Shotgun", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_HAS_GRENADE] = {.id = "has_grenade", .display_name = "Grenade", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_HAS_LASER] = {.id = "has_laser", .display_name = "Laser", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_HAS_NINJA] = {.id = "has_ninja", .display_name = "Ninja", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_HEALTH] = {.id = "health", .display_name = "Health", .group = "Combat", .kind = FT_VALUE_INT, .flags = FT_PROP_WRITABLE},
     [PROP_ARMOR] = {.id = "armor", .display_name = "Armor", .group = "Combat", .kind = FT_VALUE_INT, .flags = FT_PROP_WRITABLE},
     [PROP_FREEZE_TIME] = {.id = "freeze_time",
@@ -283,8 +312,24 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
                           .group = "State",
                           .unit = "ticks",
                           .kind = FT_VALUE_INT,
-                          .flags = FT_PROP_WRITABLE | FT_PROP_SUMMARY},
-    [PROP_JUMPS_LEFT] = {.id = "jumps_left", .display_name = "Jumps used", .group = "Movement", .kind = FT_VALUE_INT, .flags = FT_PROP_WRITABLE},
+                          .flags = DD_PROP_START | FT_PROP_SUMMARY,
+                          .min_value = 0,
+                          .max_value = 500},
+    [PROP_JUMPS] = {.id = "jumps",
+                    .display_name = "Jumps",
+                    .group = "Movement",
+                    .kind = FT_VALUE_INT,
+                    .flags = DD_PROP_START,
+                    .min_value = 0,
+                    .max_value = 255},
+    [PROP_JUMPS_LEFT] = {.id = "jumps_left",
+                         .display_name = "Jumps already used",
+                         .group = "Movement",
+                         .kind = FT_VALUE_INT,
+                         .flags = DD_PROP_START,
+                         .min_value = 0,
+                         .max_value = 255},
+    [PROP_ENDLESS_JUMP] = {.id = "endless_jump", .display_name = "Endless jump", .group = "Movement", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_GROUNDED] = {.id = "grounded", .display_name = "Grounded", .group = "Movement", .kind = FT_VALUE_BOOL},
     [PROP_HOOK_STATE] = {.id = "hook_state", .display_name = "Hook state", .group = "Movement", .kind = FT_VALUE_INT},
     [PROP_HOOKED_PLAYER] = {.id = "hooked_player", .display_name = "Hooked player", .group = "Movement", .kind = FT_VALUE_INT},
@@ -294,10 +339,42 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
                         .unit = "s",
                         .kind = FT_VALUE_FLOAT,
                         .flags = FT_PROP_SUMMARY | FT_PROP_READ_ONLY_UI},
-    [PROP_DEEP_FROZEN] = {.id = "deep_frozen", .display_name = "Deep frozen", .group = "State", .kind = FT_VALUE_BOOL, .flags = FT_PROP_WRITABLE},
-    [PROP_JETPACK] = {.id = "jetpack", .display_name = "Jetpack", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = FT_PROP_WRITABLE},
-    [PROP_ENDLESS_HOOK] = {.id = "endless_hook", .display_name = "Endless hook", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = FT_PROP_WRITABLE},
-    [PROP_SOLO] = {.id = "solo", .display_name = "Solo", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = FT_PROP_WRITABLE},
+    [PROP_DEEP_FROZEN] = {.id = "deep_frozen", .display_name = "Deep frozen", .group = "State", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_LIVE_FROZEN] = {.id = "live_frozen", .display_name = "Live frozen", .group = "State", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_JETPACK] = {.id = "jetpack", .display_name = "Jetpack", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_ENDLESS_HOOK] = {.id = "endless_hook", .display_name = "Endless hook", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_SOLO] = {.id = "solo", .display_name = "Solo", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_TELEGUN] = {.id = "telegun", .display_name = "Telegun", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_TELEGRENADE] = {.id = "telegrenade", .display_name = "Telegrenade", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_TELELASER] = {.id = "telelaser", .display_name = "Telelaser", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    // Stored inverted: DDNet disables these, the editor asks whether they work,
+    // because "can hook others" reads better on a checkbox than "hook disabled".
+    [PROP_COLLIDE_OTHERS] = {.id = "collide_others",
+                             .display_name = "Collides with others",
+                             .group = "Interaction",
+                             .kind = FT_VALUE_BOOL,
+                             .flags = DD_PROP_START},
+    [PROP_HOOK_OTHERS] = {.id = "hook_others", .display_name = "Hooks others", .group = "Interaction", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_HAMMER_HITS_OTHERS] = {.id = "hammer_hits_others",
+                                 .display_name = "Hammer hits others",
+                                 .group = "Interaction",
+                                 .kind = FT_VALUE_BOOL,
+                                 .flags = DD_PROP_START},
+    [PROP_SHOTGUN_HITS_OTHERS] = {.id = "shotgun_hits_others",
+                                  .display_name = "Shotgun hits others",
+                                  .group = "Interaction",
+                                  .kind = FT_VALUE_BOOL,
+                                  .flags = DD_PROP_START},
+    [PROP_GRENADE_HITS_OTHERS] = {.id = "grenade_hits_others",
+                                  .display_name = "Grenade hits others",
+                                  .group = "Interaction",
+                                  .kind = FT_VALUE_BOOL,
+                                  .flags = DD_PROP_START},
+    [PROP_LASER_HITS_OTHERS] = {.id = "laser_hits_others",
+                                .display_name = "Laser hits others",
+                                .group = "Interaction",
+                                .kind = FT_VALUE_BOOL,
+                                .flags = DD_PROP_START},
 };
 
 // Projectiles and lasers, so they can be picked and inspected in the viewport.
@@ -414,8 +491,22 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   case PROP_FREEZE_TIME:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_FreezeTime};
     return true;
+  case PROP_HAS_HAMMER:
+  case PROP_HAS_GUN:
+  case PROP_HAS_SHOTGUN:
+  case PROP_HAS_GRENADE:
+  case PROP_HAS_LASER:
+  case PROP_HAS_NINJA:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_aWeaponGot[prop - PROP_HAS_HAMMER]};
+    return true;
+  case PROP_JUMPS:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_Jumps};
+    return true;
   case PROP_JUMPS_LEFT:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_JumpedTotal};
+    return true;
+  case PROP_ENDLESS_JUMP:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_EndlessJump};
     return true;
   case PROP_GROUNDED:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Grounded};
@@ -440,6 +531,38 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
     return true;
   case PROP_SOLO:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Solo};
+    return true;
+  case PROP_LIVE_FROZEN:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_LiveFrozen};
+    return true;
+  case PROP_TELEGUN:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_HasTelegunGun};
+    return true;
+  case PROP_TELEGRENADE:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_HasTelegunGrenade};
+    return true;
+  case PROP_TELELASER:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_HasTelegunLaser};
+    return true;
+  // The physics stores these as things that are switched off; the editor shows
+  // them as things that work, so both sides read the way their owner thinks.
+  case PROP_COLLIDE_OTHERS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_CollisionDisabled};
+    return true;
+  case PROP_HOOK_OTHERS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_HookHitDisabled};
+    return true;
+  case PROP_HAMMER_HITS_OTHERS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_HammerHitDisabled};
+    return true;
+  case PROP_SHOTGUN_HITS_OTHERS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_ShotgunHitDisabled};
+    return true;
+  case PROP_GRENADE_HITS_OTHERS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_GrenadeHitDisabled};
+    return true;
+  case PROP_LASER_HITS_OTHERS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_LaserHitDisabled};
     return true;
   default:
     return false;
@@ -477,8 +600,28 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   case PROP_FREEZE_TIME:
     c->m_FreezeTime = (int)value->as.i;
     return true;
+  case PROP_HAS_HAMMER:
+  case PROP_HAS_GUN:
+  case PROP_HAS_SHOTGUN:
+  case PROP_HAS_GRENADE:
+  case PROP_HAS_LASER:
+  case PROP_HAS_NINJA: {
+    const int weapon = (int)prop - PROP_HAS_HAMMER;
+    c->m_aWeaponGot[weapon] = value->as.b;
+    // A tee cannot hold a weapon it does not have; fall back to the hammer,
+    // which every tee keeps.
+    if (!value->as.b && c->m_ActiveWeapon == weapon) c->m_ActiveWeapon = WEAPON_HAMMER;
+    return true;
+  }
+  case PROP_JUMPS:
+    if (value->as.i < 0 || value->as.i > 255) return false;
+    c->m_Jumps = (int)value->as.i;
+    return true;
   case PROP_JUMPS_LEFT:
     c->m_JumpedTotal = (int)value->as.i;
+    return true;
+  case PROP_ENDLESS_JUMP:
+    c->m_EndlessJump = value->as.b;
     return true;
   case PROP_DEEP_FROZEN:
     c->m_DeepFrozen = value->as.b;
@@ -491,6 +634,36 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
     return true;
   case PROP_SOLO:
     c->m_Solo = value->as.b;
+    return true;
+  case PROP_LIVE_FROZEN:
+    c->m_LiveFrozen = value->as.b;
+    return true;
+  case PROP_TELEGUN:
+    c->m_HasTelegunGun = value->as.b;
+    return true;
+  case PROP_TELEGRENADE:
+    c->m_HasTelegunGrenade = value->as.b;
+    return true;
+  case PROP_TELELASER:
+    c->m_HasTelegunLaser = value->as.b;
+    return true;
+  case PROP_COLLIDE_OTHERS:
+    c->m_CollisionDisabled = !value->as.b;
+    return true;
+  case PROP_HOOK_OTHERS:
+    c->m_HookHitDisabled = !value->as.b;
+    return true;
+  case PROP_HAMMER_HITS_OTHERS:
+    c->m_HammerHitDisabled = !value->as.b;
+    return true;
+  case PROP_SHOTGUN_HITS_OTHERS:
+    c->m_ShotgunHitDisabled = !value->as.b;
+    return true;
+  case PROP_GRENADE_HITS_OTHERS:
+    c->m_GrenadeHitDisabled = !value->as.b;
+    return true;
+  case PROP_LASER_HITS_OTHERS:
+    c->m_LaserHitDisabled = !value->as.b;
     return true;
   default:
     return false;
@@ -1055,6 +1228,7 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
 
 static void ddnet_destroy(ft_game *game) {
   if (!game) return;
+  dd_player_panel_cleanup(game);
   dd_skin_browser_cleanup(game);
   dd_export_window_cleanup(game);
   for (int i = 0; i < game->particle_count; ++i)
@@ -1075,8 +1249,17 @@ static void ddnet_resources_destroy(ft_game *game) {
     free(game->maps);
     game->maps = NULL;
   }
+  dd_player_panel_cleanup(game);
   dd_skin_browser_cleanup(game);
 }
+
+// Where this game's windows want to open the first time they are ever seen.
+// The player panel takes the spot beside the editor's player list, which is
+// where the editor's own one used to sit.
+static const ft_panel_desc ddnet_panels[] = {
+    {.window_title = "Player Info", .dock = FT_DOCK_LEFT},
+    {.window_title = "Skin Browser", .dock = FT_DOCK_RIGHT},
+};
 
 // DDNet's start screen is its map browser: picking a map is how a run begins.
 // The editor hands over the panel and this game fills it.
@@ -1094,6 +1277,7 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
     }
     break;
   case FT_UI_PANELS:
+    dd_player_panel_render(game, frame);
     if (game->show_skin_browser) dd_skin_browser_render(game, frame);
     // Finish-event generation follows recording even while its editor is
     // closed, so let the manager handle this slot every frame.
@@ -1146,7 +1330,8 @@ static const ft_game_module module = {
 
     .constraints = {.struct_size = sizeof(ft_game_constraints),
                     .caps = FT_CAP_DYNAMIC_PLAYERS | FT_CAP_LINKED_INPUTS | FT_CAP_WORLD_SERIALIZE | FT_CAP_EXPORTERS |
-                            FT_CAP_LEVEL_FROM_MEMORY | FT_CAP_TIMELINE_EVENTS | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS,
+                            FT_CAP_LEVEL_FROM_MEMORY | FT_CAP_TIMELINE_EVENTS | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS |
+                            FT_CAP_HOSTS_STARTING_STATE,
                     .min_players = 0,
                     .max_players = 64,
                     .ticks_per_second = 50,
@@ -1199,6 +1384,8 @@ static const ft_game_module module = {
     .resources_create = ddnet_resources_create,
     .resources_destroy = ddnet_resources_destroy,
     .ui = ddnet_ui,
+    .panels = ddnet_panels,
+    .panel_count = (uint32_t)(sizeof(ddnet_panels) / sizeof(ddnet_panels[0])),
     .collect_events = ddnet_collect_events,
 
     .exporter_count = ddnet_exporter_count,

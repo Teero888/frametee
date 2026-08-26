@@ -1,4 +1,5 @@
 #include "dd_internal.h"
+#include "dd_profile.h"
 
 #include "dd_imgui.h"
 #include <limits.h>
@@ -99,8 +100,10 @@ static const char *world_name(ft_game *game, int world, char *fallback, size_t f
 
 static const char *track_name(ft_game *game, int world, int local, char *fallback, size_t fallback_size) {
   const int track = game->engine->timeline_player_track((uint32_t)world, (uint32_t)local);
-  ft_player_setup setup = {.struct_size = sizeof(setup)};
-  if (track >= 0 && game->engine->get_player_setup(track, &setup) && setup.name && setup.name[0]) return setup.name;
+  if (track >= 0) {
+    dd_profile_display_name(game, track, fallback, fallback_size);
+    return fallback;
+  }
   snprintf(fallback, fallback_size, "Track %d", local + 1);
   return fallback;
 }

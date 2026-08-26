@@ -604,7 +604,7 @@ int renderer_init(gfx_handler_t *handler) {
   // plane this distant costs nothing either: what would be a precision problem
   // in an ordinary depth buffer is where a reversed one is most exact. The far
   // plane has to clear a sky, and a sky is drawn on a dome tens of kilometres
-  // across — clip it and the world ends in the clear colour.
+  // across: clip it and the world ends in the clear colour.
   renderer->camera3.near_z = 0.05f;
   renderer->camera3.far_z = 200000.f;
 
@@ -870,8 +870,8 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
   // 2D draws are ordered by the z a game supplies, so they must not depth-test
   // against each other. 3D geometry has no such ordering and depends on it.
   //
-  // The world pass runs on a reversed depth range — the near plane at one, the
-  // far plane at zero — which is what puts a float depth buffer's precision
+  // The world pass runs on a reversed depth range (the near plane at one, the
+  // far plane at zero) which is what puts a float depth buffer's precision
   // where a perspective divide takes it away. Without it a track a kilometre
   // long z-fights with itself a few hundred metres out.
   const bool depth_3d = shader == renderer->primitive3d_shader;
@@ -2248,7 +2248,7 @@ void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
   // Reversed depth: the near plane lands on one and the far plane on zero.
   // Swapping the two distances is all a zero-to-one projection needs to produce
   // it, and it pairs a float depth buffer's dense range near zero with the
-  // perspective divide's sparse range far away — which is the difference
+  // perspective divide's sparse range far away, which is the difference
   // between a track that z-fights past a hundred metres and one that does not.
   // The pipeline compares greater-or-equal and the pass clears depth to zero.
   glm_perspective_rh_zo(c->fov_y, aspect, c->far_z, c->near_z, proj);

@@ -1,6 +1,6 @@
 // The module vtable: what the engine sees of TrackMania Nations Forever.
 //
-// Everything substantial lives next door — the sandbox in tmnf_sandbox.cpp, the
+// Everything substantial lives next door, the sandbox in tmnf_sandbox.cpp, the
 // track in tmnf_level.cpp, the drawing in tmnf_render.cpp, the view in
 // tmnf_camera.cpp and the start screen in tmnf_ui.cpp. What is left here is the
 // description of the game itself: its inputs, the properties it exposes for
@@ -89,15 +89,21 @@ enum PropIndex {
   PROP_SLIDING,
   PROP_FREE_WHEELING,
   PROP_TURBO,
+  PROP_ENGINE,
   PROP_CHECKPOINTS,
   PROP_RESPAWNS,
   PROP_TIME,
   PROP_COUNT,
 };
 
+// What a run can be set up with, rather than only watched: where the car is,
+// how fast it is going, and whether the engine drives it. The editor renders a
+// control for each of these and writes them into the world a group starts from.
+constexpr std::uint32_t kStartable = FT_PROP_WRITABLE | FT_PROP_STARTING;
+
 const ft_prop_desc kCarProps[PROP_COUNT] = {
-    {"position", "Position", "Motion", "m", FT_VALUE_VEC3, FT_PROP_SUMMARY, 0.0, 0.0},
-    {"velocity", "Velocity", "Motion", "m/s", FT_VALUE_VEC3, FT_PROP_SUMMARY, 0.0, 0.0},
+    {"position", "Position", "Motion", "m", FT_VALUE_VEC3, FT_PROP_SUMMARY | kStartable, 0.0, 0.0},
+    {"velocity", "Velocity", "Motion", "m/s", FT_VALUE_VEC3, FT_PROP_SUMMARY | kStartable, 0.0, 0.0},
     {"speed", "Speed", "Motion", "km/h", FT_VALUE_FLOAT, FT_PROP_SUMMARY, 0.0, 0.0},
     {"gear", "Gear", "Drivetrain", nullptr, FT_VALUE_INT, 0, 0.0, 0.0},
     {"rpm", "RPM", "Drivetrain", nullptr, FT_VALUE_FLOAT, 0, 0.0, 0.0},
@@ -108,6 +114,9 @@ const ft_prop_desc kCarProps[PROP_COUNT] = {
     {"sliding", "Sliding", "Contact", nullptr, FT_VALUE_BOOL, 0, 0.0, 0.0},
     {"free_wheeling", "Free wheeling", "Contact", nullptr, FT_VALUE_BOOL, 0, 0.0, 0.0},
     {"turbo", "Turbo", "Drivetrain", nullptr, FT_VALUE_FLOAT, 0, 0.0, 0.0},
+    // Off is the coasting car: the powertrain stops integrating and never
+    // starts again, which is a start worth trying a corner from.
+    {"engine", "Engine running", "Drivetrain", nullptr, FT_VALUE_BOOL, kStartable, 0.0, 0.0},
     {"checkpoints", "Checkpoints", "Race", nullptr, FT_VALUE_INT, FT_PROP_SUMMARY, 0.0, 0.0},
     {"respawns", "Respawns", "Race", nullptr, FT_VALUE_INT, 0, 0.0, 0.0},
     {"time", "Race time", "Race", "s", FT_VALUE_FLOAT, 0, 0.0, 0.0},
@@ -310,11 +319,46 @@ bool EntityPropGet(ft_game *, const ft_world *world, std::uint32_t entity_class,
   case PROP_SLIDING: return boolean(AnyWheelSliding(car));
   case PROP_FREE_WHEELING: return boolean(car.freeWheeling);
   case PROP_TURBO: return number(car.turbo);
+  case PROP_ENGINE: return boolean(world->state.EngineOn());
   case PROP_CHECKPOINTS: return integer(view.checkpointsCollected);
   case PROP_RESPAWNS: return integer(view.respawnCount);
   case PROP_TIME: return number(static_cast<double>(view.timeMs) / 1000.0);
   default: return false;
   }
+}
+
+// The three things about a car a run can be *set up* with. Everything else the
+// simulation reports is a consequence of driving and cannot be dictated.
+bool EntityPropSet(ft_game *game, ft_world *world, std::uint32_t entity_class, std::int32_t entity, std::uint32_t prop,
+                   const ft_value *value) {
+  if (!game || !world || !value || entity_class != FT_ENTITY_CLASS_PLAYER || entity != 0) return false;
+  if (!game->world || !world->state) return false;
+
+  sim::World::StateEdit edit;
+  switch (prop) {
+  case PROP_POSITION:
+    if (value->kind != FT_VALUE_VEC3) return false;
+    edit.position = sim::Vector3{value->as.v3.x, value->as.v3.y, value->as.v3.z};
+    break;
+  case PROP_VELOCITY:
+    if (value->kind != FT_VALUE_VEC3) return false;
+    edit.linearSpeed = sim::Vector3{value->as.v3.x, value->as.v3.y, value->as.v3.z};
+    break;
+  case PROP_ENGINE:
+    if (value->kind != FT_VALUE_BOOL) return false;
+    edit.engineOn = value->as.b;
+    break;
+  default: return false;
+  }
+
+  // One simulation serves every world, so editing a state is as much a use of
+  // it as stepping one is.
+  std::lock_guard<std::mutex> lock(game->mutex);
+  sim::State edited = game->world->WithEdit(world->state, edit);
+  if (!edited) return false;
+  world->state = std::move(edited);
+  world->view = world->state.View();
+  return true;
 }
 
 // --- readouts ----------------------------------------------------------------
@@ -447,6 +491,11 @@ bool SettingSet(ft_game *game, std::uint32_t index, const ft_value *value) {
 
 // --- the vtable --------------------------------------------------------------
 
+// Where this game's own windows open the first time they are seen.
+constexpr ft_panel_desc kPanels[] = {
+    {"Player Info", FT_DOCK_LEFT},
+};
+
 ft_game_module BuildModule() {
   ft_game_module module{};
   module.struct_size = sizeof(ft_game_module);
@@ -461,7 +510,7 @@ ft_game_module BuildModule() {
   module.info.thumbnail = "thumbnail.png";
 
   module.constraints.struct_size = sizeof(ft_game_constraints);
-  module.constraints.caps = FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS | FT_CAP_TIMELINE_EVENTS;
+  module.constraints.caps = FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS | FT_CAP_TIMELINE_EVENTS | FT_CAP_HOSTS_STARTING_STATE;
   module.constraints.dimensions = FT_DIMENSIONS_3D;
   module.constraints.min_players = 1;
   module.constraints.max_players = 1;
@@ -499,9 +548,12 @@ ft_game_module BuildModule() {
 
   module.entity_count = EntityCount;
   module.entity_prop_get = EntityPropGet;
+  module.entity_prop_set = EntityPropSet;
 
   module.render = Render;
   module.ui = Ui;
+  module.panels = kPanels;
+  module.panel_count = static_cast<std::uint32_t>(sizeof(kPanels) / sizeof(kPanels[0]));
   module.camera_update = CameraUpdate;
 
   module.status_lines = StatusLines;

@@ -579,10 +579,8 @@ static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, 
     player_track_t *new_track = &ts->player_tracks[insert_index + i];
     memset(new_track, 0, sizeof(player_track_t));
     snprintf(new_track->name, sizeof(new_track->name), "Track %d", existing_group_count + i + 1);
-    for (int channel = 0; channel < 4; ++channel) {
-      new_track->player_info.primary_color[channel] = 1.f;
-      new_track->player_info.secondary_color[channel] = 1.f;
-    }
+    // A fresh track carries no profile. The game fills one in the first time
+    // its panel is used, and reads "none" as its own defaults until then.
     new_track->group_index = group_index;
     new_track->linked_source_player = 0;
     const ft_input_schema *schema = game_input_schema(model_host(ts));
@@ -1043,6 +1041,38 @@ void model_apply_starting_config(timeline_state_t *ts, int track_index) {
     const int prop = model_find_player_prop(host, sc->overrides[i].prop_id);
     if (prop < 0) continue;
     gh_entity_prop_set(host, world, FT_ENTITY_CLASS_PLAYER, local_index, (unsigned)prop, &sc->overrides[i].value);
+  }
+  model_recalc_physics(ts, 0);
+}
+
+// Puts a group's starting world back the way the level made it, then re-applies
+// whatever overrides are still enabled on its tracks.
+//
+// Overrides are written straight into the starting world, so turning one off
+// cannot simply "unset" it: the only thing that knows what the level said is
+// the level. Rebuilding from it and re-applying the rest is what restores a
+// pristine start.
+void model_rebuild_group_start(timeline_state_t *ts, int group_index) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count) return;
+  game_host_t *host = model_host(ts);
+  const ft_level *level = ts->ui->gfx_handler->level;
+  if (!level) return;
+
+  timeline_group_t *group = ts->groups[group_index];
+  ft_world *pristine = gh_world_create(host, level, 0, group_index);
+  if (!pristine) return;
+
+  const int tracks = model_group_track_count(ts, group_index);
+  for (int p = gh_world_player_count(host, pristine); p < tracks; ++p) gh_world_add_player(host, pristine, -1, NULL);
+  while (gh_world_player_count(host, pristine) > tracks)
+    gh_world_remove_player(host, pristine, gh_world_player_count(host, pristine) - 1);
+
+  gh_world_copy(host, group->initial_world, pristine);
+  gh_world_destroy(host, pristine);
+
+  for (int track_index = 0; track_index < ts->player_track_count; ++track_index) {
+    if (ts->player_tracks[track_index].group_index != group_index) continue;
+    if (ts->player_tracks[track_index].starting_config.enabled) model_apply_starting_config(ts, track_index);
   }
   model_recalc_physics(ts, 0);
 }

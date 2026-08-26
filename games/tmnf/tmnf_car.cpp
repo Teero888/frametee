@@ -2,8 +2,8 @@
 //
 // The authored model comes out of the installed packs (see
 // tmnf_vehicle_model.cpp) and is what is drawn whenever it could be read. The
-// modelled car below stands in when it could not — no packs, a pack the decoder
-// does not recognise — so the editor still shows something car-shaped rather
+// modelled car below stands in when it could not: no packs, or a pack the
+// decoder does not recognise. The editor still shows something car-shaped rather
 // than nothing at all. It is built to the dimensions the simulation actually
 // uses, which come out of the collision ellipsoids.
 //
@@ -172,7 +172,7 @@ struct CarMesh {
 };
 
 // The livery is the editor's accent colour for the world, so the body is
-// rebuilt only when that changes — which is to say almost never.
+// rebuilt only when that changes, which is to say almost never.
 const CarMesh &Mesh(ft_color livery) {
   static CarMesh mesh;
   if (!mesh.built || mesh.livery.r != livery.r || mesh.livery.g != livery.g || mesh.livery.b != livery.b) {
@@ -289,19 +289,19 @@ void DrawCar(ft_game *game, const ft_render_frame *frame, const CarPose &pose) {
   const Quat steered = QuatFromAxisAngle(ft_vec3{0.f, 1.f, 0.f}, steer);
 
   // And all four roll. The simulation never says how far a wheel has turned, so
-  // the angle is carried between frames per world — see WheelSpin — and the
+  // the angle is carried between frames per world (see WheelSpin), and the
   // wheels of a prediction ghost turn independently of the run's.
   const std::size_t spin_slot =
       frame->world_index >= 0 ? static_cast<std::size_t>(frame->world_index) % kMaxSpinnyWorlds : 0u;
   const std::uint64_t now_ms = view.timeMs + static_cast<std::uint64_t>(std::clamp(frame->alpha, 0.f, 1.f) * kTickMs);
   // The car looks down +Z with +X to its right, so a wheel rolls about its own
   // +X. Turning that way carries the top of the wheel towards +Z, which is what
-  // rolling forwards does — the contact patch goes backwards and the top goes
+  // rolling forwards does: the contact patch goes backwards and the top goes
   // the way the car is going.
   const float roll = game->wheel_spin[spin_slot].Advance(now_ms, view.car.signedSpeed, kWheelRadius);
   const Quat rolled = QuatFromAxisAngle(ft_vec3{1.f, 0.f, 0.f}, roll);
 
-  const ft_color livery = frame->accent.a > 0.01f ? frame->accent : ft_color{0.20f, 0.58f, 1.f, 1.f};
+  const ft_color livery = LiveryFor(frame, 0);
 
   if (game->vehicle.loaded) {
     DrawAuthored(api, game->vehicle, frame, pose, steered, rolled, livery, opacity);

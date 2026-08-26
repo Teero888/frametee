@@ -187,7 +187,7 @@ struct Frustum {
     // Zero-to-one clip space, so the two depth planes are z >= 0 and w - z >= 0
     // rather than the symmetric pair the OpenGL convention uses. The engine
     // renders with a reversed range, which swaps which of these is the near
-    // plane and which is the far one — and leaves the volume they bound
+    // plane and which is the far one, and leaves the volume they bound
     // identical, which is why nothing here has to know about it.
     set(4, r2[0], r2[1], r2[2], r2[3]);                                 // near
     set(5, r3[0] - r2[0], r3[1] - r2[1], r3[2] - r2[2], r3[3] - r2[3]); // far

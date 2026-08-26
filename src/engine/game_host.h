@@ -133,6 +133,9 @@ void gh_linked_input_update(game_host_t *host, const ft_linked_input_frame *fram
 void gh_update(game_host_t *host, const ft_engine_state *state);
 void gh_render(game_host_t *host, const ft_render_frame *frame);
 void gh_ui(game_host_t *host, const ft_ui_frame *frame);
+// Default placement for the windows the active game opens, or NULL when it asks
+// for none. Borrowed from the module and valid while it stays loaded.
+const ft_panel_desc *gh_panels(game_host_t *host, uint32_t *out_count);
 bool gh_resources_create(game_host_t *host);
 void gh_resources_destroy(game_host_t *host);
 

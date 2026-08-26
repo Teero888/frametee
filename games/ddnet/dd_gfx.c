@@ -437,51 +437,64 @@ static int load_skin_path_into_layer(ft_game *game, const char *name, const char
   return ok ? layer : -1;
 }
 
-static int load_skin_into_layer(ft_game *game, const char *name, int layer) {
-  if (!name || !*name || strstr(name, "..") || strchr(name, '/') || strchr(name, '\\')) return -1;
+static bool skin_file_exists(ft_game *game, const char *path) {
+  void *data = NULL;
+  size_t size = 0;
+  if (!game->engine->read_file(path, &data, &size)) return false;
+  game->engine->free_file_data(data);
+  return true;
+}
+
+// Where a skin called `name` actually lives. One search order, shared by the
+// renderer and by the panel that wants a thumbnail of it: this module's cache
+// first, then the skins shipped beside the game, then the client's own.
+bool dd_gfx_find_skin_file(ft_game *game, const char *name, char *out, size_t out_size) {
+  if (!game || !name || !*name || !out || out_size == 0) return false;
+  if (strstr(name, "..") || strchr(name, '/') || strchr(name, '\\')) return false;
 
   char relative[256];
   snprintf(relative, sizeof(relative), "skins/%s.png", name);
-  char path[1024];
-  game->engine->resolve_cache_path(relative, path, sizeof(path));
-  int loaded = load_skin_path_into_layer(game, name, path, layer);
-  if (loaded >= 0) return loaded;
 
-  game->engine->resolve_data_path(relative, path, sizeof(path));
-  loaded = load_skin_path_into_layer(game, name, path, layer);
-  if (loaded >= 0) return loaded;
+  game->engine->resolve_cache_path(relative, out, out_size);
+  if (skin_file_exists(game, out)) return true;
+
+  game->engine->resolve_data_path(relative, out, out_size);
+  if (skin_file_exists(game, out)) return true;
 
 #ifdef _WIN32
   const char *base = getenv("APPDATA");
   if (base) {
-    snprintf(path, sizeof(path), "%s\\frametee\\skins\\%s.png", base, name);
-    loaded = load_skin_path_into_layer(game, name, path, layer);
-    if (loaded >= 0) return loaded;
+    snprintf(out, out_size, "%s\\frametee\\skins\\%s.png", base, name);
+    if (skin_file_exists(game, out)) return true;
   }
   static const char *subdirs[] = {"Teeworlds\\skins", "Teeworlds\\downloadedskins", "DDNet\\skins", "DDNet\\downloadedskins"};
 #else
   const char *base = getenv("HOME");
   const char *config_home = getenv("XDG_CONFIG_HOME");
   if (config_home) {
-    snprintf(path, sizeof(path), "%s/frametee/skins/%s.png", config_home, name);
-    loaded = load_skin_path_into_layer(game, name, path, layer);
-    if (loaded >= 0) return loaded;
+    snprintf(out, out_size, "%s/frametee/skins/%s.png", config_home, name);
+    if (skin_file_exists(game, out)) return true;
   } else if (base) {
-    snprintf(path, sizeof(path), "%s/.config/frametee/skins/%s.png", base, name);
-    loaded = load_skin_path_into_layer(game, name, path, layer);
-    if (loaded >= 0) return loaded;
+    snprintf(out, out_size, "%s/.config/frametee/skins/%s.png", base, name);
+    if (skin_file_exists(game, out)) return true;
   }
   static const char *subdirs[] = {".teeworlds/skins", ".teeworlds/downloadedskins", ".local/share/ddnet/skins",
                                   ".local/share/ddnet/downloadedskins"};
 #endif
   if (base) {
     for (unsigned i = 0; i < sizeof(subdirs) / sizeof(subdirs[0]); ++i) {
-      snprintf(path, sizeof(path), "%s%c%s%c%s.png", base, DD_GFX_PATH_SEP, subdirs[i], DD_GFX_PATH_SEP, name);
-      loaded = load_skin_path_into_layer(game, name, path, layer);
-      if (loaded >= 0) return loaded;
+      snprintf(out, out_size, "%s%c%s%c%s.png", base, DD_GFX_PATH_SEP, subdirs[i], DD_GFX_PATH_SEP, name);
+      if (skin_file_exists(game, out)) return true;
     }
   }
-  return -1;
+  out[0] = '\0';
+  return false;
+}
+
+static int load_skin_into_layer(ft_game *game, const char *name, int layer) {
+  char path[1024];
+  if (!dd_gfx_find_skin_file(game, name, path, sizeof(path))) return -1;
+  return load_skin_path_into_layer(game, name, path, layer);
 }
 
 int dd_gfx_skin_index(ft_game *game, const char *name) {
@@ -536,8 +549,8 @@ int dd_gfx_load_skin_path(ft_game *game, const char *name, const char *path) {
   return gfx->default_skin;
 }
 
-bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *path, ft_texture *destination, uint32_t destination_x,
-                                uint32_t destination_y) {
+bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *path, const dd_skin_colors_t *colors,
+                                ft_texture *destination, uint32_t destination_x, uint32_t destination_y) {
   if (!game || !game->gfx.ready || !destination || !game->engine->render_instances_preview) return false;
   uint8_t *rgba = NULL, *weights = NULL;
   if (!load_skin_path_layers(game, name, path, &rgba, &weights)) return false;
@@ -551,8 +564,15 @@ bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *pat
   instance.skin_index = DD_SKIN_PREVIEW_LAYER;
   instance.eye_state = 6;
   instance.dir[0] = 1.f;
+  // A thumbnail of a skin is drawn plain; a thumbnail of a particular tee is
+  // drawn in that tee's own colours, which is what the player panel wants.
   instance.col_body[0] = instance.col_body[1] = instance.col_body[2] = 1.f;
   instance.col_feet[0] = instance.col_feet[1] = instance.col_feet[2] = 1.f;
+  if (colors && colors->custom) {
+    glm_vec3_copy((float *)colors->body, instance.col_body);
+    glm_vec3_copy((float *)colors->feet, instance.col_feet);
+    instance.col_custom = 1;
+  }
   instance.body[0] = anim.body.x;
   instance.body[1] = anim.body.y;
   instance.body[2] = anim.body.angle;

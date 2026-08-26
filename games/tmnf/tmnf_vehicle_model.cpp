@@ -3,7 +3,7 @@
 // ForeverValidator decodes the vehicle for physics only: its public API hands
 // back wheel definitions and collision ellipsoids, and never touches the visual
 // half of the same file. The model is there in the pack though, and the
-// validator already contains everything needed to reach it — a pack reader, a
+// validator already contains everything needed to reach it: a pack reader, a
 // solid-archive decoder and a scene-tree assembler, all of which it uses to
 // build the track's meshes.
 //
@@ -69,8 +69,8 @@ const char *TreeName(const CPlugTree &tree) {
   return id.IsLocalName() != 0 ? id.GetString() : nullptr;
 }
 
-// The turning parts. Names are prefixed with the detail level they belong to —
-// "1FLWheel", "2FLWheel" — and only the wheel itself turns: the suspension arms
+// The turning parts. Names are prefixed with the detail level they belong to
+// ("1FLWheel", "2FLWheel") and only the wheel itself turns: the suspension arms
 // and the hub around it are anchored to the chassis and would swing out of the
 // bodywork if they were turned about the wheel's own centre.
 //
@@ -144,7 +144,7 @@ ft_vec3 TransformDirection(const GmIso4 &iso, const GmVec3 &d) {
 // path to put them through, so there is nothing to sample. The materials do not
 // help either: the validator only attaches them when a pack-wide material
 // repository is installed on the load session, which it does for the map and
-// not for a solid decoded on its own — so every node here comes back with a
+// not for a solid decoded on its own, so every node here comes back with a
 // null material, and asking it for a surface id would be asking nothing.
 //
 // So the tyres are black, and the rest is left white for the caller to paint
@@ -164,7 +164,7 @@ ft_color BaseColorFor(const CPlugMaterial *material, std::uint8_t part) {
 //
 // A track's materials are linked for us: the load session is given a material
 // repository and the validator resolves each material node against it. A solid
-// decoded on its own gets no repository — there is nowhere to hand one in — so
+// decoded on its own gets no repository (there is nowhere to hand one in), so
 // nothing ever classifies its material nodes, no definitions are made, and every
 // tree comes back with no material at all. That is why the car had no picture on
 // it while the track around it did.
@@ -431,7 +431,7 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
 
   // The finest level the module is willing to draw. The car is submitted a
   // triangle at a time, once per world on screen, so the most detailed stadium
-  // car — fifty thousand triangles, most of them in bodywork panel gaps — costs
+  // car (fifty thousand triangles, most of them in bodywork panel gaps) costs
   // more than the whole track in view and shows nothing extra at the distance
   // the camera actually sits at. The coarser levels are the game's own, authored
   // for exactly this.

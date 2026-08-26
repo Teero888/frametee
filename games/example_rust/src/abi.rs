@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 12;
+pub const FT_GAME_ABI_VERSION: u32 = 13;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -180,15 +180,15 @@ pub struct ft_player_view {
     pub run_start_tick: i32,
 }
 
+/// The editor's own label for a track, plus the game's own profile bytes for it.
+/// What a player can be customised into is this module's business, so the editor
+/// carries the profile without reading it.
 #[repr(C)]
 pub struct ft_player_setup {
     pub struct_size: u32,
-    pub name: *const c_char,
-    pub tag: *const c_char,
-    pub appearance_id: *const c_char,
-    pub primary_color: ft_color,
-    pub secondary_color: ft_color,
-    pub use_custom_color: bool,
+    pub track_name: *const c_char,
+    pub data: *const c_void,
+    pub data_size: u32,
     pub linked_player: i32,
 }
 
@@ -390,7 +390,7 @@ pub struct ft_engine_api {
     pub open_file_dialog: *const c_void,
     pub visit_directory: *const c_void,
     pub get_player_setup: *const c_void,
-    pub set_player_appearance: *const c_void,
+    pub set_player_profile: *const c_void,
     pub timeline_world_count: *const c_void,
     pub timeline_world_info: *const c_void,
     pub timeline_world_pair: *const c_void,
@@ -473,6 +473,8 @@ pub struct ft_game_module {
     pub resources_destroy: *const c_void,
 
     pub ui: Option<unsafe extern "C" fn(*mut c_void, *const ft_ui_frame)>,
+    pub panels: *const c_void,
+    pub panel_count: u32,
     pub collect_events: *const c_void,
 
     pub exporter_count: *const c_void,

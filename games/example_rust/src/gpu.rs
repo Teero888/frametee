@@ -39,9 +39,7 @@ pub unsafe fn adopt(dev: &ft_gpu_device) -> Option<HostGpu> {
     if dev.api != FT_GPU_API_VULKAN || dev.instance.is_null() || dev.device.is_null() {
         return None;
     }
-
-    // The loader is already resident in this process — the engine linked it —
-    // so this resolves the same entry points the engine is using.
+    
     let entry = ash::Entry::load().ok()?;
     let raw_instance = ash::Instance::load(
         entry.static_fn(),

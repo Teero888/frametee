@@ -1,13 +1,3 @@
-// A three-dimensional game, to show that the engine is not a 2D tool with a
-// third axis bolted on.
-//
-// It is deliberately the same shape as the Bevy bouncer — a body bouncing
-// around a box — so the difference between them is only the dimension they live
-// in. Everything here is drawn with the engine's own primitives, which is the
-// point: a 3D game gets depth-tested lines, triangles and boxes from the engine
-// exactly as a 2D game gets rects and circles, without bringing a renderer of
-// its own.
-
 #include <frametee/game_abi.h>
 
 #include <cimgui.h>

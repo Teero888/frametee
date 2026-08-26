@@ -34,6 +34,11 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type (default Release)" FORCE)
 endif()
 
+# Keep every build-tree runpath relative to the binary that carries it, so the
+# layout the release workflow copies out of build/ keeps resolving once it is
+# unpacked somewhere else. Without this CMake bakes in absolute build paths.
+set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+
 option(ENABLE_AGGRESSIVE_OPTIM "Enable aggressive optimizations with LTO and native tuning" OFF)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(PGO)
@@ -80,7 +85,8 @@ set(SRCS
 	src/renderer/graphics_backend.c
 	src/renderer/renderer.c
 	src/user_interface/keybinds.c
-	src/user_interface/player_info.c
+	src/user_interface/player_profile.c
+	src/user_interface/starting_state.c
 	src/user_interface/snippet_editor.c
 	src/user_interface/timeline_events.c
 	src/user_interface/undo_redo.c
@@ -213,7 +219,14 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 )
 
 # add and link libs
+# cglm defaults to a shared build, which leaves the executable with a
+# NEEDED libcglm.so.0 that only resolves inside the build tree. Nothing links
+# it out of process, so build it static and fold it into the binaries that use
+# it; PIC is required because the game modules are shared libraries.
+set(CGLM_STATIC ON CACHE BOOL "Build cglm as a static library" FORCE)
+set(CGLM_SHARED OFF CACHE BOOL "Do not build cglm as a shared library" FORCE)
 add_subdirectory(libs/cglm)
+set_target_properties(cglm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_subdirectory(libs/nfd)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE

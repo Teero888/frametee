@@ -84,7 +84,7 @@ typedef struct {
   undo_command_t base;
   int track_index;
   int group_index;
-  player_info_t player_info;
+  player_profile_t player_profile;
 } AddTrackCommand;
 
 typedef struct {
@@ -481,6 +481,74 @@ undo_command_t *commands_create_group_visibility_change(ui_handler_t *ui, int gr
   if (!command) return NULL;
   command->before.boolean = before;
   command->after.boolean = ui->timeline.groups[group_index]->visible;
+  return &command->base;
+}
+
+// A track's whole starting configuration, before and after. It is one edit as
+// far as the user is concerned, "the start changed", and the config is small
+// and pointer-free apart from the inline strings, so both states are simply
+// held by value.
+typedef struct {
+  undo_command_t base;
+  int track_index;
+  starting_config_t before;
+  starting_config_t after;
+} StartingConfigCommand;
+
+static bool starting_configs_equal(const starting_config_t *a, const starting_config_t *b) {
+  if (a->enabled != b->enabled || a->override_count != b->override_count) return false;
+  for (int i = 0; i < a->override_count; ++i) {
+    const starting_override_t *left = &a->overrides[i];
+    const starting_override_t *right = &b->overrides[i];
+    if (strcmp(left->prop_id, right->prop_id) != 0 || left->value.kind != right->value.kind) return false;
+    // The string variant's pointer is inline storage, so it always differs
+    // between two copies; the text behind it is what changed or did not.
+    if (left->value.kind == FT_VALUE_STRING) {
+      if (strcmp(left->string_value, right->string_value) != 0) return false;
+    } else if (memcmp(&left->value.as, &right->value.as, sizeof(left->value.as)) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void apply_starting_config(struct timeline_state *ts, int track_index, const starting_config_t *config) {
+  if (track_index < 0 || track_index >= ts->player_track_count) return;
+  player_track_t *track = &ts->player_tracks[track_index];
+  track->starting_config = *config;
+  model_rebind_starting_strings(&track->starting_config);
+  model_rebuild_group_start(ts, model_track_group_index(ts, track_index));
+}
+
+static void undo_starting_config(void *cmd, void *ts_void) {
+  StartingConfigCommand *c = (StartingConfigCommand *)cmd;
+  apply_starting_config((struct timeline_state *)ts_void, c->track_index, &c->before);
+}
+
+static void redo_starting_config(void *cmd, void *ts_void) {
+  StartingConfigCommand *c = (StartingConfigCommand *)cmd;
+  apply_starting_config((struct timeline_state *)ts_void, c->track_index, &c->after);
+}
+
+static void cleanup_starting_config(void *cmd) { free(cmd); }
+
+undo_command_t *commands_create_starting_config_change(ui_handler_t *ui, int track_index, const starting_config_t *before,
+                                                       const char *description) {
+  if (!ui || !before || track_index < 0 || track_index >= ui->timeline.player_track_count) return NULL;
+  const starting_config_t *after = &ui->timeline.player_tracks[track_index].starting_config;
+  if (starting_configs_equal(before, after)) return NULL;
+
+  StartingConfigCommand *command = calloc(1, sizeof(*command));
+  if (!command) return NULL;
+  snprintf(command->base.description, sizeof(command->base.description), "%s", description);
+  command->base.undo = undo_starting_config;
+  command->base.redo = redo_starting_config;
+  command->base.cleanup = cleanup_starting_config;
+  command->track_index = track_index;
+  command->before = *before;
+  command->after = *after;
+  model_rebind_starting_strings(&command->before);
+  model_rebind_starting_strings(&command->after);
   return &command->base;
 }
 
@@ -1537,14 +1605,14 @@ static void cleanup_remove_track_cmd(void *cmd) {
 
 // API Command Implementations
 
-undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t *info, int *out_track_index) {
+undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_profile_t *profile, int *out_track_index) {
   timeline_state_t *ts = &ui->timeline;
 
   player_track_t *new_track = model_add_new_track(ts, 1);
   if (!new_track) return NULL;
   int new_index = (int)(new_track - ts->player_tracks);
 
-  if (info) new_track->player_info = *info;
+  if (profile) new_track->player_profile = *profile;
   if (out_track_index) *out_track_index = new_index;
 
   AddTrackCommand *cmd = calloc(1, sizeof(AddTrackCommand));
@@ -1554,7 +1622,7 @@ undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_info_t 
   cmd->base.cleanup = cleanup_add_track_cmd;
   cmd->track_index = new_index;
   cmd->group_index = new_track->group_index;
-  cmd->player_info = new_track->player_info;
+  cmd->player_profile = new_track->player_profile;
 
   return &cmd->base;
 }
@@ -1576,7 +1644,7 @@ static void redo_add_track(void *cmd, void *ts_void) {
   if (!new_track) return;
 
   c->track_index = (int)(new_track - ts->player_tracks);
-  new_track->player_info = c->player_info;
+  new_track->player_profile = c->player_profile;
 }
 
 static void cleanup_add_track_cmd(void *cmd) { free(cmd); }

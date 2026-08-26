@@ -292,8 +292,8 @@ int input_glfw_key_from_imgui(ImGuiKey key) {
 
 ImGuiKey input_capture_pressed_key(void) {
   // A modifier is normally part of a combo rather than its key, so a real key
-  // always wins. On its own, though, it is a perfectly good bind — a freecam
-  // wants Shift to sprint — so it is remembered and used when nothing else was
+  // always wins. On its own, though, it is a perfectly good bind: a freecam
+  // wants Shift to sprint, so it is remembered and used when nothing else was
   // pressed.
   ImGuiKey modifier_only = ImGuiKey_None;
 

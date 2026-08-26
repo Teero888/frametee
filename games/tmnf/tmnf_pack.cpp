@@ -6,8 +6,8 @@
 // painted on it, because nothing in a validator has any use for one.
 //
 // This file does that last step. It is the same pack reader, the same GBX
-// reference tables and the same material decoder the validator uses — nothing
-// here reimplements a format the submodule already knows — followed by a DDS
+// reference tables and the same material decoder the validator uses (nothing
+// here reimplements a format the submodule already knows) followed by a DDS
 // decoder, which it does not have, because the textures are the one thing it
 // never looks at.
 //
@@ -71,8 +71,8 @@ std::string NormalizePath(std::string_view path) {
 
 // Where the installed game keeps the files its packs only point at.
 //
-// The pictures are not in the packs. A .pak holds the descriptors — the
-// materials, the shaders, the bitmaps — and each bitmap names an image that
+// The pictures are not in the packs. A .pak holds the descriptors (the
+// materials, the shaders, the bitmaps) and each bitmap names an image that
 // lives on disk under GameData, which is why a copy of Packs on its own is
 // enough to simulate a track and not enough to draw one.
 //
@@ -145,8 +145,8 @@ bool PackSet::OpenOne(const std::string &name) {
 }
 
 // A file's bytes, whichever pack holds it. Content is spread across the packs
-// with no rule a caller could apply — a stadium block's material sits in
-// Stadium.pak and the cloud texture it reflects sits in Game.pak — so the
+// with no rule a caller could apply: a stadium block's material sits in
+// Stadium.pak and the cloud texture it reflects sits in Game.pak, so the
 // lookup simply asks each of them.
 //
 // Most of a pack's entries are stored under a hash of their name rather than
@@ -159,7 +159,7 @@ bool PackSet::Read(std::string_view plain_path, std::vector<unsigned char> *out)
 
   // Every way the packs are known to file something. A hash is taken over the
   // path below a known media folder, so which folder a file lives under decides
-  // how it is named — and the rules for that are the validator's, not this
+  // how it is named, and the rules for that are the validator's, not this
   // module's guesses.
   std::vector<std::string> hashed;
   const auto add_hash = [&](int (*hash)(const char *, char *, std::size_t)) {
@@ -293,7 +293,7 @@ std::optional<std::uint8_t> PackSet::MaterialSurface(std::string_view plain_path
 // Every material the packs name, under the name they name it by.
 //
 // A pack files almost everything under a hash of its path, so the file listing
-// alone never says what a material is called — and the validator's material
+// alone never says what a material is called, and the validator's material
 // repository is keyed on the name, not the hash. The names are written down, but
 // in the *referring* files: a solid says which materials it uses, a material
 // says which others it derives from. So the vocabulary is the union of every

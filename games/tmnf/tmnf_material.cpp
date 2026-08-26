@@ -3,7 +3,7 @@
 // A TrackMania material names several textures and only one of them is the
 // surface's own appearance: beside it sit a normal map, a specular ramp, a
 // baked occlusion pass, an environment cube. Which is which is not a property
-// of the file names — plenty of them are called things like StadiumWarpO — it
+// of the file names (plenty of them are called things like StadiumWarpO), it
 // is the *sampler* each one is bound to. "Diffuse" is the picture. So the
 // material has to be read rather than guessed at, and this reads it.
 //
@@ -12,7 +12,7 @@
 // there is patched: this is a second pass over the same bytes that keeps what
 // the first one discards. The two therefore have to agree about the format
 // exactly, and where the shape of a chunk looks arbitrary here it is because it
-// is arbitrary there — see
+// is arbitrary there; see
 // ForeverValidator/src/format/materials/material_archive_decoder.cpp.
 //
 // The roles are TrackMania's own vocabulary; the order they are preferred in
@@ -110,7 +110,7 @@ public:
     return nullptr;
   }
 
-  // The node reference itself, and — when it points outside the file — which
+  // The node reference itself, and, when it points outside the file, which
   // file it points at, which is the whole reason this pass exists.
   bool ReadNodeReference(const GbxBodyExternalReference **external = nullptr, bool *is_null = nullptr);
   bool ReadFidReference(const GbxBodyExternalReference **external = nullptr);
@@ -376,7 +376,7 @@ bool Cursor::SkipDeviceSets(u32 chunk) {
 // samplers and any of them may be missing, so this is a preference rather than
 // a lookup: the first one present wins.
 //
-// "Grass" is deliberately not in here. It is not a ground picture — it is the
+// "Grass" is deliberately not in here. It is not a ground picture; it is the
 // close-up blade sheet a terrain material binds beside its diffuse, and because
 // it sorted ahead of GDiffuse/PxzDiffuse/BaseColor it was winning on stadium
 // terrain and tiling blades across the whole field instead of the ground.

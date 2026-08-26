@@ -7,7 +7,7 @@
 #include <stdbool.h>
 #include <system/include_cimgui.h>
 #include <types.h>
-#include <user_interface/player_info.h>
+#include <user_interface/player_profile.h>
 
 #define MAX_SNIPPETS_PER_PLAYER 64
 #define MAX_SNIPPET_LAYERS 8
@@ -42,7 +42,10 @@ struct input_snippet_t {
 // An override the user pinned on a track's starting state. The engine stores it
 // as a game property id plus a value and applies it through the game's own
 // property table, so it never has to know what "active weapon" means.
-#define MAX_STARTING_OVERRIDES 16
+// Enough for every startable property a bundled game publishes (DDNet's is the
+// longest, at 25) with room to spare. Each track carries this array by value and
+// undo snapshots clone tracks, so it is sized to fit rather than generously.
+#define MAX_STARTING_OVERRIDES 32
 #define MAX_STARTING_STRING 256
 
 typedef struct starting_override_t {
@@ -72,7 +75,8 @@ struct player_track_t {
   // The input state for this track for the current frame/tick
   input_record_t current_input;
 
-  player_info_t player_info;
+  // Opaque to the editor: the active game writes it and reads it back.
+  player_profile_t player_profile;
   starting_config_t starting_config;
   char name[MAX_TRACK_NAME];
   int group_index;

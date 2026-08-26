@@ -259,7 +259,7 @@ struct atlas_renderer_t {
   // Set when this atlas samples someone else's image instead of owning a copy
   // of it. A normal atlas blits its sprites into a private array texture once,
   // which is right for a sprite sheet and wrong for anything that changes every
-  // frame — a game module rendering its own frame, above all. An aliased atlas
+  // frame (a game module rendering its own frame, above all). An aliased atlas
   // borrows the image, so it has no padding and must never free it.
   bool aliased;
 };

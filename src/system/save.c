@@ -451,13 +451,12 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
 
   for (int i = 0; i < timeline->player_track_count; ++i) {
     const player_track_t *track = &timeline->player_tracks[i];
-    if (!buffer_string(buffer, track->player_info.name) || !buffer_string(buffer, track->player_info.tag) ||
-        !buffer_string(buffer, track->player_info.appearance_id) ||
-        !buffer_f32(buffer, track->player_info.primary_color[0]) || !buffer_f32(buffer, track->player_info.primary_color[1]) ||
-        !buffer_f32(buffer, track->player_info.primary_color[2]) || !buffer_f32(buffer, track->player_info.primary_color[3]) ||
-        !buffer_f32(buffer, track->player_info.secondary_color[0]) || !buffer_f32(buffer, track->player_info.secondary_color[1]) ||
-        !buffer_f32(buffer, track->player_info.secondary_color[2]) || !buffer_f32(buffer, track->player_info.secondary_color[3]) ||
-        !buffer_u8(buffer, track->player_info.use_custom_color ? 1 : 0) ||
+    // The game's profile bytes travel as a length-delimited blob, exactly as the
+    // game wrote them. The editor has no idea what is in there and never needs
+    // to: a project opened by a different game simply hands it bytes it will
+    // reject, which the game-id check above has already caught.
+    if (!buffer_u32(buffer, track->player_profile.size) ||
+        !buffer_write(buffer, track->player_profile.data, track->player_profile.size) ||
         !buffer_u8(buffer, track->is_linked ? 1 : 0) || !buffer_i32(buffer, track->linked_source_player) ||
         !buffer_u64(buffer, track->linked_copy_fields) || !buffer_u32(buffer, track->linked_transform_flags) ||
         !buffer_u8(buffer, track->starting_config.enabled ? 1 : 0))
@@ -621,6 +620,23 @@ static bool read_value(byte_reader_t *reader, starting_override_t *override) {
   return false;
 }
 
+// Versions 12 and 13 stored an identity the editor had invented for every game:
+// a nickname, a tag, an appearance name and two colours. Games own what a player
+// can be customised into now, so those fields are read past and the track opens
+// with no profile at all, which every game reads as its own defaults.
+static bool read_legacy_player_identity(byte_reader_t *reader) {
+  for (int i = 0; i < 3; ++i) {
+    uint32_t length;
+    if (!reader_u32(reader, &length) || !reader_bytes(reader, NULL, length)) return false;
+  }
+  for (int i = 0; i < 8; ++i) {
+    float unused;
+    if (!reader_f32(reader, &unused)) return false;
+  }
+  uint8_t custom_color;
+  return reader_u8(reader, &custom_color) && custom_color <= 1;
+}
+
 static bool read_timeline(byte_reader_t *reader, project_document_t *document, uint32_t project_version) {
   uint8_t boolean;
   uint32_t count;
@@ -672,20 +688,21 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document, u
 
   for (int i = 0; i < document->track_count; ++i) {
     player_track_t *track = &document->tracks[i];
-    uint8_t custom_color, is_linked, starting_enabled, export_enabled, prediction_enabled;
-    if (!reader_string(reader, track->player_info.name, sizeof(track->player_info.name)) ||
-        !reader_string(reader, track->player_info.tag, sizeof(track->player_info.tag)) ||
-        !reader_string(reader, track->player_info.appearance_id, sizeof(track->player_info.appearance_id)) ||
-        !reader_f32(reader, &track->player_info.primary_color[0]) || !reader_f32(reader, &track->player_info.primary_color[1]) ||
-        !reader_f32(reader, &track->player_info.primary_color[2]) || !reader_f32(reader, &track->player_info.primary_color[3]) ||
-        !reader_f32(reader, &track->player_info.secondary_color[0]) || !reader_f32(reader, &track->player_info.secondary_color[1]) ||
-        !reader_f32(reader, &track->player_info.secondary_color[2]) || !reader_f32(reader, &track->player_info.secondary_color[3]) ||
-        !reader_u8(reader, &custom_color) || custom_color > 1 || !reader_u8(reader, &is_linked) || is_linked > 1 ||
-        !reader_i32(reader, &track->linked_source_player) || !reader_u64(reader, &track->linked_copy_fields) ||
-        !reader_u32(reader, &track->linked_transform_flags) || !reader_u8(reader, &starting_enabled) || starting_enabled > 1 ||
-        !reader_u32(reader, &count) || count > MAX_STARTING_OVERRIDES)
+    uint8_t is_linked, starting_enabled, export_enabled, prediction_enabled;
+    if (project_version >= 14) {
+      uint32_t profile_size;
+      if (!reader_u32(reader, &profile_size) || profile_size > FT_PLAYER_PROFILE_MAX ||
+          !reader_bytes(reader, track->player_profile.data, profile_size))
+        return false;
+      track->player_profile.size = profile_size;
+    } else if (!read_legacy_player_identity(reader)) {
       return false;
-    track->player_info.use_custom_color = custom_color != 0;
+    }
+    if (!reader_u8(reader, &is_linked) || is_linked > 1 || !reader_i32(reader, &track->linked_source_player) ||
+        !reader_u64(reader, &track->linked_copy_fields) || !reader_u32(reader, &track->linked_transform_flags) ||
+        !reader_u8(reader, &starting_enabled) || starting_enabled > 1 || !reader_u32(reader, &count) ||
+        count > MAX_STARTING_OVERRIDES)
+      return false;
     track->is_linked = is_linked != 0;
     track->starting_config.enabled = starting_enabled != 0;
     track->starting_config.override_count = (int)count;

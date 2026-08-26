@@ -251,7 +251,7 @@ static bool imgui_queue_needs_trickling(void) {
 }
 
 // Brings up the game layer: builds the service table, finds the installed game
-// modules and activates one. The engine can run with none active — it just has
+// modules and activates one. The engine can run with none active; it just has
 // nothing to simulate or draw until a game is chosen.
 static void init_game_layer(gfx_handler_t *handler) {
   const ft_engine_api *api = engine_api_init(handler);
@@ -961,7 +961,7 @@ float gfx_get_ui_scale(void) {
     return dpi;
 #define UI_DIV 5.0
   GLFWmonitor *mon = glfwGetPrimaryMonitor();
-  // There is no primary monitor when GLFW enumerates none — a headless X
+  // There is no primary monitor when GLFW enumerates none: a headless X
   // server, a stripped build without RandR. Scaling is guesswork then, so take
   // 1.0 rather than dereferencing NULL inside GLFW.
   if (!mon) {
@@ -1376,7 +1376,7 @@ static void create_logical_device(gfx_handler_t *handler) {
       .pQueuePriorities = queue_priority,
   }};
   // Anisotropic filtering, when the device has it. A ground plane seen at a
-  // grazing angle — which is most of what a driving game shows — collapses to a
+  // grazing angle, which is most of what a driving game shows, collapses to a
   // flat average without it, however much detail the texture has.
   VkPhysicalDeviceFeatures supported = {0};
   vkGetPhysicalDeviceFeatures(handler->g_physical_device, &supported);

@@ -82,11 +82,41 @@ jobs:
           test -f data/games/ddnet/skins/default.png
           test -f data/games/tmnf/thumbnail.png
           test -f data/games/tmnf/README.txt
-          ./frametee --list-games | tee game-modules.txt
-          grep -Eq '^  ddnet[[:space:]]' game-modules.txt
-          grep -Eq '^  tmnf[[:space:]]' game-modules.txt
           find . -type f -print | sort > artifact-manifest.txt
         )
+
+    - name: Verify Relocated Artifact
+      run: |
+        set -euo pipefail
+        # Run the smoke test from a copy that has no build tree next to it. In
+        # place, an absolute build-tree RUNPATH resolves and hides exactly the
+        # breakage users hit after unpacking a release elsewhere.
+        relocated="$RUNNER_TEMP/frametee-relocated"
+        rm -rf "$relocated"
+        mkdir -p "$relocated"
+        cp -a artifact/frametee-linux/. "$relocated/"
+        rm -rf build
+
+        cd "$relocated"
+        while IFS= read -r binary; do
+          resolved=$(ldd "$binary")
+          if grep -q "not found" <<<"$resolved"; then
+            echo "::error::$binary has unresolved libraries"
+            printf '%s\n' "$resolved"
+            exit 1
+          fi
+          # Everything has to come either from the bundle itself or from the
+          # system; nothing may point back into the checkout.
+          if grep -q "$GITHUB_WORKSPACE" <<<"$resolved"; then
+            echo "::error::$binary still resolves libraries inside the checkout"
+            printf '%s\n' "$resolved"
+            exit 1
+          fi
+        done < <(find . -type f \( -name "frametee" -o -name "*.so*" \) -print)
+
+        ./frametee --list-games | tee game-modules.txt
+        grep -Eq '^  ddnet[[:space:]]' game-modules.txt
+        grep -Eq '^  tmnf[[:space:]]' game-modules.txt
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
@@ -154,9 +184,10 @@ jobs:
             -exec cp {} artifact/frametee-windows/plugins/ \;
         fi
 
-        # Libraries built as dependencies rather than as modules (currently
-        # cglm) also have to ship. Put them beside the executable, which is in
-        # the Windows DLL search path for games and plugins alike.
+        # Libraries built as dependencies rather than as modules also have to
+        # ship. Put them beside the executable, which is in the Windows DLL
+        # search path for games and plugins alike. cglm is static now, so this
+        # is usually a no-op; it stays for the next dependency that is not.
         while IFS= read -r library; do
           cp "$library" artifact/frametee-windows/
         done < <(find build -type f -iname "*.dll" \
@@ -218,11 +249,19 @@ jobs:
 
     - name: Create archives
       run: |
-        cd artifacts/frametee-linux
-        tar -czvf ../../frametee-linux.tar.gz *
-        cd ../frametee-windows
-        zip -r ../../frametee-windows.zip *
-        cd ../..
+        set -euo pipefail
+        # download-artifact restores contents but not the executable bit, so
+        # frametee arrives as 0644 and the release archive would ship a file
+        # users have to chmod before it will run.
+        chmod +x artifacts/frametee-linux/frametee
+        find artifacts/frametee-linux -type f -name "*.so*" -exec chmod +x {} +
+        test -x artifacts/frametee-linux/frametee
+
+        tar -czvf frametee-linux.tar.gz -C artifacts/frametee-linux .
+        (cd artifacts/frametee-windows && zip -r ../../frametee-windows.zip .)
+
+        # tar records the mode; make sure the archive really carries it.
+        tar -tvzf frametee-linux.tar.gz ./frametee | grep -q '^-rwxr-xr-x'
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2

@@ -2,7 +2,7 @@
 //
 // The sandbox builds a render scene of its own and it is very nearly enough:
 // real meshes, real instances, real texture coordinates. What it cannot carry is
-// which picture goes on a surface — and on several environments it cannot even
+// which picture goes on a surface, and on several environments it cannot even
 // carry which material a surface uses, reporting a whole Island track as one
 // nameless material.
 //
@@ -18,7 +18,7 @@
 // did not is paired up from the tile's own reference table. From those paths the
 // textures follow (see tmnf_texture.cpp).
 //
-// What comes out is the whole scene — meshes, placements and materials — and it
+// What comes out is the whole scene (meshes, placements and materials) and it
 // is what the module draws. Loading the map twice is the price; it buys the
 // actual appearance of the game, which nothing else on offer does.
 
@@ -74,7 +74,7 @@ std::vector<std::byte> ReadFile(const std::string &path) {
 // A reference is written relative to whatever file made it, so it may arrive as
 // "Island\\Material\\IslandGrass.Material.Gbx" while the repository keys the same
 // material under "Island\\Media\\Material\\IslandGrass.Material.Gbx". Both are
-// tried, and the one that worked is what gets recorded — the other names nothing
+// tried, and the one that worked is what gets recorded; the other names nothing
 // and a texture lookup following it would find nothing.
 std::optional<std::pair<ResolvedMaterialDefinition, std::string>> ResolveMaterialReference(
     InstalledPackAssetRepository &assets, const std::string &pack_name, const std::string &reference) {
@@ -96,8 +96,8 @@ std::optional<std::pair<ResolvedMaterialDefinition, std::string>> ResolveMateria
 // Every material in the packs, resolved through the repository before the track
 // is, and remembered by the handle the repository gave it.
 //
-// The graph names a material only by that handle — an index into the order the
-// repository happened to resolve things in — and the repository keeps the path
+// The graph names a material only by that handle, an index into the order the
+// repository happened to resolve things in, and the repository keeps the path
 // behind it to itself. Resolving the whole vocabulary up front turns the index
 // back into a path, and does it exhaustively: after this, every material the
 // track load asks for is already cached, so every handle the graph ends up
@@ -164,7 +164,7 @@ void NameMaterials(const std::unordered_map<std::uint32_t, std::string> &by_inde
 //
 // A material lives in the tile's own solid, not in the map, and the tile names
 // it in its reference table. The validator links those for us when the solid
-// declares a material node — and does nothing when the solid declares a shader
+// declares a material node, and does nothing when the solid declares a shader
 // node instead, which is how a great many tiles are authored. Those tiles come
 // out of the assembler with no material at all, and there is then nothing to
 // say what they should look like: one stadium track loses its platform this
@@ -301,7 +301,7 @@ TrackPurpose ToPurpose(StaticScenePurpose purpose) {
 // Walks a scene model's tree and collects what it draws.
 //
 // A mesh is kept once per visual and an instance records where it was placed, so
-// a block laid down fifty times costs one mesh and fifty transforms — which is
+// a block laid down fifty times costs one mesh and fifty transforms, which is
 // how the game stores it and the only way a whole track fits in memory twice
 // over.
 // What a surface looks like when the tile never said.

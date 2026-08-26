@@ -57,7 +57,7 @@ bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
 // Held, ignoring modifiers the bind did not ask for. Exact matching is right
 // for a discrete shortcut, where Ctrl+S must not also fire S, but wrong for
 // anything held continuously: a freecam's forward key has to keep working while
-// sprint or descend — themselves modifiers — are held down.
+// sprint or descend, themselves modifiers, are held down.
 static bool combo_modifiers_satisfied(const key_combo_t *combo) {
   if ((combo->ctrl || key_is_ctrl(combo->key)) && !input_ctrl_down()) return false;
   if ((combo->shift || key_is_shift(combo->key)) && !input_shift_down()) return false;

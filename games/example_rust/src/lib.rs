@@ -874,6 +874,8 @@ static MODULE: ft_game_module = ft_game_module {
     resources_destroy: std::ptr::null(),
 
     ui: Some(ui),
+    panels: std::ptr::null(),
+    panel_count: 0,
     collect_events: std::ptr::null(),
 
     exporter_count: std::ptr::null(),

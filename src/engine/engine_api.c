@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <system/fs.h>
+#include <user_interface/starting_state.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <user_interface/timeline_events.h>
 #include <user_interface/user_interface.h>
@@ -643,28 +644,38 @@ static bool api_get_player_setup(int32_t player, ft_player_setup *out) {
   timeline_state_t *timeline = &g_engine->user_interface.timeline;
   if (player < 0 || player >= timeline->player_track_count) return false;
   const player_track_t *track = &timeline->player_tracks[player];
-  const player_info_t *info = &track->player_info;
+  const player_profile_t *profile = &track->player_profile;
   *out = (ft_player_setup){.struct_size = sizeof(*out),
-                           .name = info->name,
-                           .tag = info->tag,
-                           .appearance_id = info->appearance_id,
-                           .primary_color = {info->primary_color[0], info->primary_color[1], info->primary_color[2], info->primary_color[3]},
-                           .secondary_color = {info->secondary_color[0], info->secondary_color[1], info->secondary_color[2],
-                                               info->secondary_color[3]},
-                           .use_custom_color = info->use_custom_color,
+                           .track_name = track->name,
+                           .data = profile->size ? profile->data : NULL,
+                           .data_size = profile->size,
                            .linked_player = track->is_linked ? track->linked_source_player : -1};
   return true;
 }
 
-static bool api_set_player_appearance(int32_t player, const char *appearance_id) {
-  if (!g_engine || !appearance_id) return false;
+// The game's own bytes about one player. The engine stores them, saves them and
+// hands them back; what they mean stays on the game's side of the boundary.
+static bool api_set_player_profile(int32_t player, const void *data, uint32_t size) {
+  if (!g_engine) return false;
+  if (size > FT_PLAYER_PROFILE_MAX) return false;
+  if (size > 0 && !data) return false;
   timeline_state_t *timeline = &g_engine->user_interface.timeline;
   if (player < 0 || player >= timeline->player_track_count) return false;
-  player_info_t *info = &timeline->player_tracks[player].player_info;
-  if (strcmp(info->appearance_id, appearance_id) == 0) return true;
-  snprintf(info->appearance_id, sizeof(info->appearance_id), "%s", appearance_id);
+
+  player_profile_t *profile = &timeline->player_tracks[player].player_profile;
+  if (profile->size == size && (size == 0 || memcmp(profile->data, data, size) == 0)) return true;
+  if (size > 0) memcpy(profile->data, data, size);
+  memset(profile->data + size, 0, sizeof(profile->data) - size);
+  profile->size = size;
   api_mark_dirty();
   return true;
+}
+
+// The engine's own starting-state editor, drawn wherever the game put it. The
+// game supplies the properties; the widgets and the storage are the engine's.
+static bool api_starting_state_editor(int32_t player) {
+  if (!g_engine) return false;
+  return starting_state_draw(&g_engine->user_interface, player);
 }
 
 static uint32_t api_timeline_world_count(void) {
@@ -809,7 +820,8 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .open_file_dialog = api_open_file_dialog,
       .visit_directory = api_visit_directory,
       .get_player_setup = api_get_player_setup,
-      .set_player_appearance = api_set_player_appearance,
+      .set_player_profile = api_set_player_profile,
+      .starting_state_editor = api_starting_state_editor,
       .timeline_world_count = api_timeline_world_count,
       .timeline_world_info = api_timeline_world_info,
       .timeline_world_pair = api_timeline_world_pair,
