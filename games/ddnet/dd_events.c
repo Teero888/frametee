@@ -520,9 +520,16 @@ static void render_event_inspector(ft_game *game, dd_event_editor_t *editor, int
   igEndChild();
 }
 
-void dd_events_render(ft_game *game, const ft_ui_frame *frame) {
+// Generating finish events follows recording, not the editor: the panels can be
+// hidden (Tab) or simply closed while a run is being recorded, and this is
+// driven from the menu-bar slot, which the editor draws either way.
+void dd_events_scan_recording(ft_game *game, const ft_ui_frame *frame) {
   if (!event_api_ready(game) || !frame) return;
   if (game->auto_finish_events && frame->state.recording) scan_finish_tick(game, frame->state.current_tick);
+}
+
+void dd_events_render(ft_game *game, const ft_ui_frame *frame) {
+  if (!event_api_ready(game) || !frame) return;
   if (!game->show_events) return;
 
   igSetNextWindowSize((ImVec2){820.f, 620.f}, ImGuiCond_FirstUseEver);

@@ -20,7 +20,7 @@ and different dimensions:
 
 | Module | Language | What it shows |
 | --- | --- | --- |
-| `ddnet` | C | The real one: DDNet physics, four rulesets, up to 64 players |
+| `ddnet` | C | The real one: DDNet physics, four rulesets |
 | `example_platformer` | C++ / raylib | A complete fixed-player platformer using raylib math, colours and collision |
 | `example_rust` | Rust / Bevy | A deterministic Bevy ECS world stepped through an ordered schedule |
 | `example_cube` | C | A 3D game: a volume, an orbit camera and depth-tested primitives |

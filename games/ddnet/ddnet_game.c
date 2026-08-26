@@ -1265,6 +1265,9 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
 
   switch (frame->slot) {
   case FT_UI_MAIN_MENU:
+    // The one slot the editor draws every frame whatever else is on screen, so
+    // recording keeps producing finish events with the panels hidden.
+    dd_events_scan_recording(game, frame);
     if (igBeginMenu("DDNet", true)) {
       igMenuItem_BoolPtr("Skin Browser", NULL, &game->show_skin_browser, true);
       igMenuItem_BoolPtr("Timeline Events", NULL, &game->show_events, true);
@@ -1275,8 +1278,6 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
   case FT_UI_PANELS:
     dd_player_panel_render(game, frame);
     if (game->show_skin_browser) dd_skin_browser_render(game, frame);
-    // Finish-event generation follows recording even while its editor is
-    // closed, so let the manager handle this slot every frame.
     dd_events_render(game, frame);
     dd_export_window_render(game);
     break;
@@ -1329,7 +1330,7 @@ static const ft_game_module module = {
                             FT_CAP_LEVEL_FROM_MEMORY | FT_CAP_TIMELINE_EVENTS | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS |
                             FT_CAP_HOSTS_STARTING_STATE,
                     .min_players = 0,
-                    .max_players = 64,
+                    .max_players = 1024,
                     .ticks_per_second = 50,
                     .units_per_tile = 1.f,
                     .default_camera_height = 20.f,
