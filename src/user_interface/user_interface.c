@@ -1,7 +1,8 @@
 #include "user_interface.h"
 #include "cglm/vec2.h"
 #include "cimgui.h"
-#include "player_info.h"
+#include "player_profile.h"
+#include "starting_state.h"
 #include "snippet_editor.h"
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
@@ -184,6 +185,46 @@ void render_menu_bar(ui_handler_t *ui) {
   }
 }
 
+// The editor's own nodes, kept so a game's windows can be given a home. Indexed
+// by ft_dock_slot; FT_DOCK_FLOATING stays zero and means "leave it alone".
+static ImGuiID g_dock_nodes[FT_DOCK_CENTER + 1];
+
+// A game names its own windows, so the editor cannot dock them when it lays
+// itself out: the game is not loaded yet. Each one is placed the first time it
+// is seen instead, and is the user's to move from then on.
+static void place_game_panels(ui_handler_t *ui) {
+  enum { MAX_PLACED = 16 };
+  static char placed[MAX_PLACED][64];
+  static int placed_count = 0;
+  static char placed_game[FT_NAME_MAX] = {0};
+
+  game_host_t *host = &ui->gfx_handler->game_host;
+  if (!game_host_ready(host)) return;
+  const char *game_id = game_host_active_id(host);
+  if (!game_id) return;
+  if (strcmp(placed_game, game_id) != 0) {
+    snprintf(placed_game, sizeof(placed_game), "%s", game_id);
+    placed_count = 0;
+  }
+
+  uint32_t count = 0;
+  const ft_panel_desc *panels = gh_panels(host, &count);
+  for (uint32_t i = 0; i < count && placed_count < MAX_PLACED; ++i) {
+    const ft_panel_desc *panel = &panels[i];
+    if (!panel->window_title || panel->dock <= FT_DOCK_FLOATING || panel->dock > FT_DOCK_CENTER) continue;
+    const ImGuiID node = g_dock_nodes[panel->dock];
+    if (!node) continue;
+
+    bool already_placed = false;
+    for (int j = 0; j < placed_count; ++j)
+      if (strcmp(placed[j], panel->window_title) == 0) already_placed = true;
+    if (already_placed) continue;
+
+    snprintf(placed[placed_count++], sizeof(placed[0]), "%s", panel->window_title);
+    igDockBuilderDockWindow(panel->window_title, node);
+  }
+}
+
 // docking setup
 void setup_docking(ui_handler_t *ui) {
   ImGuiID main_dockspace_id = igGetID_Str("MainDockSpace");
@@ -211,6 +252,7 @@ void setup_docking(ui_handler_t *ui) {
 
   // build the initial layout programmatically
   static bool first_time = true;
+  static ImGuiID dock_id_left, dock_id_right, dock_id_center, dock_id_bottom;
   if (first_time) {
     first_time = false;
 
@@ -220,12 +262,10 @@ void setup_docking(ui_handler_t *ui) {
 
     // split root into bottom + top remainder
     ImGuiID dock_id_top;
-    ImGuiID dock_id_bottom = igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.20f, NULL, &dock_id_top);
+    dock_id_bottom = igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.20f, NULL, &dock_id_top);
 
     // split top remainder into left + remainder
-    ImGuiID dock_id_left;
-    ImGuiID dock_id_center;
-    ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.25f, NULL, &dock_id_center);
+    dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.25f, NULL, &dock_id_center);
     dock_id_left = igDockBuilderSplitNode(dock_id_center, ImGuiDir_Left, 0.40f, NULL, &dock_id_center);
 
     igDockBuilderDockWindow("Viewport", dock_id_center);
@@ -234,7 +274,6 @@ void setup_docking(ui_handler_t *ui) {
 
     igDockBuilderDockWindow("Timeline", dock_id_bottom);
 
-    igDockBuilderDockWindow("Player Info", dock_id_left);
     igDockBuilderDockWindow("Players", dock_id_left);
     igDockBuilderDockWindow("Snippet Editor", dock_id_right);
 
@@ -247,6 +286,12 @@ void setup_docking(ui_handler_t *ui) {
 
     igDockBuilderFinish(main_dockspace_id);
   }
+
+  g_dock_nodes[FT_DOCK_LEFT] = dock_id_left;
+  g_dock_nodes[FT_DOCK_RIGHT] = dock_id_right;
+  g_dock_nodes[FT_DOCK_BOTTOM] = dock_id_bottom;
+  g_dock_nodes[FT_DOCK_CENTER] = dock_id_center;
+  place_game_panels(ui);
 }
 
 // player manager panel
@@ -455,9 +500,11 @@ void render_player_manager(ui_handler_t *ui) {
           player_track_t *track = &ts->player_tracks[i];
           igPushID_Int(i);
           bool selected = i == ts->selected_player_track_index;
-          const char *player_name = track->player_info.name[0] ? track->player_info.name : "unnamed player";
+          // The editor's own label for the track. Who the player is (a
+          // nickname, a number, a car) is the game's to say, and it says it
+          // through player_label further down this row.
           char row_label[160];
-          snprintf(row_label, sizeof(row_label), "%s  (%s)", track->name[0] ? track->name : "Track", player_name);
+          snprintf(row_label, sizeof(row_label), "%s", track->name[0] ? track->name : "Track");
 
           ImDrawList *row_draw_list = igGetWindowDrawList();
           ImVec4 row_color = {0.18f, 0.18f, 0.18f, 0.55f};
@@ -1411,7 +1458,6 @@ void ui_render(ui_handler_t *ui) {
     render_timeline(ui);
     render_player_manager(ui);
     render_snippet_editor_panel(ui);
-    if (ui->timeline.selected_player_track_index != -1) render_player_info(ui->gfx_handler);
   }
 
   keybinds_render_settings_window(ui);
@@ -1425,6 +1471,8 @@ void ui_render(ui_handler_t *ui) {
   // of the frame in which the splash can replace the active game.
   if (ui->gfx_handler->level != NULL && !ui->show_splash) {
     render_game_ui_slot(ui, FT_UI_PANELS, ui->timeline.selected_player_track_index);
+    // Only for a game that does not place the editor in a panel of its own.
+    starting_state_render_window(ui);
   }
 
   render_new_project_prompt(ui);

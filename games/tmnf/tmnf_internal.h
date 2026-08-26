@@ -200,8 +200,8 @@ private:
 
 // One texture a material names, under the sampler it binds it to. The sampler
 // is the only thing that says what the texture is *for*: "Diffuse" is the
-// surface's own picture and everything beside it — "Normal", "Specular",
-// "Occlusion", the environment cubes — modifies it. File names cannot be used
+// surface's own picture and everything beside it ("Normal", "Specular",
+// "Occlusion", the environment cubes) modifies it. File names cannot be used
 // for this, because plenty of them end in the same letters for other reasons.
 struct MaterialTextureSlot {
   std::string sampler;
@@ -246,7 +246,7 @@ struct MaterialStyle {
   // These are in the geometry and were never meant to be seen.
   bool invisible = false;
   // Textured by where a surface is in the world rather than by its authored
-  // coordinates. Terrain is laid out this way — a grass tile carries no useful
+  // coordinates. Terrain is laid out this way: a grass tile carries no useful
   // coordinates of its own and is expected to take them from the ground plane.
   bool world_uv = false;
   // Adds its light to what is behind it: glows, lit signs, spot flares.
@@ -395,9 +395,9 @@ public:
   // The dome in a track's scene carries no material at all, so there is nothing
   // to look a picture up by. The picture is not in the packs either: it is a
   // property of the time of day the map was saved with, and lives beside the
-  // rest of that mood's assets in the installed game. Two of them, in fact —
+  // rest of that mood's assets in the installed game. Two of them, in fact:
   // a ceiling over the whole sky and a panorama that fades in towards the
-  // horizon — which is why this composes rather than just loads.
+  // horizon, which is why this composes rather than just loads.
   std::optional<std::uint32_t> SkyLayer(const PackSet &packs, const std::string &environment, const std::string &mood);
   // Hands the decoded layers to the engine as one array texture. Called once,
   // after everything a level needs has been decoded.
@@ -441,7 +441,7 @@ private:
 
 // --- the wheels turning ------------------------------------------------------
 
-// The editor draws several worlds at once — the run and its prediction ghosts —
+// The editor draws several worlds at once (the run and its prediction ghosts)
 // and each turns its own wheels.
 inline constexpr std::size_t kMaxSpinnyWorlds = 16u;
 
@@ -613,7 +613,7 @@ struct ft_game {
   tmnf::VehicleModel vehicle;
 
   // How far each world's wheels have turned. The simulation reports a speed but
-  // never an angle, so it is integrated here — which means it belongs to the
+  // never an angle, so it is integrated here, which means it belongs to the
   // presentation and not to the run, and a timeline that jumps must not try to
   // catch up across the gap. See tmnf::WheelSpin.
   tmnf::WheelSpin wheel_spin[tmnf::kMaxSpinnyWorlds];
@@ -682,6 +682,24 @@ extern const std::uint32_t kCameraModeCount;
 
 void CameraReset(ft_game *game);
 bool CameraUpdate(ft_game *game, const ft_camera_frame *frame, ft_camera *inout);
+
+// --- tmnf_player.cpp ---------------------------------------------------------
+
+// What this game lets a player customise, in the bytes the editor stores for it
+// and hands back untouched. Pointer-free and fixed-size, as the ABI requires.
+struct PlayerProfile {
+  std::uint32_t version;
+  char name[32];
+};
+
+PlayerProfile DefaultProfile();
+PlayerProfile DecodeProfile(const void *data, std::uint32_t size);
+PlayerProfile ProfileForTrack(ft_game *game, std::int32_t track);
+bool StoreProfile(ft_game *game, std::int32_t track, const PlayerProfile &profile);
+// The colour this car is painted: its own livery when it has one, otherwise the
+// editor's accent for the world it is driving in.
+ft_color LiveryFor(const ft_render_frame *frame, int player);
+void PlayerPanel(ft_game *game, const ft_ui_frame *frame);
 
 // --- tmnf_ui.cpp -------------------------------------------------------------
 

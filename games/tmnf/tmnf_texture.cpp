@@ -377,19 +377,19 @@ void Resample(const std::vector<std::uint8_t> &src, std::uint32_t sw, std::uint3
 // reflection, a specular ramp, a normal map, a baked lightmap. Only the first is
 // the surface's own appearance.
 //
-// Some are named outright — "DefaultEnvCubic", "SpecularCube". The rest are
+// Some are named outright: "DefaultEnvCubic", "SpecularCube". The rest are
 // named by a single trailing letter, which is TrackMania's convention: D for the
 // picture, N for the normals, S for specular, L for the baked light.
 //
 // That letter cannot be read on its own, because plenty of names simply end in
 // one: IslandBeach, IslandTransition, StadiumGrass. What marks a suffix is
-// having a sibling — either the same name without the letter, or another name
+// having a sibling, either the same name without the letter, or another name
 // with the same stem and a different letter. Judging a name in isolation is what
 // left half of Island untextured, and judging it against its siblings is what
 // this does instead.
 enum TextureRole {
   TEXTURE_ROLE_REJECT = 0, // never the surface: normals, specular, environment
-  TEXTURE_ROLE_LIGHT,      // a baked lightmap — the right shape, the wrong colour
+  TEXTURE_ROLE_LIGHT,      // a baked lightmap: the right shape, the wrong colour
   TEXTURE_ROLE_PLAIN,      // no suffix, so the picture itself
   TEXTURE_ROLE_DIFFUSE,    // says so
 };
@@ -439,9 +439,9 @@ struct TextureCandidate {
 //
 // A material is a texture plus a shader, and it is the shader that says whether
 // the surface is transparent, two-sided, unlit, textured from the world, or not
-// meant to be drawn at all. Shaders are shared across every environment — the
-// same "TDiff PX2 Trans 2Sided" is behind a stadium fence and an island railing
-// — so this table is short and covers all of them.
+// meant to be drawn at all. Shaders are shared across every environment (the
+// same "TDiff PX2 Trans 2Sided" is behind a stadium fence and an island railing)
+// so this table is short and covers all of them.
 //
 // The classifications are taken from GbxTools3D, a viewer for these same
 // environments, which has already established which shader means what:
@@ -609,7 +609,7 @@ std::optional<std::string> TextureLibrary::DiffuseImagePath(const PackSet &packs
 
   // A material names its textures directly or, just as often, only names the
   // shaders that sample them. Both spellings are in use across the same
-  // environment — the stadium car names its own, the sport car names shaders —
+  // environment (the stadium car names its own, the sport car names shaders)
   // so when the material itself says nothing, the shaders it uses are asked.
   if (candidates.empty()) {
     for (const GbxReference &reference : material.references) {
@@ -846,8 +846,8 @@ std::optional<std::uint32_t> TextureLibrary::SkyLayer(const PackSet &packs, cons
   }
   if (layers_.size() >= kMaxTextureLayers) return std::nullopt;
 
-  // Both are mapped the same way on the dome — the coordinate runs from the
-  // pole at zero to the horizon at one — so compositing them is a straight
+  // Both are mapped the same way on the dome (the coordinate runs from the
+  // pole at zero to the horizon at one) so compositing them is a straight
   // per-pixel blend at whichever of the two is the larger.
   const std::uint32_t width = std::max(ceiling.width, panoramic.width);
   const std::uint32_t height = std::max(ceiling.height, panoramic.height);
@@ -904,7 +904,7 @@ void TextureLibrary::Clear() {
 // The array cannot hold layers of different sizes, so this is a single choice
 // made for the whole track. It is the largest side any of its textures were
 // actually authored at, because anything smaller throws away detail that is
-// there — the stadium's road and its hoardings are 1024 and 2048, and squashing
+// there: the stadium's road and its hoardings are 1024 and 2048, and squashing
 // them to a fixed 512 is what made every surface read as a blur a few metres
 // ahead of the car. It is then halved until the array fits the memory budget,
 // which is what keeps an environment with a hundred and fifty textures from
@@ -964,7 +964,7 @@ bool TextureLibrary::Upload(ft_game *game) {
     Page &page = layers_[i];
     // Alpha is only an opacity where a material says so. Everywhere else the
     // game is using the channel to carry specular strength, and plenty of
-    // ordinary surfaces store a zero in it — sampling that as opacity is what
+    // ordinary surfaces store a zero in it; sampling that as opacity is what
     // made the car, its wheels and a good deal of the stadium see-through.
     if (!page.alpha_used) {
       for (std::size_t p = 3u; p < page.rgba.size(); p += 4u) page.rgba[p] = 255u;

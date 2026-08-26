@@ -118,19 +118,17 @@ static void api_input_set_vec2(void *record, int field, ft_vec2 value) {
   if (field >= 0) gh_input_set_vec2(&g_ui_handler_for_api->gfx_handler->game_host, record, (unsigned)field, value);
 }
 
+// A plugin may hand over a profile for the new track, in the same opaque form
+// the active game writes: it either knows that game's format or passes nothing.
 static struct undo_command_t *api_do_create_track(const ft_player_setup *setup, int *out_track_index) {
-  player_info_t info = {0};
-  const player_info_t *info_ptr = NULL;
-  if (setup) {
-    snprintf(info.name, sizeof(info.name), "%s", setup->name ? setup->name : "");
-    snprintf(info.tag, sizeof(info.tag), "%s", setup->tag ? setup->tag : "");
-    snprintf(info.appearance_id, sizeof(info.appearance_id), "%s", setup->appearance_id ? setup->appearance_id : "");
-    memcpy(info.primary_color, &setup->primary_color, sizeof(info.primary_color));
-    memcpy(info.secondary_color, &setup->secondary_color, sizeof(info.secondary_color));
-    info.use_custom_color = setup->use_custom_color;
-    info_ptr = &info;
+  player_profile_t profile = {0};
+  const player_profile_t *profile_ptr = NULL;
+  if (setup && setup->data && setup->data_size > 0 && setup->data_size <= FT_PLAYER_PROFILE_MAX) {
+    memcpy(profile.data, setup->data, setup->data_size);
+    profile.size = setup->data_size;
+    profile_ptr = &profile;
   }
-  return timeline_api_create_track(g_ui_handler_for_api, info_ptr, out_track_index);
+  return timeline_api_create_track(g_ui_handler_for_api, profile_ptr, out_track_index);
 }
 
 static struct undo_command_t *api_do_create_snippet(int track_index, int start_tick, int duration, int *out_snippet_id) {

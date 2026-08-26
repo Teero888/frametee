@@ -215,7 +215,8 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
     }
   }
   const uint32_t known_caps = FT_CAP_DYNAMIC_PLAYERS | FT_CAP_LINKED_INPUTS | FT_CAP_WORLD_SERIALIZE | FT_CAP_LEVEL_FROM_MEMORY |
-                              FT_CAP_TIMELINE_EVENTS | FT_CAP_EXPORTERS | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS;
+                              FT_CAP_TIMELINE_EVENTS | FT_CAP_EXPORTERS | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS |
+                              FT_CAP_HOSTS_STARTING_STATE;
   if (m->constraints.caps & ~known_caps) FAIL("declares unknown capability bits 0x%x", m->constraints.caps & ~known_caps);
   if ((m->constraints.caps & FT_CAP_DYNAMIC_PLAYERS) && (!m->world_add_player || !m->world_remove_player))
     FAIL("advertises dynamic players without add/remove entry points");
@@ -764,6 +765,14 @@ void gh_ui(game_host_t *host, const ft_ui_frame *frame) {
   if (m->ui) m->ui(host->instance, frame);
 }
 
+const ft_panel_desc *gh_panels(game_host_t *host, uint32_t *out_count) {
+  if (out_count) *out_count = 0;
+  REQUIRE_GAME(NULL);
+  if (!m->panels || m->panel_count == 0) return NULL;
+  if (out_count) *out_count = m->panel_count;
+  return m->panels;
+}
+
 bool gh_resources_create(game_host_t *host) {
   REQUIRE_GAME(false);
   if (!m->resources_create) return true;
@@ -911,7 +920,7 @@ static const ft_camera_mode g_default_camera_mode = {"free", "Free view", "Pan a
 // simulation for nothing and every 3D game wants it. So it is appended to
 // whatever modes the game declared, which makes it selected, cycled and stored
 // exactly like one of them instead of living on a hotkey of its own. Its index
-// is one past the game's list and is never handed to camera_update — the
+// is one past the game's list and is never handed to camera_update: the
 // engine flies the camera itself in this mode.
 static const ft_camera_mode g_freecam_mode = {FT_CAMERA_MODE_FREECAM_ID, "Freecam",
                                               "Fly the camera: WASD to move, space and shift for up and down",

@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 12u
+#define FT_GAME_ABI_VERSION 13u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -186,6 +186,11 @@ enum ft_game_caps {
   /* The game can be stepped without any rendering resources present, so
    * headless scripting is allowed. */
   FT_CAP_HEADLESS = 1u << 8,
+  /* The game places the engine's starting-state editor inside a panel of its
+   * own, by calling starting_state_editor. The engine then does not open a
+   * window for it; a game that leaves this off gets that window instead, so the
+   * editor exists either way. */
+  FT_CAP_HOSTS_STARTING_STATE = 1u << 9,
 };
 
 /* How the viewport may be pointed at the world. A racing game might offer
@@ -427,7 +432,7 @@ typedef struct ft_world_desc {
   /* Which of the editor's worlds this belongs to, matching
    * ft_render_frame.world_index. The engine creates many copies of the same
    * world for caching and rewinding, and they all carry the same index. A game
-   * that keeps per-world presentation state — particles, sounds, trails — uses
+   * that keeps per-world presentation state (particles, sounds, trails) uses
    * it to route effects to the right one.
    *
    * -1 marks a scratch world: one the engine simulates to answer a question
@@ -452,28 +457,44 @@ typedef struct ft_player_view {
   ft_vec2 aim; /* world-space aim/target, zero when the game has none */
   uint32_t flags;
   /* Tick this player's timed run began on, or -1 before it starts. Every game a
-   * TAS tool cares about has this notion — crossing a start line, leaving the
-   * gate, taking the first step — and the editor uses it to line up separate
+   * TAS tool cares about has this notion (crossing a start line, leaving the
+   * gate, taking the first step) and the editor uses it to line up separate
    * attempts on a common origin. */
   int32_t run_start_tick;
 } ft_player_view;
 
-/* Per-player identity the engine carries (name, colours, appearance choice).
- * The engine stores and edits these; the game interprets appearance_id however
- * it likes, typically as a skin/livery/character name. */
+/* Everything the engine knows about who a player is.
+ *
+ * Which aspects of a player are worth customising is a question only a game can
+ * answer: DDNet wants a nickname, a clan, a skin and two body colours, a racing
+ * game wants a livery and a car, and neither list is one the editor should be
+ * carrying. So the engine keeps exactly one identity of its own, the track's
+ * name, which it needs for its lists and its undo entries, and treats the rest
+ * as opaque bytes it stores on the game's behalf.
+ *
+ * That profile is written by the game through `set_player_profile`, normally
+ * from a panel it draws itself, and comes back here and in every render frame.
+ * The engine copies it into the project, snapshots it for undo and carries it
+ * when a track is duplicated, without ever looking inside. */
 typedef struct ft_player_setup {
   uint32_t struct_size;
-  const char *name;
-  /* Optional secondary identity label: team tag, clan, car number, etc. */
-  const char *tag;
-  const char *appearance_id;
-  ft_color primary_color;
-  ft_color secondary_color;
-  bool use_custom_color;
+  /* The editor's label for this track. Engine-owned; a game that wants a
+   * nickname of its own keeps one in its profile. */
+  const char *track_name;
+  /* The game's own profile bytes, or NULL with `data_size` 0 when this track
+   * has never been given one, which a game reads as "use your defaults". Valid
+   * until the next engine call. */
+  const void *data;
+  uint32_t data_size;
   /* Index of the player this one mirrors, or -1. Only meaningful with
    * FT_CAP_LINKED_INPUTS. */
   int32_t linked_player;
 } ft_player_setup;
+
+/* Big enough for a nickname, a clan, a skin name and a palette, while keeping
+ * per-track profiles fixed-size and trivially copyable for undo snapshots. A
+ * game needing more than this wants module project data instead. */
+#define FT_PLAYER_PROFILE_MAX 512u
 
 /* -------------------------------------------------------------------------
  * Property reflection
@@ -490,7 +511,7 @@ typedef struct ft_prop_desc {
   const char *id; /* stable; used by scripts, plugins and project files */
   const char *display_name;
   const char *group; /* optional heading, e.g. "Movement" */
-  const char *unit;  /* optional suffix, e.g. "px/tick" */
+  const char *unit;  /* optional suffix, e.g. "units/tick" */
   ft_value_kind kind;
   uint32_t flags;              /* ft_prop_flags */
   double min_value, max_value; /* editor clamp; equal means unbounded */
@@ -510,8 +531,8 @@ typedef struct ft_entity_class {
  * Settings
  * -------------------------------------------------------------------------
  *
- * Presentation options that belong to a game — whether to draw its weapons, how
- * long its trajectory preview runs — but that the user expects to find in the
+ * Presentation options that belong to a game (whether to draw its weapons, how
+ * long its trajectory preview runs) but that the user expects to find in the
  * editor's own settings menu. The game describes them; the engine renders the
  * controls, stores the values in its config file under the game's id, and hands
  * changes back. That way a module needs no UI toolkit of its own to be
@@ -887,7 +908,7 @@ typedef struct ft_engine_api {
    * with `layers` > 0 and stays owned by the game. */
   void (*set_texture3)(ft_texture *texture);
   /* A textured triangle. `layer` selects a layer of the texture set above, and
-   * `tint` multiplies what is sampled — white leaves the texture as authored.
+   * `tint` multiplies what is sampled: white leaves the texture as authored.
    * Coordinates are taken as given and repeat outside [0,1], which is what a
    * road surface tiling along a track needs. Out-of-range layers, or no texture
    * set, draw the tint alone rather than sampling nothing.
@@ -897,7 +918,7 @@ typedef struct ft_engine_api {
   void (*draw_triangle3_textured)(ft_vec3 a, ft_vec3 b, ft_vec3 c, ft_vec2 uv_a, ft_vec2 uv_b, ft_vec2 uv_c,
                                   uint32_t layer, ft_color tint);
   /* An axis-aligned box given by its centre and full extents. Filled when
-   * `wire` is false, twelve edges when true — the shape an editor wants for
+   * `wire` is false, twelve edges when true: the shape an editor wants for
    * bounds, triggers and hitboxes. */
   void (*draw_box3)(ft_vec3 center, ft_vec3 size, ft_color color, bool wire);
   void (*draw_instances)(ft_pipeline *pipeline, float z, ft_texture *const *textures, uint32_t texture_count,
@@ -951,9 +972,24 @@ typedef struct ft_engine_api {
   uint32_t (*visit_directory)(const char *path, ft_directory_visitor visitor, void *user);
 
   /* Player numbers here are editor track indices, matching
-   * ft_engine_state.selected_player. Strings in `out` remain engine-owned. */
+   * ft_engine_state.selected_player. Strings and profile bytes in `out` remain
+   * engine-owned and are valid until the next engine call. */
   bool (*get_player_setup)(int32_t player, ft_player_setup *out);
-  bool (*set_player_appearance)(int32_t player, const char *appearance_id);
+  /* Replaces one track's profile with `size` bytes of the game's own making,
+   * at most FT_PLAYER_PROFILE_MAX, and marks the project dirty. Passing a size
+   * of 0 clears it back to "no profile", which a game reads as its defaults. */
+  bool (*set_player_profile)(int32_t player, const void *data, uint32_t size);
+
+  /* Draws the editor for what a player starts as (every property the game
+   * flagged FT_PROP_STARTING) at the current ImGui cursor, inside the caller's
+   * own window. The editor is the engine's: it stores the overrides on the
+   * track, saves them with the project and writes them into the starting world
+   * through this game's property table.
+   *
+   * A game calls this to keep the editor next to its own controls. One that
+   * does not gets the same editor in a window of its own, so the feature is
+   * never missing. Returns false when there is nothing to draw. */
+  bool (*starting_state_editor)(int32_t player);
 
   /* Read-only timeline access for exporters. World pairs are owned by the
    * engine and remain valid only until the next timeline query. `global_tick`
@@ -970,8 +1006,8 @@ typedef struct ft_engine_api {
   /* --- games that bring their own renderer ---
    *
    * Everything above expresses a frame through the engine's renderer. A game
-   * built on an engine that owns a renderer of its own — Bevy, raylib, anything
-   * with its own device and pipelines — does not want that. These two calls let
+   * built on an engine that owns a renderer of its own (Bevy, raylib, anything
+   * with its own device and pipelines) does not want that. These two calls let
    * such a module draw its frame itself and hand over the result.
    *
    * The engine's device, for a module whose renderer can adopt an existing one
@@ -1080,14 +1116,18 @@ typedef struct ft_camera_frame {
 } ft_camera_frame;
 
 typedef enum ft_ui_slot {
-  FT_UI_MAIN_MENU = 0,  /* inside the engine's menu bar */
-  FT_UI_PANELS = 1,     /* free-floating windows */
+  FT_UI_MAIN_MENU = 0, /* inside the engine's menu bar */
+  /* The game's own windows, each opened with its own igBegin. Anything the
+   * editor has no opinion about lives here, the player panel included: what a
+   * player can be customised into is the game's business, so the game draws
+   * that window itself rather than filling in fields the engine invented. */
+  FT_UI_PANELS = 1,
   FT_UI_SETTINGS = 2,   /* inside the engine's settings window */
   FT_UI_PLAYER_ROW = 3, /* inline, next to a timeline track's controls */
   FT_UI_STATUS_BAR = 4, /* inline, in the engine's status bar */
   /* The start screen, after the user has picked this game. Whatever a run
    * begins with belongs here: a level browser, a track list, a category picker.
-   * The engine draws the general half — games, recent projects — and hands the
+   * The engine draws the general half (games, recent projects) and hands the
    * rest of the panel to the game. */
   FT_UI_SPLASH = 5,
 } ft_ui_slot;
@@ -1097,10 +1137,30 @@ typedef struct ft_ui_frame {
   ft_ui_slot slot;
   const ft_world *world;
   int32_t tick;
-  /* Valid for FT_UI_PLAYER_ROW: which player the row belongs to. */
+  /* Which player this frame is about, within `world`: the row's player for
+   * FT_UI_PLAYER_ROW, and the selected one everywhere else. -1 when there is
+   * none. `state.selected_player` is the same player in the editor's own track
+   * numbering, which is what the player-profile calls take. */
   int32_t player;
   ft_engine_state state;
 } ft_ui_frame;
+
+/* Where a game's window wants to start out, the first time the editor ever sees
+ * it. The editor places it and never again: from then on the window is the
+ * user's to move, and its position comes back from the saved layout. */
+typedef enum ft_dock_slot {
+  FT_DOCK_FLOATING = 0, /* leave it where ImGui puts it */
+  FT_DOCK_LEFT = 1,     /* beside the editor's player list */
+  FT_DOCK_RIGHT = 2,    /* beside the snippet editor */
+  FT_DOCK_BOTTOM = 3,   /* with the timeline */
+  FT_DOCK_CENTER = 4,   /* with the viewport */
+} ft_dock_slot;
+
+typedef struct ft_panel_desc {
+  /* Exactly the title the game passes to igBegin, including any "##id". */
+  const char *window_title;
+  ft_dock_slot dock;
+} ft_panel_desc;
 
 /* -------------------------------------------------------------------------
  * The module vtable
@@ -1201,6 +1261,10 @@ typedef struct ft_game_module {
 
   /* ---- UI (optional; skipped headless) ---- */
   void (*ui)(ft_game *game, const ft_ui_frame *frame);
+  /* Default placement for the windows this game opens in FT_UI_PANELS, applied
+   * once per window and only while the saved layout has never heard of it. */
+  const ft_panel_desc *panels;
+  uint32_t panel_count;
 
   /* ---- timeline events (optional; needs FT_CAP_TIMELINE_EVENTS) ----
    * Called after the engine simulated `world` from the previous tick. The game

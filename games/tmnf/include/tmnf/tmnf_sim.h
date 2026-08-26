@@ -47,6 +47,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,7 @@ namespace fve = forevervalidator::experimental;
 
 // Plain data from ForeverValidator's public header, reused rather than
 // re-declared so that nothing has to be converted at this boundary.
+using Vector3 = forevervalidator::Vector3;
 using CarState = fve::PhysicsSandboxCarState;
 using StateView = fve::PhysicsSandboxStateView;
 using Ellipsoid = fve::PhysicsSandboxEllipsoid;
@@ -83,6 +85,9 @@ public:
   explicit operator bool() const noexcept { return impl_ != nullptr; }
   // Everything the simulation reports about the tick this was taken at.
   const StateView &View() const noexcept;
+  // Whether the engine drives the car on this state. Not part of the view: the
+  // simulation never reports it, because a replay cannot turn it off.
+  bool EngineOn() const noexcept;
 
 private:
   friend class World;
@@ -129,6 +134,24 @@ public:
   // The state at race tick zero, after the countdown the simulation runs
   // internally and never reports.
   const State &Start() const noexcept;
+
+  // A change to a captured state: where the car is, how fast it is going, and
+  // whether its engine drives it at all. Anything left unset stays as it was.
+  //
+  // This exists for the editor's starting-state overrides, which is a TAS tool's
+  // whole reason for existing: try the corner from here, at this speed, coasting
+  // rather than under power. A replay never needs it, so the simulation has no
+  // notion of it: what it does have is a restorable snapshot, and these are
+  // fields inside one.
+  struct StateEdit {
+    std::optional<Vector3> position;
+    std::optional<Vector3> linearSpeed;
+    std::optional<bool> engineOn;
+  };
+
+  // `state` with `edit` applied, or an empty State when it cannot be applied.
+  // Leaves the simulation sitting on the result, as Restore would.
+  State WithEdit(const State &state, const StateEdit &edit);
 
   // --- the simulation ---
   // Puts the simulation back on `state`. Cheap, and a no-op when the World is

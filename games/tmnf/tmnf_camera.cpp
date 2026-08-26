@@ -2,16 +2,16 @@
 //
 // ForeverValidator decodes the original game's race camera out of the
 // installed packs and exposes it as a stateful controller, so the chase view
-// here is not an approximation of TrackMania's camera — it is TrackMania's
+// here is not an approximation of TrackMania's camera; it is TrackMania's
 // camera, fed the same vehicle signals the game feeds it. That matters for a
 // TAS tool: judging a jump or a wall ride against a hand-rolled camera means
 // judging it against something the game never showed.
 //
 // Two things the engine cannot carry are dropped on the way out. Its view
 // matrix is built with a fixed world up, so camera roll is discarded, and it
-// derives its own field of view, so the lens is ignored. Everything else — the
+// derives its own field of view, so the lens is ignored. Everything else (the
 // position, the heading, the way the view swings out under acceleration and
-// settles again — comes through.
+// settles again) comes through.
 
 #include "tmnf_internal.h"
 

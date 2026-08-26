@@ -93,6 +93,10 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
 // Index of a player property by id in the active game's table, or -1.
 int model_find_player_prop(game_host_t *host, const char *prop_id);
 void model_apply_starting_config(timeline_state_t *ts, int track_index);
+// Rebuilds a group's starting world from the level and re-applies the overrides
+// still enabled on it. This is how an override that is turned off gives back
+// what the level originally said.
+void model_rebuild_group_start(timeline_state_t *ts, int group_index);
 void model_rebind_starting_strings(starting_config_t *config);
 
 #endif // UI_TIMELINE_MODEL_H

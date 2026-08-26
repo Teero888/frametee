@@ -39,6 +39,13 @@ namespace {
 constexpr std::uint32_t kPrestartTicks = kPrestartMs / kTickMs;
 
 forevervalidator::Vector3 ToVec(const GmVec3 &v) { return {v.x, v.y, v.z}; }
+GmVec3 ToGm(const forevervalidator::Vector3 &v) {
+  GmVec3 out{};
+  out.x = v.x;
+  out.y = v.y;
+  out.z = v.z;
+  return out;
+}
 
 bool ReadFile(const std::string &path, std::vector<std::uint8_t> *out) {
   std::FILE *f = std::fopen(path.c_str(), "rb");
@@ -103,6 +110,10 @@ struct State::Impl {
 const StateView &State::View() const noexcept {
   static const StateView empty{};
   return impl_ ? impl_->view : empty;
+}
+
+bool State::EngineOn() const noexcept {
+  return impl_ && impl_->clone ? impl_->clone->runtime.vehicle.car.integration.integrateEngine : true;
 }
 
 // --- World -------------------------------------------------------------------
@@ -387,6 +398,44 @@ bool World::Step(const TmnfInput &input) {
   impl_->resident = nullptr;
   impl_->ReadView();
   return true;
+}
+
+State World::WithEdit(const State &state, const StateEdit &edit) {
+  if (!Restore(state)) return State{};
+  if (!edit.position && !edit.linearSpeed && !edit.engineOn) return state;
+
+  ReplaySimulationInstanceClone clone = *state.impl_->clone;
+
+  // The body carries three copies of the same frame (the one being written,
+  // the one just finished and the scratch one a substep works in) and the next
+  // tick reads whichever it is up to. A start has to look the same in all three
+  // or the car snaps back on its first step.
+  if (edit.position || edit.linearSpeed) {
+    CHmsDyna::CHmsStateDyna *frames[] = {&clone.runtime.body.currentState, &clone.runtime.body.writeState,
+                                         &clone.runtime.body.tempState};
+    for (CHmsDyna::CHmsStateDyna *frame : frames) {
+      if (edit.position) frame->position = ToGm(*edit.position);
+      if (edit.linearSpeed) {
+        frame->linearSpeed = ToGm(*edit.linearSpeed);
+        // A correction speed left over from the old position is a push the car
+        // never asked for, and a tweaked speed is last tick's answer to a
+        // collision that no longer happened.
+        frame->linearCorrectionSpeed = GmVec3{};
+        frame->tweakedLinearSpeedValid = false;
+        frame->tweakedLinearSpeed = GmVec3{};
+      }
+    }
+  }
+  // "Engine off" is the integration step the powertrain runs each tick, which
+  // BeginRaceSimulation turns on once and nothing turns off again, so clearing
+  // it here holds for the rest of the run, and the car coasts.
+  if (edit.engineOn) clone.runtime.vehicle.car.integration.integrateEngine = *edit.engineOn;
+
+  if (!impl_->session->PrepareRuntimeCloneRestore(clone)) return State{};
+  impl_->session->RestoreRuntimeClone(std::move(clone));
+  impl_->resident = nullptr;
+  impl_->ReadView();
+  return Capture();
 }
 
 State World::Capture() const {

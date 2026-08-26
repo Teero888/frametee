@@ -1,7 +1,7 @@
 //! Bevy's renderer, drawing this game's frame.
 //!
-//! The module owns a Bevy `App` with the real rendering stack — `Camera2d`,
-//! sprites, the lot — running on the engine's Vulkan device. Its camera targets
+//! The module owns a Bevy `App` with the real rendering stack (`Camera2d`,
+//! sprites, the lot) running on the engine's Vulkan device. Its camera targets
 //! an image the engine allocated, so Bevy draws into engine memory and the
 //! engine composites the result into its viewport. No pixels are copied.
 //!
@@ -9,7 +9,7 @@
 //!
 //!  * `PipelinedRenderingPlugin` is disabled. It moves rendering to another
 //!    thread, and this design depends on Bevy having submitted its work to the
-//!    shared queue by the time the render callback returns — that ordering is
+//!    shared queue by the time the render callback returns; that ordering is
 //!    what makes the engine's barriers sufficient.
 //!  * `WindowPlugin` gets no primary window. The module has no window; the
 //!    engine owns it, and Bevy never needs to know it exists.

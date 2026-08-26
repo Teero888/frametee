@@ -1,6 +1,7 @@
 #include "dd_internal.h"
 #include "dd_imcol.h"
 #include "dd_imgui.h"
+#include "dd_profile.h"
 
 #include <ctype.h>
 #include <curl/curl.h>
@@ -92,7 +93,7 @@ static size_t write_download(void *data, size_t size, size_t count, void *user) 
   return fwrite(data, size, count, (FILE *)user) * size;
 }
 
-static bool fetch_skin(ft_game *game, const char *name, char *out_path, size_t out_size) {
+bool dd_skin_fetch(ft_game *game, const char *name, char *out_path, size_t out_size) {
   if (!game || !valid_fetch_name(name) || !out_path || out_size == 0) return false;
 
   char directory[1024];
@@ -282,7 +283,7 @@ static void load_preview(ft_game *game, dd_browser_skin_t *skin, int skin_index)
   if (!atlas) return;
   const uint32_t x = (uint32_t)(cell % DD_BROWSER_ATLAS_COLUMNS) * DD_BROWSER_PREVIEW_SIZE;
   const uint32_t y = (uint32_t)(cell / DD_BROWSER_ATLAS_COLUMNS) * DD_BROWSER_PREVIEW_SIZE;
-  skin->preview_loaded = dd_gfx_render_skin_preview(game, skin->name, skin->path, atlas->texture, x, y);
+  skin->preview_loaded = dd_gfx_render_skin_preview(game, skin->name, skin->path, NULL, atlas->texture, x, y);
 }
 
 typedef struct dd_browser_card_draw_t {
@@ -302,10 +303,11 @@ static void layout_skin_card(ft_game *game, const ft_ui_frame *frame, dd_browser
     load_preview(game, skin, id);
   }
   igPushID_Int(id);
-  ft_player_setup setup = {0};
-  const bool have_player = frame->state.selected_player >= 0 && game->engine->get_player_setup &&
-                           game->engine->get_player_setup(frame->state.selected_player, &setup);
-  const bool selected = have_player && setup.appearance_id && dd_strcasecmp(setup.appearance_id, skin->name) == 0;
+  const int32_t track = frame->state.selected_player;
+  const bool have_player = track >= 0;
+  dd_player_profile_t profile;
+  dd_profile_for_track(game, track, &profile);
+  const bool selected = have_player && dd_strcasecmp(profile.skin, skin->name) == 0;
 
   const ImVec2 card_min = igGetCursorScreenPos();
   const ImVec2 card_max = {card_min.x + width, card_min.y + height};
@@ -315,7 +317,8 @@ static void layout_skin_card(ft_game *game, const ft_ui_frame *frame, dd_browser
 
   if (clicked && have_player) {
     dd_gfx_load_skin_path(game, skin->name, skin->path);
-    game->engine->set_player_appearance(frame->state.selected_player, skin->name);
+    snprintf(profile.skin, sizeof(profile.skin), "%s", skin->name);
+    dd_profile_store(game, track, &profile);
   }
   *draw = (dd_browser_card_draw_t){.skin = skin,
                                    .id = id,
@@ -407,14 +410,17 @@ void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
   igSameLine(0.f, 8.f);
   if (igButton(ICON_FA_DOWNLOAD " Fetch", (ImVec2){button_width, 0.f})) {
     char path[1024];
-    if (fetch_skin(game, browser->search, path, sizeof(path))) {
+    if (dd_skin_fetch(game, browser->search, path, sizeof(path))) {
       char fetched_name[sizeof(browser->search)];
       snprintf(fetched_name, sizeof(fetched_name), "%s", browser->search);
       scan_skins(game);
       snprintf(browser->search, sizeof(browser->search), "%s", fetched_name);
       if (frame->state.selected_player >= 0) {
         dd_gfx_load_skin_path(game, fetched_name, path);
-        game->engine->set_player_appearance(frame->state.selected_player, fetched_name);
+        dd_player_profile_t profile;
+        dd_profile_for_track(game, frame->state.selected_player, &profile);
+        snprintf(profile.skin, sizeof(profile.skin), "%s", fetched_name);
+        dd_profile_store(game, frame->state.selected_player, &profile);
       }
     }
   }

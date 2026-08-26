@@ -45,8 +45,8 @@ typedef struct keybind_entry_t keybind_entry_t;
 typedef struct action_info_t action_info_t;
 typedef struct key_combo_t key_combo_t;
 
-// Player Info
-typedef struct player_info_t player_info_t;
+// Player profiles
+typedef struct player_profile_t player_profile_t;
 
 // Undo/Redo
 #ifndef FRAMETEE_UNDO_COMMAND_T_DEFINED

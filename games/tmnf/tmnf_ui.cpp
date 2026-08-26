@@ -380,6 +380,10 @@ void Ui(ft_game *game, const ft_ui_frame *frame) {
     if (game->level) igText("%s", game->level->name.c_str());
     return;
   }
+  if (frame->slot == FT_UI_PANELS) {
+    PlayerPanel(game, frame);
+    return;
+  }
   if (frame->slot != FT_UI_SPLASH) return;
 
   static char filter[64] = {};

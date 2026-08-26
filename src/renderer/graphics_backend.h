@@ -75,8 +75,8 @@ struct gfx_handler_t {
   // App Stuffs
   ui_handler_t user_interface;
   renderer_state_t renderer;
-  // The active game. Everything game-specific — physics, level format, how a
-  // world looks — lives behind this and never in the engine.
+  // The active game. Everything game-specific (physics, level format, how a
+  // world looks) lives behind this and never in the engine.
   game_host_t game_host;
   // The level the project is built on, owned by the game module. NULL until one
   // is opened.
@@ -120,8 +120,8 @@ struct gfx_handler_t {
   VkRenderPass offscreen_render_pass;
   // ImGui texture id returned by ImGui_ImplVulkan_AddTexture
   ImTextureRef *offscreen_texture;
-  // Depth for the offscreen pass. A 2D game never touches it — its draws are
-  // ordered by the z the game supplies — but a 3D game's geometry has to be
+  // Depth for the offscreen pass. A 2D game never touches it (its draws are
+  // ordered by the z the game supplies) but a 3D game's geometry has to be
   // resolved by depth, so the attachment always exists and 2D pipelines simply
   // leave the test off.
   VkImage offscreen_depth_image;

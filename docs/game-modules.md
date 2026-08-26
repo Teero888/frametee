@@ -54,6 +54,7 @@ FrameTee game modules (ABI 7)
 | Window, Vulkan, batching, camera | Its own panels, settings and exporters |
 | Plugin loading and scoping | What an input record contains |
 | File dialogs, config, logging | What a world contains |
+| Track names, starting-state overrides | What a player can be customised into |
 
 The engine never interprets a game's bytes. Input records and worlds are opaque
 to it: it stores them, copies them, hands them back at the right tick, and edits
@@ -96,7 +97,7 @@ can explain the problem instead of silently ignoring the file.
 ## Constraints: how a game restricts the editor
 
 `ft_game_constraints` is not advice. The engine treats it as a hard limit, clamps
-its own UI to it, and refuses operations that would violate it — so a game never
+its own UI to it, and refuses operations that would violate it, so a game never
 has to defend against configurations it cannot represent.
 
 ```c
@@ -108,7 +109,7 @@ has to defend against configurations it cannot represent.
 },
 ```
 
-That block is how you say "this game is single player, always" — Trackmania, a
+That block is how you say "this game is single player, always": Trackmania, a
 Mario run, any one-runner game. With it in place the editor:
 
 - hides the "Add Player" control and the count field entirely,
@@ -127,8 +128,8 @@ input mirroring tools. No `FT_CAP_EXPORTERS` means no export menu. No
 
 ## Input schema
 
-A game defines its own input record — any layout it likes, including packed
-bitfields — and describes it field by field:
+A game defines its own input record (any layout it likes, including packed
+bitfields) and describes it field by field:
 
 ```c
 static const ft_input_field fields[] = {
@@ -206,7 +207,7 @@ version. DDNet's implementation refuses to load a blob whose character struct
 size differs from the running build, rather than reinterpreting stale bytes.
 
 `level_serialize` embeds a level when it can be recreated through
-`level_load_memory`; otherwise version 12 stores the original reloadable path.
+`level_load_memory`; otherwise the project stores the original reloadable path.
 `project_save` / `project_load` are an optional pair for metadata that belongs
 to neither a level nor a world. Both bundled reference examples implement a
 small versioned project blob, showing the size-query/write/read convention in
@@ -222,10 +223,10 @@ this existed expects; set `FT_DIMENSIONS_3D` and three things change:
 
 * The viewport camera gains two modes, toggled with `F` (rebindable, listed
   under Camera):
-  * **Orbit** — right-drag to turn, wheel to pull in and out, framed on the
+  * **Orbit**: right-drag to turn, wheel to pull in and out, framed on the
     level's bounds, which a 3D game describes as its ground plane. Right for
     watching a run from outside.
-  * **Freecam** — right-drag to look, `WASD` to fly, `E`/`Space` and
+  * **Freecam**: right-drag to look, `WASD` to fly, `E`/`Space` and
     `Q`/`Ctrl` for world up and down, `Shift` to sprint, wheel to trim speed.
     The only way to get inside the geometry or look from somewhere the orbit
     cannot reach.
@@ -249,14 +250,14 @@ primitives for screen-space overlays, and a 2D game pays nothing for any of it.
 The engine owns the graphics API; the game owns what goes through it. A module
 draws through `ft_engine_api`, which offers, in rising order of power:
 
-1. **Primitives** — `draw_rect`, `draw_circle`, `draw_line`, `draw_triangle`,
+1. **Primitives**: `draw_rect`, `draw_circle`, `draw_line`, `draw_triangle`,
    `draw_text` in the plane, and `draw_line3`, `draw_triangle3`, `draw_box3` in
    a volume. Enough for a whole game, as the examples show.
-2. **Sprite atlases** — `texture_create` + `atlas_create`, then `draw_sprites`
+2. **Sprite atlases**: `texture_create` + `atlas_create`, then `draw_sprites`
    with an array of instances. The engine batches every draw sharing an atlas,
    which is how a game gets thousands of particles or tiles per frame without
    touching Vulkan.
-3. **Custom pipelines** — `pipeline_create` takes your SPIR-V and an instance
+3. **Custom pipelines**: `pipeline_create` takes your SPIR-V and an instance
    attribute layout, and `draw_instances` feeds it. This is the escape hatch for
    techniques the generic path cannot express, such as DDNet's tee-skin
    compositing. Attribute location 0 is the unit-quad corner the engine binds;
@@ -277,6 +278,72 @@ engine-drawn overlays.
 over its ImGui context through `engine->imgui_context()`; a module that wants
 panels links its own ImGui/cimgui and adopts that context, exactly the way
 plugins already do.
+
+A game's windows are opened by the game itself, in `FT_UI_PANELS`, with its own
+`igBegin`. The editor cannot place them when it builds its layout: it has not
+loaded a game yet. So a module lists them instead, and each is dropped into the
+node it asks for the first time that window is ever seen:
+
+```c
+static const ft_panel_desc panels[] = {
+    {.window_title = "Player Info", .dock = FT_DOCK_LEFT},
+    {.window_title = "Skin Browser", .dock = FT_DOCK_RIGHT},
+};
+```
+
+From then on the window is the user's to move.
+
+### The player panel
+
+What is worth customising about a player is a question only a game can answer.
+DDNet wants a nickname, a clan, a skin and two tee colours in its own packed
+hue/saturation/lightness; the TrackMania module wants a driver name and nothing
+else, because its car comes out of the installed packs and this renderer will
+not repaint it; neither list is one the editor should be carrying. So the editor
+keeps exactly one identity of its own, the track's name, and the game draws
+the panel.
+
+What the game stores travels as opaque bytes, the same way a timeline event's
+payload does:
+
+```c
+typedef struct dd_player_profile_t { /* whatever this game means by a player */ } dd_player_profile_t;
+
+dd_player_profile_t profile;
+dd_profile_decode(setup.data, setup.data_size, &profile);   /* size 0: your defaults */
+/* ... draw controls for it ... */
+engine->set_player_profile(track, &profile, sizeof(profile));
+```
+
+The editor copies that blob into the project, snapshots it for undo, carries it
+when a track is duplicated, and hands it back through `get_player_setup` and in
+every `ft_render_frame`, without ever looking inside. At most
+`FT_PLAYER_PROFILE_MAX` bytes; a track that has never been given one arrives
+with `data_size` 0, which every game reads as "use your defaults".
+
+### The starting state
+
+What a player *starts* as is the other half, and that one is not game-specific
+at all in shape: it is a list of properties with values. A game flags the ones
+worth pinning with `FT_PROP_STARTING` and implements `entity_prop_set` for them;
+the editor renders a control per property, stores the values as overrides on the
+track, saves them, and writes them into the group's starting world through the
+game's own property table. DDNet flags position, velocity, weapons, jumps,
+jetpack, the telekit and the collision/hook/hit switches; TrackMania flags where
+the car is, how fast it is going and whether its engine drives it at all. Both
+get an editor for all of it without drawing a single widget.
+
+The setter is the interesting half. A game whose world is a plain struct writes
+the field. TrackMania's is a restorable snapshot of a simulation it does not
+own, so `tmnf::sim::World::WithEdit` copies the snapshot, writes position, speed
+or the powertrain's integration flag into the copy, restores that and captures
+the result, which is what makes "start this corner at 200 km/h, coasting"
+expressible at all.
+
+The editor puts that editor in a window of its own. A game that would rather
+have it beside its own controls declares `FT_CAP_HOSTS_STARTING_STATE` and calls
+`engine->starting_state_editor(player)` wherever it wants it; the widgets are
+still the engine's, only the placement is the game's.
 
 ---
 
@@ -341,7 +408,7 @@ set_target_properties(my_game PROPERTIES PREFIX "" OUTPUT_NAME "my_game")
 target_include_directories(my_game PRIVATE ${FRAMETEE_ABI_INCLUDE_DIR})
 ```
 
-Out of tree, point the include at a copy of `include/`. Nothing else is needed —
+Out of tree, point the include at a copy of `include/`. Nothing else is needed:
 no engine sources, no Vulkan, no ImGui unless you want panels.
 
 Anything statically linked into a module has to be position independent, since
@@ -382,7 +449,7 @@ pub extern "C" fn ft_game_module_entry(engine_abi_version: u32) -> *const ft_gam
 
 `cargo build --release` produces a loadable module; copying it into `games/` is
 the entire install step. If you would rather generate the bindings, run bindgen
-over `include/frametee/game_abi.h` — it is plain C with no macros in the type
+over `include/frametee/game_abi.h`; it is plain C with no macros in the type
 definitions.
 
 ### Running
@@ -419,6 +486,8 @@ Concretely, the migration moved:
 | the entity inspector's projectile and laser structs | property reflection over `ft_entity_class` |
 | DDNet skin discovery, fetching, previews and selection | `games/ddnet/dd_skin_browser.c` via the module UI hook |
 | the player panel's game-specific stat block | `FT_PROP_SUMMARY` properties |
+| the player panel itself: name, clan, skin, tee colours | `games/ddnet/dd_player_panel.c`, over an opaque per-track profile |
+| the fixed position/velocity/weapon start editor | `FT_PROP_STARTING` properties, rendered by the engine for any game |
 | DDNet chat/kill/vote event structs | generic events from `collect_events` |
 | hardcoded input columns in the snippet editor | one column per `ft_input_field` |
 | `[gameplay] game_mode` in config | the game's own variant list |
@@ -429,10 +498,13 @@ renderer, plugins, keybinds and the window.
 
 Two consequences worth knowing:
 
-- **Project files are version 12 and not backwards compatible.** Engine-owned
+- **Project files are version 14, and read back to version 12.** Engine-owned
   values use explicit little-endian fields rather than raw C structs. Levels,
-  each group's starting world, and optional module project metadata are stored
-  as opaque length-delimited blobs. Prediction variants, their colors and input
+  each group's starting world, each track's player profile, and optional module
+  project metadata are stored as opaque length-delimited blobs. Versions 12 and
+  13 carried a fixed player identity the editor had invented (nickname, tag,
+  appearance, two colours) which is read past when such a project is opened:
+  those tracks come back with no profile, and the game supplies its defaults. Prediction variants, their colors and input
   controls, and per-group/per-track prediction scope are engine-owned project
   state. A project carries its game id and SemVer, ruleset, and a hash of the
   full input schema; any mismatch is refused before the open project is
@@ -441,7 +513,7 @@ Two consequences worth knowing:
 - **DDNet-specific plugins link the game's physics themselves.** The engine used
   to re-export `ddnet_physics` symbols to plugins; it no longer links it at all.
   Such a plugin includes `games/ddnet/include/ddnet/ddnet_game.h`, which is the
-  DDNet module's own contract with its plugins — separate from the engine ABI,
+  DDNet module's own contract with its plugins, separate from the engine ABI,
   and free to change when that game changes. A plugin that only needs to read or
   write inputs can stay game-agnostic instead by enumerating the schema through
   `tas_api_t` (`input_field_count`, `input_field`, and the typed accessors),
@@ -449,8 +521,8 @@ Two consequences worth knowing:
 
 ### Start screens
 
-The splash runs in two halves. The editor draws the general one — the game
-picker, recent projects, opening a level or a project — and then hands the panel
+The splash runs in two halves. The editor draws the general one (the game
+picker, recent projects, opening a level or a project) and then hands the panel
 to the chosen game through the `ui` hook with `FT_UI_SPLASH`. Whatever a run
 begins with belongs there: DDNet fills it with its map browser, which downloads
 from ddnet.org and asks the editor to open what the user picks.
@@ -463,15 +535,15 @@ A game that wants panels does not compile ImGui: it includes the cimgui headers
 and the `ig*` symbols resolve against the editor at load time, the same way the
 bundled plugins work. The one requirement is adopting the editor's context and
 allocator before the first call, which `engine->imgui_context()` and
-`engine->imgui_allocators()` provide — see `games/ddnet/dd_imgui.c`, which is
+`engine->imgui_allocators()` provide; see `games/ddnet/dd_imgui.c`, which is
 the whole of it.
 
 Three services exist for exactly this kind of panel:
 
-- `resolve_cache_path` — a writable directory for anything downloaded or
+- `resolve_cache_path`: a writable directory for anything downloaded or
   generated, under the user's config rather than the install.
-- `request_level` — asks the editor to open a level by path, as if the user had
+- `request_level`: asks the editor to open a level by path, as if the user had
   picked it themselves.
-- `imgui_texture_id` — an owned ImGui handle for a texture the game created, so
+- `imgui_texture_id`: an owned ImGui handle for a texture the game created, so
   its panels can draw thumbnails. Release each handle with
   `imgui_texture_release` before destroying its texture.

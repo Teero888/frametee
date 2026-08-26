@@ -508,6 +508,7 @@ struct ft_game {
   // pointer so this header stays free of the browser's own types.
   struct online_map_manager_t *maps;
   struct dd_skin_browser_t *skin_browser;
+  struct dd_player_panel_t *player_panel;
   bool show_skin_browser;
   bool show_events;
   bool auto_finish_events;
@@ -532,13 +533,33 @@ void dd_gfx_destroy(ft_game *game);
 int dd_gfx_skin_index(ft_game *game, const char *name);
 // Loads a skin chosen by the DDNet browser from an arbitrary local path.
 int dd_gfx_load_skin_path(ft_game *game, const char *name, const char *path);
-// Renders one browser thumbnail through the same pipeline and texture arrays
-// used by the in-game tee renderer.
-bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *path, ft_texture *destination, uint32_t destination_x,
-                                uint32_t destination_y);
+// Where a skin called `name` lives, in the order this module looks: its cache,
+// the skins shipped beside the game, then the client's own directories.
+bool dd_gfx_find_skin_file(ft_game *game, const char *name, char *out, size_t out_size);
+// Optional tinting for a thumbnail: the colours a particular tee wears, or NULL
+// for the plain skin as it comes.
+typedef struct dd_skin_colors_t {
+  vec3 body;
+  vec3 feet;
+  bool custom;
+} dd_skin_colors_t;
+
+// Renders one thumbnail through the same pipeline and texture arrays used by
+// the in-game tee renderer.
+bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *path, const dd_skin_colors_t *colors,
+                                ft_texture *destination, uint32_t destination_x, uint32_t destination_y);
 
 void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame);
 void dd_skin_browser_cleanup(ft_game *game);
+// Downloads a skin by name into the module's cache, or reports the copy that is
+// already there. Shared with the player panel, which fetches the same way.
+bool dd_skin_fetch(ft_game *game, const char *name, char *out_path, size_t out_size);
+
+// The panel this game draws for the selected player: nickname, clan, skin and
+// tee colours. What a player can be customised into is DDNet's own business, so
+// the window belongs to the module rather than to the editor.
+void dd_player_panel_render(ft_game *game, const ft_ui_frame *frame);
+void dd_player_panel_cleanup(ft_game *game);
 bool dd_demo_export(ft_game *game, const ft_export_request *request);
 bool dd_demo_export_with_pings(ft_game *game, const ft_export_request *request, const int32_t *player_pings);
 void dd_export_window_open(ft_game *game);

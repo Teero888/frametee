@@ -3,7 +3,7 @@
 //
 // ForeverValidator hands over the real authored geometry: meshes, instances,
 // materials and texture coordinates. What it does not hand over is which
-// picture goes on a surface, because its material paths come back empty — so
+// picture goes on a surface, because its material paths come back empty, so
 // that one link is made separately (tmnf_scene.cpp) and the texture itself is
 // decoded from the installed game (tmnf_texture.cpp). A surface whose picture
 // cannot be found falls back to a colour classified from its physical surface
@@ -340,7 +340,7 @@ std::string MoodOf(const std::byte *bytes, std::size_t size) {
 constexpr float kSceneryFootprint = 1500.f;
 // The sky dome is a sphere fifteen kilometres tall around the whole map. Nothing
 // a track is built from is remotely that tall, so its height is what identifies
-// it — and it has to be identified, because it carries no material and so has
+// it, and it has to be identified, because it carries no material and so has
 // nothing else to recognise it by.
 constexpr float kSkyDomeHeight = 5000.f;
 
@@ -366,14 +366,14 @@ bool IsDistantScenery(const TrackMesh &mesh, const TrackInstance &instance) {
 // draws them near the camera and fades them out with distance; there is nothing
 // here to fade them with, so they are all drawn, all of the time. Across the
 // campaign they are between two fifths and six sevenths of every triangle a
-// level owns — on the first track, 1.25 million of grass against 300 thousand
-// of everything else — and since the frame budget is sixty thousand spent
+// level owns (on the first track, 1.25 million of grass against 300 thousand
+// of everything else) and since the frame budget is sixty thousand spent
 // nearest first, it is the grass around the car that spends it rather than the
 // track.
 //
 // Nothing names them: the shells come off the same material as the flat ground
 // under them, so what identifies them is their shape. A shell is a field of
-// cards — every triangle standing on end, no taller than the grass, and spread
+// cards, every triangle standing on end, no taller than the grass, and spread
 // across the footprint of a whole tile in both directions at once. A fence or a
 // railing stands on end too, but it is a line rather than a field: narrow in
 // one direction, which is what keeps it drawn.

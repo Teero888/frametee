@@ -4,7 +4,7 @@
 // once per frame, unlit, with a hard cap a little over sixty thousand and no
 // warning when it is passed. There is no retained mesh upload for 3D geometry,
 // so the work here is entirely about submitting as few triangles as possible
-// and making sure they are the right ones — the track around the camera rather
+// and making sure they are the right ones, the track around the camera rather
 // than the track around the car, which is what a free or orbiting view needs.
 
 #include "tmnf_internal.h"
@@ -91,7 +91,7 @@ std::size_t DrawGrid(const ft_engine_api *api, const std::vector<Triangle> &tria
       if (backface_cull && !tri.two_sided) {
         // The renderer never culls back faces itself, so half the triangles of
         // a solid track are drawn purely to be overwritten. Winding was made
-        // consistent at load, which is what makes this safe — and the surfaces
+        // consistent at load, which is what makes this safe, and the surfaces
         // that are sheets rather than solids say so, because a sheet looked at
         // from behind is still meant to be there.
         const ft_vec3 face = Cross(Sub(tri.b, tri.a), Sub(tri.c, tri.a));
@@ -128,7 +128,7 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
   const Frustum frustum = Frustum::FromViewProj(camera.view_proj);
   const bool have_frustum = frustum.Valid();
 
-  // Without a usable camera — the very first frame after a level loads — fall
+  // Without a usable camera, the very first frame after a level loads, fall
   // back to the car, which is where the view is about to be.
   ft_vec3 eye = camera.eye;
   if (!have_frustum) {
@@ -143,7 +143,7 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
   // The sky and the ground plane the environment is painted on come first, and
   // out of a reserve of their own. Drawing them from what the track left over
   // meant they were never drawn at all on any track big enough to spend the
-  // budget — which is exactly what a stadium is, and why the sky was missing.
+  // budget, which is exactly what a stadium is, and why the sky was missing.
   //
   // They are also never back-face culled. A sky is a shell with the viewer
   // inside it, so every one of its triangles faces away; culling it is what

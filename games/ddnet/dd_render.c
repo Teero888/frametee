@@ -7,6 +7,7 @@
 // handed without knowing any of it.
 
 #include "dd_internal.h"
+#include "dd_profile.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -157,19 +158,16 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   out->dir[1] = lint2((float)prev_input->m_TargetY, (float)core->m_Input.m_TargetY, intra);
   glm_vec2_normalize(out->dir);
 
-  const ft_player_setup *setup = setup_for(frame, index);
-  out->skin = setup && setup->appearance_id ? dd_gfx_skin_index(game, setup->appearance_id) : game->gfx.default_skin;
-  out->custom = setup ? setup->use_custom_color : false;
+  dd_player_profile_t profile;
+  dd_profile_from_setup(setup_for(frame, index), &profile);
+  out->skin = dd_gfx_skin_index(game, profile.skin);
+  out->custom = profile.use_custom_color != 0;
   glm_vec3_copy((vec3){1.f, 1.f, 1.f}, out->feet_col);
   glm_vec3_copy((vec3){0.f, 0.f, 0.f}, out->body_col);
 
-  if (out->custom && setup) {
-    out->body_col[0] = setup->primary_color.r;
-    out->body_col[1] = setup->primary_color.g;
-    out->body_col[2] = setup->primary_color.b;
-    out->feet_col[0] = setup->secondary_color.r;
-    out->feet_col[1] = setup->secondary_color.g;
-    out->feet_col[2] = setup->secondary_color.b;
+  if (out->custom) {
+    dd_hsl_to_rgb(profile.color_body, out->body_col);
+    dd_hsl_to_rgb(profile.color_feet, out->feet_col);
   }
 
   if (core->m_FreezeTime > 0 || core->m_ActiveWeapon == WEAPON_NINJA) {

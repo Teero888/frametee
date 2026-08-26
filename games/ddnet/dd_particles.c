@@ -1,4 +1,5 @@
 #include "dd_internal.h"
+#include "dd_profile.h"
 
 #include <ddnet_physics/collision.h>
 #include <math.h>
@@ -721,12 +722,10 @@ static void on_particle(mvec2 pos, int type, int cid, void *user_data) {
     const int track = world->game->engine->timeline_player_track
                           ? world->game->engine->timeline_player_track((uint32_t)world->index, (uint32_t)cid)
                           : -1;
-    ft_player_setup setup = {.struct_size = sizeof(setup)};
-    if (track >= 0 && world->game->engine->get_player_setup(track, &setup) && setup.use_custom_color) {
-      color[0] = setup.primary_color.r;
-      color[1] = setup.primary_color.g;
-      color[2] = setup.primary_color.b;
-      color[3] = setup.primary_color.a;
+    if (track >= 0) {
+      dd_player_profile_t profile;
+      dd_profile_for_track(world->game, track, &profile);
+      if (profile.use_custom_color) dd_hsl_to_rgb(profile.color_body, color);
     }
     dd_particles_create_player_death(ps, p, color);
     break;
