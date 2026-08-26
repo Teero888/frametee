@@ -45,6 +45,11 @@ if(TARGET ddnet_map_loader)
         BUILD_RPATH_USE_ORIGIN ON
     )
 endif()
+if(UNIX AND NOT APPLE)
+    set_target_properties(ddnet_physics PROPERTIES
+        INSTALL_RPATH "$ORIGIN/libs/ddnet_map_loader"
+    )
+endif()
 if(NOT MSVC)
     target_compile_options(ddnet_physics PRIVATE -ftls-model=initial-exec)
 endif()
@@ -83,6 +88,11 @@ set_target_properties(ddnet_game PROPERTIES
     C_STANDARD 11
     C_VISIBILITY_PRESET hidden
 )
+if(UNIX AND NOT APPLE)
+    set_target_properties(ddnet_game PROPERTIES
+        INSTALL_RPATH "$ORIGIN/../libs/ddnet_physics:$ORIGIN/../libs/ddnet_physics/libs/ddnet_map_loader"
+    )
+endif()
 
 target_include_directories(ddnet_game PRIVATE
     ${FRAMETEE_ABI_INCLUDE_DIR}

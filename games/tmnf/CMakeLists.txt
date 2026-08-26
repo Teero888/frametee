@@ -255,6 +255,9 @@ set_target_properties(tmnf_game PROPERTIES
     CXX_STANDARD_REQUIRED ON
     CXX_VISIBILITY_PRESET hidden
 )
+if(UNIX AND NOT APPLE)
+    set_target_properties(tmnf_game PROPERTIES INSTALL_RPATH "$ORIGIN")
+endif()
 
 target_include_directories(tmnf_game PRIVATE
     ${FRAMETEE_ABI_INCLUDE_DIR}

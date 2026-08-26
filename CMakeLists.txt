@@ -246,7 +246,7 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<AND:$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>: -g -DDEBUG>
     $<$<AND:$<CONFIG:Debug>,$<C_COMPILER_ID:MSVC>>: /Zi /Od /DDEBUG>
 
-    $<$<AND:$<CONFIG:Release>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>: -g -O3 -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros>
+    $<$<AND:$<CONFIG:Release>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>: -O3 -funroll-loops -mfpmath=sse -fomit-frame-pointer -fno-trapping-math -fno-signed-zeros>
     $<$<AND:$<CONFIG:Release>,$<C_COMPILER_ID:MSVC>>: /Ox /Ob2 /Oi /GL /DNDEBUG>
 
     $<$<AND:$<BOOL:${ENABLE_SANITIZERS}>,$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>>:-fsanitize=address,undefined>
@@ -377,9 +377,6 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy_if_different 
         ${SHADER_OUTPUTS} 
         ${CMAKE_BINARY_DIR}/data/shaders/
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different 
-        ${SHADER_OUTPUTS} 
-        ${CMAKE_SOURCE_DIR}/data/shaders/
     COMMENT "Copying compiled shaders to build directory"
 )
 
@@ -490,10 +487,16 @@ endif()
 # PLUGINS INTEGRATION
 # =================================================================================================
 option(BUILD_PLUGINS "Build all default plugins" ON)
+set(FRAMETEE_PLUGIN_ALLOWLIST "" CACHE STRING
+    "Semicolon-separated plugin directory names to build; empty builds every discovered plugin")
 if(BUILD_PLUGINS)
     set(HOST_APP_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH "Path to the FrameTee project root" FORCE)
     file(GLOB PLUGIN_ENTRIES "${CMAKE_SOURCE_DIR}/plugins/*")
     foreach(PLUGIN_DIR ${PLUGIN_ENTRIES})
+        get_filename_component(PLUGIN_NAME "${PLUGIN_DIR}" NAME)
+        if(FRAMETEE_PLUGIN_ALLOWLIST AND NOT PLUGIN_NAME IN_LIST FRAMETEE_PLUGIN_ALLOWLIST)
+            continue()
+        endif()
         if(IS_DIRECTORY "${PLUGIN_DIR}" AND EXISTS "${PLUGIN_DIR}/CMakeLists.txt")
             add_subdirectory("${PLUGIN_DIR}")
             get_property(PLUGIN_TARGETS DIRECTORY "${PLUGIN_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
@@ -503,8 +506,110 @@ if(BUILD_PLUGINS)
                     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
                     BUILD_RPATH_USE_ORIGIN ON
                 )
+                # A plugin's loadable binary is part of the end-user runtime;
+                # its build directory, import library, and debug intermediates
+                # are not. Installing the target keeps that distinction exact.
+                get_target_property(PLUGIN_TARGET_TYPE ${TARGET} TYPE)
+                if(PLUGIN_TARGET_TYPE STREQUAL "SHARED_LIBRARY" OR
+                   PLUGIN_TARGET_TYPE STREQUAL "MODULE_LIBRARY")
+                    # MSVC does not prefix DLLs, but MinGW does unless told
+                    # otherwise. Keep one stable Windows plugin filename (and
+                    # therefore one stable configuration key) across both
+                    # toolchains.
+                    if(WIN32)
+                        set_target_properties(${TARGET} PROPERTIES PREFIX "")
+                    endif()
+                    install(TARGETS ${TARGET}
+                        RUNTIME DESTINATION "plugins" COMPONENT Runtime
+                        LIBRARY DESTINATION "plugins" COMPONENT Runtime
+                    )
+                endif()
             endforeach()
 
         endif()
     endforeach()
+endif()
+
+# =================================================================================================
+# MINIMAL RUNTIME INSTALL
+# =================================================================================================
+# Release packaging installs this component instead of copying whole build
+# directories. Build trees contain object files, generated project files,
+# import libraries, debug databases, and optional developer plugins; none of
+# those belong in an end-user archive.
+install(TARGETS ${PROJECT_NAME}
+    RUNTIME DESTINATION "." COMPONENT Runtime
+)
+
+# Only these two fonts are loaded by the UI. Keep Roboto's license beside them;
+# JetBrains Mono and the legacy engine texture directory are not runtime inputs.
+install(FILES
+    "${CMAKE_SOURCE_DIR}/data/fonts/Roboto-SemiBold.ttf"
+    "${CMAKE_SOURCE_DIR}/data/fonts/fa-solid-900.ttf"
+    "${CMAKE_SOURCE_DIR}/data/fonts/OFL.txt"
+    DESTINATION "data/fonts"
+    COMPONENT Runtime
+)
+install(FILES ${SHADER_OUTPUTS}
+    DESTINATION "data/shaders"
+    COMPONENT Runtime
+)
+
+if(TARGET ddnet_game)
+    install(TARGETS ddnet_game
+        RUNTIME DESTINATION "games" COMPONENT Runtime
+        LIBRARY DESTINATION "games" COMPONENT Runtime
+    )
+
+    # PNG assets are copied from the source tree and SPIR-V files are generated
+    # in the build tree. Source GLSL is useful for development, not at runtime.
+    install(DIRECTORY "${CMAKE_BINARY_DIR}/data/games/ddnet/"
+        DESTINATION "data/games/ddnet"
+        COMPONENT Runtime
+        FILES_MATCHING
+        PATTERN "*.png"
+        PATTERN "*.spv"
+    )
+
+    # DDNet's physics libraries are shared on ELF and static on Windows. Only
+    # shared targets need to be present in the runtime component.
+    foreach(DDNET_RUNTIME_TARGET ddnet_physics ddnet_map_loader)
+        if(TARGET ${DDNET_RUNTIME_TARGET})
+            get_target_property(DDNET_RUNTIME_TARGET_TYPE ${DDNET_RUNTIME_TARGET} TYPE)
+            if(DDNET_RUNTIME_TARGET_TYPE STREQUAL "SHARED_LIBRARY")
+                if(DDNET_RUNTIME_TARGET STREQUAL "ddnet_physics")
+                    set(DDNET_RUNTIME_DESTINATION "libs/ddnet_physics")
+                else()
+                    set(DDNET_RUNTIME_DESTINATION "libs/ddnet_physics/libs/ddnet_map_loader")
+                endif()
+                install(TARGETS ${DDNET_RUNTIME_TARGET}
+                    RUNTIME DESTINATION "${DDNET_RUNTIME_DESTINATION}" COMPONENT Runtime
+                    LIBRARY DESTINATION "${DDNET_RUNTIME_DESTINATION}" COMPONENT Runtime
+                )
+            endif()
+        endif()
+    endforeach()
+endif()
+
+if(TARGET tmnf_game)
+    install(TARGETS tmnf_game
+        RUNTIME DESTINATION "games" COMPONENT Runtime
+        LIBRARY DESTINATION "games" COMPONENT Runtime
+    )
+    if(TARGET forevervalidator_shared)
+        install(TARGETS forevervalidator_shared
+            RUNTIME DESTINATION "games" COMPONENT Runtime
+            LIBRARY DESTINATION "games" COMPONENT Runtime
+        )
+    endif()
+
+    # The proprietary Packs and GameData directories must come from the user's
+    # own TMNF installation. Never pick those ignored local files up in a
+    # release made from a developer checkout.
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/data/games/tmnf/README.txt"
+        "${CMAKE_SOURCE_DIR}/data/games/tmnf/thumbnail.png"
+        DESTINATION "data/games/tmnf"
+        COMPONENT Runtime
+    )
 endif()

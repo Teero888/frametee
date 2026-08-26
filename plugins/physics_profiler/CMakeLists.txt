@@ -30,6 +30,12 @@ add_library(${PROJECT_NAME} SHARED
     physics_profiler.cpp
 )
 
+if(UNIX AND NOT APPLE)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        INSTALL_RPATH "$ORIGIN/../libs/ddnet_physics:$ORIGIN/../libs/ddnet_physics/libs/ddnet_map_loader"
+    )
+endif()
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Vulkan::Vulkan
 )
