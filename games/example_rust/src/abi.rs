@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 13;
+pub const FT_GAME_ABI_VERSION: u32 = 14;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -220,6 +220,9 @@ pub struct ft_engine_state {
     pub headless: bool,
     pub selected_player: i32,
     pub camera: ft_camera,
+    /// Texture LOD bias in mip levels. A game sampling through its own
+    /// pipelines applies this itself; the engine applies it to its own drawing.
+    pub lod_bias: f32,
 }
 
 #[repr(C)]

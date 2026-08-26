@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 13u
+#define FT_GAME_ABI_VERSION 14u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -844,6 +844,11 @@ typedef struct ft_engine_state {
   bool headless;
   int32_t selected_player; /* -1 when nothing is selected */
   ft_camera camera;
+  /* The texture LOD bias the user set, in mip levels: negative sharpens,
+   * positive blurs. The engine applies it to everything it draws itself. A game
+   * that samples through pipelines of its own has to apply it there, or its
+   * level stops answering the setting the moment it takes over that drawing. */
+  float lod_bias;
 } ft_engine_state;
 
 /* Services the engine exposes to a game module. Every pointer is non-NULL for
