@@ -494,101 +494,115 @@ void render_player_manager(ui_handler_t *ui) {
 
         const ft_world *world = model_group_world_at_tick(ts, group_index, ts->current_tick);
         const int player_count = gh_world_player_count(host, world);
-        for (int local_index = 0; local_index < player_count; ++local_index) {
-          int i = model_group_track_index(ts, group_index, local_index);
-          if (i < 0) continue;
-          player_track_t *track = &ts->player_tracks[i];
-          igPushID_Int(i);
-          bool selected = i == ts->selected_player_track_index;
-          // The editor's own label for the track. Who the player is (a
-          // nickname, a number, a car) is the game's to say, and it says it
-          // through player_label further down this row.
-          char row_label[160];
-          snprintf(row_label, sizeof(row_label), "%s", track->name[0] ? track->name : "Track");
-
-          ImDrawList *row_draw_list = igGetWindowDrawList();
-          ImVec4 row_color = {0.18f, 0.18f, 0.18f, 0.55f};
-          ImVec4 row_selected_color = {0.30f, 0.30f, 0.30f, 0.70f};
-          ImVec4 row_hovered_color = {0.25f, 0.25f, 0.25f, 0.75f};
-          ImVec4 row_active_color = {0.34f, 0.34f, 0.34f, 0.80f};
-
-          // Keep Selectable's native text-height layout so the label and the timing text placed on
-          // the same line share a baseline. Draw the persistent tint in a lower channel after the
-          // exact item rectangle is known.
-          ImDrawList_ChannelsSplit(row_draw_list, 2);
-          ImDrawList_ChannelsSetCurrent(row_draw_list, 1);
-          float row_left_padding = 12.0f * dpi_scale;
-          igIndent(row_left_padding);
-          igPushStyleColor_Vec4(ImGuiCol_Header, row_selected_color);
-          igPushStyleColor_Vec4(ImGuiCol_HeaderHovered, row_hovered_color);
-          igPushStyleColor_Vec4(ImGuiCol_HeaderActive, row_active_color);
-          bool track_clicked = igSelectable_Bool(row_label, selected, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns,
-                                                 (ImVec2){0, 0});
-          igPopStyleColor(3);
-          igUnindent(row_left_padding);
-
-          ImVec2 row_min = igGetItemRectMin();
-          ImVec2 row_max = igGetItemRectMax();
-          ImDrawList_ChannelsSetCurrent(row_draw_list, 0);
-          ImDrawList_AddRectFilled(row_draw_list, row_min, row_max, igGetColorU32_Vec4(row_color), 3.0f * dpi_scale, ImDrawFlags_RoundCornersAll);
-
-          ImDrawList_ChannelsSetCurrent(row_draw_list, 1);
-          ImU32 rail_color = igGetColorU32_Vec4((ImVec4){0.65f, 0.65f, 0.65f, 0.85f});
-          ImVec2 rail_min = {row_min.x + 1.0f * dpi_scale, row_min.y + 2.0f * dpi_scale};
-          ImVec2 rail_max = {row_min.x + 4.0f * dpi_scale, row_max.y - 2.0f * dpi_scale};
-          ImDrawList_AddRectFilled(row_draw_list, rail_min, rail_max, rail_color, 1.5f * dpi_scale, ImDrawFlags_RoundCornersAll);
-          ImDrawList_ChannelsMerge(row_draw_list);
-          if (track_clicked) interaction_select_track(ts, i);
-
-          if (igBeginPopupContextItem("##track_context", ImGuiPopupFlags_MouseButtonRight)) {
-            interaction_select_track(ts, i);
-            char track_name_before_frame[MAX_TRACK_NAME];
-            memcpy(track_name_before_frame, track->name, sizeof(track_name_before_frame));
-            igSetNextItemWidth(180.0f * dpi_scale);
-            bool track_name_changed = igInputText("Track name", track->name, sizeof(track->name), ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
-            if (igIsItemActivated()) {
-              g_track_name_edit_undo.active = true;
-              g_track_name_edit_undo.index = i;
-              memcpy(g_track_name_edit_undo.before, track_name_before_frame, sizeof(g_track_name_edit_undo.before));
+        // A row costs a selectable, a split draw list, a label query and a call
+        // into the game, so a large cast is worth clipping: only the rows the
+        // clipper hands back are built.
+        ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
+        ImGuiListClipper_Begin(clipper, player_count, -1.f);
+        while (ImGuiListClipper_Step(clipper)) {
+          for (int local_index = clipper->DisplayStart; local_index < clipper->DisplayEnd; ++local_index) {
+            int i = model_group_track_index(ts, group_index, local_index);
+            if (i < 0) {
+              // The clipper counts this index either way, so the row has to take
+              // up its line rather than shift everything below it up.
+              igTextDisabled("--");
+              continue;
             }
-            if (track_name_changed) ui_mark_unsaved(ui);
-            if (igIsItemDeactivatedAfterEdit() && g_track_name_edit_undo.active && g_track_name_edit_undo.index == i) {
-              undo_command_t *command = commands_create_track_name_change(ui, i, g_track_name_edit_undo.before);
-              if (command) undo_manager_register_command(&ui->undo_manager, command);
-              g_track_name_edit_undo.active = false;
-            }
-            if (ts->group_count > 1 && igBeginMenu("Clone to group", !ts->recording)) {
-              for (int target_group = 0; target_group < ts->group_count; ++target_group) {
-                if (target_group == group_index) continue;
-                if (igMenuItem_Bool(ts->groups[target_group]->name, NULL, false, true)) {
-                  pending_clone_track = i;
-                  pending_clone_group = target_group;
+            player_track_t *track = &ts->player_tracks[i];
+            igPushID_Int(i);
+            bool selected = i == ts->selected_player_track_index;
+            // The editor's own label for the track. Who the player is (a
+            // nickname, a number, a car) is the game's to say, and it says it
+            // through player_label further down this row.
+            char row_label[160];
+            snprintf(row_label, sizeof(row_label), "%s", track->name[0] ? track->name : "Track");
+
+            ImDrawList *row_draw_list = igGetWindowDrawList();
+            ImVec4 row_color = {0.18f, 0.18f, 0.18f, 0.55f};
+            ImVec4 row_selected_color = {0.30f, 0.30f, 0.30f, 0.70f};
+            ImVec4 row_hovered_color = {0.25f, 0.25f, 0.25f, 0.75f};
+            ImVec4 row_active_color = {0.34f, 0.34f, 0.34f, 0.80f};
+
+            // Keep Selectable's native text-height layout so the label and the timing text placed on
+            // the same line share a baseline. Draw the persistent tint in a lower channel after the
+            // exact item rectangle is known.
+            ImDrawList_ChannelsSplit(row_draw_list, 2);
+            ImDrawList_ChannelsSetCurrent(row_draw_list, 1);
+            float row_left_padding = 12.0f * dpi_scale;
+            igIndent(row_left_padding);
+            igPushStyleColor_Vec4(ImGuiCol_Header, row_selected_color);
+            igPushStyleColor_Vec4(ImGuiCol_HeaderHovered, row_hovered_color);
+            igPushStyleColor_Vec4(ImGuiCol_HeaderActive, row_active_color);
+            bool track_clicked = igSelectable_Bool(row_label, selected, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns,
+                                                   (ImVec2){0, 0});
+            igPopStyleColor(3);
+            igUnindent(row_left_padding);
+
+            ImVec2 row_min = igGetItemRectMin();
+            ImVec2 row_max = igGetItemRectMax();
+            ImDrawList_ChannelsSetCurrent(row_draw_list, 0);
+            ImDrawList_AddRectFilled(row_draw_list, row_min, row_max, igGetColorU32_Vec4(row_color), 3.0f * dpi_scale, ImDrawFlags_RoundCornersAll);
+
+            ImDrawList_ChannelsSetCurrent(row_draw_list, 1);
+            ImU32 rail_color = igGetColorU32_Vec4((ImVec4){0.65f, 0.65f, 0.65f, 0.85f});
+            ImVec2 rail_min = {row_min.x + 1.0f * dpi_scale, row_min.y + 2.0f * dpi_scale};
+            ImVec2 rail_max = {row_min.x + 4.0f * dpi_scale, row_max.y - 2.0f * dpi_scale};
+            ImDrawList_AddRectFilled(row_draw_list, rail_min, rail_max, rail_color, 1.5f * dpi_scale, ImDrawFlags_RoundCornersAll);
+            ImDrawList_ChannelsMerge(row_draw_list);
+            if (track_clicked) interaction_select_track(ts, i);
+
+            if (igBeginPopupContextItem("##track_context", ImGuiPopupFlags_MouseButtonRight)) {
+              interaction_select_track(ts, i);
+              char track_name_before_frame[MAX_TRACK_NAME];
+              memcpy(track_name_before_frame, track->name, sizeof(track_name_before_frame));
+              igSetNextItemWidth(180.0f * dpi_scale);
+              bool track_name_changed = igInputText("Track name", track->name, sizeof(track->name), ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
+              if (igIsItemActivated()) {
+                g_track_name_edit_undo.active = true;
+                g_track_name_edit_undo.index = i;
+                memcpy(g_track_name_edit_undo.before, track_name_before_frame, sizeof(g_track_name_edit_undo.before));
+              }
+              if (track_name_changed) ui_mark_unsaved(ui);
+              if (igIsItemDeactivatedAfterEdit() && g_track_name_edit_undo.active && g_track_name_edit_undo.index == i) {
+                undo_command_t *command = commands_create_track_name_change(ui, i, g_track_name_edit_undo.before);
+                if (command) undo_manager_register_command(&ui->undo_manager, command);
+                g_track_name_edit_undo.active = false;
+              }
+              if (ts->group_count > 1 && igBeginMenu("Clone to group", !ts->recording)) {
+                for (int target_group = 0; target_group < ts->group_count; ++target_group) {
+                  if (target_group == group_index) continue;
+                  if (igMenuItem_Bool(ts->groups[target_group]->name, NULL, false, true)) {
+                    pending_clone_track = i;
+                    pending_clone_group = target_group;
+                  }
+                }
+                igEndMenu();
+              }
+              igSeparator();
+              if (igMenuItem_Bool(ICON_FA_TRASH " Delete Player Track", NULL, false, true)) {
+                if (g_remove_confirm_needed && track->snippet_count > 0) {
+                  g_pending_remove_index = i;
+                  igOpenPopup_Str("Confirm remove player", ImGuiPopupFlags_AnyPopupLevel);
+                } else {
+                  pending_track_remove = i;
                 }
               }
-              igEndMenu();
+              igEndPopup();
             }
-            igSeparator();
-            if (igMenuItem_Bool(ICON_FA_TRASH " Delete Player Track", NULL, false, true)) {
-              if (g_remove_confirm_needed && track->snippet_count > 0) {
-                g_pending_remove_index = i;
-                igOpenPopup_Str("Confirm remove player", ImGuiPopupFlags_AnyPopupLevel);
-              } else {
-                pending_track_remove = i;
-              }
-            }
-            igEndPopup();
-          }
 
-          // Whatever the game wants shown next to a player in a list: DDNet puts
-          // the finish time or the last checkpoint there.
-          char annotation[64];
-          if (gh_player_label(host, world, local_index, annotation, sizeof(annotation)) && annotation[0]) {
-            igSameLine(0, 10.f * dpi_scale);
-            igTextDisabled("%s", annotation);
+            // Whatever the game wants shown next to a player in a list: DDNet puts
+            // the finish time or the last checkpoint there.
+            char annotation[64];
+            if (gh_player_label(host, world, local_index, annotation, sizeof(annotation)) && annotation[0]) {
+              igSameLine(0, 10.f * dpi_scale);
+              igTextDisabled("%s", annotation);
+            }
+            render_game_ui_slot(ui, FT_UI_PLAYER_ROW, i);
+            igPopID();
           }
-          render_game_ui_slot(ui, FT_UI_PLAYER_ROW, i);
-          igPopID();
         }
+        ImGuiListClipper_End(clipper);
+        ImGuiListClipper_destroy(clipper);
 
         igSeparator();
       }
@@ -1631,10 +1645,13 @@ bool ui_render_late(ui_handler_t *ui) {
     float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
     if (ui->timeline.is_reversing) intra = 1.f - intra;
 
+    // A start being placed by hand takes the click before anything can read it
+    // as a selection.
+    const bool placed_start = starting_state_take_world_click(ui, wx, wy);
     const bool selected_entity =
-        entity_inspector_pick(&ui->entity_inspector, world, ui->gfx_handler, intra, mx, my);
+        !placed_start && entity_inspector_pick(&ui->entity_inspector, world, ui->gfx_handler, intra, mx, my);
 
-    if (!selected_entity) {
+    if (!placed_start && !selected_entity) {
       int best_match = -1;
       float best_dist = 1.5f;
 
@@ -1666,6 +1683,8 @@ bool ui_render_late(ui_handler_t *ui) {
       }
     }
   }
+
+  if (hovered && starting_state_is_picking()) igSetTooltip("Click to place the start");
 
   // draw overlays & menus
   if (ui->timeline.recording) {

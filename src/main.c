@@ -5,6 +5,7 @@
 #include <engine/engine_api.h>
 #include <engine/prediction.h>
 #include <user_interface/entity_inspector.h>
+#include <user_interface/starting_state.h>
 #include <user_interface/timeline/timeline_model.h>
 #include "scripting/script_engine.h"
 #include <math.h>
@@ -102,6 +103,9 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
   // The editor's own marker for whatever the inspector has selected, drawn on
   // top of everything the game produced.
   entity_inspector_render_highlight(&ui->entity_inspector, handler);
+  // And for every start the user has taken over, so an override reads in the
+  // level and not only in the panel that set it.
+  starting_state_render_markers(ui, handler);
 }
 
 int main(int argc, char **argv) {

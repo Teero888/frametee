@@ -241,8 +241,6 @@ enum ddnet_player_prop {
   PROP_POSITION = 0,
   PROP_VELOCITY,
   PROP_ACTIVE_WEAPON,
-  PROP_HAS_HAMMER,
-  PROP_HAS_GUN,
   PROP_HAS_SHOTGUN,
   PROP_HAS_GRENADE,
   PROP_HAS_LASER,
@@ -259,8 +257,8 @@ enum ddnet_player_prop {
   PROP_RACE_TIME,
   PROP_DEEP_FROZEN,
   PROP_LIVE_FROZEN,
-  PROP_JETPACK,
   PROP_ENDLESS_HOOK,
+  PROP_JETPACK,
   PROP_SOLO,
   PROP_COLLIDE_OTHERS,
   PROP_HOOK_OTHERS,
@@ -294,19 +292,17 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
                        .flags = FT_PROP_WRITABLE | FT_PROP_STARTING | FT_PROP_SUMMARY},
     [PROP_ACTIVE_WEAPON] = {.id = "active_weapon",
                             .display_name = "Active weapon",
-                            .group = "Combat",
+                            .group = "Weapons",
                             .kind = FT_VALUE_INT,
                             .flags = FT_PROP_WRITABLE | FT_PROP_STARTING | FT_PROP_SUMMARY,
                             .min_value = 0,
                             .max_value = NUM_WEAPONS - 1},
-    [PROP_HAS_HAMMER] = {.id = "has_hammer", .display_name = "Hammer", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
-    [PROP_HAS_GUN] = {.id = "has_gun", .display_name = "Gun", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_HAS_SHOTGUN] = {.id = "has_shotgun", .display_name = "Shotgun", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_HAS_GRENADE] = {.id = "has_grenade", .display_name = "Grenade", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_HAS_LASER] = {.id = "has_laser", .display_name = "Laser", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_HAS_NINJA] = {.id = "has_ninja", .display_name = "Ninja", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
-    [PROP_HEALTH] = {.id = "health", .display_name = "Health", .group = "Combat", .kind = FT_VALUE_INT, .flags = FT_PROP_WRITABLE},
-    [PROP_ARMOR] = {.id = "armor", .display_name = "Armor", .group = "Combat", .kind = FT_VALUE_INT, .flags = FT_PROP_WRITABLE},
+    [PROP_HEALTH] = {.id = "health", .display_name = "Health", .group = "Weapons", .kind = FT_VALUE_INT, .flags = FT_PROP_WRITABLE},
+    [PROP_ARMOR] = {.id = "armor", .display_name = "Armor", .group = "Weapons", .kind = FT_VALUE_INT, .flags = FT_PROP_WRITABLE},
     [PROP_FREEZE_TIME] = {.id = "freeze_time",
                           .display_name = "Freeze time",
                           .group = "State",
@@ -329,7 +325,7 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
                          .flags = DD_PROP_START,
                          .min_value = 0,
                          .max_value = 255},
-    [PROP_ENDLESS_JUMP] = {.id = "endless_jump", .display_name = "Endless jump", .group = "Movement", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_ENDLESS_JUMP] = {.id = "endless_jump", .display_name = "Endless jump", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_GROUNDED] = {.id = "grounded", .display_name = "Grounded", .group = "Movement", .kind = FT_VALUE_BOOL},
     [PROP_HOOK_STATE] = {.id = "hook_state", .display_name = "Hook state", .group = "Movement", .kind = FT_VALUE_INT},
     [PROP_HOOKED_PLAYER] = {.id = "hooked_player", .display_name = "Hooked player", .group = "Movement", .kind = FT_VALUE_INT},
@@ -341,8 +337,8 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
                         .flags = FT_PROP_SUMMARY | FT_PROP_READ_ONLY_UI},
     [PROP_DEEP_FROZEN] = {.id = "deep_frozen", .display_name = "Deep frozen", .group = "State", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_LIVE_FROZEN] = {.id = "live_frozen", .display_name = "Live frozen", .group = "State", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
-    [PROP_JETPACK] = {.id = "jetpack", .display_name = "Jetpack", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_ENDLESS_HOOK] = {.id = "endless_hook", .display_name = "Endless hook", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_JETPACK] = {.id = "jetpack", .display_name = "Jetpack", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_SOLO] = {.id = "solo", .display_name = "Solo", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_TELEGUN] = {.id = "telegun", .display_name = "Telegun", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_TELEGRENADE] = {.id = "telegrenade", .display_name = "Telegrenade", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
@@ -491,13 +487,11 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   case PROP_FREEZE_TIME:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_FreezeTime};
     return true;
-  case PROP_HAS_HAMMER:
-  case PROP_HAS_GUN:
   case PROP_HAS_SHOTGUN:
   case PROP_HAS_GRENADE:
   case PROP_HAS_LASER:
   case PROP_HAS_NINJA:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_aWeaponGot[prop - PROP_HAS_HAMMER]};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_aWeaponGot[prop - (PROP_HAS_SHOTGUN - 2)]};
     return true;
   case PROP_JUMPS:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_Jumps};
@@ -523,11 +517,11 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   case PROP_DEEP_FROZEN:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_DeepFrozen};
     return true;
-  case PROP_JETPACK:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Jetpack};
-    return true;
   case PROP_ENDLESS_HOOK:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_EndlessHook};
+    return true;
+  case PROP_JETPACK:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Jetpack};
     return true;
   case PROP_SOLO:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Solo};
@@ -600,17 +594,19 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   case PROP_FREEZE_TIME:
     c->m_FreezeTime = (int)value->as.i;
     return true;
-  case PROP_HAS_HAMMER:
-  case PROP_HAS_GUN:
   case PROP_HAS_SHOTGUN:
   case PROP_HAS_GRENADE:
   case PROP_HAS_LASER:
   case PROP_HAS_NINJA: {
-    const int weapon = (int)prop - PROP_HAS_HAMMER;
+    const int weapon = (int)prop - (PROP_HAS_SHOTGUN - 2);
     c->m_aWeaponGot[weapon] = value->as.b;
     // A tee cannot hold a weapon it does not have; fall back to the hammer,
     // which every tee keeps.
     if (!value->as.b && c->m_ActiveWeapon == weapon) c->m_ActiveWeapon = WEAPON_HAMMER;
+    if (c->m_aWeaponGot[WEAPON_NINJA]) {
+      c->m_ActiveWeapon = WEAPON_NINJA;
+      c->m_Ninja.m_ActivationTick = world->core.m_GameTick;
+    }
     return true;
   }
   case PROP_JUMPS:
@@ -626,11 +622,11 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   case PROP_DEEP_FROZEN:
     c->m_DeepFrozen = value->as.b;
     return true;
-  case PROP_JETPACK:
-    c->m_Jetpack = value->as.b;
-    return true;
   case PROP_ENDLESS_HOOK:
     c->m_EndlessHook = value->as.b;
+    return true;
+  case PROP_JETPACK:
+    c->m_Jetpack = value->as.b;
     return true;
   case PROP_SOLO:
     c->m_Solo = value->as.b;

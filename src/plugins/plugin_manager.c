@@ -1,13 +1,16 @@
 #include "plugin_manager.h"
+#include <frametee/icons.h>
 #include <logger/logger.h>
-#include <system/fs.h>
-#include <system/include_cimgui.h>
-#include <system/config.h>
-#include <tomlc17.h>
+#include <stdbool.h>
+#include <ctype.h>
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
+#include <system/config.h>
+#include <system/fs.h>
+#include <system/include_cimgui.h>
+#include <tomlc17.h>
 
 static const char *LOG_SOURCE = "PluginManager";
 
@@ -400,6 +403,8 @@ void plugin_manager_shutdown(plugin_manager_t *manager) {
 }
 
 void plugin_manager_reload_all(plugin_manager_t *manager, const char *directory) {
+  char directory_copy[sizeof(manager->directory)];
+  snprintf(directory_copy, sizeof(directory_copy), "%s", directory ? directory : manager->directory);
   tas_context_t *context = manager->context;
   tas_api_t *api = manager->api;
   ui_handler_t *host_ui = manager->host_ui;
@@ -407,189 +412,304 @@ void plugin_manager_reload_all(plugin_manager_t *manager, const char *directory)
 
   plugin_manager_shutdown(manager);
   plugin_manager_init(manager, context, api, host_ui);
-  plugin_manager_load_all(manager, directory);
+  plugin_manager_load_all(manager, directory_copy);
+}
+
+static const char *plugin_display_name(const loaded_plugin_t *plugin) {
+  return plugin->info.name && plugin->info.name[0] ? plugin->info.name : plugin->key;
+}
+
+static bool plugin_matches_filter(const loaded_plugin_t *plugin, const char *filter) {
+  if (!filter[0]) return true;
+  return safe_strcasestr(plugin_display_name(plugin), filter) ||
+         (plugin->info.description && safe_strcasestr(plugin->info.description, filter)) ||
+         safe_strcasestr(plugin->key, filter) || (plugin->info.author && safe_strcasestr(plugin->info.author, filter));
+}
+
+static int plugin_index_from_key(const plugin_manager_t *manager, const char *key) {
+  if (!key[0]) return -1;
+  for (int i = 0; i < manager->count; ++i)
+    if (strcmp(manager->plugins[i].key, key) == 0) return i;
+  return -1;
+}
+
+static const char *plugin_status_label(plugin_status_t status) {
+  switch (status) {
+  case PLUGIN_STATUS_LOADED:
+    return "Active";
+  case PLUGIN_STATUS_WRONG_GAME:
+    return "Other game";
+  case PLUGIN_STATUS_UNLOADED:
+    return "Disabled";
+  case PLUGIN_STATUS_ERROR:
+    return "Error";
+  }
+  return "Unknown";
+}
+
+static ImVec4 plugin_status_color(plugin_status_t status) {
+  switch (status) {
+  case PLUGIN_STATUS_LOADED:
+    return (ImVec4){0.25f, 0.82f, 0.38f, 1.f};
+  case PLUGIN_STATUS_WRONG_GAME:
+    return (ImVec4){0.48f, 0.68f, 0.95f, 1.f};
+  case PLUGIN_STATUS_UNLOADED:
+    return (ImVec4){0.58f, 0.58f, 0.61f, 1.f};
+  case PLUGIN_STATUS_ERROR:
+    return (ImVec4){0.95f, 0.32f, 0.30f, 1.f};
+  }
+  return (ImVec4){0.8f, 0.8f, 0.8f, 1.f};
+}
+
+static void render_plugin_status(const loaded_plugin_t *plugin) {
+  igTextColored(plugin_status_color(plugin->status), "%s", plugin_status_label(plugin->status));
+  if (plugin->status == PLUGIN_STATUS_WRONG_GAME && igIsItemHovered(0))
+    igSetTooltip("Waiting for game '%s'. It will load automatically when that game becomes active.", plugin->game_id);
+  else if (plugin->status == PLUGIN_STATUS_ERROR && igIsItemHovered(0))
+    igSetTooltip("%s", plugin->error_msg);
+}
+
+static bool plugin_row_selectable(const char *label, bool selected) {
+  const ImVec4 transparent = {0.f, 0.f, 0.f, 0.f};
+  igPushStyleColor_Vec4(ImGuiCol_Header, transparent);
+  igPushStyleColor_Vec4(ImGuiCol_HeaderHovered, transparent);
+  igPushStyleColor_Vec4(ImGuiCol_HeaderActive, transparent);
+  const bool clicked = igSelectable_Bool(label, selected, ImGuiSelectableFlags_SpanAllColumns, (ImVec2){0.f, 0.f});
+  const bool hovered = igIsItemHovered(0);
+  const bool active = igIsItemActive();
+  igPopStyleColor(3);
+
+  if (active) igTableSetBgColor(ImGuiTableBgTarget_RowBg0, igGetColorU32_Col(ImGuiCol_HeaderActive, 1.f), -1);
+  else if (hovered)
+    igTableSetBgColor(ImGuiTableBgTarget_RowBg0, igGetColorU32_Col(ImGuiCol_HeaderHovered, 1.f), -1);
+  else if (selected)
+    igTableSetBgColor(ImGuiTableBgTarget_RowBg0, igGetColorU32_Col(ImGuiCol_Header, 1.f), -1);
+  return clicked;
+}
+
+static void render_plugin_list(plugin_manager_t *manager, char *selected_key, const char *filter, float height,
+                               float dpi) {
+  if (!igBeginChild_Str("PluginList", (ImVec2){0.f, height}, true, ImGuiWindowFlags_None)) {
+    igEndChild();
+    return;
+  }
+
+  const bool compact = igGetContentRegionAvail().x < 410.f * dpi;
+  const int columns = compact ? 2 : 3;
+  int visible = 0;
+  const ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
+                                ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+  if (igBeginTable("Plugins", columns, flags, (ImVec2){0.f, 0.f}, 0.f)) {
+    igTableSetupColumn("Plugin", ImGuiTableColumnFlags_WidthStretch, 0.f, 0);
+    if (!compact) igTableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 65.f * dpi, 0);
+    igTableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 82.f * dpi, 0);
+    igTableHeadersRow();
+
+    for (int i = 0; i < manager->count; ++i) {
+      loaded_plugin_t *plugin = &manager->plugins[i];
+      if (!plugin_matches_filter(plugin, filter)) continue;
+      ++visible;
+
+      igPushID_Int(i);
+      igTableNextRow(0, 0.f);
+      igTableSetColumnIndex(0);
+      if (plugin_row_selectable(plugin_display_name(plugin), strcmp(selected_key, plugin->key) == 0))
+        snprintf(selected_key, 128, "%s", plugin->key);
+
+      int column = 1;
+      if (!compact) {
+        igTableSetColumnIndex(column++);
+        igTextDisabled("%s", plugin->info.version && plugin->info.version[0] ? plugin->info.version : "--");
+      }
+      igTableSetColumnIndex(column);
+      render_plugin_status(plugin);
+      igPopID();
+    }
+    igEndTable();
+  }
+
+  if (visible == 0) {
+    igSpacing();
+    igTextDisabled(filter[0] ? ICON_FA_MAGNIFYING_GLASS "  No plugins match this search."
+                             : ICON_FA_PLUG "  No plugins found in the plugin directory.");
+  }
+  igEndChild();
+}
+
+static void render_plugin_metadata(const loaded_plugin_t *plugin) {
+  if (!igBeginTable("PluginMetadata", 2, ImGuiTableFlags_SizingStretchProp, (ImVec2){0.f, 0.f}, 0.f)) return;
+  const ImGuiStyle *style = igGetStyle();
+  const ImVec2 widest_label = igCalcTextSize("VERSION", NULL, false, -1.f);
+  igTableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, widest_label.x + style->ItemSpacing.x * 1.5f, 0);
+  igTableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.f, 0);
+
+  igTableNextRow(0, 0.f);
+  igTableSetColumnIndex(0);
+  igTextDisabled("VERSION");
+  igTableSetColumnIndex(1);
+  igTextWrapped("%s", plugin->info.version && plugin->info.version[0] ? plugin->info.version : "Unknown");
+
+  igTableNextRow(0, 0.f);
+  igTableSetColumnIndex(0);
+  igTextDisabled("AUTHOR");
+  igTableSetColumnIndex(1);
+  igTextWrapped("%s", plugin->info.author && plugin->info.author[0] ? plugin->info.author : "Unknown");
+
+  igTableNextRow(0, 0.f);
+  igTableSetColumnIndex(0);
+  igTextDisabled("SCOPE");
+  igTableSetColumnIndex(1);
+  if (plugin->game_id[0]) igTextWrapped(ICON_FA_GAMEPAD "  Game-specific (%s)", plugin->game_id);
+  else igTextWrapped(ICON_FA_GLOBE "  Global (any game)");
+
+  igTableNextRow(0, 0.f);
+  igTableSetColumnIndex(0);
+  igTextDisabled("KEY");
+  igTableSetColumnIndex(1);
+  igTextWrapped("%s", plugin->key);
+  igEndTable();
+}
+
+static void render_plugin_actions(plugin_manager_t *manager, int index, float dpi) {
+  loaded_plugin_t *plugin = &manager->plugins[index];
+  const bool inline_actions = igGetContentRegionAvail().x >= 350.f * dpi;
+
+  if (plugin->status == PLUGIN_STATUS_LOADED) {
+    if (igButton(ICON_FA_POWER_OFF " Disable", (ImVec2){0.f, 0.f})) plugin_manager_toggle_plugin(manager, index);
+    if (inline_actions) igSameLine(0.f, 6.f * dpi);
+    if (igButton(ICON_FA_ROTATE " Reload", (ImVec2){0.f, 0.f})) plugin_manager_reload_plugin(manager, index);
+    if (plugin->show_ui) {
+      if (inline_actions) igSameLine(0.f, 6.f * dpi);
+      if (igButton(ICON_FA_SLIDERS " Open panel", (ImVec2){0.f, 0.f})) plugin->show_ui(plugin->data);
+    }
+    return;
+  }
+
+  if (plugin->status == PLUGIN_STATUS_WRONG_GAME) {
+    if (igButton(ICON_FA_POWER_OFF " Disable", (ImVec2){0.f, 0.f})) plugin_manager_toggle_plugin(manager, index);
+    return;
+  }
+
+  if (plugin->status == PLUGIN_STATUS_UNLOADED) {
+    if (igButton(ICON_FA_PLUG " Enable", (ImVec2){0.f, 0.f})) plugin_manager_toggle_plugin(manager, index);
+    return;
+  }
+
+  if (plugin->enabled) {
+    if (igButton(ICON_FA_ROTATE " Retry load", (ImVec2){0.f, 0.f})) plugin_manager_reload_plugin(manager, index);
+    if (inline_actions) igSameLine(0.f, 6.f * dpi);
+    if (igButton(ICON_FA_POWER_OFF " Disable", (ImVec2){0.f, 0.f})) plugin_manager_toggle_plugin(manager, index);
+  } else if (igButton(ICON_FA_PLUG " Enable and retry", (ImVec2){0.f, 0.f})) {
+    plugin_manager_toggle_plugin(manager, index);
+  }
+}
+
+static void render_plugin_detail(plugin_manager_t *manager, int index, float height, float dpi) {
+  if (!igBeginChild_Str("PluginDetail", (ImVec2){0.f, height}, true, ImGuiWindowFlags_None)) {
+    igEndChild();
+    return;
+  }
+  if (index < 0 || index >= manager->count) {
+    igSpacing();
+    igTextDisabled(ICON_FA_CIRCLE_INFO "  Select a plugin to view its details.");
+    igEndChild();
+    return;
+  }
+
+  loaded_plugin_t *plugin = &manager->plugins[index];
+  igTextWrapped("%s", plugin_display_name(plugin));
+  render_plugin_status(plugin);
+  igSeparator();
+  render_plugin_metadata(plugin);
+
+  igSeparatorText("Description");
+  igTextWrapped("%s", plugin->info.description && plugin->info.description[0] ? plugin->info.description
+                                                                              : "No description provided.");
+
+  if (plugin->status == PLUGIN_STATUS_WRONG_GAME) {
+    igSpacing();
+    igPushTextWrapPos(0.f);
+    igTextColored(plugin_status_color(plugin->status), ICON_FA_HOURGLASS "  Waiting for '%s' to become active.",
+                  plugin->game_id);
+    igPopTextWrapPos();
+  } else if (plugin->status == PLUGIN_STATUS_ERROR) {
+    igSeparatorText("Load error");
+    igPushTextWrapPos(0.f);
+    igTextColored(plugin_status_color(plugin->status), ICON_FA_TRIANGLE_EXCLAMATION "  %s", plugin->error_msg);
+    igPopTextWrapPos();
+  }
+
+  if (igCollapsingHeader_TreeNodeFlags("Library path", ImGuiTreeNodeFlags_None)) igTextWrapped("%s", plugin->path);
+  igSeparator();
+  render_plugin_actions(manager, index, dpi);
+  igEndChild();
 }
 
 void plugin_manager_render_ui(plugin_manager_t *manager, bool *p_open) {
   if (!*p_open) return;
 
-  igSetNextWindowSize((ImVec2){800, 500}, ImGuiCond_FirstUseEver);
+  igSetNextWindowSize((ImVec2){860.f, 560.f}, ImGuiCond_FirstUseEver);
+  if (!igBegin("Plugin Manager", p_open, 0)) {
+    igEnd();
+    return;
+  }
 
-  if (igBegin("Plugin Manager", p_open, 0)) {
-    static int selected_index = -1;
-    static char filter[128] = "";
+  static char selected_key[128] = "";
+  static char filter[128] = "";
+  const float dpi = igGetFontSize() > 0.f ? igGetFontSize() / 19.f : 1.f;
+  const bool toolbar_inline = igGetContentRegionAvail().x >= 620.f * dpi;
 
-    if (selected_index >= manager->count) {
-      selected_index = manager->count > 0 ? 0 : -1;
-    }
+  if (igButton(ICON_FA_MAGNIFYING_GLASS " Scan", (ImVec2){0.f, 0.f}))
+    plugin_manager_load_all(manager, manager->directory);
+  igSameLine(0.f, 6.f * dpi);
+  if (igButton(ICON_FA_ARROWS_ROTATE " Reload all", (ImVec2){0.f, 0.f}))
+    plugin_manager_reload_all(manager, manager->directory);
+  if (toolbar_inline) igSameLine(0.f, 12.f * dpi);
+  else igSpacing();
+  igSetNextItemWidth(toolbar_inline ? -FLT_MIN : igGetContentRegionAvail().x);
+  igInputTextWithHint("##plugin_filter", ICON_FA_MAGNIFYING_GLASS " Search plugins...", filter, sizeof(filter), 0,
+                      NULL, NULL);
 
-    if (igButton("Scan for Plugins", (ImVec2){0, 0})) {
-      plugin_manager_load_all(manager, manager->directory);
-    }
-    igSameLine(0, 5);
-    if (igButton("Reload All", (ImVec2){0, 0})) {
-      plugin_manager_reload_all(manager, manager->directory);
-    }
-    
-    igSameLine(0, 15);
-    igText("Search:");
-    igSameLine(0, 5);
-    igInputText("##Filter", filter, sizeof(filter), 0, NULL, NULL);
+  int active_count = 0;
+  int error_count = 0;
+  int waiting_count = 0;
+  for (int i = 0; i < manager->count; ++i) {
+    active_count += manager->plugins[i].status == PLUGIN_STATUS_LOADED;
+    error_count += manager->plugins[i].status == PLUGIN_STATUS_ERROR;
+    waiting_count += manager->plugins[i].status == PLUGIN_STATUS_WRONG_GAME;
+  }
+  igPushTextWrapPos(0.f);
+  igTextDisabled("%d plugin%s  |  %d active  |  %d waiting  |  %d error%s", manager->count,
+                 manager->count == 1 ? "" : "s", active_count, waiting_count, error_count,
+                 error_count == 1 ? "" : "s");
+  igPopTextWrapPos();
+  igSeparator();
 
-    igSeparator();
+  int selected_index = plugin_index_from_key(manager, selected_key);
+  if (selected_index < 0 && manager->count > 0) {
+    snprintf(selected_key, sizeof(selected_key), "%s", manager->plugins[0].key);
+    selected_index = 0;
+  }
 
-    if (igBeginTable("LayoutTable", 2, ImGuiTableFlags_Resizable, (ImVec2){0, 0}, 0.0f)) {
-      igTableSetupColumn("ListColumn", ImGuiTableColumnFlags_WidthStretch, 0.6f, 0);
-      igTableSetupColumn("DetailColumn", ImGuiTableColumnFlags_WidthStretch, 0.4f, 0);
-      igTableNextRow(0, 0.0f);
-
-      // LEFT COLUMN: Plugins list
-      igTableSetColumnIndex(0);
-      if (igBeginChild_Str("ListChild", (ImVec2){0, 0}, true, 0)) {
-        if (igBeginTable("PluginsTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, (ImVec2){0, 0}, 0.0f)) {
-          igTableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
-          igTableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 60.0f, 0);
-          igTableSetupColumn("Author", ImGuiTableColumnFlags_WidthFixed, 80.0f, 0);
-          igTableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 80.0f, 0);
-          igTableHeadersRow();
-
-          for (int i = 0; i < manager->count; ++i) {
-            loaded_plugin_t *p = &manager->plugins[i];
-            
-            if (filter[0] != '\0') {
-              bool match = false;
-              if (p->info.name && safe_strcasestr(p->info.name, filter)) match = true;
-              if (p->info.description && safe_strcasestr(p->info.description, filter)) match = true;
-              if (p->key[0] != '\0' && safe_strcasestr(p->key, filter)) match = true;
-              if (!match) continue;
-            }
-
-            igTableNextRow(0, 0.0f);
-            igTableSetColumnIndex(0);
-            
-            bool selected = (selected_index == i);
-            char label[256];
-            snprintf(label, sizeof(label), "%s##%d", (p->info.name && p->info.name[0]) ? p->info.name : p->key, i);
-            if (igSelectable_Bool(label, selected, ImGuiSelectableFlags_SpanAllColumns, (ImVec2){0, 0})) {
-              selected_index = i;
-            }
-
-            igTableSetColumnIndex(1);
-            igText("%s", (p->info.version && p->info.version[0]) ? p->info.version : "-");
-
-            igTableSetColumnIndex(2);
-            igText("%s", (p->info.author && p->info.author[0]) ? p->info.author : "-");
-
-            igTableSetColumnIndex(3);
-            if (p->status == PLUGIN_STATUS_LOADED) {
-              igTextColored((ImVec4){0.2f, 0.8f, 0.2f, 1.0f}, "Active");
-            } else if (p->status == PLUGIN_STATUS_WRONG_GAME) {
-              igTextColored((ImVec4){0.55f, 0.65f, 0.9f, 1.0f}, "Other game");
-              if (igIsItemHovered(0)) igSetTooltip("Written for '%s'. It loads again when that game is active.", p->game_id);
-            } else if (p->status == PLUGIN_STATUS_UNLOADED) {
-              igTextColored((ImVec4){0.6f, 0.6f, 0.6f, 1.0f}, "Disabled");
-            } else {
-              igTextColored((ImVec4){0.9f, 0.2f, 0.2f, 1.0f}, "Error");
-              if (igIsItemHovered(0)) {
-                igSetTooltip("%s", p->error_msg);
-              }
-            }
-          }
-          igEndTable();
-        }
-        igEndChild();
-      }
-
-      // RIGHT COLUMN: Selected details
-      igTableSetColumnIndex(1);
-      if (igBeginChild_Str("DetailChild", (ImVec2){0, 0}, true, 0)) {
-        if (selected_index >= 0 && selected_index < manager->count) {
-          loaded_plugin_t *p = &manager->plugins[selected_index];
-          
-          igText("Plugin Details");
-          igSeparator();
-          
-          igPushTextWrapPos(0.0f);
-          
-          igTextColored((ImVec4){0.9f, 0.9f, 0.9f, 1.0f}, "%s", (p->info.name && p->info.name[0]) ? p->info.name : p->key);
-          
-          igTextColored((ImVec4){0.6f, 0.6f, 0.6f, 1.0f}, "Key: %s", p->key);
-          igTextColored((ImVec4){0.6f, 0.6f, 0.6f, 1.0f}, "Version: %s", (p->info.version && p->info.version[0]) ? p->info.version : "Unknown");
-          igTextColored((ImVec4){0.6f, 0.6f, 0.6f, 1.0f}, "Author: %s", (p->info.author && p->info.author[0]) ? p->info.author : "Unknown");
-          igTextColored((ImVec4){0.6f, 0.6f, 0.6f, 1.0f}, "Path: %s", p->path);
-          
-          igSeparator();
-          igText("Description:");
-          igTextColored((ImVec4){0.8f, 0.8f, 0.8f, 1.0f}, "%s", (p->info.description && p->info.description[0]) ? p->info.description : "No description provided.");
-          
-          igSeparator();
-          igText("Scope:");
-          igSameLine(0, 5);
-          if (p->game_id[0])
-            igTextColored((ImVec4){0.7f, 0.8f, 1.0f, 1.0f}, "Game-specific (%s)", p->game_id);
-          else
-            igTextColored((ImVec4){0.8f, 0.8f, 0.8f, 1.0f}, "Global (any game)");
-
-          igText("Status:");
-          igSameLine(0, 5);
-          if (p->status == PLUGIN_STATUS_LOADED) {
-            igTextColored((ImVec4){0.2f, 0.8f, 0.2f, 1.0f}, "Active (Loaded)");
-          } else if (p->status == PLUGIN_STATUS_WRONG_GAME) {
-            igTextColored((ImVec4){0.55f, 0.65f, 0.9f, 1.0f}, "Waiting for its game");
-          } else if (p->status == PLUGIN_STATUS_UNLOADED) {
-            igTextColored((ImVec4){0.6f, 0.6f, 0.6f, 1.0f}, "Disabled (Unloaded)");
-          } else {
-            igTextColored((ImVec4){0.9f, 0.2f, 0.2f, 1.0f}, "Error");
-            igTextColored((ImVec4){0.9f, 0.4f, 0.4f, 1.0f}, "Reason: %s", p->error_msg);
-          }
-          
-          igSeparator();
-          igPopTextWrapPos();
-
-          if (p->status == PLUGIN_STATUS_LOADED) {
-            if (igButton("Disable Plugin", (ImVec2){0, 0})) {
-              plugin_manager_toggle_plugin(manager, selected_index);
-            }
-            igSameLine(0, 5);
-            if (igButton("Reload", (ImVec2){0, 0})) {
-              plugin_manager_reload_plugin(manager, selected_index);
-            }
-            if (p->show_ui) {
-              igSameLine(0, 5);
-              if (igButton("Open Settings", (ImVec2){0, 0})) {
-                p->show_ui(p->data);
-              }
-            }
-          } else if (p->status == PLUGIN_STATUS_UNLOADED) {
-            if (igButton("Enable Plugin", (ImVec2){0, 0})) {
-              plugin_manager_toggle_plugin(manager, selected_index);
-            }
-          } else { // Error
-            if (igButton("Retry Load", (ImVec2){0, 0})) {
-              plugin_manager_load_plugin(manager, selected_index);
-            }
-            igSameLine(0, 5);
-            if (p->enabled) {
-              if (igButton("Disable", (ImVec2){0, 0})) {
-                p->enabled = false;
-                p->status = PLUGIN_STATUS_UNLOADED;
-                config_save(manager->host_ui);
-              }
-            } else {
-              if (igButton("Enable (Retry)", (ImVec2){0, 0})) {
-                p->enabled = true;
-                plugin_manager_load_plugin(manager, selected_index);
-                config_save(manager->host_ui);
-              }
-            }
-          }
-        } else {
-          igTextDisabled("Select a plugin from the list to view its details.");
-        }
-        igEndChild();
-      }
-      igEndTable();
-    }
+  const ImVec2 remaining = igGetContentRegionAvail();
+  const bool split = remaining.x >= 700.f * dpi;
+  if (split && igBeginTable("PluginWorkspace", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp,
+                            (ImVec2){0.f, 0.f}, 0.f)) {
+    igTableSetupColumn("Plugin list", ImGuiTableColumnFlags_WidthStretch, .56f, 0);
+    igTableSetupColumn("Plugin detail", ImGuiTableColumnFlags_WidthStretch, .44f, 0);
+    igTableNextRow(0, 0.f);
+    igTableSetColumnIndex(0);
+    render_plugin_list(manager, selected_key, filter, 0.f, dpi);
+    igTableSetColumnIndex(1);
+    selected_index = plugin_index_from_key(manager, selected_key);
+    render_plugin_detail(manager, selected_index, 0.f, dpi);
+    igEndTable();
+  } else if (!split) {
+    const float list_height = remaining.y > 220.f * dpi ? remaining.y * .46f : remaining.y * .5f;
+    render_plugin_list(manager, selected_key, filter, list_height, dpi);
+    igSpacing();
+    selected_index = plugin_index_from_key(manager, selected_key);
+    render_plugin_detail(manager, selected_index, 0.f, dpi);
   }
   igEnd();
 }

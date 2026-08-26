@@ -3,6 +3,7 @@
 
 #include "dd_imgui.h"
 #include <float.h>
+#include <frametee/icons.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -196,54 +197,76 @@ static void scan_finish_tick(ft_game *game, int global_tick) {
   }
 }
 
+static bool payload_input_int(const char *label, const char *id, int *value) {
+  igTextDisabled("%s", label);
+  igSetNextItemWidth(-FLT_MIN);
+  return igInputInt(id, value, 1, 1, 0);
+}
+
+static bool payload_input_text(const char *label, const char *id, char *value, size_t value_size) {
+  igTextDisabled("%s", label);
+  igSetNextItemWidth(-FLT_MIN);
+  return igInputText(id, value, value_size, 0, NULL, NULL);
+}
+
+static bool payload_combo(const char *label, const char *id, int *value, const char *const items[], int item_count,
+                          int popup_items) {
+  igTextDisabled("%s", label);
+  igSetNextItemWidth(-FLT_MIN);
+  return igCombo_Str_arr(id, value, items, item_count, popup_items);
+}
+
 static bool edit_payload(dd_event_payload_t *payload) {
   bool changed = false;
   switch ((dd_event_type_t)payload->type) {
   case DD_EVENT_CHAT: {
-    changed |= igInputInt("Client ID", &payload->client_id, 1, 1, 0);
+    changed |= payload_input_int("Client ID", "##client_id", &payload->client_id);
     int team_index = payload->team + 2;
-    if (igCombo_Str_arr("Team", &team_index, team_names, (int)(sizeof(team_names) / sizeof(team_names[0])), 0)) {
+    if (payload_combo("Team", "##team", &team_index, team_names, (int)(sizeof(team_names) / sizeof(team_names[0])), 0)) {
       payload->team = team_index - 2;
       changed = true;
     }
-    changed |= igInputText("Message", payload->message, sizeof(payload->message), 0, NULL, NULL);
+    changed |= payload_input_text("Message", "##message", payload->message, sizeof(payload->message));
     break;
   }
   case DD_EVENT_BROADCAST:
-    changed |= igInputText("Message", payload->message, sizeof(payload->message), 0, NULL, NULL);
+    changed |= payload_input_text("Message", "##message", payload->message, sizeof(payload->message));
     break;
   case DD_EVENT_KILLMSG:
-    changed |= igInputInt("Killer", &payload->killer, 1, 1, 0);
-    changed |= igInputInt("Victim", &payload->victim, 1, 1, 0);
-    changed |= igCombo_Str_arr("Weapon", &payload->weapon, weapon_names, (int)(sizeof(weapon_names) / sizeof(weapon_names[0])), 0);
-    changed |= igInputInt("Mode", &payload->mode_special, 1, 1, 0);
+    changed |= payload_input_int("Killer", "##killer", &payload->killer);
+    changed |= payload_input_int("Victim", "##victim", &payload->victim);
+    changed |= payload_combo("Weapon", "##weapon", &payload->weapon, weapon_names,
+                             (int)(sizeof(weapon_names) / sizeof(weapon_names[0])), 0);
+    changed |= payload_input_int("Mode", "##mode", &payload->mode_special);
     break;
   case DD_EVENT_SOUND_GLOBAL:
-    changed |= igCombo_Str_arr("Sound", &payload->sound_id, sound_names, (int)(sizeof(sound_names) / sizeof(sound_names[0])), 20);
+    changed |= payload_combo("Sound", "##sound", &payload->sound_id, sound_names,
+                             (int)(sizeof(sound_names) / sizeof(sound_names[0])), 20);
     break;
   case DD_EVENT_EMOTICON:
-    changed |= igInputInt("Client ID", &payload->client_id, 1, 1, 0);
-    changed |= igCombo_Str_arr("Emoticon", &payload->emoticon, emote_names, (int)(sizeof(emote_names) / sizeof(emote_names[0])), 0);
+    changed |= payload_input_int("Client ID", "##client_id", &payload->client_id);
+    changed |= payload_combo("Emoticon", "##emoticon", &payload->emoticon, emote_names,
+                             (int)(sizeof(emote_names) / sizeof(emote_names[0])), 0);
     break;
   case DD_EVENT_VOTE_SET:
-    changed |= igInputInt("Timeout", &payload->vote_timeout, 1, 1, 0);
-    changed |= igInputText("Description", payload->message, sizeof(payload->message), 0, NULL, NULL);
-    changed |= igInputText("Reason", payload->reason, sizeof(payload->reason), 0, NULL, NULL);
+    changed |= payload_input_int("Timeout", "##timeout", &payload->vote_timeout);
+    changed |= payload_input_text("Description", "##description", payload->message, sizeof(payload->message));
+    changed |= payload_input_text("Reason", "##reason", payload->reason, sizeof(payload->reason));
     break;
   case DD_EVENT_VOTE_STATUS:
-    changed |= igInputInt("Yes", &payload->vote_yes, 1, 1, 0);
-    changed |= igInputInt("No", &payload->vote_no, 1, 1, 0);
-    changed |= igInputInt("Pass", &payload->vote_pass, 1, 1, 0);
-    changed |= igInputInt("Total", &payload->vote_total, 1, 1, 0);
+    changed |= payload_input_int("Yes", "##yes", &payload->vote_yes);
+    changed |= payload_input_int("No", "##no", &payload->vote_no);
+    changed |= payload_input_int("Pass", "##pass", &payload->vote_pass);
+    changed |= payload_input_int("Total", "##total", &payload->vote_total);
     break;
   case DD_EVENT_DDRACE_TIME:
-    changed |= igInputInt("Time", &payload->time, 1, 1, 0);
-    changed |= igInputInt("Check", &payload->check, 1, 1, 0);
-    changed |= igInputInt("Finish", &payload->finish, 1, 1, 0);
+    changed |= payload_input_int("Time", "##time", &payload->time);
+    changed |= payload_input_int("Check", "##check", &payload->check);
+    changed |= payload_input_int("Finish", "##finish", &payload->finish);
     break;
   case DD_EVENT_RECORD:
-    changed |= igInputInt("Server Best", &payload->server_time_best, 1, 1, 0);
-    changed |= igInputInt("Player Best", &payload->player_time_best, 1, 1, 0);
+    changed |= payload_input_int("Server Best", "##server_best", &payload->server_time_best);
+    changed |= payload_input_int("Player Best", "##player_best", &payload->player_time_best);
     break;
   default:
     break;
@@ -251,12 +274,258 @@ static bool edit_payload(dd_event_payload_t *payload) {
   return changed;
 }
 
+typedef struct dd_event_editor_t {
+  bool active;
+  int original_world;
+  int original_tick;
+  dd_event_payload_t original_payload;
+  int world;
+  int tick;
+  dd_event_payload_t payload;
+} dd_event_editor_t;
+
+static int find_editor_event(ft_game *game, const dd_event_editor_t *editor) {
+  if (!editor->active) return -1;
+  const uint32_t count = game->engine->timeline_event_count();
+  for (uint32_t index = 0; index < count; ++index) {
+    ft_timeline_event event = {.struct_size = sizeof(event)};
+    dd_event_payload_t payload;
+    if (game->engine->timeline_event_get(index, &event) && event.world_index == editor->original_world &&
+        event.tick == editor->original_tick && dd_event_decode(&event, &payload) &&
+        memcmp(&payload, &editor->original_payload, sizeof(payload)) == 0)
+      return (int)index;
+  }
+  return -1;
+}
+
+static void select_editor_event(dd_event_editor_t *editor, const ft_timeline_event *event,
+                                const dd_event_payload_t *payload) {
+  editor->active = true;
+  editor->original_world = editor->world = event->world_index;
+  editor->original_tick = editor->tick = event->tick;
+  editor->original_payload = editor->payload = *payload;
+}
+
+// ImGui carries the text baseline of a cell's *last* line over to the next cell
+// of the same row (see the baseline propagation FIXME in imgui_tables.cpp), so a
+// cell that ends on a framed widget pushes the next cell's label down by
+// FramePadding.y. These field cells stack a label over a widget, so every one of
+// them has to start from a clean baseline for the columns to line up.
+static void field_column(void) {
+  igTableNextColumn();
+  igGetCurrentWindow()->DC.CurrLineTextBaseOffset = 0.f;
+}
+
+static bool event_world_combo(ft_game *game, const char *id, int *world, int world_count) {
+  char fallback[32];
+  const char *selected = world_name(game, *world, fallback, sizeof(fallback));
+  bool changed = false;
+  if (igBeginCombo(id, selected, 0)) {
+    for (int candidate = 0; candidate < world_count; ++candidate) {
+      char candidate_fallback[32];
+      const char *candidate_name = world_name(game, candidate, candidate_fallback, sizeof(candidate_fallback));
+      if (igSelectable_Bool(candidate_name, candidate == *world, 0, (ImVec2){0.f, 0.f})) {
+        *world = candidate;
+        changed = true;
+      }
+    }
+    igEndCombo();
+  }
+  return changed;
+}
+
+static bool event_row_selectable(const char *label, bool selected) {
+  const ImVec4 transparent = {0.f, 0.f, 0.f, 0.f};
+  igPushStyleColor_Vec4(ImGuiCol_Header, transparent);
+  igPushStyleColor_Vec4(ImGuiCol_HeaderHovered, transparent);
+  igPushStyleColor_Vec4(ImGuiCol_HeaderActive, transparent);
+  const bool clicked = igSelectable_Bool(label, selected, ImGuiSelectableFlags_SpanAllColumns, (ImVec2){0.f, 0.f});
+  const bool hovered = igIsItemHovered(0);
+  const bool active = igIsItemActive();
+  igPopStyleColor(3);
+
+  if (active) igTableSetBgColor(ImGuiTableBgTarget_RowBg0, igGetColorU32_Col(ImGuiCol_HeaderActive, 1.f), -1);
+  else if (hovered)
+    igTableSetBgColor(ImGuiTableBgTarget_RowBg0, igGetColorU32_Col(ImGuiCol_HeaderHovered, 1.f), -1);
+  else if (selected)
+    igTableSetBgColor(ImGuiTableBgTarget_RowBg0, igGetColorU32_Col(ImGuiCol_Header, 1.f), -1);
+  return clicked;
+}
+
+// The panel lists this game's events, not every timeline event, so a clipper row
+// is not a timeline index. Membership is decided by the payload size alone,
+// which costs nothing to test; the full decode is left to the rows on screen.
+static bool event_row_fetch(ft_game *game, uint32_t index, ft_timeline_event *event) {
+  *event = (ft_timeline_event){.struct_size = sizeof(*event)};
+  return game->engine->timeline_event_get(index, event) && event->data_size == sizeof(dd_event_payload_t);
+}
+
+static int event_row_count(ft_game *game, uint32_t count) {
+  int rows = 0;
+  for (uint32_t index = 0; index < count; ++index) {
+    ft_timeline_event event;
+    if (event_row_fetch(game, index, &event)) ++rows;
+  }
+  return rows;
+}
+
+static void render_event_list(ft_game *game, dd_event_editor_t *editor, float height, float dpi) {
+  if (!igBeginChild_Str("DDNetEventList", (ImVec2){0.f, height}, true, ImGuiWindowFlags_None)) {
+    igEndChild();
+    return;
+  }
+
+  const uint32_t count = game->engine->timeline_event_count();
+  const int row_count = event_row_count(game, count);
+  if (row_count == 0) {
+    igSpacing();
+    igTextDisabled(ICON_FA_LIST "  No authored DDNet events.");
+    igEndChild();
+    return;
+  }
+
+  const int selected_index = find_editor_event(game, editor);
+  const bool compact = igGetContentRegionAvail().x < 430.f * dpi;
+  const int columns = compact ? 3 : 4;
+  const ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
+                                ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+  if (igBeginTable("DDNetEventRows", columns, flags, (ImVec2){0.f, 0.f}, 0.f)) {
+    if (!compact) igTableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 100.f * dpi, 0);
+    igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 62.f * dpi, 0);
+    igTableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 112.f * dpi, 0);
+    igTableSetupColumn("Summary", ImGuiTableColumnFlags_WidthStretch, 0.f, 0);
+    igTableHeadersRow();
+
+    ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
+    ImGuiListClipper_Begin(clipper, row_count, -1.f);
+    while (ImGuiListClipper_Step(clipper)) {
+      int row = 0;
+      for (uint32_t index = 0; index < count; ++index) {
+        ft_timeline_event event;
+        dd_event_payload_t payload;
+        if (!event_row_fetch(game, index, &event)) continue;
+        const int current_row = row++;
+        if (current_row < clipper->DisplayStart) continue;
+        if (current_row >= clipper->DisplayEnd) break;
+
+        igPushID_Int((int)index);
+        igTableNextRow(0, 0.f);
+        // A payload that passed the size test but not the decode still owns its
+        // row: dropping it here would desync every row height below it.
+        if (!dd_event_decode(&event, &payload)) {
+          igTableSetColumnIndex(0);
+          igTextDisabled("--");
+          igPopID();
+          continue;
+        }
+        const bool selected = selected_index == (int)index;
+        bool clicked;
+        int column = 0;
+        if (!compact) {
+          igTableSetColumnIndex(column++);
+          char fallback[32];
+          const char *name = world_name(game, event.world_index, fallback, sizeof(fallback));
+          clicked = event_row_selectable(name, selected);
+        } else {
+          igTableSetColumnIndex(column++);
+          char tick_label[32];
+          snprintf(tick_label, sizeof(tick_label), "%d", event.tick);
+          clicked = event_row_selectable(tick_label, selected);
+        }
+
+        if (!compact) {
+          igTableSetColumnIndex(column++);
+          igText("%d", event.tick);
+        }
+        igTableSetColumnIndex(column++);
+        igTextColored((ImVec4){event.color.r, event.color.g, event.color.b,
+                               event.color.a > 0.f ? event.color.a : 1.f},
+                      "%s", event_names[payload.type]);
+        igTableSetColumnIndex(column);
+        igTextUnformatted(event.text ? event.text : "", NULL);
+        if (clicked) select_editor_event(editor, &event, &payload);
+        igPopID();
+      }
+    }
+    ImGuiListClipper_End(clipper);
+    ImGuiListClipper_destroy(clipper);
+    igEndTable();
+  }
+  igEndChild();
+}
+
+static void render_event_inspector(ft_game *game, dd_event_editor_t *editor, int world_count, float height, float dpi) {
+  if (!igBeginChild_Str("DDNetEventInspector", (ImVec2){0.f, height}, true, ImGuiWindowFlags_None)) {
+    igEndChild();
+    return;
+  }
+
+  const int selected_index = find_editor_event(game, editor);
+  if (!editor->active || selected_index < 0) {
+    editor->active = false;
+    igSpacing();
+    igTextDisabled(ICON_FA_PEN_TO_SQUARE "  Select an event to inspect or edit it.");
+    igEndChild();
+    return;
+  }
+
+  igSeparatorText("Selected event");
+  const int field_columns = igGetContentRegionAvail().x >= 360.f * dpi ? 2 : 1;
+  if (igBeginTable("SelectedEventBasics", field_columns, ImGuiTableFlags_SizingStretchSame, (ImVec2){0.f, 0.f}, 0.f)) {
+    field_column();
+    igTextDisabled("Group");
+    igSetNextItemWidth(-FLT_MIN);
+    event_world_combo(game, "##selected_world", &editor->world, world_count);
+    field_column();
+    igTextDisabled("Tick");
+    igSetNextItemWidth(-FLT_MIN);
+    igDragInt("##selected_tick", &editor->tick, 1.f, 0, 0, "%d", 0);
+    igEndTable();
+  }
+
+  igTextDisabled("Type");
+  igSetNextItemWidth(-FLT_MIN);
+  int type = editor->payload.type;
+  if (igCombo_Str_arr("##selected_type", &type, event_names, DD_EVENT_COUNT, 0)) editor->payload.type = type;
+
+  igSpacing();
+  igPushID_Str("selected_payload");
+  igPushItemWidth(-FLT_MIN);
+  edit_payload(&editor->payload);
+  igPopItemWidth();
+  igPopID();
+
+  const bool dirty = editor->world != editor->original_world || editor->tick != editor->original_tick ||
+                     memcmp(&editor->payload, &editor->original_payload, sizeof(editor->payload)) != 0;
+  igSeparator();
+  if (!dirty) igBeginDisabled(true);
+  if (igButton(ICON_FA_FLOPPY_DISK " Save", (ImVec2){0.f, 0.f})) {
+    if (update_event(game, (uint32_t)selected_index, editor->world, editor->tick, &editor->payload)) {
+      editor->original_world = editor->world;
+      editor->original_tick = editor->tick;
+      editor->original_payload = editor->payload;
+    }
+  }
+  igSameLine(0.f, 6.f * dpi);
+  if (igButton(ICON_FA_ROTATE_LEFT " Revert", (ImVec2){0.f, 0.f})) {
+    editor->world = editor->original_world;
+    editor->tick = editor->original_tick;
+    editor->payload = editor->original_payload;
+  }
+  if (!dirty) igEndDisabled();
+  igSameLine(0.f, 12.f * dpi);
+  if (igButton(ICON_FA_TRASH " Delete", (ImVec2){0.f, 0.f})) {
+    if (game->engine->timeline_event_remove((uint32_t)selected_index)) editor->active = false;
+  }
+  igEndChild();
+}
+
 void dd_events_render(ft_game *game, const ft_ui_frame *frame) {
   if (!event_api_ready(game) || !frame) return;
   if (game->auto_finish_events && frame->state.recording) scan_finish_tick(game, frame->state.current_tick);
   if (!game->show_events) return;
 
-  igSetNextWindowSize((ImVec2){760.f, 560.f}, ImGuiCond_FirstUseEver);
+  igSetNextWindowSize((ImVec2){820.f, 620.f}, ImGuiCond_FirstUseEver);
   if (!igBegin("DDNet Timeline Events", &game->show_events, 0)) {
     igEnd();
     return;
@@ -266,6 +535,7 @@ void dd_events_render(ft_game *game, const ft_ui_frame *frame) {
   static int new_tick = 0;
   static int new_world = 0;
   static dd_event_payload_t draft;
+  static dd_event_editor_t editor;
   if (draft.magic != DD_EVENT_PAYLOAD_MAGIC)
     draft = (dd_event_payload_t){.magic = DD_EVENT_PAYLOAD_MAGIC, .type = DD_EVENT_CHAT, .team = -2, .vote_timeout = 30};
 
@@ -274,9 +544,12 @@ void dd_events_render(ft_game *game, const ft_ui_frame *frame) {
     new_world = game->engine->timeline_active_world ? game->engine->timeline_active_world() : 0;
   if (new_world < 0 || new_world >= world_count) new_world = 0;
 
+  const float dpi = igGetFontSize() > 0.f ? igGetFontSize() / 19.f : 1.f;
+  const float window_width = igGetContentRegionAvail().x;
+  const bool automation_inline = window_width >= 560.f * dpi;
   igCheckbox("Auto-generate finish events while recording", &game->auto_finish_events);
-  igSameLine(0, 10.f);
-  if (igButton("Generate Finish Events", (ImVec2){0, 0}) && game->engine->timeline_range) {
+  if (automation_inline) igSameLine(0.f, 10.f * dpi);
+  if (igButton(ICON_FA_FLAG_CHECKERED " Generate finish events", (ImVec2){0.f, 0.f}) && game->engine->timeline_range) {
     int32_t first = 0, last = 0;
     if (game->engine->timeline_range(&first, &last))
       for (int tick = first + 1; tick <= last; ++tick)
@@ -284,92 +557,62 @@ void dd_events_render(ft_game *game, const ft_ui_frame *frame) {
   }
   igSeparator();
 
-  char world_fallback[32];
-  const char *selected_world_name = world_name(game, new_world, world_fallback, sizeof(world_fallback));
-  if (igBeginCombo("Group", selected_world_name, 0)) {
-    for (int world = 0; world < world_count; ++world) {
-      char fallback[32];
-      const char *name = world_name(game, world, fallback, sizeof(fallback));
-      if (igSelectable_Bool(name, world == new_world, 0, (ImVec2){0, 0})) new_world = world;
+  if (igCollapsingHeader_TreeNodeFlags("Create event", ImGuiTreeNodeFlags_DefaultOpen)) {
+    const int basics_columns = window_width >= 590.f * dpi ? 3 : (window_width >= 360.f * dpi ? 2 : 1);
+    if (igBeginTable("NewEventBasics", basics_columns, ImGuiTableFlags_SizingStretchSame, (ImVec2){0.f, 0.f}, 0.f)) {
+      field_column();
+      igTextDisabled("Group");
+      igSetNextItemWidth(-FLT_MIN);
+      event_world_combo(game, "##new_world", &new_world, world_count);
+      field_column();
+      igTextDisabled("Tick");
+      const char *current_tick_label = ICON_FA_LOCATION_CROSSHAIRS " Current";
+      const ImGuiStyle *style = igGetStyle();
+      const ImVec2 current_tick_text = igCalcTextSize(current_tick_label, NULL, false, -1.f);
+      const float current_tick_width = current_tick_text.x + style->FramePadding.x * 2.f;
+      const float tick_input_width =
+          fmaxf(70.f * dpi, igGetContentRegionAvail().x - current_tick_width - style->ItemSpacing.x);
+      igSetNextItemWidth(tick_input_width);
+      igDragInt("##new_tick", &new_tick, 1.f, 0, 0, "%d", 0);
+      igSameLine(0.f, style->ItemSpacing.x);
+      if (igButton(current_tick_label, (ImVec2){current_tick_width, igGetFrameHeight()}))
+        new_tick = current_local_tick(game, frame, new_world);
+      field_column();
+      igTextDisabled("Type");
+      igSetNextItemWidth(-FLT_MIN);
+      if (igCombo_Str_arr("##new_type", &new_type, event_names, DD_EVENT_COUNT, 0)) draft.type = new_type;
+      else draft.type = new_type;
+      igEndTable();
     }
-    igEndCombo();
+
+    igPushID_Str("new_event");
+    igPushItemWidth(-FLT_MIN);
+    edit_payload(&draft);
+    igPopItemWidth();
+    igPopID();
+    if (igButton(ICON_FA_PLUS " Add event", (ImVec2){130.f * dpi, 0.f})) add_event(game, new_world, new_tick, &draft);
   }
-  if (igButton("Set to Current Tick", (ImVec2){0, 0})) new_tick = current_local_tick(game, frame, new_world);
-  igSameLine(0, 6.f);
-  igSetNextItemWidth(130.f);
-  igDragInt("Tick", &new_tick, 1.f, 0, 0, "%d", 0);
-  igSameLine(0, 12.f);
-  igSetNextItemWidth(160.f);
-  if (igCombo_Str_arr("Type", &new_type, event_names, DD_EVENT_COUNT, 0)) draft.type = new_type;
-  else draft.type = new_type;
 
-  igPushID_Str("new_event");
-  edit_payload(&draft);
-  igPopID();
-  if (igButton("Add Event", (ImVec2){110.f, 0.f})) add_event(game, new_world, new_tick, &draft);
-  igSeparator();
-
-  if (igBeginTable("DDNetEvents", 5,
-                   ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
-                   (ImVec2){0, 0}, 0.f)) {
-    igTableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 110.f, 0);
-    igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 70.f, 0);
-    igTableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 115.f, 0);
-    igTableSetupColumn("Details", ImGuiTableColumnFlags_WidthStretch, 0.f, 0);
-    igTableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 55.f, 0);
-    igTableHeadersRow();
-
-    const uint32_t count = game->engine->timeline_event_count();
-    for (uint32_t index = 0; index < count; ++index) {
-      ft_timeline_event event = {.struct_size = sizeof(event)};
-      dd_event_payload_t payload;
-      if (!game->engine->timeline_event_get(index, &event) || !dd_event_decode(&event, &payload)) continue;
-      igPushID_Int((int)index);
-      igTableNextRow(0, 0.f);
-      bool changed = false;
-      int world = event.world_index;
-      int tick = event.tick;
-
-      igTableSetColumnIndex(0);
-      char fallback[32];
-      const char *name = world_name(game, world, fallback, sizeof(fallback));
-      if (igBeginCombo("##world", name, 0)) {
-        for (int candidate = 0; candidate < world_count; ++candidate) {
-          char candidate_fallback[32];
-          const char *candidate_name = world_name(game, candidate, candidate_fallback, sizeof(candidate_fallback));
-          if (igSelectable_Bool(candidate_name, candidate == world, 0, (ImVec2){0, 0})) {
-            world = candidate;
-            changed = true;
-          }
-        }
-        igEndCombo();
-      }
-
-      igTableSetColumnIndex(1);
-      igSetNextItemWidth(-FLT_MIN);
-      changed |= igDragInt("##tick", &tick, 1.f, 0, 0, "%d", 0);
-
-      igTableSetColumnIndex(2);
-      int type = payload.type;
-      igSetNextItemWidth(-FLT_MIN);
-      if (igCombo_Str_arr("##type", &type, event_names, DD_EVENT_COUNT, 0)) {
-        payload.type = type;
-        changed = true;
-      }
-
-      igTableSetColumnIndex(3);
-      igPushID_Str("details");
-      changed |= edit_payload(&payload);
-      igPopID();
-
-      igTableSetColumnIndex(4);
-      const bool remove = igSmallButton("Delete");
-      if (remove) game->engine->timeline_event_remove(index);
-      else if (changed) update_event(game, index, world, tick, &payload);
-      igPopID();
-      if (remove || changed) break; // mutation may re-sort the engine's array
-    }
+  igSeparatorText("Authored events");
+  const uint32_t event_count = game->engine->timeline_event_count();
+  igTextDisabled("%u event%s", event_count, event_count == 1 ? "" : "s");
+  const ImVec2 remaining = igGetContentRegionAvail();
+  const bool split = remaining.x >= 700.f * dpi;
+  if (split && igBeginTable("DDNetEventWorkspace", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp,
+                            (ImVec2){0.f, 0.f}, 0.f)) {
+    igTableSetupColumn("Events", ImGuiTableColumnFlags_WidthStretch, .58f, 0);
+    igTableSetupColumn("Inspector", ImGuiTableColumnFlags_WidthStretch, .42f, 0);
+    igTableNextRow(0, 0.f);
+    igTableSetColumnIndex(0);
+    render_event_list(game, &editor, 0.f, dpi);
+    igTableSetColumnIndex(1);
+    render_event_inspector(game, &editor, world_count, 0.f, dpi);
     igEndTable();
+  } else if (!split) {
+    const float list_height = fmaxf(150.f * dpi, remaining.y * .45f);
+    render_event_list(game, &editor, list_height, dpi);
+    igSpacing();
+    render_event_inspector(game, &editor, world_count, 0.f, dpi);
   }
   igEnd();
 }
