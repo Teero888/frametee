@@ -61,11 +61,8 @@ static void submit_tee_hand(ft_game *game, const vec2 center_phys, const vec2 di
 
 static void render_fastcap_flag(ft_game *game, int team, vec2 pos) {
   const uint32_t sprite = team == 0 ? GAMESKIN_FLAG_RED : GAMESKIN_FLAG_BLUE;
-  const ft_sprite_rect *rect = dd_sprite_rect(game, game->gfx.gameskin, sprite);
-  if (!rect) return;
-  const float f = sqrtf((float)rect->w * rect->w + (float)rect->h * rect->h);
-  vec2 size = {8.0f * ((float)rect->w / f), 8.0f * ((float)rect->h / f)};
-  vec2 draw_pos = {pos[0], pos[1] - size[1] * 0.5f};
+  vec2 size = {42.0f / PX_PER_TILE, 84.0f / PX_PER_TILE};
+  vec2 draw_pos = {pos[0], pos[1] - 31.5f / PX_PER_TILE};
   dd_draw_sprite(game, game->gfx.gameskin, DD_Z_PICKUPS, draw_pos, size, 0.f, sprite, (vec4){1.f, 1.f, 1.f, 1.f});
 }
 
