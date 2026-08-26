@@ -303,13 +303,7 @@ void prediction_render_menu(timeline_state_t *timeline) {
   prediction_settings_t *settings = &timeline->prediction;
   const float dpi = gfx_get_ui_scale();
 
-  if (settings->enabled) {
-    igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.18f, 0.48f, 0.75f, 1.f});
-    igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.24f, 0.58f, 0.88f, 1.f});
-    igPushStyleColor_Vec4(ImGuiCol_ButtonActive, (ImVec4){0.28f, 0.65f, 0.95f, 1.f});
-  }
   const bool open = ui_icon_button(timeline->ui, ICON_FA_ROUTE, (ImVec2){30.f * dpi, 0.f});
-  if (settings->enabled) igPopStyleColor(3);
   if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("Prediction lines");
   if (open) igOpenPopup_Str("PredictionMenu", ImGuiPopupFlags_None);
 

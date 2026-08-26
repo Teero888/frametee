@@ -159,7 +159,8 @@ void renderer_draw_controls(timeline_state_t *ts) {
   igText("Zoom");
   igSameLine(0, 4 * dpi_scale);
   igSetNextItemWidth(75 * dpi_scale);
-  igSliderFloat("##Zoom", &ts->zoom, MIN_TIMELINE_ZOOM, MAX_TIMELINE_ZOOM, "%.2f", ImGuiSliderFlags_Logarithmic);
+  igDragFloat("##Zoom", &ts->zoom, 0.02f, MIN_TIMELINE_ZOOM, MAX_TIMELINE_ZOOM, "%.2f",
+              ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
 
   igSameLine(0, 12 * dpi_scale);
   igText("Speed");
@@ -167,7 +168,7 @@ void renderer_draw_controls(timeline_state_t *ts) {
   igSetNextItemWidth(75 * dpi_scale);
   const int active_tps = game_ticks_per_second(&ts->ui->gfx_handler->game_host);
   const int max_speed = active_tps > 50 ? active_tps * 2 : 100;
-  igSliderInt("##Speed", &ts->gui_playback_speed, 1, max_speed, "%d", ImGuiSliderFlags_None);
+  igDragInt("##Speed", &ts->gui_playback_speed, 0.5f, 1, max_speed, "%d", ImGuiSliderFlags_AlwaysClamp);
 
   igSameLine(0, 14 * dpi_scale);
 
@@ -177,23 +178,13 @@ void renderer_draw_controls(timeline_state_t *ts) {
   game_host_t *camera_host = &ts->ui->gfx_handler->game_host;
   const unsigned mode_count = game_camera_mode_count(camera_host);
   const ft_camera_mode *mode = game_camera_mode(camera_host, camera->mode);
-  const bool directed = mode && (mode->flags & FT_CAMERA_MODE_DIRECTED) != 0;
 
-  if (directed) {
-    igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){1., 0.48f, 0.1f, 1.0f});
-    igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){1., 0.58f, 0.1f, 1.0f});
-    igPushStyleColor_Vec4(ImGuiCol_ButtonActive, (ImVec4){1., 0.68f, 0.1f, 1.0f});
-  }
   if (ui_icon_button(ts->ui, ICON_FA_VIDEO, (ImVec2){30 * dpi_scale, 0}) && mode_count > 0) {
     camera->mode = (camera->mode + 1) % mode_count;
   }
   if (igIsItemHovered(ImGuiHoveredFlags_None)) {
     const ft_camera_mode *next = game_camera_mode(camera_host, mode_count ? (camera->mode + 1) % mode_count : 0);
-    igSetTooltip("Camera: %s%s\nClick for %s", mode ? mode->display_name : "?", directed ? " (active)" : "",
-                 next ? next->display_name : "?");
-  }
-  if (directed) {
-    igPopStyleColor(3);
+    igSetTooltip("Camera: %s\nClick for %s", mode ? mode->display_name : "?", next ? next->display_name : "?");
   }
 
   igSameLine(0, btn_gap);

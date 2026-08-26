@@ -565,6 +565,7 @@ void engine_api_fill_state(ft_engine_state *out) {
   out->recording = ts->recording;
   out->headless = g_is_headless;
   out->selected_player = ts->selected_player_track_index;
+  out->lod_bias = g_engine->renderer.lod_bias;
   api_camera_get(&out->camera);
 }
 

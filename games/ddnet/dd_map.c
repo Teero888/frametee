@@ -192,7 +192,9 @@ void dd_map_render(ft_game *game, const ft_render_frame *frame) {
   dd_map_uniforms_t ubo = {
       .transform = {camera.position.x / (float)map->width, camera.position.y / (float)map->height, zoom},
       .aspect = 1.0f / (camera.aspect / map_ratio),
-      .lod_bias = 0.0f,
+      // The editor's own setting. Tiles are sampled by this game's shader now,
+      // so this is the only place left that can honour it.
+      .lod_bias = frame->state.lod_bias,
   };
 
   ft_texture *textures[4] = {game->gfx.entities, level->layer_textures[0], level->layer_textures[1], level->layer_textures[2]};
