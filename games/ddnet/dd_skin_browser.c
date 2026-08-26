@@ -5,6 +5,7 @@
 
 #include <ctype.h>
 #include <curl/curl.h>
+#include <errno.h>
 #include <frametee/icons.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -111,9 +112,13 @@ bool dd_skin_fetch(ft_game *game, const char *name, char *out_path, size_t out_s
   }
 
   CURL *curl = curl_easy_init();
-  if (!curl) return false;
+  if (!curl) {
+    dd_log(game, FT_LOG_ERROR, "Could not initialize libcurl while fetching skin '%s'.", name);
+    return false;
+  }
   char *encoded = curl_easy_escape(curl, name, 0);
   if (!encoded) {
+    dd_log(game, FT_LOG_ERROR, "Could not URL-encode skin name '%s'.", name);
     curl_easy_cleanup(curl);
     return false;
   }
@@ -124,11 +129,22 @@ bool dd_skin_fetch(ft_game *game, const char *name, char *out_path, size_t out_s
       "https://skins.ddnet.org/skin/%s.png",
   };
   bool downloaded = false;
+  bool filesystem_error = false;
+  char curl_error[CURL_ERROR_SIZE] = {0};
+  char last_url[2048] = {0};
+  CURLcode last_result = CURLE_OK;
+  long last_response = 0;
+  curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_error);
   for (unsigned i = 0; i < sizeof(urls) / sizeof(urls[0]) && !downloaded; ++i) {
     char url[2048];
     snprintf(url, sizeof(url), urls[i], encoded);
     FILE *file = fopen(temporary, "wb");
-    if (!file) break;
+    if (!file) {
+      dd_log(game, FT_LOG_ERROR, "Could not create skin download file '%s': %s.", temporary, strerror(errno));
+      filesystem_error = true;
+      break;
+    }
+    curl_error[0] = '\0';
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_download);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
@@ -142,8 +158,35 @@ bool dd_skin_fetch(ft_game *game, const char *name, char *out_path, size_t out_s
     long response = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
     const bool write_ok = fclose(file) == 0;
-    downloaded = result == CURLE_OK && response == 200 && write_ok && rename(temporary, destination) == 0;
+    const int write_error = errno;
+    if (!write_ok) {
+      dd_log(game, FT_LOG_ERROR, "Could not finish skin download file '%s': %s.", temporary, strerror(write_error));
+      filesystem_error = true;
+      remove(temporary);
+      break;
+    }
+
+    if (result == CURLE_OK && response == 200) {
+      if (rename(temporary, destination) == 0) {
+        downloaded = true;
+        dd_log(game, FT_LOG_INFO, "Downloaded skin '%s' from %s.", name, url);
+      } else {
+        const int rename_error = errno;
+        dd_log(game, FT_LOG_ERROR, "Could not move downloaded skin into '%s': %s.", destination, strerror(rename_error));
+        filesystem_error = true;
+      }
+    } else {
+      last_result = result;
+      last_response = response;
+      snprintf(last_url, sizeof(last_url), "%s", url);
+    }
     if (!downloaded) remove(temporary);
+    if (filesystem_error) break;
+  }
+  if (!downloaded && !filesystem_error) {
+    const char *detail = curl_error[0] ? curl_error : curl_easy_strerror(last_result);
+    dd_log(game, FT_LOG_WARN, "Could not fetch skin '%s'; last GET '%s' failed: %s (curl %d, HTTP %ld).", name,
+           last_url, detail, (int)last_result, last_response);
   }
   curl_free(encoded);
   curl_easy_cleanup(curl);

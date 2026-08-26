@@ -5,6 +5,7 @@
 #include <cJSON.h>
 #include <stb_image.h>
 #include <curl/curl.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,16 +177,22 @@ static bool http_download_to_file(const char *url, const char *dest_file_path) {
     snprintf(temp_path, sizeof(temp_path), "%s.tmp", dest_file_path);
     
     FILE *fp = fs_open(temp_path, "wb");
-    if (!fp) return false;
+    if (!fp) {
+        log_error(NULL, "Could not create download file '%s': %s.", temp_path, strerror(errno));
+        return false;
+    }
     
     CURL *curl = curl_easy_init();
     if (!curl) {
+        log_error(NULL, "Could not initialize libcurl for '%s'.", url);
         fclose(fp);
         remove(temp_path);
         return false;
     }
-    
+
+    char curl_error[CURL_ERROR_SIZE] = {0};
     curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_error);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_file_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
@@ -197,16 +204,30 @@ static bool http_download_to_file(const char *url, const char *dest_file_path) {
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(curl);
-    fclose(fp);
-    
-    if (res == CURLE_OK && (http_code == 200 || http_code == 0)) {
-        remove(dest_file_path);
-        rename(temp_path, dest_file_path);
-        return true;
-    } else {
+    const int close_result = fclose(fp);
+    const int close_error = errno;
+
+    if (res != CURLE_OK || (http_code != 200 && http_code != 0)) {
+        const char *detail = curl_error[0] ? curl_error : curl_easy_strerror(res);
+        log_warn(NULL, "GET '%s' failed: %s (curl %d, HTTP %ld).", url, detail, (int)res, http_code);
         remove(temp_path);
         return false;
     }
+
+    if (close_result != 0) {
+        log_error(NULL, "Could not finish download file '%s': %s.", temp_path, strerror(close_error));
+        remove(temp_path);
+        return false;
+    }
+
+    remove(dest_file_path);
+    if (rename(temp_path, dest_file_path) != 0) {
+        const int rename_error = errno;
+        log_error(NULL, "Could not move download into '%s': %s.", dest_file_path, strerror(rename_error));
+        remove(temp_path);
+        return false;
+    }
+    return true;
 }
 
 static void add_item_to_category(online_map_category_t *cat, const online_map_item_t *item) {
@@ -444,6 +465,7 @@ static void *fetch_json_thread(void *arg) {
     bool success = http_download_to_file(url, args->json_file_path);
     
     if (success) {
+        log_info(NULL, "Updated the online map index.");
         pthread_mutex_lock(&args->mgr->mutex);
         args->mgr->is_offline = false;
         args->mgr->needs_reload = true;
@@ -527,6 +549,7 @@ static pthread_t g_map_thread;
 static void *map_download_worker(void *arg) {
     map_download_task_t *task = (map_download_task_t *)arg;
     task->success = http_download_to_file(task->url, task->dest_path);
+    if (task->success) log_info(NULL, "Downloaded map '%s'.", task->target_name);
     task->done = true;
     return NULL;
 }

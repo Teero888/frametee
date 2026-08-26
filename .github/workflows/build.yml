@@ -142,7 +142,7 @@ jobs:
           cmake:p
           ninja:p
           pkgconf:p
-          curl:p
+          curl-winssl:p
           openssl:p
           zlib:p
           glfw:p
@@ -191,7 +191,7 @@ jobs:
         require_file /ucrt64/bin/vulkan-1.dll
         cp /ucrt64/bin/vulkan-1.dll artifact/frametee-windows/
 
-        # MinGW, curl, OpenSSL, and zlib are dynamically linked. ldd reports
+        # MinGW, curl/Schannel, OpenSSL, and zlib are dynamically linked. ldd reports
         # the complete transitive UCRT64 DLL closure for the executable and
         # every loadable game; Windows finds these beside frametee.exe. Keep the
         # dependency report in the runner temp directory, outside the release.
@@ -214,6 +214,27 @@ jobs:
           fi
         done < <(find artifact/frametee-windows -type f \
           \( -iname "*.exe" -o -iname "*.dll" \) -print)
+
+        # Exercise the same bundled libcurl DLL closure outside MSYS2's bin
+        # directory. The WinSSL build uses Windows' Schannel trust store, so a
+        # release does not depend on /ucrt64/etc/ssl existing on the end-user
+        # machine. The normal OpenSSL curl build did, which made every HTTPS
+        # map and skin request fail after the CA bundle was left out.
+        network_smoke="$RUNNER_TEMP/frametee-network-smoke"
+        mkdir -p "$network_smoke"
+        cp /ucrt64/bin/curl.exe "$network_smoke/"
+        find artifact/frametee-windows -maxdepth 1 -type f -iname "*.dll" \
+          -exec cp {} "$network_smoke/" \;
+        curl_version=$("$network_smoke/curl.exe" --version)
+        printf '%s\n' "$curl_version"
+        if ! grep -qi 'Schannel' <<<"$curl_version"; then
+          echo "::error::The release libcurl is not using Windows Schannel"
+          exit 1
+        fi
+        "$network_smoke/curl.exe" --fail --silent --show-error \
+          --output "$RUNNER_TEMP/frametee-maps.json" \
+          https://raw.githubusercontent.com/Teero888/tw-thumbs/refs/heads/master/maps.json
+        require_file "$RUNNER_TEMP/frametee-maps.json"
 
         (
           cd artifact/frametee-windows
