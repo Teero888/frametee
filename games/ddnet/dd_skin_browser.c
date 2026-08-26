@@ -7,6 +7,7 @@
 #include <curl/curl.h>
 #include <errno.h>
 #include <frametee/icons.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -373,24 +374,37 @@ static void layout_skin_card(ft_game *game, const ft_ui_frame *frame, dd_browser
   igPopID();
 }
 
-static void draw_card_backgrounds(ImDrawList *draw_list, const dd_browser_card_draw_t *cards, int count) {
+static void draw_card_backgrounds(ImDrawList *draw_list, const dd_browser_card_draw_t *cards, int count, float dpi) {
   for (int i = 0; i < count; ++i) {
     const dd_browser_card_draw_t *card = &cards[i];
     if (card->selected) {
-      ImDrawList_AddRectFilled(draw_list, card->min, card->max, IM_COL32(35, 75, 120, 180), 8.f, ImDrawFlags_None);
-      ImDrawList_AddRect(draw_list, card->min, card->max, IM_COL32(75, 175, 255, 255), 8.f, ImDrawFlags_None, 2.f);
+      ImDrawList_AddRectFilled(draw_list, card->min, card->max, IM_COL32(35, 75, 120, 180), 8.f * dpi, ImDrawFlags_None);
+      ImDrawList_AddRect(draw_list, card->min, card->max, IM_COL32(75, 175, 255, 255), 8.f * dpi, ImDrawFlags_None,
+                         2.f * dpi);
     } else if (card->hovered) {
-      ImDrawList_AddRectFilled(draw_list, card->min, card->max, IM_COL32(50, 58, 75, 160), 8.f, ImDrawFlags_None);
-      ImDrawList_AddRect(draw_list, card->min, card->max, IM_COL32(110, 190, 255, 220), 8.f, ImDrawFlags_None, 1.5f);
+      ImDrawList_AddRectFilled(draw_list, card->min, card->max, IM_COL32(50, 58, 75, 160), 8.f * dpi, ImDrawFlags_None);
+      ImDrawList_AddRect(draw_list, card->min, card->max, IM_COL32(110, 190, 255, 220), 8.f * dpi, ImDrawFlags_None,
+                         1.5f * dpi);
     } else {
-      ImDrawList_AddRectFilled(draw_list, card->min, card->max, IM_COL32(28, 32, 42, 120), 8.f, ImDrawFlags_None);
-      ImDrawList_AddRect(draw_list, card->min, card->max, IM_COL32(255, 255, 255, 15), 8.f, ImDrawFlags_None, 1.f);
+      ImDrawList_AddRectFilled(draw_list, card->min, card->max, IM_COL32(28, 32, 42, 120), 8.f * dpi, ImDrawFlags_None);
+      ImDrawList_AddRect(draw_list, card->min, card->max, IM_COL32(255, 255, 255, 15), 8.f * dpi, ImDrawFlags_None,
+                         1.f * dpi);
     }
   }
 }
 
+static void card_preview_rect(const dd_browser_card_draw_t *card, float dpi, ImVec2 *out_min, ImVec2 *out_max) {
+  const float padding = 6.f * dpi;
+  float size = 52.f * dpi;
+  const float available = card->width - padding * 2.f;
+  if (size > available) size = available;
+  if (size < 0.f) size = 0.f;
+  *out_min = (ImVec2){card->min.x + (card->width - size) * .5f, card->min.y + padding};
+  *out_max = (ImVec2){out_min->x + size, out_min->y + size};
+}
+
 static void draw_card_previews(ImDrawList *draw_list, const struct dd_skin_browser_t *browser,
-                               const dd_browser_card_draw_t *cards, int count) {
+                               const dd_browser_card_draw_t *cards, int count, float dpi) {
   for (int i = 0; i < count; ++i) {
     const dd_browser_card_draw_t *card = &cards[i];
     if (!card->skin->preview_loaded) continue;
@@ -402,18 +416,21 @@ static void draw_card_previews(ImDrawList *draw_list, const struct dd_skin_brows
     const ImVec2 uv_min = {(float)atlas_x * uv_cell, (float)atlas_y * uv_cell};
     const ImVec2 uv_max = {uv_min.x + uv_cell, uv_min.y + uv_cell};
     const ImTextureRef_c ref = {._TexData = NULL, ._TexID = (ImTextureID)browser->atlases[atlas_index].texture_id};
-    const ImVec2 image_min = {card->min.x + card->width * .5f - 26.f, card->min.y + 4.f};
-    const ImVec2 image_max = {card->min.x + card->width * .5f + 26.f, card->min.y + 56.f};
+    ImVec2 image_min, image_max;
+    card_preview_rect(card, dpi, &image_min, &image_max);
     ImDrawList_AddImage(draw_list, ref, image_min, image_max, uv_min, uv_max, IM_COL32_WHITE);
   }
 }
 
-static void draw_card_labels(ImDrawList *draw_list, const dd_browser_card_draw_t *cards, int count) {
+static void draw_card_labels(ImDrawList *draw_list, const dd_browser_card_draw_t *cards, int count, float dpi) {
   for (int i = 0; i < count; ++i) {
     const dd_browser_card_draw_t *card = &cards[i];
+    ImVec2 preview_min, preview_max;
+    card_preview_rect(card, dpi, &preview_min, &preview_max);
     if (!card->skin->preview_loaded) {
       const ImVec2 icon_size = igCalcTextSize(ICON_FA_IMAGE, NULL, false, -1.f);
-      const ImVec2 icon_pos = {card->min.x + (card->width - icon_size.x) * .5f, card->min.y + 22.f};
+      const ImVec2 icon_pos = {preview_min.x + (preview_max.x - preview_min.x - icon_size.x) * .5f,
+                               preview_min.y + (preview_max.y - preview_min.y - icon_size.y) * .5f};
       ImDrawList_AddText_Vec2(draw_list, icon_pos, IM_COL32(105, 115, 135, 255), ICON_FA_IMAGE, NULL);
     }
 
@@ -421,16 +438,28 @@ static void draw_card_labels(ImDrawList *draw_list, const dd_browser_card_draw_t
     snprintf(label, sizeof(label), "%s", card->skin->name);
     ImVec2 label_size = igCalcTextSize(label, NULL, false, -1.f);
     size_t length = strlen(label);
-    while (label_size.x > card->width - 8.f && length > 4) {
+    const float label_width = card->width - 12.f * dpi;
+    while (label_size.x > label_width && length > 3) {
       --length;
       label[length - 2] = '.';
       label[length - 1] = '.';
       label[length] = '\0';
       label_size = igCalcTextSize(label, NULL, false, -1.f);
     }
-    const ImVec2 label_pos = {card->min.x + (card->width - label_size.x) * .5f, card->min.y + 61.f};
+    const ImVec2 label_pos = {card->min.x + (card->width - label_size.x) * .5f,
+                              card->max.y - 6.f * dpi - label_size.y};
+    const ImVec2 label_clip_min = {card->min.x + 4.f * dpi, card->min.y};
+    const ImVec2 label_clip_max = {card->max.x - 4.f * dpi, card->max.y};
+    ImDrawList_PushClipRect(draw_list, label_clip_min, label_clip_max, true);
     ImDrawList_AddText_Vec2(draw_list, label_pos, IM_COL32(235, 240, 250, 255), label, NULL);
+    ImDrawList_PopClipRect(draw_list);
   }
+}
+
+static bool skin_browser_button(const char *label, float width, const char *tooltip) {
+  const bool clicked = igButton(label, (ImVec2){width, 0.f});
+  if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("%s", tooltip);
+  return clicked;
 }
 
 void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
@@ -444,14 +473,37 @@ void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
     igEnd();
     return;
   }
-  const float dpi = igGetFontSize() / 19.f;
-  const float button_width = 110.f * dpi;
-  float search_width = igGetContentRegionAvail().x - button_width * 2.f - 16.f;
-  if (search_width < 120.f) search_width = 120.f;
+  const float font_size = igGetFontSize();
+  const float dpi = font_size > 0.f ? font_size / 19.f : 1.f;
+  const ImGuiStyle *style = igGetStyle();
+  const float item_gap = style->ItemSpacing.x;
+  const float toolbar_width = igGetContentRegionAvail().x;
+  const ImVec2 fetch_label = igCalcTextSize(ICON_FA_DOWNLOAD " Fetch", NULL, false, -1.f);
+  const ImVec2 refresh_label = igCalcTextSize(ICON_FA_ROTATE " Refresh", NULL, false, -1.f);
+  const float label_width = fetch_label.x > refresh_label.x ? fetch_label.x : refresh_label.x;
+  const float button_width = fmaxf(96.f * dpi, label_width + style->FramePadding.x * 2.f);
+  const float minimum_search_width = 140.f * dpi;
+  const bool toolbar_inline = toolbar_width >= minimum_search_width + button_width * 2.f + item_gap * 2.f;
+  const float search_width = toolbar_inline ? toolbar_width - button_width * 2.f - item_gap * 2.f : toolbar_width;
   igSetNextItemWidth(search_width);
   igInputTextWithHint("##skin_search", "Search / Fetch skin...", browser->search, sizeof(browser->search), 0, NULL, NULL);
-  igSameLine(0.f, 8.f);
-  if (igButton(ICON_FA_DOWNLOAD " Fetch", (ImVec2){button_width, 0.f})) {
+  bool fetch_clicked = false;
+  bool refresh_clicked = false;
+  if (toolbar_inline) {
+    igSameLine(0.f, item_gap);
+    fetch_clicked = skin_browser_button(ICON_FA_DOWNLOAD " Fetch", button_width, "Fetch skin online by name");
+    igSameLine(0.f, item_gap);
+    refresh_clicked = skin_browser_button(ICON_FA_ROTATE " Refresh", button_width, "Rescan local skins directories");
+  } else {
+    const bool actions_inline = toolbar_width >= button_width * 2.f + item_gap;
+    const float wrapped_button_width = actions_inline ? (toolbar_width - item_gap) * .5f : toolbar_width;
+    fetch_clicked = skin_browser_button(ICON_FA_DOWNLOAD " Fetch", wrapped_button_width, "Fetch skin online by name");
+    if (actions_inline) igSameLine(0.f, item_gap);
+    refresh_clicked =
+        skin_browser_button(ICON_FA_ROTATE " Refresh", wrapped_button_width, "Rescan local skins directories");
+  }
+
+  if (fetch_clicked) {
     char path[1024];
     if (dd_skin_fetch(game, browser->search, path, sizeof(path))) {
       char fetched_name[sizeof(browser->search)];
@@ -467,19 +519,19 @@ void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
       }
     }
   }
-  if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("Fetch skin online by name");
-  igSameLine(0.f, 8.f);
-  if (igButton(ICON_FA_ROTATE " Refresh", (ImVec2){button_width, 0.f})) scan_skins(game);
-  if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("Rescan local skins directories");
+  if (refresh_clicked) scan_skins(game);
 
   igSeparator();
 
-  const float card_width = 114.f * dpi;
-  const float card_height = 92.f * dpi;
+  const float target_card_width = 114.f * dpi;
+  const float card_height = 6.f * dpi + 52.f * dpi + 4.f * dpi + igGetTextLineHeight() + 6.f * dpi;
+  const ImVec2 cell_padding = {6.f * dpi, 6.f * dpi};
   int preview_budget = DD_BROWSER_PREVIEWS_PER_FRAME;
   const float available = igGetContentRegionAvail().x;
-  int columns = (int)(available / (card_width + 12.f));
+  const float usable_width = fmaxf(available - style->ScrollbarSize, 1.f);
+  int columns = (int)(usable_width / (target_card_width + cell_padding.x * 2.f));
   if (columns < 1) columns = 1;
+  if (columns > 64) columns = 64;
   dd_browser_skin_t **filtered = browser->count ? malloc((size_t)browser->count * sizeof(*filtered)) : NULL;
   int filtered_count = 0;
   for (int i = 0; i < browser->count; ++i) {
@@ -491,7 +543,7 @@ void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
   const ImVec2 grid_size = igGetContentRegionAvail();
   const ImVec2 grid_clip_max = {grid_clip_min.x + grid_size.x, grid_clip_min.y + grid_size.y};
 
-  igPushStyleVar_Vec2(ImGuiStyleVar_CellPadding, (ImVec2){8.f, 10.f});
+  igPushStyleVar_Vec2(ImGuiStyleVar_CellPadding, cell_padding);
   if (igBeginTable("SkinGrid", columns, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_ScrollY, (ImVec2){0.f, 0.f}, 0.f)) {
     if (filtered_count == 0) {
       igTableNextColumn();
@@ -499,7 +551,7 @@ void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
     } else {
       const int rows = (filtered_count + columns - 1) / columns;
       ImGuiListClipper *clipper = ImGuiListClipper_ImGuiListClipper();
-      ImGuiListClipper_Begin(clipper, rows, card_height + 20.f * dpi);
+      ImGuiListClipper_Begin(clipper, rows, card_height + cell_padding.y * 2.f);
       while (ImGuiListClipper_Step(clipper)) {
         for (int row = clipper->DisplayStart; row < clipper->DisplayEnd; ++row) {
           igTableNextRow(0, 0.f);
@@ -510,7 +562,10 @@ void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
             igTableNextColumn();
             dd_browser_card_draw_t fallback_draw;
             dd_browser_card_draw_t *card_draw = card_draws ? &card_draws[card_draw_count] : &fallback_draw;
-            layout_skin_card(game, frame, skin, (int)(skin - browser->skins), card_width, card_height, &preview_budget, card_draw);
+            float card_width = igGetContentRegionAvail().x;
+            if (card_width < 1.f) card_width = target_card_width;
+            layout_skin_card(game, frame, skin, (int)(skin - browser->skins), card_width, card_height, &preview_budget,
+                             card_draw);
             if (card_draws) ++card_draw_count;
           }
         }
@@ -521,17 +576,17 @@ void dd_skin_browser_render(ft_game *game, const ft_ui_frame *frame) {
     // Give the final cards breathing room at the maximum scroll position.
     // Without a real footer row, the table's scrolling child clips their
     // rounded lower edge against the window border.
-    igTableNextRow(0, 12.f * dpi);
+    igTableNextRow(0, 8.f * dpi);
     igTableNextColumn();
-    igDummy((ImVec2){0.f, 4.f * dpi});
+    igDummy((ImVec2){0.f, 2.f * dpi});
     igEndTable();
   }
   if (card_draw_count > 0) {
     ImDrawList *draw_list = igGetWindowDrawList();
     ImDrawList_PushClipRect(draw_list, grid_clip_min, grid_clip_max, true);
-    draw_card_backgrounds(draw_list, card_draws, card_draw_count);
-    draw_card_previews(draw_list, browser, card_draws, card_draw_count);
-    draw_card_labels(draw_list, card_draws, card_draw_count);
+    draw_card_backgrounds(draw_list, card_draws, card_draw_count, dpi);
+    draw_card_previews(draw_list, browser, card_draws, card_draw_count, dpi);
+    draw_card_labels(draw_list, card_draws, card_draw_count, dpi);
     ImDrawList_PopClipRect(draw_list);
   }
   igPopStyleVar(1);
