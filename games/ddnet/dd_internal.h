@@ -401,6 +401,7 @@ typedef struct {
 } dd_event_payload_t;
 
 void dd_events_render(ft_game *game, const ft_ui_frame *frame);
+void dd_events_scan_recording(ft_game *game, const ft_ui_frame *frame);
 bool dd_event_decode(const ft_timeline_event *event, dd_event_payload_t *out);
 
 // --- graphics ---------------------------------------------------------------

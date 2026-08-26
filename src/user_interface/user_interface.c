@@ -99,11 +99,19 @@ void render_menu_bar(ui_handler_t *ui) {
 
     // view menu
     if (igBeginMenu("View", true)) {
-      igMenuItem_BoolPtr("Timeline", NULL, &ui->show_timeline, true);
+      // Read before the item that flips it, so both halves of the disabled
+      // scope below agree on one value.
+      const bool panels_visible = ui->show_ui;
+      igMenuItem_BoolPtr("Interface", "Tab", &ui->show_ui, true);
+      igSeparator();
+      // The individual panels are still the user's to choose, but none of them
+      // can appear while the interface is down, so they say so.
+      if (!panels_visible) igBeginDisabled(true);
       igMenuItem_BoolPtr("Controls", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Undo History", NULL, &ui->undo_manager.show_history_window, true);
       igMenuItem_BoolPtr("Timeline Events", NULL, &ui->show_timeline_events_window, true);
       igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);
+      if (!panels_visible) igEndDisabled();
       igEndMenu();
     }
 
@@ -189,6 +197,15 @@ void render_menu_bar(ui_handler_t *ui) {
 // by ft_dock_slot; FT_DOCK_FLOATING stays zero and means "leave it alone".
 static ImGuiID g_dock_nodes[FT_DOCK_CENTER + 1];
 
+// A game's own player panel shares the left dock with the editor's track list,
+// and the window added to a dock node last is the one holding the tab. The
+// editor's list is the one to come up on, so it takes the tab back whenever
+// that happens. Docking the panel is not the moment: the window itself is only
+// created when its game first draws it, which is after a level has loaded and
+// after this list has already drawn for that frame.
+static bool g_focus_players_tab = true;
+static int g_left_panel_window_count;
+
 // A game names its own windows, so the editor cannot dock them when it lays
 // itself out: the game is not loaded yet. Each one is placed the first time it
 // is seen instead, and is the user's to move from then on.
@@ -205,6 +222,9 @@ static void place_game_panels(ui_handler_t *ui) {
   if (strcmp(placed_game, game_id) != 0) {
     snprintf(placed_game, sizeof(placed_game), "%s", game_id);
     placed_count = 0;
+    // The windows of the game being left behind are not this game's, so its
+    // own count starts again and its first panel counts as newly arrived.
+    g_left_panel_window_count = 0;
   }
 
   uint32_t count = 0;
@@ -223,6 +243,18 @@ static void place_game_panels(ui_handler_t *ui) {
     snprintf(placed[placed_count++], sizeof(placed[0]), "%s", panel->window_title);
     igDockBuilderDockWindow(panel->window_title, node);
   }
+
+  // ImGui has no window for a panel until the game has drawn it once, so this
+  // counts the ones that have turned up. One more than last frame means a panel
+  // was just added to the left dock and took the tab with it.
+  int existing = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    const ft_panel_desc *panel = &panels[i];
+    if (!panel->window_title || panel->dock != FT_DOCK_LEFT) continue;
+    if (igFindWindowByName(panel->window_title)) ++existing;
+  }
+  if (existing > g_left_panel_window_count) g_focus_players_tab = true;
+  g_left_panel_window_count = existing;
 }
 
 // docking setup
@@ -329,6 +361,10 @@ static void register_timeline_data_change(ui_handler_t *ui, timeline_data_snapsh
 void render_player_manager(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   float dpi_scale = gfx_get_ui_scale();
+  if (g_focus_players_tab) {
+    igSetNextWindowFocus();
+    g_focus_players_tab = false;
+  }
   if (igBegin("Players", NULL, 0)) {
     if (ts->recording) igBeginDisabled(true);
 
@@ -993,7 +1029,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->loaded_level_path[0] = '\0';
   ui->current_project_path[0] = '\0';
   ui->has_unsaved_changes = false;
-  ui->show_timeline = true;
+  ui->show_ui = true;
   ui->show_timeline_events_window = false;
   ui->show_plugin_manager = false;
   entity_inspector_clear(&ui->entity_inspector);
@@ -1467,28 +1503,34 @@ void ui_render(ui_handler_t *ui) {
     }
   }
 
-  if (ui->show_timeline) {
+  // Tab drops every panel the editor and the game own, so the level is left
+  // with nothing over it but the menu bar. Input, shortcuts, the dock layout
+  // and plugin work all carry on: what goes away is what is drawn. An empty
+  // dock node takes no room, so the viewport grows into the space.
+  if (ui->show_ui) {
     if (!ui->timeline.ui) ui->timeline.ui = ui;
     render_timeline(ui);
     render_player_manager(ui);
     render_snippet_editor_panel(ui);
+
+    keybinds_render_settings_window(ui);
+    undo_manager_render_history_window(&ui->undo_manager);
+    render_timeline_events_window(ui);
+    if (ui->show_plugin_manager) {
+      plugin_manager_render_ui(&ui->plugin_manager, &ui->show_plugin_manager);
+    }
+    entity_inspector_render(&ui->entity_inspector);
+    // Game-owned panels may reference game-owned GPU resources. Keep them out
+    // of the frame in which the splash can replace the active game.
+    if (ui->gfx_handler->level != NULL && !ui->show_splash) {
+      render_game_ui_slot(ui, FT_UI_PANELS, ui->timeline.selected_player_track_index);
+      // Only for a game that does not place the editor in a panel of its own.
+      starting_state_render_window(ui);
+    }
   }
 
-  keybinds_render_settings_window(ui);
-  undo_manager_render_history_window(&ui->undo_manager);
-  render_timeline_events_window(ui);
-  if (ui->show_plugin_manager) {
-    plugin_manager_render_ui(&ui->plugin_manager, &ui->show_plugin_manager);
-  }
-  entity_inspector_render(&ui->entity_inspector);
-  // Game-owned panels may reference game-owned GPU resources. Keep them out
-  // of the frame in which the splash can replace the active game.
-  if (ui->gfx_handler->level != NULL && !ui->show_splash) {
-    render_game_ui_slot(ui, FT_UI_PANELS, ui->timeline.selected_player_track_index);
-    // Only for a game that does not place the editor in a panel of its own.
-    starting_state_render_window(ui);
-  }
-
+  // Not a panel: the prompt answers "New Project" from the File menu, which is
+  // still there with the interface down.
   render_new_project_prompt(ui);
 
   // with nothing loaded the splash is the only thing to show, otherwise it is up because
@@ -1691,11 +1733,14 @@ bool ui_render_late(ui_handler_t *ui) {
     draw_recording_overlay(start);
   }
 
-  if ((hovered || ui->timeline.recording) && input_key_pressed(GLFW_KEY_TAB, false)) {
-    ui->show_timeline = !ui->show_timeline;
+  // With the interface down there is no panel left to hover, so the key works
+  // wherever the cursor is: it is the way back. Not while a field has the
+  // keyboard, where Tab is the field's.
+  if ((hovered || ui->timeline.recording || !ui->show_ui) && !igIsAnyItemActive() && input_key_pressed(GLFW_KEY_TAB, false)) {
+    ui->show_ui = !ui->show_ui;
   }
 
-  if (ui->timeline.selected_player_track_index >= 0) {
+  if (ui->show_ui && ui->timeline.selected_player_track_index >= 0) {
     draw_character_inspector(ui, start);
   }
 

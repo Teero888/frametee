@@ -39,7 +39,9 @@ struct ui_handler_t {
   float lod_bias;
   float bg_color[3];
 
-  bool show_timeline;
+  // Every editor panel at once. Tab drops it, leaving the level under the menu
+  // bar, which is where it is turned back on.
+  bool show_ui;
   bool show_timeline_events_window;
   bool vsync;
   bool show_fps;
