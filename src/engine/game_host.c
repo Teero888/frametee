@@ -677,6 +677,37 @@ bool gh_world_player_view(game_host_t *host, const ft_world *world, int player, 
   return m->world_player_view(host->instance, world, player, out);
 }
 
+bool gh_world_run_equal(game_host_t *host, const ft_world *a, const ft_world *b) {
+  REQUIRE_GAME(false);
+  if (!a || !b) return false;
+  if (m->world_run_equal) return m->world_run_equal(host->instance, a, b);
+  if (!m->world_player_view) return false;
+
+  const int players = m->world_player_count(host->instance, a);
+  if (players != m->world_player_count(host->instance, b)) return false;
+  for (int player = 0; player < players; ++player) {
+    ft_player_view left = {.struct_size = sizeof(left)};
+    ft_player_view right = {.struct_size = sizeof(right)};
+    if (!m->world_player_view(host->instance, a, player, &left) ||
+        !m->world_player_view(host->instance, b, player, &right))
+      return false;
+    // Aim is authored input rather than run output. The remaining fields are
+    // compared bit-for-bit so cleaning never hides a floating-point change.
+    if (memcmp(&left.position, &right.position, sizeof(left.position)) != 0 ||
+        memcmp(&left.velocity, &right.velocity, sizeof(left.velocity)) != 0 || left.flags != right.flags ||
+        left.run_start_tick != right.run_start_tick)
+      return false;
+  }
+  return true;
+}
+
+int gh_input_clean_lookahead_ticks(game_host_t *host) {
+  REQUIRE_GAME(0);
+  if (!m->input_clean_lookahead_ticks) return 0;
+  const int ticks = m->input_clean_lookahead_ticks(host->instance);
+  return ticks > 0 ? ticks : 0;
+}
+
 int gh_world_add_player(game_host_t *host, ft_world *world, int at_index, const ft_player_setup *setup) {
   REQUIRE_GAME(-1);
   if (!world || !m->world_add_player) return -1;

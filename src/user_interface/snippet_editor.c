@@ -8,12 +8,14 @@
 
 #include "snippet_editor.h"
 
+#include "input_cleaner.h"
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_model.h"
 #include "user_interface.h"
 #include <engine/input_record.h>
 #include <float.h>
 #include <renderer/graphics_backend.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <system/include_cimgui.h>
@@ -26,6 +28,12 @@ static struct {
   int selected_capacity;
   int last_clicked_row;
 
+  // Cleaning choices are shared by snippets using the same input schema, so
+  // moving between snippets does not make the user select the fields again.
+  bool *clean_fields;
+  int clean_field_capacity;
+  const ft_input_schema *clean_schema;
+
   // One undoable action covers a whole drag or bulk edit, so the before-state
   // is captured once when it starts.
   bool action_in_progress;
@@ -37,6 +45,7 @@ static struct {
   long long bulk_value;
   float bulk_float_value;
   ft_vec2 bulk_vec2_value;
+  char clean_status[192];
 } editor_state = {.snippet_id = -1, .last_clicked_row = -1, .bulk_field = 0};
 
 static void ensure_selection_capacity(int count) {
@@ -48,18 +57,40 @@ static void ensure_selection_capacity(int count) {
   editor_state.selected_capacity = count;
 }
 
-static void reset_editor_state(void) {
+static void clear_row_selection(void) {
   if (editor_state.selected_rows) memset(editor_state.selected_rows, 0, (size_t)editor_state.selected_capacity * sizeof(bool));
   editor_state.last_clicked_row = -1;
+}
+
+static bool ensure_clean_field_selection(const ft_input_schema *schema) {
+  if ((int)schema->field_count > editor_state.clean_field_capacity) {
+    bool *grown = realloc(editor_state.clean_fields, schema->field_count * sizeof(*grown));
+    if (!grown) return false;
+    editor_state.clean_fields = grown;
+    editor_state.clean_field_capacity = (int)schema->field_count;
+  }
+
+  if (editor_state.clean_schema != schema) {
+    for (uint32_t i = 0; i < schema->field_count; ++i)
+      editor_state.clean_fields[i] = !(schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL);
+    editor_state.clean_schema = schema;
+  }
+  return true;
+}
+
+static void reset_editor_state(void) {
+  clear_row_selection();
   editor_state.action_in_progress = false;
   free(editor_state.action_before_states);
   editor_state.action_before_states = NULL;
   editor_state.action_before_count = 0;
+  editor_state.clean_status[0] = '\0';
 }
 
 void snippet_editor_reset(void) {
   reset_editor_state();
   editor_state.snippet_id = -1;
+  editor_state.clean_schema = NULL;
 }
 
 void snippet_editor_cleanup(void) {
@@ -67,22 +98,38 @@ void snippet_editor_cleanup(void) {
   free(editor_state.selected_rows);
   editor_state.selected_rows = NULL;
   editor_state.selected_capacity = 0;
+  free(editor_state.clean_fields);
+  editor_state.clean_fields = NULL;
+  editor_state.clean_field_capacity = 0;
 }
 
-static void begin_action(const input_snippet_t *snippet) {
-  if (editor_state.action_in_progress) return;
+static bool begin_action(const input_snippet_t *snippet) {
+  if (editor_state.action_in_progress) return editor_state.action_before_states != NULL;
   editor_state.action_in_progress = true;
   editor_state.action_before_count = snippet->input_count;
   free(editor_state.action_before_states);
   editor_state.action_before_states = malloc(sizeof(input_record_t) * (size_t)snippet->input_count);
-  if (editor_state.action_before_states)
-    memcpy(editor_state.action_before_states, snippet_window(snippet), sizeof(input_record_t) * (size_t)snippet->input_count);
+  if (!editor_state.action_before_states) {
+    editor_state.action_in_progress = false;
+    editor_state.action_before_count = 0;
+    return false;
+  }
+  memcpy(editor_state.action_before_states, snippet_window(snippet), sizeof(input_record_t) * (size_t)snippet->input_count);
+  return true;
+}
+
+static void cancel_action(void) {
+  editor_state.action_in_progress = false;
+  free(editor_state.action_before_states);
+  editor_state.action_before_states = NULL;
+  editor_state.action_before_count = 0;
 }
 
 // Closes the action, turning the whole edit into one undo entry.
 static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
   if (!editor_state.action_in_progress) return;
   editor_state.action_in_progress = false;
+  editor_state.clean_status[0] = '\0';
 
   if (editor_state.action_before_states && editor_state.action_before_count == snippet->input_count) {
     // Every tick in the snippet is handed to the undo command; it stores the
@@ -102,6 +149,66 @@ static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
 
   model_recalc_physics(&ui->timeline, snippet->start_tick);
   ui_mark_unsaved(ui);
+}
+
+static void draw_input_cleaning(ui_handler_t *ui, const ft_input_schema *schema, input_snippet_t *snippet, int track_index) {
+  if (!igCollapsingHeader_TreeNodeFlags("Input cleaning", ImGuiTreeNodeFlags_DefaultOpen)) return;
+  if (!ensure_clean_field_selection(schema)) {
+    igTextDisabled("Could not allocate input cleaning choices.");
+    return;
+  }
+
+  if (igButton("All##clean", (ImVec2){0.f, 0.f})) {
+    for (uint32_t i = 0; i < schema->field_count; ++i)
+      editor_state.clean_fields[i] = !(schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL);
+  }
+  igSameLine(0.f, 6.f);
+  if (igButton("None##clean", (ImVec2){0.f, 0.f})) {
+    for (uint32_t i = 0; i < schema->field_count; ++i) editor_state.clean_fields[i] = false;
+  }
+
+  int selected_count = 0;
+  int visible_count = 0;
+  for (uint32_t i = 0; i < schema->field_count; ++i)
+    if (!(schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL)) ++visible_count;
+  const int columns = visible_count < 3 ? visible_count : 3;
+  if (columns > 0 && igBeginTable("CleanInputFields", columns, ImGuiTableFlags_SizingStretchSame, (ImVec2){0.f, 0.f}, 0.f)) {
+    for (uint32_t i = 0; i < schema->field_count; ++i) {
+      const ft_input_field *field = &schema->fields[i];
+      if (field->flags & FT_INPUT_FLAG_INTERNAL) continue;
+      igTableNextColumn();
+      igPushID_Int((int)i);
+      igCheckbox(field->display_name ? field->display_name : field->id, &editor_state.clean_fields[i]);
+      igPopID();
+      if (editor_state.clean_fields[i]) ++selected_count;
+    }
+    igEndTable();
+  }
+
+  timeline_state_t *timeline = &ui->timeline;
+  const bool can_clean = snippet->is_active && !timeline->recording && selected_count > 0;
+  if (!can_clean) igBeginDisabled(true);
+  if (igButton("Clean selected", (ImVec2){0.f, 0.f})) {
+    input_clean_result_t result;
+    if (!begin_action(snippet)) {
+      snprintf(editor_state.clean_status, sizeof(editor_state.clean_status), "Could not allocate an undo snapshot.");
+    } else if (!input_cleaner_clean_snippet(ui, track_index, snippet, editor_state.clean_fields, schema->field_count, &result)) {
+      cancel_action();
+      snprintf(editor_state.clean_status, sizeof(editor_state.clean_status), "This game's run state cannot be compared.");
+    } else if (result.changed_values == 0) {
+      cancel_action();
+      snprintf(editor_state.clean_status, sizeof(editor_state.clean_status), "Already clean (%llu simulations).",
+               (unsigned long long)result.simulations);
+    } else {
+      end_action(ui, snippet);
+      snprintf(editor_state.clean_status, sizeof(editor_state.clean_status),
+               "Cleaned %d value%s in %d row%s (%d pass%s, %llu simulations).", result.changed_values,
+               result.changed_values == 1 ? "" : "s", result.changed_rows, result.changed_rows == 1 ? "" : "s", result.passes,
+               result.passes == 1 ? "" : "es", (unsigned long long)result.simulations);
+    }
+  }
+  if (!can_clean) igEndDisabled();
+  if (editor_state.clean_status[0]) igTextDisabled("%s", editor_state.clean_status);
 }
 
 // One cell of the matrix, drawn according to what kind of field it is.
@@ -287,8 +394,9 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
       for (int i = 0; i < snippet->input_count && i < editor_state.selected_capacity; ++i) editor_state.selected_rows[i] = true;
     }
     igSameLine(0, 6.f);
-    if (igButton("Select none", (ImVec2){0.f, 0.f})) reset_editor_state();
+    if (igButton("Select none", (ImVec2){0.f, 0.f})) clear_row_selection();
 
+    draw_input_cleaning(ui, schema, snippet, track_index);
     draw_bulk_edit(ui, host, schema, snippet);
     igSeparator();
 

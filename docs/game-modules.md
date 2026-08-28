@@ -201,6 +201,16 @@ and draws the resulting paths. A module chooses the value being tracked by the
 prediction renderer. Scratch worlds are created with `world_index == -1`, so a
 module must not emit persistent presentation effects while stepping them.
 
+The snippet editor's input cleaner uses the same scratch-world replay. Its
+optional `world_run_equal` callback compares every exact physics and result
+value that defines a run while ignoring the controls being tested and harmless
+presentation state. If it is omitted, the engine compares every player's 2D
+position, velocity, result flags and run-start tick bit-for-bit. A 3D game
+should provide the callback so vertical motion and its complete physics state
+are not lost through that generic view. A game whose delayed effects have a
+known upper bound may return it from `input_clean_lookahead_ticks`; zero keeps
+the conservative full-run replay.
+
 `world_serialize` / `world_deserialize` store starting states in project files.
 Version the blob yourself; the engine only records it next to the game id and
 version. DDNet's implementation refuses to load a blob whose character struct

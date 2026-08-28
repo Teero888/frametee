@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 14;
+pub const FT_GAME_ABI_VERSION: u32 = 15;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -500,6 +500,8 @@ pub struct ft_game_module {
     pub linked_actions: *const c_void,
     pub linked_action_count: u32,
     pub linked_input_update: *const c_void,
+    pub world_run_equal: *const c_void,
+    pub input_clean_lookahead_ticks: *const c_void,
 }
 
 // The vtable is immutable static data shared with the engine thread.
