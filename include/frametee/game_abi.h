@@ -1081,6 +1081,8 @@ typedef struct ft_render_frame {
   const ft_world *world;
   const ft_world *previous_world;
   float alpha;
+  /* Local simulation tick of `world`. This can differ from
+   * ft_engine_state.current_tick when the world has a timeline start offset. */
   int32_t tick;
   /* Per-player presentation data the engine owns, indexed by player. */
   const ft_player_setup *player_setups;

@@ -77,7 +77,11 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
       frame.world = current;
       frame.previous_world = previous;
       frame.alpha = intra;
-      frame.tick = ts->current_tick;
+      // A group's snapshots use its local simulation clock. Group 0 happens
+      // to have no start offset, but passing the shared timeline tick ages
+      // short-lived per-world effects (notably DDNet explosions) by every
+      // other group's offset before they are rendered.
+      frame.tick = current ? gh_world_tick(&handler->game_host, current) : ts->current_tick;
       frame.opacity = 1.f;
       frame.world_index = per_world ? group_index : -1;
       frame.world_count = ts->group_count;
