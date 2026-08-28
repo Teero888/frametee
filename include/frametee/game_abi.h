@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 14u
+#define FT_GAME_ABI_VERSION 15u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -1336,6 +1336,19 @@ typedef struct ft_game_module {
   const ft_linked_action *linked_actions;
   uint32_t linked_action_count;
   void (*linked_input_update)(ft_game *game, const ft_linked_input_frame *frame, void *inout_record);
+
+  /* ---- run comparison (optional) ----
+   * Whether two worlds are indistinguishable for input cleaning. Games should
+   * compare every exact physics/result value that contributes to the run, but
+   * may deliberately ignore disposable presentation or entities that can no
+   * longer affect a player (for example a harmless projectile). The engine
+   * falls back to exact player position, velocity and result flags when this
+   * is NULL. */
+  bool (*world_run_equal)(ft_game *game, const ft_world *a, const ft_world *b);
+
+  /* Maximum ticks after the last changed input that cleaning must replay to
+   * observe every delayed effect, or 0 when it must replay to the end. */
+  int32_t (*input_clean_lookahead_ticks)(ft_game *game);
 } ft_game_module;
 
 /* The one symbol a module must export.

@@ -898,6 +898,8 @@ static MODULE: ft_game_module = ft_game_module {
     linked_actions: std::ptr::null(),
     linked_action_count: 0,
     linked_input_update: std::ptr::null(),
+    world_run_equal: std::ptr::null(),
+    input_clean_lookahead_ticks: std::ptr::null(),
 };
 
 /// The one symbol the engine looks for.

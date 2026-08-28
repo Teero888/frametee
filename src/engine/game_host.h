@@ -116,6 +116,10 @@ void gh_world_step(game_host_t *host, ft_world *world, const void *inputs, unsig
 int gh_world_tick(game_host_t *host, const ft_world *world);
 int gh_world_player_count(game_host_t *host, const ft_world *world);
 bool gh_world_player_view(game_host_t *host, const ft_world *world, int player, ft_player_view *out);
+// Exact run-relevant comparison used by the snippet input cleaner. Games with
+// state beyond ft_player_view can provide their own comparator through the ABI.
+bool gh_world_run_equal(game_host_t *host, const ft_world *a, const ft_world *b);
+int gh_input_clean_lookahead_ticks(game_host_t *host);
 int gh_world_add_player(game_host_t *host, ft_world *world, int at_index, const ft_player_setup *setup);
 bool gh_world_remove_player(game_host_t *host, ft_world *world, int player);
 size_t gh_world_serialize(game_host_t *host, const ft_world *world, void *out, size_t out_size);

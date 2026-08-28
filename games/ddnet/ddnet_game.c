@@ -137,6 +137,9 @@ static void ddnet_input_default(ft_game *game, void *record) {
   // A zero aim would leave the tee pointing at itself, which no real client
   // ever sends; straight up matches what DDNet does on spawn.
   input->m_TargetY = -1;
+  // Gun is DDNet's neutral wanted-weapon value. A zeroed record requests the
+  // hammer and would switch away from the weapon the tee spawns with.
+  input->m_WantedWeapon = WEAPON_GUN;
 }
 
 static int64_t ddnet_input_get(ft_game *game, const void *record, uint32_t field) {
@@ -1009,6 +1012,11 @@ static bool ddnet_world_player_view(ft_game *game, const ft_world *world, int32_
   return true;
 }
 
+static int32_t ddnet_input_clean_lookahead_ticks(ft_game *game) {
+  (void)game;
+  return 250;
+}
+
 static void ddnet_collect_events(ft_game *game, const ft_world *previous, const ft_world *world,
                                  void (*emit)(void *user, const ft_timeline_event *event), void *user) {
   (void)game;
@@ -1406,6 +1414,7 @@ static const ft_game_module module = {
     .linked_actions = linked_actions,
     .linked_action_count = (uint32_t)(sizeof(linked_actions) / sizeof(linked_actions[0])),
     .linked_input_update = ddnet_linked_input_update,
+    .input_clean_lookahead_ticks = ddnet_input_clean_lookahead_ticks,
 };
 
 FT_GAME_EXPORT const ft_game_module *ft_game_module_entry(uint32_t engine_abi_version) {
