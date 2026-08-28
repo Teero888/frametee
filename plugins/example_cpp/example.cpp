@@ -58,9 +58,7 @@ public:
 
 extern "C" {
 
-FT_API plugin_info_t get_plugin_info() {
-  return {"C++ Native ImGui Example", "Teero", "69.420", "A self-contained plugin written in C++ using the native ImGui API."};
-}
+FT_PLUGIN_ABI_EXPORT()
 
 FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) { return new CppPlugin(context, api); }
 

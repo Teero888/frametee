@@ -17,13 +17,11 @@ typedef struct undo_command_t undo_command_t;
 #endif
 typedef struct tas_context_t tas_context_t;
 typedef struct tas_api_t tas_api_t;
-typedef struct plugin_info_t plugin_info_t;
 
 typedef void *(*plugin_init_func)(tas_context_t *context, const tas_api_t *api);
 typedef void (*plugin_shutdown_func)(void *plugin_data);
 typedef void (*plugin_update_func)(void *plugin_data);
 typedef void (*plugin_show_ui_func)(void *plugin_data);
-typedef plugin_info_t (*get_plugin_info_func)(void);
 
 // passed to plugins to provide read-only access to high-level application state.
 struct tas_context_t {
@@ -33,6 +31,10 @@ struct tas_context_t {
   // active. A global plugin can branch on this; a game-specific one is only
   // ever initialized while its own game is active, so it can assume its match.
   const char *active_game_id;
+  // The directory the plugin was loaded from, which is the plugin's own: it may
+  // read its resources from there. Set for the duration of plugin_init and null
+  // outside it, so copy it if it is needed later.
+  const char *plugin_directory;
 };
 
 // api functions provided to plugins for interacting with the host application.
@@ -123,17 +125,32 @@ struct tas_api_t {
   bool (*save_file_dialog)(const char *filter_name, const char *filter_ext, const char *default_name, char *out_path, int out_path_size);
 };
 
-struct plugin_info_t {
-  const char *name;
-  const char *author;
-  const char *version;
-  const char *description;
-};
+// A plugin's name, author, version and description come from the manifest
+// beside its library, not from an export: the editor has to be able to show
+// them for a plugin it has not loaded, and it never loads one the user has not
+// enabled. See docs/plugins.md.
 
-#define GET_PLUGIN_INFO_FUNC_NAME "get_plugin_info"
 #define GET_PLUGIN_INIT_FUNC_NAME "plugin_init"
 #define GET_PLUGIN_UPDATE_FUNC_NAME "plugin_update"
 #define GET_PLUGIN_SHUTDOWN_FUNC_NAME "plugin_shutdown"
+
+// Everything in this header is a shape two separately compiled programs agree
+// on, and a plugin built against a different version of it calls through
+// structs that have since moved. There is no way to notice that from the
+// symbols alone, so every plugin says which version it was built for and the
+// host refuses anything else, exactly as it does for game modules.
+//
+// Bump this whenever the structs, the exports, or the meaning of either change.
+#define FRAMETEE_PLUGIN_ABI_VERSION 1u
+#define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
+typedef uint32_t (*plugin_abi_version_func)(void);
+
+// Writes the required export. Put it with a plugin's other entry points:
+//
+//   FT_PLUGIN_ABI_EXPORT()
+//
+#define FT_PLUGIN_ABI_EXPORT() \
+  FT_API uint32_t plugin_abi_version(void) { return FRAMETEE_PLUGIN_ABI_VERSION; }
 
 // Optional. Export it to tie a plugin to one game, returning that game's module
 // id (e.g. "ddnet"); the host then only loads the plugin while that game is
@@ -144,9 +161,12 @@ struct plugin_info_t {
 // A plugin that does not export this symbol is global: it works with every
 // game and stays loaded across game switches. Anything that reaches into a
 // game's world or input records belongs to that game and should say so, since
-// the bytes mean nothing under a different one. This is a separate symbol
-// rather than a plugin_info_t field because that struct is returned by value,
-// so growing it would make already-built plugins read past their own stack.
+// the bytes mean nothing under a different one.
+//
+// The manifest names the game too, but only as something to show. This export
+// is what the host acts on: it cannot drift from the code the way a text file
+// beside it can, and loading a plugin under a game it was not written for is a
+// question of whether its reads mean anything, not of what it calls itself.
 #define GET_PLUGIN_GAME_ID_FUNC_NAME "plugin_game_id"
 
 #undef FT_API

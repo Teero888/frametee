@@ -506,7 +506,7 @@ ft_game_module BuildModule() {
   module.info.id = "tmnf";
   module.info.display_name = "TrackMania Nations Forever";
   module.info.version = "1.0.0";
-  module.info.author = "FrameTee";
+  module.info.author = "Teero";
   module.info.thumbnail = "thumbnail.png";
 
   module.constraints.struct_size = sizeof(ft_game_constraints);

@@ -70,11 +70,16 @@ jobs:
           test -f data/games/ddnet/skins/default.png
           test -f data/games/tmnf/thumbnail.png
           test -f data/games/tmnf/README.txt
-          test -f plugins/libapi_example_c_plugin.so
-          test -f plugins/libapi_example_cpp_plugin.so
-          test -f plugins/libphysics_profiler_plugin.so
-          test -f plugins/librandom_input_filler.so
-          test -z "$(find plugins -type f ! -name '*.so*' -print -quit)"
+          # A plugin is a directory holding its library, its manifest and any
+          # resources it ships. The directory names the plugin on every
+          # platform, and the library inside carries that name.
+          test -f plugins/example_c/libexample_c.so
+          test -f plugins/example_cpp/libexample_cpp.so
+          test -f plugins/physics_profiler/libphysics_profiler.so
+          test -f plugins/random_input_filler/librandom_input_filler.so
+          test -f plugins/physics_profiler/plugin.toml
+          test -f plugins/random_input_filler/plugin.toml
+          test -z "$(find plugins -type f ! -name '*.so*' ! -name '*.toml' -print -quit)"
           test ! -d data/textures
           test ! -f data/fonts/JetBrainsMono-Medium.ttf
           test -z "$(find . -type f \( -name '*.o' -o -name '*.a' -o -name '*.cmake' -o -name '*.pdb' -o -name '*.glsl' \) -print -quit)"
@@ -113,6 +118,39 @@ jobs:
         ./frametee --list-games | tee "$RUNNER_TEMP/frametee-game-modules.txt"
         grep -Eq '^  ddnet[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
         grep -Eq '^  tmnf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
+
+        # --list-games returns before the editor exists, so it says nothing
+        # about whether the release can come up. An empty auto script runs the
+        # real startup -- config, game activation, plugins -- with no window,
+        # and the timeout turns a hang into a failed build rather than a white
+        # window on a user's machine.
+        smoke_config="$RUNNER_TEMP/frametee-config"
+        rm -rf "$smoke_config"
+        mkdir -p "$smoke_config/frametee"
+        : > "$RUNNER_TEMP/frametee-smoke.ftscript"
+
+        XDG_CONFIG_HOME="$smoke_config" timeout 120 \
+          ./frametee --auto "$RUNNER_TEMP/frametee-smoke.ftscript" |
+          tee "$RUNNER_TEMP/frametee-startup.txt"
+        grep -q "Scanning for plugins" "$RUNNER_TEMP/frametee-startup.txt"
+        grep -q "Auto script finished" "$RUNNER_TEMP/frametee-startup.txt"
+        # Nothing is enabled in a fresh config, and a plugin that is not enabled
+        # is not loaded at all -- being listed must never run its code.
+        ! grep -q "Loaded '" "$RUNNER_TEMP/frametee-startup.txt"
+
+        # Again with every shipped plugin turned on, which is the path that does
+        # load, initialize, shut down and unload plugin code.
+        {
+          echo "[plugins]"
+          for plugin in plugins/*/; do
+            echo "$(basename "$plugin") = true"
+          done
+        } > "$smoke_config/frametee/config.toml"
+        XDG_CONFIG_HOME="$smoke_config" timeout 120 \
+          ./frametee --auto "$RUNNER_TEMP/frametee-smoke.ftscript" |
+          tee "$RUNNER_TEMP/frametee-plugins.txt"
+        grep -q "Loaded '" "$RUNNER_TEMP/frametee-plugins.txt"
+        grep -q "Auto script finished" "$RUNNER_TEMP/frametee-plugins.txt"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
@@ -243,17 +281,51 @@ jobs:
           require_file data/games/tmnf/thumbnail.png
           require_file data/games/tmnf/README.txt
           require_file vulkan-1.dll
-          require_file plugins/api_example_c_plugin.dll
-          require_file plugins/api_example_cpp_plugin.dll
-          require_file plugins/physics_profiler_plugin.dll
-          require_file plugins/random_input_filler.dll
-          test -z "$(find plugins -type f ! -iname '*.dll' -print -quit)"
+          # See the Linux job: one directory per plugin, named after it.
+          require_file plugins/example_c/example_c.dll
+          require_file plugins/example_cpp/example_cpp.dll
+          require_file plugins/physics_profiler/physics_profiler.dll
+          require_file plugins/random_input_filler/random_input_filler.dll
+          require_file plugins/physics_profiler/plugin.toml
+          require_file plugins/random_input_filler/plugin.toml
+          test -z "$(find plugins -type f ! -iname '*.dll' ! -iname '*.toml' -print -quit)"
           test ! -d data/textures
           test ! -f data/fonts/JetBrainsMono-Medium.ttf
           test -z "$(find . -type f \( -name '*.o' -o -name '*.a' -o -name '*.cmake' -o -name '*.pdb' -o -name '*.glsl' -o -name '*.ilk' -o -name '*.lib' -o -name '*.exp' \) -print -quit)"
           ./frametee.exe --list-games | tee "$RUNNER_TEMP/frametee-game-modules.txt"
           grep -Eq '^  ddnet[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
           grep -Eq '^  tmnf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
+
+          # See the Linux job: --list-games never reaches the editor. This does,
+          # and Windows is where it matters, because the loader lock is held
+          # while a library attaches and detaches -- a plugin that starts or
+          # joins a thread there deadlocks startup before the first frame.
+          smoke_config="$RUNNER_TEMP/frametee-config"
+          rm -rf "$smoke_config"
+          mkdir -p "$smoke_config/frametee"
+          : > "$RUNNER_TEMP/frametee-smoke.ftscript"
+          # The editor reads APPDATA with the Win32 API, not through MSYS2's
+          # path translation, so it has to be handed a native path.
+          smoke_appdata=$(cygpath -m "$smoke_config")
+
+          APPDATA="$smoke_appdata" timeout 120 \
+            ./frametee.exe --auto "$RUNNER_TEMP/frametee-smoke.ftscript" |
+            tee "$RUNNER_TEMP/frametee-startup.txt"
+          grep -q "Scanning for plugins" "$RUNNER_TEMP/frametee-startup.txt"
+          grep -q "Auto script finished" "$RUNNER_TEMP/frametee-startup.txt"
+          ! grep -q "Loaded '" "$RUNNER_TEMP/frametee-startup.txt"
+
+          {
+            echo "[plugins]"
+            for plugin in plugins/*/; do
+              echo "$(basename "$plugin") = true"
+            done
+          } > "$smoke_config/frametee/config.toml"
+          APPDATA="$smoke_appdata" timeout 120 \
+            ./frametee.exe --auto "$RUNNER_TEMP/frametee-smoke.ftscript" |
+            tee "$RUNNER_TEMP/frametee-plugins.txt"
+          grep -q "Loaded '" "$RUNNER_TEMP/frametee-plugins.txt"
+          grep -q "Auto script finished" "$RUNNER_TEMP/frametee-plugins.txt"
           find . -type f -print | sort
         )
 

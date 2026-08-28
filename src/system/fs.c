@@ -112,10 +112,10 @@ struct fs_dir_t {
     HANDLE handle;
     WIN32_FIND_DATA find_data;
     bool first;
-    char path[1024];
 #else
     DIR *dir;
 #endif
+    char path[1024];
     fs_dirent_t entry;
 };
 
@@ -127,6 +127,7 @@ fs_dir_t *fs_opendir(const char *path) {
     dir->handle = INVALID_HANDLE_VALUE;
     dir->first = true;
 #else
+    snprintf(dir->path, sizeof(dir->path), "%s", path);
     dir->dir = opendir(path);
     if (!dir->dir) {
         free(dir);
@@ -158,6 +159,14 @@ fs_dirent_t *fs_readdir(fs_dir_t *dir) {
     if (!ent) return NULL;
     snprintf(dir->entry.name, sizeof(dir->entry.name), "%s", ent->d_name);
     dir->entry.is_directory = (ent->d_type == DT_DIR);
+    if (ent->d_type == DT_UNKNOWN) {
+        // Not every filesystem fills in d_type, and a caller that walks
+        // directories cannot afford to read one as a file. Ask directly.
+        char full_path[2048];
+        struct stat info;
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir->path, ent->d_name);
+        if (stat(full_path, &info) == 0) dir->entry.is_directory = S_ISDIR(info.st_mode);
+    }
     return &dir->entry;
 #endif
 }
@@ -209,7 +218,19 @@ bool fs_replace(const char *source, const char *destination) {
 
 void *fs_load_library(const char *path) {
 #ifdef _WIN32
-    return LoadLibrary(path);
+    // Wide, because paths carry the user's name and installs land wherever the
+    // user put them; and absolute with the altered search path, because a
+    // plugin lives in a directory of its own and may ship the libraries it
+    // depends on beside itself. Windows otherwise searches the directory of the
+    // executable and never the one the module came out of, and the flag is only
+    // defined for an absolute path.
+    wchar_t wide_path[1024];
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide_path, 1024) <= 0) return NULL;
+
+    wchar_t full_path[1024];
+    const DWORD length = GetFullPathNameW(wide_path, 1024, full_path, NULL);
+    if (length == 0 || length >= 1024) return LoadLibraryW(wide_path);
+    return LoadLibraryExW(full_path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
 #else
     return dlopen(path, RTLD_LAZY);
 #endif

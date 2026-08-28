@@ -10,17 +10,11 @@ typedef struct {
   int snippet_duration;
 } plugin_state_t;
 
-FT_API plugin_info_t get_plugin_info(void) {
-  return (plugin_info_t){.name = "C API Example",
-                         .author = "Teero",
-                         .version = "420.69",
-                         .description =
-                             "A self-contained plugin written in C that compiles its own ImGui sources."};
-}
-
 // No plugin_game_id export, so this plugin is global: it stays loaded no
 // matter which game the editor is running. Export plugin_game_id returning a
 // game id ("ddnet", ...) to bind a plugin to one game instead.
+
+FT_PLUGIN_ABI_EXPORT()
 
 FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
   plugin_state_t *state = (plugin_state_t *)calloc(1, sizeof(plugin_state_t));

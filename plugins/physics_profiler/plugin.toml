@@ -1,0 +1,9 @@
+# Read by the editor as data, without loading the library, so a plugin can be
+# listed before the user agrees to run it. Everything here is this plugin's own
+# word about itself; the editor verifies none of it. See docs/plugins.md.
+name = "Physics Profiler"
+author = "Teero"
+version = "1.0.0"
+description = "Integrates Tracy to benchmark the ddnet_physics library."
+game = "ddnet"
+repository = "https://github.com/Teero888/frametee/tree/master/plugins/physics_profiler"

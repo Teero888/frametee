@@ -326,7 +326,7 @@ static const ft_game_module module = {
              .id = "example-cube",
              .display_name = "Cube Arena (3D)",
              .version = "1.0.0",
-             .author = "FrameTee"},
+             .author = "Teero"},
     .constraints = {.struct_size = sizeof(ft_game_constraints),
                     .caps = FT_CAP_HEADLESS | FT_CAP_RENDERS_LEVEL,
                     .dimensions = FT_DIMENSIONS_3D,

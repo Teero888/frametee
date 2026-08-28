@@ -3,7 +3,7 @@
 	url = https://github.com/cimgui/cimgui.git
 [submodule "libs/cglm"]
 	path = libs/cglm
-	url = https://github.com/recp/cglm
+	url = https://github.com/recp/cglm.git
 [submodule "libs/nfd"]
 	path = libs/nfd
 	url = https://github.com/btzy/nativefiledialog-extended.git
@@ -12,10 +12,10 @@
 	url = https://github.com/Teero888/ddnet_physics_c.git
 [submodule "libs/ddnet_demo"]
 	path = libs/ddnet_demo
-	url = https://github.com/Teero888/ddnet_demo_c99
+	url = https://github.com/Teero888/ddnet_demo_c99.git
 [submodule "libs/toml"]
 	path = libs/toml
 	url = https://github.com/cktan/tomlc17.git
 [submodule "games/tmnf/ForeverValidator"]
 	path = games/tmnf/ForeverValidator
-	url = https://github.com/Teero888/ForeverValidator
+	url = https://github.com/Teero888/ForeverValidator.git

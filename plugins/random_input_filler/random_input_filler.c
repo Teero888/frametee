@@ -171,12 +171,7 @@ static void fill_tracks_with_random_inputs(random_input_state_t *state) {
   set_status(state, summary);
 }
 
-FT_API plugin_info_t get_plugin_info(void) {
-  return (plugin_info_t){.name = "Random Input Filler",
-                         .author = "Tater",
-                         .version = "1.0.0",
-                         .description = "Generates random inputs for every track"};
-}
+FT_PLUGIN_ABI_EXPORT()
 
 // Now schema-driven, so it works under any game and stays global. Export
 // plugin_game_id() here to bind it to one instead.

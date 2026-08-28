@@ -12,6 +12,16 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(TRACY_ENABLE "Enable Tracy profiler" ON)
 option(TRACY_ON_DEMAND "Enable on-demand connection" ON)
+# Not a preference. Tracy's default lifetime is the shared object's: the client
+# starts its worker threads while this library attaches and joins them while it
+# detaches, and on Windows both run under the loader lock, which a thread needs
+# to start or exit. The host loads and unloads every plugin it finds just to
+# read its name, so that deadlock hung the editor on startup whenever this
+# plugin was present. Manual lifetime hands both ends to plugin_init and
+# plugin_shutdown; see physics_profiler.cpp. Tracy defines this PUBLIC on
+# TracyClient, so the plugin's own translation unit agrees with the client on
+# the config-mangled symbol names.
+option(TRACY_MANUAL_LIFETIME "Start and stop the Tracy client from the plugin's entry points" ON)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -31,8 +41,9 @@ add_library(${PROJECT_NAME} SHARED
 )
 
 if(UNIX AND NOT APPLE)
+    # Relative to plugins/<name>/, which is two levels below the install root.
     set_target_properties(${PROJECT_NAME} PROPERTIES
-        INSTALL_RPATH "$ORIGIN/../libs/ddnet_physics:$ORIGIN/../libs/ddnet_physics/libs/ddnet_map_loader"
+        INSTALL_RPATH "$ORIGIN/../../libs/ddnet_physics:$ORIGIN/../../libs/ddnet_physics/libs/ddnet_map_loader"
     )
 endif()
 

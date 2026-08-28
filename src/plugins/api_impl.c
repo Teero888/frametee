@@ -231,7 +231,13 @@ static bool api_viewport_accepts_input(bool continuing_drag) {
 
 static void api_register_undo_command(struct undo_command_t *command) {
   if (command) {
-    undo_manager_register_command(&g_ui_handler_for_api->undo_manager, command);
+    // Tagged with whichever plugin is running, so unloading it takes the
+    // command with it: the command may be the plugin's own, and its undo, redo
+    // and cleanup would point into the unmapped library. Host-built commands
+    // registered by a plugin are tagged too, which costs nothing -- the host
+    // can rebuild history it owns, and dropping a step is better than keeping
+    // one whose partner is gone.
+    undo_manager_register_command_owned(&g_ui_handler_for_api->undo_manager, command, plugin_manager_running_plugin());
   }
 }
 

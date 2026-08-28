@@ -840,7 +840,7 @@ const ft_game_module kModule = {
              .id = "example-platformer",
              .display_name = "Raylib Platformer (C++)",
              .version = "2.0.0",
-             .author = "FrameTee",
+             .author = "Teero",
              .url = nullptr,
              .thumbnail = "thumbnail.png"},
 

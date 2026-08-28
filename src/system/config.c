@@ -520,6 +520,21 @@ void config_save(ui_handler_t *ui) {
     fprintf(fp, " = %s\n", ui->plugin_manager.plugins[i].enabled ? "true" : "false");
   }
 
+  // What each enabled plugin looked like when it was enabled. The editor
+  // compares this against the plugin's directory on startup and leaves the
+  // plugin off if they disagree, so that agreeing to run a plugin once is not
+  // agreement to run whatever later takes its place. Deleting a line here only
+  // means the next start takes the plugin as it finds it.
+  fprintf(fp, "\n[plugin_checksums]\n");
+  for (int i = 0; i < ui->plugin_manager.count; ++i) {
+    const loaded_plugin_t *plugin = &ui->plugin_manager.plugins[i];
+    if (!plugin->approved_sha256[0]) continue;
+    write_toml_key(fp, plugin->key);
+    fputs(" = ", fp);
+    write_toml_string(fp, plugin->approved_sha256);
+    fputc('\n', fp);
+  }
+
   const bool flushed = fflush(fp) == 0;
   const bool closed = fclose(fp) == 0;
   if (!flushed || !closed || !fs_replace(temporary_path, config_path)) {

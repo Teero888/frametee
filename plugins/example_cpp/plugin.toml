@@ -1,0 +1,6 @@
+# See docs/plugins.md. Read as data by the editor; nothing here is verified.
+name = "C++ Native ImGui Example"
+author = "Teero"
+version = "69.420"
+description = "A self-contained plugin written in C++ using the native ImGui API."
+repository = "https://github.com/Teero888/frametee/tree/master/plugins/example_cpp"

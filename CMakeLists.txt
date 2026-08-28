@@ -74,6 +74,7 @@ set(SRCS
 	src/system/config.c
 	src/system/input.c
 	src/system/fs.c
+	src/system/sha256.c
 	src/logger/logger.c
 	src/engine/game_host.c
 	src/engine/engine_api.c
@@ -498,12 +499,22 @@ if(BUILD_PLUGINS)
             continue()
         endif()
         if(IS_DIRECTORY "${PLUGIN_DIR}" AND EXISTS "${PLUGIN_DIR}/CMakeLists.txt")
-            add_subdirectory("${PLUGIN_DIR}")
+            # Built out of the way: plugins/<name> in the build tree is the
+            # plugin's runtime directory, which holds what a release holds and
+            # nothing else, so the digest the editor shows over it means the
+            # same thing here as it does in an install.
+            add_subdirectory("${PLUGIN_DIR}" "${CMAKE_BINARY_DIR}/plugin-build/${PLUGIN_NAME}")
             get_property(PLUGIN_TARGETS DIRECTORY "${PLUGIN_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
             foreach(TARGET ${PLUGIN_TARGETS})
+                # A plugin owns a directory named after it, holding its library,
+                # its manifest and whatever resources it ships. The directory
+                # name is the same on every platform, so it is what the editor
+                # and config.toml call the plugin, and the library inside takes
+                # that name too.
                 set_target_properties(${TARGET} PROPERTIES
-                    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
-                    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+                    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/${PLUGIN_NAME}"
+                    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/${PLUGIN_NAME}"
+                    OUTPUT_NAME "${PLUGIN_NAME}"
                     BUILD_RPATH_USE_ORIGIN ON
                 )
                 # A plugin's loadable binary is part of the end-user runtime;
@@ -519,10 +530,41 @@ if(BUILD_PLUGINS)
                     if(WIN32)
                         set_target_properties(${TARGET} PROPERTIES PREFIX "")
                     endif()
+                    # A plugin's own directory, first on its search path, so it
+                    # can carry the libraries it depends on beside itself as it
+                    # can on Windows. Appended rather than assigned: a plugin
+                    # that named directories of its own keeps them, and only it
+                    # knows where they are.
+                    if(NOT WIN32 AND NOT APPLE)
+                        get_target_property(PLUGIN_RPATH ${TARGET} INSTALL_RPATH)
+                        if(PLUGIN_RPATH)
+                            set_target_properties(${TARGET} PROPERTIES INSTALL_RPATH "$ORIGIN;${PLUGIN_RPATH}")
+                        else()
+                            set_target_properties(${TARGET} PROPERTIES INSTALL_RPATH "$ORIGIN")
+                        endif()
+                    endif()
                     install(TARGETS ${TARGET}
-                        RUNTIME DESTINATION "plugins" COMPONENT Runtime
-                        LIBRARY DESTINATION "plugins" COMPONENT Runtime
+                        RUNTIME DESTINATION "plugins/${PLUGIN_NAME}" COMPONENT Runtime
+                        LIBRARY DESTINATION "plugins/${PLUGIN_NAME}" COMPONENT Runtime
                     )
+                    # The manifest is what the editor may read about a plugin it
+                    # has not loaded, so it ships in the same directory.
+                    if(EXISTS "${PLUGIN_DIR}/plugin.toml")
+                        # A custom target rather than a POST_BUILD step: the
+                        # plugin's own target belongs to its subdirectory and
+                        # cannot be extended from here.
+                        add_custom_target(${TARGET}_manifest ALL
+                            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                                "${PLUGIN_DIR}/plugin.toml"
+                                "${CMAKE_BINARY_DIR}/plugins/${PLUGIN_NAME}/plugin.toml"
+                            DEPENDS "${PLUGIN_DIR}/plugin.toml"
+                            VERBATIM
+                        )
+                        add_dependencies(${TARGET}_manifest ${TARGET})
+                        install(FILES "${PLUGIN_DIR}/plugin.toml"
+                            DESTINATION "plugins/${PLUGIN_NAME}" COMPONENT Runtime
+                        )
+                    endif()
                 endif()
             endforeach()
 

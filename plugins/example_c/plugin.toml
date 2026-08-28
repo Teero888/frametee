@@ -1,0 +1,6 @@
+# See docs/plugins.md. Read as data by the editor; nothing here is verified.
+name = "C API Example"
+author = "Teero"
+version = "420.69"
+description = "A self-contained plugin written in C that compiles its own ImGui sources."
+repository = "https://github.com/Teero888/frametee/tree/master/plugins/example_c"

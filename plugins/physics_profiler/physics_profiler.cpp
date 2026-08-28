@@ -202,19 +202,51 @@ public:
   }
 };
 
+// Tracy's client spawns worker threads when it starts and joins them again when
+// it stops. Neither may happen while this library is attaching or detaching: on
+// Windows the loader lock is held across DllMain, and a thread can neither
+// start nor exit without taking it, so a profiler whose lifetime is the shared
+// object's deadlocks the loader. That is not a hypothetical for a plugin -- the
+// host loads every plugin it finds and unloads the ones it is not running,
+// purely to read their names, so the editor hung on startup for as long as this
+// library sat in the plugins directory, enabled or not. TRACY_MANUAL_LIFETIME
+// moves both ends into plugin_init/plugin_shutdown below, which the host calls
+// with no loader lock held.
+static void profiler_startup(void) {
+#if defined(TRACY_ENABLE) && defined(TRACY_MANUAL_LIFETIME)
+  if (!tracy::IsProfilerStarted()) tracy::StartupProfiler();
+#endif
+}
+
+static void profiler_shutdown(void) {
+#if defined(TRACY_ENABLE) && defined(TRACY_MANUAL_LIFETIME)
+  if (tracy::IsProfilerStarted()) tracy::ShutdownProfiler();
+#endif
+}
+
 extern "C" {
 
-FT_API plugin_info_t get_plugin_info() { return {"Physics Profiler", "Teero", "1.0.0", "Integrates Tracy to benchmark the ddnet_physics library."}; }
+FT_PLUGIN_ABI_EXPORT()
 
 // Benchmarks ddnet_physics itself, so it only makes sense while DDNet is the
 // active game.
 FT_API const char *plugin_game_id() { return "ddnet"; }
 
-FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) { return new PhysicsProfilerPlugin(context, api); }
+FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
+  // Before the plugin object, so every Tracy macro below it runs against a
+  // started profiler.
+  profiler_startup();
+  return new PhysicsProfilerPlugin(context, api);
+}
 
 FT_API void plugin_update(void *plugin_data) { static_cast<PhysicsProfilerPlugin *>(plugin_data)->Update(); }
 
-FT_API void plugin_shutdown(void *plugin_data) { delete static_cast<PhysicsProfilerPlugin *>(plugin_data); }
+FT_API void plugin_shutdown(void *plugin_data) {
+  // The benchmark thread is joined by the destructor, so the profiler outlives
+  // the last zone it can emit.
+  delete static_cast<PhysicsProfilerPlugin *>(plugin_data);
+  profiler_shutdown();
+}
 
 FT_API void plugin_show_ui(void *plugin_data) { static_cast<PhysicsProfilerPlugin *>(plugin_data)->ToggleWindow(); }
 }

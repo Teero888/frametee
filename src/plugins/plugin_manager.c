@@ -1,9 +1,9 @@
 #include "plugin_manager.h"
+#include <ctype.h>
+#include <float.h>
 #include <frametee/icons.h>
 #include <logger/logger.h>
 #include <stdbool.h>
-#include <ctype.h>
-#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,10 +14,17 @@
 
 static const char *LOG_SOURCE = "PluginManager";
 
+// The library whose code the host is currently inside, or NULL when it is in
+// its own. Anything a plugin registers with the host while it runs is tagged
+// with this, so it can be taken back when the library goes away.
+static const void *g_running_plugin = NULL;
+
+const void *plugin_manager_running_plugin(void) { return g_running_plugin; }
+
 static const char *safe_strcasestr(const char *haystack, const char *needle) {
   if (!haystack || !needle) return NULL;
   if (!*needle) return haystack;
-  
+
   for (; *haystack; haystack++) {
     if (tolower((unsigned char)*haystack) == tolower((unsigned char)*needle)) {
       const char *h, *n;
@@ -30,26 +37,33 @@ static const char *safe_strcasestr(const char *haystack, const char *needle) {
   return NULL;
 }
 
-static void get_plugin_key(const char *path, char *key, size_t key_size) {
-  const char *filename = strrchr(path, '/');
+// A plugin's directory names it, and the library inside carries that name with
+// whatever prefix and suffix the platform puts on a shared library. Anything
+// else in the directory belongs to the plugin -- resources, or the libraries it
+// depends on -- and is never mistaken for the plugin itself.
+static bool find_plugin_library(const char *plugin_directory, const char *name, char *out_path, size_t size) {
+  static const char *const patterns[] = {
 #ifdef _WIN32
-  const char *win_slash = strrchr(path, '\\');
-  if (win_slash && (!filename || win_slash > filename)) {
-    filename = win_slash;
-  }
+      "%s%c%s.dll",
+      "%s%clib%s.dll",
+#elif defined(__APPLE__)
+      "%s%clib%s.dylib",
+      "%s%c%s.dylib",
+#else
+      "%s%clib%s.so",
+      "%s%c%s.so",
 #endif
-  if (filename) {
-    filename++;
-  } else {
-    filename = path;
-  }
+  };
 
-  size_t i = 0;
-  while (filename[i] && filename[i] != '.' && i < key_size - 1) {
-    key[i] = filename[i];
-    i++;
+  for (size_t i = 0; i < sizeof(patterns) / sizeof(patterns[0]); ++i) {
+    snprintf(out_path, size, patterns[i], plugin_directory, PATH_SEP, name);
+    FILE *file = fs_open(out_path, "rb");
+    if (!file) continue;
+    fclose(file);
+    return true;
   }
-  key[i] = '\0';
+  out_path[0] = '\0';
+  return false;
 }
 
 // A plugin without the optional symbol is global. Anything that touches a
@@ -74,37 +88,178 @@ bool plugin_manager_matches_active_game(const plugin_manager_t *manager, const l
   return active && strcmp(active, plugin->game_id) == 0;
 }
 
-static bool load_metadata_temp(loaded_plugin_t *p) {
-  void *handle = fs_load_library(p->path);
-  if (!handle) {
-    return false;
+// A plugin's name, author, version, description and game id all live inside the
+// library, so loading it is the only way to ask it anything -- and loading it
+// runs it. A plugin may therefore ship a manifest beside its library, which the
+// editor reads as data, so that a plugin it has not run can still be listed.
+static bool plugin_metadata_known(const loaded_plugin_t *plugin) { return plugin->info_name[0] != '\0'; }
+
+// The manifest's name if it gave one, and the directory's otherwise.
+static const char *plugin_display_name(const loaded_plugin_t *plugin) {
+  return plugin->info_name[0] ? plugin->info_name : plugin->key;
+}
+
+// One identity for everything a plugin ships, so the number the editor shows
+// covers its library, its manifest and its resources rather than one file of
+// the three.
+//
+// The recipe is deliberately one anybody can repeat without this editor: hash
+// every file under the directory, then hash the lines "<hex>  <relative path>"
+// in ascending path order -- exactly the bytes sha256sum prints. docs/plugins.md
+// gives the shell equivalent.
+#define DIGEST_MAX_FILES 4096
+#define DIGEST_MAX_DEPTH 8
+
+typedef struct {
+  char **paths;
+  int count;
+  bool failed;
+} digest_listing_t;
+
+static void collect_files(const char *root, const char *prefix, int depth, digest_listing_t *listing) {
+  if (listing->failed || depth > DIGEST_MAX_DEPTH) {
+    listing->failed = true;
+    return;
   }
 
-  union {
-    void *sym;
-    get_plugin_info_func get_info;
-  } u;
+  char scan_path[1024];
+  if (prefix[0]) snprintf(scan_path, sizeof(scan_path), "%s%c%s", root, PATH_SEP, prefix);
+  else snprintf(scan_path, sizeof(scan_path), "%s", root);
 
-  u.sym = fs_get_symbol(handle, GET_PLUGIN_INFO_FUNC_NAME);
-  if (!u.get_info) {
-    fs_free_library(handle);
-    return false;
+  fs_dir_t *dir = fs_opendir(scan_path);
+  if (!dir) {
+    listing->failed = true;
+    return;
   }
 
-  read_game_id(handle, p);
-  plugin_info_t raw_info = u.get_info();
-  strncpy(p->info_name, raw_info.name ? raw_info.name : "", sizeof(p->info_name) - 1);
-  strncpy(p->info_author, raw_info.author ? raw_info.author : "", sizeof(p->info_author) - 1);
-  strncpy(p->info_version, raw_info.version ? raw_info.version : "", sizeof(p->info_version) - 1);
-  strncpy(p->info_description, raw_info.description ? raw_info.description : "", sizeof(p->info_description) - 1);
+  fs_dirent_t *entry;
+  while ((entry = fs_readdir(dir)) != NULL && !listing->failed) {
+    if (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "..") == 0) continue;
 
-  p->info.name = p->info_name;
-  p->info.author = p->info_author;
-  p->info.version = p->info_version;
-  p->info.description = p->info_description;
+    // Always '/' in the hashed name, so the same directory hashes the same on
+    // either platform.
+    char relative[1024];
+    if (prefix[0]) snprintf(relative, sizeof(relative), "%s/%s", prefix, entry->name);
+    else snprintf(relative, sizeof(relative), "%s", entry->name);
 
-  fs_free_library(handle);
-  return true;
+    if (entry->is_directory) {
+      collect_files(root, relative, depth + 1, listing);
+      continue;
+    }
+
+    if (listing->count >= DIGEST_MAX_FILES) {
+      listing->failed = true;
+      break;
+    }
+    char **grown = realloc(listing->paths, (size_t)(listing->count + 1) * sizeof(*listing->paths));
+    if (!grown) {
+      listing->failed = true;
+      break;
+    }
+    listing->paths = grown;
+    listing->paths[listing->count] = strdup(relative);
+    if (!listing->paths[listing->count]) {
+      listing->failed = true;
+      break;
+    }
+    listing->count++;
+  }
+
+  fs_closedir(dir);
+}
+
+static int compare_paths(const void *a, const void *b) { return strcmp(*(const char *const *)a, *(const char *const *)b); }
+
+static bool directory_digest_hex(const char *plugin_directory, char out_hex[SHA256_HEX_SIZE]) {
+  out_hex[0] = '\0';
+
+  digest_listing_t listing = {NULL, 0, false};
+  collect_files(plugin_directory, "", 0, &listing);
+
+  bool ok = !listing.failed && listing.count > 0;
+  if (ok) {
+    qsort(listing.paths, (size_t)listing.count, sizeof(*listing.paths), compare_paths);
+
+    sha256_ctx_t ctx;
+    sha256_init(&ctx);
+    for (int i = 0; i < listing.count && ok; ++i) {
+      char file_path[1024];
+      char file_hex[SHA256_HEX_SIZE];
+      snprintf(file_path, sizeof(file_path), "%s%c%s", plugin_directory, PATH_SEP, listing.paths[i]);
+      // A file that cannot be read leaves the digest unknown rather than
+      // quietly standing for a directory with one file fewer in it.
+      ok = sha256_file_hex(file_path, file_hex);
+      if (!ok) break;
+
+      char line[1024 + SHA256_HEX_SIZE + 4];
+      const int length = snprintf(line, sizeof(line), "%s  %s\n", file_hex, listing.paths[i]);
+      if (length < 0 || (size_t)length >= sizeof(line)) {
+        ok = false;
+        break;
+      }
+      sha256_update(&ctx, line, (size_t)length);
+    }
+
+    if (ok) {
+      uint8_t digest[32];
+      sha256_final(&ctx, digest);
+      for (int i = 0; i < 32; ++i)
+        snprintf(out_hex + i * 2, 3, "%02x", digest[i]);
+    }
+  }
+
+  for (int i = 0; i < listing.count; ++i)
+    free(listing.paths[i]);
+  free(listing.paths);
+  if (!ok) out_hex[0] = '\0';
+  return ok;
+}
+
+// Manifest text is written by whoever wrote the plugin and is rendered straight
+// into the interface, so control characters -- which would break a line or hide
+// the rest of a value -- are dropped rather than passed along.
+static void copy_manifest_string(char *destination, size_t size, toml_datum_t value) {
+  destination[0] = '\0';
+  if (value.type != TOML_STRING || !value.u.str.ptr) return;
+
+  size_t written = 0;
+  for (const unsigned char *cursor = (const unsigned char *)value.u.str.ptr; *cursor && written + 1 < size; ++cursor) {
+    if (*cursor < 0x20 || *cursor == 0x7f) continue;
+    destination[written++] = (char)*cursor;
+  }
+  destination[written] = '\0';
+}
+
+// The manifest is plugin.toml in the plugin's own directory, so it travels with
+// the library it describes. A plugin that ships without one is simply listed by
+// the name of its directory.
+//
+// Nothing in here is verified, and nothing in here decides anything: an author
+// who would lie in a manifest is an author whose library the user is about to
+// run. It exists so the user can see what a plugin claims to be, and where its
+// source is meant to live, before agreeing to run it.
+static void read_manifest(loaded_plugin_t *p) {
+  char manifest_path[sizeof(p->directory) + 16];
+  snprintf(manifest_path, sizeof(manifest_path), "%s%cplugin.toml", p->directory, PATH_SEP);
+
+  FILE *fp = fs_open(manifest_path, "r");
+  if (!fp) return;
+  toml_result_t result = toml_parse_file(fp);
+  fclose(fp);
+  if (!result.ok) {
+    log_warn(LOG_SOURCE, "Ignoring the manifest for '%s': %s", p->key, result.errmsg);
+    return;
+  }
+
+  copy_manifest_string(p->repository, sizeof(p->repository), toml_get(result.toptab, "repository"));
+  copy_manifest_string(p->manifest_game, sizeof(p->manifest_game), toml_get(result.toptab, "game"));
+
+  copy_manifest_string(p->info_name, sizeof(p->info_name), toml_get(result.toptab, "name"));
+  copy_manifest_string(p->info_author, sizeof(p->info_author), toml_get(result.toptab, "author"));
+  copy_manifest_string(p->info_version, sizeof(p->info_version), toml_get(result.toptab, "version"));
+  copy_manifest_string(p->info_description, sizeof(p->info_description), toml_get(result.toptab, "description"));
+
+  toml_free(result);
 }
 
 bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
@@ -121,15 +276,34 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
 
   union {
     void *sym;
-    get_plugin_info_func get_info;
     plugin_init_func init;
     plugin_update_func update;
     plugin_shutdown_func shutdown;
     plugin_show_ui_func show_ui;
+    plugin_abi_version_func abi_version;
   } u;
 
-  u.sym = fs_get_symbol(handle, GET_PLUGIN_INFO_FUNC_NAME);
-  get_plugin_info_func get_info = u.get_info;
+  // Before anything else is called through: a plugin built against a different
+  // version of plugin_api.h would be reading structs that have moved under it.
+  u.sym = fs_get_symbol(handle, GET_PLUGIN_ABI_VERSION_FUNC_NAME);
+  const plugin_abi_version_func read_abi_version = u.abi_version;
+  if (!read_abi_version) {
+    p->status = PLUGIN_STATUS_ERROR;
+    snprintf(p->error_msg, sizeof(p->error_msg),
+             "Declares no plugin ABI version. Rebuild it against this editor's plugin_api.h.");
+    log_error(LOG_SOURCE, "Plugin '%s' declares no ABI version.", p->path);
+    fs_free_library(handle);
+    return false;
+  }
+  const uint32_t plugin_abi = read_abi_version();
+  if (plugin_abi != FRAMETEE_PLUGIN_ABI_VERSION) {
+    p->status = PLUGIN_STATUS_ERROR;
+    snprintf(p->error_msg, sizeof(p->error_msg), "Built for plugin ABI %u; this editor speaks %u.", plugin_abi,
+             FRAMETEE_PLUGIN_ABI_VERSION);
+    log_error(LOG_SOURCE, "Plugin '%s' is built for ABI %u, not %u.", p->path, plugin_abi, FRAMETEE_PLUGIN_ABI_VERSION);
+    fs_free_library(handle);
+    return false;
+  }
 
   u.sym = fs_get_symbol(handle, GET_PLUGIN_INIT_FUNC_NAME);
   p->init = u.init;
@@ -143,7 +317,7 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
   u.sym = fs_get_symbol(handle, "plugin_show_ui");
   p->show_ui = u.show_ui;
 
-  if (!get_info || !p->init) {
+  if (!p->init) {
     p->status = PLUGIN_STATUS_ERROR;
     snprintf(p->error_msg, sizeof(p->error_msg), "Plugin missing required symbols.");
     log_error(LOG_SOURCE, "Plugin '%s' is missing required symbols.", p->path);
@@ -162,28 +336,23 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
 
   p->handle = handle;
 
-  plugin_info_t raw_info = get_info();
-  strncpy(p->info_name, raw_info.name ? raw_info.name : "", sizeof(p->info_name) - 1);
-  strncpy(p->info_author, raw_info.author ? raw_info.author : "", sizeof(p->info_author) - 1);
-  strncpy(p->info_version, raw_info.version ? raw_info.version : "", sizeof(p->info_version) - 1);
-  strncpy(p->info_description, raw_info.description ? raw_info.description : "", sizeof(p->info_description) - 1);
-
-  p->info.name = p->info_name;
-  p->info.author = p->info_author;
-  p->info.version = p->info_version;
-  p->info.description = p->info_description;
-
+  // A plugin's resources live beside it, and it has no other way to find out
+  // where that is.
+  manager->context->plugin_directory = p->directory;
+  g_running_plugin = p->handle;
   p->data = p->init(manager->context, manager->api);
+  g_running_plugin = NULL;
+  manager->context->plugin_directory = NULL;
 
   if (p->data) {
     p->status = PLUGIN_STATUS_LOADED;
     p->error_msg[0] = '\0';
-    log_info(LOG_SOURCE, "Loaded '%s' v%s by %s.", p->info.name, p->info.version, p->info.author);
+    log_info(LOG_SOURCE, "Loaded '%s'.", plugin_display_name(p));
     return true;
   } else {
     p->status = PLUGIN_STATUS_ERROR;
     snprintf(p->error_msg, sizeof(p->error_msg), "plugin_init returned NULL.");
-    log_error(LOG_SOURCE, "Plugin '%s' failed to initialize.", p->info.name);
+    log_error(LOG_SOURCE, "Plugin '%s' failed to initialize.", plugin_display_name(p));
     fs_free_library(p->handle);
     p->handle = NULL;
     return false;
@@ -198,7 +367,16 @@ void plugin_manager_unload_plugin(plugin_manager_t *manager, int index) {
   }
   if (p->status != PLUGIN_STATUS_LOADED) return;
 
-  log_info(LOG_SOURCE, "Shutting down '%s'...", p->info.name);
+  log_info(LOG_SOURCE, "Shutting down '%s'...", plugin_display_name(p));
+  // Anything this plugin put on the undo stack is three pointers into a library
+  // that is about to stop existing. Take them back while the code that knows
+  // how to clean them up is still mapped, and before the plugin's own shutdown
+  // frees whatever they point at.
+  if (p->handle && manager->host_ui) {
+    const int dropped = undo_manager_purge_owner(&manager->host_ui->undo_manager, p->handle);
+    if (dropped > 0)
+      log_info(LOG_SOURCE, "Dropped %d undo step(s) that only '%s' knew how to reverse.", dropped, plugin_display_name(p));
+  }
   if (p->shutdown && p->data) {
     p->shutdown(p->data);
   }
@@ -219,10 +397,24 @@ void plugin_manager_toggle_plugin(plugin_manager_t *manager, int index) {
   loaded_plugin_t *p = &manager->plugins[index];
   p->enabled = !p->enabled;
   if (p->enabled) {
+    // Turning a plugin on is the moment of consent, so it is also what gets
+    // remembered: these files, as they are now.
+    snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
     plugin_manager_load_plugin(manager, index);
   } else {
     plugin_manager_unload_plugin(manager, index);
+    p->approved_sha256[0] = '\0';
   }
+  config_save(manager->host_ui);
+}
+
+void plugin_manager_approve_current_version(plugin_manager_t *manager, int index) {
+  loaded_plugin_t *p = &manager->plugins[index];
+  snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
+  p->enabled = true;
+  p->status = PLUGIN_STATUS_UNLOADED;
+  p->error_msg[0] = '\0';
+  plugin_manager_load_plugin(manager, index);
   config_save(manager->host_ui);
 }
 
@@ -265,8 +457,10 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
   }
 
   toml_datum_t plugins_table = {0};
+  toml_datum_t checksums_table = {0};
   if (has_toml) {
     plugins_table = toml_get(res.toptab, "plugins");
+    checksums_table = toml_get(res.toptab, "plugin_checksums");
   }
 
   fs_dir_t *dir = fs_opendir(directory);
@@ -278,79 +472,109 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
   fs_dirent_t *entry;
   while ((entry = fs_readdir(dir)) != NULL) {
     if (!entry->is_directory) {
+      // A plugin is a directory now, so a loose library here is somebody's old
+      // install rather than something to load.
       const char *ext = strrchr(entry->name, '.');
-      if (ext && (strcmp(ext, ".dll") == 0 || strcmp(ext, ".so") == 0 || strcmp(ext, ".dylib") == 0)) {
-        char full_path[1024];
-        snprintf(full_path, sizeof(full_path), "%s/%s", directory, entry->name);
+      if (ext && (strcmp(ext, ".dll") == 0 || strcmp(ext, ".so") == 0 || strcmp(ext, ".dylib") == 0))
+        log_warn(LOG_SOURCE, "Ignoring '%s': a plugin lives in its own directory now. See docs/plugins.md.", entry->name);
+      continue;
+    }
+    if (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "..") == 0) continue;
 
-        char key[128];
-        get_plugin_key(full_path, key, sizeof(key));
+    // The directory names the plugin: it is the same on every platform, unlike
+    // the library file, which grows a "lib" here and loses it there. That name
+    // is the key in config.toml and the name of the library inside.
+    char plugin_directory[1024];
+    snprintf(plugin_directory, sizeof(plugin_directory), "%s%c%s", directory, PATH_SEP, entry->name);
 
-        // 1. Check if we already have it in the list (by path)
-        int index = -1;
-        for (int i = 0; i < manager->count; ++i) {
-          if (strcmp(manager->plugins[i].path, full_path) == 0) {
-            index = i;
-            break;
-          }
-        }
+    char full_path[1024];
+    if (!find_plugin_library(plugin_directory, entry->name, full_path, sizeof(full_path))) {
+      log_warn(LOG_SOURCE, "'%s' holds no library named after it; skipping it.", plugin_directory);
+      continue;
+    }
 
-        // 2. If not found, allocate / grow array
-        if (index == -1) {
-          if (manager->count >= manager->capacity) {
-            manager->capacity = manager->capacity == 0 ? 4 : manager->capacity * 2;
-            loaded_plugin_t *new_plugins = realloc(manager->plugins, manager->capacity * sizeof(loaded_plugin_t));
-            if (new_plugins) {
-              manager->plugins = new_plugins;
-              // Fix internal pointers after reallocation
-              for (int k = 0; k < manager->count; ++k) {
-                manager->plugins[k].info.name = manager->plugins[k].info_name;
-                manager->plugins[k].info.author = manager->plugins[k].info_author;
-                manager->plugins[k].info.version = manager->plugins[k].info_version;
-                manager->plugins[k].info.description = manager->plugins[k].info_description;
-              }
-            }
-          }
-          index = manager->count++;
-          memset(&manager->plugins[index], 0, sizeof(loaded_plugin_t));
-          snprintf(manager->plugins[index].path, sizeof(manager->plugins[index].path), "%s", full_path);
-          snprintf(manager->plugins[index].key, sizeof(manager->plugins[index].key), "%s", key);
-          manager->plugins[index].status = PLUGIN_STATUS_UNLOADED;
-        }
+    const char *key = entry->name;
 
-        loaded_plugin_t *p = &manager->plugins[index];
+    // 1. Check if we already have it in the list (by path)
+    int index = -1;
+    for (int i = 0; i < manager->count; ++i) {
+      if (strcmp(manager->plugins[i].path, full_path) == 0) {
+        index = i;
+        break;
+      }
+    }
 
-        // 3. Determine if it is enabled in config
-        bool enabled = false;
-        if (has_toml && plugins_table.type == TOML_TABLE) {
-          toml_datum_t val = toml_get(plugins_table, key);
-          if (val.type == TOML_BOOLEAN) {
-            enabled = val.u.boolean;
-          }
-        }
-        p->enabled = enabled;
-
-        // 4. Load it or just get its metadata
-        if (enabled) {
-          plugin_manager_load_plugin(manager, index);
-        } else {
-          plugin_manager_unload_plugin(manager, index);
-          if (p->info_name[0] == '\0') {
-            load_metadata_temp(p);
-          }
+    // 2. If not found, allocate / grow array
+    if (index == -1) {
+      if (manager->count >= manager->capacity) {
+        manager->capacity = manager->capacity == 0 ? 4 : manager->capacity * 2;
+        loaded_plugin_t *new_plugins = realloc(manager->plugins, manager->capacity * sizeof(loaded_plugin_t));
+        if (new_plugins) {
+          manager->plugins = new_plugins;
         }
       }
+      index = manager->count++;
+      memset(&manager->plugins[index], 0, sizeof(loaded_plugin_t));
+      snprintf(manager->plugins[index].path, sizeof(manager->plugins[index].path), "%s", full_path);
+      snprintf(manager->plugins[index].directory, sizeof(manager->plugins[index].directory), "%s", plugin_directory);
+      snprintf(manager->plugins[index].key, sizeof(manager->plugins[index].key), "%s", key);
+      manager->plugins[index].status = PLUGIN_STATUS_UNLOADED;
+    }
+
+    loaded_plugin_t *p = &manager->plugins[index];
+
+    // 3. Determine if it is enabled in config
+    bool enabled = false;
+    if (has_toml && plugins_table.type == TOML_TABLE) {
+      toml_datum_t val = toml_get(plugins_table, key);
+      if (val.type == TOML_BOOLEAN) {
+        enabled = val.u.boolean;
+      }
+    }
+    p->enabled = enabled;
+
+    // 3b. What can be known about the plugin without running it: the editor's
+    //     own digest of everything in its directory, and whatever the plugin
+    //     says about itself in the manifest there.
+    if (!directory_digest_hex(p->directory, p->sha256)) {
+      p->sha256[0] = '\0';
+      log_warn(LOG_SOURCE, "Could not read '%s' to check its contents.", p->directory);
+    }
+    read_manifest(p);
+
+    // 3c. And what the user approved when they turned it on, if anything.
+    p->approved_sha256[0] = '\0';
+    if (checksums_table.type == TOML_TABLE) {
+      toml_datum_t recorded = toml_get(checksums_table, key);
+      if (recorded.type == TOML_STRING && recorded.u.str.ptr)
+        snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", recorded.u.str.ptr);
+    }
+
+    // 4. Load it, or leave the directory alone. Being listed is not consent to
+    //    run: the only way to ask a plugin about itself is to load the library,
+    //    and loading it runs whatever it does at load time.
+    const bool changed = enabled && p->approved_sha256[0] && p->sha256[0] && strcmp(p->approved_sha256, p->sha256) != 0;
+    if (!enabled) {
+      plugin_manager_unload_plugin(manager, index);
+      p->approved_sha256[0] = '\0';
+    } else if (changed) {
+      // Enabling it approved the files that were there then. These are not
+      // those files, so this is a decision the user has not made yet.
+      plugin_manager_unload_plugin(manager, index);
+      p->status = PLUGIN_STATUS_CHANGED;
+      snprintf(p->error_msg, sizeof(p->error_msg),
+               "The files in this plugin's directory have changed since it was enabled, so it was not loaded.");
+      log_warn(LOG_SOURCE, "'%s' changed since it was enabled; leaving it off until that is confirmed.", key);
+    } else {
+      const bool loaded = plugin_manager_load_plugin(manager, index);
+      // A config written before the editor recorded checksums, or by hand.
+      // Take what is on disk as what was meant, rather than accusing the user
+      // of a change they did not make.
+      if (loaded && !p->approved_sha256[0])
+        snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
     }
   }
   fs_closedir(dir);
-
-  // Re-bind all metadata pointers to ensure they point to the correct, final allocated memory addresses.
-  for (int i = 0; i < manager->count; ++i) {
-    manager->plugins[i].info.name = manager->plugins[i].info_name;
-    manager->plugins[i].info.author = manager->plugins[i].info_author;
-    manager->plugins[i].info.version = manager->plugins[i].info_version;
-    manager->plugins[i].info.description = manager->plugins[i].info_description;
-  }
 
   if (has_toml) {
     toml_free(res);
@@ -381,7 +605,9 @@ void plugin_manager_on_game_changed(plugin_manager_t *manager) {
 void plugin_manager_update_all(plugin_manager_t *manager) {
   for (int i = 0; i < manager->count; ++i) {
     if (manager->plugins[i].status == PLUGIN_STATUS_LOADED && manager->plugins[i].update && manager->plugins[i].data) {
+      g_running_plugin = manager->plugins[i].handle;
       manager->plugins[i].update(manager->plugins[i].data);
+      g_running_plugin = NULL;
     }
   }
 }
@@ -389,7 +615,16 @@ void plugin_manager_update_all(plugin_manager_t *manager) {
 void plugin_manager_shutdown(plugin_manager_t *manager) {
   for (int i = 0; i < manager->count; ++i) {
     if (manager->plugins[i].status == PLUGIN_STATUS_LOADED) {
-      log_info(LOG_SOURCE, "Shutting down '%s'...", manager->plugins[i].info.name);
+      log_info(LOG_SOURCE, "Shutting down '%s'...", plugin_display_name(&manager->plugins[i]));
+      // As in plugin_manager_unload_plugin: the undo stacks outlive this call
+      // -- ui_cleanup empties them after every plugin is gone -- so a command
+      // whose cleanup lives in this library has to go before the library does.
+      if (manager->host_ui) {
+        const int dropped = undo_manager_purge_owner(&manager->host_ui->undo_manager, manager->plugins[i].handle);
+        if (dropped > 0)
+          log_info(LOG_SOURCE, "Dropped %d undo step(s) that only '%s' knew how to reverse.", dropped,
+                   plugin_display_name(&manager->plugins[i]));
+      }
       if (manager->plugins[i].shutdown && manager->plugins[i].data) {
         manager->plugins[i].shutdown(manager->plugins[i].data);
       }
@@ -415,15 +650,11 @@ void plugin_manager_reload_all(plugin_manager_t *manager, const char *directory)
   plugin_manager_load_all(manager, directory_copy);
 }
 
-static const char *plugin_display_name(const loaded_plugin_t *plugin) {
-  return plugin->info.name && plugin->info.name[0] ? plugin->info.name : plugin->key;
-}
-
 static bool plugin_matches_filter(const loaded_plugin_t *plugin, const char *filter) {
   if (!filter[0]) return true;
   return safe_strcasestr(plugin_display_name(plugin), filter) ||
-         (plugin->info.description && safe_strcasestr(plugin->info.description, filter)) ||
-         safe_strcasestr(plugin->key, filter) || (plugin->info.author && safe_strcasestr(plugin->info.author, filter));
+         safe_strcasestr(plugin->info_description, filter) || safe_strcasestr(plugin->key, filter) ||
+         safe_strcasestr(plugin->info_author, filter);
 }
 
 static int plugin_index_from_key(const plugin_manager_t *manager, const char *key) {
@@ -441,6 +672,8 @@ static const char *plugin_status_label(plugin_status_t status) {
     return "Other game";
   case PLUGIN_STATUS_UNLOADED:
     return "Disabled";
+  case PLUGIN_STATUS_CHANGED:
+    return "Changed";
   case PLUGIN_STATUS_ERROR:
     return "Error";
   }
@@ -455,6 +688,8 @@ static ImVec4 plugin_status_color(plugin_status_t status) {
     return (ImVec4){0.48f, 0.68f, 0.95f, 1.f};
   case PLUGIN_STATUS_UNLOADED:
     return (ImVec4){0.58f, 0.58f, 0.61f, 1.f};
+  case PLUGIN_STATUS_CHANGED:
+    return (ImVec4){0.96f, 0.74f, 0.28f, 1.f};
   case PLUGIN_STATUS_ERROR:
     return (ImVec4){0.95f, 0.32f, 0.30f, 1.f};
   }
@@ -465,6 +700,8 @@ static void render_plugin_status(const loaded_plugin_t *plugin) {
   igTextColored(plugin_status_color(plugin->status), "%s", plugin_status_label(plugin->status));
   if (plugin->status == PLUGIN_STATUS_WRONG_GAME && igIsItemHovered(0))
     igSetTooltip("Waiting for game '%s'. It will load automatically when that game becomes active.", plugin->game_id);
+  else if (plugin->status == PLUGIN_STATUS_CHANGED && igIsItemHovered(0))
+    igSetTooltip("%s", plugin->error_msg);
   else if (plugin->status == PLUGIN_STATUS_ERROR && igIsItemHovered(0))
     igSetTooltip("%s", plugin->error_msg);
 }
@@ -519,7 +756,7 @@ static void render_plugin_list(plugin_manager_t *manager, char *selected_key, co
       int column = 1;
       if (!compact) {
         igTableSetColumnIndex(column++);
-        igTextDisabled("%s", plugin->info.version && plugin->info.version[0] ? plugin->info.version : "--");
+        igTextDisabled("%s", plugin->info_version[0] ? plugin->info_version : "--");
       }
       igTableSetColumnIndex(column);
       render_plugin_status(plugin);
@@ -536,10 +773,17 @@ static void render_plugin_list(plugin_manager_t *manager, char *selected_key, co
   igEndChild();
 }
 
+// A manifest may name any string it likes, and the platform "open this" call
+// behind a link will open far more than web pages -- a local program, for one.
+// Only http(s) is ever passed on; anything else is shown as text.
+static bool manifest_link_is_web(const char *link) {
+  return strncmp(link, "https://", 8) == 0 || strncmp(link, "http://", 7) == 0;
+}
+
 static void render_plugin_metadata(const loaded_plugin_t *plugin) {
   if (!igBeginTable("PluginMetadata", 2, ImGuiTableFlags_SizingStretchProp, (ImVec2){0.f, 0.f}, 0.f)) return;
   const ImGuiStyle *style = igGetStyle();
-  const ImVec2 widest_label = igCalcTextSize("VERSION", NULL, false, -1.f);
+  const ImVec2 widest_label = igCalcTextSize("REPOSITORY", NULL, false, -1.f);
   igTableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, widest_label.x + style->ItemSpacing.x * 1.5f, 0);
   igTableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.f, 0);
 
@@ -547,20 +791,50 @@ static void render_plugin_metadata(const loaded_plugin_t *plugin) {
   igTableSetColumnIndex(0);
   igTextDisabled("VERSION");
   igTableSetColumnIndex(1);
-  igTextWrapped("%s", plugin->info.version && plugin->info.version[0] ? plugin->info.version : "Unknown");
+  igTextWrapped("%s", plugin->info_version[0] ? plugin->info_version : "Unknown");
 
   igTableNextRow(0, 0.f);
   igTableSetColumnIndex(0);
   igTextDisabled("AUTHOR");
   igTableSetColumnIndex(1);
-  igTextWrapped("%s", plugin->info.author && plugin->info.author[0] ? plugin->info.author : "Unknown");
+  igTextWrapped("%s", plugin->info_author[0] ? plugin->info_author : "Unknown");
 
   igTableNextRow(0, 0.f);
   igTableSetColumnIndex(0);
   igTextDisabled("SCOPE");
   igTableSetColumnIndex(1);
-  if (plugin->game_id[0]) igTextWrapped(ICON_FA_GAMEPAD "  Game-specific (%s)", plugin->game_id);
+  // The library's own answer if it has been loaded, the manifest's claim if not.
+  const char *scope_game = plugin->game_id[0] ? plugin->game_id : plugin->manifest_game;
+  if (scope_game[0]) igTextWrapped(ICON_FA_GAMEPAD "  Game-specific (%s)", scope_game);
+  else if (!plugin_metadata_known(plugin)) igTextDisabled(ICON_FA_CIRCLE_QUESTION "  Unknown until enabled");
   else igTextWrapped(ICON_FA_GLOBE "  Global (any game)");
+
+  if (plugin->repository[0]) {
+    igTableNextRow(0, 0.f);
+    igTableSetColumnIndex(0);
+    igTextDisabled("REPOSITORY");
+    igTableSetColumnIndex(1);
+    // Only ever handed to the shell as a web address. The string came out of a
+    // file next to an unrun plugin, and on Windows the shell would just as
+    // happily open a path to a program.
+    if (manifest_link_is_web(plugin->repository)) igTextLinkOpenURL(plugin->repository, plugin->repository);
+    else igTextWrapped("%s", plugin->repository);
+  }
+
+  if (plugin->sha256[0]) {
+    igTableNextRow(0, 0.f);
+    igTableSetColumnIndex(0);
+    igTextDisabled("SHA-256");
+    igTableSetColumnIndex(1);
+    // Sixty-four characters nobody is going to retype, so the text itself is
+    // the button.
+    igTextWrapped("%s", plugin->sha256);
+    if (igIsItemHovered(0)) {
+      igSetMouseCursor(ImGuiMouseCursor_Hand);
+      igSetTooltip("Click to copy");
+    }
+    if (igIsItemClicked(0)) igSetClipboardText(plugin->sha256);
+  }
 
   igTableNextRow(0, 0.f);
   igTableSetColumnIndex(0);
@@ -568,6 +842,20 @@ static void render_plugin_metadata(const loaded_plugin_t *plugin) {
   igTableSetColumnIndex(1);
   igTextWrapped("%s", plugin->key);
   igEndTable();
+}
+
+// Enabling a plugin is not a preference, it is a decision to run someone else's
+// program: a plugin is a native library loaded into this process, with no
+// sandbox of any kind between it and the machine. The editor cannot inspect
+// what it will do, or contain it once it is running, so the honest thing is to
+// say so where the decision is actually made.
+static void render_plugin_trust_warning(void) {
+  igPushTextWrapPos(0.f);
+  igTextColored((ImVec4){0.96f, 0.74f, 0.28f, 1.f}, ICON_FA_TRIANGLE_EXCLAMATION "  Plugins are not sandboxed.");
+  igTextDisabled("A plugin runs as part of the editor, with the same access to your files and your system that you have. "
+                 "Only enable plugins from authors you trust, and prefer ones whose source you can read.");
+  igPopTextWrapPos();
+  igSpacing();
 }
 
 static void render_plugin_actions(plugin_manager_t *manager, int index, float dpi) {
@@ -580,7 +868,11 @@ static void render_plugin_actions(plugin_manager_t *manager, int index, float dp
     if (igButton(ICON_FA_ROTATE " Reload", (ImVec2){0.f, 0.f})) plugin_manager_reload_plugin(manager, index);
     if (plugin->show_ui) {
       if (inline_actions) igSameLine(0.f, 6.f * dpi);
-      if (igButton(ICON_FA_SLIDERS " Open panel", (ImVec2){0.f, 0.f})) plugin->show_ui(plugin->data);
+      if (igButton(ICON_FA_SLIDERS " Open panel", (ImVec2){0.f, 0.f})) {
+        g_running_plugin = plugin->handle;
+        plugin->show_ui(plugin->data);
+        g_running_plugin = NULL;
+      }
     }
     return;
   }
@@ -590,7 +882,17 @@ static void render_plugin_actions(plugin_manager_t *manager, int index, float dp
     return;
   }
 
+  if (plugin->status == PLUGIN_STATUS_CHANGED) {
+    render_plugin_trust_warning();
+    if (igButton(ICON_FA_PLUG " Enable this version", (ImVec2){0.f, 0.f}))
+      plugin_manager_approve_current_version(manager, index);
+    if (inline_actions) igSameLine(0.f, 6.f * dpi);
+    if (igButton(ICON_FA_POWER_OFF " Disable", (ImVec2){0.f, 0.f})) plugin_manager_toggle_plugin(manager, index);
+    return;
+  }
+
   if (plugin->status == PLUGIN_STATUS_UNLOADED) {
+    render_plugin_trust_warning();
     if (igButton(ICON_FA_PLUG " Enable", (ImVec2){0.f, 0.f})) plugin_manager_toggle_plugin(manager, index);
     return;
   }
@@ -599,8 +901,9 @@ static void render_plugin_actions(plugin_manager_t *manager, int index, float dp
     if (igButton(ICON_FA_ROTATE " Retry load", (ImVec2){0.f, 0.f})) plugin_manager_reload_plugin(manager, index);
     if (inline_actions) igSameLine(0.f, 6.f * dpi);
     if (igButton(ICON_FA_POWER_OFF " Disable", (ImVec2){0.f, 0.f})) plugin_manager_toggle_plugin(manager, index);
-  } else if (igButton(ICON_FA_PLUG " Enable and retry", (ImVec2){0.f, 0.f})) {
-    plugin_manager_toggle_plugin(manager, index);
+  } else {
+    render_plugin_trust_warning();
+    if (igButton(ICON_FA_PLUG " Enable and retry", (ImVec2){0.f, 0.f})) plugin_manager_toggle_plugin(manager, index);
   }
 }
 
@@ -623,8 +926,24 @@ static void render_plugin_detail(plugin_manager_t *manager, int index, float hei
   render_plugin_metadata(plugin);
 
   igSeparatorText("Description");
-  igTextWrapped("%s", plugin->info.description && plugin->info.description[0] ? plugin->info.description
-                                                                              : "No description provided.");
+  if (plugin->info_description[0]) igTextWrapped("%s", plugin->info_description);
+  else if (!plugin_metadata_known(plugin))
+    igTextDisabled("A plugin describes itself from inside its library, which this editor only loads once you enable it.");
+  else igTextWrapped("No description provided.");
+
+  if (plugin->status == PLUGIN_STATUS_CHANGED) {
+    igSeparatorText("Changed since you enabled it");
+    igPushTextWrapPos(0.f);
+    igTextColored(plugin_status_color(plugin->status), ICON_FA_TRIANGLE_EXCLAMATION "  %s", plugin->error_msg);
+    igTextDisabled("Enabling a plugin approves the files that are there at the time, and these are not those files. "
+                   "That is expected after updating the plugin yourself. If you did not update it, find out why it "
+                   "changed before enabling it again.");
+    igPopTextWrapPos();
+    igTextDisabled("APPROVED");
+    igTextWrapped("%s", plugin->approved_sha256);
+    igTextDisabled("NOW");
+    igTextWrapped("%s", plugin->sha256[0] ? plugin->sha256 : "unreadable");
+  }
 
   if (plugin->status == PLUGIN_STATUS_WRONG_GAME) {
     igSpacing();
@@ -639,7 +958,12 @@ static void render_plugin_detail(plugin_manager_t *manager, int index, float hei
     igPopTextWrapPos();
   }
 
-  if (igCollapsingHeader_TreeNodeFlags("Library path", ImGuiTreeNodeFlags_None)) igTextWrapped("%s", plugin->path);
+  if (igCollapsingHeader_TreeNodeFlags("Files", ImGuiTreeNodeFlags_None)) {
+    igTextDisabled("DIRECTORY");
+    igTextWrapped("%s", plugin->directory);
+    igTextDisabled("LIBRARY");
+    igTextWrapped("%s", plugin->path);
+  }
   igSeparator();
   render_plugin_actions(manager, index, dpi);
   igEndChild();
@@ -673,14 +997,16 @@ void plugin_manager_render_ui(plugin_manager_t *manager, bool *p_open) {
   int active_count = 0;
   int error_count = 0;
   int waiting_count = 0;
+  int changed_count = 0;
   for (int i = 0; i < manager->count; ++i) {
     active_count += manager->plugins[i].status == PLUGIN_STATUS_LOADED;
     error_count += manager->plugins[i].status == PLUGIN_STATUS_ERROR;
     waiting_count += manager->plugins[i].status == PLUGIN_STATUS_WRONG_GAME;
+    changed_count += manager->plugins[i].status == PLUGIN_STATUS_CHANGED;
   }
   igPushTextWrapPos(0.f);
-  igTextDisabled("%d plugin%s  |  %d active  |  %d waiting  |  %d error%s", manager->count,
-                 manager->count == 1 ? "" : "s", active_count, waiting_count, error_count,
+  igTextDisabled("%d plugin%s  |  %d active  |  %d waiting  |  %d changed  |  %d error%s", manager->count,
+                 manager->count == 1 ? "" : "s", active_count, waiting_count, changed_count, error_count,
                  error_count == 1 ? "" : "s");
   igPopTextWrapPos();
   igSeparator();

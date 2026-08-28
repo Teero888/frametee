@@ -126,7 +126,7 @@ void render_menu_bar(ui_handler_t *ui) {
           loaded_plugin_t *p = &ui->plugin_manager.plugins[i];
           bool is_loaded = (p->status == PLUGIN_STATUS_LOADED);
           char label[256];
-          snprintf(label, sizeof(label), "%s##menu_%d", (p->info.name && p->info.name[0]) ? p->info.name : p->key, i);
+          snprintf(label, sizeof(label), "%s##menu_%d", p->info_name[0] ? p->info_name : p->key, i);
           if (igMenuItem_Bool(label, NULL, is_loaded, true)) {
             plugin_manager_toggle_plugin(&ui->plugin_manager, i);
           }
@@ -311,8 +311,8 @@ void setup_docking(ui_handler_t *ui) {
 
     for (int i = 0; i < ui->plugin_manager.count; ++i) {
       loaded_plugin_t *p = &ui->plugin_manager.plugins[i];
-      if (p->info.name) {
-        igDockBuilderDockWindow(p->info.name, dock_id_right);
+      if (p->info_name[0]) {
+        igDockBuilderDockWindow(p->info_name, dock_id_right);
       }
     }
 

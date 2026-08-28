@@ -1,0 +1,6 @@
+# See docs/plugins.md. Read as data by the editor; nothing here is verified.
+name = "Random Input Filler"
+author = "Tater"
+version = "1.0.0"
+description = "Generates random inputs for every track"
+repository = "https://github.com/Teero888/frametee/tree/master/plugins/random_input_filler"
