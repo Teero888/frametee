@@ -43,6 +43,8 @@ struct ui_handler_t {
   // bar, which is where it is turned back on.
   bool show_ui;
   bool show_timeline_events_window;
+  bool show_snippet_editor_window;
+  bool focus_snippet_editor_window;
   bool show_effects_window;
   bool focus_effects_window;
   int effects_snippet_id;
