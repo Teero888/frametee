@@ -332,7 +332,7 @@ typedef struct {
 void dd_particles_init(dd_particle_system_t *ps);
 void dd_particles_reset(dd_particle_system_t *ps);
 void dd_particles_cleanup(dd_particle_system_t *ps);
-void dd_particles_update_sim(dd_particle_system_t *ps, const map_data_t *map);
+void dd_particles_update_sim(dd_particle_system_t *ps, SCollision *collision);
 void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer);
 // Installs the physics' effect callbacks. Every step retains its demo events on
 // `world`; visible worlds additionally spawn into their particle system.
@@ -343,9 +343,9 @@ void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool b
 // Advances the visible particle simulation to `tick + alpha`.
 void dd_particles_advance(ft_game *game, int world_index, const ft_level *level, int tick, float alpha);
 dd_particle_system_t *dd_particles_for(ft_game *game, int world_index);
-void dd_particles_prune_by_time(dd_particle_system_t *ps, double min_time);
+void dd_particles_rewind_to_tick(dd_particle_system_t *ps, int replay_tick);
 
-void dd_particles_create_explosion(dd_particle_system_t *ps, vec2 pos);
+void dd_particles_create_explosion(dd_particle_system_t *ps, SCollision *collision, vec2 pos);
 void dd_particles_create_smoke(dd_particle_system_t *ps, vec2 pos, vec2 vel, float alpha, float time_passed);
 void dd_particles_create_bullet_trail(dd_particle_system_t *ps, vec2 pos, float alpha, float time_passed);
 void dd_particles_create_player_death(dd_particle_system_t *ps, vec2 pos, vec4 blood_color);

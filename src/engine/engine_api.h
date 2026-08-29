@@ -26,4 +26,8 @@ void engine_api_set_world_extent(struct gfx_handler_t *handler, float width, flo
 // Returns the previous state so callers can restore nested scopes safely.
 bool engine_api_set_presentation_effects(bool enabled);
 
+// Reports the current scope without changing it. Timeline cache selection uses
+// this to distinguish a visible replay from a read-only simulation.
+bool engine_api_presentation_effects_enabled(void);
+
 #endif // ENGINE_API_H

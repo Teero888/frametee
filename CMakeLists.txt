@@ -384,64 +384,6 @@ add_custom_command(
 )
 
 # =================================================================================================
-# GAME MODULE ASSETS
-# =================================================================================================
-# Each game keeps its assets under data/games/<id>/, which is what
-# engine->resolve_data_path() hands back to a module. Shaders there are compiled
-# the same way the engine's own are.
-file(GLOB GAME_SHADER_SOURCES
-    "${CMAKE_SOURCE_DIR}/data/games/*/shaders/*.vert.glsl"
-    "${CMAKE_SOURCE_DIR}/data/games/*/shaders/*.frag.glsl"
-)
-set(GAME_SHADER_OUTPUTS "")
-foreach(SHADER ${GAME_SHADER_SOURCES})
-    file(RELATIVE_PATH SHADER_REL "${CMAKE_SOURCE_DIR}/data" "${SHADER}")
-    string(REPLACE ".glsl" ".spv" SHADER_REL_SPV "${SHADER_REL}")
-    set(SHADER_OUTPUT "${CMAKE_BINARY_DIR}/data/${SHADER_REL_SPV}")
-    get_filename_component(SHADER_OUT_DIR "${SHADER_OUTPUT}" DIRECTORY)
-    list(APPEND GAME_SHADER_OUTPUTS ${SHADER_OUTPUT})
-    add_custom_command(
-        OUTPUT ${SHADER_OUTPUT}
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
-        COMMAND ${GLSLANG_VALIDATOR} -V ${SHADER} -o ${SHADER_OUTPUT}
-        DEPENDS ${SHADER}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Compiling game shader ${SHADER_REL}"
-    )
-endforeach()
-add_custom_target(compile_game_shaders ALL DEPENDS ${GAME_SHADER_OUTPUTS})
-add_dependencies(${PROJECT_NAME} compile_game_shaders)
-
-# Copy non-shader game assets next to the compiled shaders. Each file is an
-# actual build output so changing a texture (or adding one via CONFIGURE_DEPENDS)
-# updates the build tree even when the FrameTee executable does not need to be
-# relinked.
-file(GLOB_RECURSE GAME_ASSET_SOURCES CONFIGURE_DEPENDS
-    LIST_DIRECTORIES false
-    "${CMAKE_SOURCE_DIR}/data/games/*"
-)
-set(GAME_ASSET_OUTPUTS "")
-foreach(ASSET ${GAME_ASSET_SOURCES})
-    if(ASSET MATCHES "/shaders/.*\\.(glsl|spv)$")
-        continue()
-    endif()
-    file(RELATIVE_PATH ASSET_REL "${CMAKE_SOURCE_DIR}/data" "${ASSET}")
-    set(ASSET_OUTPUT "${CMAKE_BINARY_DIR}/data/${ASSET_REL}")
-    get_filename_component(ASSET_OUT_DIR "${ASSET_OUTPUT}" DIRECTORY)
-    list(APPEND GAME_ASSET_OUTPUTS "${ASSET_OUTPUT}")
-    add_custom_command(
-        OUTPUT "${ASSET_OUTPUT}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${ASSET_OUT_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ASSET}" "${ASSET_OUTPUT}"
-        DEPENDS "${ASSET}"
-        COMMENT "Copying game asset ${ASSET_REL}"
-        VERBATIM
-    )
-endforeach()
-add_custom_target(copy_game_assets ALL DEPENDS ${GAME_ASSET_OUTPUTS})
-add_dependencies(${PROJECT_NAME} copy_game_assets)
-
-# =================================================================================================
 # GAME MODULES
 # =================================================================================================
 # Each subdirectory of games/ is an independent shared library implementing
@@ -485,6 +427,89 @@ if(BUILD_GAMES)
         endif()
     endforeach()
 endif()
+
+# =================================================================================================
+# GAME MODULE ASSETS
+# =================================================================================================
+# Each game keeps its assets under data/games/<id>/, which is what
+# engine->resolve_data_path() hands back to a module. Shaders there are compiled
+# the same way the engine's own are.
+#
+# This runs after the modules are added so that a game left out of the build
+# leaves its data out with it. data/games/tmnf alone is 1.7 GB of Packs and
+# GameData that no build without a tmnf module can use, and the glob is not free
+# either: CONFIGURE_DEPENDS re-walks every directory it covers on each build. A
+# data directory with no games/<id> beside it belongs to a module built out of
+# tree, so it is always copied.
+set(GAME_ASSET_GLOBS "")
+set(GAME_SHADER_GLOBS "")
+file(GLOB GAME_DATA_ENTRIES "${CMAKE_SOURCE_DIR}/data/games/*")
+foreach(GAME_DATA_ENTRY ${GAME_DATA_ENTRIES})
+    if(NOT IS_DIRECTORY "${GAME_DATA_ENTRY}")
+        list(APPEND GAME_ASSET_GLOBS "${GAME_DATA_ENTRY}")
+        continue()
+    endif()
+    get_filename_component(GAME_DATA_ID "${GAME_DATA_ENTRY}" NAME)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/games/${GAME_DATA_ID}/CMakeLists.txt" AND
+       NOT TARGET ${GAME_DATA_ID}_game)
+        message(STATUS "Game assets: skipping data/games/${GAME_DATA_ID}, "
+                       "the ${GAME_DATA_ID} module is not part of this build")
+        continue()
+    endif()
+    list(APPEND GAME_ASSET_GLOBS "${GAME_DATA_ENTRY}/*")
+    list(APPEND GAME_SHADER_GLOBS
+        "${GAME_DATA_ENTRY}/shaders/*.vert.glsl"
+        "${GAME_DATA_ENTRY}/shaders/*.frag.glsl")
+endforeach()
+
+file(GLOB GAME_SHADER_SOURCES ${GAME_SHADER_GLOBS})
+set(GAME_SHADER_OUTPUTS "")
+foreach(SHADER ${GAME_SHADER_SOURCES})
+    file(RELATIVE_PATH SHADER_REL "${CMAKE_SOURCE_DIR}/data" "${SHADER}")
+    string(REPLACE ".glsl" ".spv" SHADER_REL_SPV "${SHADER_REL}")
+    set(SHADER_OUTPUT "${CMAKE_BINARY_DIR}/data/${SHADER_REL_SPV}")
+    get_filename_component(SHADER_OUT_DIR "${SHADER_OUTPUT}" DIRECTORY)
+    list(APPEND GAME_SHADER_OUTPUTS ${SHADER_OUTPUT})
+    add_custom_command(
+        OUTPUT ${SHADER_OUTPUT}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+        COMMAND ${GLSLANG_VALIDATOR} -V ${SHADER} -o ${SHADER_OUTPUT}
+        DEPENDS ${SHADER}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Compiling game shader ${SHADER_REL}"
+    )
+endforeach()
+add_custom_target(compile_game_shaders ALL DEPENDS ${GAME_SHADER_OUTPUTS})
+add_dependencies(${PROJECT_NAME} compile_game_shaders)
+
+# Copy non-shader game assets next to the compiled shaders. Each file is an
+# actual build output so changing a texture (or adding one via CONFIGURE_DEPENDS)
+# updates the build tree even when the FrameTee executable does not need to be
+# relinked.
+file(GLOB_RECURSE GAME_ASSET_SOURCES CONFIGURE_DEPENDS
+    LIST_DIRECTORIES false
+    ${GAME_ASSET_GLOBS}
+)
+set(GAME_ASSET_OUTPUTS "")
+foreach(ASSET ${GAME_ASSET_SOURCES})
+    if(ASSET MATCHES "/shaders/.*\\.(glsl|spv)$")
+        continue()
+    endif()
+    file(RELATIVE_PATH ASSET_REL "${CMAKE_SOURCE_DIR}/data" "${ASSET}")
+    set(ASSET_OUTPUT "${CMAKE_BINARY_DIR}/data/${ASSET_REL}")
+    get_filename_component(ASSET_OUT_DIR "${ASSET_OUTPUT}" DIRECTORY)
+    list(APPEND GAME_ASSET_OUTPUTS "${ASSET_OUTPUT}")
+    add_custom_command(
+        OUTPUT "${ASSET_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${ASSET_OUT_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ASSET}" "${ASSET_OUTPUT}"
+        DEPENDS "${ASSET}"
+        COMMENT "Copying game asset ${ASSET_REL}"
+        VERBATIM
+    )
+endforeach()
+add_custom_target(copy_game_assets ALL DEPENDS ${GAME_ASSET_OUTPUTS})
+add_dependencies(${PROJECT_NAME} copy_game_assets)
 
 # =================================================================================================
 # PLUGINS INTEGRATION

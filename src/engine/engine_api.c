@@ -772,7 +772,7 @@ static bool api_timeline_range(int32_t *out_start_tick, int32_t *out_end_tick) {
   return true;
 }
 
-static bool api_presentation_effects_enabled(void) { return g_presentation_effects; }
+static bool api_presentation_effects_enabled(void) { return engine_api_presentation_effects_enabled(); }
 
 // --- assembly ----------------------------------------------------------------
 
@@ -853,6 +853,8 @@ bool engine_api_set_presentation_effects(bool enabled) {
   g_presentation_effects = enabled;
   return previous;
 }
+
+bool engine_api_presentation_effects_enabled(void) { return g_presentation_effects; }
 
 void engine_api_set_world_extent(gfx_handler_t *handler, float width, float height) {
   handler->world_width = width > 0.f ? width : 1.f;

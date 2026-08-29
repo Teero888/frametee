@@ -196,6 +196,10 @@ struct timeline_group_t {
   ft_world *prev_world_cached;
   ft_world *world_cached;
   int cached_tick;
+  // Physics may be cached by inspectors, plugins or input effects while game
+  // presentation is suppressed. Keep its visible high-water mark separate so
+  // the render path knows when it must replay particles and other effects.
+  int presentation_tick;
   // Reused scratch simulations, one for each prediction variant. These are
   // deliberately world handles rather than game data.
   ft_world *prediction_worlds[MAX_PREDICTION_LINES];

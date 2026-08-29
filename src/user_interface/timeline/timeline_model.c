@@ -1,4 +1,5 @@
 #include "timeline_model.h"
+#include <engine/engine_api.h>
 #include <engine/game_host.h>
 #include <engine/input_record.h>
 #include <engine/int_math.h>
@@ -50,6 +51,7 @@ static void group_runtime_init(timeline_state_t *ts, timeline_group_t *group, in
   group->prev_world_cached = gh_world_create(host, level, 0, world_index);
   group->world_cached = gh_world_create(host, level, 0, world_index);
   group->cached_tick = -1;
+  group->presentation_tick = 0;
 }
 
 static void group_runtime_cleanup(timeline_state_t *ts, timeline_group_t *group) {
@@ -170,6 +172,7 @@ void model_reset_groups_for_level(timeline_state_t *ts) {
     if (group->vec.data && group->vec.data[0]) gh_world_copy(host, group->vec.data[0], group->initial_world);
     group->vec.current_size = 1;
     group->cached_tick = -1;
+    group->presentation_tick = -1;
   }
 }
 
@@ -807,6 +810,7 @@ void model_reset_physics_cache(timeline_state_t *ts) {
     timeline_group_t *group = ts->groups[i];
     group->vec.current_size = 1;
     group->cached_tick = -1;
+    group->presentation_tick = -1;
     gh_world_copy(host, group->previous_world, group->initial_world);
     if (group->vec.data && group->vec.data[0]) gh_world_copy(host, group->vec.data[0], group->initial_world);
   }
@@ -969,6 +973,10 @@ static void seed_world(timeline_state_t *ts, int group_index, ft_world *out_worl
 
   if (tick < previous_tick || (tick - previous_tick) > 100) {
     int base_index = (tick - 1) / step;
+    // Visible particles are not part of physics snapshots. Replaying one more
+    // snapshot reconstructs the recent short-lived effects around a jump, as
+    // the pre-game-module timeline did. Read-only scans do not need this work.
+    if (engine_api_presentation_effects_enabled() && base_index > 0) --base_index;
     if (base_index > (int)group->vec.current_size - 1) base_index = (int)group->vec.current_size - 1;
     if (base_index < 0) base_index = 0;
     gh_world_copy(host, out_world, group->vec.data[base_index]);
@@ -990,8 +998,13 @@ const ft_world *model_group_world_at_tick(timeline_state_t *ts, int group_index,
 
   if (group->cached_tick == tick) return group->world_cached;
 
+  // A single-world lookup is observational. Camera/rendering use the adjacent
+  // pair API below; inspectors, plugins and input effects must not fill or
+  // rewind game-owned particle state while asking a physics question.
+  const bool previous_effects = engine_api_set_presentation_effects(false);
   seed_world(ts, group_index, group->world_cached, tick);
   simulate_to(ts, group_index, group->world_cached, tick);
+  engine_api_set_presentation_effects(previous_effects);
   gh_world_copy(host, group->previous_world, group->world_cached);
   group->cached_tick = tick;
   return group->world_cached;
@@ -1009,15 +1022,18 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
   game_host_t *host = model_host(ts);
   timeline_group_t *group = ts->groups[group_index];
   const int local_tick = imax(0, tick - group->start_offset);
+  const bool presentation_enabled = engine_api_presentation_effects_enabled();
 
   if (local_tick <= 0) {
     const ft_world *world = model_group_world_at_tick(ts, group_index, tick);
+    if (presentation_enabled) group->presentation_tick = 0;
     if (out_prev) *out_prev = world;
     if (out_cur) *out_cur = world;
     return;
   }
 
-  if (group->cached_tick == local_tick - 1) {
+  if (group->cached_tick == local_tick - 1 &&
+      (!presentation_enabled || group->presentation_tick == local_tick - 1)) {
     // Fast path for sequential forward playback: the current world becomes previous,
     // and we only simulate the 1 single new tick!
     ts->simulation_group_index = group_index;
@@ -1025,7 +1041,10 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
     simulate_to(ts, group_index, group->world_cached, local_tick);
     gh_world_copy(host, group->previous_world, group->world_cached);
     group->cached_tick = local_tick;
-  } else if (group->cached_tick != local_tick) {
+    if (presentation_enabled) group->presentation_tick = local_tick;
+  } else if (group->cached_tick != local_tick ||
+             (presentation_enabled && group->presentation_tick != local_tick) ||
+             gh_world_tick(host, group->prev_world_cached) != local_tick - 1) {
     // Reach the tick before the wanted one first, keep it, then take the last
     // step. That gives both worlds for interpolation from one simulation run.
     ts->simulation_group_index = group_index;
@@ -1035,13 +1054,7 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
     simulate_to(ts, group_index, group->world_cached, local_tick);
     gh_world_copy(host, group->previous_world, group->world_cached);
     group->cached_tick = local_tick;
-  } else if (gh_world_tick(host, group->prev_world_cached) != local_tick - 1) {
-    // A direct world lookup (camera, inspector, prediction, etc.) may have
-    // filled the current-tick cache without filling its interpolation partner.
-    // Rebuild only the missing previous world and leave the current one intact.
-    ts->simulation_group_index = group_index;
-    seed_world(ts, group_index, group->prev_world_cached, local_tick - 1);
-    simulate_to(ts, group_index, group->prev_world_cached, local_tick - 1);
+    if (presentation_enabled) group->presentation_tick = local_tick;
   }
 
   if (out_prev) *out_prev = group->prev_world_cached;

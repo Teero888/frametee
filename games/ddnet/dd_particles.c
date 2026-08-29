@@ -32,6 +32,19 @@ static void random_direction(dd_particle_system_t *ps, vec2 out) {
 
 static void mix_colors(vec4 c1, vec4 c2, float t, vec4 out) { glm_vec4_lerp(c1, c2, t, out); }
 
+// Match CParticle::SetDefault for rendering and collision. DDNet still carries
+// m_FlowAffected in that default, but its particle update does not consume the
+// field. FrameTee's legacy flow simulation does, so effects must opt into it
+// explicitly or stationary sprites such as the explosion itself start moving.
+static dd_particle_t particle_default(void) {
+  dd_particle_t particle = {.flow_affected = 0.f,
+                            .collides = true,
+                            .start_alpha = 1.f,
+                            .end_alpha = 1.f,
+                            .color = {1.f, 1.f, 1.f, 1.f}};
+  return particle;
+}
+
 void dd_particles_init(dd_particle_system_t *ps) {
   memset(ps, 0, sizeof(dd_particle_system_t));
   ps->particles = calloc(DD_MAX_PARTICLES, sizeof(dd_particle_t));
@@ -56,13 +69,12 @@ void dd_particles_cleanup(dd_particle_system_t *ps) {
   }
 }
 
-void dd_particles_prune_by_time(dd_particle_system_t *ps, double min_time) {
-  int target_tick = (int)(min_time * 50.0 + 0.1);
-
-  // Compact particles
+static void particles_drop_expired(dd_particle_system_t *ps, double time) {
   int valid_count = 0;
   for (int i = 0; i < ps->active_count; ++i) {
-    if (ps->particles[i].life_span > 0.0001f && ps->particles[i].creation_tick <= target_tick) {
+    const dd_particle_t *particle = &ps->particles[i];
+    const double age = time - particle->spawn_time;
+    if (particle->life_span > 0.0001f && age >= -0.001 && age <= particle->life_span) {
       if (i != valid_count) {
         ps->particles[valid_count] = ps->particles[i];
       }
@@ -70,11 +82,30 @@ void dd_particles_prune_by_time(dd_particle_system_t *ps, double min_time) {
     }
   }
   ps->active_count = valid_count;
+}
+
+void dd_particles_rewind_to_tick(dd_particle_system_t *ps, int replay_tick) {
+  const double replay_time = (double)replay_tick / (double)GAME_TICK_SPEED;
+
+  // replay_tick is about to run again. Keeping particles born on that tick
+  // duplicates the complete burst every time a cache query replays it.
+  int valid_count = 0;
+  for (int i = 0; i < ps->active_count; ++i) {
+    const dd_particle_t *particle = &ps->particles[i];
+    const double age = replay_time - particle->spawn_time;
+    if (particle->creation_tick < replay_tick && particle->life_span > 0.0001f &&
+        age >= -0.001 && age <= particle->life_span) {
+      if (i != valid_count) ps->particles[valid_count] = ps->particles[i];
+      ++valid_count;
+    }
+  }
+  ps->active_count = valid_count;
 
   // Compact flow events
   int valid_flow = 0;
   for (int i = 0; i < DD_MAX_FLOW_EVENTS; ++i) {
-    if (ps->flow_events[i].active && ps->flow_events[i].creation_tick <= target_tick) {
+    const double age = replay_time - ps->flow_events[i].time;
+    if (ps->flow_events[i].active && ps->flow_events[i].creation_tick < replay_tick && age >= 0.0 && age <= 1.5) {
       if (i != valid_flow) {
         ps->flow_events[valid_flow] = ps->flow_events[i];
       }
@@ -85,13 +116,11 @@ void dd_particles_prune_by_time(dd_particle_system_t *ps, double min_time) {
     memset(&ps->flow_events[valid_flow], 0, (DD_MAX_FLOW_EVENTS - valid_flow) * sizeof(dd_flow_event_t));
   }
   ps->next_flow_index = valid_flow % DD_MAX_FLOW_EVENTS;
-
-  if (target_tick < ps->last_simulated_tick) {
-    ps->last_simulated_tick = target_tick;
-  }
+  ps->last_simulated_tick = replay_tick - 1;
 }
 
 void dd_particle_spawn(dd_particle_system_t *ps, int group, dd_particle_t *p_template, float time_passed) {
+  if (!ps || !ps->particles || !p_template) return;
   int current_tick = (int)(ps->current_time * 50.0 + 0.1);
   if (current_tick <= ps->last_simulated_tick) return;
 
@@ -170,21 +199,12 @@ static void flow_get(dd_particle_system_t *ps, double sim_time, vec2 pos, vec2 o
   }
 }
 
-static bool point_is_solid(const map_data_t *map, float x, float y) {
-  const unsigned char *tiles = map->game_layer.data;
-  if (!tiles) return false;
-
-  int nx = (int)roundf(x) / 32;
-  int ny = (int)roundf(y) / 32;
-  nx = nx < 0 ? 0 : (nx > map->width - 1 ? map->width - 1 : nx);
-  ny = ny < 0 ? 0 : (ny > map->height - 1 ? map->height - 1 : ny);
-
-  unsigned char tile = tiles[ny * map->width + nx];
-  return tile == TILE_SOLID || tile == TILE_NOHOOK;
+static bool point_is_solid(SCollision *collision, float x, float y) {
+  return collision && check_point(collision, vec2_init(x, y));
 }
 
-static void move_point(const map_data_t *map, vec2 *inout_pos, vec2 *inout_vel, float elasticity) {
-  if (!map || !map->game_layer.data) {
+static void move_point(SCollision *collision, vec2 *inout_pos, vec2 *inout_vel, float elasticity) {
+  if (!collision) {
     glm_vec2_add(*inout_pos, *inout_vel, *inout_pos);
     return;
   }
@@ -192,18 +212,18 @@ static void move_point(const map_data_t *map, vec2 *inout_pos, vec2 *inout_vel, 
   vec2 pos = {(*inout_pos)[0], (*inout_pos)[1]};
   vec2 vel = {(*inout_vel)[0], (*inout_vel)[1]};
 
-  if (!point_is_solid(map, pos[0] + vel[0], pos[1] + vel[1])) {
+  if (!point_is_solid(collision, pos[0] + vel[0], pos[1] + vel[1])) {
     glm_vec2_add(pos, vel, *inout_pos);
     return;
   }
 
   // Each axis is tested on its own, so a step into a corner reflects both instead of guessing one.
   int affected = 0;
-  if (point_is_solid(map, pos[0] + vel[0], pos[1])) {
+  if (point_is_solid(collision, pos[0] + vel[0], pos[1])) {
     (*inout_vel)[0] *= -elasticity;
     affected++;
   }
-  if (point_is_solid(map, pos[0], pos[1] + vel[1])) {
+  if (point_is_solid(collision, pos[0], pos[1] + vel[1])) {
     (*inout_vel)[1] *= -elasticity;
     affected++;
   }
@@ -213,7 +233,8 @@ static void move_point(const map_data_t *map, vec2 *inout_pos, vec2 *inout_vel, 
   }
 }
 
-static void particle_simulate_step(dd_particle_system_t *ps, dd_particle_t *p, vec2 pos, vec2 vel, uint32_t *seed, double sim_time, float dt, const map_data_t *map) {
+static void particle_simulate_step(dd_particle_system_t *ps, dd_particle_t *p, vec2 pos, vec2 vel, uint32_t *seed,
+                                   double sim_time, float dt, SCollision *collision) {
   vel[1] += p->gravity * dt;
 
   if (p->flow_affected > 0.0f) {
@@ -229,9 +250,9 @@ static void particle_simulate_step(dd_particle_system_t *ps, dd_particle_t *p, v
 
   vec2 move;
   glm_vec2_scale(vel, dt, move);
-  if (p->collides && map) {
+  if (p->collides && collision) {
     float elasticity = 0.1f + 0.9f * deterministic_frand(seed);
-    move_point(map, (vec2 *)pos, &move, elasticity);
+    move_point(collision, (vec2 *)pos, &move, elasticity);
     if (dt > 0.0001f) {
       glm_vec2_scale(move, 1.0f / dt, vel);
     }
@@ -240,7 +261,7 @@ static void particle_simulate_step(dd_particle_system_t *ps, dd_particle_t *p, v
   }
 }
 
-void dd_particles_update_sim(dd_particle_system_t *ps, const map_data_t *map) {
+void dd_particles_update_sim(dd_particle_system_t *ps, SCollision *collision) {
   const double step = 0.02;
   double sim_target = ps->current_time;
 
@@ -275,7 +296,8 @@ void dd_particles_update_sim(dd_particle_system_t *ps, const map_data_t *map) {
       glm_vec2_copy(p->current_pos, p->prev_pos);
       p->prev_sim_time = p->last_sim_time;
 
-      particle_simulate_step(ps, p, p->current_pos, p->current_vel, &p->current_seed, p->last_sim_time, (float)step, map);
+      particle_simulate_step(ps, p, p->current_pos, p->current_vel, &p->current_seed, p->last_sim_time, (float)step,
+                             collision);
       p->last_sim_time += step;
     }
 
@@ -369,21 +391,44 @@ void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer) {
   }
 }
 
-void dd_particles_create_explosion(dd_particle_system_t *ps, vec2 pos) {
+void dd_particles_create_explosion(dd_particle_system_t *ps, SCollision *collision, vec2 pos) {
   flow_add(ps, pos, 5000.0f);
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
   glm_vec2_copy(pos, p.start_pos);
   p.life_span = 0.4f;
   p.start_size = 150.0f;
   p.end_size = 0.0f;
   p.rot = ps_frand01(ps) * 2 * M_PI;
+  // This is an animated impact sprite, not debris. Its position is fixed for
+  // its complete lifetime; only its size and rotation are animated.
+  p.flow_affected = 0.f;
+  p.collides = false;
   p.sprite_index = PARTICLE_EXPL01 + PARTICLE_SPRITE_OFFSET;
   glm_vec4_copy((vec4){1, 1, 1, 1}, p.color);
   dd_particle_spawn(ps, GROUP_EXPLOSIONS, &p, 0);
 
+  // Match DDNet's collision nudge: explosions commonly occur just inside the
+  // hit tile, where every smoke particle would otherwise remain trapped.
+  vec2 smoke_pos = {pos[0], pos[1]};
+  if (point_is_solid(collision, smoke_pos[0], smoke_pos[1])) {
+    vec2 distance_to_top_left = {smoke_pos[0] - (int)(smoke_pos[0] / 32.f) * 32.f,
+                                 smoke_pos[1] - (int)(smoke_pos[1] / 32.f) * 32.f};
+    vec2 check_offset = {(distance_to_top_left[0] > 16.f ? 32.f : -1.f) - distance_to_top_left[0],
+                         (distance_to_top_left[1] > 16.f ? 32.f : -1.f) - distance_to_top_left[1]};
+    static const int masks[3][2] = {{1, 0}, {0, 1}, {1, 1}};
+    for (int i = 0; i < 3; ++i) {
+      vec2 candidate = {smoke_pos[0] + check_offset[0] * masks[i][0],
+                        smoke_pos[1] + check_offset[1] * masks[i][1]};
+      if (!point_is_solid(collision, candidate[0], candidate[1])) {
+        glm_vec2_copy(candidate, smoke_pos);
+        break;
+      }
+    }
+  }
+
   for (int i = 0; i < 24; ++i) {
-    memset(&p, 0, sizeof(p));
-    glm_vec2_copy(pos, p.start_pos);
+    p = particle_default();
+    glm_vec2_copy(smoke_pos, p.start_pos);
     vec2 dir;
     random_direction(ps, dir);
     float speed = ps_frand_range(ps, 1.0f, 1.2f) * 1000.0f;
@@ -394,16 +439,17 @@ void dd_particles_create_explosion(dd_particle_system_t *ps, vec2 pos) {
     p.end_size = 0.0f;
     p.gravity = ps_frand_range(ps, -800.0f, 0.0f);
     p.friction = 0.4f;
+    // Preserve FrameTee's intentional legacy flow response for the expanding
+    // smoke cloud without applying it to DDNet's stationary explosion sprite.
+    p.flow_affected = 1.f;
     p.sprite_index = PARTICLE_SMOKE + PARTICLE_SPRITE_OFFSET;
-    p.collides = true;
-    p.flow_affected = 1.0f;
     mix_colors((vec4){0.75, 0.75, 0.75, 1}, (vec4){0.5, 0.5, 0.5, 1}, ps_frand01(ps), p.color);
     dd_particle_spawn(ps, GROUP_GENERAL, &p, 0);
   }
 }
 
 void dd_particles_create_smoke(dd_particle_system_t *ps, vec2 pos, vec2 vel, float alpha, float time_passed) {
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
   glm_vec2_copy(pos, p.start_pos);
   vec2 dir;
   random_direction(ps, dir);
@@ -414,14 +460,13 @@ void dd_particles_create_smoke(dd_particle_system_t *ps, vec2 pos, vec2 vel, flo
   p.end_size = 0;
   p.friction = 0.7f;
   p.gravity = ps_frand_range(ps, -500, 0);
-  p.flow_affected = 0.0f;
   p.sprite_index = PARTICLE_SMOKE + PARTICLE_SPRITE_OFFSET;
   glm_vec4_copy((vec4){1, 1, 1, alpha}, p.color);
   dd_particle_spawn(ps, GROUP_PROJECTILE_TRAIL, &p, time_passed);
 }
 
 void dd_particles_create_skid_trail(dd_particle_system_t *ps, vec2 pos, vec2 vel, int direction, float alpha) {
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
   p.sprite_index = PARTICLE_SMOKE + PARTICLE_SPRITE_OFFSET;
   p.start_pos[0] = pos[0] + (-direction * 6);
   p.start_pos[1] = pos[1] + 12;
@@ -440,7 +485,7 @@ void dd_particles_create_skid_trail(dd_particle_system_t *ps, vec2 pos, vec2 vel
 }
 
 void dd_particles_create_bullet_trail(dd_particle_system_t *ps, vec2 pos, float alpha, float time_passed) {
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
   glm_vec2_copy(pos, p.start_pos);
   p.life_span = ps_frand_range(ps, 0.25, 0.5);
   p.start_size = 8;
@@ -453,7 +498,7 @@ void dd_particles_create_bullet_trail(dd_particle_system_t *ps, vec2 pos, float 
 
 void dd_particles_create_player_death(dd_particle_system_t *ps, vec2 pos, vec4 blood_color) {
   for (int i = 0; i < 64; ++i) {
-    dd_particle_t p = {0};
+    dd_particle_t p = particle_default();
     glm_vec2_copy(pos, p.start_pos);
     vec2 dir;
     random_direction(ps, dir);
@@ -468,7 +513,6 @@ void dd_particles_create_player_death(dd_particle_system_t *ps, vec2 pos, vec4 b
     p.rot = ps_frand01(ps) * 2 * M_PI;
     p.rot_speed = ps_frand_range(ps, -0.5, 0.5) * M_PI;
     p.sprite_index = (PARTICLE_SPLAT01 + (int)(ps_frand01(ps) * 3)) + PARTICLE_SPRITE_OFFSET;
-    p.collides = true;
     float t = ps_frand_range(ps, 0.75, 1);
     p.color[0] = blood_color[0] * t;
     p.color[1] = blood_color[1] * t;
@@ -481,7 +525,7 @@ void dd_particles_create_player_death(dd_particle_system_t *ps, vec2 pos, vec4 b
 void dd_particles_create_confetti(dd_particle_system_t *ps, vec2 pos, float alpha) {
   vec4 cols[] = {{1, 0.4, 0.4, 1}, {0.4, 1, 0.4, 1}, {0.4, 0.4, 1, 1}, {1, 1, 0.4, 1}, {0.4, 1, 1, 1}, {1, 0.4, 1, 1}};
   for (int i = 0; i < 64; ++i) {
-    dd_particle_t p = {0};
+    dd_particle_t p = particle_default();
     glm_vec2_copy(pos, p.start_pos);
     p.sprite_index = (PARTICLE_SPLAT01 + (int)(ps_frand01(ps) * 3)) + PARTICLE_SPRITE_OFFSET;
     float a = -0.5 * M_PI + ps_frand_range(ps, -0.8, 0.8);
@@ -502,7 +546,9 @@ void dd_particles_create_confetti(dd_particle_system_t *ps, vec2 pos, float alph
 }
 
 void dd_particles_create_star(dd_particle_system_t *ps, vec2 pos) {
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
+  p.collides = false;
+  p.flow_affected = 0.f;
   glm_vec2_copy(pos, p.start_pos);
   p.start_vel[1] = -200;
   p.life_span = 1;
@@ -514,7 +560,7 @@ void dd_particles_create_star(dd_particle_system_t *ps, vec2 pos) {
 }
 
 void dd_particles_create_hammer_hit(dd_particle_system_t *ps, vec2 pos, float alpha) {
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
   glm_vec2_copy(pos, p.start_pos);
   p.life_span = 0.3f;
   p.start_size = 120;
@@ -527,7 +573,7 @@ void dd_particles_create_hammer_hit(dd_particle_system_t *ps, vec2 pos, float al
 void dd_particles_create_air_jump(dd_particle_system_t *ps, vec2 pos, float alpha) {
   vec2 off = {-6, 16};
   for (int i = 0; i < 2; ++i) {
-    dd_particle_t p = {0};
+    dd_particle_t p = particle_default();
     p.start_pos[0] = pos[0] + off[0];
     p.start_pos[1] = pos[1] + off[1];
     p.start_vel[1] = -200;
@@ -536,6 +582,7 @@ void dd_particles_create_air_jump(dd_particle_system_t *ps, vec2 pos, float alph
     p.end_size = 0;
     p.gravity = 500;
     p.friction = 0.7;
+    p.flow_affected = 0.f;
     p.rot = ps_frand01(ps) * 2 * M_PI;
     p.rot_speed = 2 * M_PI;
     p.sprite_index = PARTICLE_AIRJUMP + PARTICLE_SPRITE_OFFSET;
@@ -547,7 +594,7 @@ void dd_particles_create_air_jump(dd_particle_system_t *ps, vec2 pos, float alph
 
 void dd_particles_create_player_spawn(dd_particle_system_t *ps, vec2 pos, float alpha) {
   for (int i = 0; i < 32; ++i) {
-    dd_particle_t p = {0};
+    dd_particle_t p = particle_default();
     glm_vec2_copy(pos, p.start_pos);
     vec2 d;
     random_direction(ps, d);
@@ -567,7 +614,7 @@ void dd_particles_create_player_spawn(dd_particle_system_t *ps, vec2 pos, float 
 }
 
 void dd_particles_create_powerup_shine(dd_particle_system_t *ps, vec2 pos, vec2 size, float alpha) {
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
   p.sprite_index = PARTICLE_SLICE + PARTICLE_SPRITE_OFFSET;
   p.start_pos[0] = pos[0] + ps_frand_range(ps, -0.5, 0.5) * size[0];
   p.start_pos[1] = pos[1] + ps_frand_range(ps, -0.5, 0.5) * size[1];
@@ -578,12 +625,13 @@ void dd_particles_create_powerup_shine(dd_particle_system_t *ps, vec2 pos, vec2 
   p.rot_speed = 2 * M_PI;
   p.gravity = 500;
   p.friction = 0.9;
+  p.flow_affected = 0.f;
   glm_vec4_copy((vec4){1, 1, 1, alpha}, p.color);
   dd_particle_spawn(ps, GROUP_GENERAL, &p, 0);
 }
 
 void dd_particles_create_freezing_flakes(dd_particle_system_t *ps, vec2 pos, vec2 size, float alpha) {
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
   p.sprite_index = EXTRA_SNOWFLAKE + EXTRA_SPRITE_OFFSET;
   p.start_pos[0] = pos[0] + ps_frand_range(ps, -0.5, 0.5) * size[0];
   p.start_pos[1] = pos[1] + ps_frand_range(ps, -0.5, 0.5) * size[1];
@@ -597,12 +645,14 @@ void dd_particles_create_freezing_flakes(dd_particle_system_t *ps, vec2 pos, vec
   p.rot_speed = M_PI;
   p.gravity = ps_frand_range(ps, 0, 250);
   p.friction = 0.9;
+  p.flow_affected = 0.f;
+  p.collides = false;
   glm_vec4_copy((vec4){1, 1, 1, alpha}, p.color);
   dd_particle_spawn(ps, GROUP_EXTRA, &p, 0);
 }
 
 void dd_particles_create_sparkle(dd_particle_system_t *ps, vec2 pos, float alpha) {
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
   p.sprite_index = EXTRA_SPARKLE + EXTRA_SPRITE_OFFSET;
   vec2 d;
   random_direction(ps, d);
@@ -615,12 +665,15 @@ void dd_particles_create_sparkle(dd_particle_system_t *ps, vec2 pos, float alpha
   p.use_alpha_fading = true;
   p.start_alpha = alpha;
   p.end_alpha = fminf(0.2f, alpha);
+  p.collides = false;
   glm_vec4_copy((vec4){1, 1, 1, 1}, p.color);
   dd_particle_spawn(ps, GROUP_TRAIL_EXTRA, &p, 0);
 }
 
 void dd_particles_create_damage_ind(dd_particle_system_t *ps, vec2 pos, vec2 dir, float alpha) {
-  dd_particle_t p = {0};
+  dd_particle_t p = particle_default();
+  p.collides = false;
+  p.flow_affected = 0.f;
   glm_vec2_copy(pos, p.start_pos);
   glm_vec2_negate_to(dir, p.start_vel);
   p.life_span = 0.75f;
@@ -740,7 +793,7 @@ static void on_particle(mvec2 pos, int type, int cid, void *user_data) {
     dd_particles_create_star(ps, p);
     break;
   case PARTICLE_TYPE_EXPLOSION:
-    dd_particles_create_explosion(ps, p);
+    dd_particles_create_explosion(ps, world->level ? &world->level->collision : NULL, p);
     break;
   case PARTICLE_TYPE_HAMMER_HIT:
     dd_particles_create_hammer_hit(ps, p, 1.0f);
@@ -818,14 +871,15 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
   // Drop everything newer than this moment and resume from here: without this
   // the high-water mark stays ahead forever and nothing ever spawns again.
   if (world->core.m_GameTick <= ps->last_simulated_tick) {
-    const double time = (double)world->core.m_GameTick / (double)GAME_TICK_SPEED;
-    dd_particles_prune_by_time(ps, time);
-    ps->current_time = time;
-    ps->last_simulated_tick = world->core.m_GameTick - 1;
+    dd_particles_rewind_to_tick(ps, world->core.m_GameTick);
   }
 
   ps->rng_seed = (uint32_t)world->core.m_GameTick;
   ps->current_time = (double)world->core.m_GameTick / (double)GAME_TICK_SPEED;
+  // Long jumps can simulate thousands of ticks before the next render. Expire
+  // dead particles as the logic clock advances so old smoke cannot fill the
+  // fixed pool and crowd out the effects near the destination.
+  particles_drop_expired(ps, ps->current_time);
   return true;
 }
 
@@ -868,9 +922,14 @@ void dd_particles_advance(ft_game *game, int world_index, const ft_level *level,
   dd_particle_system_t *ps = dd_particles_for(game, world_index);
   if (!ps || !level) return;
 
+  if (tick <= 0) {
+    dd_particles_reset(ps);
+    return;
+  }
+
   // The simulation runs one step ahead of the rendered time; rendering
   // interpolates between the two, so this only has to set where "now" is.
   const double particle_time = ((double)tick - 1.0 + (double)alpha) / (double)GAME_TICK_SPEED;
   ps->current_time = particle_time < 0.0 ? 0.0 : particle_time;
-  dd_particles_update_sim(ps, &level->collision.m_MapData);
+  dd_particles_update_sim(ps, (SCollision *)&level->collision);
 }
