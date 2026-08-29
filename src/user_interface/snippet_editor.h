@@ -5,6 +5,7 @@
 
 // Renders the snippet editor panel
 void render_snippet_editor_panel(ui_handler_t *ui);
+void snippet_editor_open(ui_handler_t *ui, int snippet_id);
 
 // Drop edit state that refers to the current timeline. Call this before a
 // project, level, or game change; cleanup also releases the retained UI buffer.

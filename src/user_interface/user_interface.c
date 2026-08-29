@@ -111,6 +111,7 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Controls", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Undo History", NULL, &ui->undo_manager.show_history_window, true);
       igMenuItem_BoolPtr("Timeline Events", NULL, &ui->show_timeline_events_window, true);
+      igMenuItem_BoolPtr("Snippet Editor", NULL, &ui->show_snippet_editor_window, true);
       igMenuItem_BoolPtr("Effects", NULL, &ui->show_effects_window, true);
       igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);
       if (!panels_visible) igEndDisabled();
@@ -1036,6 +1037,8 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->has_unsaved_changes = false;
   ui->show_ui = true;
   ui->show_timeline_events_window = false;
+  ui->show_snippet_editor_window = false;
+  ui->focus_snippet_editor_window = false;
   ui->show_effects_window = false;
   ui->focus_effects_window = false;
   ui->effects_snippet_id = -1;

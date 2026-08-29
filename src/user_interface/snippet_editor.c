@@ -9,6 +9,7 @@
 #include "snippet_editor.h"
 
 #include "timeline/timeline_commands.h"
+#include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
 #include "user_interface.h"
 #include <engine/input_record.h>
@@ -72,6 +73,17 @@ void snippet_editor_cleanup(void) {
   free(editor_state.selected_rows);
   editor_state.selected_rows = NULL;
   editor_state.selected_capacity = 0;
+}
+
+void snippet_editor_open(ui_handler_t *ui, int snippet_id) {
+  if (!ui) return;
+  if (model_find_snippet_by_id(&ui->timeline, snippet_id, NULL)) {
+    interaction_clear_selection(&ui->timeline);
+    interaction_add_snippet_to_selection(&ui->timeline, snippet_id);
+    ui->timeline.active_snippet_id = snippet_id;
+  }
+  ui->show_snippet_editor_window = true;
+  ui->focus_snippet_editor_window = true;
 }
 
 static bool begin_action(const input_snippet_t *snippet) {
@@ -247,11 +259,16 @@ static void draw_bulk_edit(ui_handler_t *ui, game_host_t *host, const ft_input_s
 }
 
 void render_snippet_editor_panel(ui_handler_t *ui) {
+  if (!ui->show_snippet_editor_window) return;
+  if (ui->focus_snippet_editor_window) {
+    igSetNextWindowFocus();
+    ui->focus_snippet_editor_window = false;
+  }
   timeline_state_t *ts = &ui->timeline;
   game_host_t *host = &ui->gfx_handler->game_host;
   const ft_input_schema *schema = game_input_schema(host);
 
-  if (igBegin("Snippet Editor", NULL, 0)) {
+  if (igBegin("Snippet Editor", &ui->show_snippet_editor_window, 0)) {
     if (!schema) {
       igTextDisabled("No game is active.");
       igEnd();

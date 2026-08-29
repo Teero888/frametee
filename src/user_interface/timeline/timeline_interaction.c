@@ -1,18 +1,19 @@
-#include <engine/int_math.h>
 #include "timeline_interaction.h"
 #include "cglm/util.h"
 #include "renderer/graphics_backend.h"
 #include "timeline_commands.h"
 #include "timeline_model.h"
-#include <user_interface/input_effects.h>
-#include <user_interface/input_effects_editor.h>
 #include "timeline_renderer.h"
 #include "user_interface/timeline/timeline_types.h"
 #include <GLFW/glfw3.h>
+#include <engine/int_math.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <system/input.h>
+#include <user_interface/input_effects.h>
+#include <user_interface/input_effects_editor.h>
+#include <user_interface/snippet_editor.h>
 #include <user_interface/user_interface.h>
 #include <user_interface/widgets/imcol.h>
 
@@ -874,7 +875,7 @@ void interaction_toggle_recording(timeline_state_t *ts) {
       player_track_t *track = &ts->player_tracks[i];
       bool is_selected = (i == ts->selected_player_track_index);
       bool is_linked = game_has_cap(&ts->ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS) && track->is_linked &&
-                      track->group_index == ts->active_group_index;
+                       track->group_index == ts->active_group_index;
 
       if (is_selected || is_linked) {
         interaction_start_recording_on_track(ts, i);
@@ -1032,7 +1033,7 @@ void interaction_update_recording_input(ui_handler_t *ui) {
     const action_t action = keybinds_game_action(i);
     const bool active = accept_game_controls &&
                         ((control->flags & FT_CONTROL_PRESSED) ? keybinds_is_action_pressed(kb, action, false)
-                                                              : keybinds_is_action_down(kb, action));
+                                                               : keybinds_is_action_down(kb, action));
     if (!active) continue;
     const ft_input_field *field = &schema->fields[control->field];
     if (field->kind == FT_INPUT_FLOAT) {
@@ -1112,6 +1113,8 @@ void interaction_handle_context_menu(timeline_state_t *ts) {
     input_snippet_t *context_snippet = model_find_snippet_by_id(ts, ts->context_menu_snippet_id, NULL);
     if (!context_snippet && ts->selected_snippets.count == 1)
       context_snippet = model_find_snippet_by_id(ts, ts->selected_snippets.ids[0], NULL);
+    if (igMenuItem_Bool("Edit Inputs", NULL, false, context_snippet != NULL))
+      snippet_editor_open(ts->ui, context_snippet->id);
     if (igMenuItem_Bool("Edit Effects", NULL, false, context_snippet != NULL))
       input_effects_editor_open(ts->ui, context_snippet->id);
     igSeparator();
