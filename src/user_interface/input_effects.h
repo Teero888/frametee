@@ -28,6 +28,12 @@ bool input_effect_copy(input_effect_t *destination, const input_effect_t *source
 void input_effect_stack_destroy(input_effect_t *effects, int count);
 input_effect_t *input_effect_stack_copy(const input_effect_t *effects, int count);
 bool input_effect_stack_equal(const input_effect_t *left, int left_count, const input_effect_t *right, int right_count);
+// Merging fuses two windows into one snippet, so both sides have to agree on a
+// single stack: an empty side adopts the other's effects, while two different
+// non-empty stacks have no combined representation.
+bool input_effect_stack_mergeable(const input_effect_t *left, int left_count, const input_effect_t *right, int right_count);
+// Replaces the snippet's stack with a deep copy of the given effects.
+bool input_effects_snippet_set_stack(input_snippet_t *snippet, const input_effect_t *effects, int count);
 bool input_effect_init(game_host_t *host, unsigned type_index, input_effect_t *effect);
 const ft_input_effect_desc *input_effect_descriptor(game_host_t *host, const input_effect_t *effect, int *out_index);
 int input_effects_enabled_count(const input_snippet_t *snippet);

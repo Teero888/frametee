@@ -1093,7 +1093,7 @@ static bool can_merge_selected(const timeline_state_t *ts) {
       for (int right = 0; right < track->snippet_count; ++right) {
         const input_snippet_t *b = &track->snippets[right];
         if (!snippet_id_vector_contains(&ts->selected_snippets, b->id) || a->end_tick != b->start_tick) continue;
-        if (input_effect_stack_equal(a->effects, a->effect_count, b->effects, b->effect_count)) return true;
+        if (input_effect_stack_mergeable(a->effects, a->effect_count, b->effects, b->effect_count)) return true;
       }
     }
   }

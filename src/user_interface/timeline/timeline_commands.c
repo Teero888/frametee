@@ -71,6 +71,8 @@ typedef struct {
   int track_index;
   int target_snippet_id;
   int original_target_end_tick;
+  input_effect_t *original_target_effects; // the target may adopt a stack while merging
+  int original_target_effect_count;
   DeletedSnippetInfo *merged_snippets;
   int merged_snippets_count;
 } MergeSnippetsCommand;
@@ -176,12 +178,7 @@ typedef struct {
 static void apply_input_effects(timeline_state_t *timeline, int snippet_id, const input_effect_t *effects, int count) {
   input_snippet_t *snippet = model_find_snippet_by_id(timeline, snippet_id, NULL);
   if (!snippet || count < 0 || count > MAX_SNIPPET_INPUT_EFFECTS) return;
-  input_effect_t *copy = input_effect_stack_copy(effects, count);
-  if (count > 0 && !copy) return;
-  input_effect_stack_destroy(snippet->effects, snippet->effect_count);
-  snippet->effects = copy;
-  snippet->effect_count = count;
-  snippet->effect_capacity = count;
+  if (!input_effects_snippet_set_stack(snippet, effects, count)) return;
   input_effects_refresh(timeline);
   model_reset_physics_cache(timeline);
 }
@@ -1039,11 +1036,13 @@ undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
       input_snippet_t *b = candidates[i + 1];
 
       if (a->end_tick == b->start_tick &&
-          input_effect_stack_equal(a->effects, a->effect_count, b->effects, b->effect_count)) { // Adjacent and representable
-        if (!merged_something) {                                                                // First merge operation
+          input_effect_stack_mergeable(a->effects, a->effect_count, b->effects, b->effect_count)) { // Adjacent and representable
+        if (!merged_something) {                                                                   // First merge operation
           cmd->track_index = ti;
           cmd->target_snippet_id = a->id;
           cmd->original_target_end_tick = a->end_tick;
+          cmd->original_target_effects = input_effect_stack_copy(a->effects, a->effect_count);
+          cmd->original_target_effect_count = cmd->original_target_effects ? a->effect_count : 0;
         }
 
         // Store B for undo
@@ -1060,6 +1059,10 @@ undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
         input_record_t *b_window = snippet_window(b);
         model_resize_snippet_inputs(ts, a, old_a_duration + b_duration);
         memcpy(&a->inputs[old_a_duration], b_window, sizeof(input_record_t) * b_duration);
+
+        // A snippet without effects inherits the other side's stack; equal stacks make this a no-op.
+        if (a->effect_count == 0 && b->effect_count > 0)
+          input_effects_snippet_set_stack(a, b->effects, b->effect_count);
 
         // Defer the removal of snippet 'b' by adding its ID to a list.
         ids_to_remove[remove_count++] = b->id;
@@ -1462,6 +1465,7 @@ static void undo_merge_snippets(void *cmd, void *ts_void) {
   if (!target) return;
 
   model_resize_snippet_inputs(ts, target, c->original_target_end_tick - target->start_tick);
+  input_effects_snippet_set_stack(target, c->original_target_effects, c->original_target_effect_count);
 
   for (int i = 0; i < c->merged_snippets_count; i++) {
     input_snippet_t new_snip;
@@ -1491,6 +1495,8 @@ static void redo_merge_snippets(void *cmd, void *ts_void) {
     target->end_tick = target->start_tick + new_duration;
     target->source_offset = 0;
     target->source_count = new_duration;
+    if (target->effect_count == 0 && info->snippet_copy.effect_count > 0)
+      input_effects_snippet_set_stack(target, info->snippet_copy.effects, info->snippet_copy.effect_count);
 
     model_remove_snippet_from_track(ts, track, info->snippet_copy.id);
   }
@@ -1498,6 +1504,7 @@ static void redo_merge_snippets(void *cmd, void *ts_void) {
 }
 static void cleanup_merge_snippets_cmd(void *cmd) {
   MergeSnippetsCommand *c = (MergeSnippetsCommand *)cmd;
+  input_effect_stack_destroy(c->original_target_effects, c->original_target_effect_count);
   if (c->merged_snippets) {
     for (int i = 0; i < c->merged_snippets_count; i++) {
       model_free_snippet_inputs(&c->merged_snippets[i].snippet_copy);

@@ -746,7 +746,7 @@ void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *trac
     if (track->snippets[j].is_active && track->snippets[j].start_tick == tick + 1) after = &track->snippets[j];
   }
 
-  if (before && after && input_effect_stack_equal(before->effects, before->effect_count, after->effects, after->effect_count)) {
+  if (before && after && input_effect_stack_mergeable(before->effects, before->effect_count, after->effects, after->effect_count)) {
     int old_before_duration = before->input_count;
     int after_duration = after->input_count;
     // Swallowing `after` into `before` rewrites both buffers, so read the window before resizing.
@@ -754,6 +754,9 @@ void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *trac
     model_resize_snippet_inputs(ts, before, old_before_duration + 1 + after_duration);
     before->inputs[old_before_duration] = *input;
     memcpy(&before->inputs[old_before_duration + 1], after_window, sizeof(input_record_t) * after_duration);
+    // The fused snippet keeps whichever stack the two sides agreed on.
+    if (before->effect_count == 0 && after->effect_count > 0)
+      input_effects_snippet_set_stack(before, after->effects, after->effect_count);
     model_remove_snippet_from_track(ts, track, after->id);
     model_compact_layers_for_track(track);
   } else if (before) {

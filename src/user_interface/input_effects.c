@@ -137,6 +137,23 @@ bool input_effect_stack_equal(const input_effect_t *left, int left_count, const 
   return true;
 }
 
+bool input_effect_stack_mergeable(const input_effect_t *left, int left_count, const input_effect_t *right,
+                                  int right_count) {
+  if (left_count <= 0 || right_count <= 0) return true;
+  return input_effect_stack_equal(left, left_count, right, right_count);
+}
+
+bool input_effects_snippet_set_stack(input_snippet_t *snippet, const input_effect_t *effects, int count) {
+  if (!snippet || count < 0) return false;
+  input_effect_t *copy = input_effect_stack_copy(effects, count);
+  if (count > 0 && !copy) return false;
+  input_effect_stack_destroy(snippet->effects, snippet->effect_count);
+  snippet->effects = copy;
+  snippet->effect_count = copy ? count : 0;
+  snippet->effect_capacity = snippet->effect_count;
+  return true;
+}
+
 bool input_effect_init(game_host_t *host, unsigned type_index, input_effect_t *effect) {
   const ft_input_effect_desc *desc = gh_input_effect_desc(host, type_index);
   if (!desc || !effect) return false;
