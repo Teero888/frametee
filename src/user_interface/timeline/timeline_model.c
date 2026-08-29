@@ -1,15 +1,16 @@
-#include <engine/int_math.h>
 #include "timeline_model.h"
 #include <engine/game_host.h>
 #include <engine/input_record.h>
+#include <engine/int_math.h>
 #include <limits.h>
 #include <math.h>
 #include <renderer/graphics_backend.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <user_interface/user_interface.h>
+#include <user_interface/input_effects.h>
 #include <user_interface/timeline_events.h>
+#include <user_interface/user_interface.h>
 
 #define DEFAULT_TRACK_HEIGHT 60.f
 
@@ -163,7 +164,8 @@ void model_reset_groups_for_level(timeline_state_t *ts) {
     // A fixed-cast game has already created its required players. Dynamic
     // games start lower and need only the difference represented by tracks.
     const int existing = gh_world_player_count(host, group->initial_world);
-    for (int p = existing; p < players; ++p) gh_world_add_player(host, group->initial_world, -1, NULL);
+    for (int p = existing; p < players; ++p)
+      gh_world_add_player(host, group->initial_world, -1, NULL);
     gh_world_copy(host, group->previous_world, group->initial_world);
     if (group->vec.data && group->vec.data[0]) gh_world_copy(host, group->vec.data[0], group->initial_world);
     group->vec.current_size = 1;
@@ -438,11 +440,9 @@ void model_resize_snippet_inputs(timeline_state_t *ts, input_snippet_t *snippet,
   model_snippet_flatten(snippet);
 
   int old_count = snippet->input_count;
-  snippet->inputs = realloc(snippet->inputs, sizeof(input_record_t) * new_duration);
-  if (!snippet->inputs) {
-    snippet->input_count = 0;
-    return;
-  }
+  input_record_t *grown = realloc(snippet->inputs, sizeof(input_record_t) * (size_t)new_duration);
+  if (!grown) return;
+  snippet->inputs = grown;
   if (new_duration > old_count) {
     memset(&snippet->inputs[old_count], 0, (new_duration - old_count) * sizeof(input_record_t));
   }
@@ -451,13 +451,17 @@ void model_resize_snippet_inputs(timeline_state_t *ts, input_snippet_t *snippet,
   snippet->end_tick = snippet->start_tick + new_duration;
   snippet->source_offset = 0;
   snippet->source_count = new_duration;
+  input_effects_snippet_discard_cache(snippet);
 
-  int preserve_count = (old_count < new_duration) ? old_count : new_duration;
-  if (!ts->recording && snippet->end_tick <= ts->current_tick) model_recalc_physics(ts, snippet->start_tick + preserve_count);
+  if (!ts->recording) {
+    input_effects_invalidate(ts);
+    if (snippet->end_tick <= ts->current_tick) model_reset_physics_cache(ts);
+  }
 }
 
 void model_free_snippet_inputs(input_snippet_t *snippet) {
   free(snippet->inputs);
+  input_effects_snippet_cleanup(snippet);
   snippet->inputs = NULL;
   snippet->input_count = 0;
   snippet->source_offset = 0;
@@ -466,6 +470,7 @@ void model_free_snippet_inputs(input_snippet_t *snippet) {
 
 void model_snippet_clone(input_snippet_t *dest, const input_snippet_t *src) {
   *dest = *src;
+  input_effects_snippet_clone(dest, src);
   // The whole source travels with the copy, not just the visible window, so a cloned snippet can be
   // widened back out to everything the original held.
   if (src->inputs && src->source_count > 0) {
@@ -505,6 +510,7 @@ void model_snippet_flatten(input_snippet_t *snippet) {
   snippet->inputs = flat;
   snippet->source_offset = 0;
   snippet->source_count = snippet->input_count;
+  input_effects_snippet_discard_cache(snippet);
 }
 
 bool model_trim_snippet(timeline_state_t *ts, input_snippet_t *snippet, int new_start_tick, int new_end_tick) {
@@ -586,7 +592,7 @@ static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, 
     const ft_input_schema *schema = game_input_schema(model_host(ts));
     if (schema) {
       for (uint32_t field = 0; field < schema->field_count && field < 64; ++field)
-        if ((schema->fields[field].flags & FT_INPUT_FLAG_INTERNAL) == 0)
+        if ((schema->fields[field].flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN)) == 0)
           new_track->linked_copy_fields |= UINT64_C(1) << field;
     }
     new_track->export_enabled = true;
@@ -740,7 +746,7 @@ void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *trac
     if (track->snippets[j].is_active && track->snippets[j].start_tick == tick + 1) after = &track->snippets[j];
   }
 
-  if (before && after) {
+  if (before && after && input_effect_stack_equal(before->effects, before->effect_count, after->effects, after->effect_count)) {
     int old_before_duration = before->input_count;
     int after_duration = after->input_count;
     // Swallowing `after` into `before` rewrites both buffers, so read the window before resizing.
@@ -789,9 +795,10 @@ void model_clear_all_recording_buffers(timeline_state_t *ts) {
 
 // Physics & Playback
 
-void model_recalc_physics(timeline_state_t *ts, int tick) {
-  (void)tick;
+void model_reset_physics_cache(timeline_state_t *ts) {
+  if (!ts) return;
   game_host_t *host = model_host(ts);
+  if (!host) return;
   ts->current_tick = imax(ts->current_tick, model_get_min_global_tick(ts));
   for (int i = 0; i < ts->group_count; ++i) {
     timeline_group_t *group = ts->groups[i];
@@ -802,7 +809,14 @@ void model_recalc_physics(timeline_state_t *ts, int tick) {
   }
 }
 
+void model_recalc_physics(timeline_state_t *ts, int tick) {
+  (void)tick;
+  input_effects_invalidate(ts);
+  model_reset_physics_cache(ts);
+}
+
 input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
+  if (!ts->recording && !ts->input_effects_rebuilding) input_effects_ensure((timeline_state_t *)ts);
   const player_track_t *track = &ts->player_tracks[track_index];
   input_record_t blank;
   engine_input_default(model_host(ts), &blank);
@@ -813,10 +827,11 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
     for (int i = 0; i < track->recording_snippet_count; ++i) {
       const input_snippet_t *snippet = &track->recording_snippets[i];
       if (snippet->is_active) {
-        if (tick >= snippet->start_tick && tick < snippet->end_tick) return snippet_window(snippet)[tick - snippet->start_tick];
+        const input_record_t *inputs = input_effects_snippet_window(snippet);
+        if (tick >= snippet->start_tick && tick < snippet->end_tick) return inputs[tick - snippet->start_tick];
         if (snippet->end_tick <= tick && snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
           last_input_tick = snippet->end_tick - 1;
-          last_valid_input = snippet_window(snippet)[snippet->input_count - 1];
+          last_valid_input = inputs[snippet->input_count - 1];
         }
       }
     }
@@ -825,10 +840,11 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
   for (int i = 0; i < track->snippet_count; ++i) {
     const input_snippet_t *snippet = &track->snippets[i];
     if (snippet->is_active) {
-      if (tick >= snippet->start_tick && tick < snippet->end_tick) return snippet_window(snippet)[tick - snippet->start_tick];
+      const input_record_t *inputs = input_effects_snippet_window(snippet);
+      if (tick >= snippet->start_tick && tick < snippet->end_tick) return inputs[tick - snippet->start_tick];
       if (snippet->end_tick <= tick && snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
         last_input_tick = snippet->end_tick - 1;
-        last_valid_input = snippet_window(snippet)[snippet->input_count - 1];
+        last_valid_input = inputs[snippet->input_count - 1];
       }
     }
   }
@@ -956,6 +972,10 @@ static void seed_world(timeline_state_t *ts, int group_index, ft_world *out_worl
 
 const ft_world *model_group_world_at_tick(timeline_state_t *ts, int group_index, int tick) {
   if (!ts || group_index < 0 || group_index >= ts->group_count) return NULL;
+  /* Rebuild effects before seeding a simulation world. Rebuilding may ask the
+   * timeline for reference worlds and reset its caches; doing that lazily from
+   * model_get_input_at_tick would overwrite a simulation already in progress. */
+  if (!ts->recording && !ts->input_effects_rebuilding) input_effects_ensure(ts);
   game_host_t *host = model_host(ts);
   timeline_group_t *group = ts->groups[group_index];
   tick = imax(0, tick - group->start_offset);
@@ -974,6 +994,10 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
   if (out_prev) *out_prev = NULL;
   if (out_cur) *out_cur = NULL;
   if (!ts || group_index < 0 || group_index >= ts->group_count) return;
+
+  /* See model_group_world_at_tick: effects must never rebuild from inside the
+   * simulation that is consuming their output. */
+  if (!ts->recording && !ts->input_effects_rebuilding) input_effects_ensure(ts);
 
   game_host_t *host = model_host(ts);
   timeline_group_t *group = ts->groups[group_index];
@@ -1063,7 +1087,8 @@ void model_rebuild_group_start(timeline_state_t *ts, int group_index) {
   if (!pristine) return;
 
   const int tracks = model_group_track_count(ts, group_index);
-  for (int p = gh_world_player_count(host, pristine); p < tracks; ++p) gh_world_add_player(host, pristine, -1, NULL);
+  for (int p = gh_world_player_count(host, pristine); p < tracks; ++p)
+    gh_world_add_player(host, pristine, -1, NULL);
   while (gh_world_player_count(host, pristine) > tracks)
     gh_world_remove_player(host, pristine, gh_world_player_count(host, pristine) - 1);
 
@@ -1117,7 +1142,8 @@ player_track_t *model_clone_track_to_group(timeline_state_t *ts, int track_index
   player_track_t *new_track = model_add_new_track(ts, 1);
   ts->active_group_index = old_active;
   if (!new_track) {
-    for (int i = 0; i < copy.snippet_count; ++i) model_free_snippet_inputs(&copy.snippets[i]);
+    for (int i = 0; i < copy.snippet_count; ++i)
+      model_free_snippet_inputs(&copy.snippets[i]);
     free(copy.snippets);
     return NULL;
   }
@@ -1255,7 +1281,8 @@ static void v_init(timeline_state_t *ts, physics_v_t *t, int world_index) {
 
 static void v_destroy(timeline_state_t *ts, physics_v_t *t) {
   game_host_t *host = model_host(ts);
-  for (uint32_t i = 0; i < t->max_size; ++i) gh_world_destroy(host, t->data[i]);
+  for (uint32_t i = 0; i < t->max_size; ++i)
+    gh_world_destroy(host, t->data[i]);
   free(t->data);
   t->data = NULL;
   t->current_size = 0;
@@ -1277,7 +1304,8 @@ static void v_push(timeline_state_t *ts, physics_v_t *t, const ft_world *world, 
       return;
     }
     t->data = new_data;
-    for (uint32_t i = old_max; i < t->max_size; ++i) t->data[i] = gh_world_create(host, ts->ui->gfx_handler->level, 0, world_index);
+    for (uint32_t i = old_max; i < t->max_size; ++i)
+      t->data[i] = gh_world_create(host, ts->ui->gfx_handler->level, 0, world_index);
   }
   gh_world_copy(host, t->data[t->current_size - 1], world);
 }

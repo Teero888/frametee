@@ -1,11 +1,12 @@
-#include <engine/int_math.h>
 #include "timeline_commands.h"
 #include "timeline_interaction.h"
 #include "timeline_model.h"
+#include <engine/int_math.h>
 #include <limits.h>
 #include <renderer/graphics_backend.h>
 #include <stdlib.h>
 #include <string.h>
+#include <user_interface/input_effects.h>
 #include <user_interface/user_interface.h>
 
 // Define a reasonable max number of tracks to handle for batch operations
@@ -99,6 +100,15 @@ typedef struct {
 typedef struct {
   undo_command_t base;
   int snippet_id;
+  input_effect_t *before;
+  int before_count;
+  input_effect_t *after;
+  int after_count;
+} InputEffectsCommand;
+
+typedef struct {
+  undo_command_t base;
+  int snippet_id;
   int old_start_tick, old_end_tick;
   int new_start_tick, new_end_tick;
   int *deactivated_ids; // snippets the widened snippet now covers
@@ -163,6 +173,59 @@ typedef struct {
   TimelinePropertyValue after;
 } TimelinePropertyCommand;
 
+static void apply_input_effects(timeline_state_t *timeline, int snippet_id, const input_effect_t *effects, int count) {
+  input_snippet_t *snippet = model_find_snippet_by_id(timeline, snippet_id, NULL);
+  if (!snippet || count < 0 || count > MAX_SNIPPET_INPUT_EFFECTS) return;
+  input_effect_t *copy = input_effect_stack_copy(effects, count);
+  if (count > 0 && !copy) return;
+  input_effect_stack_destroy(snippet->effects, snippet->effect_count);
+  snippet->effects = copy;
+  snippet->effect_count = count;
+  snippet->effect_capacity = count;
+  input_effects_refresh(timeline);
+  model_reset_physics_cache(timeline);
+}
+
+static void undo_input_effects(void *command, void *timeline) {
+  InputEffectsCommand *effects = command;
+  apply_input_effects(timeline, effects->snippet_id, effects->before, effects->before_count);
+}
+
+static void redo_input_effects(void *command, void *timeline) {
+  InputEffectsCommand *effects = command;
+  apply_input_effects(timeline, effects->snippet_id, effects->after, effects->after_count);
+}
+
+static void cleanup_input_effects(void *command) {
+  InputEffectsCommand *effects = command;
+  input_effect_stack_destroy(effects->before, effects->before_count);
+  input_effect_stack_destroy(effects->after, effects->after_count);
+  free(effects);
+}
+
+undo_command_t *commands_create_input_effects_change(ui_handler_t *ui, int snippet_id,
+                                                     const input_effect_t *before, int before_count,
+                                                     const char *description) {
+  input_snippet_t *snippet = ui ? model_find_snippet_by_id(&ui->timeline, snippet_id, NULL) : NULL;
+  if (!snippet || before_count < 0 || before_count > MAX_SNIPPET_INPUT_EFFECTS) return NULL;
+  InputEffectsCommand *command = calloc(1, sizeof(*command));
+  if (!command) return NULL;
+  command->before = input_effect_stack_copy(before, before_count);
+  command->after = input_effect_stack_copy(snippet->effects, snippet->effect_count);
+  if ((before_count > 0 && !command->before) || (snippet->effect_count > 0 && !command->after)) {
+    cleanup_input_effects(command);
+    return NULL;
+  }
+  snprintf(command->base.description, sizeof(command->base.description), "%s", description ? description : "Edit Input Effects");
+  command->base.undo = undo_input_effects;
+  command->base.redo = redo_input_effects;
+  command->base.cleanup = cleanup_input_effects;
+  command->snippet_id = snippet_id;
+  command->before_count = before_count;
+  command->after_count = snippet->effect_count;
+  return &command->base;
+}
+
 static void clone_track_data(player_track_t *destination, const player_track_t *source) {
   *destination = *source;
   model_rebind_starting_strings(&destination->starting_config);
@@ -184,8 +247,10 @@ static void clone_track_data(player_track_t *destination, const player_track_t *
 }
 
 static void free_track_data(player_track_t *track) {
-  for (int i = 0; i < track->snippet_count; ++i) model_free_snippet_inputs(&track->snippets[i]);
-  for (int i = 0; i < track->recording_snippet_count; ++i) model_free_snippet_inputs(&track->recording_snippets[i]);
+  for (int i = 0; i < track->snippet_count; ++i)
+    model_free_snippet_inputs(&track->snippets[i]);
+  for (int i = 0; i < track->recording_snippet_count; ++i)
+    model_free_snippet_inputs(&track->recording_snippets[i]);
   free(track->snippets);
   free(track->recording_snippets);
   track->snippets = NULL;
@@ -221,7 +286,8 @@ timeline_data_snapshot_t *commands_capture_timeline_data(const timeline_state_t 
       commands_free_timeline_data_snapshot(snapshot);
       return NULL;
     }
-    for (int i = 0; i < snapshot->track_count; ++i) clone_track_data(&snapshot->tracks[i], &ts->player_tracks[i]);
+    for (int i = 0; i < snapshot->track_count; ++i)
+      clone_track_data(&snapshot->tracks[i], &ts->player_tracks[i]);
   }
 
   snapshot->event_count = ts->event_count;
@@ -256,7 +322,8 @@ timeline_data_snapshot_t *commands_capture_timeline_data(const timeline_state_t 
 
 void commands_free_timeline_data_snapshot(timeline_data_snapshot_t *snapshot) {
   if (!snapshot) return;
-  for (int i = 0; i < snapshot->track_count; ++i) free_track_data(&snapshot->tracks[i]);
+  for (int i = 0; i < snapshot->track_count; ++i)
+    free_track_data(&snapshot->tracks[i]);
   free(snapshot->tracks);
   free(snapshot->groups);
   free(snapshot->events);
@@ -274,8 +341,10 @@ static void apply_timeline_data_snapshot(timeline_state_t *ts, const timeline_da
   ts->pending_single_select_id = -1;
   model_clear_all_recording_buffers(ts);
 
-  for (int i = ts->player_track_count - 1; i >= 0; --i) model_remove_track_logic(ts, i);
-  while (ts->group_count > snapshot->group_count) model_remove_group(ts, ts->group_count - 1);
+  for (int i = ts->player_track_count - 1; i >= 0; --i)
+    model_remove_track_logic(ts, i);
+  while (ts->group_count > snapshot->group_count)
+    model_remove_group(ts, ts->group_count - 1);
   while (ts->group_count < snapshot->group_count) {
     if (!model_add_group(ts, snapshot->groups[ts->group_count].name)) return;
   }
@@ -969,8 +1038,9 @@ undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
       input_snippet_t *a = candidates[i];
       input_snippet_t *b = candidates[i + 1];
 
-      if (a->end_tick == b->start_tick) { // Adjacent
-        if (!merged_something) {          // First merge operation
+      if (a->end_tick == b->start_tick &&
+          input_effect_stack_equal(a->effects, a->effect_count, b->effects, b->effect_count)) { // Adjacent and representable
+        if (!merged_something) {                                                                // First merge operation
           cmd->track_index = ti;
           cmd->target_snippet_id = a->id;
           cmd->original_target_end_tick = a->end_tick;
@@ -1854,6 +1924,8 @@ undo_command_t *commands_create_commit_recording(ui_handler_t *ui) {
   for (int i = 0; i < affected_count; i++) {
     capture_track_state(ts, affected_indices[i], &cmd->tracks_after[i]);
   }
+
+  model_recalc_physics(ts, 0);
 
   free(affected_indices);
   return &cmd->base;

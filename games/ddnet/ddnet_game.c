@@ -5,6 +5,7 @@
 // (dd_gfx.c, dd_render.c, dd_particles.c, dd_anim_*.c) and none of them are
 // visible to the engine.
 
+#include "dd_input_effects.h"
 #include "dd_internal.h"
 #include "dd_maps.h"
 
@@ -88,12 +89,13 @@ static const ft_input_field input_fields[IN_COUNT] = {
     [IN_EYES] = {.id = "eyes",
                  .display_name = "Eyes",
                  .kind = FT_INPUT_ENUM,
+                 .flags = FT_INPUT_FLAG_EDITOR_HIDDEN,
                  .min_value = 0,
                  .max_value = NUM_EYES - 1,
                  .enum_labels = eye_labels,
                  .enum_count = (uint32_t)(sizeof(eye_labels) / sizeof(eye_labels[0]))},
-    [IN_EMOTE] = {.id = "emote", .display_name = "Emoticon", .kind = FT_INPUT_INT, .min_value = 0, .max_value = 15},
-    [IN_SIT] = {.id = "sit", .display_name = "Sit", .kind = FT_INPUT_BOOL},
+    [IN_EMOTE] = {.id = "emote", .display_name = "Emoticon", .kind = FT_INPUT_INT, .flags = FT_INPUT_FLAG_EDITOR_HIDDEN, .min_value = 0, .max_value = 15},
+    [IN_SIT] = {.id = "sit", .display_name = "Sit", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_EDITOR_HIDDEN},
     [IN_TELE_OUT] = {.id = "tele_out", .display_name = "Tele out", .kind = FT_INPUT_INT, .flags = FT_INPUT_FLAG_INTERNAL, .max_value = 255},
 };
 
@@ -1012,11 +1014,6 @@ static bool ddnet_world_player_view(ft_game *game, const ft_world *world, int32_
   return true;
 }
 
-static int32_t ddnet_input_clean_lookahead_ticks(ft_game *game) {
-  (void)game;
-  return 250;
-}
-
 static void ddnet_collect_events(ft_game *game, const ft_world *previous, const ft_world *world,
                                  void (*emit)(void *user, const ft_timeline_event *event), void *user) {
   (void)game;
@@ -1414,7 +1411,11 @@ static const ft_game_module module = {
     .linked_actions = linked_actions,
     .linked_action_count = (uint32_t)(sizeof(linked_actions) / sizeof(linked_actions[0])),
     .linked_input_update = ddnet_linked_input_update,
-    .input_clean_lookahead_ticks = ddnet_input_clean_lookahead_ticks,
+    .input_effect_count = dd_input_effect_count,
+    .input_effect_desc = dd_input_effect_desc,
+    .input_effect_default = dd_input_effect_default,
+    .input_effect_apply = dd_input_effect_apply,
+    .input_effect_ui = dd_input_effect_ui,
 };
 
 FT_GAME_EXPORT const ft_game_module *ft_game_module_entry(uint32_t engine_abi_version) {

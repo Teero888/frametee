@@ -197,10 +197,10 @@ void render_timeline_events_window(ui_handler_t *ui) {
           igTextUnformatted(ev->message, NULL);
 
           igTableSetColumnIndex(column);
-          if (igSmallButton(ICON_FA_LOCATION_CROSSHAIRS "##jump")) timeline_event_jump_to(ts, ev);
+          if (igButton(ICON_FA_LOCATION_CROSSHAIRS "##jump", (ImVec2){0.f, 0.f})) timeline_event_jump_to(ts, ev);
           if (igIsItemHovered(0)) igSetTooltip("Jump to this event");
           igSameLine(0.f, action_spacing);
-          if (igSmallButton(ICON_FA_TRASH "##remove")) pending_remove = i;
+          if (igButton(ICON_FA_TRASH "##remove", (ImVec2){0.f, 0.f})) pending_remove = i;
           if (igIsItemHovered(0)) igSetTooltip("Remove this event");
           igPopID();
         }

@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 15u
+#define FT_GAME_ABI_VERSION 16u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -318,6 +318,11 @@ enum ft_input_field_flags {
    * This is schema metadata rather than an engine convention around names
    * such as "target" or "aim". */
   FT_INPUT_FLAG_RECORDING_CURSOR = 1u << 6,
+  /* Hide a stored field from generic editing and display UIs. Unlike INTERNAL,
+   * this is presentation metadata and is excluded from project schema
+   * compatibility, so a game may hide an existing field without invalidating
+   * projects whose input record layout and semantics are unchanged. */
+  FT_INPUT_FLAG_EDITOR_HIDDEN = 1u << 7,
 };
 
 typedef struct ft_input_field {
@@ -408,6 +413,62 @@ typedef struct ft_linked_input_frame {
   uint64_t actions_down;
   uint64_t actions_pressed;
 } ft_linked_input_frame;
+
+/* -------------------------------------------------------------------------
+ * Game-owned input effects
+ * -------------------------------------------------------------------------
+ *
+ * The editor owns only the ordered list attached to a snippet, its opaque
+ * parameter bytes, undo/persistence and derived-input caches. Effect meaning,
+ * defaults, evaluation and parameter UI all belong to the active game. This
+ * deliberately allows two games to expose completely unrelated effect sets.
+ */
+
+#define FT_INPUT_EFFECT_PARAMETER_MAX 4096u
+#define FT_INPUT_EFFECT_RUNTIME_MAX 4096u
+
+typedef struct ft_input_effect_desc {
+  uint32_t struct_size;
+  const char *id; /* stable project identifier */
+  const char *display_name;
+  const char *description; /* optional, used by the game's editor UI */
+  uint32_t parameter_size; /* opaque bytes persisted by the editor */
+  uint32_t runtime_size;   /* opaque, zeroed bytes rebuilt at evaluation */
+} ft_input_effect_desc;
+
+/* Capabilities supplied by the editor while one effect is being evaluated.
+ * Ticks are local to `world_index`; the editor translates world start offsets.
+ * Returned worlds and inputs already include every earlier enabled effect in
+ * timeline order, including earlier effects on this snippet. */
+typedef struct ft_input_effect_frame {
+  uint32_t struct_size;
+  const ft_level *level;
+  int32_t track_index; /* editor track index */
+  int32_t world_index;
+  int32_t player;     /* player index inside this world */
+  int32_t start_tick; /* inclusive snippet window */
+  int32_t end_tick;   /* exclusive snippet window */
+  int32_t authored_end_tick;
+  uint32_t player_count;
+  uint32_t record_count;
+  uint32_t record_stride;
+  void *timeline_user;
+  bool (*input_at_tick)(void *timeline_user, int32_t player, int32_t tick, void *out_record);
+  const ft_world *(*world_at_tick)(void *timeline_user, int32_t tick);
+  void (*reset_simulation)(void *timeline_user);
+} ft_input_effect_frame;
+
+/* Small, game-independent location record for the game's parameter editor.
+ * The module adopts the engine's ImGui context and renders whatever controls
+ * make sense for this effect. */
+typedef struct ft_input_effect_ui_frame {
+  uint32_t struct_size;
+  int32_t track_index;
+  int32_t world_index;
+  int32_t player;
+  int32_t start_tick;
+  int32_t end_tick;
+} ft_input_effect_ui_frame;
 
 /* -------------------------------------------------------------------------
  * Levels and worlds
@@ -1337,18 +1398,22 @@ typedef struct ft_game_module {
   uint32_t linked_action_count;
   void (*linked_input_update)(ft_game *game, const ft_linked_input_frame *frame, void *inout_record);
 
-  /* ---- run comparison (optional) ----
-   * Whether two worlds are indistinguishable for input cleaning. Games should
-   * compare every exact physics/result value that contributes to the run, but
-   * may deliberately ignore disposable presentation or entities that can no
-   * longer affect a player (for example a harmless projectile). The engine
-   * falls back to exact player position, velocity and result flags when this
-   * is NULL. */
-  bool (*world_run_equal)(ft_game *game, const ft_world *a, const ft_world *b);
-
-  /* Maximum ticks after the last changed input that cleaning must replay to
-   * observe every delayed effect, or 0 when it must replay to the end. */
-  int32_t (*input_clean_lookahead_ticks)(ft_game *game);
+  /* ---- game-owned input effects (optional) ----
+   * Descriptors remain valid for the module lifetime. `input_effect_apply`
+   * mutates `record_count` records in `inout_records`, separated by
+   * `record_stride` bytes. It must be deterministic, have no external side
+   * effects and not retain frame pointers: the editor may restore its output
+   * and runtime bytes from a stage cache instead of calling it. The UI
+   * callback returns true when it changed the parameter bytes. */
+  uint32_t (*input_effect_count)(ft_game *game);
+  const ft_input_effect_desc *(*input_effect_desc)(ft_game *game, uint32_t index);
+  void (*input_effect_default)(ft_game *game, uint32_t index, void *parameters, uint32_t parameter_size);
+  bool (*input_effect_apply)(ft_game *game, uint32_t index, const ft_input_effect_frame *frame,
+                             const void *parameters, uint32_t parameter_size, void *runtime,
+                             uint32_t runtime_size, void *inout_records);
+  bool (*input_effect_ui)(ft_game *game, uint32_t index, const ft_input_effect_ui_frame *frame,
+                          void *parameters, uint32_t parameter_size, const void *runtime,
+                          uint32_t runtime_size);
 } ft_game_module;
 
 /* The one symbol a module must export.

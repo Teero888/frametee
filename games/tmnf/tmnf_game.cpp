@@ -215,21 +215,6 @@ bool WorldPlayerView(ft_game *, const ft_world *world, std::int32_t player, ft_p
   return true;
 }
 
-bool WorldRunEqual(ft_game *, const ft_world *left, const ft_world *right) {
-  if (!left || !right) return false;
-  const auto &a = left->view;
-  const auto &b = right->view;
-
-  // Controls are deliberately excluded: they are the values being cleaned.
-  // The car view contains every 3D physics value exposed by the sandbox, so
-  // this catches changes that the engine's generic X/Z player view cannot.
-  return std::memcmp(&a.car, &b.car, sizeof(a.car)) == 0 &&
-         a.checkpointsCollected == b.checkpointsCollected && a.checkpointsTotal == b.checkpointsTotal &&
-         a.completedLaps == b.completedLaps && a.totalLaps == b.totalLaps && a.raceCompleted == b.raceCompleted &&
-         a.finishTimeMs == b.finishTimeMs && a.finishTime == b.finishTime && a.respawnCount == b.respawnCount &&
-         a.stuntsScore == b.stuntsScore;
-}
-
 // --- input records -----------------------------------------------------------
 
 void InputDefault(ft_game *, void *record) {
@@ -555,7 +540,6 @@ ft_game_module BuildModule() {
   module.world_tick = WorldTick;
   module.world_player_count = WorldPlayerCount;
   module.world_player_view = WorldPlayerView;
-  module.world_run_equal = WorldRunEqual;
 
   module.input_default = InputDefault;
   module.input_get = InputGet;

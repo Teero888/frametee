@@ -185,12 +185,6 @@ static int32_t world_player_count(ft_game *game, const ft_world *world) {
   return world ? 1 : 0;
 }
 
-static bool world_run_equal(ft_game *game, const ft_world *a, const ft_world *b) {
-  (void)game;
-  return a && b && a->tick == b->tick && memcmp(a->pos, b->pos, sizeof(a->pos)) == 0 &&
-         memcmp(a->vel, b->vel, sizeof(a->vel)) == 0;
-}
-
 static void input_default(ft_game *game, void *record) {
   (void)game;
   cube_input value = {0};
@@ -355,7 +349,6 @@ static const ft_game_module module = {
     .world_step = world_step,
     .world_tick = world_tick,
     .world_player_count = world_player_count,
-    .world_run_equal = world_run_equal,
     .input_default = input_default,
     .input_set = input_set,
     .input_get = input_get,

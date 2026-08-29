@@ -8,7 +8,6 @@
 
 #include "snippet_editor.h"
 
-#include "input_cleaner.h"
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_model.h"
 #include "user_interface.h"
@@ -28,12 +27,6 @@ static struct {
   int selected_capacity;
   int last_clicked_row;
 
-  // Cleaning choices are shared by snippets using the same input schema, so
-  // moving between snippets does not make the user select the fields again.
-  bool *clean_fields;
-  int clean_field_capacity;
-  const ft_input_schema *clean_schema;
-
   // One undoable action covers a whole drag or bulk edit, so the before-state
   // is captured once when it starts.
   bool action_in_progress;
@@ -45,7 +38,6 @@ static struct {
   long long bulk_value;
   float bulk_float_value;
   ft_vec2 bulk_vec2_value;
-  char clean_status[192];
 } editor_state = {.snippet_id = -1, .last_clicked_row = -1, .bulk_field = 0};
 
 static void ensure_selection_capacity(int count) {
@@ -62,35 +54,17 @@ static void clear_row_selection(void) {
   editor_state.last_clicked_row = -1;
 }
 
-static bool ensure_clean_field_selection(const ft_input_schema *schema) {
-  if ((int)schema->field_count > editor_state.clean_field_capacity) {
-    bool *grown = realloc(editor_state.clean_fields, schema->field_count * sizeof(*grown));
-    if (!grown) return false;
-    editor_state.clean_fields = grown;
-    editor_state.clean_field_capacity = (int)schema->field_count;
-  }
-
-  if (editor_state.clean_schema != schema) {
-    for (uint32_t i = 0; i < schema->field_count; ++i)
-      editor_state.clean_fields[i] = !(schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL);
-    editor_state.clean_schema = schema;
-  }
-  return true;
-}
-
 static void reset_editor_state(void) {
   clear_row_selection();
   editor_state.action_in_progress = false;
   free(editor_state.action_before_states);
   editor_state.action_before_states = NULL;
   editor_state.action_before_count = 0;
-  editor_state.clean_status[0] = '\0';
 }
 
 void snippet_editor_reset(void) {
   reset_editor_state();
   editor_state.snippet_id = -1;
-  editor_state.clean_schema = NULL;
 }
 
 void snippet_editor_cleanup(void) {
@@ -98,9 +72,6 @@ void snippet_editor_cleanup(void) {
   free(editor_state.selected_rows);
   editor_state.selected_rows = NULL;
   editor_state.selected_capacity = 0;
-  free(editor_state.clean_fields);
-  editor_state.clean_fields = NULL;
-  editor_state.clean_field_capacity = 0;
 }
 
 static bool begin_action(const input_snippet_t *snippet) {
@@ -118,25 +89,18 @@ static bool begin_action(const input_snippet_t *snippet) {
   return true;
 }
 
-static void cancel_action(void) {
-  editor_state.action_in_progress = false;
-  free(editor_state.action_before_states);
-  editor_state.action_before_states = NULL;
-  editor_state.action_before_count = 0;
-}
-
 // Closes the action, turning the whole edit into one undo entry.
 static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
   if (!editor_state.action_in_progress) return;
   editor_state.action_in_progress = false;
-  editor_state.clean_status[0] = '\0';
 
   if (editor_state.action_before_states && editor_state.action_before_count == snippet->input_count) {
     // Every tick in the snippet is handed to the undo command; it stores the
     // before and after states so redo is exact.
     int *indices = malloc(sizeof(int) * (size_t)snippet->input_count);
     if (indices) {
-      for (int i = 0; i < snippet->input_count; ++i) indices[i] = i;
+      for (int i = 0; i < snippet->input_count; ++i)
+        indices[i] = i;
       undo_command_t *command = create_edit_inputs_command(snippet, indices, snippet->input_count, editor_state.action_before_states,
                                                            snippet_window(snippet));
       if (command) undo_manager_register_command(&ui->undo_manager, command);
@@ -149,66 +113,6 @@ static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
 
   model_recalc_physics(&ui->timeline, snippet->start_tick);
   ui_mark_unsaved(ui);
-}
-
-static void draw_input_cleaning(ui_handler_t *ui, const ft_input_schema *schema, input_snippet_t *snippet, int track_index) {
-  if (!igCollapsingHeader_TreeNodeFlags("Input cleaning", ImGuiTreeNodeFlags_DefaultOpen)) return;
-  if (!ensure_clean_field_selection(schema)) {
-    igTextDisabled("Could not allocate input cleaning choices.");
-    return;
-  }
-
-  if (igButton("All##clean", (ImVec2){0.f, 0.f})) {
-    for (uint32_t i = 0; i < schema->field_count; ++i)
-      editor_state.clean_fields[i] = !(schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL);
-  }
-  igSameLine(0.f, 6.f);
-  if (igButton("None##clean", (ImVec2){0.f, 0.f})) {
-    for (uint32_t i = 0; i < schema->field_count; ++i) editor_state.clean_fields[i] = false;
-  }
-
-  int selected_count = 0;
-  int visible_count = 0;
-  for (uint32_t i = 0; i < schema->field_count; ++i)
-    if (!(schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL)) ++visible_count;
-  const int columns = visible_count < 3 ? visible_count : 3;
-  if (columns > 0 && igBeginTable("CleanInputFields", columns, ImGuiTableFlags_SizingStretchSame, (ImVec2){0.f, 0.f}, 0.f)) {
-    for (uint32_t i = 0; i < schema->field_count; ++i) {
-      const ft_input_field *field = &schema->fields[i];
-      if (field->flags & FT_INPUT_FLAG_INTERNAL) continue;
-      igTableNextColumn();
-      igPushID_Int((int)i);
-      igCheckbox(field->display_name ? field->display_name : field->id, &editor_state.clean_fields[i]);
-      igPopID();
-      if (editor_state.clean_fields[i]) ++selected_count;
-    }
-    igEndTable();
-  }
-
-  timeline_state_t *timeline = &ui->timeline;
-  const bool can_clean = snippet->is_active && !timeline->recording && selected_count > 0;
-  if (!can_clean) igBeginDisabled(true);
-  if (igButton("Clean selected", (ImVec2){0.f, 0.f})) {
-    input_clean_result_t result;
-    if (!begin_action(snippet)) {
-      snprintf(editor_state.clean_status, sizeof(editor_state.clean_status), "Could not allocate an undo snapshot.");
-    } else if (!input_cleaner_clean_snippet(ui, track_index, snippet, editor_state.clean_fields, schema->field_count, &result)) {
-      cancel_action();
-      snprintf(editor_state.clean_status, sizeof(editor_state.clean_status), "This game's run state cannot be compared.");
-    } else if (result.changed_values == 0) {
-      cancel_action();
-      snprintf(editor_state.clean_status, sizeof(editor_state.clean_status), "Already clean (%llu simulations).",
-               (unsigned long long)result.simulations);
-    } else {
-      end_action(ui, snippet);
-      snprintf(editor_state.clean_status, sizeof(editor_state.clean_status),
-               "Cleaned %d value%s in %d row%s (%d pass%s, %llu simulations).", result.changed_values,
-               result.changed_values == 1 ? "" : "s", result.changed_rows, result.changed_rows == 1 ? "" : "s", result.passes,
-               result.passes == 1 ? "" : "es", (unsigned long long)result.simulations);
-    }
-  }
-  if (!can_clean) igEndDisabled();
-  if (editor_state.clean_status[0]) igTextDisabled("%s", editor_state.clean_status);
 }
 
 // One cell of the matrix, drawn according to what kind of field it is.
@@ -268,7 +172,8 @@ static bool draw_field_cell(game_host_t *host, const ft_input_field *field, int 
     igPopItemWidth();
     break;
   }
-  default: break;
+  default:
+    break;
   }
 
   igPopID();
@@ -284,7 +189,7 @@ static void draw_bulk_edit(ui_handler_t *ui, game_host_t *host, const ft_input_s
 
   if (igBeginCombo("Field", field->display_name ? field->display_name : field->id, 0)) {
     for (uint32_t i = 0; i < schema->field_count; ++i) {
-      if (schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL) continue;
+      if (schema->fields[i].flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN)) continue;
       const bool selected = (int)i == editor_state.bulk_field;
       if (igSelectable_Bool(schema->fields[i].display_name ? schema->fields[i].display_name : schema->fields[i].id, selected, 0,
                             (ImVec2){0, 0})) {
@@ -391,19 +296,19 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
     igText("Track %d, ticks %d..%d", track_index, snippet->start_tick, snippet->end_tick);
     igSameLine(0, 12.f);
     if (igButton("Select all", (ImVec2){0.f, 0.f})) {
-      for (int i = 0; i < snippet->input_count && i < editor_state.selected_capacity; ++i) editor_state.selected_rows[i] = true;
+      for (int i = 0; i < snippet->input_count && i < editor_state.selected_capacity; ++i)
+        editor_state.selected_rows[i] = true;
     }
     igSameLine(0, 6.f);
     if (igButton("Select none", (ImVec2){0.f, 0.f})) clear_row_selection();
 
-    draw_input_cleaning(ui, schema, snippet, track_index);
     draw_bulk_edit(ui, host, schema, snippet);
     igSeparator();
 
     // One column per non-internal field, plus the tick number.
     int columns = 1;
     for (uint32_t i = 0; i < schema->field_count; ++i)
-      if (!(schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL)) ++columns;
+      if (!(schema->fields[i].flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN))) ++columns;
 
     const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX |
                                   ImGuiTableFlags_Resizable;
@@ -411,7 +316,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
       igTableSetupScrollFreeze(1, 1);
       igTableSetupColumn("Tick", ImGuiTableColumnFlags_WidthFixed, 64.f, 0);
       for (uint32_t i = 0; i < schema->field_count; ++i) {
-        if (schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL) continue;
+        if (schema->fields[i].flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN)) continue;
         igTableSetupColumn(schema->fields[i].display_name ? schema->fields[i].display_name : schema->fields[i].id,
                            ImGuiTableColumnFlags_WidthFixed, schema->fields[i].kind == FT_INPUT_VEC2 ? 140.f : 90.f, 0);
       }
@@ -434,7 +339,8 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
             if (io->KeyShift && editor_state.last_clicked_row >= 0) {
               const int from = row < editor_state.last_clicked_row ? row : editor_state.last_clicked_row;
               const int to = row < editor_state.last_clicked_row ? editor_state.last_clicked_row : row;
-              for (int i = from; i <= to && i < editor_state.selected_capacity; ++i) editor_state.selected_rows[i] = true;
+              for (int i = from; i <= to && i < editor_state.selected_capacity; ++i)
+                editor_state.selected_rows[i] = true;
             } else {
               if (!io->KeyCtrl) memset(editor_state.selected_rows, 0, (size_t)editor_state.selected_capacity * sizeof(bool));
               if (row < editor_state.selected_capacity) editor_state.selected_rows[row] = !selected || io->KeyCtrl;
@@ -445,7 +351,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
           bool row_changed = false;
           int column = 1;
           for (uint32_t i = 0; i < schema->field_count; ++i) {
-            if (schema->fields[i].flags & FT_INPUT_FLAG_INTERNAL) continue;
+            if (schema->fields[i].flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN)) continue;
             igTableSetColumnIndex(column++);
             if (draw_field_cell(host, &schema->fields[i], (int)i, &snippet_window(snippet)[row], row)) row_changed = true;
           }

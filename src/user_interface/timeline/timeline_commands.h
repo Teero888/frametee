@@ -55,6 +55,10 @@ struct undo_command_t *commands_create_timeline_event_group_change(ui_handler_t 
 // Special command for the snippet editor
 struct undo_command_t *create_edit_inputs_command(input_snippet_t *snippet, const int *indices, int count,
                                                   const input_record_t *before_states, const input_record_t *after_states);
+// Captures an already-applied change to one snippet's ordered effect stack.
+struct undo_command_t *commands_create_input_effects_change(ui_handler_t *ui, int snippet_id,
+                                                            const input_effect_t *before, int before_count,
+                                                            const char *description);
 
 // API-level commands
 struct undo_command_t *timeline_api_create_track(ui_handler_t *ui, const player_profile_t *profile, int *out_track_index);
