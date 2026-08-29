@@ -15,16 +15,23 @@
 #define MAX_MESHES 64
 #define MAX_TEXTURES_PER_DRAW 8
 #define MAX_UBOS_PER_DRAW 2
-#define MAX_PRIMITIVE_VERTICES 100000
-#define MAX_PRIMITIVE_INDICES 200000
+// Where the primitive buffers start, not how far they go: a frame that asks for
+// more room than it has gets a larger allocation, and the one it outgrew is
+// retired until the frames still reading it are done. Nothing here is a ceiling
+// on how much a game or a plugin may draw. See ensure_primitive_space.
+//
+// Sized so that ordinary frames never grow at all, since growing costs an
+// allocation and a copy in the frame that does it.
+#define INITIAL_PRIMITIVE_VERTICES 100000
+#define INITIAL_PRIMITIVE_INDICES 200000
 // A 3D game submits its world one triangle at a time and there is no retained
-// mesh path for it, so this ceiling is the whole of how much world can be on
-// screen at once. Two hundred thousand vertices is sixty-six thousand
-// triangles, which a real track passes several times over; the buffer costs
-// twenty-eight bytes a vertex, so the room is cheap and running out of it is
-// silent.
-#define MAX_PRIMITIVE3D_VERTICES 1200000
-#define MAX_RENDER_COMMANDS 65536
+// mesh path for it, so a whole track's worth of geometry comes through here
+// every frame. The buffer costs twenty-eight bytes a vertex, and this much of
+// it up front saves several doublings on the first frame of a real track.
+#define INITIAL_PRIMITIVE3D_VERTICES 1200000
+// Where the z-sorted command queue starts. Like the primitive buffers it is not
+// a ceiling: the queue grows with what a frame submits. See queue_reserve_one.
+#define INITIAL_RENDER_COMMANDS 65536
 #define MAX_ATLAS_INSTANCES 1000000
 // Resources a game module may create at runtime, on top of the engine's own.
 #define MAX_CUSTOM_VERTEX_ATTRS 24
@@ -45,6 +52,13 @@ struct buffer_t {
   VkDeviceMemory memory;
   VkDeviceSize size;
   void *mapped_memory;
+};
+
+// An allocation a primitive path has outgrown. Freeing one at the moment of the
+// swap would pull it out from under command buffers already recorded against
+// it, so it waits here until the frame fence has completed.
+struct retired_buffer_t {
+  buffer_t buffer;
 };
 
 struct texture_t {
@@ -326,6 +340,8 @@ struct render_command_t {
 struct render_queue_t {
   render_command_t *commands;
   uint32_t count;
+  // How many it holds now. A frame that submits more gets a bigger array.
+  uint32_t capacity;
 };
 
 struct renderer_state_t {
@@ -354,6 +370,8 @@ struct renderer_state_t {
   buffer_t dynamic_vertex_buffer3d;
   primitive3d_vertex_t *vertex3d_buffer_ptr;
   uint32_t primitive3d_vertex_count;
+  // How much the allocation currently holds. Grows with what is drawn.
+  uint32_t primitive3d_vertex_capacity;
   // The texture array the 3D path samples this frame. A game sets it once and
   // then addresses pages of it per triangle. NULL means nothing textured was
   // drawn, and the fallback below is bound so the descriptor is still complete.
@@ -371,7 +389,16 @@ struct renderer_state_t {
   uint32_t primitive_vertex_count;
   uint32_t primitive_index_count;
   uint32_t primitive_index_offset_drawn;
+  // As above: what the pair holds now, not what it is allowed to hold.
+  uint32_t primitive_vertex_capacity;
+  uint32_t primitive_index_capacity;
   VkCommandBuffer current_command_buffer;
+
+  // Allocations replaced by larger ones, freed once the preceding submission
+  // has completed.
+  retired_buffer_t *retired_buffers;
+  int retired_buffer_count;
+  int retired_buffer_capacity;
 
   buffer_t dynamic_ubo_buffer;
   void *ubo_buffer_ptr;
@@ -403,6 +430,10 @@ struct renderer_state_t {
 void check_vk_result(VkResult err);
 int renderer_init(gfx_handler_t *handler);
 void renderer_cleanup(gfx_handler_t *handler);
+// Called only after the preceding frame fence (or the whole device) has
+// completed. Dynamic allocations replaced while recording that frame can then
+// be released without guessing how many frames the GPU may have in flight.
+void renderer_frame_completed(gfx_handler_t *handler);
 
 shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, const char *frag_path);
 texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path);

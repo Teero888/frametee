@@ -414,6 +414,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   if (fb_width > 0 && fb_height > 0 &&
       (handler->g_swap_chain_rebuild || handler->g_main_window_data.Width != fb_width || handler->g_main_window_data.Height != fb_height)) {
     vkDeviceWaitIdle(handler->g_device);
+    renderer_frame_completed(handler);
 
     // Update Present Mode based on settings
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
@@ -442,9 +443,11 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
   // Ensure the previous use of this frame's fence is completed, so reuse of semaphores is safe
   ImGui_ImplVulkanH_Frame *acquire_fd = &wd->Frames.Data[wd->FrameIndex];
-  vkWaitForFences(handler->g_device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
+  VkResult err = vkWaitForFences(handler->g_device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
+  check_vk_result(err);
+  renderer_frame_completed(handler);
 
-  VkResult err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
+  err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
     handler->g_swap_chain_rebuild = true;
     // Skip this frame if the swapchain is invalid

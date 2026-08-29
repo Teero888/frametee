@@ -6,6 +6,7 @@
 #include "../scripting/script_engine.h"
 #include "renderer/renderer.h"
 #include <engine/input_record.h>
+#include <limits.h>
 #include <nfd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,48 @@ static int api_get_current_tick(void) { return g_ui_handler_for_api->timeline.cu
 static int api_get_track_count(void) { return g_ui_handler_for_api->timeline.player_track_count; }
 
 static int api_get_selected_track(void) { return g_ui_handler_for_api->timeline.selected_player_track_index; }
+
+static int track_last_tick(const player_track_t *track) {
+  int last = -1;
+  for (int i = 0; i < track->snippet_count; ++i) {
+    const input_snippet_t *snippet = &track->snippets[i];
+    if (snippet->is_active && snippet->input_count > 0 && snippet->end_tick > 0 && snippet->end_tick - 1 > last)
+      last = snippet->end_tick - 1;
+  }
+  for (int i = 0; i < track->recording_snippet_count; ++i) {
+    const input_snippet_t *snippet = &track->recording_snippets[i];
+    if (snippet->is_active && snippet->input_count > 0 && snippet->end_tick > 0 && snippet->end_tick - 1 > last)
+      last = snippet->end_tick - 1;
+  }
+  return last;
+}
+
+static int api_get_track_last_tick(int track_index) {
+  timeline_state_t *ts = &g_ui_handler_for_api->timeline;
+  if (track_index < 0 || track_index >= ts->player_track_count) return -1;
+  return track_last_tick(&ts->player_tracks[track_index]);
+}
+
+static bool api_get_track_position_at(int track_index, int tick, ft_vec2 *out_position) {
+  timeline_state_t *ts = &g_ui_handler_for_api->timeline;
+  if (!out_position || tick < 0 || track_index < 0 || track_index >= ts->player_track_count) return false;
+
+  const int group_index = model_track_group_index(ts, track_index);
+  const int local_player = model_group_local_track_index(ts, track_index);
+  if (group_index < 0 || local_player < 0) return false;
+
+  // model_group_world_at_tick takes shared/global time; plugin tracks and their
+  // snippets expose local time, so put this query on the owning group's clock.
+  const int64_t global_tick = (int64_t)tick + ts->groups[group_index]->start_offset;
+  if (global_tick < INT_MIN || global_tick > INT_MAX) return false;
+  const ft_world *world = model_group_world_at_tick(ts, group_index, (int)global_tick);
+  if (!world) return false;
+
+  ft_player_view view = {.struct_size = sizeof(view)};
+  if (!gh_world_player_view(&g_ui_handler_for_api->gfx_handler->game_host, world, local_player, &view)) return false;
+  *out_position = view.position;
+  return true;
+}
 
 // READ ONLY PLEASE. The handle belongs to the active game; a plugin that looks
 // inside it has to be built for that game and declare so via plugin_game_id().
@@ -141,6 +184,7 @@ static bool api_find_snippet_at(int track_index, int tick, int *out_snippet_id, 
   player_track_t *track = &ts->player_tracks[track_index];
   for (int i = 0; i < track->snippet_count; ++i) {
     input_snippet_t *snippet = &track->snippets[i];
+    if (!snippet->is_active) continue;
     if (tick < snippet->start_tick || tick >= snippet->end_tick) continue;
     const int offset = tick - snippet->start_tick;
     if (out_snippet_id) *out_snippet_id = snippet->id;
@@ -366,6 +410,8 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .get_current_tick = api_get_current_tick,
       .get_track_count = api_get_track_count,
       .get_selected_track = api_get_selected_track,
+      .get_track_last_tick = api_get_track_last_tick,
+      .get_track_position_at = api_get_track_position_at,
       .get_initial_world = api_get_initial_world,
       .get_world_state_at = api_get_world_state_at,
       .destroy_world = api_destroy_world,

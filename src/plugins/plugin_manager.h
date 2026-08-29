@@ -39,14 +39,21 @@ struct loaded_plugin_t {
   
   // Game this plugin is written for, empty when it is global. Owned copy, since
   // the string lives in the library and the library may be unloaded. Read from
-  // the library itself, so it is only set once the plugin has been loaded.
+  // the library itself, so it is only authoritative once game_id_known is true.
+  // That boolean matters for a global plugin: an empty, known answer must not
+  // fall back to a game named only by the manifest.
   char game_id[32];
+  bool game_id_known;
 
   // From the manifest the plugin ships beside its library, which the editor
   // reads as data so that a plugin it will not run can still be listed. Every
   // one of these is the author's claim about their own plugin: the manifest
-  // sits next to the library and whoever writes one writes the other. They are
-  // shown to the user and never used to decide anything.
+  // sits next to the library and whoever writes one writes the other, so none
+  // of it is evidence of anything. They are shown to the user, and the one
+  // decision any of them takes part in is fail-closed: `manifest_game` naming
+  // another game keeps the library from being opened at all, while naming this
+  // one grants nothing, because plugin_game_id() is asked again the moment the
+  // library is up. See plugin_manager_load_plugin.
   char repository[256];
   char manifest_game[32];
 
@@ -101,9 +108,13 @@ void plugin_manager_toggle_plugin(plugin_manager_t *manager, int index);
 void plugin_manager_approve_current_version(plugin_manager_t *manager, int index);
 void plugin_manager_render_ui(plugin_manager_t *manager, bool *p_open);
 
+// The game a plugin says it is for: its library's answer once that answer is
+// known, its manifest's claim before that, empty for a known-global plugin.
+// For showing, and for the one fail-closed test described above.
+const char *plugin_target_game(const loaded_plugin_t *plugin);
 // True when the plugin may run under the currently active game: either it is
-// global, or its game_id matches. Game-specific plugins are skipped rather than
-// failed, because switching back makes them valid again.
+// global, or the game it declares matches. Game-specific plugins are skipped
+// rather than failed, because switching back makes them valid again.
 bool plugin_manager_matches_active_game(const plugin_manager_t *manager, const loaded_plugin_t *plugin);
 // Loads plugins that became valid for the newly active game and unloads the
 // ones that no longer apply. Call after the active game changes.

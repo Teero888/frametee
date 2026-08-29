@@ -157,7 +157,9 @@ public:
       ImGui::EndMainMenuBar();
     }
 
-    if (m_ShowWindow) {
+    // Tab takes the editor's interface down; this panel goes with it. A
+    // profiling run started before it went down carries on regardless.
+    if (m_ShowWindow && m_pContext->ui_visible) {
       if (ImGui::Begin("Physics Profiler", &m_ShowWindow)) {
         ImGui::Text("Benchmark controls for the ddnet_physics library.");
         ImGui::Text("Uses the current initial world to benchmark, add as many players as you want");

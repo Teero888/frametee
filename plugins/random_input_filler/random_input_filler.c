@@ -208,7 +208,8 @@ FT_API void plugin_update(void *plugin_data) {
     igEndMainMenuBar();
   }
 
-  if (!state->show_window)
+  // Down with the editor's interface (Tab), up with it: see tas_context_t.
+  if (!state->show_window || !state->context->ui_visible)
     return;
 
   if (igBegin("Random Input Filler", &state->show_window, ImGuiWindowFlags_None)) {

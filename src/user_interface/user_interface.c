@@ -133,7 +133,15 @@ void render_menu_bar(ui_handler_t *ui) {
           char label[256];
           snprintf(label, sizeof(label), "%s##menu_%d", p->info_name[0] ? p->info_name : p->key, i);
           if (igMenuItem_Bool(label, NULL, is_loaded, true)) {
-            plugin_manager_toggle_plugin(&ui->plugin_manager, i);
+            // A changed plugin is still enabled, but its previously approved
+            // digest deliberately prevents it from loading. The unchecked
+            // menu item means "make this active"; toggling the stored enabled
+            // bit here would disable it on the first click and require a
+            // second click to approve and load the new files.
+            if (p->status == PLUGIN_STATUS_CHANGED)
+              plugin_manager_approve_current_version(&ui->plugin_manager, i);
+            else
+              plugin_manager_toggle_plugin(&ui->plugin_manager, i);
           }
         }
       }
@@ -1055,6 +1063,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->plugin_api = api_init(ui);
   ui->plugin_context.imgui_context = igGetCurrentContext();
   ui->plugin_context.is_headless = g_is_headless;
+  ui->plugin_context.ui_visible = ui->show_ui;
   // Points into the host's slot table, which outlives every plugin.
   ui->plugin_context.active_game_id = game_host_active_id(&gfx_handler->game_host);
   plugin_manager_init(&ui->plugin_manager, &ui->plugin_context, &ui->plugin_api, ui);
@@ -1499,6 +1508,9 @@ void ui_render(ui_handler_t *ui) {
   keybinds_process_inputs(ui);
   interaction_handle_playback_and_shortcuts(&ui->timeline);
   setup_docking(ui);
+  // Read by plugins for the same reason the panels below are gated: see
+  // tas_context_t::ui_visible. Set before the update that reads it.
+  ui->plugin_context.ui_visible = ui->show_ui;
   plugin_manager_update_all(&ui->plugin_manager);
 
   if (ui->show_fps) {

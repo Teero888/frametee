@@ -35,6 +35,16 @@ struct tas_context_t {
   // read its resources from there. Set for the duration of plugin_init and null
   // outside it, so copy it if it is needed later.
   const char *plugin_directory;
+  // False while the editor's interface is down (Tab), which is how a user asks
+  // for the level with nothing over it. A plugin is still updated every frame
+  // while it is false -- searches, recordings and world overlays are the work
+  // the editor is being cleared to show -- so what belongs behind this test is
+  // the plugin's panels, exactly what the editor and the games drop from the
+  // same gesture. Menu bar entries stay: the menu bar itself does.
+  //
+  // Live, and read through the context pointer the plugin was handed: check it
+  // in plugin_update rather than copying it in plugin_init.
+  bool ui_visible;
 };
 
 // api functions provided to plugins for interacting with the host application.
@@ -50,6 +60,14 @@ struct tas_api_t {
   int (*get_current_tick)(void);
   int (*get_track_count)(void);
   int (*get_selected_track)(void);
+  // Last tick carrying active input on this track, in the track's own local
+  // time, or -1 when it has no input. Recording snippets are included.
+  int (*get_track_last_tick)(int track_index);
+  // Position reported by the active game's ft_player_view for this track at a
+  // track-local tick. The host resolves both the track's simulation group and
+  // its player index within that group, so callers must not confuse a global
+  // timeline track index with a world's local player index.
+  bool (*get_track_position_at)(int track_index, int tick, ft_vec2 *out_position);
   const ft_world *(*get_initial_world)(void);
   // Owned copy. Release it with destroy_world.
   ft_world *(*get_world_state_at)(int tick);
@@ -141,7 +159,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 1u
+#define FRAMETEE_PLUGIN_ABI_VERSION 2u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 
@@ -163,8 +181,9 @@ typedef uint32_t (*plugin_abi_version_func)(void);
 // game's world or input records belongs to that game and should say so, since
 // the bytes mean nothing under a different one.
 //
-// The manifest names the game too, but only as something to show. This export
-// is what the host acts on: it cannot drift from the code the way a text file
+// The manifest names the game too. Before opening a library, the host may use
+// that claim only to withhold a load under another game; after opening it, this
+// export is authoritative. It cannot drift from the code the way a text file
 // beside it can, and loading a plugin under a game it was not written for is a
 // question of whether its reads mean anything, not of what it calls itself.
 #define GET_PLUGIN_GAME_ID_FUNC_NAME "plugin_game_id"

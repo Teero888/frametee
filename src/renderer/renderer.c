@@ -2,6 +2,7 @@
 #include <system/fs.h>
 #include "graphics_backend.h"
 #include <cglm/cglm.h>
+#include <limits.h>
 #include <logger/logger.h>
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
@@ -69,6 +70,9 @@ static void renderer_flush_custom_instances(gfx_handler_t *h, VkCommandBuffer cm
 static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t base_layer,
                           uint32_t layer_count);
 static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer);
+static void destroy_mapped_buffer(gfx_handler_t *handler, buffer_t *buffer);
+// Frees the allocations the primitive paths have outgrown; see its definition.
+static void destroy_retired_buffers(gfx_handler_t *handler);
 static void flush_primitives3d(gfx_handler_t *h, VkCommandBuffer command_buffer);
 static primitive_ubo_t world_ubo(gfx_handler_t *h);
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
@@ -533,8 +537,9 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->gfx = handler;
 
   // Initialize the render queue
-  renderer->queue.commands = malloc(sizeof(render_command_t) * MAX_RENDER_COMMANDS);
+  renderer->queue.commands = malloc(sizeof(render_command_t) * INITIAL_RENDER_COMMANDS);
   renderer->queue.count = 0;
+  renderer->queue.capacity = renderer->queue.commands ? INITIAL_RENDER_COMMANDS : 0;
 
   setup_vertex_descriptions();
 
@@ -573,15 +578,19 @@ int renderer_init(gfx_handler_t *handler) {
   // Primitive & UBO Ring Buffer Setup
   renderer->primitive_shader = renderer_load_shader(handler, "data/shaders/primitive.vert.spv", "data/shaders/primitive.frag.spv");
 
-  create_buffer(handler, MAX_PRIMITIVE_VERTICES * sizeof(primitive_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  create_buffer(handler, INITIAL_PRIMITIVE_VERTICES * sizeof(primitive_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_vertex_buffer);
   vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->vertex_buffer_ptr);
+  renderer->dynamic_vertex_buffer.mapped_memory = renderer->vertex_buffer_ptr;
+  renderer->primitive_vertex_capacity = INITIAL_PRIMITIVE_VERTICES;
 
   renderer->primitive3d_shader =
       renderer_load_shader(handler, "data/shaders/primitive3d.vert.spv", "data/shaders/primitive3d.frag.spv");
-  create_buffer(handler, MAX_PRIMITIVE3D_VERTICES * sizeof(primitive3d_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  create_buffer(handler, INITIAL_PRIMITIVE3D_VERTICES * sizeof(primitive3d_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_vertex_buffer3d);
   vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer3d.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->vertex3d_buffer_ptr);
+  renderer->dynamic_vertex_buffer3d.mapped_memory = renderer->vertex3d_buffer_ptr;
+  renderer->primitive3d_vertex_capacity = INITIAL_PRIMITIVE3D_VERTICES;
 
   renderer->primitive3d_sampler =
       create_texture_sampler_wrapped(handler, 16, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
@@ -608,13 +617,16 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->camera3.near_z = 0.05f;
   renderer->camera3.far_z = 200000.f;
 
-  create_buffer(handler, MAX_PRIMITIVE_INDICES * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+  create_buffer(handler, INITIAL_PRIMITIVE_INDICES * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_index_buffer);
   vkMapMemory(handler->g_device, renderer->dynamic_index_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->index_buffer_ptr);
+  renderer->dynamic_index_buffer.mapped_memory = renderer->index_buffer_ptr;
+  renderer->primitive_index_capacity = INITIAL_PRIMITIVE_INDICES;
 
   create_buffer(handler, DYNAMIC_UBO_BUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_ubo_buffer);
   vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0, &renderer->ubo_buffer_ptr);
+  renderer->dynamic_ubo_buffer.mapped_memory = renderer->ubo_buffer_ptr;
 
 
   // Game Skin Sprites (32x16 grid, 32px unit)
@@ -687,12 +699,18 @@ void renderer_cleanup(gfx_handler_t *handler) {
     }
   }
 
-  vkDestroyBuffer(device, renderer->dynamic_vertex_buffer.buffer, allocator);
-  vkFreeMemory(device, renderer->dynamic_vertex_buffer.memory, allocator);
-  vkDestroyBuffer(device, renderer->dynamic_index_buffer.buffer, allocator);
-  vkFreeMemory(device, renderer->dynamic_index_buffer.memory, allocator);
-  vkDestroyBuffer(device, renderer->dynamic_ubo_buffer.buffer, allocator);
-  vkFreeMemory(device, renderer->dynamic_ubo_buffer.memory, allocator);
+  destroy_retired_buffers(handler);
+  free(renderer->retired_buffers);
+  renderer->retired_buffers = NULL;
+  renderer->retired_buffer_count = 0;
+  renderer->retired_buffer_capacity = 0;
+
+  destroy_mapped_buffer(handler, &renderer->dynamic_vertex_buffer);
+  destroy_mapped_buffer(handler, &renderer->dynamic_index_buffer);
+  destroy_mapped_buffer(handler, &renderer->dynamic_vertex_buffer3d);
+  destroy_mapped_buffer(handler, &renderer->dynamic_ubo_buffer);
+  if (renderer->primitive3d_sampler != VK_NULL_HANDLE)
+    vkDestroySampler(device, renderer->primitive3d_sampler, allocator);
 
   for (int i = 0; i < 3; i++) {
     if (renderer->frame_descriptor_pools[i] != VK_NULL_HANDLE) {
@@ -1758,25 +1776,162 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   renderer->primitive_index_offset_drawn = renderer->primitive_index_count;
 }
 
-static void ensure_primitive_space(gfx_handler_t *handler, uint32_t vertex_count, uint32_t index_count) {
-  renderer_state_t *renderer = &handler->renderer;
-  if (renderer->primitive_vertex_count + vertex_count > MAX_PRIMITIVE_VERTICES ||
-      renderer->primitive_index_count + index_count > MAX_PRIMITIVE_INDICES) {
-    // If full, flush what we have so far
-    flush_primitives(handler, renderer->current_command_buffer);
+// Twice what there is, or what was asked for when that is more. A frame that
+// grows steadily then stops growing after a step or two; one that arrives with a
+// hundred times the geometry gets there in one allocation rather than seven.
+static uint32_t grown_capacity(uint32_t current, uint32_t needed) {
+  uint32_t capacity = current > 0 ? current : 1024;
+  while (capacity < needed && capacity <= UINT32_MAX / 2)
+    capacity *= 2;
+  return capacity < needed ? needed : capacity;
+}
 
-    // Check again. If still full (because we didn't reset), we are out of space for this frame.
-    if (renderer->primitive_vertex_count + vertex_count > MAX_PRIMITIVE_VERTICES ||
-        renderer->primitive_index_count + index_count > MAX_PRIMITIVE_INDICES) {
-      log_error(LOG_SOURCE, "Primitive buffer overflow! Increase MAX_PRIMITIVE_VERTICES/INDICES.");
-      // We can't safely reset here because previous draw calls depend on the data.
-      // Dropping geometry is the only safe fallback without ring buffering.
-    }
+// The non-fatal counterpart to create_buffer. How large these get is decided by
+// what a game or a plugin draws, so a refusal is a thing that can reasonably
+// happen, and the answer to it is to draw less rather than to lose the editor.
+static bool try_create_mapped_buffer(gfx_handler_t *handler, VkDeviceSize size, VkBufferUsageFlags usage, buffer_t *out,
+                                     void **out_ptr) {
+  memset(out, 0, sizeof(*out));
+  *out_ptr = NULL;
+
+  VkBufferCreateInfo buffer_info = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size, .usage = usage, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+  if (vkCreateBuffer(handler->g_device, &buffer_info, handler->g_allocator, &out->buffer) != VK_SUCCESS) {
+    out->buffer = VK_NULL_HANDLE;
+    return false;
   }
+
+  VkMemoryRequirements requirements;
+  vkGetBufferMemoryRequirements(handler->g_device, out->buffer, &requirements);
+  const VkMemoryPropertyFlags properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  VkMemoryAllocateInfo alloc_info = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = requirements.size,
+      .memoryTypeIndex = find_memory_type(handler->g_physical_device, requirements.memoryTypeBits, properties)};
+  if (vkAllocateMemory(handler->g_device, &alloc_info, handler->g_allocator, &out->memory) != VK_SUCCESS ||
+      vkBindBufferMemory(handler->g_device, out->buffer, out->memory, 0) != VK_SUCCESS ||
+      vkMapMemory(handler->g_device, out->memory, 0, VK_WHOLE_SIZE, 0, out_ptr) != VK_SUCCESS) {
+    vkDestroyBuffer(handler->g_device, out->buffer, handler->g_allocator);
+    if (out->memory != VK_NULL_HANDLE) vkFreeMemory(handler->g_device, out->memory, handler->g_allocator);
+    memset(out, 0, sizeof(*out));
+    return false;
+  }
+
+  out->size = size;
+  out->mapped_memory = *out_ptr;
+  return true;
+}
+
+static void destroy_mapped_buffer(gfx_handler_t *handler, buffer_t *buffer) {
+  if (buffer->mapped_memory && buffer->memory != VK_NULL_HANDLE)
+    vkUnmapMemory(handler->g_device, buffer->memory);
+  if (buffer->buffer != VK_NULL_HANDLE)
+    vkDestroyBuffer(handler->g_device, buffer->buffer, handler->g_allocator);
+  if (buffer->memory != VK_NULL_HANDLE)
+    vkFreeMemory(handler->g_device, buffer->memory, handler->g_allocator);
+  memset(buffer, 0, sizeof(*buffer));
+}
+
+static bool reserve_retired_buffers(renderer_state_t *renderer, int additional) {
+  if (additional <= renderer->retired_buffer_capacity - renderer->retired_buffer_count) return true;
+  int capacity = renderer->retired_buffer_capacity > 0 ? renderer->retired_buffer_capacity : 8;
+  const int needed = renderer->retired_buffer_count + additional;
+  while (capacity < needed) {
+    if (capacity > INT_MAX / 2) {
+      capacity = needed;
+      break;
+    }
+    capacity *= 2;
+  }
+  retired_buffer_t *grown = realloc(renderer->retired_buffers, (size_t)capacity * sizeof(*grown));
+  if (!grown) return false;
+  renderer->retired_buffers = grown;
+  renderer->retired_buffer_capacity = capacity;
+  return true;
+}
+
+static void retire_buffer(gfx_handler_t *handler, const buffer_t *buffer) {
+  if (buffer->buffer == VK_NULL_HANDLE) return;
+  renderer_state_t *renderer = &handler->renderer;
+  renderer->retired_buffers[renderer->retired_buffer_count].buffer = *buffer;
+  ++renderer->retired_buffer_count;
+}
+
+// gfx_begin_frame waits for the immediately preceding submission before it
+// starts another one, so every allocation retired while recording that frame
+// is safe once renderer_frame_completed is called. Cleanup has likewise waited
+// for the whole device.
+static void destroy_retired_buffers(gfx_handler_t *handler) {
+  renderer_state_t *renderer = &handler->renderer;
+  for (int i = 0; i < renderer->retired_buffer_count; ++i) {
+    destroy_mapped_buffer(handler, &renderer->retired_buffers[i].buffer);
+  }
+  renderer->retired_buffer_count = 0;
+}
+
+void renderer_frame_completed(gfx_handler_t *handler) { destroy_retired_buffers(handler); }
+
+// Room for one more primitive, whatever it takes.
+//
+// The 2D path writes into mapped memory that draw commands already recorded
+// this frame are bound to, so a full buffer cannot simply be reused: what has
+// been written is drawn first, then a larger pair of buffers takes over and the
+// counts start again at zero. The old pair stays alive, retired, for as long as
+// anything might still be reading it.
+//
+// False means the geometry has nowhere to go and the caller must not write it.
+// That is the one case where something is dropped, and it takes the graphics
+// driver refusing an allocation to get there.
+static bool ensure_primitive_space(gfx_handler_t *handler, uint32_t vertex_count, uint32_t index_count) {
+  renderer_state_t *renderer = &handler->renderer;
+  if (vertex_count > UINT32_MAX - renderer->primitive_vertex_count ||
+      index_count > UINT32_MAX - renderer->primitive_index_count)
+    return false;
+  const uint32_t needed_vertices = renderer->primitive_vertex_count + vertex_count;
+  const uint32_t needed_indices = renderer->primitive_index_count + index_count;
+  if (needed_vertices <= renderer->primitive_vertex_capacity && needed_indices <= renderer->primitive_index_capacity)
+    return true;
+
+  if (!reserve_retired_buffers(renderer, 2)) return false;
+  flush_primitives(handler, renderer->current_command_buffer);
+  // A failed pipeline/descriptor/UBO allocation did not record the pending
+  // draw. Keep its memory intact rather than replacing it and silently losing
+  // geometry that renderer_end_frame may still be able to flush.
+  if (renderer->primitive_index_offset_drawn != renderer->primitive_index_count) return false;
+
+  buffer_t vertices, indices;
+  primitive_vertex_t *vertex_ptr = NULL;
+  uint32_t *index_ptr = NULL;
+  const uint32_t vertex_capacity = grown_capacity(renderer->primitive_vertex_capacity, needed_vertices);
+  const uint32_t index_capacity = grown_capacity(renderer->primitive_index_capacity, needed_indices);
+
+  if (!try_create_mapped_buffer(handler, (VkDeviceSize)vertex_capacity * sizeof(primitive_vertex_t),
+                                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &vertices, (void **)&vertex_ptr))
+    return false;
+  if (!try_create_mapped_buffer(handler, (VkDeviceSize)index_capacity * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                &indices, (void **)&index_ptr)) {
+    destroy_mapped_buffer(handler, &vertices);
+    return false;
+  }
+
+  retire_buffer(handler, &renderer->dynamic_vertex_buffer);
+  retire_buffer(handler, &renderer->dynamic_index_buffer);
+  renderer->dynamic_vertex_buffer = vertices;
+  renderer->dynamic_index_buffer = indices;
+  renderer->vertex_buffer_ptr = vertex_ptr;
+  renderer->index_buffer_ptr = index_ptr;
+  renderer->primitive_vertex_capacity = vertex_capacity;
+  renderer->primitive_index_capacity = index_capacity;
+  // Everything written so far was drawn out of the buffers that were just
+  // retired, so the new pair starts empty.
+  renderer->primitive_vertex_count = 0;
+  renderer->primitive_index_count = 0;
+  renderer->primitive_index_offset_drawn = 0;
+  return true;
 }
 
 void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4 color) {
-  ensure_primitive_space(handler, 4, 6);
+  if (!ensure_primitive_space(handler, 4, 6)) return;
 
   renderer_state_t *renderer = &handler->renderer;
   uint32_t base_index = renderer->primitive_vertex_count;
@@ -1813,7 +1968,7 @@ void renderer_draw_rect_filled(gfx_handler_t *handler, vec2 pos, vec2 size, vec4
 }
 
 void renderer_draw_triangle_filled(gfx_handler_t *handler, vec2 p1, vec2 p2, vec2 p3, vec4 color) {
-  ensure_primitive_space(handler, 3, 3);
+  if (!ensure_primitive_space(handler, 3, 3)) return;
 
   renderer_state_t *renderer = &handler->renderer;
   uint32_t base_index = renderer->primitive_vertex_count;
@@ -1834,8 +1989,12 @@ void renderer_draw_triangle_filled(gfx_handler_t *handler, vec2 p1, vec2 p2, vec
 
 void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color, uint32_t segments) {
   if (segments < 3) segments = 3;
+  if (segments == UINT32_MAX || segments > UINT32_MAX / 3) {
+    log_warn(LOG_SOURCE, "Circle has too many segments (%u); draw skipped", segments);
+    return;
+  }
 
-  ensure_primitive_space(handler, segments + 1, segments * 3);
+  if (!ensure_primitive_space(handler, segments + 1, segments * 3)) return;
 
   renderer_state_t *renderer = &handler->renderer;
   uint32_t base_index = renderer->primitive_vertex_count;
@@ -1868,13 +2027,6 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
 }
 // TODO: ensuring the width of the thing is atleast 1px is kinda expensive. think of another way to do this
 void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness) {
-  ensure_primitive_space(handler, 4, 6);
-
-  renderer_state_t *renderer = &handler->renderer;
-  uint32_t base_index = renderer->primitive_vertex_count;
-  primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
-  uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
-
   // Calculate perpendicular direction
   vec2 dir;
   glm_vec2_sub(p2, p1, dir);
@@ -1884,6 +2036,13 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
     // Line is too short, skip
     return;
   }
+
+  if (!ensure_primitive_space(handler, 4, 6)) return;
+
+  renderer_state_t *renderer = &handler->renderer;
+  uint32_t base_index = renderer->primitive_vertex_count;
+  primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
+  uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
 
   glm_vec2_scale(dir, 1.0f / len, dir);
   vec2 normal = {-dir[1], dir[0]};
@@ -2262,19 +2421,53 @@ void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
 // texture" rather than clamping into page zero.
 #define PRIMITIVE3D_NO_TEXTURE (-1.f)
 
-static void push_vertex3(renderer_state_t *r, vec3 pos, vec4 color, vec2 uv, float layer) {
-  if (r->primitive3d_vertex_count >= MAX_PRIMITIVE3D_VERTICES || !r->vertex3d_buffer_ptr) {
-    // Dropping geometry without saying so looks like a bug in the game rather
-    // than a limit in the renderer, so say it once.
-    static bool reported = false;
-    if (r->vertex3d_buffer_ptr && !reported) {
-      reported = true;
-      log_warn("Renderer", "3D vertex buffer full at %d vertices; geometry past this is not drawn",
-               MAX_PRIMITIVE3D_VERTICES);
-    }
-    return;
+// The 3D stream is drawn by a single command at the end of the frame, so
+// nothing is bound to this buffer while it fills and a larger one can take over
+// simply by carrying the vertices across. As in the 2D path, the allocation
+// left behind is retired rather than freed: an earlier frame may still be
+// reading it.
+static bool grow_primitive3d_buffer(gfx_handler_t *handler, uint32_t needed) {
+  renderer_state_t *renderer = &handler->renderer;
+  if (!reserve_retired_buffers(renderer, 1)) return false;
+  const uint32_t capacity = grown_capacity(renderer->primitive3d_vertex_capacity, needed);
+
+  buffer_t grown;
+  primitive3d_vertex_t *ptr = NULL;
+  if (!try_create_mapped_buffer(handler, (VkDeviceSize)capacity * sizeof(primitive3d_vertex_t),
+                                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &grown, (void **)&ptr))
+    return false;
+
+  if (renderer->vertex3d_buffer_ptr && renderer->primitive3d_vertex_count > 0)
+    memcpy(ptr, renderer->vertex3d_buffer_ptr, (size_t)renderer->primitive3d_vertex_count * sizeof(primitive3d_vertex_t));
+
+  retire_buffer(handler, &renderer->dynamic_vertex_buffer3d);
+  renderer->dynamic_vertex_buffer3d = grown;
+  renderer->vertex3d_buffer_ptr = ptr;
+  renderer->primitive3d_vertex_capacity = capacity;
+  return true;
+}
+
+static bool ensure_primitive3d_space(gfx_handler_t *handler, uint32_t additional) {
+  renderer_state_t *renderer = &handler->renderer;
+  if (additional > UINT32_MAX - renderer->primitive3d_vertex_count) return false;
+  const uint32_t needed = renderer->primitive3d_vertex_count + additional;
+  if (renderer->vertex3d_buffer_ptr && needed <= renderer->primitive3d_vertex_capacity) return true;
+  if (grow_primitive3d_buffer(handler, needed)) return true;
+
+  // A whole triangle or line is reserved before any of its vertices are
+  // written. Otherwise an allocation failure on the last vertex shifts every
+  // triangle that follows and turns unrelated geometry into one corrupt strip.
+  static bool reported = false;
+  if (!reported) {
+    reported = true;
+    log_warn(LOG_SOURCE, "Out of memory for 3D vertices at %u; geometry past this is not drawn",
+             renderer->primitive3d_vertex_capacity);
   }
-  primitive3d_vertex_t *v = &r->vertex3d_buffer_ptr[r->primitive3d_vertex_count++];
+  return false;
+}
+
+static void push_vertex3(renderer_state_t *renderer, vec3 pos, vec4 color, vec2 uv, float layer) {
+  primitive3d_vertex_t *v = &renderer->vertex3d_buffer_ptr[renderer->primitive3d_vertex_count++];
   glm_vec3_copy(pos, v->pos);
   glm_vec4_copy(color, v->color);
   glm_vec2_copy(uv, v->uv);
@@ -2282,11 +2475,12 @@ static void push_vertex3(renderer_state_t *r, vec3 pos, vec4 color, vec2 uv, flo
 }
 
 void renderer_submit_triangle3(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec4 color) {
-  renderer_state_t *r = &h->renderer;
+  if (!ensure_primitive3d_space(h, 3)) return;
+  renderer_state_t *renderer = &h->renderer;
   vec2 no_uv = {0.f, 0.f};
-  push_vertex3(r, a, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
-  push_vertex3(r, b, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
-  push_vertex3(r, c, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(renderer, a, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(renderer, b, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(renderer, c, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
 }
 
 // The page a triangle names, or the "no texture" marker when nothing is bound
@@ -2299,11 +2493,12 @@ static float primitive3d_page(const renderer_state_t *r, uint32_t layer) {
 
 void renderer_submit_triangle3_textured(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec2 uv_a, vec2 uv_b, vec2 uv_c,
                                         uint32_t layer, vec4 tint) {
-  renderer_state_t *r = &h->renderer;
-  const float page = primitive3d_page(r, layer);
-  push_vertex3(r, a, tint, uv_a, page);
-  push_vertex3(r, b, tint, uv_b, page);
-  push_vertex3(r, c, tint, uv_c, page);
+  if (!ensure_primitive3d_space(h, 3)) return;
+  renderer_state_t *renderer = &h->renderer;
+  const float page = primitive3d_page(renderer, layer);
+  push_vertex3(renderer, a, tint, uv_a, page);
+  push_vertex3(renderer, b, tint, uv_b, page);
+  push_vertex3(renderer, c, tint, uv_c, page);
 }
 
 void renderer_set_texture3(gfx_handler_t *h, texture_t *texture) { h->renderer.primitive3d_texture = texture; }
@@ -2330,14 +2525,15 @@ void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float t
   glm_vec3_add(b, side, b0);
   glm_vec3_sub(b, side, b1);
 
-  renderer_state_t *r = &h->renderer;
+  if (!ensure_primitive3d_space(h, 6)) return;
+  renderer_state_t *renderer = &h->renderer;
   vec2 no_uv = {0.f, 0.f};
-  push_vertex3(r, a0, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
-  push_vertex3(r, a1, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
-  push_vertex3(r, b0, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
-  push_vertex3(r, b0, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
-  push_vertex3(r, a1, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
-  push_vertex3(r, b1, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(renderer, a0, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(renderer, a1, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(renderer, b0, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(renderer, b0, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(renderer, a1, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
+  push_vertex3(renderer, b1, color, no_uv, PRIMITIVE3D_NO_TEXTURE);
 }
 
 void renderer_submit_box3(gfx_handler_t *h, vec3 center, vec3 size, vec4 color, bool wire) {
@@ -2525,8 +2721,35 @@ static int compare_render_commands(const void *a, const void *b) {
 
 
 
+// Room for one more command in the z-sorted queue, however many a frame draws.
+//
+// Nothing holds a pointer into this array across a submit -- a command is
+// filled in immediately, and a batch points into transient memory rather than
+// into the queue -- so growing it is a plain realloc. False only when the
+// allocation is refused, which is the one case left where a draw is dropped.
+static bool queue_reserve_one(renderer_state_t *renderer) {
+  if (renderer->queue.count < renderer->queue.capacity) return true;
+
+  if (renderer->queue.capacity == UINT32_MAX) return false;
+  const uint32_t capacity = grown_capacity(renderer->queue.capacity, renderer->queue.capacity + 1);
+  if ((size_t)capacity > SIZE_MAX / sizeof(*renderer->queue.commands)) return false;
+  render_command_t *grown = realloc(renderer->queue.commands, (size_t)capacity * sizeof(*grown));
+  if (!grown) {
+    static bool reported = false;
+    if (!reported) {
+      reported = true;
+      log_warn(LOG_SOURCE, "Out of memory for the render queue at %u commands; draws past this are dropped",
+               renderer->queue.capacity);
+    }
+    return false;
+  }
+  renderer->queue.commands = grown;
+  renderer->queue.capacity = capacity;
+  return true;
+}
+
 void renderer_submit_rect_filled(struct gfx_handler_t *h, float z, vec2 pos, vec2 size, vec4 color) {
-  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  if (!queue_reserve_one(&h->renderer)) return;
   render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
   cmd->type = RENDER_CMD_RECT_FILLED;
   cmd->z = z;
@@ -2536,7 +2759,7 @@ void renderer_submit_rect_filled(struct gfx_handler_t *h, float z, vec2 pos, vec
 }
 
 void renderer_submit_circle_filled(struct gfx_handler_t *h, float z, vec2 center, float radius, vec4 color, uint32_t segments) {
-  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  if (!queue_reserve_one(&h->renderer)) return;
   render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
   cmd->type = RENDER_CMD_CIRCLE_FILLED;
   cmd->z = z;
@@ -2547,7 +2770,7 @@ void renderer_submit_circle_filled(struct gfx_handler_t *h, float z, vec2 center
 }
 
 void renderer_submit_triangle_filled(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec2 p3, vec4 color) {
-  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  if (!queue_reserve_one(&h->renderer)) return;
   render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
   cmd->type = RENDER_CMD_TRIANGLE_FILLED;
   cmd->z = z;
@@ -2558,7 +2781,7 @@ void renderer_submit_triangle_filled(struct gfx_handler_t *h, float z, vec2 p1, 
 }
 
 void renderer_submit_line(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec4 color, float thickness) {
-  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
+  if (!queue_reserve_one(&h->renderer)) return;
   render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
   cmd->type = RENDER_CMD_LINE;
   cmd->z = z;
@@ -2570,12 +2793,14 @@ void renderer_submit_line(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, ve
 
 void renderer_submit_line_batch(struct gfx_handler_t *h, float z, const line_segment_t *segments, uint32_t count) {
   renderer_state_t *renderer = &h->renderer;
-  if (!segments || count == 0 || renderer->queue.count >= MAX_RENDER_COMMANDS) return;
+  if (!segments || count == 0 || (size_t)count > SIZE_MAX / sizeof(*segments)) return;
   const size_t size = sizeof(*segments) * (size_t)count;
-  if (size > renderer->transient_capacity - renderer->transient_offset) {
+  if (renderer->transient_offset > renderer->transient_capacity ||
+      size > renderer->transient_capacity - renderer->transient_offset) {
     log_error(LOG_SOURCE, "Transient memory exhausted while queuing %u line segments.", count);
     return;
   }
+  if (!queue_reserve_one(renderer)) return;
   line_segment_t *copy = (line_segment_t *)(renderer->transient_memory + renderer->transient_offset);
   memcpy(copy, segments, size);
   renderer->transient_offset += size;
@@ -2604,15 +2829,16 @@ void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, a
 
 void renderer_submit_atlas_batch(struct gfx_handler_t *h, struct atlas_renderer_t *ar, float z, const atlas_instance_t *instances,
                                  uint32_t count, bool screen_space) {
-  if (h->renderer.queue.count >= MAX_RENDER_COMMANDS) return;
-  if (count == 0) return;
+  if (!ar || !instances || count == 0 || (size_t)count > SIZE_MAX / sizeof(*instances)) return;
 
   // Allocate from transient memory
-  size_t size = count * sizeof(atlas_instance_t);
-  if (h->renderer.transient_offset + size > h->renderer.transient_capacity) {
+  const size_t size = (size_t)count * sizeof(*instances);
+  if (h->renderer.transient_offset > h->renderer.transient_capacity ||
+      size > h->renderer.transient_capacity - h->renderer.transient_offset) {
     log_error(LOG_SOURCE, "Transient memory exhausted! Cannot submit atlas batch.");
     return;
   }
+  if (!queue_reserve_one(&h->renderer)) return;
 
   void *dest = h->renderer.transient_memory + h->renderer.transient_offset;
   memcpy(dest, instances, size);
@@ -2686,14 +2912,16 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       }
 
       // Check for space
-      if (active_ar->instance_count + q->data.atlas_batch.count > active_ar->max_instances) {
+      if (active_ar->instance_count > active_ar->max_instances ||
+          q->data.atlas_batch.count > active_ar->max_instances - active_ar->instance_count) {
         // Flush current batch
         uint32_t count = active_ar->instance_count - batch_start_idx;
         renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
         batch_start_idx = active_ar->instance_count;
 
         // If still no space, we can't draw this batch.
-        if (active_ar->instance_count + q->data.atlas_batch.count > active_ar->max_instances) {
+        if (active_ar->instance_count > active_ar->max_instances ||
+            q->data.atlas_batch.count > active_ar->max_instances - active_ar->instance_count) {
           log_error(LOG_SOURCE, "Atlas batch too large for buffer! (Req: %d, Max: %d, Cur: %d)",
                     q->data.atlas_batch.count, active_ar->max_instances, active_ar->instance_count);
           break;
@@ -3107,12 +3335,14 @@ void renderer_destroy_custom_pipeline(gfx_handler_t *h, custom_pipeline_t *pipe)
 void renderer_submit_instances(gfx_handler_t *h, custom_pipeline_t *pipe, float z, texture_t *const *textures, uint32_t texture_count,
                                const void *instances, uint32_t count) {
   renderer_state_t *r = &h->renderer;
-  if (!pipe || !pipe->active || count == 0 || !instances) return;
-  if (r->queue.count >= MAX_RENDER_COMMANDS) return;
-  if (pipe->instance_count + count > pipe->max_instances) {
+  if (!pipe || !pipe->active || !pipe->instance_ptr || pipe->instance_stride == 0 || count == 0 || !instances) return;
+  if (texture_count > 0 && !textures) return;
+  if (pipe->instance_count > pipe->max_instances || count > pipe->max_instances - pipe->instance_count ||
+      (size_t)count > SIZE_MAX / pipe->instance_stride) {
     log_error(LOG_SOURCE, "Custom pipeline instance ring exhausted (%u).", pipe->max_instances);
     return;
   }
+  if (!queue_reserve_one(r)) return;
 
   const uint32_t start = pipe->instance_count;
   memcpy(pipe->instance_ptr + (size_t)start * pipe->instance_stride, instances, (size_t)count * pipe->instance_stride);
@@ -3400,11 +3630,13 @@ void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, me
                           uint32_t texture_count, const void *uniforms, size_t uniform_size) {
   renderer_state_t *r = &h->renderer;
   if (!pipe || !pipe->active || !mesh) return;
-  if (r->queue.count >= MAX_RENDER_COMMANDS) return;
+  if (texture_count > 0 && !textures) return;
+  if (uniform_size > 0 && !uniforms) return;
   if (uniform_size > MAX_QUEUED_UNIFORM_BYTES) {
     log_error(LOG_SOURCE, "Mesh draw carries %zu uniform bytes, limit is %d.", uniform_size, MAX_QUEUED_UNIFORM_BYTES);
     return;
   }
+  if (!queue_reserve_one(r)) return;
 
   render_command_t *cmd = &r->queue.commands[r->queue.count++];
   cmd->type = RENDER_CMD_MESH;

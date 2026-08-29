@@ -85,8 +85,14 @@ shows it as a claim, marked as one. Its value is that you can read it, and
 follow it to the source, *before* agreeing to run anything.
 
 `game` is the exception that is only half a claim. It is what the plugin list
-shows as the scope, but the editor acts on the `plugin_game_id()` export
-instead, which cannot drift from the code the way a text file beside it can.
+shows as the scope, and the editor reads it in one direction: naming a game
+other than the active one keeps the library from being opened at all, while
+naming the active one grants nothing. The authority is the `plugin_game_id()`
+export, which cannot drift from the code the way a text file beside it can, and
+which is asked again the moment the library is up. A manifest can therefore
+spare an honest plugin for another game from being run at all -- there is no
+other way to ask a library a question without running it -- and a dishonest one
+gets no further than it would have anyway.
 
 For plugins built in this repository, `plugin.toml` sits in the plugin's source
 directory and the top-level build copies it into the built plugin's directory
@@ -104,10 +110,19 @@ Compare it against what the author publishes for the release you meant to
 install. A match means the directory on disk is the one they shipped.
 
 The editor also remembers it. Enabling a plugin records its digest in
-`config.toml` under `[plugin_checksums]`, and on every start the recorded digest
-is compared against the directory as it is then. If they disagree, the plugin is
-listed as `Changed` and is not loaded: you approved the files that were there
-when you enabled it, not whatever replaced them. The details panel shows both
+`config.toml` under `[plugin_checksums]`, and the recorded digest is compared
+against the directory as it is then before the library is opened -- at every
+start, at a game switch, and on `Reload`, because a check that only ran at
+startup would be no check at all for the paths that load a plugin later. If they
+disagree, the plugin is listed as `Changed` and is not loaded: you approved the
+files that were there when you enabled it, not whatever replaced them. The same
+goes for a directory the editor cannot read to the end: what it cannot establish
+the contents of, it does not run.
+
+The check happens before the library is opened, not after. Opening one runs it --
+a constructor or a `DllMain` executes before the editor can look up a single
+symbol -- so a plugin that is loaded, questioned and then unloaded has already
+had its say. Nothing the editor decides afterwards takes that back. The details panel shows both
 digests and offers `Enable this version`, which approves what is there now. That
 is the expected step after you update a plugin yourself. If you did not update
 it, it is worth finding out what did.
@@ -141,6 +156,24 @@ It returns `FRAMETEE_PLUGIN_ABI_VERSION`, which goes up whenever anything in
 rather than loaded, because everything in that header is a layout two separately
 compiled programs have to agree on, and nothing in the symbols themselves would
 give away that they no longer do.
+
+`plugin_init` is handed a `tas_context_t *` that stays live for as long as the
+plugin does, so read it every update rather than copying what it held at load
+time. `ui_visible` is the field that changes most: it is false while the user
+has the editor's interface down (Tab), which is the request to see the level
+with nothing over it. Plugins are still updated every frame while it is false --
+a search, a recording or a world overlay is the work the screen is being cleared
+to show -- so what belongs behind the test is a plugin's panels:
+
+```c
+if (state->show_window && state->context->ui_visible) {
+  igBegin(...);
+}
+```
+
+Menu bar entries need no test, because the menu bar itself stays up. Nothing
+enforces this: the editor cannot tell which windows came from which plugin, so a
+plugin that ignores the flag simply keeps drawing over a cleared screen.
 
 One constraint deserves its own note, because breaking it hangs the editor
 rather than failing: **do not start or join threads while your library is

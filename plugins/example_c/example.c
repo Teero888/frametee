@@ -42,7 +42,9 @@ FT_API void plugin_update(void *plugin_data) {
     igEndMainMenuBar();
   }
 
-  if (state->show_example_window) {
+  // Tab takes the editor's interface down; a plugin's panels go with it. Only
+  // the drawing: everything above this point still runs. See tas_context_t.
+  if (state->show_example_window && state->context->ui_visible) {
     if (igBegin("C Plugin Window", &state->show_example_window, ImGuiWindowFlags_None)) {
       igText("This window is rendered from a pure C plugin!");
       igSeparator();

@@ -38,11 +38,15 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     OUTPUT_NAME random_input_filler
 )
 
-install(TARGETS ${PROJECT_NAME}
-    LIBRARY DESTINATION "${HOST_APP_DIR}/build/plugins"
-)
-
+# Installing this subdirectory as part of FrameTee is handled centrally by the
+# host. Keep the legacy host-build-tree destination confined to an explicitly
+# standalone plugin build so `cmake --install` of FrameTee never writes back
+# into its own build directory.
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    install(TARGETS ${PROJECT_NAME}
+        RUNTIME DESTINATION "${HOST_APP_DIR}/build/plugins"
+        LIBRARY DESTINATION "${HOST_APP_DIR}/build/plugins"
+    )
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}> "${HOST_APP_DIR}/build/plugins/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
     )

@@ -56,7 +56,8 @@ static bool find_plugin_library(const char *plugin_directory, const char *name, 
   };
 
   for (size_t i = 0; i < sizeof(patterns) / sizeof(patterns[0]); ++i) {
-    snprintf(out_path, size, patterns[i], plugin_directory, PATH_SEP, name);
+    const int length = snprintf(out_path, size, patterns[i], plugin_directory, PATH_SEP, name);
+    if (length < 0 || (size_t)length >= size) continue;
     FILE *file = fs_open(out_path, "rb");
     if (!file) continue;
     fclose(file);
@@ -76,16 +77,26 @@ static void read_game_id(void *handle, loaded_plugin_t *p) {
   } u;
   u.sym = fs_get_symbol(handle, GET_PLUGIN_GAME_ID_FUNC_NAME);
   p->game_id[0] = '\0';
+  p->game_id_known = true;
   if (!u.get_game_id) return;
   const char *id = u.get_game_id();
   if (id && *id) snprintf(p->game_id, sizeof(p->game_id), "%s", id);
 }
 
+// The game a plugin says it is for: what its library answered if it has been
+// loaded, and what its manifest claims if it has not. Also what the interface
+// names while a plugin waits for its game, which is a state it can be in
+// without ever having run.
+const char *plugin_target_game(const loaded_plugin_t *plugin) {
+  return plugin->game_id_known ? plugin->game_id : plugin->manifest_game;
+}
+
 bool plugin_manager_matches_active_game(const plugin_manager_t *manager, const loaded_plugin_t *plugin) {
-  if (!plugin->game_id[0]) return true; // global
+  const char *declared = plugin_target_game(plugin);
+  if (!declared[0]) return true; // global
   if (!manager->context) return false;
   const char *active = manager->context->active_game_id;
-  return active && strcmp(active, plugin->game_id) == 0;
+  return active && strcmp(active, declared) == 0;
 }
 
 // A plugin's name, author, version, description and game id all live inside the
@@ -123,8 +134,12 @@ static void collect_files(const char *root, const char *prefix, int depth, diges
   }
 
   char scan_path[1024];
-  if (prefix[0]) snprintf(scan_path, sizeof(scan_path), "%s%c%s", root, PATH_SEP, prefix);
-  else snprintf(scan_path, sizeof(scan_path), "%s", root);
+  const int scan_length = prefix[0] ? snprintf(scan_path, sizeof(scan_path), "%s%c%s", root, PATH_SEP, prefix)
+                                    : snprintf(scan_path, sizeof(scan_path), "%s", root);
+  if (scan_length < 0 || (size_t)scan_length >= sizeof(scan_path)) {
+    listing->failed = true;
+    return;
+  }
 
   fs_dir_t *dir = fs_opendir(scan_path);
   if (!dir) {
@@ -139,8 +154,12 @@ static void collect_files(const char *root, const char *prefix, int depth, diges
     // Always '/' in the hashed name, so the same directory hashes the same on
     // either platform.
     char relative[1024];
-    if (prefix[0]) snprintf(relative, sizeof(relative), "%s/%s", prefix, entry->name);
-    else snprintf(relative, sizeof(relative), "%s", entry->name);
+    const int relative_length = prefix[0] ? snprintf(relative, sizeof(relative), "%s/%s", prefix, entry->name)
+                                          : snprintf(relative, sizeof(relative), "%s", entry->name);
+    if (relative_length < 0 || (size_t)relative_length >= sizeof(relative)) {
+      listing->failed = true;
+      break;
+    }
 
     if (entry->is_directory) {
       collect_files(root, relative, depth + 1, listing);
@@ -185,7 +204,11 @@ static bool directory_digest_hex(const char *plugin_directory, char out_hex[SHA2
     for (int i = 0; i < listing.count && ok; ++i) {
       char file_path[1024];
       char file_hex[SHA256_HEX_SIZE];
-      snprintf(file_path, sizeof(file_path), "%s%c%s", plugin_directory, PATH_SEP, listing.paths[i]);
+      const int path_length = snprintf(file_path, sizeof(file_path), "%s%c%s", plugin_directory, PATH_SEP, listing.paths[i]);
+      if (path_length < 0 || (size_t)path_length >= sizeof(file_path)) {
+        ok = false;
+        break;
+      }
       // A file that cannot be read leaves the digest unknown rather than
       // quietly standing for a directory with one file fewer in it.
       ok = sha256_file_hex(file_path, file_hex);
@@ -234,11 +257,21 @@ static void copy_manifest_string(char *destination, size_t size, toml_datum_t va
 // the library it describes. A plugin that ships without one is simply listed by
 // the name of its directory.
 //
-// Nothing in here is verified, and nothing in here decides anything: an author
-// who would lie in a manifest is an author whose library the user is about to
-// run. It exists so the user can see what a plugin claims to be, and where its
+// Nothing in here is verified. The game claim has one fail-closed use before
+// the library is opened: naming another game withholds the load. The library's
+// own plugin_game_id() answer remains authoritative once it can be asked. The
+// rest exists so the user can see what a plugin claims to be, and where its
 // source is meant to live, before agreeing to run it.
 static void read_manifest(loaded_plugin_t *p) {
+  // A reload is also a rescan. If the file was removed or stopped parsing, its
+  // old claims must not survive as though they had just been read again.
+  p->repository[0] = '\0';
+  p->manifest_game[0] = '\0';
+  p->info_name[0] = '\0';
+  p->info_author[0] = '\0';
+  p->info_version[0] = '\0';
+  p->info_description[0] = '\0';
+
   char manifest_path[sizeof(p->directory) + 16];
   snprintf(manifest_path, sizeof(manifest_path), "%s%cplugin.toml", p->directory, PATH_SEP);
 
@@ -262,9 +295,62 @@ static void read_manifest(loaded_plugin_t *p) {
   toml_free(result);
 }
 
+// Opening a library runs it. A constructor, or a DllMain, executes before this
+// function can look up its first symbol, and from that moment the code is in
+// this process whatever the editor decides afterwards -- unloading it again is
+// not a way to un-run it. So everything that decides whether a plugin may run
+// is settled here, before the open, out of what can be read as data: the
+// config's record of what the user approved, the editor's digest of the
+// directory as it is now, and the manifest beside the library. This is the only
+// call to fs_load_library in the editor, so no caller can get past it.
 bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
   loaded_plugin_t *p = &manager->plugins[index];
   if (p->status == PLUGIN_STATUS_LOADED) return true;
+
+  if (!p->enabled) {
+    p->status = PLUGIN_STATUS_UNLOADED;
+    return false;
+  }
+
+  // Read again rather than trust what an earlier scan left behind: this is the
+  // last moment before the files run, and they may have been replaced since.
+  const bool digest_ok = directory_digest_hex(p->directory, p->sha256);
+  if (!digest_ok) p->sha256[0] = '\0';
+  read_manifest(p);
+
+  if (!digest_ok) {
+    // Nothing to compare against what was approved. A plugin whose contents
+    // cannot be established does not run on the strength of that.
+    p->status = PLUGIN_STATUS_ERROR;
+    snprintf(p->error_msg, sizeof(p->error_msg),
+             "This plugin's files could not be read to check them against what you approved.");
+    log_error(LOG_SOURCE, "Could not read '%s' to check its contents; leaving it unloaded.", p->directory);
+    return false;
+  }
+
+  // The user approved a particular set of files. Anything else is a decision
+  // they have not made, and it is refused before the library is opened rather
+  // than after, because after is too late.
+  if (!p->approved_sha256[0] || strcmp(p->approved_sha256, p->sha256) != 0) {
+    p->status = PLUGIN_STATUS_CHANGED;
+    snprintf(p->error_msg, sizeof(p->error_msg),
+             "The files in this plugin's directory have changed since it was enabled, so it was not loaded.");
+    log_warn(LOG_SOURCE, "'%s' changed since it was last enabled; not loading it.", p->key);
+    return false;
+  }
+
+  // A plugin whose manifest names another game is not going to be used this
+  // session, and the only other way to ask is to run it first. The manifest is
+  // read in one direction only: it can withhold a load, never authorise one,
+  // because the library's own answer is checked again below as soon as it is
+  // up. That check is what a manifest cannot talk its way past; this one just
+  // means an honest plugin for another game never has to be run to be skipped.
+  if (!plugin_manager_matches_active_game(manager, p)) {
+    p->status = PLUGIN_STATUS_WRONG_GAME;
+    snprintf(p->error_msg, sizeof(p->error_msg), "Written for game '%s', which is not active.", plugin_target_game(p));
+    log_info(LOG_SOURCE, "Skipping '%s': its manifest says it belongs to game '%s'.", p->key, plugin_target_game(p));
+    return false;
+  }
 
   void *handle = fs_load_library(p->path);
   if (!handle) {
@@ -325,6 +411,8 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
     return false;
   }
 
+  // The library's own answer, which is the authority: a manifest that stayed
+  // quiet, or claimed this game while the code says otherwise, is caught here.
   read_game_id(handle, p);
   if (!plugin_manager_matches_active_game(manager, p)) {
     p->status = PLUGIN_STATUS_WRONG_GAME;
@@ -398,8 +486,14 @@ void plugin_manager_toggle_plugin(plugin_manager_t *manager, int index) {
   p->enabled = !p->enabled;
   if (p->enabled) {
     // Turning a plugin on is the moment of consent, so it is also what gets
-    // remembered: these files, as they are now.
+    // remembered: these files, as they are on disk now rather than as some
+    // earlier scan found them.
+    if (!directory_digest_hex(p->directory, p->sha256)) p->sha256[0] = '\0';
     snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
+    // Enabling approves the files now on disk, which may not be the library
+    // whose answer was cached before the plugin was switched off.
+    p->game_id[0] = '\0';
+    p->game_id_known = false;
     plugin_manager_load_plugin(manager, index);
   } else {
     plugin_manager_unload_plugin(manager, index);
@@ -410,7 +504,12 @@ void plugin_manager_toggle_plugin(plugin_manager_t *manager, int index) {
 
 void plugin_manager_approve_current_version(plugin_manager_t *manager, int index) {
   loaded_plugin_t *p = &manager->plugins[index];
+  // What is there now, read now: the digest on screen came from a scan, and
+  // what is being approved is the directory.
+  if (!directory_digest_hex(p->directory, p->sha256)) p->sha256[0] = '\0';
   snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
+  p->game_id[0] = '\0';
+  p->game_id_known = false;
   p->enabled = true;
   p->status = PLUGIN_STATUS_UNLOADED;
   p->error_msg[0] = '\0';
@@ -485,7 +584,12 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
     // the library file, which grows a "lib" here and loses it there. That name
     // is the key in config.toml and the name of the library inside.
     char plugin_directory[1024];
-    snprintf(plugin_directory, sizeof(plugin_directory), "%s%c%s", directory, PATH_SEP, entry->name);
+    const int directory_length =
+        snprintf(plugin_directory, sizeof(plugin_directory), "%s%c%s", directory, PATH_SEP, entry->name);
+    if (directory_length < 0 || (size_t)directory_length >= sizeof(plugin_directory)) {
+      log_warn(LOG_SOURCE, "Plugin path for '%s' is too long; skipping it.", entry->name);
+      continue;
+    }
 
     char full_path[1024];
     if (!find_plugin_library(plugin_directory, entry->name, full_path, sizeof(full_path))) {
@@ -507,11 +611,14 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
     // 2. If not found, allocate / grow array
     if (index == -1) {
       if (manager->count >= manager->capacity) {
-        manager->capacity = manager->capacity == 0 ? 4 : manager->capacity * 2;
-        loaded_plugin_t *new_plugins = realloc(manager->plugins, manager->capacity * sizeof(loaded_plugin_t));
-        if (new_plugins) {
-          manager->plugins = new_plugins;
+        const int new_capacity = manager->capacity == 0 ? 4 : manager->capacity * 2;
+        loaded_plugin_t *new_plugins = realloc(manager->plugins, (size_t)new_capacity * sizeof(*new_plugins));
+        if (!new_plugins) {
+          log_error(LOG_SOURCE, "Out of memory while adding plugin '%s'.", key);
+          continue;
         }
+        manager->plugins = new_plugins;
+        manager->capacity = new_capacity;
       }
       index = manager->count++;
       memset(&manager->plugins[index], 0, sizeof(loaded_plugin_t));
@@ -551,27 +658,21 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
     }
 
     // 4. Load it, or leave the directory alone. Being listed is not consent to
-    //    run: the only way to ask a plugin about itself is to load the library,
-    //    and loading it runs whatever it does at load time.
-    const bool changed = enabled && p->approved_sha256[0] && p->sha256[0] && strcmp(p->approved_sha256, p->sha256) != 0;
+    //    run, and what may run is not decided here: plugin_manager_load_plugin
+    //    settles that immediately before it opens the library, so that every
+    //    other way into it -- the Reload button, a game switch -- is held to
+    //    the same test as this one.
     if (!enabled) {
       plugin_manager_unload_plugin(manager, index);
       p->approved_sha256[0] = '\0';
-    } else if (changed) {
-      // Enabling it approved the files that were there then. These are not
-      // those files, so this is a decision the user has not made yet.
-      plugin_manager_unload_plugin(manager, index);
-      p->status = PLUGIN_STATUS_CHANGED;
-      snprintf(p->error_msg, sizeof(p->error_msg),
-               "The files in this plugin's directory have changed since it was enabled, so it was not loaded.");
-      log_warn(LOG_SOURCE, "'%s' changed since it was enabled; leaving it off until that is confirmed.", key);
     } else {
-      const bool loaded = plugin_manager_load_plugin(manager, index);
-      // A config written before the editor recorded checksums, or by hand.
-      // Take what is on disk as what was meant, rather than accusing the user
-      // of a change they did not make.
-      if (loaded && !p->approved_sha256[0])
+      // A config written before the editor recorded checksums, or by hand:
+      // nothing was ever approved, so take what is on disk as what was meant
+      // rather than accusing the user of a change they did not make. Recorded
+      // before the load, because the load is what checks it.
+      if (!p->approved_sha256[0])
         snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
+      plugin_manager_load_plugin(manager, index);
     }
   }
   fs_closedir(dir);
@@ -589,7 +690,7 @@ void plugin_manager_on_game_changed(plugin_manager_t *manager) {
     if (!allowed && p->status == PLUGIN_STATUS_LOADED) {
       plugin_manager_unload_plugin(manager, i);
       p->status = PLUGIN_STATUS_WRONG_GAME;
-      snprintf(p->error_msg, sizeof(p->error_msg), "Written for game '%s', which is not active.", p->game_id);
+      snprintf(p->error_msg, sizeof(p->error_msg), "Written for game '%s', which is not active.", plugin_target_game(p));
     } else if (allowed && p->enabled && p->status != PLUGIN_STATUS_LOADED) {
       // A plugin parked for the wrong game becomes loadable again; one that
       // errored out for its own reasons is left alone.
@@ -699,7 +800,8 @@ static ImVec4 plugin_status_color(plugin_status_t status) {
 static void render_plugin_status(const loaded_plugin_t *plugin) {
   igTextColored(plugin_status_color(plugin->status), "%s", plugin_status_label(plugin->status));
   if (plugin->status == PLUGIN_STATUS_WRONG_GAME && igIsItemHovered(0))
-    igSetTooltip("Waiting for game '%s'. It will load automatically when that game becomes active.", plugin->game_id);
+    igSetTooltip("Waiting for game '%s'. It will load automatically when that game becomes active.",
+                 plugin_target_game(plugin));
   else if (plugin->status == PLUGIN_STATUS_CHANGED && igIsItemHovered(0))
     igSetTooltip("%s", plugin->error_msg);
   else if (plugin->status == PLUGIN_STATUS_ERROR && igIsItemHovered(0))
@@ -949,7 +1051,7 @@ static void render_plugin_detail(plugin_manager_t *manager, int index, float hei
     igSpacing();
     igPushTextWrapPos(0.f);
     igTextColored(plugin_status_color(plugin->status), ICON_FA_HOURGLASS "  Waiting for '%s' to become active.",
-                  plugin->game_id);
+                  plugin_target_game(plugin));
     igPopTextWrapPos();
   } else if (plugin->status == PLUGIN_STATUS_ERROR) {
     igSeparatorText("Load error");

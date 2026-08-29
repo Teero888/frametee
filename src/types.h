@@ -34,6 +34,7 @@ typedef struct shader_t shader_t;
 typedef struct camera_t camera_t;
 typedef struct camera3_t camera3_t;
 typedef struct buffer_t buffer_t;
+typedef struct retired_buffer_t retired_buffer_t;
 typedef struct mesh_t mesh_t;
 
 // User Interface

@@ -29,7 +29,9 @@ public:
       ImGui::EndMainMenuBar();
     }
 
-    if (m_ShowWindow) {
+    // Tab takes the editor's interface down; a plugin's panels go with it.
+    // Only the drawing: everything above this point still runs.
+    if (m_ShowWindow && m_pContext->ui_visible) {
       if (ImGui::Begin("C++ Native Plugin Window", &m_ShowWindow)) {
         ImGui::Text("This window is rendered from a C++ plugin using the native ImGui API!");
         ImGui::Separator();
