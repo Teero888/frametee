@@ -812,6 +812,10 @@ void model_reset_physics_cache(timeline_state_t *ts) {
   }
 }
 
+int model_max_playback_speed(const timeline_state_t *ts) {
+  return game_ticks_per_second(&ts->ui->gfx_handler->game_host) * 10;
+}
+
 void model_recalc_physics(timeline_state_t *ts, int tick) {
   (void)tick;
   input_effects_invalidate(ts);

@@ -84,6 +84,8 @@ void model_reset_physics_cache(timeline_state_t *ts);
 void model_recalc_physics(timeline_state_t *ts, int tick);
 input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
 void model_advance_tick(timeline_state_t *ts, int steps);
+// Upper end of the playback/recording tick rate, shared by the speed widget and its keybinds.
+int model_max_playback_speed(const timeline_state_t *ts);
 void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_id_to_activate);
 // World access. The returned world is borrowed from the group's cache and stays
 // valid until the next call for that group, which is enough for a frame's worth

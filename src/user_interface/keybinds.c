@@ -261,7 +261,6 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_DELETE_SNIPPET, (key_combo_t){ImGuiKey_Delete, false, false, false});
   keybinds_add(manager, ACTION_SPLIT_SNIPPET, (key_combo_t){ImGuiKey_R, true, false, false});
   keybinds_add(manager, ACTION_MERGE_SNIPPETS, (key_combo_t){ImGuiKey_M, true, false, false});
-  keybinds_add(manager, ACTION_TOGGLE_SNIPPET_ACTIVE, (key_combo_t){ImGuiKey_A, false, false, false});
 
   keybinds_add(manager, ACTION_TOGGLE_FULLSCREEN, (key_combo_t){ImGuiKey_F11, false, false, false});
   keybinds_add(manager, ACTION_UNDO, (key_combo_t){ImGuiKey_Z, true, false, false});
@@ -457,13 +456,12 @@ void keybinds_process_inputs(ui_handler_t *ui) {
     // own per-tick effects before the frame is drawn.
     model_world_at_tick(ts, ts->current_tick);
   }
-  if (!ts->recording) {
-    if (keybinds_is_action_pressed(kb, ACTION_INC_TPS, true)) {
-      ++ts->gui_playback_speed;
-    }
-    if (keybinds_is_action_pressed(kb, ACTION_DEC_TPS, true)) {
-      --ts->gui_playback_speed;
-    }
+  // Recording runs off the same tick rate, so the speed keys stay live there too.
+  if (keybinds_is_action_pressed(kb, ACTION_INC_TPS, true)) {
+    ts->gui_playback_speed = imin(ts->gui_playback_speed + 1, model_max_playback_speed(ts));
+  }
+  if (keybinds_is_action_pressed(kb, ACTION_DEC_TPS, true)) {
+    ts->gui_playback_speed = imax(ts->gui_playback_speed - 1, 1);
   }
   if (game_has_cap(&ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS) &&
       keybinds_is_action_pressed(kb, ACTION_TOGGLE_LINKED_COPY, false)) {
