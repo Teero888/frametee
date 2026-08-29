@@ -36,6 +36,7 @@ static int init_window(gfx_handler_t *handler);
 static int init_vulkan(gfx_handler_t *handler);
 static int init_imgui(gfx_handler_t *handler);
 static void cleanup_vulkan(gfx_handler_t *handler);
+static void log_vulkan_loader_diagnostics(void);
 static void cleanup_vulkan_window(gfx_handler_t *handler);
 // frame_render and frame_present are now folded into gfx_begin/end_frame
 
@@ -815,6 +816,7 @@ static int init_window(gfx_handler_t *handler) {
   }
   if (!glfwVulkanSupported()) {
     log_error("GLFW", "Vulkan is not supported on this system.");
+    log_vulkan_loader_diagnostics();
     glfwDestroyWindow(handler->window);
     glfwTerminate();
     return 1;
@@ -822,11 +824,105 @@ static int init_window(gfx_handler_t *handler) {
   return 0;
 }
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+// windows.h carries an ARRAYSIZE of its own; keep the signed one this file's
+// call sites are written against.
+#undef ARRAYSIZE
+#define ARRAYSIZE(_ARR) ((int)(sizeof(_ARR) / sizeof(*(_ARR))))
+#endif
+
+// glfwGetRequiredInstanceExtensions() returns NULL without raising a GLFW error
+// of its own, so this is the only place that failure can be explained. What it
+// looks for -- VK_KHR_surface plus the platform's surface extension -- is
+// contributed by the graphics driver (the ICD), not by the loader: a loader
+// with no driver behind it still loads and still enumerates successfully, which
+// is why glfwVulkanSupported() in init_window() passed, and reports only a
+// handful of debug and meta extensions with no window-system ones among them.
+// Print the list the loader actually gave and, on Windows, which vulkan-1.dll
+// produced it -- a copy sitting beside the executable shadows the one the
+// graphics driver installed in System32.
+static void log_vulkan_loader_diagnostics(void) {
+#ifdef _WIN32
+  HMODULE loader = GetModuleHandleA("vulkan-1.dll");
+  char loader_path[MAX_PATH];
+  if (loader != NULL && GetModuleFileNameA(loader, loader_path, (DWORD)sizeof(loader_path)) > 0) {
+    log_error("Vulkan", "Loader in use: %s", loader_path);
+  } else {
+    log_error("Vulkan", "Loader in use: the path of vulkan-1.dll could not be resolved.");
+  }
+#endif
+
+  uint32_t count = 0;
+  VkResult err = vkEnumerateInstanceExtensionProperties(NULL, &count, NULL);
+  if (err != VK_SUCCESS) {
+    log_error("Vulkan", "The loader could not count its instance extensions (VkResult %d).", (int)err);
+    return;
+  }
+
+  VkExtensionProperties *properties = calloc(count > 0 ? count : 1, sizeof(*properties));
+  if (properties == NULL) return;
+  if (count > 0) {
+    err = vkEnumerateInstanceExtensionProperties(NULL, &count, properties);
+    if (err != VK_SUCCESS) {
+      log_error("Vulkan", "The loader could not list its instance extensions (VkResult %d).", (int)err);
+      free(properties);
+      return;
+    }
+  }
+
+  // the same set GLFW itself accepts as a platform surface extension
+  static const char *const platform_surface_extensions[] = {
+      "VK_KHR_win32_surface",
+      "VK_KHR_xlib_surface",
+      "VK_KHR_xcb_surface",
+      "VK_KHR_wayland_surface",
+      "VK_EXT_metal_surface",
+      "VK_MVK_macos_surface",
+  };
+
+  bool has_surface = false;
+  bool has_platform_surface = false;
+  char list[2048];
+  size_t used = 0;
+  list[0] = '\0';
+  for (uint32_t i = 0; i < count; ++i) {
+    const char *name = properties[i].extensionName;
+    if (strcmp(name, "VK_KHR_surface") == 0) has_surface = true;
+    for (int j = 0; j < ARRAYSIZE(platform_surface_extensions); ++j) {
+      if (strcmp(name, platform_surface_extensions[j]) == 0) has_platform_surface = true;
+    }
+    if (used < sizeof(list)) {
+      int written = snprintf(list + used, sizeof(list) - used, "%s%s", used > 0 ? ", " : "", name);
+      if (written < 0 || (size_t)written >= sizeof(list) - used) {
+        used = sizeof(list);
+      } else {
+        used += (size_t)written;
+      }
+    }
+  }
+  free(properties);
+
+  log_error("Vulkan", "The loader reports %u instance extension%s (VK_KHR_surface: %s, platform surface extension: %s).", count,
+            count == 1 ? "" : "s", has_surface ? "present" : "missing", has_platform_surface ? "present" : "missing");
+  log_error("Vulkan", "Instance extensions: %s", count > 0 ? list : "none");
+  if (!has_surface || !has_platform_surface) {
+    log_error("Vulkan", "No Vulkan driver found: the surface extensions come from the graphics driver, so a loader that reports none has "
+                        "no usable driver behind it. Install or repair the GPU driver's Vulkan runtime, and if a vulkan-1.dll sits next to "
+                        "the executable try removing it so the system loader is used. Run with VK_LOADER_DEBUG=all to see which driver "
+                        "manifests the loader found.");
+  }
+}
+
 static int init_vulkan(gfx_handler_t *handler) {
   uint32_t extensions_count = 0;
   const char **glfw_extensions = glfwGetRequiredInstanceExtensions(&extensions_count);
   if (glfw_extensions == NULL) {
-    log_error("Vulkan", "glfwGetRequiredInstanceExtensions failed.");
+    log_error("Vulkan", "glfwGetRequiredInstanceExtensions failed: the loader exposes no window-system extensions.");
+    log_vulkan_loader_diagnostics();
     return -1;
   }
 
