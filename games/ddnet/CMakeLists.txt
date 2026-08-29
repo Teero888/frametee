@@ -66,6 +66,7 @@ endif()
 
 add_library(ddnet_game MODULE
     ddnet_game.c
+    dd_input_effects.c
     dd_gfx.c
     dd_render.c
     dd_particles.c

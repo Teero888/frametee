@@ -1,16 +1,17 @@
-#include <engine/int_math.h>
-#include <engine/prediction.h>
 #include "timeline_renderer.h"
+#include "../timeline_events.h"
 #include "renderer/graphics_backend.h"
 #include "timeline_commands.h"
 #include "timeline_interaction.h"
 #include "timeline_model.h"
-#include "../timeline_events.h"
+#include <engine/int_math.h>
+#include <engine/prediction.h>
+#include <frametee/icons.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <frametee/icons.h>
 #include <system/include_cimgui.h>
+#include <user_interface/input_effects.h>
 #include <user_interface/undo_redo.h>
 #include <user_interface/widgets/imcol.h>
 
@@ -307,8 +308,8 @@ void renderer_draw_playhead_line(timeline_state_t *ts, ImDrawList *draw_list, Im
     float playhead_x = renderer_tick_to_screen_x(ts, playhead_tick, timeline_rect.Min.x);
     if (playhead_x < timeline_rect.Min.x || playhead_x > timeline_rect.Max.x) continue;
     ImU32 color = group_index == 0 ? igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f)
-                                  : igGetColorU32_Vec4((ImVec4){ts->groups[group_index]->color[0], ts->groups[group_index]->color[1],
-                                                                ts->groups[group_index]->color[2], 0.95f});
+                                   : igGetColorU32_Vec4((ImVec4){ts->groups[group_index]->color[0], ts->groups[group_index]->color[1],
+                                                                 ts->groups[group_index]->color[2], 0.95f});
     ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, y0}, (ImVec2){playhead_x, y1}, color, 2.0f * dpi_scale);
   }
 }
@@ -321,8 +322,8 @@ void renderer_draw_playhead_handle(timeline_state_t *ts, ImDrawList *draw_list, 
     float group_x = renderer_tick_to_screen_x(ts, playhead_tick, timeline_rect.Min.x);
     if (group_x < timeline_rect.Min.x || group_x > timeline_rect.Max.x) continue;
     ImU32 color = group_index == 0 ? igGetColorU32_Col(ImGuiCol_SeparatorActive, 1.0f)
-                                  : igGetColorU32_Vec4((ImVec4){ts->groups[group_index]->color[0], ts->groups[group_index]->color[1],
-                                                                ts->groups[group_index]->color[2], 0.95f});
+                                   : igGetColorU32_Vec4((ImVec4){ts->groups[group_index]->color[0], ts->groups[group_index]->color[1],
+                                                                 ts->groups[group_index]->color[2], 0.95f});
     ImVec2 head_bottom = {group_x + 0.5f, header_bb.Max.y + 0.5f};
     ImVec2 head_top_left = {(head_bottom.x - 6.0f * dpi_scale) + 0.5f, head_bottom.y - 10.0f * dpi_scale + 0.5f};
     ImVec2 head_top_right = {(head_bottom.x + 6.0f * dpi_scale) - 0.5f, head_bottom.y - 10.0f * dpi_scale + 0.5f};
@@ -471,7 +472,7 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
             if (schema) {
               for (uint32_t field_index = 0; field_index < schema->field_count && field_index < 64; ++field_index) {
                 const ft_input_field *field = &schema->fields[field_index];
-                if (field->flags & FT_INPUT_FLAG_INTERNAL) continue;
+                if (field->flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN)) continue;
                 bool copied = (track->linked_copy_fields & (UINT64_C(1) << field_index)) != 0;
                 if (igCheckbox(field->display_name ? field->display_name : field->id, &copied)) {
                   track->linked_copy_fields ^= UINT64_C(1) << field_index;
@@ -729,4 +730,20 @@ static void render_input_snippet(timeline_state_t *ts, player_track_t *track, in
   ImDrawList_AddRect(draw_list, min, max,
                      is_selected ? igGetColorU32_Vec4(selected_border) : igGetColorU32_Col(ImGuiCol_Border, 0.6f), 4.0f * dpi_scale,
                      ImDrawFlags_RoundCornersAll, (is_selected ? 2.0f : 1.0f) * dpi_scale);
+
+  if (!is_recording_snippet && snippet->effect_count > 0 && max.x - min.x >= 22.f * dpi_scale) {
+    const bool any_enabled = input_effects_enabled_count(snippet) > 0;
+    char badge[32];
+    snprintf(badge, sizeof(badge), "%s %d", ICON_FA_WAND_MAGIC_SPARKLES, snippet->effect_count);
+    const ImVec2 text_size = igCalcTextSize(badge, NULL, false, 0.f);
+    const float pad = 4.f * dpi_scale;
+    ImVec2 badge_min = {max.x - text_size.x - pad * 2.f, min.y};
+    if (badge_min.x < min.x) badge_min.x = min.x;
+    ImVec2 badge_max = {max.x, fminf(max.y, min.y + text_size.y + pad)};
+    ImDrawList_AddRectFilled(draw_list, badge_min, badge_max,
+                             any_enabled ? IM_COL32(35, 35, 45, 190) : IM_COL32(70, 70, 70, 150),
+                             4.f * dpi_scale, ImDrawFlags_RoundCornersTopRight | ImDrawFlags_RoundCornersBottomLeft);
+    ImDrawList_AddText_Vec2(draw_list, (ImVec2){badge_min.x + pad, badge_min.y + (badge_max.y - badge_min.y - text_size.y) * 0.5f},
+                            any_enabled ? IM_COL32(255, 225, 115, 255) : IM_COL32(190, 190, 190, 220), badge, NULL);
+  }
 }

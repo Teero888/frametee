@@ -114,6 +114,11 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
   if (m->input_schema->field_count > 0 && !m->input_schema->fields) FAIL("input schema declares fields but has no field table");
   if (m->input_schema->control_count > 0 && !m->input_schema->controls) FAIL("input schema declares controls but has no control table");
   if (m->input_schema->control_count > 64) FAIL("input schema declares %u controls; the editor supports at most 64", m->input_schema->control_count);
+  const bool has_effects = m->input_effect_count || m->input_effect_desc || m->input_effect_default ||
+                           m->input_effect_apply || m->input_effect_ui;
+  if (has_effects && (!m->input_effect_count || !m->input_effect_desc || !m->input_effect_default ||
+                      !m->input_effect_apply))
+    FAIL("input effects require count, descriptor, default and apply callbacks");
   bool needs_integer_access = false;
   bool needs_float_access = false;
   bool needs_vec2_access = false;
@@ -429,12 +434,39 @@ bool game_host_activate_index(game_host_t *host, int index) {
   }
 
   host->instance = instance;
+  const unsigned effect_count = gh_input_effect_count(host);
+  if (effect_count > 64) {
+    log_error(LOG_SOURCE, "Game '%s' declares %u input effects; the editor supports at most 64.", slot->id, effect_count);
+    goto invalid_effects;
+  }
+  for (unsigned effect = 0; effect < effect_count; ++effect) {
+    const ft_input_effect_desc *desc = gh_input_effect_desc(host, effect);
+    if (!desc) {
+      log_error(LOG_SOURCE, "Game '%s' has an invalid input effect descriptor at index %u.", slot->id, effect);
+      goto invalid_effects;
+    }
+    for (unsigned previous = 0; previous < effect; ++previous) {
+      const ft_input_effect_desc *other = gh_input_effect_desc(host, previous);
+      if (other && strcmp(desc->id, other->id) == 0) {
+        log_error(LOG_SOURCE, "Game '%s' declares duplicate input effect id '%s'.", slot->id, desc->id);
+        goto invalid_effects;
+      }
+    }
+  }
   // Bind the module-declared control table to its schema before recording can
   // write any fields.
   engine_input_bind(host);
   game_host_set_variant(host, NULL);
   log_info(LOG_SOURCE, "Activated game '%s'.", slot->display_name);
   return true;
+
+invalid_effects:
+  slot->module->destroy(instance);
+  host->instance = NULL;
+  host->module = NULL;
+  host->active = -1;
+  host->active_id[0] = '\0';
+  return false;
 }
 
 bool game_host_activate_id(game_host_t *host, const char *id) {
@@ -677,37 +709,6 @@ bool gh_world_player_view(game_host_t *host, const ft_world *world, int player, 
   return m->world_player_view(host->instance, world, player, out);
 }
 
-bool gh_world_run_equal(game_host_t *host, const ft_world *a, const ft_world *b) {
-  REQUIRE_GAME(false);
-  if (!a || !b) return false;
-  if (m->world_run_equal) return m->world_run_equal(host->instance, a, b);
-  if (!m->world_player_view) return false;
-
-  const int players = m->world_player_count(host->instance, a);
-  if (players != m->world_player_count(host->instance, b)) return false;
-  for (int player = 0; player < players; ++player) {
-    ft_player_view left = {.struct_size = sizeof(left)};
-    ft_player_view right = {.struct_size = sizeof(right)};
-    if (!m->world_player_view(host->instance, a, player, &left) ||
-        !m->world_player_view(host->instance, b, player, &right))
-      return false;
-    // Aim is authored input rather than run output. The remaining fields are
-    // compared bit-for-bit so cleaning never hides a floating-point change.
-    if (memcmp(&left.position, &right.position, sizeof(left.position)) != 0 ||
-        memcmp(&left.velocity, &right.velocity, sizeof(left.velocity)) != 0 || left.flags != right.flags ||
-        left.run_start_tick != right.run_start_tick)
-      return false;
-  }
-  return true;
-}
-
-int gh_input_clean_lookahead_ticks(game_host_t *host) {
-  REQUIRE_GAME(0);
-  if (!m->input_clean_lookahead_ticks) return 0;
-  const int ticks = m->input_clean_lookahead_ticks(host->instance);
-  return ticks > 0 ? ticks : 0;
-}
-
 int gh_world_add_player(game_host_t *host, ft_world *world, int at_index, const ft_player_setup *setup) {
   REQUIRE_GAME(-1);
   if (!world || !m->world_add_player) return -1;
@@ -779,6 +780,67 @@ void gh_input_set_vec2(game_host_t *host, void *record, unsigned field, ft_vec2 
 void gh_linked_input_update(game_host_t *host, const ft_linked_input_frame *frame, void *inout_record) {
   REQUIRE_GAME();
   if (frame && inout_record && m->linked_input_update) m->linked_input_update(host->instance, frame, inout_record);
+}
+
+unsigned gh_input_effect_count(game_host_t *host) {
+  REQUIRE_GAME(0);
+  return m->input_effect_count ? m->input_effect_count(host->instance) : 0;
+}
+
+const ft_input_effect_desc *gh_input_effect_desc(game_host_t *host, unsigned index) {
+  REQUIRE_GAME(NULL);
+  if (!m->input_effect_desc || index >= gh_input_effect_count(host)) return NULL;
+  const ft_input_effect_desc *desc = m->input_effect_desc(host->instance, index);
+  if (!desc || desc->struct_size != sizeof(*desc) || !id_is_valid(desc->id) || !desc->display_name ||
+      !*desc->display_name || desc->parameter_size > FT_INPUT_EFFECT_PARAMETER_MAX ||
+      desc->runtime_size > FT_INPUT_EFFECT_RUNTIME_MAX)
+    return NULL;
+  return desc;
+}
+
+int gh_input_effect_find(game_host_t *host, const char *id) {
+  if (!id || !*id) return -1;
+  const unsigned count = gh_input_effect_count(host);
+  for (unsigned i = 0; i < count; ++i) {
+    const ft_input_effect_desc *desc = gh_input_effect_desc(host, i);
+    if (desc && strcmp(desc->id, id) == 0) return (int)i;
+  }
+  return -1;
+}
+
+bool gh_input_effect_default(game_host_t *host, unsigned index, void *parameters, unsigned parameter_size) {
+  REQUIRE_GAME(false);
+  const ft_input_effect_desc *desc = gh_input_effect_desc(host, index);
+  if (!desc || desc->parameter_size != parameter_size || (parameter_size > 0 && !parameters)) return false;
+  if (parameter_size > 0) memset(parameters, 0, parameter_size);
+  m->input_effect_default(host->instance, index, parameters, parameter_size);
+  return true;
+}
+
+bool gh_input_effect_apply(game_host_t *host, unsigned index, const ft_input_effect_frame *frame,
+                           const void *parameters, unsigned parameter_size, void *runtime,
+                           unsigned runtime_size, void *inout_records) {
+  REQUIRE_GAME(false);
+  const ft_input_effect_desc *desc = gh_input_effect_desc(host, index);
+  if (!desc || !frame || frame->struct_size != sizeof(*frame) || desc->parameter_size != parameter_size ||
+      desc->runtime_size != runtime_size || (parameter_size > 0 && !parameters) ||
+      (runtime_size > 0 && !runtime) || (frame->record_count > 0 && !inout_records))
+    return false;
+  if (runtime_size > 0) memset(runtime, 0, runtime_size);
+  return m->input_effect_apply(host->instance, index, frame, parameters, parameter_size, runtime,
+                               runtime_size, inout_records);
+}
+
+bool gh_input_effect_ui(game_host_t *host, unsigned index, const ft_input_effect_ui_frame *frame,
+                        void *parameters, unsigned parameter_size, const void *runtime,
+                        unsigned runtime_size) {
+  REQUIRE_GAME(false);
+  const ft_input_effect_desc *desc = gh_input_effect_desc(host, index);
+  if (!desc || !m->input_effect_ui || !frame || frame->struct_size != sizeof(*frame) ||
+      desc->parameter_size != parameter_size || desc->runtime_size != runtime_size ||
+      (parameter_size > 0 && !parameters) || (runtime_size > 0 && !runtime))
+    return false;
+  return m->input_effect_ui(host->instance, index, frame, parameters, parameter_size, runtime, runtime_size);
 }
 
 void gh_update(game_host_t *host, const ft_engine_state *state) {

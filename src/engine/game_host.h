@@ -116,10 +116,6 @@ void gh_world_step(game_host_t *host, ft_world *world, const void *inputs, unsig
 int gh_world_tick(game_host_t *host, const ft_world *world);
 int gh_world_player_count(game_host_t *host, const ft_world *world);
 bool gh_world_player_view(game_host_t *host, const ft_world *world, int player, ft_player_view *out);
-// Exact run-relevant comparison used by the snippet input cleaner. Games with
-// state beyond ft_player_view can provide their own comparator through the ABI.
-bool gh_world_run_equal(game_host_t *host, const ft_world *a, const ft_world *b);
-int gh_input_clean_lookahead_ticks(game_host_t *host);
 int gh_world_add_player(game_host_t *host, ft_world *world, int at_index, const ft_player_setup *setup);
 bool gh_world_remove_player(game_host_t *host, ft_world *world, int player);
 size_t gh_world_serialize(game_host_t *host, const ft_world *world, void *out, size_t out_size);
@@ -133,6 +129,17 @@ void gh_input_set_float(game_host_t *host, void *record, unsigned field, float v
 ft_vec2 gh_input_get_vec2(game_host_t *host, const void *record, unsigned field);
 void gh_input_set_vec2(game_host_t *host, void *record, unsigned field, ft_vec2 value);
 void gh_linked_input_update(game_host_t *host, const ft_linked_input_frame *frame, void *inout_record);
+
+unsigned gh_input_effect_count(game_host_t *host);
+const ft_input_effect_desc *gh_input_effect_desc(game_host_t *host, unsigned index);
+int gh_input_effect_find(game_host_t *host, const char *id);
+bool gh_input_effect_default(game_host_t *host, unsigned index, void *parameters, unsigned parameter_size);
+bool gh_input_effect_apply(game_host_t *host, unsigned index, const ft_input_effect_frame *frame,
+                           const void *parameters, unsigned parameter_size, void *runtime,
+                           unsigned runtime_size, void *inout_records);
+bool gh_input_effect_ui(game_host_t *host, unsigned index, const ft_input_effect_ui_frame *frame,
+                        void *parameters, unsigned parameter_size, const void *runtime,
+                        unsigned runtime_size);
 
 void gh_update(game_host_t *host, const ft_engine_state *state);
 void gh_render(game_host_t *host, const ft_render_frame *frame);

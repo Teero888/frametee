@@ -78,6 +78,9 @@ void model_clear_all_recording_buffers(timeline_state_t *ts);
 void model_insert_snippet_into_recording_track(player_track_t *track, const input_snippet_t *snippet);
 
 // Physics & Playback
+// Resets only simulated worlds. Effect implementations use this while testing
+// a derived buffer without invalidating the effect pipeline they are building.
+void model_reset_physics_cache(timeline_state_t *ts);
 void model_recalc_physics(timeline_state_t *ts, int tick);
 input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
 void model_advance_tick(timeline_state_t *ts, int steps);

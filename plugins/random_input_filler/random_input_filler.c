@@ -50,7 +50,7 @@ static void randomize_record(random_input_state_t *state, uint32_t *rng_state, v
   const uint32_t field_count = state->api->input_field_count();
   for (uint32_t index = 0; index < field_count; ++index) {
     const ft_input_field *field = state->api->input_field(index);
-    if (!field || (field->flags & FT_INPUT_FLAG_INTERNAL)) continue;
+    if (!field || (field->flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN))) continue;
 
     switch (field->kind) {
     case FT_INPUT_BOOL:

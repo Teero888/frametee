@@ -37,6 +37,7 @@ is the game FrameTee ships with. See [docs/game-modules.md](docs/game-modules.md
 *   **Timeline Interface:** Multi-track timeline for managing inputs.
 *   **Recording:** Real-time and frame-by-frame recording capabilities.
 *   **Input Snippets:** Organize inputs into movable, resizable, and editable snippets.
+*   **Input Effects:** Build ordered, reversible per-snippet input pipelines without rewriting authored inputs.
 *   **Prediction:** Visual trajectory prediction.
 *   **Snippet Editor:** Detailed matrix editor for precise tick-by-tick modification.
 *   **Undo/Redo:** Comprehensive system for timeline operations.

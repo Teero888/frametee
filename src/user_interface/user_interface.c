@@ -1,9 +1,10 @@
 #include "user_interface.h"
 #include "cglm/vec2.h"
 #include "cimgui.h"
+#include "input_effects_editor.h"
 #include "player_profile.h"
-#include "starting_state.h"
 #include "snippet_editor.h"
+#include "starting_state.h"
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
@@ -110,10 +111,13 @@ void render_menu_bar(ui_handler_t *ui) {
       igMenuItem_BoolPtr("Controls", NULL, &ui->keybinds.show_settings_window, true);
       igMenuItem_BoolPtr("Undo History", NULL, &ui->undo_manager.show_history_window, true);
       igMenuItem_BoolPtr("Timeline Events", NULL, &ui->show_timeline_events_window, true);
+      igMenuItem_BoolPtr("Effects", NULL, &ui->show_effects_window, true);
       igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);
       if (!panels_visible) igEndDisabled();
       igEndMenu();
     }
+
+    input_effects_editor_render_menu(ui);
 
     // plugins menu
     if (igBeginMenu("Plugins", true)) {
@@ -308,6 +312,7 @@ void setup_docking(ui_handler_t *ui) {
 
     igDockBuilderDockWindow("Players", dock_id_left);
     igDockBuilderDockWindow("Snippet Editor", dock_id_right);
+    igDockBuilderDockWindow("Effects", dock_id_right);
 
     for (int i = 0; i < ui->plugin_manager.count; ++i) {
       loaded_plugin_t *p = &ui->plugin_manager.plugins[i];
@@ -937,7 +942,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->bg_color[2] = 0.253f;
   ui->render_level = true;
 
-  ui->auto_save_enabled = true;
+  ui->auto_save_enabled = false;
   ui->auto_save_interval_sec = 60;
   ui->last_auto_save_time = 0.0;
   keybinds_init(&ui->keybinds);
@@ -1031,6 +1036,9 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->has_unsaved_changes = false;
   ui->show_ui = true;
   ui->show_timeline_events_window = false;
+  ui->show_effects_window = false;
+  ui->focus_effects_window = false;
+  ui->effects_snippet_id = -1;
   ui->show_plugin_manager = false;
   entity_inspector_clear(&ui->entity_inspector);
   timeline_init(ui);
@@ -1512,6 +1520,7 @@ void ui_render(ui_handler_t *ui) {
     render_timeline(ui);
     render_player_manager(ui);
     render_snippet_editor_panel(ui);
+    input_effects_editor_render(ui);
 
     keybinds_render_settings_window(ui);
     undo_manager_render_history_window(&ui->undo_manager);
@@ -1602,7 +1611,7 @@ static void draw_character_inspector(ui_handler_t *ui, ImVec2 start) {
     const ft_input_schema *schema = game_input_schema(host);
     for (uint32_t i = 0; schema && i < schema->field_count; ++i) {
       const ft_input_field *field = &schema->fields[i];
-      if (field->flags & FT_INPUT_FLAG_INTERNAL) continue;
+      if (field->flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN)) continue;
       const char *label = field->display_name ? field->display_name : field->id;
 
       if (field->kind == FT_INPUT_VEC2) {

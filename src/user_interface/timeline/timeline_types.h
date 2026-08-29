@@ -11,6 +11,7 @@
 
 #define MAX_SNIPPETS_PER_PLAYER 64
 #define MAX_SNIPPET_LAYERS 8
+#define MAX_SNIPPET_INPUT_EFFECTS 16
 #define MAX_TIMELINE_GROUP_NAME 64
 #define MAX_TRACK_NAME 64
 
@@ -22,6 +23,25 @@ struct physics_v_t {
   uint32_t current_size;
   uint32_t max_size;
 };
+
+typedef struct input_effect_t {
+  char type_id[FT_ID_MAX];
+  bool enabled;
+  uint32_t parameter_size;
+  unsigned char *parameters;
+  uint32_t runtime_size;
+  unsigned char *runtime;
+  bool runtime_ok;
+} input_effect_t;
+
+typedef struct input_effect_stage_cache_t {
+  input_record_t *inputs;
+  int input_count;
+  unsigned char *runtime;
+  uint32_t runtime_size;
+  uint64_t key;
+  bool valid;
+} input_effect_stage_cache_t;
 
 // A snippet is a window onto a source buffer, the way a clip is a window onto its media. Trimming
 // an edge or splitting a snippet only moves the window: `inputs` keeps holding every tick that was
@@ -37,6 +57,16 @@ struct input_snippet_t {
   int input_count;        // length of the visible window
   int source_offset;      // index in `inputs` of the tick played at start_tick
   int source_count;       // total ticks held in `inputs`
+
+  input_effect_t *effects;
+  int effect_count;
+  int effect_capacity;
+
+  input_record_t *effect_inputs; // derived visible window, never serialized
+  int effect_input_count;
+  bool effect_cache_valid;
+  input_effect_stage_cache_t *effect_stage_caches;
+  int effect_stage_capacity;
 };
 
 // An override the user pinned on a track's starting state. The engine stores it
@@ -199,6 +229,9 @@ struct timeline_state {
   int group_count;
   int active_group_index;
   int simulation_group_index;
+  bool input_effects_dirty;
+  bool input_effects_rebuilding;
+  uint64_t input_effect_context_revision;
 
   prediction_settings_t prediction;
 

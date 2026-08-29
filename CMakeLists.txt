@@ -86,7 +86,8 @@ set(SRCS
 	src/renderer/graphics_backend.c
 	src/renderer/renderer.c
 	src/user_interface/keybinds.c
-	src/user_interface/input_cleaner.c
+	src/user_interface/input_effects.c
+	src/user_interface/input_effects_editor.c
 	src/user_interface/player_profile.c
 	src/user_interface/starting_state.c
 	src/user_interface/snippet_editor.c

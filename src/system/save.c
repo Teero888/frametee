@@ -29,6 +29,7 @@ enum {
   PROJECT_MAX_TRACKS = 10000,
   PROJECT_MAX_EVENTS = 1000000,
   PROJECT_MAX_SOURCE_TICKS = 10000000,
+  PROJECT_MAX_EFFECT_PAYLOAD = 4096,
 };
 
 #define PROJECT_MAX_FILE_SIZE ((size_t)1024 * 1024 * 1024)
@@ -263,14 +264,17 @@ static bool reader_blob(byte_reader_t *reader, uint64_t encoded_size, uint8_t **
 
 static void project_document_free(project_document_t *document) {
   if (!document) return;
-  for (int i = 0; i < document->track_count; ++i) {
-    player_track_t *track = &document->tracks[i];
-    for (int j = 0; j < track->snippet_count; ++j)
-      free(track->snippets[j].inputs);
-    free(track->snippets);
+  if (document->tracks) {
+    for (int i = 0; i < document->track_count; ++i) {
+      player_track_t *track = &document->tracks[i];
+      for (int j = 0; j < track->snippet_count; ++j)
+        model_free_snippet_inputs(&track->snippets[j]);
+      free(track->snippets);
+    }
   }
-  for (int i = 0; i < document->group_count; ++i)
-    free(document->groups[i].world_data);
+  if (document->groups)
+    for (int i = 0; i < document->group_count; ++i)
+      free(document->groups[i].world_data);
   free(document->groups);
   free(document->tracks);
   free(document->events);
@@ -309,7 +313,9 @@ static uint64_t input_schema_hash(const game_host_t *host) {
     const ft_input_field *field = &schema->fields[i];
     hash = hash_string(hash, field->id);
     hash = hash_u32(hash, (uint32_t)field->kind);
-    hash = hash_u32(hash, field->flags);
+    /* Editor visibility does not alter the stored record or its semantics and
+     * must therefore not invalidate an otherwise compatible project. */
+    hash = hash_u32(hash, field->flags & ~FT_INPUT_FLAG_EDITOR_HIDDEN);
     hash = hash_u32(hash, (uint32_t)field->min_value);
     hash = hash_u32(hash, (uint32_t)field->max_value);
     hash = hash_u32(hash, (uint32_t)field->default_value);
@@ -488,6 +494,16 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
         return false;
       for (int tick = 0; tick < snippet->source_count; ++tick)
         if (!buffer_write(buffer, snippet->inputs[tick].bytes, input_size)) return false;
+      if (snippet->effect_count < 0 || snippet->effect_count > MAX_SNIPPET_INPUT_EFFECTS ||
+          !buffer_u32(buffer, (uint32_t)snippet->effect_count))
+        return false;
+      for (int effect_index = 0; effect_index < snippet->effect_count; ++effect_index) {
+        const input_effect_t *effect = &snippet->effects[effect_index];
+        if (effect->parameter_size > PROJECT_MAX_EFFECT_PAYLOAD || !buffer_string(buffer, effect->type_id) ||
+            !buffer_u8(buffer, effect->enabled ? 1 : 0) || !buffer_u32(buffer, effect->parameter_size) ||
+            !buffer_write(buffer, effect->parameters, effect->parameter_size))
+          return false;
+      }
     }
   }
 
@@ -637,7 +653,8 @@ static bool read_legacy_player_identity(byte_reader_t *reader) {
   return reader_u8(reader, &custom_color) && custom_color <= 1;
 }
 
-static bool read_timeline(byte_reader_t *reader, project_document_t *document, uint32_t project_version) {
+static bool read_timeline(byte_reader_t *reader, project_document_t *document, uint32_t project_version,
+                          game_host_t *host) {
   uint8_t boolean;
   uint32_t count;
   if (!reader_i32(reader, &document->current_tick) || !reader_i32(reader, &document->active_group_index) ||
@@ -743,6 +760,35 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document, u
       if (snippet->source_count && !snippet->inputs) return false;
       for (int tick = 0; tick < snippet->source_count; ++tick)
         if (!reader_bytes(reader, snippet->inputs[tick].bytes, document->input_record_size)) return false;
+      if (project_version >= 15) {
+        uint32_t effect_count;
+        if (!reader_u32(reader, &effect_count) || effect_count > MAX_SNIPPET_INPUT_EFFECTS) return false;
+        snippet->effect_count = (int)effect_count;
+        snippet->effect_capacity = (int)effect_count;
+        snippet->effects = effect_count ? calloc(effect_count, sizeof(*snippet->effects)) : NULL;
+        if (effect_count && !snippet->effects) return false;
+        for (uint32_t effect_index = 0; effect_index < effect_count; ++effect_index) {
+          input_effect_t *effect = &snippet->effects[effect_index];
+          uint8_t enabled;
+          uint32_t payload_size;
+          if (project_version >= 16) {
+            if (!reader_string(reader, effect->type_id, sizeof(effect->type_id))) return false;
+          } else {
+            uint32_t legacy_type;
+            if (!reader_u32(reader, &legacy_type) || legacy_type == 0) return false;
+            const ft_input_effect_desc *desc = gh_input_effect_desc(host, legacy_type - 1);
+            if (!desc) return false;
+            snprintf(effect->type_id, sizeof(effect->type_id), "%s", desc->id);
+          }
+          if (!reader_u8(reader, &enabled) || enabled > 1 || !reader_u32(reader, &payload_size) ||
+              payload_size > PROJECT_MAX_EFFECT_PAYLOAD || payload_size > FT_INPUT_EFFECT_PARAMETER_MAX)
+            return false;
+          effect->enabled = enabled != 0;
+          effect->parameter_size = payload_size;
+          effect->parameters = payload_size ? malloc(payload_size) : NULL;
+          if (payload_size > 0 && (!effect->parameters || !reader_bytes(reader, effect->parameters, payload_size))) return false;
+        }
+      }
       model_snippet_normalize(snippet);
     }
     model_rebind_starting_strings(&track->starting_config);
@@ -845,7 +891,8 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
 
   byte_reader_t timeline_reader = {.data = reader.data + reader.pos, .size = (size_t)timeline_size, .ok = true};
   reader.pos += (size_t)timeline_size;
-  if (!read_timeline(&timeline_reader, document, version) || reader.pos != reader.size) goto malformed;
+  if (!read_timeline(&timeline_reader, document, version, &ui->gfx_handler->game_host) || reader.pos != reader.size)
+    goto malformed;
 
   if (document->active_group_index < 0 || document->active_group_index >= document->group_count ||
       document->selected_track_index < -1 || document->selected_track_index >= document->track_count)

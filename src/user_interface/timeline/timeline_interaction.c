@@ -4,6 +4,8 @@
 #include "renderer/graphics_backend.h"
 #include "timeline_commands.h"
 #include "timeline_model.h"
+#include <user_interface/input_effects.h>
+#include <user_interface/input_effects_editor.h>
 #include "timeline_renderer.h"
 #include "user_interface/timeline/timeline_types.h"
 #include <GLFW/glfw3.h>
@@ -585,6 +587,14 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
         }
       }
 
+      if (igIsItemClicked(ImGuiMouseButton_Right)) {
+        if (!interaction_is_snippet_selected(ts, snippet->id)) {
+          interaction_clear_selection(ts);
+          interaction_add_snippet_to_selection(ts, snippet->id);
+        }
+        ts->context_menu_snippet_id = snippet->id;
+      }
+
       if (igIsItemHovered(0) && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
         // Ensure the clicked snippet is selected (should be handled by single click, but safe to ensure)
         if (!interaction_is_snippet_selected(ts, snippet->id)) {
@@ -842,6 +852,7 @@ static void interaction_start_recording_on_track(timeline_state_t *ts, int track
 }
 
 void interaction_toggle_recording(timeline_state_t *ts) {
+  if (!ts->recording) input_effects_ensure(ts);
   // continue the aim from the snippet under the playhead instead of jumping to wherever the mouse
   // was left.
   if (!ts->recording && engine_input_cursor_field() >= 0 && ts->selected_player_track_index >= 0 &&
@@ -1071,6 +1082,23 @@ input_record_t interaction_predict_input(ui_handler_t *ui, const ft_world *world
   return model_get_input_at_tick(ts, track_idx, gh_world_tick(&ui->gfx_handler->game_host, world));
 }
 
+static bool can_merge_selected(const timeline_state_t *ts) {
+  if (!ts || ts->selected_snippets.count < 2) return false;
+  for (int track_index = 0; track_index < ts->player_track_count; ++track_index) {
+    const player_track_t *track = &ts->player_tracks[track_index];
+    for (int left = 0; left < track->snippet_count; ++left) {
+      const input_snippet_t *a = &track->snippets[left];
+      if (!snippet_id_vector_contains(&ts->selected_snippets, a->id)) continue;
+      for (int right = 0; right < track->snippet_count; ++right) {
+        const input_snippet_t *b = &track->snippets[right];
+        if (!snippet_id_vector_contains(&ts->selected_snippets, b->id) || a->end_tick != b->start_tick) continue;
+        if (input_effect_stack_equal(a->effects, a->effect_count, b->effects, b->effect_count)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 void interaction_handle_context_menu(timeline_state_t *ts) {
   if (igGetIO_Nil()->ConfigFlags & ImGuiConfigFlags_NoMouse) return;
   if (igBeginPopup("TimelineContextMenu", 0)) {
@@ -1081,11 +1109,17 @@ void interaction_handle_context_menu(timeline_state_t *ts) {
       if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
     }
     igSeparator();
+    input_snippet_t *context_snippet = model_find_snippet_by_id(ts, ts->context_menu_snippet_id, NULL);
+    if (!context_snippet && ts->selected_snippets.count == 1)
+      context_snippet = model_find_snippet_by_id(ts, ts->selected_snippets.ids[0], NULL);
+    if (igMenuItem_Bool("Edit Effects", NULL, false, context_snippet != NULL))
+      input_effects_editor_open(ts->ui, context_snippet->id);
+    igSeparator();
     if (igMenuItem_Bool("Split Selected", "Ctrl+R", false, ts->selected_snippets.count > 0)) {
       undo_command_t *cmd = commands_create_split_selected(ts->ui);
       if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
     }
-    if (igMenuItem_Bool("Merge Selected", "Ctrl+M", false, ts->selected_snippets.count > 1)) {
+    if (igMenuItem_Bool("Merge Selected", "Ctrl+M", false, can_merge_selected(ts))) {
       undo_command_t *cmd = commands_create_merge_selected(ts->ui);
       if (cmd) undo_manager_register_command(&ts->ui->undo_manager, cmd);
     }

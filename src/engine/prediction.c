@@ -332,7 +332,7 @@ void prediction_render_menu(timeline_state_t *timeline) {
                             ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoLabel);
     if (!line->use_timeline_inputs) {
       igSameLine(0.f, 6.f * dpi);
-      if (igSmallButton(ICON_FA_TRASH)) remove_line = line_index;
+      if (igButton(ICON_FA_TRASH, (ImVec2){0.f, 0.f})) remove_line = line_index;
       if (schema && igTreeNode_Str("Inputs")) {
         for (uint32_t control = 0; control < schema->control_count && control < 64; ++control) {
           igPushID_Int((int)control);
