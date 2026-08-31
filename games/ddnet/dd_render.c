@@ -170,6 +170,10 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   if (core->m_FreezeTime > 0 || core->m_ActiveWeapon == WEAPON_NINJA) {
     out->skin = game->gfx.ninja_skin;
     out->custom = false;
+    // The native-color path still reads feet_col.r for air-jump dimming, so
+    // no part of the player's custom tint may remain when forcing x_ninja.
+    glm_vec3_copy((vec3){1.f, 1.f, 1.f}, out->body_col);
+    glm_vec3_copy((vec3){1.f, 1.f, 1.f}, out->feet_col);
   }
   // Jumping off the last available jump dims the feet, which is DDNet's tell
   // that there is nothing left.
