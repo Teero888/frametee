@@ -387,6 +387,13 @@ static void api_draw_rect(float z, ft_vec2 pos, ft_vec2 size, ft_color color) {
   renderer_submit_rect_filled(g_engine, z, (vec2){pos.x, pos.y}, (vec2){size.x, size.y}, col);
 }
 
+static void api_draw_rect_rounded(float z, ft_vec2 pos, ft_vec2 size, float radius, ft_color color, uint32_t segments) {
+  if (!have_graphics()) return;
+  vec4 c;
+  copy_color(&color, c);
+  renderer_submit_rect_rounded(g_engine, z, (vec2){pos.x, pos.y}, (vec2){size.x, size.y}, radius, c, segments);
+}
+
 static void api_draw_circle(float z, ft_vec2 center, float radius, ft_color color, uint32_t segments) {
   if (!have_graphics()) return;
   vec4 col;
@@ -799,6 +806,7 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .draw_sprites = api_draw_sprites,
       .draw_line = api_draw_line,
       .draw_rect = api_draw_rect,
+      .draw_rect_rounded = api_draw_rect_rounded,
       .draw_circle = api_draw_circle,
       .draw_triangle = api_draw_triangle,
       .draw_text = api_draw_text,

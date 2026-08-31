@@ -281,6 +281,7 @@ struct atlas_renderer_t {
 typedef enum {
   RENDER_CMD_ATLAS_BATCH,
   RENDER_CMD_RECT_FILLED,
+  RENDER_CMD_RECT_ROUNDED,
   RENDER_CMD_CIRCLE_FILLED,
   RENDER_CMD_TRIANGLE_FILLED,
   RENDER_CMD_LINE,
@@ -471,6 +472,10 @@ VkSampler create_texture_sampler_wrapped(gfx_handler_t *handler, uint32_t mip_le
 void renderer_submit_atlas_batch(gfx_handler_t *h, atlas_renderer_t *ar, float z, const atlas_instance_t *instances, uint32_t count, bool screen_space);
 void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, atlas_instance_t *out_inst);
 void renderer_submit_rect_filled(gfx_handler_t *h, float z, vec2 pos, vec2 size, vec4 color);
+// segments is the subdivision of one quarter-circle corner; the radius is
+// clamped to half the shorter side, and a radius of zero draws a plain rect.
+void renderer_submit_rect_rounded(gfx_handler_t *h, float z, vec2 pos, vec2 size, float radius, vec4 color,
+                                  uint32_t segments);
 void renderer_submit_circle_filled(gfx_handler_t *h, float z, vec2 center, float radius, vec4 color, uint32_t segments);
 void renderer_submit_triangle_filled(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec2 p3, vec4 color);
 void renderer_submit_line(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec4 color, float thickness);

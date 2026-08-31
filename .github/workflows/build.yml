@@ -33,6 +33,7 @@ jobs:
           libgtk-3-dev \
           libglfw3-dev \
           libcurl4-openssl-dev \
+          libfreetype6-dev \
           pkg-config
 
     - name: Setup Vulkan SDK
@@ -68,6 +69,9 @@ jobs:
           cd artifact/frametee-linux
           test -f data/games/ddnet/shaders/map.frag.spv
           test -f data/games/ddnet/skins/default.png
+          test -f data/games/ddnet/textures/emoticons.png
+          test -f data/fonts/DejaVuSans.ttf
+          test -f data/fonts/DejaVuSans-LICENSE.txt
           test -f data/games/tmnf/thumbnail.png
           test -f data/games/tmnf/README.txt
           # A plugin is a directory holding its library, its manifest and any
@@ -181,6 +185,7 @@ jobs:
           ninja:p
           pkgconf:p
           curl-winssl:p
+          freetype:p
           openssl:p
           zlib:p
           glfw:p
@@ -278,6 +283,9 @@ jobs:
           cd artifact/frametee-windows
           require_file data/games/ddnet/shaders/map.frag.spv
           require_file data/games/ddnet/skins/default.png
+          require_file data/games/ddnet/textures/emoticons.png
+          require_file data/fonts/DejaVuSans.ttf
+          require_file data/fonts/DejaVuSans-LICENSE.txt
           require_file data/games/tmnf/thumbnail.png
           require_file data/games/tmnf/README.txt
           require_file vulkan-1.dll

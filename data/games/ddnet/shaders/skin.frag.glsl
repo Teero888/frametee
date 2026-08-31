@@ -21,6 +21,9 @@ layout(location = 9) flat in vec3 frag_col_feet;
 layout(location = 10) flat in int frag_col_custom;
 layout(location = 11) flat in int frag_mode;
 layout(location = 12) flat in float frag_lod_bias;
+// Whole-instance fade. Every colour below is premultiplied, so scaling rgb and
+// alpha together is the correct way to make one instance translucent.
+layout(location = 13) flat in float frag_alpha;
 
 layout(location = 0) out vec4 out_color;
 
@@ -88,7 +91,7 @@ void main() {
     vec4 c = vec4(0.0);
     c = blend_pma(c, get_part_color(hand_shadow, frag_uv, frag_skin_index, true, false));
     c = blend_pma(c, get_part_color(hand, frag_uv, frag_skin_index, true, false));
-    out_color = c;
+    out_color = c * frag_alpha;
     return;
   }
 
@@ -124,5 +127,5 @@ void main() {
   final_color = blend_pma(final_color, get_part_color(eye_right, uv_body, frag_skin_index, true, true));
   final_color = blend_pma(final_color, get_part_color(foot, uv_front, frag_skin_index, false, false));
 
-  out_color = final_color;
+  out_color = final_color * frag_alpha;
 }

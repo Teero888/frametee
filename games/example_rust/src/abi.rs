@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 16;
+pub const FT_GAME_ABI_VERSION: u32 = 17;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -354,6 +354,16 @@ pub struct ft_engine_api {
     >,
     pub draw_rect:
         Option<unsafe extern "C" fn(z: f32, pos: ft_vec2, size: ft_vec2, color: ft_color)>,
+    pub draw_rect_rounded: Option<
+        unsafe extern "C" fn(
+            z: f32,
+            pos: ft_vec2,
+            size: ft_vec2,
+            radius: f32,
+            color: ft_color,
+            segments: u32,
+        ),
+    >,
     pub draw_circle: Option<
         unsafe extern "C" fn(z: f32, center: ft_vec2, radius: f32, color: ft_color, segments: u32),
     >,

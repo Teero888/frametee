@@ -17,6 +17,7 @@ layout(location = 10) in vec3 col_body;
 layout(location = 11) in vec3 col_feet;
 layout(location = 12) in int col_custom;
 layout(location = 13) in int instance_mode;
+layout(location = 14) in float instance_alpha;
 
 layout(location = 0) out vec2 frag_uv;
 layout(location = 1) flat out int frag_skin_index;
@@ -43,6 +44,7 @@ layout(binding = 0) uniform primitive_ubo {
 ubo;
 
 layout(location = 12) flat out float frag_lod_bias;
+layout(location = 13) flat out float frag_alpha;
 
 void main() {
   // the hand rides a quad of its own, the tee quad never rotates
@@ -75,4 +77,5 @@ void main() {
   frag_col_custom = col_custom;
   frag_mode = instance_mode;
   frag_lod_bias = ubo.lod_bias;
+  frag_alpha = instance_alpha;
 }

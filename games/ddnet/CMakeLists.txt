@@ -68,7 +68,9 @@ add_library(ddnet_game MODULE
     ddnet_game.c
     dd_input_effects.c
     dd_gfx.c
+    dd_text.c
     dd_render.c
+    dd_overlays.c
     dd_particles.c
     dd_anim_data.c
     dd_anim_system.c
@@ -111,7 +113,8 @@ target_include_directories(ddnet_game PRIVATE
 target_compile_definitions(ddnet_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
 
 find_package(CURL REQUIRED)
-target_link_libraries(ddnet_game PRIVATE ddnet_physics cglm CURL::libcurl)
+find_package(Freetype REQUIRED)
+target_link_libraries(ddnet_game PRIVATE ddnet_physics cglm CURL::libcurl Freetype::Freetype)
 
 # cJSON is compiled straight in; it is one file and the editor's copy is not a
 # library a module can link against.

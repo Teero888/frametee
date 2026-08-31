@@ -610,9 +610,12 @@ install(TARGETS ${PROJECT_NAME}
     RUNTIME DESTINATION "." COMPONENT Runtime
 )
 
-# Only these two fonts are loaded by the UI. Keep Roboto's license beside them;
-# JetBrains Mono and the legacy engine texture directory are not runtime inputs.
+# These are the fonts loaded by the UI and the DDNet renderer. Keep their
+# licenses beside them; JetBrains Mono and the legacy engine texture directory
+# are not runtime inputs.
 install(FILES
+    "${CMAKE_SOURCE_DIR}/data/fonts/DejaVuSans.ttf"
+    "${CMAKE_SOURCE_DIR}/data/fonts/DejaVuSans-LICENSE.txt"
     "${CMAKE_SOURCE_DIR}/data/fonts/Roboto-SemiBold.ttf"
     "${CMAKE_SOURCE_DIR}/data/fonts/fa-solid-900.ttf"
     "${CMAKE_SOURCE_DIR}/data/fonts/OFL.txt"

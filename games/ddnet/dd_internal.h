@@ -19,19 +19,31 @@
 // tiles, so everything crossing the ABI is scaled by this.
 #define PX_PER_TILE 32.0f
 
-// Draw order inside the module's own passes. These are the module's business:
-// the engine only sorts by the float it is given.
+// Draw order inside the module's own passes. The engine sorts every command in
+// the frame by this float, whichever pass produced it, so these bands are what
+// actually decides the picture. They follow the DDNet client's component order
+// in gameclient.cpp: m_Items (pickups, projectiles, lasers, doors) below
+// m_Players (hook, weapon, tee), then m_MapLayersForeground -- the game layer
+// and its entity overlays, which is why the map sits above the tees -- then the
+// explosions and the nameplates.
 #define DD_Z_PICKUPS 1.f
 #define DD_Z_PARTICLES_BACK 2.f
+#define DD_Z_LASERS 2.5f
 #define DD_Z_HOOK 3.f
 #define DD_Z_PROJECTILES 4.f
 #define DD_Z_HOOK_HAND 4.5f
 #define DD_Z_WEAPONS 5.f
 #define DD_Z_WEAPON_HAND 5.5f
 #define DD_Z_SKINS 6.f
-#define DD_Z_PARTICLES_FRONT 8.0f
 #define DD_Z_MAP 7.0f
+#define DD_Z_MAP_TELE_TEXT 7.1f
+#define DD_Z_MAP_SPEEDUP 7.2f
+#define DD_Z_MAP_SPEEDUP_TEXT 7.3f
+#define DD_Z_MAP_SWITCH_TEXT 7.4f
+#define DD_Z_PARTICLES_FRONT 8.0f
+// The editor's own markers, which belong on top of the game whatever it drew.
 #define DD_Z_LINES 9.0f
+#define DD_Z_OVERLAYS 10.0f
 #define DD_Z_CURSOR 100.0f
 
 #define DD_MAX_SKINS 128
@@ -195,6 +207,19 @@ typedef enum { CURSOR_HAMMER,
                CURSOR_LASER,
                CURSOR_NINJA,
                CURSOR_SPRITE_COUNT } dd_cursor_sprite_t;
+
+enum { DD_EMOTICON_COUNT = 16 };
+
+// DDNet's hud.png freeze bar sprites, followed by horizontally mirrored copies
+// of the same four. CFreezeBars draws half its pieces with a reversed texture
+// subset; the sprite path has no free UV subset, so the mirror is baked into
+// the sheet and selected by sprite index instead.
+enum { DD_FREEZE_FULL_LEFT = 0,
+       DD_FREEZE_FULL,
+       DD_FREEZE_EMPTY,
+       DD_FREEZE_EMPTY_RIGHT,
+       DD_FREEZE_MIRRORED = 4,
+       DD_FREEZE_SPRITE_COUNT = 8 };
 
 // The particle system tags a sprite with which sheet it came from by offsetting
 // the index, the same way the engine's renderer used to.
@@ -421,6 +446,9 @@ typedef struct {
   vec3 col_feet;
   int col_custom;
   int mode; // 0 whole tee, 1 just a hand
+  // Fades the whole instance. The shader's output is premultiplied, so this
+  // scales colour and coverage together.
+  float alpha;
 } dd_skin_instance_t;
 
 enum { DD_SKIN_MODE_TEE = 0,
@@ -432,21 +460,70 @@ typedef struct {
   bool loaded;
 } dd_skin_slot_t;
 
+// DDNet text is rendered by the game module, through the same atlas path as
+// its other sprites. This keeps it inside the viewport render target and gives
+// it exactly the same camera transform and clipping as the map and players.
+// DDNet keeps the fill and the outline in two separate textures and draws the
+// string twice, which is what lets it colour the outline independently. The
+// same split here, plus one dilated variant per outline thickness so the ring
+// can also match the size DDNet would have baked for a given screen size.
+enum { DD_TEXT_OUTLINE_VARIANTS = 4 };
+
+typedef struct {
+  uint32_t codepoint;
+  uint32_t glyph_index;
+  uint32_t sprite_index;
+  uint32_t outline_sprite[DD_TEXT_OUTLINE_VARIANTS];
+  uint32_t width;
+  uint32_t height;
+  float offset_x;
+  float offset_y;
+  float advance_x;
+  bool visible;
+} dd_text_glyph_t;
+
+typedef struct {
+  void *library;
+  void *face;
+  void *font_data;
+  ft_texture *source_texture;
+  ft_atlas *atlas;
+  ft_texture *entity_source_textures[3];
+  ft_atlas *entity_atlases[3];
+  dd_text_glyph_t *glyphs;
+  uint32_t glyph_count;
+  float baked_size;
+  // cl_text_entities_size, as a percentage. The entity number sheets bake it
+  // in, so changing it re-uploads them exactly as CMapImages does.
+  int entity_scale;
+} dd_text_renderer_t;
+
 typedef struct {
   bool ready;
 
   ft_texture *gameskin_texture;
   ft_texture *particles_texture;
   ft_texture *extras_texture;
+  ft_texture *emoticons_texture;
+  ft_texture *speedup_arrow_texture;
+  ft_texture *freeze_bar_texture;
   ft_atlas *gameskin;
   ft_atlas *particles;
   ft_atlas *extras;
+  ft_atlas *emoticons;
+  // DDNet's editor/speed_arrow.png: a single sprite covering the whole sheet.
+  ft_atlas *speedup_arrow;
+  ft_atlas *freeze_bar;
   // The crosshair uses its own sprite table over the same sheet.
   ft_atlas *cursor;
+  dd_text_renderer_t text;
   ft_sprite_rect cursor_rects[CURSOR_SPRITE_COUNT];
   ft_sprite_rect gameskin_rects[GAMESKIN_SPRITE_COUNT];
   ft_sprite_rect particle_rects[PARTICLE_SPRITE_COUNT];
   ft_sprite_rect extra_rects[EXTRA_SPRITE_COUNT];
+  ft_sprite_rect emoticon_rects[DD_EMOTICON_COUNT];
+  ft_sprite_rect speedup_arrow_rect;
+  ft_sprite_rect freeze_bar_rects[DD_FREEZE_SPRITE_COUNT];
 
   // Tee rendering: one array texture of skin sheets, one of their grayscale
   // versions for tinting, and the pipeline that composes them.
@@ -474,6 +551,12 @@ typedef struct {
   dd_skin_instance_t *hook_hand_batch;
   uint32_t hook_hand_batch_count;
   uint32_t hook_hand_batch_capacity;
+  // Tees drawn as part of the HUD rather than the world -- the chat's avatars.
+  // They need their own batch because a batch carries one z for all of it, and
+  // theirs has to clear the map and the overlays the world tees sit under.
+  dd_skin_instance_t *overlay_batch;
+  uint32_t overlay_batch_count;
+  uint32_t overlay_batch_capacity;
 } dd_gfx_t;
 
 // Presentation settings. These belong to the game, not the editor, which is why
@@ -484,6 +567,25 @@ typedef struct {
   bool render_particles;
   bool render_pickups;
   bool render_cursor_follow;
+  bool render_chat;
+  // cl_chat_size and cl_chat_width. DDNet keeps width/size at or above
+  // CHAT_FONTSIZE_WIDTH_RATIO so the two never fight each other.
+  int chat_font_size;
+  int chat_width;
+  bool render_nameplates;
+  bool render_emoticons;
+  bool render_freeze_bars;
+  bool render_entity_text;
+  // DDNet's cl_text_entities_size, 20 to 100 percent.
+  int entity_text_size;
+  bool render_speedups;
+  bool render_doors;
+  // The cl_nameplates_* family, in DDNet's units: the two sizes are the
+  // percentages a font size is derived from and the offset is world pixels.
+  int nameplate_size;
+  bool nameplate_clan;
+  int nameplate_clan_size;
+  int nameplate_offset;
   bool center_dot;
   float cursor_scale;
 } dd_settings_t;
@@ -529,6 +631,24 @@ void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...);
 
 bool dd_gfx_create(ft_game *game);
 void dd_gfx_destroy(ft_game *game);
+bool dd_text_create(ft_game *game);
+void dd_text_destroy(ft_game *game);
+float dd_text_width(ft_game *game, float size, const char *text);
+void dd_text_draw(ft_game *game, float z, ft_vec2 position, float size, ft_color color, const char *text);
+// The full form: an outline colour of its own, and the on-screen pixel size the
+// outline thickness should be chosen for. DDNet picks that from the size it
+// bakes a glyph at -- the real screen size for HUD text like chat, and a fixed
+// interface size for world text like nameplates, which is why it is a separate
+// argument rather than derived from `size`.
+void dd_text_draw_outlined(ft_game *game, float z, ft_vec2 position, float size, ft_color color, ft_color outline,
+                           float outline_reference_px, const char *text);
+enum { DD_ENTITY_TEXT_TOP = 0,
+       DD_ENTITY_TEXT_CENTER,
+       DD_ENTITY_TEXT_BOTTOM,
+       DD_ENTITY_TEXT_STYLE_COUNT };
+void dd_entity_text_draw(ft_game *game, float z, int style, int x, int y, int value, ft_color color);
+// Re-bakes the entity number sheets when cl_text_entities_size changes.
+void dd_text_set_entity_scale(ft_game *game, int scale);
 // Resolves a skin name to a layer in the skin array, loading it on demand.
 // Returns the default skin's layer when the named one cannot be loaded.
 int dd_gfx_skin_index(ft_game *game, const char *name);
@@ -580,11 +700,19 @@ void dd_skin_push(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 
                   bool custom);
 void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, vec3 col_body, bool custom, bool hook_hand);
 void dd_skins_flush(ft_game *game);
+// A tee in HUD space: an explicit alpha, and its own flush so it can be drawn
+// from a pass that runs after the world's tees have already gone out.
+void dd_skin_push_overlay(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 dir, const dd_anim_state_t *anim,
+                          vec3 col_body, vec3 col_feet, bool custom, float alpha);
+void dd_skins_flush_overlay(ft_game *game);
 
 // Retrieves the sprite rectangle a draw needs for its aspect ratio.
 const ft_sprite_rect *dd_sprite_rect(ft_game *game, ft_atlas *atlas, uint32_t index);
 
 void dd_render(ft_game *game, const ft_render_frame *frame);
+void dd_render_world_overlays(ft_game *game, const ft_render_frame *frame);
+void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame);
+void dd_render_doors(ft_game *game, const ft_render_frame *frame);
 
 enum { DD_CAMERA_FREE = 0,
        DD_CAMERA_FOLLOW,

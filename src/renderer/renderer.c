@@ -1987,6 +1987,62 @@ void renderer_draw_triangle_filled(gfx_handler_t *handler, vec2 p1, vec2 p2, vec
   renderer->primitive_index_count += 3;
 }
 
+// A rounded rect is convex, so one triangle fan from its centre covers it: the
+// perimeter is the four corner arcs walked in order, and consecutive arc points
+// close against the centre. Straight edges need no vertices of their own -- the
+// arcs' endpoints already sit on them.
+void renderer_draw_rect_rounded(gfx_handler_t *handler, vec2 pos, vec2 size, float radius, vec4 color, uint32_t segments) {
+  const float half_min = (size[0] < size[1] ? size[0] : size[1]) * 0.5f;
+  if (radius > half_min) radius = half_min;
+  if (!(radius > 0.f)) {
+    renderer_draw_rect_filled(handler, pos, size, color);
+    return;
+  }
+  if (segments < 1) segments = 1;
+  if (segments > 64) segments = 64;
+
+  const uint32_t per_corner = segments + 1;
+  const uint32_t perimeter = per_corner * 4;
+  if (!ensure_primitive_space(handler, perimeter + 1, perimeter * 3)) return;
+
+  renderer_state_t *renderer = &handler->renderer;
+  const uint32_t base_index = renderer->primitive_vertex_count;
+  primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
+  uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
+
+  vtx[0].pos[0] = pos[0] + size[0] * 0.5f;
+  vtx[0].pos[1] = pos[1] + size[1] * 0.5f;
+  glm_vec4_copy(color, vtx[0].color);
+
+  // Clockwise on screen, y down: the top-left arc sweeps from pointing left to
+  // pointing up, and each following corner picks up where the last stopped.
+  const float centers[4][2] = {{pos[0] + radius, pos[1] + radius},
+                               {pos[0] + size[0] - radius, pos[1] + radius},
+                               {pos[0] + size[0] - radius, pos[1] + size[1] - radius},
+                               {pos[0] + radius, pos[1] + size[1] - radius}};
+  const float starts[4] = {(float)M_PI, (float)(M_PI * 1.5), 0.f, (float)(M_PI * 0.5)};
+
+  uint32_t out = 1;
+  for (uint32_t corner = 0; corner < 4; ++corner) {
+    for (uint32_t step = 0; step <= segments; ++step) {
+      const float angle = starts[corner] + (float)(M_PI * 0.5) * (float)step / (float)segments;
+      vtx[out].pos[0] = centers[corner][0] + cosf(angle) * radius;
+      vtx[out].pos[1] = centers[corner][1] + sinf(angle) * radius;
+      glm_vec4_copy(color, vtx[out].color);
+      ++out;
+    }
+  }
+
+  for (uint32_t i = 0; i < perimeter; ++i) {
+    idx[i * 3 + 0] = base_index;
+    idx[i * 3 + 1] = base_index + 1 + i;
+    idx[i * 3 + 2] = base_index + 1 + ((i + 1) % perimeter);
+  }
+
+  renderer->primitive_vertex_count += perimeter + 1;
+  renderer->primitive_index_count += perimeter * 3;
+}
+
 void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color, uint32_t segments) {
   if (segments < 3) segments = 3;
   if (segments == UINT32_MAX || segments > UINT32_MAX / 3) {
@@ -2758,6 +2814,19 @@ void renderer_submit_rect_filled(struct gfx_handler_t *h, float z, vec2 pos, vec
   glm_vec4_copy(color, cmd->data.prim.color);
 }
 
+void renderer_submit_rect_rounded(struct gfx_handler_t *h, float z, vec2 pos, vec2 size, float radius, vec4 color,
+                                  uint32_t segments) {
+  if (!queue_reserve_one(&h->renderer)) return;
+  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  cmd->type = RENDER_CMD_RECT_ROUNDED;
+  cmd->z = z;
+  glm_vec2_copy(pos, cmd->data.prim.p1);
+  glm_vec2_copy(size, cmd->data.prim.p2);
+  cmd->data.prim.thickness = radius;
+  cmd->data.prim.segments = segments;
+  glm_vec4_copy(color, cmd->data.prim.color);
+}
+
 void renderer_submit_circle_filled(struct gfx_handler_t *h, float z, vec2 center, float radius, vec4 color, uint32_t segments) {
   if (!queue_reserve_one(&h->renderer)) return;
   render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
@@ -2895,7 +2964,8 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
 
 
     // Flush primitives if switching to non-primitive
-    if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_CIRCLE_FILLED && q->type != RENDER_CMD_TRIANGLE_FILLED &&
+    if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_RECT_ROUNDED && q->type != RENDER_CMD_CIRCLE_FILLED &&
+        q->type != RENDER_CMD_TRIANGLE_FILLED &&
         q->type != RENDER_CMD_LINE && q->type != RENDER_CMD_LINE_BATCH &&
         r->primitive_index_count > r->primitive_index_offset_drawn) {
       flush_primitives(h, cmd);
@@ -2936,6 +3006,11 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     case RENDER_CMD_RECT_FILLED:
       // log_info(LOG_SOURCE, "Processing RECT_FILLED command");
       renderer_draw_rect_filled(h, q->data.prim.p1, q->data.prim.p2, q->data.prim.color);
+      break;
+
+    case RENDER_CMD_RECT_ROUNDED:
+      renderer_draw_rect_rounded(h, q->data.prim.p1, q->data.prim.p2, q->data.prim.thickness, q->data.prim.color,
+                                 q->data.prim.segments);
       break;
 
     case RENDER_CMD_CIRCLE_FILLED:

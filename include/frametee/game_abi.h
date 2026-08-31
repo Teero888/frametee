@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 16u
+#define FT_GAME_ABI_VERSION 17u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -956,6 +956,9 @@ typedef struct ft_engine_api {
   void (*draw_sprites)(ft_atlas *atlas, float z, const ft_sprite_draw *draws, uint32_t count);
   void (*draw_line)(float z, ft_vec2 a, ft_vec2 b, ft_color color, float thickness);
   void (*draw_rect)(float z, ft_vec2 pos, ft_vec2 size, ft_color color);
+  /* `segments` subdivides one quarter-circle corner. The radius is clamped to
+   * half the shorter side, and a radius of zero draws a plain rect. */
+  void (*draw_rect_rounded)(float z, ft_vec2 pos, ft_vec2 size, float radius, ft_color color, uint32_t segments);
   void (*draw_circle)(float z, ft_vec2 center, float radius, ft_color color, uint32_t segments);
   void (*draw_triangle)(float z, ft_vec2 a, ft_vec2 b, ft_vec2 c, ft_color color);
   void (*draw_text)(float z, ft_vec2 pos, float size, ft_color color, const char *text);

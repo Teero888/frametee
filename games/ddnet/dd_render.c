@@ -402,8 +402,16 @@ static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world
     tile_pos(prj_get_pos(ent, ct), to);
     lerp2(from, to, intra, p);
 
-    dd_draw_sprite(game, game->gfx.gameskin, DD_Z_PROJECTILES, p, (vec2){1.f, 1.f},
-                   -((world->m_GameTick + intra) / 50.f) * 4.f * M_PI + id, GAMESKIN_GRENADE_PROJ, (vec4){1.f, 1.f, 1.f, 1.f});
+    uint32_t sprite = GAMESKIN_GRENADE_PROJ;
+    if (ent->m_Type == WEAPON_GUN) sprite = GAMESKIN_GUN_PROJ;
+    else if (ent->m_Type == WEAPON_SHOTGUN) sprite = GAMESKIN_SHOTGUN_PROJ;
+    float rotation;
+    if (ent->m_Type == WEAPON_GRENADE)
+      rotation = -((world->m_GameTick + intra) / 50.f) * 4.f * M_PI + id;
+    else
+      rotation = atan2f(-(to[1] - from[1]), to[0] - from[0]);
+    dd_draw_sprite(game, game->gfx.gameskin, DD_Z_PROJECTILES, p, (vec2){1.f, 1.f}, rotation, sprite,
+                   (vec4){1.f, 1.f, 1.f, 1.f});
     ++id;
   }
 
@@ -412,11 +420,51 @@ static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world
     tile_pos(ent->m_Base.m_Pos, p1);
     tile_pos(ent->m_From, p0);
 
-    vec4 laser_col = {0.f, 0.f, 1.f, 0.9f};
-    vec4 shotgun_col = {0.570315f, 0.4140625f, 0.25f, 0.9f};
-    float *col = ent->m_Type == WEAPON_LASER ? laser_col : shotgun_col;
-    dd_draw_line(game, DD_Z_LINES, p0, p1, col, 0.25f);
-    dd_draw_circle(game, DD_Z_LINES, p0, 0.2f, col, 8);
+    // cl_laser_rifle_* and cl_laser_sg_*, converted from the packed HSL those
+    // defaults are stored as. DDNet draws a laser fully opaque; only another
+    // team's shots are faded, which a recording has no notion of.
+    vec4 laser_outer = {0.074402f, 0.074402f, 0.247166f, 1.f};
+    vec4 laser_inner = {0.498039f, 0.498039f, 1.000000f, 1.f};
+    vec4 shotgun_outer = {0.122399f, 0.095073f, 0.042307f, 1.f};
+    vec4 shotgun_inner = {0.571626f, 0.417407f, 0.251903f, 1.f};
+    float *outer = ent->m_Type == WEAPON_LASER ? laser_outer : shotgun_outer;
+    float *inner = ent->m_Type == WEAPON_LASER ? laser_inner : shotgun_inner;
+
+    // DDNet collapses both parts of a laser over its bounce delay. The two
+    // coloured bodies and animated splat head are what distinguish rifle and
+    // shotgun shots; a single opaque debug line loses both cues.
+    const float age_ticks = (float)(world->m_GameTick - ent->m_EvalTick) + intra;
+    const float delay_ms = ent->m_pTuning && ent->m_pTuning->m_LaserBounceDelay > 0
+                               ? ent->m_pTuning->m_LaserBounceDelay
+                               : 150.f;
+    float fade = 1.f - age_ticks * (1000.f / GAME_TICK_SPEED) / delay_ms;
+    if (fade < 0.f) fade = 0.f;
+    if (fade > 1.f) fade = 1.f;
+    if (fade > 0.f) {
+      // DDNet's 7 and 5 are offsets on each side of the beam; FrameTee's line
+      // primitive takes the full width.
+      dd_draw_line(game, DD_Z_LASERS, p0, p1, outer, 14.f * fade / PX_PER_TILE);
+      // RenderLaser's ExtraOutline: the inner body stops one pixel short at
+      // both tips so the outline caps the beam instead of being buried by it.
+      vec2 dir;
+      glm_vec2_sub(p1, p0, dir);
+      if (glm_vec2_norm(dir) > 2.f / PX_PER_TILE) {
+        glm_vec2_normalize(dir);
+        glm_vec2_scale(dir, 1.f / PX_PER_TILE, dir);
+        vec2 inner_from = {p0[0] + dir[0], p0[1] + dir[1]};
+        vec2 inner_to = {p1[0] - dir[0], p1[1] - dir[1]};
+        dd_draw_line(game, DD_Z_LASERS + 0.01f, inner_from, inner_to, inner, 10.f * fade / PX_PER_TILE);
+      }
+    }
+
+    // One of the three splat particles, picked and spun by the tick itself.
+    // DDNet's rotation is that tick count read as radians, and the engine
+    // turns sprites the opposite way around its y-down world.
+    const int ticks_head = (int)((float)world->m_GameTick + intra);
+    const uint32_t head = PARTICLE_SPLAT01 + (uint32_t)(((ticks_head % 3) + 3) % 3);
+    const float rotation = -(float)ticks_head;
+    dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.02f, p1, (vec2){0.75f, 0.75f}, rotation, head, outer);
+    dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.03f, p1, (vec2){0.625f, 0.625f}, rotation, head, inner);
   }
 }
 
@@ -596,6 +644,7 @@ void dd_render(ft_game *game, const ft_render_frame *frame) {
   switch (frame->pass) {
   case FT_PASS_LEVEL_BACKGROUND:
     dd_map_render(game, frame);
+    dd_render_map_overlays(game, frame);
     break;
   case FT_PASS_ENTITIES: {
     // Entity passes are per world. The old port tried to draw particles from a
@@ -608,10 +657,12 @@ void dd_render(ft_game *game, const ft_render_frame *frame) {
       if (particles) dd_particles_render(particles, game, 0);
     }
     render_entities(game, frame);
+    dd_render_doors(game, frame);
     if (particles) dd_particles_render(particles, game, 1);
     break;
   }
   case FT_PASS_OVERLAY:
+    dd_render_world_overlays(game, frame);
     if (frame->active) render_cursor(game, frame);
     break;
   case FT_PASS_LEVEL_FOREGROUND:

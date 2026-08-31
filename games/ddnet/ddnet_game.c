@@ -1214,6 +1214,20 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
                                    .render_particles = true,
                                    .render_pickups = true,
                                    .render_cursor_follow = true,
+                                   .render_chat = true,
+                                   .chat_font_size = 60,
+                                   .chat_width = 200,
+                                   .render_nameplates = true,
+                                   .render_emoticons = true,
+                                   .render_freeze_bars = true,
+                                   .render_entity_text = true,
+                                   .entity_text_size = 100,
+                                   .render_speedups = true,
+                                   .render_doors = true,
+                                   .nameplate_size = 50,
+                                   .nameplate_clan = true,
+                                   .nameplate_clan_size = 30,
+                                   .nameplate_offset = 30,
                                    .center_dot = false,
                                    .cursor_scale = 1.0f};
   game->auto_finish_events = true;
@@ -1439,6 +1453,20 @@ enum ddnet_setting {
   SET_CURSOR_SCALE,
   SET_CURSOR_FOLLOW,
   SET_CENTER_DOT,
+  SET_RENDER_CHAT,
+  SET_CHAT_FONT_SIZE,
+  SET_CHAT_WIDTH,
+  SET_RENDER_EMOTICONS,
+  SET_RENDER_FREEZE_BARS,
+  SET_RENDER_ENTITY_TEXT,
+  SET_ENTITY_TEXT_SIZE,
+  SET_RENDER_SPEEDUPS,
+  SET_RENDER_DOORS,
+  SET_RENDER_NAMEPLATES,
+  SET_NAMEPLATE_SIZE,
+  SET_NAMEPLATE_CLAN,
+  SET_NAMEPLATE_CLAN_SIZE,
+  SET_NAMEPLATE_OFFSET,
   SET_AUTO_FINISH_EVENTS,
   SET_COUNT
 };
@@ -1451,8 +1479,21 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_CURSOR_SCALE] = {"cursor_scale", "Crosshair scale", NULL, "Crosshair", FT_VALUE_FLOAT, 0.1, 2.0},
     [SET_CURSOR_FOLLOW] = {"cursor_follow", "Crosshair in follow camera", NULL, "Crosshair", FT_VALUE_BOOL, 0, 0},
     [SET_CENTER_DOT] = {"center_dot", "Show center dot", "Marks the tee's exact position", "Rendering", FT_VALUE_BOOL, 0, 0},
-    [SET_AUTO_FINISH_EVENTS] = {"auto_finish_events", "Generate finish events while recording", NULL, "Timeline events",
-                                FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_CHAT] = {"render_chat", "Show chat", NULL, "Chat", FT_VALUE_BOOL, 0, 0},
+    [SET_CHAT_FONT_SIZE] = {"chat_font_size", "Chat font size", NULL, "Chat", FT_VALUE_INT, 10, 100},
+    [SET_CHAT_WIDTH] = {"chat_width", "Chat width", NULL, "Chat", FT_VALUE_INT, 140, 400},
+    [SET_RENDER_EMOTICONS] = {"render_emoticons", "Emoticons", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_FREEZE_BARS] = {"render_freeze_bars", "Freeze bars", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_ENTITY_TEXT] = {"render_entity_text", "Map entity text", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
+    [SET_ENTITY_TEXT_SIZE] = {"entity_text_size", "Map entity text size", NULL, "Rendering", FT_VALUE_INT, 20, 100},
+    [SET_RENDER_SPEEDUPS] = {"render_speedups", "Speedup arrows", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_DOORS] = {"render_doors", "Doors", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_NAMEPLATES] = {"render_nameplates", "Show nameplates", NULL, "Nameplates", FT_VALUE_BOOL, 0, 0},
+    [SET_NAMEPLATE_SIZE] = {"nameplate_size", "Nameplate size", NULL, "Nameplates", FT_VALUE_INT, -50, 100},
+    [SET_NAMEPLATE_CLAN] = {"nameplate_clan", "Show clan", NULL, "Nameplates", FT_VALUE_BOOL, 0, 0},
+    [SET_NAMEPLATE_CLAN_SIZE] = {"nameplate_clan_size", "Clan size", NULL, "Nameplates", FT_VALUE_INT, -50, 100},
+    [SET_NAMEPLATE_OFFSET] = {"nameplate_offset", "Nameplate offset", NULL, "Nameplates", FT_VALUE_INT, 10, 50},
+    [SET_AUTO_FINISH_EVENTS] = {"auto_finish_events", "Generate finish events while recording", NULL, "Timeline events", FT_VALUE_BOOL, 0, 0},
 };
 
 static uint32_t ddnet_setting_count(ft_game *game) {
@@ -1489,12 +1530,60 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
   case SET_CENTER_DOT:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->center_dot};
     return true;
+  case SET_RENDER_CHAT:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_chat};
+    return true;
+  case SET_CHAT_FONT_SIZE:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->chat_font_size};
+    return true;
+  case SET_CHAT_WIDTH:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->chat_width};
+    return true;
+  case SET_RENDER_EMOTICONS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_emoticons};
+    return true;
+  case SET_RENDER_FREEZE_BARS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_freeze_bars};
+    return true;
+  case SET_RENDER_ENTITY_TEXT:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_entity_text};
+    return true;
+  case SET_ENTITY_TEXT_SIZE:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->entity_text_size};
+    return true;
+  case SET_RENDER_NAMEPLATES:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_nameplates};
+    return true;
+  case SET_NAMEPLATE_SIZE:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->nameplate_size};
+    return true;
+  case SET_NAMEPLATE_CLAN:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->nameplate_clan};
+    return true;
+  case SET_NAMEPLATE_CLAN_SIZE:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->nameplate_clan_size};
+    return true;
+  case SET_NAMEPLATE_OFFSET:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->nameplate_offset};
+    return true;
+  case SET_RENDER_SPEEDUPS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_speedups};
+    return true;
+  case SET_RENDER_DOORS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_doors};
+    return true;
   case SET_AUTO_FINISH_EVENTS:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = game->auto_finish_events};
     return true;
   default:
     return false;
   }
+}
+
+// The descriptor's bounds are advice to the UI; a hand-edited config can still
+// arrive with anything, and these settings feed sizes and offsets directly.
+static int64_t clamp_setting(int64_t value, int64_t low, int64_t high) {
+  return value < low ? low : (value > high ? high : value);
 }
 
 static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *value) {
@@ -1520,6 +1609,50 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
     return true;
   case SET_CENTER_DOT:
     s->center_dot = value->as.b;
+    return true;
+  case SET_RENDER_CHAT:
+    s->render_chat = value->as.b;
+    return true;
+  case SET_CHAT_FONT_SIZE:
+    s->chat_font_size = (int)clamp_setting(value->as.i, 10, 100);
+    return true;
+  case SET_CHAT_WIDTH:
+    s->chat_width = (int)clamp_setting(value->as.i, 140, 400);
+    return true;
+  case SET_RENDER_EMOTICONS:
+    s->render_emoticons = value->as.b;
+    return true;
+  case SET_RENDER_FREEZE_BARS:
+    s->render_freeze_bars = value->as.b;
+    return true;
+  case SET_RENDER_ENTITY_TEXT:
+    s->render_entity_text = value->as.b;
+    return true;
+  case SET_ENTITY_TEXT_SIZE:
+    s->entity_text_size = (int)clamp_setting(value->as.i, 20, 100);
+    // The number sheets bake the size in, so this re-uploads them.
+    dd_text_set_entity_scale(game, s->entity_text_size);
+    return true;
+  case SET_RENDER_NAMEPLATES:
+    s->render_nameplates = value->as.b;
+    return true;
+  case SET_NAMEPLATE_SIZE:
+    s->nameplate_size = (int)clamp_setting(value->as.i, -50, 100);
+    return true;
+  case SET_NAMEPLATE_CLAN:
+    s->nameplate_clan = value->as.b;
+    return true;
+  case SET_NAMEPLATE_CLAN_SIZE:
+    s->nameplate_clan_size = (int)clamp_setting(value->as.i, -50, 100);
+    return true;
+  case SET_NAMEPLATE_OFFSET:
+    s->nameplate_offset = (int)clamp_setting(value->as.i, 10, 50);
+    return true;
+  case SET_RENDER_SPEEDUPS:
+    s->render_speedups = value->as.b;
+    return true;
+  case SET_RENDER_DOORS:
+    s->render_doors = value->as.b;
     return true;
   case SET_AUTO_FINISH_EVENTS:
     game->auto_finish_events = value->as.b;

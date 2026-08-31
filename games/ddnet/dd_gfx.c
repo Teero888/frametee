@@ -100,6 +100,13 @@ static const ft_sprite_rect extra_rects[EXTRA_SPRITE_COUNT] = {
 static const ft_sprite_rect cursor_rects[CURSOR_SPRITE_COUNT] = {
     [CURSOR_HAMMER] = {0, 0, 64, 64}, [CURSOR_GUN] = {0, 128, 64, 64}, [CURSOR_SHOTGUN] = {0, 192, 64, 64}, [CURSOR_GRENADE] = {0, 256, 64, 64}, [CURSOR_LASER] = {0, 384, 64, 64}, [CURSOR_NINJA] = {0, 320, 64, 64}};
 
+static const ft_sprite_rect emoticon_rects[DD_EMOTICON_COUNT] = {
+    {0, 0, 128, 128},     {128, 0, 128, 128},   {256, 0, 128, 128},   {384, 0, 128, 128},
+    {0, 128, 128, 128},   {128, 128, 128, 128}, {256, 128, 128, 128}, {384, 128, 128, 128},
+    {0, 256, 128, 128},   {128, 256, 128, 128}, {256, 256, 128, 128}, {384, 256, 128, 128},
+    {0, 384, 128, 128},   {128, 384, 128, 128}, {256, 384, 128, 128}, {384, 384, 128, 128},
+};
+
 void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...) {
   if (!game || !game->engine || !game->engine->log) return;
   char message[512];
@@ -154,6 +161,72 @@ static ft_texture *load_sheet(ft_game *game, const char *relative, uint32_t *out
   return texture;
 }
 
+// DDNet's hud.png is a 16x16 sprite grid; the freeze bar occupies the first
+// four cells of row 2. Half of CFreezeBars' pieces sample their sprite right to
+// left, which the engine's sprite path cannot express, so the sheet built here
+// carries a horizontally mirrored copy of each cell after the four originals.
+#define DD_HUD_GRID 16u
+static bool load_freeze_bar_sheet(ft_game *game) {
+  dd_gfx_t *gfx = &game->gfx;
+  char path[1024];
+  game->engine->resolve_data_path("textures/hud.png", path, sizeof(path));
+
+  void *file = NULL;
+  size_t size = 0;
+  if (!game->engine->read_file(path, &file, &size)) {
+    dd_log(game, FT_LOG_ERROR, "Missing asset '%s'.", path);
+    return false;
+  }
+  int w = 0, h = 0, channels = 0;
+  unsigned char *pixels = dd_decode_png(file, size, &w, &h, &channels);
+  game->engine->free_file_data(file);
+  if (!pixels) {
+    dd_log(game, FT_LOG_ERROR, "Could not decode '%s'.", path);
+    return false;
+  }
+  if (w < (int)DD_HUD_GRID || h < (int)DD_HUD_GRID) {
+    dd_free_png(pixels);
+    dd_log(game, FT_LOG_ERROR, "'%s' is too small to hold a %ux%u sprite grid.", path, DD_HUD_GRID, DD_HUD_GRID);
+    return false;
+  }
+
+  const uint32_t cell_w = (uint32_t)w / DD_HUD_GRID;
+  const uint32_t cell_h = (uint32_t)h / DD_HUD_GRID;
+  const uint32_t sheet_w = cell_w * DD_FREEZE_SPRITE_COUNT;
+  unsigned char *sheet = calloc((size_t)sheet_w * cell_h, 4u);
+  if (!sheet) {
+    dd_free_png(pixels);
+    return false;
+  }
+  for (uint32_t sprite = 0; sprite < 4u; ++sprite) {
+    const uint32_t src_x = sprite * cell_w;
+    const uint32_t src_y = 2u * cell_h;
+    for (uint32_t y = 0; y < cell_h; ++y) {
+      const unsigned char *src = pixels + (((size_t)(src_y + y) * (uint32_t)w) + src_x) * 4u;
+      unsigned char *dst = sheet + ((size_t)y * sheet_w + src_x) * 4u;
+      unsigned char *mirror = sheet + ((size_t)y * sheet_w + (DD_FREEZE_MIRRORED + sprite) * cell_w) * 4u;
+      memcpy(dst, src, (size_t)cell_w * 4u);
+      for (uint32_t x = 0; x < cell_w; ++x) memcpy(mirror + (size_t)x * 4u, src + (size_t)(cell_w - 1u - x) * 4u, 4u);
+    }
+  }
+  dd_free_png(pixels);
+
+  for (uint32_t sprite = 0; sprite < DD_FREEZE_SPRITE_COUNT; ++sprite)
+    gfx->freeze_bar_rects[sprite] = (ft_sprite_rect){sprite * cell_w, 0u, cell_w, cell_h};
+
+  const ft_texture_desc desc = {.struct_size = sizeof(desc),
+                                .pixels = sheet,
+                                .width = sheet_w,
+                                .height = cell_h,
+                                .layers = 1,
+                                .format = FT_TEXTURE_RGBA8,
+                                .mipmaps = true,
+                                .linear_filter = true};
+  gfx->freeze_bar_texture = game->engine->texture_create(&desc);
+  free(sheet);
+  return gfx->freeze_bar_texture != NULL;
+}
+
 static ft_atlas *make_atlas(ft_game *game, ft_texture *texture, const ft_sprite_rect *rects, uint32_t count, uint32_t max_instances) {
   if (!texture) return NULL;
   ft_atlas_desc desc = {.struct_size = sizeof(desc),
@@ -194,6 +267,7 @@ static bool create_skin_pipeline(ft_game *game) {
       {11, offsetof(dd_skin_instance_t, col_feet), FT_VERTEX_FLOAT3},
       {12, offsetof(dd_skin_instance_t, col_custom), FT_VERTEX_INT1},
       {13, offsetof(dd_skin_instance_t, mode), FT_VERTEX_INT1},
+      {14, offsetof(dd_skin_instance_t, alpha), FT_VERTEX_FLOAT1},
   };
 
   ft_pipeline_desc desc = {.struct_size = sizeof(desc),
@@ -227,14 +301,22 @@ bool dd_gfx_create(ft_game *game) {
   memcpy(gfx->cursor_rects, cursor_rects, sizeof(cursor_rects));
   memcpy(gfx->particle_rects, particle_rects, sizeof(particle_rects));
   memcpy(gfx->extra_rects, extra_rects, sizeof(extra_rects));
+  memcpy(gfx->emoticon_rects, emoticon_rects, sizeof(emoticon_rects));
+  gfx->speedup_arrow_rect = (ft_sprite_rect){0, 0, 64, 64};
 
   gfx->gameskin_texture = load_sheet(game, "textures/game.png", NULL, NULL);
   gfx->particles_texture = load_sheet(game, "textures/particles.png", NULL, NULL);
   gfx->extras_texture = load_sheet(game, "textures/extras.png", NULL, NULL);
+  gfx->emoticons_texture = load_sheet(game, "textures/emoticons.png", NULL, NULL);
+  gfx->speedup_arrow_texture = load_sheet(game, "textures/speed_arrow.png", NULL, NULL);
+  load_freeze_bar_sheet(game);
 
   gfx->gameskin = make_atlas(game, gfx->gameskin_texture, gfx->gameskin_rects, GAMESKIN_SPRITE_COUNT, 200000);
   gfx->particles = make_atlas(game, gfx->particles_texture, gfx->particle_rects, PARTICLE_SPRITE_COUNT, 200000);
   gfx->extras = make_atlas(game, gfx->extras_texture, gfx->extra_rects, EXTRA_SPRITE_COUNT, 200000);
+  gfx->emoticons = make_atlas(game, gfx->emoticons_texture, gfx->emoticon_rects, DD_EMOTICON_COUNT, 4096);
+  gfx->speedup_arrow = make_atlas(game, gfx->speedup_arrow_texture, &gfx->speedup_arrow_rect, 1, 65536);
+  gfx->freeze_bar = make_atlas(game, gfx->freeze_bar_texture, gfx->freeze_bar_rects, DD_FREEZE_SPRITE_COUNT, 4096);
   // One crosshair at a time, so a tiny instance ring is plenty.
   gfx->cursor = make_atlas(game, gfx->gameskin_texture, gfx->cursor_rects, CURSOR_SPRITE_COUNT, 8);
   if (!gfx->gameskin) {
@@ -268,6 +350,11 @@ bool dd_gfx_create(ft_game *game) {
   gfx->skin_batch = calloc(gfx->skin_batch_capacity, sizeof(dd_skin_instance_t));
   gfx->default_skin = dd_gfx_skin_index(game, "default");
   gfx->ninja_skin = dd_gfx_skin_index(game, "x_ninja");
+  if (!dd_text_create(game)) {
+    dd_log(game, FT_LOG_ERROR, "Could not create the DDNet text renderer.");
+    dd_gfx_destroy(game);
+    return false;
+  }
   gfx->ready = true;
   return true;
 }
@@ -282,9 +369,14 @@ void dd_gfx_destroy(ft_game *game) {
   if (gfx->gameskin) game->engine->atlas_destroy(gfx->gameskin);
   if (gfx->particles) game->engine->atlas_destroy(gfx->particles);
   if (gfx->extras) game->engine->atlas_destroy(gfx->extras);
+  if (gfx->emoticons) game->engine->atlas_destroy(gfx->emoticons);
+  if (gfx->speedup_arrow) game->engine->atlas_destroy(gfx->speedup_arrow);
+  if (gfx->freeze_bar) game->engine->atlas_destroy(gfx->freeze_bar);
   if (gfx->cursor) game->engine->atlas_destroy(gfx->cursor);
+  dd_text_destroy(game);
   if (gfx->skin_array) game->engine->texture_destroy(gfx->skin_array);
   if (gfx->skin_color_array) game->engine->texture_destroy(gfx->skin_color_array);
+  free(gfx->overlay_batch);
   free(gfx->skin_batch);
   free(gfx->hand_batch);
   free(gfx->hook_hand_batch);
@@ -628,6 +720,9 @@ const ft_sprite_rect *dd_sprite_rect(ft_game *game, ft_atlas *atlas, uint32_t in
   if (atlas == gfx->particles && index < PARTICLE_SPRITE_COUNT) return &gfx->particle_rects[index];
   if (atlas == gfx->extras && index < EXTRA_SPRITE_COUNT) return &gfx->extra_rects[index];
   if (atlas == gfx->cursor && index < CURSOR_SPRITE_COUNT) return &gfx->cursor_rects[index];
+  if (atlas == gfx->emoticons && index < DD_EMOTICON_COUNT) return &gfx->emoticon_rects[index];
+  if (atlas == gfx->speedup_arrow && index == 0) return &gfx->speedup_arrow_rect;
+  if (atlas == gfx->freeze_bar && index < DD_FREEZE_SPRITE_COUNT) return &gfx->freeze_bar_rects[index];
   return NULL;
 }
 
@@ -702,6 +797,7 @@ void dd_skin_push(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 
 
   inst->pos[0] = pos[0];
   inst->pos[1] = pos[1];
+  inst->alpha = 1.f;
   // The shader maps uvs as in_pos * 0.625 + 0.5, i.e. it expects a quad 1.25x
   // oversized so the animation has room to move within it.
   inst->scale = scale * 1.25f;
@@ -738,6 +834,7 @@ void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, v
 
   inst->pos[0] = pos[0];
   inst->pos[1] = pos[1];
+  inst->alpha = 1.f;
   // A hand quad spans its sprite exactly, so no 1.25 headroom here.
   inst->scale = scale;
   inst->skin_index = skin;
@@ -753,6 +850,51 @@ void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, v
 
 // Hands and bodies go in as two draws at their own depths, so a hand gripping
 // a weapon stays behind the tee holding it.
+void dd_skin_push_overlay(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 dir, const dd_anim_state_t *anim,
+                          vec3 col_body, vec3 col_feet, bool custom, float alpha) {
+  if (!game->gfx.ready) return;
+  dd_gfx_t *gfx = &game->gfx;
+  dd_skin_instance_t *inst = hand_batch_push(&gfx->overlay_batch, &gfx->overlay_batch_count, &gfx->overlay_batch_capacity);
+  if (!inst) return;
+
+  inst->pos[0] = pos[0];
+  inst->pos[1] = pos[1];
+  inst->alpha = alpha;
+  inst->scale = scale * 1.25f;
+  inst->skin_index = skin;
+  inst->eye_state = eye + 6;
+  inst->body[0] = anim->body.x;
+  inst->body[1] = anim->body.y;
+  inst->body[2] = anim->body.angle;
+  inst->back_foot[0] = anim->back_foot.x;
+  inst->back_foot[1] = anim->back_foot.y;
+  inst->back_foot[2] = anim->back_foot.angle;
+  inst->front_foot[0] = anim->front_foot.x;
+  inst->front_foot[1] = anim->front_foot.y;
+  inst->front_foot[2] = anim->front_foot.angle;
+  inst->attach[0] = anim->attach.x;
+  inst->attach[1] = anim->attach.y;
+  inst->attach[2] = anim->attach.angle;
+  inst->dir[0] = dir[0];
+  inst->dir[1] = dir[1];
+  glm_vec3_copy(col_body, inst->col_body);
+  glm_vec3_copy(col_feet, inst->col_feet);
+  inst->col_custom = custom ? 1 : 0;
+  inst->mode = DD_SKIN_MODE_TEE;
+}
+
+// Separate from dd_skins_flush because the overlay pass runs after the entity
+// pass that flushes the world's tees.
+void dd_skins_flush_overlay(ft_game *game) {
+  dd_gfx_t *gfx = &game->gfx;
+  if (!gfx->ready || !gfx->skin_pipeline || !gfx->skin_array || !gfx->skin_color_array) return;
+  if (gfx->overlay_batch_count == 0) return;
+  ft_texture *textures[2] = {gfx->skin_array, gfx->skin_color_array};
+  game->engine->draw_instances(gfx->skin_pipeline, DD_Z_OVERLAYS + 0.05f, textures, 2, gfx->overlay_batch,
+                               gfx->overlay_batch_count);
+  gfx->overlay_batch_count = 0;
+}
+
 void dd_skins_flush(ft_game *game) {
   dd_gfx_t *gfx = &game->gfx;
   if (!gfx->ready || !gfx->skin_pipeline || !gfx->skin_array || !gfx->skin_color_array) return;
