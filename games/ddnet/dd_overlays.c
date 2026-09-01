@@ -186,7 +186,8 @@ static void render_freeze_bars(ft_game *game, const ft_render_frame *frame) {
 
   for (int player = 0; player < world->m_NumCharacters; ++player) {
     const SCharacterCore *character = &world->m_pCharacters[player];
-    if (character->m_DeepFrozen || character->m_FreezeTime <= 0 || character->m_FreezeStart <= 0) continue;
+    if (character->m_DeepFrozen || character->m_IsInFreeze || character->m_FreezeTime <= 0 || character->m_FreezeStart <= 0)
+      continue;
 
     // DDNet's Max is the whole freeze and its numerator the ticks left, which
     // is exactly what the core already tracks as m_FreezeTime.
