@@ -183,6 +183,23 @@ static int remap_client_id(const int *client_ids, int client_count, int local_id
   return local_id < client_count ? client_ids[local_id] : -1;
 }
 
+static int demo_character_emote(const SWorldCore *world, const SCharacterCore *character) {
+  static const int emotes_by_eye[NUM_EYES] = {
+      [EYE_NORMAL] = DD_EMOTE_NORMAL,
+      [EYE_ANGRY] = DD_EMOTE_ANGRY,
+      [EYE_PAIN] = DD_EMOTE_PAIN,
+      [EYE_HAPPY] = DD_EMOTE_HAPPY,
+      [EYE_BLINK] = DD_EMOTE_BLINK,
+      [EYE_SURPRISE] = DD_EMOTE_SURPRISE,
+  };
+  int eye = get_flag_eye_state(&character->m_Input);
+  if (eye < EYE_NORMAL || eye >= NUM_EYES) eye = EYE_NORMAL;
+  if (character->m_FreezeTime > 0 && eye == EYE_NORMAL) eye = EYE_BLINK;
+  const int damage_age = world->m_GameTick - character->m_DamageTick;
+  if (damage_age >= 0 && damage_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
+  return emotes_by_eye[eye];
+}
+
 static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, const int *client_ids, int client_count,
                        const int *client_options, SWorldCore *prev, const ft_world *current_world, bool include_static, int demo_tick,
                        int tick_delta, int *next_item_id) {
@@ -322,8 +339,7 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     // Physics groups run on local clocks, while a demo has one shared clock. Every absolute tick
     // written to the protocol must be translated or the client predicts offset groups far away.
     ch->core.m_Tick = demo_tick;
-    const int damage_age = cur->m_GameTick - c_cur->m_DamageTick;
-    ch->m_Emote = damage_age >= 0 && damage_age < GAME_TICK_SPEED / 2 ? DD_EMOTE_PAIN : DD_EMOTE_HAPPY;
+    ch->m_Emote = demo_character_emote(cur, c_cur);
 
     ch->m_AttackTick = c_cur->m_AttackTick + tick_delta;
     ch->core.m_Direction = c_cur->m_Input.m_Direction;
