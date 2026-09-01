@@ -219,7 +219,7 @@ ft_color WheelStateColor(const sim::CarState &car, std::size_t wheel, bool *repl
 
 // The authored model, drawn part by part so the wheels can be turned and rolled.
 void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_render_frame *frame,
-                  const CarPose &pose, const Quat &steered, const Quat &rolled, ft_color livery, float opacity) {
+                  const CarPose &pose, ft_color livery, float opacity) {
   const auto &car = frame->world->view.car;
 
   // The four wheels are turned about their own hubs and tinted by their state;
@@ -228,17 +228,28 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
   bool replace[VEHICLE_PART_COUNT] = {};
   for (std::size_t i = 0; i < 4; ++i) tint[i] = WheelStateColor(car, i, &replace[i]);
 
-  // A wheel rolls about its own axle and the front pair is then steered on top
-  // of that, so the roll is applied first.
-  const Quat front_wheel = Concat(steered, rolled);
+  // Each wheel rolls about its own axle on the angle the simulation reports for
+  // it, and the front pair is steered on top of that, so the roll goes first.
+  Quat turn[4];
+  for (std::size_t i = 0; i < 4; ++i) {
+    const Quat rolled = QuatFromAxisAngle(ft_vec3{1.f, 0.f, 0.f}, car.wheelSpinAngle[i]);
+    turn[i] = Concat(QuatFromAxisAngle(ft_vec3{0.f, 1.f, 0.f}, car.wheelSteerAngle[i]), rolled);
+  }
+
   static const Quat kNoRotation{};
   for (const VehicleFace &face : model.faces) {
     const bool wheel = IsWheelPart(face.part);
-    const bool front = face.part == VEHICLE_PART_WHEEL_FL || face.part == VEHICLE_PART_WHEEL_FR;
-    const Quat &local = !wheel ? kNoRotation : (front ? front_wheel : rolled);
+    const Quat &local = wheel ? turn[face.part] : kNoRotation;
+    // A wheel and the guard over it hang off the same damper, and the game
+    // drops both by how far it has absorbed.
+    const int suspended = SuspendedWheel(face.part);
+    const float drop = suspended >= 0 ? car.wheelDamperAbsorb[static_cast<std::size_t>(suspended)] : 0.f;
 
     const auto place = [&](ft_vec3 p) {
-      if (wheel) p = Add(Rotate(local, p), model.hub[face.part]);
+      if (wheel) {
+        p = Add(Rotate(local, p), model.hub[face.part]);
+      }
+      p.y -= drop;
       return Add(pose.position, Rotate(pose.rotation, p));
     };
     // Body panels come out of the pack unpainted, and the editor's colour for
@@ -274,55 +285,38 @@ void DrawCar(ft_game *game, const ft_render_frame *frame, const CarPose &pose) {
   const float opacity = std::clamp(frame->opacity, 0.f, 1.f);
   const auto &view = frame->world->view;
 
-  // Front wheels turn with the steering axis; the rears stay put.
-  //
-  // The axis runs negative to the left, and steering left turns the car through
-  // a positive angle about its own up axis, so the wheel's angle is the
-  // negation of the axis. Getting this backwards points the wheels out of the
-  // corner, which looks fine standing still and wrong the moment it matters.
-  const float steer = -std::clamp(view.steering, -1.f, 1.f) * kMaxSteerAngle;
-  const Quat steered = QuatFromAxisAngle(ft_vec3{0.f, 1.f, 0.f}, steer);
-
-  // And all four roll. The simulation never says how far a wheel has turned, so
-  // the angle is carried between frames per world (see WheelSpin), and the
-  // wheels of a prediction ghost turn independently of the run's.
-  const std::size_t spin_slot =
-      frame->world_index >= 0 ? static_cast<std::size_t>(frame->world_index) % kMaxSpinnyWorlds : 0u;
-  const std::uint64_t now_ms = view.timeMs + static_cast<std::uint64_t>(std::clamp(frame->alpha, 0.f, 1.f) * kTickMs);
-  // The car looks down +Z with +X to its right, so a wheel rolls about its own
-  // +X. Turning that way carries the top of the wheel towards +Z, which is what
-  // rolling forwards does: the contact patch goes backwards and the top goes
-  // the way the car is going.
-  const float roll = game->wheel_spin[spin_slot].Advance(now_ms, view.car.signedSpeed, kWheelRadius);
-  const Quat rolled = QuatFromAxisAngle(ft_vec3{1.f, 0.f, 0.f}, roll);
-
   const ft_color livery = LiveryFor(frame, 0);
 
   if (game->vehicle.loaded) {
-    DrawAuthored(api, game->vehicle, frame, pose, steered, rolled, livery, opacity);
+    DrawAuthored(api, game->vehicle, frame, pose, livery, opacity);
     return;
   }
 
   const CarMesh &mesh = Mesh(livery);
   Submit(api, mesh.body, pose, ft_vec3{0.f, 0.f, 0.f}, nullptr, nullptr, opacity);
 
-  const Quat front_wheel = Concat(steered, rolled);
-  struct Wheel {
-    ft_vec3 hub;
-    bool front;
-  };
   // In the order the simulation reports contact and sliding in.
-  const Wheel wheels[4] = {
-      {ft_vec3{-kFrontTrackX, kAxleY, kFrontAxleZ}, true}, // front left
-      {ft_vec3{kFrontTrackX, kAxleY, kFrontAxleZ}, true},  // front right
-      {ft_vec3{kRearTrackX, kAxleY, kRearAxleZ}, false},   // rear right
-      {ft_vec3{-kRearTrackX, kAxleY, kRearAxleZ}, false},  // rear left
+  const ft_vec3 hubs[4] = {
+      ft_vec3{-kFrontTrackX, kAxleY, kFrontAxleZ}, // front left
+      ft_vec3{kFrontTrackX, kAxleY, kFrontAxleZ},  // front right
+      ft_vec3{kRearTrackX, kAxleY, kRearAxleZ},    // rear right
+      ft_vec3{-kRearTrackX, kAxleY, kRearAxleZ},   // rear left
   };
 
   for (std::size_t i = 0; i < 4; ++i) {
+    // The car looks down +Z with +X to its right, so a wheel rolls about its
+    // own +X: turning that way carries the top of the wheel towards +Z, which
+    // is what rolling forwards does. The front pair is steered on top of that,
+    // and both angles come from the simulation rather than being derived from
+    // the car's speed and steering axis.
+    const Quat rolled = QuatFromAxisAngle(ft_vec3{1.f, 0.f, 0.f}, view.car.wheelSpinAngle[i]);
+    const Quat turn = Concat(QuatFromAxisAngle(ft_vec3{0.f, 1.f, 0.f}, view.car.wheelSteerAngle[i]), rolled);
+    ft_vec3 hub = hubs[i];
+    hub.y -= view.car.wheelDamperAbsorb[i];
+
     bool replace = false;
     const ft_color color = WheelStateColor(view.car, i, &replace);
-    Submit(api, mesh.wheel, pose, wheels[i].hub, wheels[i].front ? &front_wheel : &rolled, &color, opacity);
+    Submit(api, mesh.wheel, pose, hub, &turn, &color, opacity);
   }
 }
 

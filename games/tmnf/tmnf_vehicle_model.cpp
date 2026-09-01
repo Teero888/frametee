@@ -83,6 +83,11 @@ std::uint8_t PartForName(const char *name) {
   if (value.find("FRWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_FR;
   if (value.find("RRWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_RR;
   if (value.find("RLWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_RL;
+  // The guards and hubs turn with nothing, but they drop with their wheel.
+  if (value.find("FLGuard") != std::string_view::npos) return VEHICLE_PART_GUARD_FL;
+  if (value.find("FRGuard") != std::string_view::npos) return VEHICLE_PART_GUARD_FR;
+  if (value.find("RRHub") != std::string_view::npos) return VEHICLE_PART_HUB_RR;
+  if (value.find("RLHub") != std::string_view::npos) return VEHICLE_PART_HUB_RL;
   return VEHICLE_PART_BODY;
 }
 
@@ -465,7 +470,7 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
   // The wheels are drawn in their own space so they can be turned, so each one
   // needs the hub it turns about.
   std::size_t wheel_faces = 0;
-  for (std::uint8_t part = VEHICLE_PART_WHEEL_FL; part <= VEHICLE_PART_WHEEL_RL; ++part) {
+  for (std::uint8_t part = VEHICLE_PART_WHEEL_FL; part <= VEHICLE_PART_WHEEL_RL; ++part) {  // wheels only
     Aabb box;
     for (const VehicleFace &face : out->faces) {
       if (face.part != part) continue;

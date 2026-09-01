@@ -442,51 +442,9 @@ private:
   std::uint32_t page_size_ = 0u;
 };
 
-// --- the wheels turning ------------------------------------------------------
-
-// The editor draws several worlds at once (the run and its prediction ghosts)
-// and each turns its own wheels.
-inline constexpr std::size_t kMaxSpinnyWorlds = 16u;
-
-// The rolling radius of a wheel, in metres. Integrating the car's speed
-// against it is what turns a wheel, both on screen and in an exported replay,
-// and a recorded TMF replay's wheel angles resolve to this same radius.
+// The rolling radius of a wheel, in metres. Only the stand-in mesh needs it:
+// how far a wheel has actually turned is something the simulation reports.
 inline constexpr float kWheelRadius = 0.364f;
-
-// Full lock at the wheel. The simulation's steering is a normalised axis, and
-// this is the angle the visible wheel takes at either end of it.
-inline constexpr float kMaxSteerAngle = 0.38f;
-
-// How far a car's wheels have rolled.
-//
-// The simulation reports how fast the car is going and never how far a wheel
-// has turned, so the angle is integrated from the speed. That makes it
-// presentation state rather than part of the run, and it has to behave when the
-// timeline is not simply playing forwards: scrubbing, stepping back, jumping to
-// a checkpoint. The rule is that a step small enough to be playback advances
-// the angle and anything larger just re-anchors, because catching up across a
-// ten second jump would spin the wheel through a thousand revolutions nobody
-// asked to see.
-struct WheelSpin {
-  float angle = 0.f;
-  std::uint64_t time_ms = 0u;
-  bool anchored = false;
-
-  // The angle at `now`, given the speed the car is doing there.
-  float Advance(std::uint64_t now, float metres_per_second, float wheel_radius) {
-    // Anything past this is a seek rather than a frame.
-    constexpr std::uint64_t kContinuousMs = 250u;
-    if (anchored && now > time_ms && now - time_ms <= kContinuousMs && wheel_radius > 1e-3f) {
-      const float seconds = static_cast<float>(now - time_ms) * 0.001f;
-      angle += metres_per_second * seconds / wheel_radius;
-      // Kept in range so the float never loses the precision a slow roll needs.
-      angle = std::fmod(angle, 2.f * kPi);
-    }
-    time_ms = now;
-    anchored = true;
-    return angle;
-  }
-};
 
 // --- the vehicle model -------------------------------------------------------
 
@@ -497,11 +455,38 @@ enum VehiclePart : std::uint8_t {
   VEHICLE_PART_WHEEL_FR,
   VEHICLE_PART_WHEEL_RR,
   VEHICLE_PART_WHEEL_RL,
+  // The guard over each front wheel and the hub behind each rear one. They do
+  // not turn, but they hang off the same suspension and drop with it.
+  VEHICLE_PART_GUARD_FL,
+  VEHICLE_PART_GUARD_FR,
+  VEHICLE_PART_HUB_RR,
+  VEHICLE_PART_HUB_RL,
   VEHICLE_PART_BODY,
   VEHICLE_PART_COUNT,
 };
 
-inline bool IsWheelPart(std::uint8_t part) { return part < VEHICLE_PART_BODY; }
+// Which wheel's suspension a part rides on, or -1 for the body.
+inline int SuspendedWheel(std::uint8_t part) {
+  switch (part) {
+  case VEHICLE_PART_WHEEL_FL:
+  case VEHICLE_PART_GUARD_FL:
+    return 0;
+  case VEHICLE_PART_WHEEL_FR:
+  case VEHICLE_PART_GUARD_FR:
+    return 1;
+  case VEHICLE_PART_WHEEL_RR:
+  case VEHICLE_PART_HUB_RR:
+    return 2;
+  case VEHICLE_PART_WHEEL_RL:
+  case VEHICLE_PART_HUB_RL:
+    return 3;
+  default:
+    return -1;
+  }
+}
+
+// The four wheels themselves, which are the only parts that turn.
+inline bool IsWheelPart(std::uint8_t part) { return part <= VEHICLE_PART_WHEEL_RL; }
 
 struct VehicleFace {
   ft_vec3 a, b, c;
@@ -640,12 +625,6 @@ struct ft_game {
 
   // The car's authored model, decoded from the pack the vehicle comes from.
   tmnf::VehicleModel vehicle;
-
-  // How far each world's wheels have turned. The simulation reports a speed but
-  // never an angle, so it is integrated here, which means it belongs to the
-  // presentation and not to the run, and a timeline that jumps must not try to
-  // catch up across the gap. See tmnf::WheelSpin.
-  tmnf::WheelSpin wheel_spin[tmnf::kMaxSpinnyWorlds];
 
   // The installed packs, and the pictures pulled out of them. Both belong to
   // the level rather than to the game, but a car is shared between tracks that
