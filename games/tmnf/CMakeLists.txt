@@ -57,6 +57,15 @@ option(FRAMETEE_TMNF_VALIDATOR_LTO
        "Build ForeverValidator with link-time optimization (Clang; GCC has its own)" ON)
 option(FRAMETEE_TMNF_VALIDATOR_RELEASE_DEBUG_INFO
        "Emit full DWARF for the optimized ForeverValidator Release build" OFF)
+# Keeps the static relocations in the linked validator so a post-link layout
+# pass (llvm-bolt; see perfwork/bolt.sh) can take it apart again. The
+# simulation is short of instruction cache -- about 2.9 billion L1i misses on
+# the A02 benchmark, and roughly a seventh of its issue slots go unfilled
+# because the frontend has nothing ready -- which is the thing a profile-driven
+# basic-block layout addresses. Off by default: it only grows the file on disk,
+# and nothing in an ordinary build reads it.
+option(FRAMETEE_TMNF_VALIDATOR_EMIT_RELOCS
+       "Keep relocations in libforevervalidator_shared.so for llvm-bolt" OFF)
 
 set(TMNF_VALIDATOR_LTO OFF)
 if(FRAMETEE_TMNF_VALIDATOR_LTO AND NOT ENABLE_SANITIZERS AND
@@ -93,6 +102,36 @@ if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         # specialization can compile away every jump to a shared label.
         "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release,RelWithDebInfo>>:-Wno-unused-variable>"
         "$<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-label>")
+endif()
+
+# Two code-generation options that cost the simulation real work and change no
+# floating-point result at all. Unlike the native tuning below they stay
+# portable, so they are unconditional rather than folded into
+# ENABLE_AGGRESSIVE_OPTIM.
+#
+# -fno-math-errno: std::sqrt is the only libm function the physics calls on its
+# hot path, and it is called from ComputeForces, the vehicle model and the
+# collision response. C says sqrt sets errno for a negative argument, so clang
+# has to emit the hardware sqrt plus a comparison, a branch, and a real call to
+# libm on the other side of it. The branch is never taken here and nothing in
+# this program reads errno, but its mere possibility forces the register
+# allocator to treat every one of those blocks as call-clobbering and spill
+# across it. The instruction that computes the result -- vsqrtss/vsqrtsd -- is
+# the same one either way and is correctly rounded by IEEE-754, so the value is
+# bit-identical; only the errno store disappears. The release build had 221
+# sqrt@plt call sites before this.
+#
+# -fno-stack-protector: this toolchain defaults to -fstack-protector-strong,
+# which put a canary in 3,881 of the validator's 7,195 functions -- a thread-
+# local load and a store on entry and a load, compare and branch on every
+# return, on functions the simulation calls millions of times a second. The
+# validator parses no input at simulation time: everything it touches per tick
+# was decoded and bounds-checked while the track was loading. Nothing about
+# arithmetic changes.
+set(TMNF_VALIDATOR_EXACT_OPTIONS)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT ENABLE_SANITIZERS)
+    set(TMNF_VALIDATOR_EXACT_OPTIONS
+        $<$<CONFIG:Release>:-fno-math-errno -fno-stack-protector>)
 endif()
 
 # The validator is where this game spends essentially all of its time, so it is
@@ -138,6 +177,9 @@ foreach(fv_target forevervalidator_core forevervalidator_native)
     endif()
     if(TMNF_VALIDATOR_NATIVE_OPTIONS)
         target_compile_options(${fv_target} PRIVATE ${TMNF_VALIDATOR_NATIVE_OPTIONS})
+    endif()
+    if(TMNF_VALIDATOR_EXACT_OPTIONS)
+        target_compile_options(${fv_target} PRIVATE ${TMNF_VALIDATOR_EXACT_OPTIONS})
     endif()
     if(COMMAND frametee_enable_pgo)
         frametee_enable_pgo(${fv_target})
@@ -222,6 +264,15 @@ if(NOT WIN32)
         target_compile_options(forevervalidator_shared PRIVATE ${TMNF_VALIDATOR_NATIVE_OPTIONS})
         target_link_options(forevervalidator_shared PRIVATE ${TMNF_VALIDATOR_NATIVE_OPTIONS})
     endif()
+    if(TMNF_VALIDATOR_EXACT_OPTIONS)
+        target_compile_options(forevervalidator_shared PRIVATE ${TMNF_VALIDATOR_EXACT_OPTIONS})
+        target_link_options(forevervalidator_shared PRIVATE ${TMNF_VALIDATOR_EXACT_OPTIONS})
+    endif()
+
+    if(FRAMETEE_TMNF_VALIDATOR_EMIT_RELOCS AND NOT MSVC)
+        target_link_options(forevervalidator_shared PRIVATE
+            "-Wl,--emit-relocs" "-Wl,-znow")
+    endif()
     if(COMMAND frametee_enable_pgo)
         frametee_enable_pgo(forevervalidator_shared)
     endif()
@@ -305,6 +356,9 @@ endif()
 # tmnf_sim.cpp is the module's simulation and is on the hot path for anything
 # that drives the game headlessly, so it wants the same treatment the validator
 # gets.
+if(TMNF_VALIDATOR_EXACT_OPTIONS)
+    target_compile_options(tmnf_game PRIVATE ${TMNF_VALIDATOR_EXACT_OPTIONS})
+endif()
 if(COMMAND frametee_enable_pgo)
     frametee_enable_pgo(tmnf_game)
 endif()

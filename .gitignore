@@ -13,6 +13,7 @@ imgui.ini
 todo.txt
 .claude
 build-pgo
+perfwork
 # Rust example game module build output
 games/*/target/
 data/games/tmnf/Packs

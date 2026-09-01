@@ -103,7 +103,10 @@ inline bool SurfaceIsGrass(std::uint16_t surface) {
 struct CheckpointInfo {
   std::uint32_t slot = 0u;
   std::uint32_t raceBlockId = 0u;
+  // Centre and full size of the checkpoint block and trigger's combined
+  // world-space bounds.
   sim::Vector3 position{};
+  sim::Vector3 size{};
 };
 
 } // namespace tmnf

@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 
 // ForeverValidator internals; see tmnf_vehicle_model.cpp for why this module
 // reads them and what that costs.
@@ -296,6 +297,16 @@ TrackPurpose ToPurpose(StaticScenePurpose purpose) {
   case StaticScenePurpose::DedicatedInitialCollision: return TRACK_PURPOSE_HIDDEN;
   default: return TRACK_PURPOSE_SCENERY;
   }
+}
+
+std::optional<GmBoxAligned> ModelWorldBounds(const StaticSceneModel &model) {
+  CPlugSolid *solid = model.Prototype().SourceSolid();
+  CPlugTree *root = solid != nullptr ? solid->CollisionTree() : nullptr;
+  if (root == nullptr || !root->UpdateBoundingBox(1u)) return std::nullopt;
+
+  GmBoxAligned bounds;
+  root->GetTransformedCollisionBox(model.WorldIso(), bounds);
+  return bounds.IsValidForPlugTreeRefresh() ? std::optional<GmBoxAligned>(bounds) : std::nullopt;
 }
 
 // Walks a scene model's tree and collects what it draws.
@@ -569,15 +580,49 @@ bool BuildTrackScene(ft_game *game, const PackSet &packs, const void *challenge_
     return false;
   }
 
+  // Gather the full authored block bounds by placement. A checkpoint trigger
+  // is commonly only a thin plane within a much larger block, while the route
+  // marker should enclose the checkpoint the player actually sees.
+  std::unordered_map<std::uint64_t, GmBoxAligned> block_bounds;
+  for (const StaticSceneModel &model : models.Models()) {
+    if (model.Purpose() != StaticScenePurpose::PlacedBlock && model.Purpose() != StaticScenePurpose::SubMobil)
+      continue;
+    const auto &placement = model.Provenance().placementIdentity;
+    const std::optional<GmBoxAligned> bounds = ModelWorldBounds(model);
+    if (!placement.has_value() || !bounds.has_value()) continue;
+    const auto inserted = block_bounds.emplace(*placement, *bounds);
+    if (!inserted.second) inserted.first->second.Union(*bounds);
+  }
+
   // The race assigns slots by walking these models in this order and keeping
   // only checkpoint-role trigger models. Capture that exact mapping before the
   // hidden trigger geometry is discarded from the visual scene.
   for (const StaticSceneModel &model : models.Models()) {
     const auto &identity = model.CheckpointIdentity();
     if (!identity.has_value() || identity->raceRole != BlockRaceRole::Checkpoint) continue;
-    const GmVec3 &position = model.WorldIso().translation;
+
+    GmVec3 center = model.WorldIso().translation;
+    GmVec3 size{6.f, 6.f, 6.f};
+    std::optional<GmBoxAligned> bounds = ModelWorldBounds(model);
+    const auto &placement = model.Provenance().placementIdentity;
+    const auto authored = placement.has_value() ? block_bounds.find(*placement) : block_bounds.end();
+    if (authored != block_bounds.end()) {
+      if (bounds.has_value())
+        bounds->Union(authored->second);
+      else
+        bounds = authored->second;
+    }
+    if (bounds.has_value()) {
+      center = bounds->center;
+      // A trigger may be authored as an almost-flat surface. Keep a small
+      // amount of volume around the complete block bounds so the overlay is
+      // visible and easy to click without losing its real span.
+      size.x = std::max(std::fabs(bounds->halfExtents.x) * 2.f + 1.f, 4.f);
+      size.y = std::max(std::fabs(bounds->halfExtents.y) * 2.f + 1.f, 4.f);
+      size.z = std::max(std::fabs(bounds->halfExtents.z) * 2.f + 1.f, 4.f);
+    }
     out->checkpoints.push_back({static_cast<std::uint32_t>(out->checkpoints.size()), identity->raceBlockId,
-                                {position.x, position.y, position.z}});
+                                {center.x, center.y, center.z}, {size.x, size.y, size.z}});
   }
 
   TreeWalker walker(out, pack_name);
