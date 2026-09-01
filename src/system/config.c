@@ -8,6 +8,8 @@
 #include <plugins/plugin_manager.h>
 #include <user_interface/user_interface.h>
 
+#include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,7 +82,178 @@ static bool action_identifier_is_active(const ui_handler_t *ui, const char *iden
 }
 
 static bool reserved_game_editor_key(const char *key) {
-  return strcmp(key, "editor_camera_mode") == 0 || strcmp(key, "editor_linked_copy_input") == 0;
+  return strcmp(key, "editor_camera_mode") == 0 || strcmp(key, "editor_linked_copy_input") == 0 ||
+         strncmp(key, "editor_prediction_", strlen("editor_prediction_")) == 0;
+}
+
+static bool config_bool(toml_datum_t table, const char *key, bool *out) {
+  const toml_datum_t value = toml_get(table, key);
+  if (value.type != TOML_BOOLEAN) return false;
+  *out = value.u.boolean;
+  return true;
+}
+
+static bool config_int(toml_datum_t table, const char *key, int *out) {
+  const toml_datum_t value = toml_get(table, key);
+  if (value.type != TOML_INT64 || value.u.int64 < INT_MIN || value.u.int64 > INT_MAX) return false;
+  *out = (int)value.u.int64;
+  return true;
+}
+
+static bool config_number(toml_datum_t table, const char *key, double *out) {
+  const toml_datum_t value = toml_get(table, key);
+  if (value.type == TOML_FP64) *out = value.u.fp64;
+  else if (value.type == TOML_INT64) *out = (double)value.u.int64;
+  else return false;
+  return isfinite(*out);
+}
+
+static bool config_color(toml_datum_t table, const char *key, float out[4]) {
+  const toml_datum_t value = toml_get(table, key);
+  if (value.type != TOML_ARRAY || value.u.arr.size != 4) return false;
+  float color[4];
+  for (int i = 0; i < 4; ++i) {
+    const toml_datum_t component = value.u.arr.elem[i];
+    double number;
+    if (component.type == TOML_FP64) number = component.u.fp64;
+    else if (component.type == TOML_INT64) number = (double)component.u.int64;
+    else return false;
+    if (!isfinite(number)) return false;
+    color[i] = (float)fmax(0.0, fmin(1.0, number));
+  }
+  memcpy(out, color, sizeof(color));
+  return true;
+}
+
+static void prediction_config_key(char *out, size_t out_size, int line, int rule, const char *field) {
+  if (rule < 0)
+    snprintf(out, out_size, "editor_prediction_line_%d_%s", line, field);
+  else
+    snprintf(out, out_size, "editor_prediction_line_%d_rule_%d_%s", line, rule, field);
+}
+
+static void load_prediction_config(toml_datum_t table, prediction_settings_t *settings) {
+  prediction_settings_default(settings);
+  if (table.type != TOML_TABLE) return;
+
+  config_bool(table, "editor_prediction_enabled", &settings->enabled);
+  int integer;
+  if (config_int(table, "editor_prediction_length", &integer) && integer >= 1 && integer <= 2000)
+    settings->length = integer;
+  double number;
+  if (config_number(table, "editor_prediction_thickness", &number) && number >= 0.01 && number <= 0.30)
+    settings->thickness = (float)number;
+  if (config_int(table, "editor_prediction_line_count", &integer) && integer >= 1 && integer <= MAX_PREDICTION_LINES)
+    settings->line_count = integer;
+
+  for (int line_index = 0; line_index < settings->line_count; ++line_index) {
+    prediction_line_t *line = &settings->lines[line_index];
+    prediction_line_default(line, line_index);
+    char key[128];
+    prediction_config_key(key, sizeof(key), line_index, -1, "name");
+    toml_datum_t stored = toml_get(table, key);
+    if (stored.type == TOML_STRING && stored.u.str.ptr)
+      snprintf(line->name, sizeof(line->name), "%s", stored.u.str.ptr);
+    prediction_config_key(key, sizeof(key), line_index, -1, "color");
+    config_color(table, key, line->color);
+    prediction_config_key(key, sizeof(key), line_index, -1, "enabled");
+    config_bool(table, key, &line->enabled);
+    prediction_config_key(key, sizeof(key), line_index, -1, "controls");
+    stored = toml_get(table, key);
+    if (stored.type == TOML_STRING && stored.u.str.ptr) {
+      char *end = NULL;
+      const unsigned long long controls = strtoull(stored.u.str.ptr, &end, 16);
+      if (end != stored.u.str.ptr && *end == '\0') line->controls = (uint64_t)controls;
+    }
+
+    prediction_config_key(key, sizeof(key), line_index, -1, "rule_count");
+    int rule_count = 0;
+    if (config_int(table, key, &integer) && integer >= 0 && integer <= MAX_PREDICTION_COLOR_RULES)
+      rule_count = integer;
+    line->color_rule_count = rule_count;
+    for (int rule_index = 0; rule_index < rule_count; ++rule_index) {
+      prediction_color_rule_t *rule = &line->color_rules[rule_index];
+      memset(rule, 0, sizeof(*rule));
+      memcpy(rule->color, line->color, sizeof(rule->color));
+      rule->enabled = true;
+
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "property");
+      stored = toml_get(table, key);
+      if (stored.type == TOML_STRING && stored.u.str.ptr)
+        snprintf(rule->property_id, sizeof(rule->property_id), "%s", stored.u.str.ptr);
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "enabled");
+      config_bool(table, key, &rule->enabled);
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "color");
+      config_color(table, key, rule->color);
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "target");
+      if (config_number(table, key, &number)) rule->target = number;
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "component");
+      if (config_int(table, key, &integer) && integer >= PREDICTION_COMPONENT_VALUE &&
+          integer <= PREDICTION_COMPONENT_MAGNITUDE)
+        rule->component = (prediction_rule_component_t)integer;
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "comparison");
+      if (config_int(table, key, &integer) && integer >= PREDICTION_COMPARE_EQUAL &&
+          integer <= PREDICTION_COMPARE_CHANGED)
+        rule->comparison = (prediction_rule_comparison_t)integer;
+    }
+  }
+}
+
+static void write_prediction_config(FILE *fp, const prediction_settings_t *settings) {
+  fprintf(fp, "editor_prediction_enabled = %s\n", settings->enabled ? "true" : "false");
+  fprintf(fp, "editor_prediction_length = %d\n", settings->length);
+  fprintf(fp, "editor_prediction_thickness = %.9g\n", settings->thickness);
+  fprintf(fp, "editor_prediction_line_count = %d\n", settings->line_count);
+  for (int line_index = 0; line_index < settings->line_count && line_index < MAX_PREDICTION_LINES; ++line_index) {
+    const prediction_line_t *line = &settings->lines[line_index];
+    char key[128];
+    prediction_config_key(key, sizeof(key), line_index, -1, "name");
+    write_toml_key(fp, key);
+    fputs(" = ", fp);
+    write_toml_string(fp, line->name);
+    fputc('\n', fp);
+    prediction_config_key(key, sizeof(key), line_index, -1, "color");
+    write_toml_key(fp, key);
+    fprintf(fp, " = [%.9g, %.9g, %.9g, %.9g]\n", line->color[0], line->color[1], line->color[2], line->color[3]);
+    prediction_config_key(key, sizeof(key), line_index, -1, "enabled");
+    write_toml_key(fp, key);
+    fprintf(fp, " = %s\n", line->enabled ? "true" : "false");
+    prediction_config_key(key, sizeof(key), line_index, -1, "controls");
+    write_toml_key(fp, key);
+    fputs(" = ", fp);
+    char controls[24];
+    snprintf(controls, sizeof(controls), "%016llx", (unsigned long long)line->controls);
+    write_toml_string(fp, controls);
+    fputc('\n', fp);
+    prediction_config_key(key, sizeof(key), line_index, -1, "rule_count");
+    write_toml_key(fp, key);
+    fprintf(fp, " = %d\n", line->color_rule_count);
+
+    for (int rule_index = 0; rule_index < line->color_rule_count && rule_index < MAX_PREDICTION_COLOR_RULES;
+         ++rule_index) {
+      const prediction_color_rule_t *rule = &line->color_rules[rule_index];
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "property");
+      write_toml_key(fp, key);
+      fputs(" = ", fp);
+      write_toml_string(fp, rule->property_id);
+      fputc('\n', fp);
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "enabled");
+      write_toml_key(fp, key);
+      fprintf(fp, " = %s\n", rule->enabled ? "true" : "false");
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "color");
+      write_toml_key(fp, key);
+      fprintf(fp, " = [%.9g, %.9g, %.9g, %.9g]\n", rule->color[0], rule->color[1], rule->color[2], rule->color[3]);
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "target");
+      write_toml_key(fp, key);
+      fprintf(fp, " = %.17g\n", rule->target);
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "component");
+      write_toml_key(fp, key);
+      fprintf(fp, " = %d\n", (int)rule->component);
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "comparison");
+      write_toml_key(fp, key);
+      fprintf(fp, " = %d\n", (int)rule->comparison);
+    }
+  }
 }
 
 static void write_preserved_values(FILE *fp, toml_datum_t table, bool (*skip)(const char *key, void *user), void *user) {
@@ -147,6 +320,7 @@ void config_load(ui_handler_t *ui) {
   if (game_host_ready(active_host)) {
     ui->configured_camera_mode_id[0] = '\0';
     ui->configured_linked_copy_input = false;
+    prediction_settings_default(&ui->configured_prediction);
     config_apply_game_editor_state(ui);
   }
 
@@ -239,8 +413,8 @@ void config_load(ui_handler_t *ui) {
       }
     }
 
-    // Presentation toggles that used to live here (prediction, particles, tee
-    // rendering, cursor) belong to the game module and are stored with it.
+    // Game-defined presentation toggles live in the active game's table. The
+    // engine-owned prediction editor uses that table as well.
     toml_datum_t render_level = toml_get(graphics_settings, "render_level");
     if (render_level.type == TOML_BOOLEAN) ui->render_level = render_level.u.boolean;
 
@@ -308,6 +482,8 @@ void config_load(ui_handler_t *ui) {
 
     toml_datum_t linked_copy = toml_get(per_game, "editor_linked_copy_input");
     if (linked_copy.type == TOML_BOOLEAN) ui->configured_linked_copy_input = linked_copy.u.boolean;
+
+    load_prediction_config(per_game, &ui->configured_prediction);
   }
   config_apply_game_editor_state(ui);
 
@@ -339,6 +515,7 @@ void config_apply_game_editor_state(ui_handler_t *ui) {
     }
   }
   ui->timeline.linked_copy_input = game_has_cap(host, FT_CAP_LINKED_INPUTS) && ui->configured_linked_copy_input;
+  ui->timeline.prediction = ui->configured_prediction;
 }
 
 void config_save(ui_handler_t *ui) {
@@ -508,6 +685,7 @@ void config_save(ui_handler_t *ui) {
     write_toml_string(fp, mode && mode->id ? mode->id : "free");
     fputc('\n', fp);
     fprintf(fp, "editor_linked_copy_input = %s\n", ui->timeline.linked_copy_input ? "true" : "false");
+    write_prediction_config(fp, &ui->configured_prediction);
   }
 
   fprintf(fp, "\n[auto_save]\n");

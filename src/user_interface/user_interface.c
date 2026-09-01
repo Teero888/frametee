@@ -952,6 +952,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->auto_save_enabled = false;
   ui->auto_save_interval_sec = 60;
   ui->last_auto_save_time = 0.0;
+  prediction_settings_default(&ui->configured_prediction);
   keybinds_init(&ui->keybinds);
   config_load(ui);
 }

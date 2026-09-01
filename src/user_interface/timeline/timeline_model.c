@@ -181,7 +181,10 @@ void model_reset_groups_for_level(timeline_state_t *ts) {
 void model_init(timeline_state_t *ts, ui_handler_t *ui) {
   ts->ui = ui;
 
-  prediction_settings_default(&ts->prediction);
+  if (ui && ui->configured_prediction.line_count > 0)
+    ts->prediction = ui->configured_prediction;
+  else
+    prediction_settings_default(&ts->prediction);
 
   int tps = (ui && ui->gfx_handler) ? game_ticks_per_second(&ui->gfx_handler->game_host) : 50;
   if (tps <= 0) tps = 50;

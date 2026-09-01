@@ -59,6 +59,10 @@ struct ui_handler_t {
   // startup, then applied as soon as those objects are initialized.
   char configured_camera_mode_id[32];
   bool configured_linked_copy_input;
+  // Engine-owned prediction preferences are global within one game rather
+  // than project data. The config loader fills this before a timeline exists;
+  // every later timeline starts from the same per-game copy.
+  prediction_settings_t configured_prediction;
 
   // The start screen runs in two stages: pick a game, then whatever that game
   // starts a run with. Choosing is only offered here, where nothing is open.

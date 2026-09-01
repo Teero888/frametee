@@ -517,18 +517,17 @@ renderer, plugins, keybinds and the window.
 
 Two consequences worth knowing:
 
-- **Project files are version 14, and read back to version 12.** Engine-owned
+- **Project files are version 17-only.** Engine-owned
   values use explicit little-endian fields rather than raw C structs. Levels,
   each group's starting world, each track's player profile, and optional module
-  project metadata are stored as opaque length-delimited blobs. Versions 12 and
-  13 carried a fixed player identity the editor had invented (nickname, tag,
-  appearance, two colours) which is read past when such a project is opened:
-  those tracks come back with no profile, and the game supplies its defaults. Prediction variants, their colors and input
-  controls, and per-group/per-track prediction scope are engine-owned project
-  state. A project carries its game id and SemVer, ruleset, and a hash of the
-  full input schema; any mismatch is refused before the open project is
-  replaced. Modules without level serialization use the stored reloadable
-  level path instead.
+  project metadata are stored as opaque length-delimited blobs. Prediction
+  lines, controls, reflected-property colour triggers and general prediction
+  settings are engine-owned preferences stored in each game's config table.
+  Only per-group/per-track prediction scope remains project state. A project
+  carries its game id and SemVer, ruleset, and a hash of the full input schema;
+  any version or schema mismatch is refused before the open project is replaced.
+  Modules without level serialization use the stored reloadable level path
+  instead.
 - **DDNet-specific plugins link the game's physics themselves.** The engine used
   to re-export `ddnet_physics` symbols to plugins; it no longer links it at all.
   Such a plugin includes `games/ddnet/include/ddnet/ddnet_game.h`, which is the

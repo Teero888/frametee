@@ -76,7 +76,6 @@ typedef struct project_document_t {
   int active_group_index;
   int selected_track_index;
   bool linked_copy_input;
-  prediction_settings_t prediction;
 
   uint8_t *level_data;
   size_t level_size;
@@ -428,22 +427,6 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
       !buffer_i32(buffer, timeline->selected_player_track_index) || !buffer_u8(buffer, timeline->linked_copy_input ? 1 : 0))
     return false;
 
-  const prediction_settings_t *prediction = &timeline->prediction;
-  if (prediction->length < 1 || prediction->length > 2000 || !isfinite(prediction->thickness) ||
-      prediction->thickness <= 0.f || prediction->line_count < 1 || prediction->line_count > MAX_PREDICTION_LINES ||
-      !buffer_u8(buffer, prediction->enabled ? 1 : 0) || !buffer_i32(buffer, prediction->length) ||
-      !buffer_f32(buffer, prediction->thickness) || !buffer_u32(buffer, (uint32_t)prediction->line_count))
-    return false;
-  for (int i = 0; i < prediction->line_count; ++i) {
-    const prediction_line_t *line = &prediction->lines[i];
-    if (line->use_timeline_inputs != (i == 0) || !buffer_string(buffer, line->name)) return false;
-    for (int c = 0; c < 4; ++c)
-      if (!isfinite(line->color[c]) || !buffer_f32(buffer, line->color[c])) return false;
-    if (!buffer_u64(buffer, line->controls) || !buffer_u8(buffer, line->enabled ? 1 : 0) ||
-        !buffer_u8(buffer, line->use_timeline_inputs ? 1 : 0))
-      return false;
-  }
-
   for (int i = 0; i < timeline->group_count; ++i) {
     const timeline_group_t *group = timeline->groups[i];
     if (!buffer_string(buffer, group->name)) return false;
@@ -636,55 +619,13 @@ static bool read_value(byte_reader_t *reader, starting_override_t *override) {
   return false;
 }
 
-// Versions 12 and 13 stored an identity the editor had invented for every game:
-// a nickname, a tag, an appearance name and two colours. Games own what a player
-// can be customised into now, so those fields are read past and the track opens
-// with no profile at all, which every game reads as its own defaults.
-static bool read_legacy_player_identity(byte_reader_t *reader) {
-  for (int i = 0; i < 3; ++i) {
-    uint32_t length;
-    if (!reader_u32(reader, &length) || !reader_bytes(reader, NULL, length)) return false;
-  }
-  for (int i = 0; i < 8; ++i) {
-    float unused;
-    if (!reader_f32(reader, &unused)) return false;
-  }
-  uint8_t custom_color;
-  return reader_u8(reader, &custom_color) && custom_color <= 1;
-}
-
-static bool read_timeline(byte_reader_t *reader, project_document_t *document, uint32_t project_version,
-                          game_host_t *host) {
+static bool read_timeline(byte_reader_t *reader, project_document_t *document) {
   uint8_t boolean;
   uint32_t count;
   if (!reader_i32(reader, &document->current_tick) || !reader_i32(reader, &document->active_group_index) ||
       !reader_i32(reader, &document->selected_track_index) || !reader_u8(reader, &boolean) || boolean > 1)
     return false;
   document->linked_copy_input = boolean != 0;
-
-  int32_t prediction_length;
-  uint32_t prediction_lines;
-  float prediction_thickness;
-  if (!reader_u8(reader, &boolean) || boolean > 1 || !reader_i32(reader, &prediction_length) || prediction_length < 1 ||
-      prediction_length > 2000 || !reader_f32(reader, &prediction_thickness) || prediction_thickness <= 0.f ||
-      !reader_u32(reader, &prediction_lines) || prediction_lines < 1 || prediction_lines > MAX_PREDICTION_LINES)
-    return false;
-  document->prediction.enabled = boolean != 0;
-  document->prediction.length = prediction_length;
-  document->prediction.thickness = prediction_thickness;
-  document->prediction.line_count = (int)prediction_lines;
-  for (uint32_t i = 0; i < prediction_lines; ++i) {
-    prediction_line_t *line = &document->prediction.lines[i];
-    uint8_t enabled, timeline_inputs;
-    if (!reader_string(reader, line->name, sizeof(line->name))) return false;
-    for (int c = 0; c < 4; ++c)
-      if (!reader_f32(reader, &line->color[c])) return false;
-    if (!reader_u64(reader, &line->controls) || !reader_u8(reader, &enabled) || enabled > 1 ||
-        !reader_u8(reader, &timeline_inputs) || timeline_inputs > 1 || (timeline_inputs != (i == 0)))
-      return false;
-    line->enabled = enabled != 0;
-    line->use_timeline_inputs = timeline_inputs != 0;
-  }
 
   for (int i = 0; i < document->group_count; ++i) {
     project_group_t *group = &document->groups[i];
@@ -706,15 +647,11 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document, u
   for (int i = 0; i < document->track_count; ++i) {
     player_track_t *track = &document->tracks[i];
     uint8_t is_linked, starting_enabled, export_enabled, prediction_enabled;
-    if (project_version >= 14) {
-      uint32_t profile_size;
-      if (!reader_u32(reader, &profile_size) || profile_size > FT_PLAYER_PROFILE_MAX ||
-          !reader_bytes(reader, track->player_profile.data, profile_size))
-        return false;
-      track->player_profile.size = profile_size;
-    } else if (!read_legacy_player_identity(reader)) {
+    uint32_t profile_size;
+    if (!reader_u32(reader, &profile_size) || profile_size > FT_PLAYER_PROFILE_MAX ||
+        !reader_bytes(reader, track->player_profile.data, profile_size))
       return false;
-    }
+    track->player_profile.size = profile_size;
     if (!reader_u8(reader, &is_linked) || is_linked > 1 || !reader_i32(reader, &track->linked_source_player) ||
         !reader_u64(reader, &track->linked_copy_fields) || !reader_u32(reader, &track->linked_transform_flags) ||
         !reader_u8(reader, &starting_enabled) || starting_enabled > 1 || !reader_u32(reader, &count) ||
@@ -760,34 +697,25 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document, u
       if (snippet->source_count && !snippet->inputs) return false;
       for (int tick = 0; tick < snippet->source_count; ++tick)
         if (!reader_bytes(reader, snippet->inputs[tick].bytes, document->input_record_size)) return false;
-      if (project_version >= 15) {
-        uint32_t effect_count;
-        if (!reader_u32(reader, &effect_count) || effect_count > MAX_SNIPPET_INPUT_EFFECTS) return false;
-        snippet->effect_count = (int)effect_count;
-        snippet->effect_capacity = (int)effect_count;
-        snippet->effects = effect_count ? calloc(effect_count, sizeof(*snippet->effects)) : NULL;
-        if (effect_count && !snippet->effects) return false;
-        for (uint32_t effect_index = 0; effect_index < effect_count; ++effect_index) {
-          input_effect_t *effect = &snippet->effects[effect_index];
-          uint8_t enabled;
-          uint32_t payload_size;
-          if (project_version >= 16) {
-            if (!reader_string(reader, effect->type_id, sizeof(effect->type_id))) return false;
-          } else {
-            uint32_t legacy_type;
-            if (!reader_u32(reader, &legacy_type) || legacy_type == 0) return false;
-            const ft_input_effect_desc *desc = gh_input_effect_desc(host, legacy_type - 1);
-            if (!desc) return false;
-            snprintf(effect->type_id, sizeof(effect->type_id), "%s", desc->id);
-          }
-          if (!reader_u8(reader, &enabled) || enabled > 1 || !reader_u32(reader, &payload_size) ||
-              payload_size > PROJECT_MAX_EFFECT_PAYLOAD || payload_size > FT_INPUT_EFFECT_PARAMETER_MAX)
-            return false;
-          effect->enabled = enabled != 0;
-          effect->parameter_size = payload_size;
-          effect->parameters = payload_size ? malloc(payload_size) : NULL;
-          if (payload_size > 0 && (!effect->parameters || !reader_bytes(reader, effect->parameters, payload_size))) return false;
-        }
+      uint32_t effect_count;
+      if (!reader_u32(reader, &effect_count) || effect_count > MAX_SNIPPET_INPUT_EFFECTS) return false;
+      snippet->effect_count = (int)effect_count;
+      snippet->effect_capacity = (int)effect_count;
+      snippet->effects = effect_count ? calloc(effect_count, sizeof(*snippet->effects)) : NULL;
+      if (effect_count && !snippet->effects) return false;
+      for (uint32_t effect_index = 0; effect_index < effect_count; ++effect_index) {
+        input_effect_t *effect = &snippet->effects[effect_index];
+        uint8_t enabled;
+        uint32_t payload_size;
+        if (!reader_string(reader, effect->type_id, sizeof(effect->type_id)) || !reader_u8(reader, &enabled) ||
+            enabled > 1 || !reader_u32(reader, &payload_size) || payload_size > PROJECT_MAX_EFFECT_PAYLOAD ||
+            payload_size > FT_INPUT_EFFECT_PARAMETER_MAX)
+          return false;
+        effect->enabled = enabled != 0;
+        effect->parameter_size = payload_size;
+        effect->parameters = payload_size ? malloc(payload_size) : NULL;
+        if (payload_size > 0 && (!effect->parameters || !reader_bytes(reader, effect->parameters, payload_size)))
+          return false;
       }
       model_snippet_normalize(snippet);
     }
@@ -807,11 +735,9 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document, u
       return false;
     for (int c = 0; c < 4; ++c)
       if (!reader_f32(reader, &event->color[c])) return false;
-    if (project_version >= 13) {
-      if (!reader_u32(reader, &event->data_size) || event->data_size > FT_TIMELINE_EVENT_DATA_MAX ||
-          !reader_bytes(reader, event->data, event->data_size))
-        return false;
-    }
+    if (!reader_u32(reader, &event->data_size) || event->data_size > FT_TIMELINE_EVENT_DATA_MAX ||
+        !reader_bytes(reader, event->data, event->data_size))
+      return false;
   }
   return reader->ok && reader->pos == reader->size;
 }
@@ -857,8 +783,8 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
     log_error(LOG_SOURCE, "Not a FrameTee project: '%s'", path);
     goto done;
   }
-  if (version < 12 || version > TAS_PROJECT_FILE_VERSION) {
-    log_error(LOG_SOURCE, "Project '%s' is version %u; this build reads versions 12 through %u.", path, version,
+  if (version != TAS_PROJECT_FILE_VERSION) {
+    log_error(LOG_SOURCE, "Project '%s' is version %u; this build requires version %u.", path, version,
               TAS_PROJECT_FILE_VERSION);
     goto done;
   }
@@ -891,7 +817,7 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
 
   byte_reader_t timeline_reader = {.data = reader.data + reader.pos, .size = (size_t)timeline_size, .ok = true};
   reader.pos += (size_t)timeline_size;
-  if (!read_timeline(&timeline_reader, document, version, &ui->gfx_handler->game_host) || reader.pos != reader.size)
+  if (!read_timeline(&timeline_reader, document) || reader.pos != reader.size)
     goto malformed;
 
   if (document->active_group_index < 0 || document->active_group_index >= document->group_count ||
@@ -990,7 +916,6 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
   timeline->active_group_index = document->active_group_index;
   timeline->selected_player_track_index = document->selected_track_index;
   timeline->linked_copy_input = document->linked_copy_input;
-  timeline->prediction = document->prediction;
   model_recalc_physics(timeline, 0);
   return true;
 }
