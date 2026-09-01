@@ -354,6 +354,36 @@ static bool api_screen_ray_world3(float screen_x, float screen_y, vec3 out_origi
   return screen_ray3(g_ui_handler_for_api->gfx_handler, lx, ly, out_origin, out_dir);
 }
 
+static bool api_world_to_screen3(vec3 world, float *screen_x, float *screen_y) {
+  if (!screen_x || !screen_y) return false;
+  gfx_handler_t *gfx = g_ui_handler_for_api->gfx_handler;
+  if (!gfx || gfx->viewport[0] <= 0 || gfx->viewport[1] <= 0) return false;
+
+  mat4 view_proj;
+  renderer_camera3_view_proj(gfx, view_proj);
+  vec4 point = {world[0], world[1], world[2], 1.0f};
+  vec4 clip;
+  glm_mat4_mulv(view_proj, point, clip);
+  if (clip[3] <= 1e-6f) return false;
+
+  const float ndc_x = clip[0] / clip[3];
+  const float ndc_y = clip[1] / clip[3];
+  const float ndc_z = clip[2] / clip[3];
+  if (ndc_x < -1.0f || ndc_x > 1.0f || ndc_y < -1.0f || ndc_y > 1.0f || ndc_z < 0.0f || ndc_z > 1.0f)
+    return false;
+
+  *screen_x = (ndc_x + 1.0f) * 0.5f * gfx->viewport[0] + g_ui_handler_for_api->viewport_window_pos.x;
+  *screen_y = (ndc_y + 1.0f) * 0.5f * gfx->viewport[1] + g_ui_handler_for_api->viewport_window_pos.y;
+
+  static ImGuiWindow *s_viewport_window = NULL;
+  if (!s_viewport_window) s_viewport_window = igFindWindowByName("Viewport");
+  if (s_viewport_window) {
+    *screen_x += s_viewport_window->DecoOuterSizeX1;
+    *screen_y += s_viewport_window->DecoOuterSizeY1;
+  }
+  return true;
+}
+
 static void api_world_to_screen(float world_x, float world_y, float *screen_x, float *screen_y) {
   world_to_screen(g_ui_handler_for_api->gfx_handler, world_x, world_y, screen_x, screen_y);
   *screen_x += g_ui_handler_for_api->viewport_window_pos.x;
@@ -443,6 +473,7 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .draw_box_world3 = api_draw_box_world3,
       .screen_to_world = api_screen_to_world,
       .screen_ray_world3 = api_screen_ray_world3,
+      .world_to_screen3 = api_world_to_screen3,
       .world_to_screen = api_world_to_screen,
       .get_time = api_get_time,
       .get_camera_info = api_get_camera_info,

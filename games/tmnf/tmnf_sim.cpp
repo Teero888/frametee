@@ -112,6 +112,19 @@ const StateView &State::View() const noexcept {
   return impl_ ? impl_->view : empty;
 }
 
+CheckpointBitmap State::PassedCheckpoints() const noexcept {
+  CheckpointBitmap bitmap{};
+  if (!impl_ || !impl_->clone) return bitmap;
+
+  const std::vector<std::uint8_t> &slots = impl_->clone->race.checkpointSlotsPassed;
+  const std::size_t checkpoint_count = std::min<std::size_t>(impl_->view.checkpointsTotal, kCheckpointBitmapBits);
+  const std::size_t count = std::min(slots.size(), checkpoint_count);
+  for (std::size_t slot = 0; slot < count; ++slot) {
+    if (slots[slot] != 0u) bitmap.words[slot / 64u] |= std::uint64_t{1} << (slot % 64u);
+  }
+  return bitmap;
+}
+
 bool State::EngineOn() const noexcept {
   return impl_ && impl_->clone ? impl_->clone->runtime.vehicle.car.integration.integrateEngine : true;
 }

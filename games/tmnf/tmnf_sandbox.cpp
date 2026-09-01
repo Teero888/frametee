@@ -78,10 +78,12 @@ ft_world *WorldCreate(ft_game *game, const ft_world_desc *desc) {
   if (!game) return nullptr;
   auto *world = new ft_world();
   world->index = desc ? desc->world_index : -1;
+  const ft_level *level = desc && desc->level ? desc->level : game->level;
   // Handed on so a game-specific plugin can open a simulation that matches this
   // one; see tmnf/tmnf_game.h.
   world->packs = game->packs.empty() ? nullptr : game->packs.c_str();
-  world->level_path = game->level && !game->level->path.empty() ? game->level->path.c_str() : nullptr;
+  world->level_path = level && !level->path.empty() ? level->path.c_str() : nullptr;
+  world->checkpoints = level ? &level->checkpoints : nullptr;
   world->track = ResolveTrack(game, world);
   if (desc && desc->level && desc->level->initial) {
     world->state = desc->level->initial;
@@ -96,6 +98,7 @@ void WorldCopy(ft_game *, ft_world *dst, const ft_world *src) {
   if (!dst || !src) return;
   dst->packs = src->packs;
   dst->level_path = src->level_path;
+  dst->checkpoints = src->checkpoints;
   // A captured state is a refcounted handle, so the engine's constant
   // snapshotting only touches a counter. The destination keeps its own identity:
   // prediction worlds are index -1 and must stay that way.
@@ -115,6 +118,7 @@ void WorldStep(ft_game *game, ft_world *world, const void *inputs, std::uint32_t
   // reopening a level replaces the ones it does have.
   world->packs = game->packs.empty() ? nullptr : game->packs.c_str();
   world->level_path = game->level && !game->level->path.empty() ? game->level->path.c_str() : nullptr;
+  world->checkpoints = game->level ? &game->level->checkpoints : nullptr;
 
   // Restoring is skipped when the simulation is already sitting where this
   // world left it, which straight-line playback always is.

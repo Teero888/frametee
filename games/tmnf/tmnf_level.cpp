@@ -636,6 +636,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   const bool decoded = !EnvironmentPackName(level->start.mapEnvironment).empty() && game->packs_open.IsOpen() &&
                        BuildTrackScene(game, game->packs_open, bytes.data(), bytes.size(),
                                        EnvironmentPackName(level->start.mapEnvironment), &scene);
+  level->checkpoints = scene.checkpoints;
 
   // The sky, which belongs to the time of day the map was saved with rather
   // than to anything in its geometry. Loaded before the materials so that its

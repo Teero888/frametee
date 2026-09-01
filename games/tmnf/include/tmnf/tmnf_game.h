@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace tmnf {
 
@@ -96,6 +97,15 @@ inline bool SurfaceIsGrass(std::uint16_t surface) {
   return surface == kSurfaceGrass || surface == kSurfaceWetGrass;
 }
 
+// One physical checkpoint trigger on the loaded map. `slot` is the exact
+// zero-based course slot used by State::PassedCheckpoints; the UI presents it
+// as CP 1, CP 2, ... while keeping this value for route configuration.
+struct CheckpointInfo {
+  std::uint32_t slot = 0u;
+  std::uint32_t raceBlockId = 0u;
+  sim::Vector3 position{};
+};
+
 } // namespace tmnf
 
 // The layout the engine hands around as an opaque pointer.
@@ -119,6 +129,9 @@ struct ft_world {
   // die with the level.
   const char *packs = nullptr;
   const char *level_path = nullptr;
+  // Borrowed with the level, just like level_path. These positions and slots
+  // let a game-specific plugin turn race bookkeeping into visible map markers.
+  const std::vector<tmnf::CheckpointInfo> *checkpoints = nullptr;
 };
 
 // Reads a world handed over by the engine, e.g. from tas_api_t::get_world_state_at.
@@ -138,6 +151,9 @@ static inline const char *tmnf_world_packs(const ft_world *world) {
 // The track file this world is simulating, or null before a level is open.
 static inline const char *tmnf_world_level_path(const ft_world *world) {
   return world ? world->level_path : nullptr;
+}
+static inline const std::vector<tmnf::CheckpointInfo> *tmnf_world_checkpoints(const ft_world *world) {
+  return world ? world->checkpoints : nullptr;
 }
 
 // Input records the engine stores are the module's own TmnfInput. The engine

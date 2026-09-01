@@ -501,6 +501,7 @@ bool BuildTrackScene(ft_game *game, const PackSet &packs, const void *challenge_
   out->meshes.clear();
   out->materials.clear();
   out->instances.clear();
+  out->checkpoints.clear();
 
   const std::vector<std::byte> packlist = ReadFile(game->packs + "/packlist.dat");
   const std::vector<std::byte> pak = ReadFile(game->packs + "/" + pack_name + ".pak");
@@ -566,6 +567,17 @@ bool BuildTrackScene(ft_game *game, const PackSet &packs, const void *challenge_
   if (!BuildStaticSceneFromArchive(session, archive_models, placements, models)) {
     Log(game, FT_LOG_WARN, "Could not build the track's static scene.");
     return false;
+  }
+
+  // The race assigns slots by walking these models in this order and keeping
+  // only checkpoint-role trigger models. Capture that exact mapping before the
+  // hidden trigger geometry is discarded from the visual scene.
+  for (const StaticSceneModel &model : models.Models()) {
+    const auto &identity = model.CheckpointIdentity();
+    if (!identity.has_value() || identity->raceRole != BlockRaceRole::Checkpoint) continue;
+    const GmVec3 &position = model.WorldIso().translation;
+    out->checkpoints.push_back({static_cast<std::uint32_t>(out->checkpoints.size()), identity->raceBlockId,
+                                {position.x, position.y, position.z}});
   }
 
   TreeWalker walker(out, pack_name);

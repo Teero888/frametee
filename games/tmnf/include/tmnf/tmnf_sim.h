@@ -44,6 +44,7 @@
 
 #include <forevervalidator/experimental/physics_sandbox.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -68,6 +69,22 @@ using Ellipsoid = fve::PhysicsSandboxEllipsoid;
 using Triangle = fve::PhysicsSandboxCollisionTriangle;
 using RenderSceneHandle = fve::PhysicsSandboxRenderSceneHandle;
 
+// TMNF's race bookkeeping addresses checkpoints by stable course slot. A
+// fixed 256-bit view covers slots 0..255 while keeping this snapshot API
+// bounded; consumers reject tracks beyond that explicit limit.
+inline constexpr std::size_t kCheckpointBitmapWords = 4u;
+inline constexpr std::size_t kCheckpointBitmapBits = kCheckpointBitmapWords * 64u;
+
+struct CheckpointBitmap {
+  std::array<std::uint64_t, kCheckpointBitmapWords> words{};
+
+  bool Test(std::uint32_t slot) const noexcept {
+    return slot < kCheckpointBitmapBits && (words[slot / 64u] & (std::uint64_t{1} << (slot % 64u))) != 0u;
+  }
+  bool operator==(const CheckpointBitmap &other) const noexcept { return words == other.words; }
+  bool operator!=(const CheckpointBitmap &other) const noexcept { return !(*this == other); }
+};
+
 // A snapshot of one tick.
 //
 // Copying is a refcount, which is what makes the engine's constant snapshotting
@@ -85,6 +102,9 @@ public:
   explicit operator bool() const noexcept { return impl_ != nullptr; }
   // Everything the simulation reports about the tick this was taken at.
   const StateView &View() const noexcept;
+  // Which course checkpoint slots had already been passed in this state. The
+  // finish trigger is deliberately excluded; it is not a checkpoint bucket.
+  CheckpointBitmap PassedCheckpoints() const noexcept;
   // Whether the engine drives the car on this state. Not part of the view: the
   // simulation never reports it, because a replay cannot turn it off.
   bool EngineOn() const noexcept;

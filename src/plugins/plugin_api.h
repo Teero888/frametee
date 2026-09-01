@@ -130,6 +130,9 @@ struct tas_api_t {
   // level needs: there is no single world point under a cursor when the level
   // has depth. False when there is no usable camera.
   bool (*screen_ray_world3)(float screen_x, float screen_y, vec3 out_origin, vec3 out_dir);
+  // Projects a 3D world point into ImGui screen coordinates. False when the
+  // point is behind the camera or outside the viewport.
+  bool (*world_to_screen3)(vec3 world, float *screen_x, float *screen_y);
   void (*world_to_screen)(float world_x, float world_y, float *screen_x, float *screen_y);
 
   double (*get_time)(void);
@@ -159,7 +162,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 2u
+#define FRAMETEE_PLUGIN_ABI_VERSION 3u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

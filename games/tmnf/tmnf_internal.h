@@ -329,6 +329,9 @@ struct TrackScene {
   std::vector<TrackMesh> meshes;
   std::vector<TrackMaterial> materials;
   std::vector<TrackInstance> instances;
+  // In the same filtered StaticSceneModel order the race uses for checkpoint
+  // slots. Kept even though trigger models themselves are never drawn.
+  std::vector<CheckpointInfo> checkpoints;
 };
 
 // Decodes the track a second time to learn what its materials are called, which
@@ -580,6 +583,7 @@ struct ft_level {
   std::vector<tmnf::Triangle> backdrop;
   tmnf::TriangleGrid track_grid;
   tmnf::TriangleGrid backdrop_grid;
+  std::vector<tmnf::CheckpointInfo> checkpoints;
 
   // The car's own collision ellipsoids, in vehicle space. Drawing these is what
   // makes the car on screen the same shape the simulation is pushing around.
