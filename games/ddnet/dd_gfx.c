@@ -652,6 +652,7 @@ bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *pat
   dd_anim_state_add(&anim, &anim_idle, 0.f, 1.f);
 
   dd_skin_instance_t instance = {0};
+  instance.alpha = 1.f;
   instance.scale = 0.75f * 1.25f;
   instance.skin_index = DD_SKIN_PREVIEW_LAYER;
   instance.eye_state = 6;

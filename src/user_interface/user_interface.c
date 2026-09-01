@@ -118,8 +118,6 @@ void render_menu_bar(ui_handler_t *ui) {
       igEndMenu();
     }
 
-    input_effects_editor_render_menu(ui);
-
     // plugins menu
     if (igBeginMenu("Plugins", true)) {
       igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);

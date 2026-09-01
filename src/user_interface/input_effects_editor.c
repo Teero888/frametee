@@ -89,20 +89,6 @@ static void render_add_menu(ui_handler_t *ui, input_snippet_t *snippet) {
   }
 }
 
-void input_effects_editor_render_menu(ui_handler_t *ui) {
-  if (!igBeginMenu("Effects", true)) return;
-  int track = -1;
-  input_snippet_t *snippet = selected_snippet(ui, &track);
-  (void)track;
-  if (igMenuItem_Bool("Open Effects", NULL, false, snippet != NULL)) input_effects_editor_open(ui, snippet->id);
-  if (igBeginMenu("Add Effect", !ui->timeline.recording && snippet != NULL &&
-                                    snippet->effect_count < MAX_SNIPPET_INPUT_EFFECTS)) {
-    render_add_menu(ui, snippet);
-    igEndMenu();
-  }
-  igEndMenu();
-}
-
 static bool full_button(const char *label, float width) { return igButton(label, (ImVec2){width, 0.f}); }
 
 static void render_effect(ui_handler_t *ui, input_snippet_t *snippet, int track_index, int effect_index) {
