@@ -599,6 +599,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
 
   auto *level = new ft_level();
   level->path = path;
+  level->source = bytes;
   level->initial = game->world->Start();
   level->start = level->initial.View();
   level->name = game->world->MapName().empty() ? "TrackMania track" : game->world->MapName();

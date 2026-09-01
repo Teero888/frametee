@@ -376,12 +376,22 @@ void Ui(ft_game *game, const ft_ui_frame *frame) {
   if (!game || !frame || game->headless) return;
   UiAttach(game->engine);
 
+  if (frame->slot == FT_UI_MAIN_MENU) {
+    if (igBeginMenu("TrackMania", true)) {
+      if (igMenuItem_Bool("Export Replay...", nullptr, false, game->level != nullptr)) ExportWindowOpen(game);
+      igEndMenu();
+    }
+    return;
+  }
   if (frame->slot == FT_UI_STATUS_BAR) {
     if (game->level) igText("%s", game->level->name.c_str());
     return;
   }
   if (frame->slot == FT_UI_PANELS) {
     PlayerPanel(game, frame);
+    // The modal opens itself here rather than from the menu, so the menu never
+    // leaves a popup half-pushed on ImGui's stack.
+    ExportWindowRender(game);
     return;
   }
   if (frame->slot != FT_UI_SPLASH) return;

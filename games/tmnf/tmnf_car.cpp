@@ -23,17 +23,12 @@ namespace {
 
 // Vehicle space: +X right, +Y up, +Z forward, origin on the ground between the
 // wheels. These match the collision ellipsoids the sandbox reports.
-constexpr float kWheelRadius = 0.364f;
 constexpr float kWheelHalfWidth = 0.182f;
 constexpr float kFrontAxleZ = 1.782f;
 constexpr float kRearAxleZ = -1.2055f;
 constexpr float kFrontTrackX = 0.863f;
 constexpr float kRearTrackX = 0.885f;
 constexpr float kAxleY = 0.3525f;
-
-// Full lock at the wheel. The simulation's steering is a normalised axis, and
-// this is what the visible wheel does with it.
-constexpr float kMaxSteerAngle = 0.38f;
 
 struct Face {
   ft_vec3 a, b, c;

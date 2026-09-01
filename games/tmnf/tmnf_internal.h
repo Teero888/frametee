@@ -448,6 +448,15 @@ private:
 // and each turns its own wheels.
 inline constexpr std::size_t kMaxSpinnyWorlds = 16u;
 
+// The rolling radius of a wheel, in metres. Integrating the car's speed
+// against it is what turns a wheel, both on screen and in an exported replay,
+// and a recorded TMF replay's wheel angles resolve to this same radius.
+inline constexpr float kWheelRadius = 0.364f;
+
+// Full lock at the wheel. The simulation's steering is a normalised axis, and
+// this is the angle the visible wheel takes at either end of it.
+inline constexpr float kMaxSteerAngle = 0.38f;
+
 // How far a car's wheels have rolled.
 //
 // The simulation reports how fast the car is going and never how far a wheel
@@ -554,6 +563,18 @@ struct Campaign {
   std::vector<TrackEntry> tracks;
 };
 
+// One timeline world in the replay export window: whether it contributes a
+// ghost at all, and which of its tracks do.
+struct ExportWorldSelection {
+  // A bool per track rather than a vector<bool>, because an ImGui checkbox
+  // needs a real bool to point at.
+  struct Track {
+    bool selected = true;
+  };
+  bool enabled = true;
+  std::vector<Track> tracks;
+};
+
 struct Settings {
   bool draw_background = true;
   // Safe because every authored mesh carries normals and winding is corrected
@@ -573,6 +594,10 @@ struct ft_level {
   tmnf::Aabb world_bounds;
   tmnf::sim::StateView start{};
   tmnf::sim::State initial;
+  // The replay container embeds the challenge verbatim. Keeping the bytes
+  // that were actually loaded also preserves maps whose path later moves or
+  // disappears while the project remains open.
+  std::vector<std::byte> source;
   // Where the track was loaded from, handed to plugins that open a
   // tmnf::sim::World of their own; see tmnf/tmnf_game.h.
   std::string path;
@@ -627,6 +652,15 @@ struct ft_game {
   // use it, so both outlive one.
   tmnf::PackSet packs_open;
   tmnf::TextureLibrary textures;
+
+  // The replay export window: the inclusive tick range to sample and which
+  // timeline worlds and tracks become ghosts. Kept on the game so a run of
+  // choices survives being closed and reopened.
+  bool open_export = false;
+  std::int32_t export_start_tick = 0;
+  std::int32_t export_end_tick = 0;
+  std::string export_error;
+  std::vector<tmnf::ExportWorldSelection> export_worlds;
 
   // The track browser on the start screen.
   std::string tracks_root;
@@ -704,6 +738,19 @@ bool StoreProfile(ft_game *game, std::int32_t track, const PlayerProfile &profil
 // editor's accent for the world it is driving in.
 ft_color LiveryFor(const ft_render_frame *frame, int player);
 void PlayerPanel(ft_game *game, const ft_ui_frame *frame);
+
+// --- tmnf_replay.cpp --------------------------------------------------------
+
+std::uint32_t ExporterCount(ft_game *game);
+const ft_exporter_desc *ExporterDesc(ft_game *game, std::uint32_t index);
+bool ExportRun(ft_game *game, std::uint32_t index, const ft_export_request *request);
+
+// --- tmnf_export.cpp ---------------------------------------------------------
+
+// The menu item that opens the export window, and the window itself. Rendering
+// is where the popup is opened, so the menu never leaves a popup half-pushed.
+void ExportWindowOpen(ft_game *game);
+void ExportWindowRender(ft_game *game);
 
 // --- tmnf_ui.cpp -------------------------------------------------------------
 

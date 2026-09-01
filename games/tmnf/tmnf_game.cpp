@@ -510,7 +510,8 @@ ft_game_module BuildModule() {
   module.info.thumbnail = "thumbnail.png";
 
   module.constraints.struct_size = sizeof(ft_game_constraints);
-  module.constraints.caps = FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS | FT_CAP_TIMELINE_EVENTS | FT_CAP_HOSTS_STARTING_STATE;
+  module.constraints.caps = FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS | FT_CAP_TIMELINE_EVENTS |
+                            FT_CAP_HOSTS_STARTING_STATE | FT_CAP_EXPORTERS;
   module.constraints.dimensions = FT_DIMENSIONS_3D;
   module.constraints.min_players = 1;
   module.constraints.max_players = 1;
@@ -559,6 +560,10 @@ ft_game_module BuildModule() {
   module.status_lines = StatusLines;
   module.player_label = PlayerLabel;
   module.collect_events = CollectEvents;
+
+  module.exporter_count = ExporterCount;
+  module.exporter_desc = ExporterDesc;
+  module.export_run = ExportRun;
 
   module.setting_count = SettingCount;
   module.setting_desc = SettingDesc;

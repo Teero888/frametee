@@ -203,6 +203,9 @@ void World::Impl::ReadView() {
   v.car.turboBoostFactor = state->turboBoostFactor;
   v.car.wheelSliding = state->wheelSliding;
   v.car.wheelSurface = state->wheelSurface;
+  v.car.wheelDamperAbsorb = state->wheelDamperAbsorb;
+  v.car.wheelSpinAngle = state->wheelSpinAngle;
+  v.car.wheelSteerAngle = state->wheelSteerAngle;
   v.accelerate = state->controls.lowSpeedGateA;
   v.brake = state->controls.lowSpeedGateB;
   v.steering = state->controls.steering;

@@ -85,6 +85,11 @@ if(FRAMETEE_TMNF_VALIDATOR_LTO AND NOT ENABLE_SANITIZERS AND
     endif()
 endif()
 
+# Replay ghost samples use the same zlib stream as the game. Resolve it in this
+# directory as well as the validator's child directory so the module can link
+# its encoder portably (including the static Windows arrangement below).
+find_package(ZLIB REQUIRED)
+
 add_subdirectory(ForeverValidator ${CMAKE_BINARY_DIR}/forevervalidator EXCLUDE_FROM_ALL)
 
 # The validator's objects are linked into a loadable module.
@@ -292,6 +297,8 @@ add_library(tmnf_game MODULE
     tmnf_camera.cpp
     tmnf_ui.cpp
     tmnf_player.cpp
+    tmnf_replay.cpp
+    tmnf_export.cpp
     tmnf_vehicle_model.cpp
     tmnf_pack.cpp
     tmnf_material.cpp
@@ -330,7 +337,7 @@ target_include_directories(tmnf_game PRIVATE
 
 target_compile_definitions(tmnf_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
 
-target_link_libraries(tmnf_game PRIVATE ${TMNF_VALIDATOR_LIBS})
+target_link_libraries(tmnf_game PRIVATE ${TMNF_VALIDATOR_LIBS} ZLIB::ZLIB)
 
 # TMNF's animated advertising boards are Bink videos. Decode them once while a
 # level loads, pack their frames into the same texture array as static DDS
