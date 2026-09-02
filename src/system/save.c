@@ -242,7 +242,8 @@ static bool reader_string(byte_reader_t *reader, char *out, size_t capacity) {
 }
 
 static bool reader_blob(byte_reader_t *reader, uint64_t encoded_size, uint8_t **out, size_t *out_size) {
-  if (encoded_size > PROJECT_MAX_BLOB_SIZE || encoded_size > SIZE_MAX || encoded_size > reader->size - reader->pos) {
+  if (reader->pos > reader->size || encoded_size > PROJECT_MAX_BLOB_SIZE || encoded_size > SIZE_MAX ||
+      encoded_size > reader->size - reader->pos) {
     reader->ok = false;
     return false;
   }
@@ -259,6 +260,15 @@ static bool reader_blob(byte_reader_t *reader, uint64_t encoded_size, uint8_t **
   *out = data;
   *out_size = size;
   return true;
+}
+
+static bool reader_skip_blob(byte_reader_t *reader, uint64_t encoded_size) {
+  if (reader->pos > reader->size || encoded_size > PROJECT_MAX_BLOB_SIZE || encoded_size > SIZE_MAX ||
+      encoded_size > reader->size - reader->pos) {
+    reader->ok = false;
+    return false;
+  }
+  return reader_bytes(reader, NULL, (size_t)encoded_size);
 }
 
 static void project_document_free(project_document_t *document) {
@@ -619,7 +629,7 @@ static bool read_value(byte_reader_t *reader, starting_override_t *override) {
   return false;
 }
 
-static bool read_timeline(byte_reader_t *reader, project_document_t *document) {
+static bool read_timeline(byte_reader_t *reader, project_document_t *document, bool keep_world_data) {
   uint8_t boolean;
   uint32_t count;
   if (!reader_i32(reader, &document->current_tick) || !reader_i32(reader, &document->active_group_index) ||
@@ -636,9 +646,13 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document) {
     uint64_t world_size;
     if (!reader_u8(reader, &visible) || visible > 1 || !reader_u8(reader, &export_enabled) || export_enabled > 1 ||
         !reader_u8(reader, &prediction_enabled) || prediction_enabled > 1 || !reader_i32(reader, &group->start_offset) ||
-        !reader_u64(reader, &world_size) ||
-        !reader_blob(reader, world_size, &group->world_data, &group->world_size))
+        !reader_u64(reader, &world_size))
       return false;
+    if (keep_world_data) {
+      if (!reader_blob(reader, world_size, &group->world_data, &group->world_size)) return false;
+    } else if (!reader_skip_blob(reader, world_size)) {
+      return false;
+    }
     group->visible = visible != 0;
     group->export_enabled = export_enabled != 0;
     group->prediction_enabled = prediction_enabled != 0;
@@ -759,7 +773,7 @@ static bool validate_document_compatibility(const project_document_t *document, 
   return true;
 }
 
-static bool read_project_file(ui_handler_t *ui, const char *path, project_document_t *document) {
+static bool read_project_file(ui_handler_t *ui, const char *path, project_document_t *document, bool keep_session_data) {
   memset(document, 0, sizeof(*document));
   FILE *file = fs_open(path, "rb");
   if (!file) {
@@ -806,10 +820,14 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
   document->track_count = (int)track_count;
   if (!validate_document_compatibility(document, &ui->gfx_handler->game_host, path)) goto done;
   if (level_size == 0 && document->level_path[0] == '\0') goto malformed;
-  if (!reader_blob(&reader, level_size, &document->level_data, &document->level_size) ||
-      !reader_blob(&reader, project_size, &document->project_data, &document->project_size) ||
-      timeline_size > reader.size - reader.pos)
+  if (keep_session_data) {
+    if (!reader_blob(&reader, level_size, &document->level_data, &document->level_size) ||
+        !reader_blob(&reader, project_size, &document->project_data, &document->project_size))
+      goto malformed;
+  } else if (!reader_skip_blob(&reader, level_size) || !reader_skip_blob(&reader, project_size)) {
     goto malformed;
+  }
+  if (timeline_size > reader.size - reader.pos) goto malformed;
 
   document->groups = calloc(group_count, sizeof(*document->groups));
   document->tracks = track_count ? calloc(track_count, sizeof(*document->tracks)) : NULL;
@@ -817,7 +835,7 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
 
   byte_reader_t timeline_reader = {.data = reader.data + reader.pos, .size = (size_t)timeline_size, .ok = true};
   reader.pos += (size_t)timeline_size;
-  if (!read_timeline(&timeline_reader, document) || reader.pos != reader.size)
+  if (!read_timeline(&timeline_reader, document, keep_session_data) || reader.pos != reader.size)
     goto malformed;
 
   if (document->active_group_index < 0 || document->active_group_index >= document->group_count ||
@@ -957,7 +975,7 @@ static void restore_camera(ui_handler_t *ui, const project_document_t *document)
 bool load_project(ui_handler_t *ui, const char *path) {
   if (!ui || !path || !ui->gfx_handler) return false;
   project_document_t document;
-  if (!read_project_file(ui, path, &document)) return false;
+  if (!read_project_file(ui, path, &document, true)) return false;
 
   game_host_t *host = &ui->gfx_handler->game_host;
   char old_variant[FT_ID_MAX];
@@ -1037,68 +1055,99 @@ static const char *project_file_stem(const char *path, char *buffer, size_t buff
   return buffer;
 }
 
-static bool document_uses_current_level(ui_handler_t *ui, const project_document_t *document) {
-  game_host_t *host = &ui->gfx_handler->game_host;
-  if (strcmp(document->variant_id, game_host_variant(host)) != 0) return false;
-  if (document->level_size == 0)
-    return document->level_path[0] && strcmp(document->level_path, ui->loaded_level_path) == 0;
+static bool prepare_imported_events(const timeline_state_t *timeline, const project_document_t *document,
+                                    timeline_event_t **out_events, int *out_count) {
+  // Payload-free events are observations from simulating the source map. They
+  // must be regenerated on the current map; only game-authored events travel
+  // with the imported timeline.
+  int authored_count = 0;
+  for (int i = 0; i < document->event_count; ++i)
+    if (document->events[i].data_size > 0) ++authored_count;
 
-  const size_t current_size = gh_level_serialize(host, ui->gfx_handler->level, NULL, 0);
-  if (current_size != document->level_size || current_size == 0) return false;
-  uint8_t *current = malloc(current_size);
-  if (!current) return false;
-  const bool same = gh_level_serialize(host, ui->gfx_handler->level, current, current_size) == current_size &&
-                    memcmp(current, document->level_data, current_size) == 0;
-  free(current);
-  return same;
+  if (timeline->event_count > PROJECT_MAX_EVENTS - authored_count) return false;
+  const int count = timeline->event_count + authored_count;
+  size_t allocation_size;
+  if (!checked_multiply((size_t)count, sizeof(**out_events), &allocation_size)) return false;
+
+  timeline_event_t *events = count > 0 ? malloc(allocation_size) : NULL;
+  if (count > 0 && !events) return false;
+  if (timeline->event_count > 0)
+    memcpy(events, timeline->events, sizeof(*events) * (size_t)timeline->event_count);
+
+  int destination = timeline->event_count;
+  for (int i = 0; i < document->event_count; ++i) {
+    if (document->events[i].data_size == 0) continue;
+    events[destination] = document->events[i];
+    events[destination].group_index += timeline->group_count;
+    ++destination;
+  }
+  *out_events = events;
+  *out_count = count;
+  return true;
 }
 
-static bool document_uses_current_project_data(ui_handler_t *ui, const project_document_t *document) {
-  uint8_t *current = NULL;
-  size_t current_size = 0;
-  if (!collect_project_data(&ui->gfx_handler->game_host, &current, &current_size)) return false;
-  const bool same = current_size == document->project_size &&
-                    (current_size == 0 || memcmp(current, document->project_data, current_size) == 0);
-  free(current);
-  return same;
+static bool validate_import_capacity(const timeline_state_t *timeline, const project_document_t *document,
+                                     int *out_snippet_count) {
+  if (timeline->group_count > PROJECT_MAX_GROUPS - document->group_count ||
+      timeline->player_track_count > PROJECT_MAX_TRACKS - document->track_count)
+    return false;
+
+  int snippet_count = 0;
+  for (int track = 0; track < document->track_count; ++track) {
+    const int count = document->tracks[track].snippet_count;
+    if (count > INT_MAX - snippet_count) return false;
+    snippet_count += count;
+  }
+  if (timeline->next_snippet_id <= 0 || snippet_count > INT_MAX - timeline->next_snippet_id) return false;
+  *out_snippet_count = snippet_count;
+  return true;
 }
 
 bool import_project_as_group(ui_handler_t *ui, const char *path) {
-  if (!ui || !path || !ui->gfx_handler || !ui->gfx_handler->level || ui->timeline.recording) return false;
+  if (!ui || !path || !*path || !ui->gfx_handler || !ui->gfx_handler->level ||
+      !game_host_ready(&ui->gfx_handler->game_host) || ui->timeline.recording)
+    return false;
   project_document_t document;
-  if (!read_project_file(ui, path, &document)) return false;
-  if (!document_uses_current_level(ui, &document)) {
-    log_error(LOG_SOURCE, "Cannot import '%s': it uses a different level or variant.", path);
-    project_document_free(&document);
-    return false;
-  }
-  if (!document_uses_current_project_data(ui, &document)) {
-    log_error(LOG_SOURCE, "Cannot import '%s': its game-owned project settings differ from the current project.", path);
-    project_document_free(&document);
-    return false;
-  }
+  // Import only needs portable timeline data. The source level, game-owned
+  // project state and serialized worlds are validated and skipped by the reader
+  // rather than allocated, loaded or compared with the active session.
+  if (!read_project_file(ui, path, &document, false)) return false;
 
   timeline_state_t *timeline = &ui->timeline;
-  game_host_t *host = &ui->gfx_handler->game_host;
   const int original_group_count = timeline->group_count;
+  const int original_active_group = timeline->active_group_index;
+  const int original_selected_track = timeline->selected_player_track_index;
+  const int original_next_snippet_id = timeline->next_snippet_id;
+  int imported_snippet_count = 0;
+  timeline_event_t *merged_events = NULL;
+  int merged_event_count = 0;
   bool ok = false;
   char stem[MAX_TIMELINE_GROUP_NAME];
   project_file_stem(path, stem, sizeof(stem));
 
+  if (!validate_import_capacity(timeline, &document, &imported_snippet_count) ||
+      !prepare_imported_events(timeline, &document, &merged_events, &merged_event_count)) {
+    log_error(LOG_SOURCE, "Cannot import '%s': the combined project is too large.", path);
+    free(merged_events);
+    project_document_free(&document);
+    return false;
+  }
+
+  int next_snippet_id = original_next_snippet_id;
+
   for (int source_group = 0; source_group < document.group_count; ++source_group) {
     project_group_t *source_group_data = &document.groups[source_group];
     timeline_group_t *group = model_add_group(timeline, source_group_data->name[0] ? source_group_data->name : stem);
-    if (!group) goto done;
+    if (!group || !group->initial_world) goto done;
     memcpy(group->color, source_group_data->color, sizeof(group->color));
     group->visible = source_group_data->visible;
     group->export_enabled = source_group_data->export_enabled;
     group->prediction_enabled = source_group_data->prediction_enabled;
     group->start_offset = source_group_data->start_offset;
     const int destination_group = timeline->group_count - 1;
-    if (source_group_data->world_size > 0 &&
-        (!gh_world_deserialize(host, group->initial_world, source_group_data->world_data, source_group_data->world_size) ||
-         gh_world_player_count(host, group->initial_world) != document_group_track_count(&document, source_group)))
-      goto done;
+
+    // model_add_group created every runtime world from the active level and
+    // variant. A source-map world snapshot is intentionally never restored.
 
     timeline->active_group_index = destination_group;
     for (int source_track = 0; source_track < document.track_count; ++source_track) {
@@ -1114,33 +1163,41 @@ bool import_project_as_group(ui_handler_t *ui, const char *path) {
       to->recording_snippet_capacity = 0;
       model_rebind_starting_strings(&to->starting_config);
       for (int snippet = 0; snippet < to->snippet_count; ++snippet)
-        to->snippets[snippet].id = timeline->next_snippet_id++;
+        to->snippets[snippet].id = next_snippet_id++;
       from->snippets = NULL;
       from->snippet_count = 0;
       from->snippet_capacity = 0;
-      if (source_group_data->world_size == 0 && to->starting_config.enabled)
+      if (to->starting_config.enabled)
         model_apply_starting_config(timeline, (int)(to - timeline->player_tracks));
     }
   }
 
-  for (int i = 0; i < document.event_count; ++i) {
-    timeline_event_t event = document.events[i];
-    event.group_index += original_group_count;
-    timeline_events_add(timeline, event);
-  }
+  free(timeline->events);
+  timeline->events = merged_events;
+  timeline->event_count = merged_event_count;
+  timeline->event_capacity = merged_event_count;
+  merged_events = NULL;
+  timeline_events_sort(timeline);
+  timeline->next_snippet_id = next_snippet_id;
   timeline->active_group_index = original_group_count;
   timeline->selected_player_track_index = model_group_track_index(timeline, original_group_count, 0);
   model_recalc_physics(timeline, 0);
   ui_mark_unsaved(ui);
-  log_info(LOG_SOURCE, "Imported %d group(s) and %d track(s) from '%s'", document.group_count, document.track_count, path);
+  log_info(LOG_SOURCE, "Imported %d group(s), %d track(s), and %d snippet(s) from '%s' onto the current level",
+           document.group_count, document.track_count, imported_snippet_count, path);
   ok = true;
 
 done:
   if (!ok) {
     while (timeline->group_count > original_group_count)
       model_remove_group(timeline, timeline->group_count - 1);
+    timeline->active_group_index = original_active_group;
+    timeline->selected_player_track_index = original_selected_track;
+    timeline->next_snippet_id = original_next_snippet_id;
+    model_recalc_physics(timeline, 0);
     log_error(LOG_SOURCE, "Could not import all project groups from '%s'.", path);
   }
+  free(merged_events);
   project_document_free(&document);
   return ok;
 }
