@@ -720,6 +720,18 @@ static void on_level_loaded(gfx_handler_t *handler) {
   model_reset_groups_for_level(&handler->user_interface.timeline);
 }
 
+// Loading a bare level starts an untitled project. Only load_project() may
+// associate the active session with an existing .tasp path; otherwise Ctrl+S
+// must open Save As instead of reusing a file from the previous project.
+static void begin_untitled_project(ui_handler_t *ui) {
+  snippet_editor_reset();
+  undo_manager_cleanup(&ui->undo_manager);
+  undo_manager_init(&ui->undo_manager);
+  ui->current_project_path[0] = '\0';
+  ui->has_unsaved_changes = false;
+  ui->last_auto_save_time = 0.0;
+}
+
 bool gfx_activate_game(gfx_handler_t *handler, int game_index) {
   if (!handler || game_index < 0 || game_index >= handler->game_host.count) return false;
   if (game_index == handler->game_host.active) return true;
@@ -763,9 +775,11 @@ bool gfx_activate_game(gfx_handler_t *handler, int game_index) {
 }
 
 void on_level_load_path(gfx_handler_t *handler, const char *level_path) {
-  snprintf(handler->user_interface.loaded_level_path, sizeof(handler->user_interface.loaded_level_path), "%s", level_path);
-  timeline_cleanup(&handler->user_interface.timeline);
-  timeline_init(&handler->user_interface);
+  ui_handler_t *ui = &handler->user_interface;
+  begin_untitled_project(ui);
+  snprintf(ui->loaded_level_path, sizeof(ui->loaded_level_path), "%s", level_path);
+  timeline_cleanup(&ui->timeline);
+  timeline_init(ui);
 
   gh_level_destroy(&handler->game_host, handler->level);
   handler->level = gh_level_load_path(&handler->game_host, level_path);
@@ -780,11 +794,12 @@ void on_level_load_path(gfx_handler_t *handler, const char *level_path) {
 }
 
 void on_level_load_memory(struct gfx_handler_t *handler, const unsigned char *level_buffer, size_t size) {
+  begin_untitled_project(&handler->user_interface);
   handler->user_interface.loaded_level_path[0] = '\0';
   gh_level_destroy(&handler->game_host, handler->level);
   handler->level = gh_level_load_memory(&handler->game_host, level_buffer, size);
   if (!handler->level) {
-    log_error(LOG_SOURCE, "The active game could not load the level stored in this project");
+    log_error(LOG_SOURCE, "The active game could not load the level from memory");
     return;
   }
   on_level_loaded(handler);

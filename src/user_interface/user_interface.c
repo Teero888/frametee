@@ -191,10 +191,13 @@ void render_menu_bar(ui_handler_t *ui) {
 
     if (ui->has_unsaved_changes) {
       igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){1.0f, 0.70f, 0.20f, 1.0f});
-      igText("*");
+      igTextUnformatted("*", NULL);
       igPopStyleColor(1);
       if (igIsItemHovered(0)) {
-        igSetTooltip("Unsaved Changes (Ctrl+S to save)");
+        if (ui->current_project_path[0])
+          igSetTooltip("This file has been modified since it was last saved. Ctrl+S to save.");
+        else
+          igSetTooltip("This project has not been saved yet. Ctrl+S to choose a file.");
       }
     }
 
@@ -1148,15 +1151,6 @@ static void render_new_project_prompt(ui_handler_t *ui) {
   }
 }
 
-// Picking a bare level from the splash starts a fresh project, so the previously open project's path
-// must not stay behind or the next Ctrl+S would silently overwrite it.
-static void splash_on_level_picked(ui_handler_t *ui) {
-  ui->current_project_path[0] = '\0';
-  ui->has_unsaved_changes = false;
-  ui->last_auto_save_time = 0.0;
-  ui->show_splash = false;
-}
-
 // --- splash: choosing a game -------------------------------------------------
 
 // Thumbnails are loaded once per game and kept for the session. Cached here
@@ -1382,7 +1376,7 @@ static void render_splash_screen(ui_handler_t *ui) {
           if (result == NFD_OKAY) {
             on_level_load_path(ui->gfx_handler, out_path);
             NFD_FreePathU8(out_path);
-            splash_on_level_picked(ui);
+            ui->show_splash = false;
             igCloseCurrentPopup();
           }
         }
