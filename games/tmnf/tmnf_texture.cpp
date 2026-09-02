@@ -13,6 +13,13 @@
 
 #include "tmnf_internal.h"
 
+#include <zlib.h>
+
+#include <fstream>
+#include <iterator>
+
+#include <cstdio>
+
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
@@ -345,8 +352,50 @@ bool DecodeBink(const std::vector<unsigned char> &, std::uint32_t *, std::uint32
 
 // Box filter onto the array's page size. Every layer of a texture array is the
 // same size, and the game's textures are not, so one of the two has to give.
+// Stretching a picture onto a larger page. Averaging the source footprint is
+// the right answer when several source texels fall into one destination texel,
+// but when fewer than one does the footprint is a single texel and averaging
+// copies it, which turns a 512 skin on a 2048 page into blocks of sixteen
+// identical texels. Reading between the texels instead keeps it as smooth as
+// the source allows, which is all an enlargement can be.
+void Magnify(const std::vector<std::uint8_t> &src, std::uint32_t sw, std::uint32_t sh, std::vector<std::uint8_t> *dst,
+             std::uint32_t dw, std::uint32_t dh) {
+  dst->assign(static_cast<std::size_t>(dw) * dh * 4u, 0u);
+  if (sw == 0u || sh == 0u) return;
+  for (std::uint32_t y = 0; y < dh; ++y) {
+    // Sample at the destination texel's centre, in source coordinates.
+    const float fy = (static_cast<float>(y) + 0.5f) * static_cast<float>(sh) / static_cast<float>(dh) - 0.5f;
+    const float y_base = std::floor(fy);
+    const float wy = fy - y_base;
+    const std::uint32_t y0 = static_cast<std::uint32_t>(std::clamp(y_base, 0.f, static_cast<float>(sh - 1u)));
+    const std::uint32_t y1 = std::min(y0 + 1u, sh - 1u);
+    for (std::uint32_t x = 0; x < dw; ++x) {
+      const float fx = (static_cast<float>(x) + 0.5f) * static_cast<float>(sw) / static_cast<float>(dw) - 0.5f;
+      const float x_base = std::floor(fx);
+      const float wx = fx - x_base;
+      const std::uint32_t x0 = static_cast<std::uint32_t>(std::clamp(x_base, 0.f, static_cast<float>(sw - 1u)));
+      const std::uint32_t x1 = std::min(x0 + 1u, sw - 1u);
+
+      const std::uint8_t *p00 = &src[(static_cast<std::size_t>(y0) * sw + x0) * 4u];
+      const std::uint8_t *p10 = &src[(static_cast<std::size_t>(y0) * sw + x1) * 4u];
+      const std::uint8_t *p01 = &src[(static_cast<std::size_t>(y1) * sw + x0) * 4u];
+      const std::uint8_t *p11 = &src[(static_cast<std::size_t>(y1) * sw + x1) * 4u];
+      std::uint8_t *out = &(*dst)[(static_cast<std::size_t>(y) * dw + x) * 4u];
+      for (int c = 0; c < 4; ++c) {
+        const float top = static_cast<float>(p00[c]) * (1.f - wx) + static_cast<float>(p10[c]) * wx;
+        const float bottom = static_cast<float>(p01[c]) * (1.f - wx) + static_cast<float>(p11[c]) * wx;
+        out[c] = static_cast<std::uint8_t>(std::lround(top * (1.f - wy) + bottom * wy));
+      }
+    }
+  }
+}
+
 void Resample(const std::vector<std::uint8_t> &src, std::uint32_t sw, std::uint32_t sh, std::vector<std::uint8_t> *dst,
               std::uint32_t dw, std::uint32_t dh) {
+  if (dw >= sw && dh >= sh) {
+    Magnify(src, sw, sh, dst, dw, dh);
+    return;
+  }
   dst->assign(static_cast<std::size_t>(dw) * dh * 4u, 0u);
   for (std::uint32_t y = 0; y < dh; ++y) {
     const std::uint32_t y0 = static_cast<std::uint32_t>(static_cast<std::uint64_t>(y) * sh / dh);
@@ -368,6 +417,89 @@ void Resample(const std::vector<std::uint8_t> &src, std::uint32_t sw, std::uint3
       for (int c = 0; c < 4; ++c) out[c] = count ? static_cast<std::uint8_t>(sum[c] / count) : 0u;
     }
   }
+}
+
+// --- skin archives -----------------------------------------------------------
+
+bool EqualsIgnoreCase(std::string_view a, std::string_view b) {
+  if (a.size() != b.size()) return false;
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+  }
+  return true;
+}
+
+
+// One member of a zip archive, by name.
+//
+// The car skins the game ships are loose zips beside its packs rather than pack
+// entries, so they are read here rather than through PackSet. Only what a skin
+// needs is implemented: walk the local headers, and take the member either
+// stored or deflated. An archive that keeps its sizes in a trailing data
+// descriptor is refused rather than guessed at.
+bool ReadZipMember(const std::string &archive_path, std::string_view member, std::vector<unsigned char> *out) {
+  if (out == nullptr) return false;
+  out->clear();
+
+  std::ifstream file(archive_path, std::ios::binary);
+  if (!file) return false;
+  const std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+  const auto word = [&bytes](std::size_t at) -> std::uint32_t {
+    return static_cast<std::uint32_t>(bytes[at]) | static_cast<std::uint32_t>(bytes[at + 1u]) << 8u |
+           static_cast<std::uint32_t>(bytes[at + 2u]) << 16u | static_cast<std::uint32_t>(bytes[at + 3u]) << 24u;
+  };
+  const auto half = [&bytes](std::size_t at) -> std::uint32_t {
+    return static_cast<std::uint32_t>(bytes[at]) | static_cast<std::uint32_t>(bytes[at + 1u]) << 8u;
+  };
+
+  constexpr std::uint32_t kLocalHeader = 0x04034b50u;
+  constexpr std::size_t kHeaderBytes = 30u;
+  std::size_t at = 0u;
+  while (at + kHeaderBytes <= bytes.size() && word(at) == kLocalHeader) {
+    const std::uint32_t flags = half(at + 6u);
+    const std::uint32_t method = half(at + 8u);
+    const std::uint32_t compressed = word(at + 18u);
+    const std::uint32_t uncompressed = word(at + 22u);
+    const std::uint32_t name_length = half(at + 26u);
+    const std::uint32_t extra_length = half(at + 28u);
+    const std::size_t name_at = at + kHeaderBytes;
+    const std::size_t data_at = name_at + name_length + extra_length;
+    if (data_at + compressed > bytes.size()) return false;
+
+    const std::string_view name(reinterpret_cast<const char *>(&bytes[name_at]), name_length);
+    if (EqualsIgnoreCase(name, member)) {
+      // Bit three says the sizes are only known after the data, which nothing
+      // the game ships uses.
+      if ((flags & 0x8u) != 0u || compressed == 0u || uncompressed == 0u) return false;
+      if (method == 0u) {
+        out->assign(bytes.begin() + static_cast<std::ptrdiff_t>(data_at),
+                    bytes.begin() + static_cast<std::ptrdiff_t>(data_at + compressed));
+        return true;
+      }
+      if (method != 8u) return false;
+
+      out->assign(uncompressed, 0u);
+      z_stream stream{};
+      // A negative window bit count asks for raw deflate, which is what a zip
+      // member is: the zlib header a stream would carry is not there.
+      if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) {
+        out->clear();
+        return false;
+      }
+      stream.next_in = const_cast<Bytef *>(&bytes[data_at]);
+      stream.avail_in = compressed;
+      stream.next_out = out->data();
+      stream.avail_out = static_cast<uInt>(out->size());
+      const int result = inflate(&stream, Z_FINISH);
+      const bool whole = result == Z_STREAM_END && stream.avail_out == 0u;
+      inflateEnd(&stream);
+      if (!whole) out->clear();
+      return whole;
+    }
+    at = data_at + compressed;
+  }
+  return false;
 }
 
 // --- picking a material's diffuse texture ------------------------------------
@@ -674,25 +806,37 @@ MaterialStyle TextureLibrary::Style(const PackSet &packs, const std::string &mat
   return style;
 }
 
-std::optional<std::uint32_t> TextureLibrary::Layer(const PackSet &packs, const std::string &material_path) {
-  const auto cached = by_material_.find(material_path);
+// A layer is identified by the picture and by whether alpha is opacity on it,
+// so the two keys below never collide across those two readings of one file.
+std::string AlphaKey(const std::string &name, bool keep_alpha) {
+  return keep_alpha ? name + "\x01alpha" : name;
+}
+
+std::optional<std::uint32_t> TextureLibrary::Layer(const PackSet &packs, const std::string &material_path,
+                                                   bool keep_alpha) {
+  const std::string key = AlphaKey(material_path, keep_alpha);
+  const auto cached = by_material_.find(key);
   if (cached != by_material_.end()) return cached->second;
 
   const std::optional<std::string> image = DiffuseImagePath(packs, material_path);
   if (!image) {
-    by_material_.emplace(material_path, std::nullopt);
+    by_material_.emplace(key, std::nullopt);
     return std::nullopt;
   }
 
-  const std::optional<std::uint32_t> layer = ImageLayer(packs, *image);
-  by_material_.emplace(material_path, layer);
+  const std::optional<std::uint32_t> layer = ImageLayer(packs, *image, keep_alpha);
+  by_material_.emplace(key, layer);
   return layer;
 }
 
-std::optional<std::uint32_t> TextureLibrary::ImageLayer(const PackSet &packs, const std::string &image_path) {
+std::optional<std::uint32_t> TextureLibrary::ImageLayer(const PackSet &packs, const std::string &image_path,
+                                                        bool keep_alpha) {
   // Two materials very often paint the same picture, so layers are keyed on the
-  // image rather than on the material that asked for it.
-  const auto shared = by_image_.find(image_path);
+  // image rather than on the material that asked for it -- but only among the
+  // materials that read its alpha the same way, because the channel is opacity
+  // for one surface and specular strength for the next.
+  const std::string shared_key = AlphaKey(image_path, keep_alpha);
+  const auto shared = by_image_.find(shared_key);
   if (shared != by_image_.end()) return shared->second;
 
   std::vector<unsigned char> bytes;
@@ -705,7 +849,7 @@ std::optional<std::uint32_t> TextureLibrary::ImageLayer(const PackSet &packs, co
                             ? DecodeBink(bytes, &width, &height, &rgba, &animation)
                             : DecodeDds(bytes, &width, &height, &rgba));
   if (!decoded) {
-    by_image_.emplace(image_path, std::nullopt);
+    by_image_.emplace(shared_key, std::nullopt);
     return std::nullopt;
   }
 
@@ -719,7 +863,7 @@ std::optional<std::uint32_t> TextureLibrary::ImageLayer(const PackSet &packs, co
     std::vector<std::uint8_t> face;
     if (!packs.Read("Stadium\\Media\\Texture\\Image\\StadiumStartSignD.dds", &face_bytes) ||
         !DecodeDds(face_bytes, &face_width, &face_height, &face)) {
-      by_image_.emplace(image_path, std::nullopt);
+      by_image_.emplace(shared_key, std::nullopt);
       return std::nullopt;
     }
 
@@ -728,7 +872,7 @@ std::optional<std::uint32_t> TextureLibrary::ImageLayer(const PackSet &packs, co
     animation.first_layer = static_cast<std::uint32_t>(layers_.size());
 
     if (layers_.size() + animation.frame_count > kMaxTextureLayers) {
-      by_image_.emplace(image_path, std::nullopt);
+      by_image_.emplace(shared_key, std::nullopt);
       return std::nullopt;
     }
 
@@ -754,27 +898,23 @@ std::optional<std::uint32_t> TextureLibrary::ImageLayer(const PackSet &packs, co
           pixel[3] = source[3];
         }
       }
-      layers_.push_back(Page{std::move(frame), output_width, output_height, false, animation});
+      layers_.push_back(Page{std::move(frame), output_width, output_height, keep_alpha, animation});
     }
-    by_image_.emplace(image_path, animation.first_layer);
+    by_image_.emplace(shared_key, animation.first_layer);
     return animation.first_layer;
   }
 
   if (layers_.size() >= kMaxTextureLayers) {
-    by_image_.emplace(image_path, std::nullopt);
+    by_image_.emplace(shared_key, std::nullopt);
     return std::nullopt;
   }
 
   // Kept at the size it was authored. What page it ends up on is decided once,
   // when the whole track's textures are known; see Upload.
   const std::uint32_t layer = static_cast<std::uint32_t>(layers_.size());
-  layers_.push_back(Page{std::move(rgba), width, height, false, animation});
-  by_image_.emplace(image_path, layer);
+  layers_.push_back(Page{std::move(rgba), width, height, keep_alpha, animation});
+  by_image_.emplace(shared_key, layer);
   return layer;
-}
-
-void TextureLibrary::UseAlpha(std::uint32_t layer) {
-  if (layer < layers_.size()) layers_[layer].alpha_used = true;
 }
 
 TextureAnimation TextureLibrary::Animation(std::uint32_t layer) const {
@@ -814,7 +954,8 @@ std::optional<std::uint32_t> TextureLibrary::StartAdvertLayer(const PackSet &pac
 }
 
 std::optional<std::uint32_t> TextureLibrary::DirectionSignLayer(const PackSet &packs) {
-  return ImageLayer(packs, "Stadium\\Media\\Texture\\Image\\SignRight.bik");
+  // The screen is an opaque panel; its alpha is not opacity.
+  return ImageLayer(packs, "Stadium\\Media\\Texture\\Image\\SignRight.bik", false);
 }
 
 std::optional<std::uint32_t> TextureLibrary::SkyLayer(const PackSet &packs, const std::string &environment,
@@ -939,19 +1080,28 @@ bool TextureLibrary::Upload(ft_game *game) {
     texture_ = nullptr;
   }
 
+  // Ask for the page the track's own textures were authored at, and step down
+  // a power of two at a time for as long as the card refuses it. What the
+  // budget above predicts is what an array ought to cost; what actually fits
+  // is only known by asking, and a track drawn at half resolution is a far
+  // better answer than one drawn in flat colours because the first ask failed.
   page_size_ = ChoosePageSize();
-
-  ft_texture_desc desc{};
-  desc.struct_size = sizeof(desc);
-  desc.pixels = nullptr;
-  desc.width = page_size_;
-  desc.height = page_size_;
-  desc.layers = static_cast<std::uint32_t>(layers_.size());
-  desc.format = FT_TEXTURE_RGBA8;
-  desc.mipmaps = true;
-  desc.linear_filter = true;
-  texture_ = api->texture_create(&desc);
-  if (texture_ == nullptr) return false;
+  for (;;) {
+    ft_texture_desc desc{};
+    desc.struct_size = sizeof(desc);
+    desc.pixels = nullptr;
+    desc.width = page_size_;
+    desc.height = page_size_;
+    desc.layers = static_cast<std::uint32_t>(layers_.size());
+    desc.format = FT_TEXTURE_RGBA8;
+    desc.mipmaps = true;
+    desc.linear_filter = true;
+    texture_ = api->texture_create(&desc);
+    if (texture_ != nullptr) break;
+    if (page_size_ <= kMinTexturePageSize) return false;
+    page_size_ /= 2u;
+    Log(game, FT_LOG_WARN, "The texture array did not fit; retrying its pages at %ux%u.", page_size_, page_size_);
+  }
 
   // A texture that is not square is stretched onto a square page rather than
   // letterboxed. Coordinates are normalised, so the picture comes out the shape
@@ -962,27 +1112,61 @@ bool TextureLibrary::Upload(ft_game *game) {
   std::size_t rescaled = 0u;
   for (std::size_t i = 0; i < layers_.size(); ++i) {
     Page &page = layers_[i];
+
+    // Resample first, then settle the alpha channel. Resampling averages the
+    // texels it merges, so anything decided about alpha beforehand comes back
+    // out as a gradient along every edge it touched.
+    std::vector<std::uint8_t> *uploaded = &page.rgba;
+    if (page.width != page_size_ || page.height != page_size_) {
+      Resample(page.rgba, page.width, page.height, &scratch, page_size_, page_size_);
+      uploaded = &scratch;
+      ++rescaled;
+    }
+
     // Alpha is only an opacity where a material says so. Everywhere else the
     // game is using the channel to carry specular strength, and plenty of
     // ordinary surfaces store a zero in it; sampling that as opacity is what
     // made the car, its wheels and a good deal of the stadium see-through.
+    //
+    // Where it is an opacity it is kept as it was authored. Snapping it to in
+    // or out would spare the blend, but the shaders a stadium inherits mark far
+    // more of its surfaces transparent than are really cut-outs, and on those
+    // the channel is a specular ramp: rounding it would punch holes through
+    // solid walls. What makes the blend behave instead is drawing the blended
+    // surfaces after the solid ones; see ft_level::translucent.
     if (!page.alpha_used) {
-      for (std::size_t p = 3u; p < page.rgba.size(); p += 4u) page.rgba[p] = 255u;
+      for (std::size_t p = 3u; p < uploaded->size(); p += 4u) (*uploaded)[p] = 255u;
     }
 
-    const std::uint8_t *pixels = page.rgba.data();
-    if (page.width != page_size_ || page.height != page_size_) {
-      Resample(page.rgba, page.width, page.height, &scratch, page_size_, page_size_);
-      pixels = scratch.data();
-      ++rescaled;
-    }
-    api->texture_update_layer(texture_, static_cast<std::uint32_t>(i), pixels, page_size_, page_size_);
+    api->texture_update_layer(texture_, static_cast<std::uint32_t>(i), uploaded->data(), page_size_, page_size_);
   }
   uploaded_ = layers_.size();
   Log(game, FT_LOG_INFO, "Loaded %zu track textures at %ux%u (%zu resampled).", layers_.size(), page_size_, page_size_,
       rescaled);
   return true;
 }
+
+std::optional<std::uint32_t> TextureLibrary::SkinLayer(const std::string &archive_path, const std::string &key) {
+  const std::string cache_key = "skin\x01" + key;
+  if (const auto cached = by_image_.find(cache_key); cached != by_image_.end()) return cached->second;
+
+  std::vector<unsigned char> dds;
+  std::uint32_t width = 0u, height = 0u;
+  std::vector<std::uint8_t> rgba;
+  if (layers_.size() >= kMaxTextureLayers || !ReadZipMember(archive_path, "Diffuse.dds", &dds) ||
+      !DecodeDds(dds, &width, &height, &rgba)) {
+    by_image_.emplace(cache_key, std::nullopt);
+    return std::nullopt;
+  }
+
+  const std::uint32_t layer = static_cast<std::uint32_t>(layers_.size());
+  // A livery is opaque; the channel it carries is not an opacity.
+  layers_.push_back(Page{std::move(rgba), width, height, false, TextureAnimation{}});
+  by_image_.emplace(cache_key, layer);
+  return layer;
+}
+
+bool TextureLibrary::NeedsUpload() const { return uploaded_ < layers_.size(); }
 
 void TextureLibrary::Destroy(ft_game *game) {
   if (texture_ != nullptr && game->engine->texture_destroy) game->engine->texture_destroy(texture_);

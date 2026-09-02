@@ -24,6 +24,8 @@
 
 #include "tmnf_internal.h"
 
+#include <unordered_set>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -353,7 +355,7 @@ public:
       : scene_(scene), pack_name_(std::move(pack_name)) {}
 
   void Walk(CPlugTree &tree, const GmIso4 &parent_iso, const CPlugMaterial *inherited, bool visible,
-            std::uint32_t lod, TrackPurpose purpose, bool start_line) {
+            std::uint32_t lod, TrackPurpose purpose, bool start_line, bool terrain_dirt) {
     GmIso4 iso;
     tree.ComposeCollisionIso(parent_iso, iso);
     const bool node_visible = visible && tree.IsVisible();
@@ -369,6 +371,7 @@ public:
         instance.lod = lod;
         instance.visible = node_visible;
         instance.start_line = start_line;
+        instance.terrain_dirt = terrain_dirt;
         if (start_line) {
           const std::string &path = scene_->materials[instance.material].path;
           if (LowerAscii(path).find("stadiumroadbordermetal.material.gbx") != std::string::npos) {
@@ -391,20 +394,29 @@ public:
     // A visual mip node holds the same shape at several detail levels. They are
     // kept and marked, not dropped, because the level a surface belongs to is
     // what decides whether it is drawn.
+    //
+    // The archive reader hands the levels over as the node's ordinary children
+    // rather than through its level list, so LevelCount() is nought and there
+    // is nothing to match a child against. A mip node's children are its
+    // levels, finest first, which is what the index counts here. Reading the
+    // level list first keeps this right if the reader ever fills it in.
     auto *mip = dynamic_cast<CPlugTreeVisualMip *>(&tree);
+    const bool levels_listed = mip != nullptr && mip->LevelCount() != 0ul;
     for (unsigned long i = 0; i < tree.GetChildCount(); ++i) {
       CPlugTree *child = tree.GetChild(i);
       if (child == nullptr) continue;
       std::uint32_t child_lod = lod;
-      if (mip != nullptr) {
+      if (levels_listed) {
         for (unsigned long level = 0; level < mip->LevelCount(); ++level) {
           if (mip->LevelTree(level) == child) {
             child_lod = lod + static_cast<std::uint32_t>(level);
             break;
           }
         }
+      } else if (mip != nullptr) {
+        child_lod = lod + static_cast<std::uint32_t>(i);
       }
-      Walk(*child, iso, material, node_visible, child_lod, purpose, start_line);
+      Walk(*child, iso, material, node_visible, child_lod, purpose, start_line, terrain_dirt);
     }
   }
 
@@ -625,6 +637,40 @@ bool BuildTrackScene(ft_game *game, const PackSet &packs, const void *challenge_
                                 {center.x, center.y, center.z}, {size.x, size.y, size.z}});
   }
 
+  // Which squares of the map carry a terrain modifier.
+  //
+  // Nothing in the block's own data says so: the modifier lives on the zone
+  // block that covers the square, and which zone block that is is knowledge
+  // about the collection rather than anything the file format carries. Stadium
+  // has the one, laid down as StadiumDirt.
+  CGameCtnChallenge *map = construction.Challenge();
+  std::unordered_set<std::uint64_t> modified_columns;
+  if (map != nullptr) {
+    for (const std::unique_ptr<CGameCtnBlock> &owned : map->Blocks()) {
+      if (owned == nullptr) continue;
+      const CMwId &name = owned->Identifier().id;
+      if (!name.IsLocalName() || LowerAscii(name.GetString()) != "stadiumdirt") continue;
+      const GmNat3 &at = owned->BaseCoord();
+      modified_columns.insert(static_cast<std::uint64_t>(at.x) << 32u | at.z);
+    }
+  }
+
+  // Which blocks stand on one of those squares, answered once per block rather
+  // than once per piece of it. A block's world position is its coordinate plus
+  // whatever its rotation shifts it by, so reading the square back out of the
+  // position lands on the wrong one for three rotations in four, and the parts
+  // of a single block then disagree about the ground they are on.
+  std::unordered_map<std::uint32_t, bool> block_on_modified_terrain;
+  if (map != nullptr && !modified_columns.empty()) {
+    for (const std::unique_ptr<CGameCtnBlock> &owned : map->Blocks()) {
+      if (owned == nullptr || !owned->BlockInstanceId().has_value()) continue;
+      const GmNat3 &at = owned->BaseCoord();
+      const std::uint64_t column = static_cast<std::uint64_t>(at.x) << 32u | at.z;
+      block_on_modified_terrain.emplace(owned->BlockInstanceId()->Value(),
+                                        modified_columns.count(column) != 0u);
+    }
+  }
+
   TreeWalker walker(out, pack_name);
   for (const StaticSceneModel &model : models.Models()) {
     const bool start_line = LowerAscii(model.Provenance().blockName) == "stadiumroadmainstartline";
@@ -633,7 +679,12 @@ bool BuildTrackScene(ft_game *game, const PackSet &packs, const void *challenge_
     CPlugSolid *solid = model.Prototype().SourceSolid();
     CPlugTree *root = solid != nullptr ? solid->CollisionTree() : nullptr;
     if (root == nullptr) continue;
-    walker.Walk(*root, model.WorldIso(), nullptr, true, 0u, purpose, start_line);
+    bool terrain_dirt = false;
+    if (const std::optional<std::uint32_t> &instance = model.Provenance().blockInstanceId) {
+      const auto found = block_on_modified_terrain.find(*instance);
+      terrain_dirt = found != block_on_modified_terrain.end() && found->second;
+    }
+    walker.Walk(*root, model.WorldIso(), nullptr, true, 0u, purpose, start_line, terrain_dirt);
   }
 
   if (out->instances.empty()) return false;

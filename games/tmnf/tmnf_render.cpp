@@ -119,6 +119,23 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
   const ft_level *level = frame->level;
   if (!level || !api->draw_triangle3) return;
 
+  // A driver's chosen livery is decoded the first time it is asked for, which
+  // adds a page to an array the engine already holds. Settle that before the
+  // frame binds it, because handing over the array and then rebuilding it
+  // leaves the frame drawing from a texture that has been destroyed.
+  if (api->timeline_world_count != nullptr && api->timeline_world_info != nullptr &&
+      api->timeline_player_track != nullptr) {
+    const std::uint32_t worlds = api->timeline_world_count();
+    for (std::uint32_t world = 0u; world < worlds; ++world) {
+      ft_timeline_world_info info{};
+      info.struct_size = sizeof(info);
+      if (!api->timeline_world_info(world, &info)) continue;
+      for (std::uint32_t local = 0u; local < info.player_count; ++local)
+        SkinLayerFor(game, api->timeline_player_track(world, local));
+    }
+  }
+  if (game->textures.NeedsUpload()) game->textures.Upload(game);
+
   // The track's own pictures, for the whole of this frame's 3D. A triangle
   // names a page of it and the renderer does the rest; nothing here has to sort
   // or batch by texture.
@@ -154,8 +171,14 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
                                         /*backface_cull=*/false, opacity, frame->tick, reserve));
   }
 
-  DrawGrid(api, level->track, level->track_grid, frustum, have_frustum, eye, settings.backface_cull, opacity,
-           frame->tick, budget);
+  budget -= std::min(budget, DrawGrid(api, level->track, level->track_grid, frustum, have_frustum, eye,
+                                      settings.backface_cull, opacity, frame->tick, budget));
+
+  // Blended surfaces last. Everything solid is resolved by now, so a cut-out or
+  // a glow blends over what actually stands behind it rather than over whatever
+  // happened to be drawn before it.
+  DrawGrid(api, level->translucent, level->translucent_grid, frustum, have_frustum, eye, settings.backface_cull,
+           opacity, frame->tick, budget);
 }
 
 // --- the car -----------------------------------------------------------------

@@ -147,4 +147,28 @@ CarPose InterpolateCar(const ft_world *previous, const ft_world *current, float 
   return pose;
 }
 
+WheelPose InterpolateWheels(const ft_world *previous, const ft_world *current, float alpha) {
+  WheelPose wheels;
+  if (!current) return wheels;
+  const ft_world *before = previous ? previous : current;
+  alpha = std::clamp(alpha, 0.f, 1.f);
+
+  const auto &c0 = before->view.car;
+  const auto &c1 = current->view.car;
+  for (std::size_t i = 0; i < 4; ++i) {
+    // The spin angle runs to 512 pi and starts over, so a tick that wraps reads
+    // as a whole period backwards. Carry the far end to whichever side of the
+    // near one it is actually closest to before interpolating.
+    constexpr float kSpinPeriod = 512.f * kPi;
+    float to = c1.wheelSpinAngle[i];
+    const float from = c0.wheelSpinAngle[i];
+    if (to - from > kSpinPeriod * 0.5f) to -= kSpinPeriod;
+    else if (from - to > kSpinPeriod * 0.5f) to += kSpinPeriod;
+    wheels.spin[i] = from + (to - from) * alpha;
+    wheels.steer[i] = c0.wheelSteerAngle[i] + (c1.wheelSteerAngle[i] - c0.wheelSteerAngle[i]) * alpha;
+    wheels.damper[i] = c0.wheelDamperAbsorb[i] + (c1.wheelDamperAbsorb[i] - c0.wheelDamperAbsorb[i]) * alpha;
+  }
+  return wheels;
+}
+
 } // namespace tmnf

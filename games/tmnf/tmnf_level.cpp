@@ -406,12 +406,22 @@ bool IsGrassBlades(const TrackMesh &mesh) {
   return true;
 }
 
+// Where a terrain modifier keeps its counterpart of a material: the same file
+// name under the modifier's own folder. A material with nothing there simply
+// keeps its own picture, which is what makes trying this cheap.
+std::optional<std::string> TerrainModifierPath(const std::string &material_path) {
+  const std::size_t slash = material_path.find_last_of("\\/");
+  if (slash == std::string::npos) return std::nullopt;
+  return "Stadium\\Media\\MaterialTerrainModifierDirt\\" + material_path.substr(slash + 1u);
+}
+
 struct BuildStats {
   std::size_t instances_drawn = 0;
   std::size_t instances_skipped = 0;
   std::size_t lod_skipped = 0;
   std::size_t grass_skipped = 0;
   std::size_t sky_instances = 0;
+  std::size_t dirt_swapped = 0;
 };
 
 void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std::uint32_t layer,
@@ -655,11 +665,13 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   // beside it how the material's shader says the surface is drawn.
   static const MaterialStyle kDefaultStyle;
   std::vector<std::uint32_t> material_layers;
+  std::vector<std::uint32_t> material_dirt_layers;
   std::vector<TextureAnimation> material_animations;
   std::vector<MaterialStyle> material_styles;
   std::optional<std::uint32_t> start_advert_layer;
   if (decoded) {
     material_layers.assign(scene.materials.size(), kNoTextureLayer);
+    material_dirt_layers.assign(scene.materials.size(), kNoTextureLayer);
     material_animations.assign(scene.materials.size(), TextureAnimation{});
     material_styles.assign(scene.materials.size(), MaterialStyle{});
     std::size_t textured = 0;
@@ -667,10 +679,18 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     for (std::size_t i = 0; i < scene.materials.size(); ++i) {
       if (scene.materials[i].path.empty()) continue;
       material_styles[i] = game->textures.Style(game->packs_open, scene.materials[i].path);
-      if (const std::optional<std::uint32_t> layer = game->textures.Layer(game->packs_open, scene.materials[i].path)) {
+      // Whether this surface reads the picture's alpha as opacity decides which
+      // page it gets, because the same picture is a cut-out for one material
+      // and carries specular strength for the next.
+      const bool keep_alpha = material_styles[i].transparent && !material_styles[i].additive;
+      if (const std::optional<std::uint32_t> layer =
+              game->textures.Layer(game->packs_open, scene.materials[i].path, keep_alpha)) {
         material_layers[i] = *layer;
-        if (material_styles[i].transparent && !material_styles[i].additive) game->textures.UseAlpha(*layer);
         ++textured;
+      }
+      if (const std::optional<std::string> dirt = TerrainModifierPath(scene.materials[i].path)) {
+        if (const std::optional<std::uint32_t> layer = game->textures.Layer(game->packs_open, *dirt, keep_alpha))
+          material_dirt_layers[i] = *layer;
       }
 
       const std::string lower = Lowered(scene.materials[i].path);
@@ -704,6 +724,13 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
           textured, named, kGameDataInstallHint);
     } else {
       Log(game, FT_LOG_INFO, "Textured %zu of %zu track materials.", textured, scene.materials.size());
+    }
+    // Which materials came back without a picture. A surface drawn in one flat
+    // colour is always one of these, and the name is what says whether the
+    // material was never found or its texture was.
+    for (std::size_t i = 0; i < scene.materials.size(); ++i) {
+      if (scene.materials[i].path.empty() || material_layers[i] != kNoTextureLayer) continue;
+      Log(game, FT_LOG_TRACE, "  no texture for material '%s'", scene.materials[i].path.c_str());
     }
   }
 
@@ -740,6 +767,11 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     ++stats.instances_drawn;
     std::uint32_t layer =
         instance.material < material_layers.size() ? material_layers[instance.material] : kNoTextureLayer;
+    if (instance.terrain_dirt && instance.material < material_dirt_layers.size() &&
+        material_dirt_layers[instance.material] != kNoTextureLayer) {
+      layer = material_dirt_layers[instance.material];
+      ++stats.dirt_swapped;
+    }
     MaterialStyle style =
         instance.material < material_styles.size() ? material_styles[instance.material] : kDefaultStyle;
     TextureAnimation animation = instance.material < material_animations.size()
@@ -784,6 +816,9 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     if ((style.unlit && !style.additive) || IsDistantScenery(scene.meshes[instance.mesh], instance)) {
       AppendInstance(scene, instance, layer, animation, start_advert_layer, style,
                      level->backdrop, backdrop_bounds);
+    } else if (style.transparent || style.additive) {
+      AppendInstance(scene, instance, layer, animation, start_advert_layer, style,
+                     level->translucent, level->world_bounds);
     } else {
       const std::size_t before = level->track.size();
       AppendInstance(scene, instance, layer, animation, start_advert_layer, style,
@@ -815,6 +850,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   game->packs_open.Close();
 
   level->track_grid.Build(level->track, level->world_bounds);
+  if (!level->translucent.empty()) level->translucent_grid.Build(level->translucent, level->world_bounds);
   if (!level->backdrop.empty()) level->backdrop_grid.Build(level->backdrop, backdrop_bounds);
 
   // The engine frames its camera on these bounds and treats them as the ground
@@ -825,11 +861,13 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
                           std::max(32.f, framing.mx.z - framing.mn.z)};
 
   Log(game, FT_LOG_INFO,
-      "Loaded '%s' (%s, %s): %u checkpoints, %zu track triangles, %zu backdrop triangles, %zu sky",
+      "Loaded '%s' (%s, %s): %u checkpoints, %zu track triangles, %zu blended, %zu backdrop triangles, %zu sky",
       level->name.c_str(), environment.c_str(), mood.empty() ? "no mood" : mood.c_str(), level->start.checkpointsTotal,
-      level->track.size(), level->backdrop.size(), stats.sky_instances);
+      level->track.size(), level->translucent.size(), level->backdrop.size(), stats.sky_instances);
   if (stats.lod_skipped) Log(game, FT_LOG_TRACE, "Skipped %zu coarse level-of-detail instances.", stats.lod_skipped);
   if (stats.grass_skipped) Log(game, FT_LOG_TRACE, "Skipped %zu shells of grass blades.", stats.grass_skipped);
+  if (stats.dirt_swapped)
+    Log(game, FT_LOG_TRACE, "Repainted %zu surfaces for the terrain they stand on.", stats.dirt_swapped);
 
   game->level = level;
   CameraReset(game);

@@ -12,13 +12,23 @@
 
 #include <cimgui.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 namespace tmnf {
 namespace {
 
-constexpr std::uint32_t kProfileVersion = 1u;
+// Version two added the livery. A version one profile is still read: it is
+// the same bytes without it, and a driver keeps their name.
+constexpr std::uint32_t kProfileVersion = 2u;
+
+struct ProfileV1 {
+  std::uint32_t version;
+  char name[32];
+};
 
 // The colour a car is painted when the editor has no accent for its world:
 // blue, the stock Nations car.
@@ -34,14 +44,81 @@ PlayerProfile DefaultProfile() {
 
 PlayerProfile DecodeProfile(const void *data, std::uint32_t size) {
   PlayerProfile profile = DefaultProfile();
-  if (!data || size != sizeof(PlayerProfile)) return profile;
+  if (!data) return profile;
+
+  if (size == sizeof(ProfileV1)) {
+    ProfileV1 old{};
+    std::memcpy(&old, data, sizeof(old));
+    if (old.version != 1u) return profile;
+    old.name[sizeof(old.name) - 1] = '\0';
+    std::snprintf(profile.name, sizeof(profile.name), "%s", old.name);
+    return profile;
+  }
+  if (size != sizeof(PlayerProfile)) return profile;
 
   PlayerProfile stored{};
   std::memcpy(&stored, data, sizeof(stored));
   if (stored.version != kProfileVersion) return profile;
 
   stored.name[sizeof(stored.name) - 1] = '\0';
+  stored.skin[sizeof(stored.skin) - 1] = '\0';
   return stored;
+}
+
+// --- liveries ----------------------------------------------------------------
+
+namespace {
+
+bool EndsWithZip(std::string_view name) {
+  if (name.size() <= 4u) return false;
+  const std::string_view tail = name.substr(name.size() - 4u);
+  return (tail[0] == '.') && std::tolower(static_cast<unsigned char>(tail[1])) == 'z' &&
+         std::tolower(static_cast<unsigned char>(tail[2])) == 'i' &&
+         std::tolower(static_cast<unsigned char>(tail[3])) == 'p';
+}
+
+std::string SkinFolder(ft_game *game) {
+  if (!game || !game->level) return {};
+  const std::string car = VehicleSkinFolder(game->level->start.vehicleModel);
+  if (car.empty()) return {};
+  return "GameData/Skins/Vehicles/" + car;
+}
+
+} // namespace
+
+const std::vector<std::string> &InstalledSkins(ft_game *game) {
+  const std::string folder = SkinFolder(game);
+  if (folder == game->skins_folder) return game->skins;
+  game->skins_folder = folder;
+  game->skins.clear();
+  if (folder.empty() || !game->engine || !game->engine->visit_directory || !game->engine->resolve_data_path)
+    return game->skins;
+
+  char root[1024];
+  if (game->engine->resolve_data_path(folder.c_str(), root, sizeof(root)) == 0u) return game->skins;
+
+  game->engine->visit_directory(
+      root,
+      [](void *user, const ft_directory_entry *entry) -> bool {
+        auto *out = static_cast<std::vector<std::string> *>(user);
+        if (entry != nullptr && !entry->is_directory && entry->name != nullptr) {
+          const std::string_view name(entry->name);
+          if (EndsWithZip(name)) out->emplace_back(name.substr(0, name.size() - 4u));
+        }
+        return true;
+      },
+      &game->skins);
+  std::sort(game->skins.begin(), game->skins.end());
+  return game->skins;
+}
+
+std::string SkinArchivePath(ft_game *game, const std::string &skin) {
+  const std::string folder = SkinFolder(game);
+  if (skin.empty() || folder.empty() || !game->engine || !game->engine->resolve_data_path) return {};
+  char path[1024];
+  const std::string relative = folder + "/" + skin + ".zip";
+  if (game->engine->resolve_data_path(relative.c_str(), path, sizeof(path)) == 0u) return {};
+  return path;
 }
 
 PlayerProfile ProfileForTrack(ft_game *game, std::int32_t track) {
@@ -67,6 +144,15 @@ ft_color LiveryFor(const ft_render_frame *frame, int player) {
   return frame->accent.a > 0.01f ? frame->accent : kDefaultLivery;
 }
 
+std::uint32_t SkinLayerFor(ft_game *game, std::int32_t track) {
+  if (game == nullptr || track < 0) return kNoTextureLayer;
+  const PlayerProfile profile = ProfileForTrack(game, track);
+  if (profile.skin[0] == '\0') return kNoTextureLayer;
+  const std::string archive = SkinArchivePath(game, profile.skin);
+  if (archive.empty()) return kNoTextureLayer;
+  return game->textures.SkinLayer(archive, profile.skin).value_or(kNoTextureLayer);
+}
+
 // The panel this game draws for the selected driver. Nothing here resembles
 // DDNet's: there is no skin, no clan and no colours, because a car has none of
 // those: what it has instead is a start worth setting up.
@@ -90,6 +176,26 @@ void PlayerPanel(ft_game *game, const ft_ui_frame *frame) {
   igPushItemWidth(igGetContentRegionAvail().x - 8.f);
   igInputTextWithHint("##name", "Nickname", profile.name, sizeof(profile.name), 0, nullptr, nullptr);
   igPopItemWidth();
+
+  // The livery. The installed archives are the game's own national skins, and
+  // the default is none of them: the car the pack draws, which is what every
+  // driver had before this existed.
+  const std::vector<std::string> &skins = InstalledSkins(game);
+  if (!skins.empty()) {
+    igSeparatorText("Livery");
+    const bool none = profile.skin[0] == '\0';
+    igPushItemWidth(igGetContentRegionAvail().x - 8.f);
+    if (igBeginCombo("##skin", none ? "Default" : profile.skin, 0)) {
+      if (igSelectable_Bool("Default", none, 0, ImVec2{0.f, 0.f})) profile.skin[0] = '\0';
+      for (const std::string &skin : skins) {
+        const bool chosen = skin == profile.skin;
+        if (igSelectable_Bool(skin.c_str(), chosen, 0, ImVec2{0.f, 0.f}))
+          std::snprintf(profile.skin, sizeof(profile.skin), "%s", skin.c_str());
+      }
+      igEndCombo();
+    }
+    igPopItemWidth();
+  }
 
   if (std::memcmp(&before, &profile, sizeof(profile)) != 0) StoreProfile(game, track, profile);
 

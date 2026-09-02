@@ -39,6 +39,7 @@
 #include "format/static_solid/static_solid_descriptor_dependency_queue.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -67,6 +68,14 @@ std::vector<std::byte> ReadWholeFile(const std::string &path) {
 const char *TreeName(const CPlugTree &tree) {
   const CMwId &id = tree.PlugId();
   return id.IsLocalName() != 0 ? id.GetString() : nullptr;
+}
+
+// The bodywork's own livery, by the material that paints it. Every car in the
+// game names it "<Car>Skin", and it is the one a livery archive supplies.
+bool NamesTheLivery(const std::string &material_path) {
+  std::string lower = material_path;
+  for (char &c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return lower.find("skin") != std::string::npos;
 }
 
 // The turning parts. Names are prefixed with the detail level they belong to
@@ -284,7 +293,16 @@ private:
     if (has_uv && material != nullptr && packs != nullptr && textures != nullptr) {
       const std::string &path = material->ReplayRenderDefinition().MaterialPlainPath();
       if (!path.empty()) {
-        if (const std::optional<std::uint32_t> found = textures->Layer(*packs, path)) layer = *found;
+        // The car reads no opacity from its pictures: their fourth channel is
+        // specular strength, and taking it as alpha is what made the body and
+        // its wheels see-through.
+        if (const std::optional<std::uint32_t> found = textures->Layer(*packs, path, false)) {
+          layer = *found;
+          // The bodywork's own livery, which a chosen skin replaces. The
+          // material is named for it: every car in the game has a "<Car>Skin"
+          // material and it is the only one a livery archive supplies.
+          if (out->skin_layer == kNoTextureLayer && NamesTheLivery(path)) out->skin_layer = layer;
+        }
       }
     }
 
@@ -352,6 +370,23 @@ std::string VehiclePackName(fv::VehicleModel vehicle) {
   case fv::VehicleModel::CoastCar: return "Coast";
   case fv::VehicleModel::BayCar: return "Bay";
   case fv::VehicleModel::StadiumCar: return "Stadium";
+  case fv::VehicleModel::Unknown: break;
+  }
+  return {};
+}
+
+// The seven cars the game ships, by the folder each keeps its liveries in.
+// These are not the pack names: the pack is the environment ("Stadium",
+// "Speed") and the folder is the car ("StadiumCar", "American").
+std::string VehicleSkinFolder(fv::VehicleModel vehicle) {
+  switch (vehicle) {
+  case fv::VehicleModel::SnowCar: return "SnowCar";
+  case fv::VehicleModel::DesertCar: return "American";
+  case fv::VehicleModel::RallyCar: return "Rally";
+  case fv::VehicleModel::IslandCar: return "SportCar";
+  case fv::VehicleModel::CoastCar: return "CoastCar";
+  case fv::VehicleModel::BayCar: return "BayCar";
+  case fv::VehicleModel::StadiumCar: return "StadiumCar";
   case fv::VehicleModel::Unknown: break;
   }
   return {};
@@ -434,13 +469,15 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
   GmIso4 root_iso;
   root->ComposeCollisionIso(identity, root_iso);
 
-  // The finest level the module is willing to draw. The car is submitted a
-  // triangle at a time, once per world on screen, so the most detailed stadium
-  // car (fifty thousand triangles, most of them in bodywork panel gaps) costs
-  // more than the whole track in view and shows nothing extra at the distance
-  // the camera actually sits at. The coarser levels are the game's own, authored
-  // for exactly this.
-  constexpr std::size_t kBudget = 12000;
+  // The finest level the module is willing to draw, per world on screen. The
+  // stadium car is authored at fifty thousand triangles, sixteen thousand and
+  // three and a half thousand; the track around it is a quarter of a million
+  // against a budget of kTriangleBudget, so the finest car is a small share of
+  // the frame and the one the camera sits close enough to see. Lower this to
+  // trade the car's panel gaps back for the triangles, which is worth doing
+  // when several prediction ghosts are on screen at once, since each draws its
+  // own.
+  constexpr std::size_t kBudget = 60000;
   const std::vector<CPlugTree *> levels = DetailLevels(*root);
   std::size_t chosen = 0;
   std::uint32_t skipped = 0;
@@ -459,6 +496,7 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
     // Some older packs keep their finest authored tree disabled and make the
     // next detail level the first visible one. An empty level is therefore not
     // a cheap model to accept; keep looking until one actually has geometry.
+    Log(game, FT_LOG_TRACE, "  car detail level %zu: %zu triangles", chosen + 1u, out->faces.size());
     if (!out->faces.empty() && (out->faces.size() <= kBudget || chosen + 1u >= levels.size())) break;
   }
 

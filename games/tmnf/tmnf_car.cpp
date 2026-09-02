@@ -219,7 +219,8 @@ ft_color WheelStateColor(const sim::CarState &car, std::size_t wheel, bool *repl
 
 // The authored model, drawn part by part so the wheels can be turned and rolled.
 void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_render_frame *frame,
-                  const CarPose &pose, ft_color livery, float opacity) {
+                  const CarPose &pose, const WheelPose &wheels, ft_color livery, float opacity,
+                  std::uint32_t skin_layer) {
   const auto &car = frame->world->view.car;
 
   // The four wheels are turned about their own hubs and tinted by their state;
@@ -232,8 +233,8 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
   // it, and the front pair is steered on top of that, so the roll goes first.
   Quat turn[4];
   for (std::size_t i = 0; i < 4; ++i) {
-    const Quat rolled = QuatFromAxisAngle(ft_vec3{1.f, 0.f, 0.f}, car.wheelSpinAngle[i]);
-    turn[i] = Concat(QuatFromAxisAngle(ft_vec3{0.f, 1.f, 0.f}, car.wheelSteerAngle[i]), rolled);
+    const Quat rolled = QuatFromAxisAngle(ft_vec3{1.f, 0.f, 0.f}, wheels.spin[i]);
+    turn[i] = Concat(QuatFromAxisAngle(ft_vec3{0.f, 1.f, 0.f}, wheels.steer[i]), rolled);
   }
 
   static const Quat kNoRotation{};
@@ -243,7 +244,7 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
     // A wheel and the guard over it hang off the same damper, and the game
     // drops both by how far it has absorbed.
     const int suspended = SuspendedWheel(face.part);
-    const float drop = suspended >= 0 ? car.wheelDamperAbsorb[static_cast<std::size_t>(suspended)] : 0.f;
+    const float drop = suspended >= 0 ? wheels.damper[static_cast<std::size_t>(suspended)] : 0.f;
 
     const auto place = [&](ft_vec3 p) {
       if (wheel) {
@@ -257,7 +258,12 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
     // were decoded with and only carry their state on top.
     // A panel that carries its own picture is already painted; only the parts
     // that came back bare take the editor's colour for this world.
-    const bool painted = face.layer != kNoTextureLayer;
+    // A driver who has chosen one of the installed liveries has it drawn where
+    // the bodywork's authored one would be.
+    const std::uint32_t face_layer = face.layer == model.skin_layer && skin_layer != kNoTextureLayer
+                                         ? skin_layer
+                                         : face.layer;
+    const bool painted = face_layer != kNoTextureLayer;
     ft_color color = wheel || painted
                          ? face.color
                          : ft_color{face.color.r * livery.r, face.color.g * livery.g, face.color.b * livery.b,
@@ -269,7 +275,7 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
     color.a *= opacity;
     if (painted && api->draw_triangle3_textured) {
       api->draw_triangle3_textured(place(face.a), place(face.b), place(face.c), face.uv[0], face.uv[1], face.uv[2],
-                                   face.layer, color);
+                                   face_layer, color);
     } else {
       api->draw_triangle3(place(face.a), place(face.b), place(face.c), color);
     }
@@ -284,11 +290,14 @@ void DrawCar(ft_game *game, const ft_render_frame *frame, const CarPose &pose) {
 
   const float opacity = std::clamp(frame->opacity, 0.f, 1.f);
   const auto &view = frame->world->view;
+  // The wheels move every tick and the car is drawn far more often than that,
+  // so they are carried across the gap the same way the body is.
+  const WheelPose wheels = InterpolateWheels(frame->previous_world, frame->world, frame->alpha);
 
   const ft_color livery = LiveryFor(frame, 0);
 
   if (game->vehicle.loaded) {
-    DrawAuthored(api, game->vehicle, frame, pose, livery, opacity);
+    DrawAuthored(api, game->vehicle, frame, pose, wheels, livery, opacity, SkinLayerFor(game, frame->world->track));
     return;
   }
 
@@ -309,10 +318,10 @@ void DrawCar(ft_game *game, const ft_render_frame *frame, const CarPose &pose) {
     // is what rolling forwards does. The front pair is steered on top of that,
     // and both angles come from the simulation rather than being derived from
     // the car's speed and steering axis.
-    const Quat rolled = QuatFromAxisAngle(ft_vec3{1.f, 0.f, 0.f}, view.car.wheelSpinAngle[i]);
-    const Quat turn = Concat(QuatFromAxisAngle(ft_vec3{0.f, 1.f, 0.f}, view.car.wheelSteerAngle[i]), rolled);
+    const Quat rolled = QuatFromAxisAngle(ft_vec3{1.f, 0.f, 0.f}, wheels.spin[i]);
+    const Quat turn = Concat(QuatFromAxisAngle(ft_vec3{0.f, 1.f, 0.f}, wheels.steer[i]), rolled);
     ft_vec3 hub = hubs[i];
-    hub.y -= view.car.wheelDamperAbsorb[i];
+    hub.y -= wheels.damper[i];
 
     bool replace = false;
     const ft_color color = WheelStateColor(view.car, i, &replace);

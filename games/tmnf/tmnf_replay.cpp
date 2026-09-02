@@ -174,6 +174,9 @@ struct ExportGhost {
   std::uint32_t stunt_score = 0u;
   std::uint32_t laps = 1u;
   bool finished = false;
+  // The livery this driver wears, by the archive's name. Empty means the car
+  // the game draws by default.
+  std::string skin;
   fv::VehicleModel vehicle = fv::VehicleModel::Unknown;
 };
 
@@ -479,6 +482,7 @@ bool CollectGhost(ft_game *game, const ft_export_request *request, const ft_time
   ghost.world_index = static_cast<std::uint32_t>(world.world_index);
   ghost.track = track;
   ghost.nickname = NicknameFor(game, track);
+  ghost.skin = ProfileForTrack(game, track).skin;
 
   const std::int64_t span = static_cast<std::int64_t>(request->end_tick) - request->start_tick;
   constexpr std::uint64_t kMaximumDurationMs =
@@ -732,10 +736,21 @@ bool WriteGhost(Writer &writer, IdWriter &ids, const ExportGhost &ghost, const M
   writer.U32(0x03092015u);
   ids.Name(writer, ghost.nickname, kTranslatedName);
 
+  // The livery the ghost wears, named the way the game names it: a pack
+  // descriptor pointing at the archive beside its own game data, and the
+  // matching flag for the driver's avatar. A ghost with no livery chosen
+  // carries no descriptor at all and the game draws the stock car.
+  const std::string car = VehicleSkinFolder(ghost.vehicle);
+  const bool has_skin = !ghost.skin.empty() && !car.empty();
   payload = Writer{};
-  payload.U32(0u); // no skin pack descriptions: the ghost drives a stock car
+  payload.U32(has_skin ? 1u : 0u);
+  if (has_skin) {
+    payload.U8(1u); // descriptor version: TMF carries no checksum
+    payload.String("Skins\\Vehicles\\" + car + "\\" + ghost.skin + ".zip");
+    payload.String(""); // no locator: the file is installed rather than fetched
+  }
   payload.String(ghost.nickname);
-  payload.String(""); // no avatar
+  payload.String(has_skin ? "Skins\\Avatars\\Flags\\" + ghost.skin + ".dds" : "");
   Wrapped(writer, 0x03092017u, payload);
 
   writer.U32(0x03092018u);

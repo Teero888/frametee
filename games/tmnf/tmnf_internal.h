@@ -310,6 +310,10 @@ struct TrackInstance {
   std::uint32_t mesh = 0u;
   std::uint32_t material = 0u;
   TrackTransform transform;
+  // Standing on a square the map's terrain modifies. A block dropped on dirt
+  // is authored with grass, and the game paints it with the counterpart of
+  // every material it names from the modifier's own folder.
+  bool terrain_dirt = false;
   TrackPurpose purpose = TRACK_PURPOSE_SCENERY;
   std::uint32_t lod = 0u;
   bool visible = true;
@@ -353,8 +357,10 @@ std::string EnvironmentPackName(fv::MapEnvironment environment);
 // allocate. See TextureLibrary::Upload.
 //
 // The ceiling on the page. Stadium's own surfaces are authored at 1024 and its
-// advertising boards at 2048; past 1024 the difference is a logo's edge on a
-// hoarding, and the cost is four times the memory for it.
+// advertising boards at 2048; going to 2048 for those costs four times the
+// memory of a 1024 page and enlarges every other picture in the array to no
+// gain, so 1024 is where the resolution the track was made at meets what it is
+// worth carrying.
 inline constexpr std::uint32_t kMaxTexturePageSize = 1024u;
 // Below this a track stops reading as its own textures at all, so a level that
 // cannot afford the pages loses layers rather than resolution.
@@ -380,11 +386,14 @@ public:
   // The layer a material's surface texture was decoded into, decoding it now if
   // this is the first time it has been asked for. Empty when the material names
   // no surface texture, or names one this module cannot read.
-  std::optional<std::uint32_t> Layer(const PackSet &packs, const std::string &material_path);
+  // `keep_alpha` is how the material that asked uses the picture's fourth
+  // channel: as opacity, or not at all. It is part of what identifies a layer
+  // rather than something set on one afterwards, because two materials sharing
+  // a picture do not have to agree about it.
+  std::optional<std::uint32_t> Layer(const PackSet &packs, const std::string &material_path, bool keep_alpha);
   // Marks a decoded page's alpha channel as coverage. Most TMNF diffuse maps
   // use that channel for gloss instead, so it is enabled from the material's
   // shader rather than guessed from the pixels.
-  void UseAlpha(std::uint32_t layer);
   TextureAnimation Animation(std::uint32_t layer) const;
   std::optional<std::uint32_t> StartAdvertLayer(const PackSet &packs);
   // The standard Stadium 2:1 direction screens are a Bink animation. All
@@ -402,6 +411,13 @@ public:
   // a ceiling over the whole sky and a panorama that fades in towards the
   // horizon, which is why this composes rather than just loads.
   std::optional<std::uint32_t> SkyLayer(const PackSet &packs, const std::string &environment, const std::string &mood);
+  // A car's livery, read from one of the skin archives the game ships beside
+  // its packs rather than out of a pack. `key` names the archive; the picture
+  // inside it is always Diffuse.dds. Nothing is decoded until a driver asks
+  // for one, and a layer added after the array was built rebuilds it.
+  std::optional<std::uint32_t> SkinLayer(const std::string &archive_path, const std::string &key);
+  // Whether a layer has been decoded that the uploaded array does not hold.
+  bool NeedsUpload() const;
   // Hands the decoded layers to the engine as one array texture. Called once,
   // after everything a level needs has been decoded.
   bool Upload(ft_game *game);
@@ -413,7 +429,7 @@ public:
 
 private:
   static std::optional<std::string> DiffuseImagePath(const PackSet &packs, const std::string &material_path);
-  std::optional<std::uint32_t> ImageLayer(const PackSet &packs, const std::string &image_path);
+  std::optional<std::uint32_t> ImageLayer(const PackSet &packs, const std::string &image_path, bool keep_alpha);
   std::uint32_t ChoosePageSize() const;
 
   // A decoded image at the size it was authored. Resampling to the array's page
@@ -434,6 +450,8 @@ private:
   };
 
   std::vector<Page> layers_;
+  // Both are keyed by the name plus how the asker uses alpha, so an opaque
+  // surface and a cut-out one painting the same picture get a page each.
   std::unordered_map<std::string, std::optional<std::uint32_t>> by_material_;
   std::unordered_map<std::string, std::optional<std::uint32_t>> by_image_;
   std::unordered_map<std::string, MaterialStyle> style_by_material_;
@@ -504,6 +522,10 @@ struct VehicleFace {
 struct VehicleModel {
   std::vector<VehicleFace> faces;
   ft_vec3 hub[VEHICLE_PART_COUNT]{};
+  // The layer the bodywork's own livery landed on. A driver who has chosen one
+  // of the installed skins has it drawn in place of this, so the two are told
+  // apart by the layer rather than by marking every face.
+  std::uint32_t skin_layer = kNoTextureLayer;
   // The pack this was decoded from, so switching between tracks that use the
   // same car does not decode it again.
   std::string pack;
@@ -520,6 +542,10 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
 // environment it was designed for, which is not always the one the track is in:
 // a Stadium car can be driven on an Island track.
 std::string VehiclePackName(fv::VehicleModel vehicle);
+// The folder the game keeps this car's liveries in. It is the car's own name
+// rather than its environment's, and the two differ: the Stadium pack draws
+// StadiumCar, whose skins live under StadiumCar.
+std::string VehicleSkinFolder(fv::VehicleModel vehicle);
 
 // The colour TrackMania's physical surface ids read as on screen. Shared so the
 // track and the car are coloured by the same table.
@@ -590,8 +616,16 @@ struct ft_level {
   // Foreground track geometry and the stadium shell behind it, kept apart so
   // the shell can be skipped without walking it every frame.
   std::vector<tmnf::Triangle> track;
+  // The surfaces that have to be blended rather than simply drawn: cut-out
+  // fences and foliage, lit signs, the glows on the gantry. The 3D pass writes
+  // depth for everything it draws and is drawn in the order it is submitted, so
+  // a blended surface submitted before whatever stands behind it writes depth
+  // over that and leaves the sky showing through the gap. They are kept apart
+  // so they can go last, once everything solid is already resolved.
+  std::vector<tmnf::Triangle> translucent;
   std::vector<tmnf::Triangle> backdrop;
   tmnf::TriangleGrid track_grid;
+  tmnf::TriangleGrid translucent_grid;
   tmnf::TriangleGrid backdrop_grid;
   std::vector<tmnf::CheckpointInfo> checkpoints;
 
@@ -640,6 +674,11 @@ struct ft_game {
   std::int32_t export_end_tick = 0;
   std::string export_error;
   std::vector<tmnf::ExportWorldSelection> export_worlds;
+
+  // The liveries installed beside the packs, listed on first use and again
+  // whenever the car changes.
+  std::vector<std::string> skins;
+  std::string skins_folder;
 
   // The track browser on the start screen.
   std::string tracks_root;
@@ -707,15 +746,28 @@ bool CameraUpdate(ft_game *game, const ft_camera_frame *frame, ft_camera *inout)
 struct PlayerProfile {
   std::uint32_t version;
   char name[32];
+  // The livery archive this driver's car wears, by its file name without the
+  // extension ("FRA"). Empty means the car the installed pack draws, which is
+  // what a driver gets until they choose otherwise.
+  char skin[32];
 };
 
 PlayerProfile DefaultProfile();
+// The liveries installed for a vehicle, by file name without the extension.
+// Read once and kept, because the folder holds ninety of them.
+const std::vector<std::string> &InstalledSkins(ft_game *game);
+// Where a livery archive lives, or empty when it is not installed.
+std::string SkinArchivePath(ft_game *game, const std::string &skin);
 PlayerProfile DecodeProfile(const void *data, std::uint32_t size);
 PlayerProfile ProfileForTrack(ft_game *game, std::int32_t track);
 bool StoreProfile(ft_game *game, std::int32_t track, const PlayerProfile &profile);
 // The colour this car is painted: its own livery when it has one, otherwise the
 // editor's accent for the world it is driving in.
 ft_color LiveryFor(const ft_render_frame *frame, int player);
+// The layer holding the livery this driver has chosen, or kNoTextureLayer for
+// the one the pack draws. Decoding is done here rather than while drawing, so
+// the array is settled before the frame binds it.
+std::uint32_t SkinLayerFor(ft_game *game, std::int32_t track);
 void PlayerPanel(ft_game *game, const ft_ui_frame *frame);
 
 // --- tmnf_replay.cpp --------------------------------------------------------
@@ -758,6 +810,17 @@ struct CarPose {
 };
 
 CarPose InterpolateCar(const ft_world *previous, const ft_world *current, float alpha);
+
+// Where the four wheels are between two ticks: how far each has rolled, how far
+// it is steered, and how far its damper has absorbed. Drawing a tick's values
+// straight makes the wheels step at the simulation's rate instead of turning.
+struct WheelPose {
+  float spin[4]{};
+  float steer[4]{};
+  float damper[4]{};
+};
+
+WheelPose InterpolateWheels(const ft_world *previous, const ft_world *current, float alpha);
 
 } // namespace tmnf
 
