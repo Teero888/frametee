@@ -1276,6 +1276,24 @@ static const ft_panel_desc ddnet_panels[] = {
     {.window_title = "Skin Browser", .dock = FT_DOCK_RIGHT},
 };
 
+static void ddnet_map_settings_menu(const ft_game *game) {
+  const bool has_level = game && game->current_level;
+  if (!igBeginMenu("Map Server Settings", has_level)) return;
+
+  const map_data_t *map = &game->current_level->collision.m_MapData;
+  if (map->num_settings <= 0) {
+    igTextDisabled("This map has no embedded server settings.");
+  } else {
+    igTextDisabled("%d embedded command%s (read-only)", map->num_settings, map->num_settings == 1 ? "" : "s");
+    igSeparator();
+    for (int i = 0; i < map->num_settings; ++i) {
+      const char *setting = map->settings && map->settings[i] ? map->settings[i] : "";
+      igBulletText("%s", setting[0] ? setting : "(empty)");
+    }
+  }
+  igEndMenu();
+}
+
 // DDNet's start screen is its map browser: picking a map is how a run begins.
 // The editor hands over the panel and this game fills it.
 static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
@@ -1288,6 +1306,8 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
     // recording keeps producing finish events with the panels hidden.
     dd_events_scan_recording(game, frame);
     if (igBeginMenu("DDNet", true)) {
+      ddnet_map_settings_menu(game);
+      igSeparator();
       igMenuItem_BoolPtr("Skin Browser", NULL, &game->show_skin_browser, true);
       igMenuItem_BoolPtr("Timeline Events", NULL, &game->show_events, true);
       if (igMenuItem_Bool("Export Demo...", NULL, false, game->current_level != NULL)) dd_export_window_open(game);
