@@ -372,21 +372,6 @@ public:
         instance.visible = node_visible;
         instance.start_line = start_line;
         instance.terrain_dirt = terrain_dirt;
-        if (start_line) {
-          const std::string &path = scene_->materials[instance.material].path;
-          if (LowerAscii(path).find("stadiumroadbordermetal.material.gbx") != std::string::npos) {
-            Aabb bounds;
-            for (const TrackVertex &vertex : scene_->meshes[instance.mesh].vertices) bounds.Add(vertex.position);
-            const float size_x = bounds.mx.x - bounds.mn.x;
-            const float size_y = bounds.mx.y - bounds.mn.y;
-            const float size_z = bounds.mx.z - bounds.mn.z;
-            // The runtime-ad carrier is the only RoadBorderMetal visual in the
-            // start solid which is broad, upright and shallow. Its archive has
-            // no separate advert material, so retain that identity here.
-            instance.start_billboard = std::max(size_x, size_z) > 16.f &&
-                                       std::min(size_x, size_z) < 6.f && size_y > 3.f;
-          }
-        }
         scene_->instances.push_back(instance);
       }
     }

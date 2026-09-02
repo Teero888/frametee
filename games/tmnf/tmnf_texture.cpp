@@ -921,38 +921,6 @@ TextureAnimation TextureLibrary::Animation(std::uint32_t layer) const {
   return layer < layers_.size() ? layers_[layer].animation : TextureAnimation{};
 }
 
-std::optional<std::uint32_t> TextureLibrary::StartAdvertLayer(const PackSet &packs) {
-  constexpr const char *kKey = "@stadium-start-advert";
-  if (const auto cached = by_image_.find(kKey); cached != by_image_.end()) return cached->second;
-  if (layers_.size() >= kMaxTextureLayers) return std::nullopt;
-
-  std::vector<unsigned char> bytes;
-  std::uint32_t width = 0u, height = 0u;
-  std::vector<std::uint8_t> advert;
-  if (!packs.Read("Interface\\Advertising\\RaceAd8x1A.dds", &bytes) ||
-      !DecodeDds(bytes, &width, &height, &advert)) {
-    by_image_.emplace(kKey, std::nullopt);
-    return std::nullopt;
-  }
-
-  // The runtime screen has a little more white carrier either side than the
-  // 8:1 source picture itself. Building that margin into this one load-time
-  // page keeps the projection simple and matches the original gantry.
-  Page page;
-  page.width = width + width / 4u;
-  page.height = height;
-  page.rgba.assign(static_cast<std::size_t>(page.width) * page.height * 4u, 255u);
-  const std::uint32_t offset = (page.width - width) / 2u;
-  for (std::uint32_t y = 0; y < height; ++y)
-    std::memcpy(&page.rgba[(static_cast<std::size_t>(y) * page.width + offset) * 4u],
-                &advert[static_cast<std::size_t>(y) * width * 4u], static_cast<std::size_t>(width) * 4u);
-
-  const std::uint32_t layer = static_cast<std::uint32_t>(layers_.size());
-  layers_.push_back(std::move(page));
-  by_image_.emplace(kKey, layer);
-  return layer;
-}
-
 std::optional<std::uint32_t> TextureLibrary::DirectionSignLayer(const PackSet &packs) {
   // The screen is an opaque panel; its alpha is not opacity.
   return ImageLayer(packs, "Stadium\\Media\\Texture\\Image\\SignRight.bik", false);

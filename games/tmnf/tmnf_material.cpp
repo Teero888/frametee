@@ -381,8 +381,9 @@ bool Cursor::SkipDeviceSets(u32 chunk) {
 // it sorted ahead of GDiffuse/PxzDiffuse/BaseColor it was winning on stadium
 // terrain and tiling blades across the whole field instead of the ground.
 const char *const kDiffuseSamplers[] = {
-    "Diffuse", "Blend1", "Panorama", "Advert",    "Glow",      "Soil",
-    "Foam 1",  "GDiffuse", "PxzDiffuse", "PyDiffuse", "BaseColor", "PxzBaseColor",
+    "Diffuse", "Blend1",   "Panorama",   "Advert",    "Glow",      "Soil",
+    "Grass",   "Foam 1",   "GDiffuse",   "PxzDiffuse", "PyDiffuse", "BaseColor",
+    "PxzBaseColor",
 };
 
 } // namespace

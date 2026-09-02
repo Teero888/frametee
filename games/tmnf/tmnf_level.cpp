@@ -425,8 +425,7 @@ struct BuildStats {
 };
 
 void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std::uint32_t layer,
-                    TextureAnimation animation, std::optional<std::uint32_t> start_advert_layer,
-                    const MaterialStyle &style,
+                    TextureAnimation animation, const MaterialStyle &style,
                     std::vector<Triangle> &out, Aabb &bounds) {
   if (instance.mesh >= scene.meshes.size() || instance.material >= scene.materials.size()) return;
   // Collision proxies, fence depth stand-ins and fake shadow skirts sit in the
@@ -438,18 +437,6 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
   const TrackMesh &mesh = scene.meshes[instance.mesh];
   const TrackMaterial &material = scene.materials[instance.material];
   const MaterialLook look = ClassifyMaterial(material, instance.material, style);
-
-  Aabb billboard_bounds;
-  if (instance.start_billboard && start_advert_layer) {
-    for (const TrackVertex &vertex : mesh.vertices) billboard_bounds.Add(vertex.position);
-  }
-  const float billboard_size_x = billboard_bounds.Valid() ? billboard_bounds.mx.x - billboard_bounds.mn.x : 0.f;
-  const float billboard_size_z = billboard_bounds.Valid() ? billboard_bounds.mx.z - billboard_bounds.mn.z : 0.f;
-  const bool billboard_long_x = billboard_size_x >= billboard_size_z;
-  const float billboard_advert_min_y = billboard_bounds.Valid()
-                                           ? billboard_bounds.mn.y +
-                                                 (billboard_bounds.mx.y - billboard_bounds.mn.y) * 0.32f
-                                           : 0.f;
 
   // A mirrored placement reverses triangle winding. Where the mesh carries
   // authored normals the winding is fixed per triangle against them instead,
@@ -469,22 +456,8 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
     const auto &v1 = mesh.vertices[i1];
     const auto &v2 = mesh.vertices[i2];
 
-    std::uint32_t triangle_layer = layer;
-    TextureAnimation triangle_animation = animation;
-    bool race_advert = false;
-    if (billboard_bounds.Valid()) {
-      const ft_vec3 local_face = Cross(Sub(v1.position, v0.position), Sub(v2.position, v0.position));
-      const float normal_to_panel = billboard_long_x ? local_face.z : local_face.x;
-      const float centre_y = (v0.position.y + v1.position.y + v2.position.y) / 3.f;
-      // Broad front/back faces point along the shallow axis. Leave the carrier's
-      // rim and brackets on their metal material.
-      race_advert = normal_to_panel * normal_to_panel > LengthSq(local_face) * 0.35f &&
-                    centre_y >= billboard_advert_min_y;
-      if (race_advert) {
-        triangle_layer = *start_advert_layer;
-        triangle_animation = TextureAnimation{};
-      }
-    }
+    const std::uint32_t triangle_layer = layer;
+    const TextureAnimation triangle_animation = animation;
 
     Triangle tri;
     tri.a = TransformPoint(instance.transform, v0.position);
@@ -492,23 +465,9 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
     tri.c = TransformPoint(instance.transform, v2.position);
     tri.two_sided = look.style.double_sided;
     tri.animation = triangle_animation;
-    if (triangle_layer != kNoTextureLayer && (race_advert || mesh.has_uv || look.style.world_uv)) {
+    if (triangle_layer != kNoTextureLayer && (mesh.has_uv || look.style.world_uv)) {
       tri.layer = triangle_layer;
-      if (race_advert) {
-        const float minimum = billboard_long_x ? billboard_bounds.mn.x : billboard_bounds.mn.z;
-        const float horizontal = billboard_long_x ? billboard_size_x : billboard_size_z;
-        const float vertical = billboard_bounds.mx.y - billboard_advert_min_y;
-        const auto project = [&](const ft_vec3 &position) {
-          const float along = billboard_long_x ? position.x : position.z;
-          return ft_vec2{horizontal > 1e-5f ? std::clamp(1.f - (along - minimum) / horizontal, 0.f, 1.f) : 0.f,
-                         vertical > 1e-5f
-                             ? std::clamp((billboard_bounds.mx.y - position.y) / vertical, 0.f, 1.f)
-                             : 0.f};
-        };
-        tri.uv[0] = project(v0.position);
-        tri.uv[1] = project(v1.position);
-        tri.uv[2] = project(v2.position);
-      } else if (look.style.world_uv) {
+      if (look.style.world_uv) {
         // Terrain carries no useful coordinates of its own: it is textured by
         // where it stands, one tile of the picture every sixteen metres. Reading
         // its authored coordinates instead is what smeared a single texel across
@@ -668,7 +627,6 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   std::vector<std::uint32_t> material_dirt_layers;
   std::vector<TextureAnimation> material_animations;
   std::vector<MaterialStyle> material_styles;
-  std::optional<std::uint32_t> start_advert_layer;
   if (decoded) {
     material_layers.assign(scene.materials.size(), kNoTextureLayer);
     material_dirt_layers.assign(scene.materials.size(), kNoTextureLayer);
@@ -705,9 +663,6 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
         material_animations[i] = game->textures.Animation(material_layers[i]);
     }
 
-    if (std::any_of(scene.instances.begin(), scene.instances.end(),
-                    [](const TrackInstance &instance) { return instance.start_billboard; }))
-      start_advert_layer = game->textures.StartAdvertLayer(game->packs_open);
     std::size_t named = 0;
     for (const TrackMaterial &material : scene.materials)
       if (!material.path.empty()) ++named;
@@ -765,6 +720,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     }
 
     ++stats.instances_drawn;
+
     std::uint32_t layer =
         instance.material < material_layers.size() ? material_layers[instance.material] : kNoTextureLayer;
     if (instance.terrain_dirt && instance.material < material_dirt_layers.size() &&
@@ -814,14 +770,14 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     // they are lit on. Only a shell that is not adding light to something is a
     // backdrop.
     if ((style.unlit && !style.additive) || IsDistantScenery(scene.meshes[instance.mesh], instance)) {
-      AppendInstance(scene, instance, layer, animation, start_advert_layer, style,
+      AppendInstance(scene, instance, layer, animation, style,
                      level->backdrop, backdrop_bounds);
     } else if (style.transparent || style.additive) {
-      AppendInstance(scene, instance, layer, animation, start_advert_layer, style,
+      AppendInstance(scene, instance, layer, animation, style,
                      level->translucent, level->world_bounds);
     } else {
       const std::size_t before = level->track.size();
-      AppendInstance(scene, instance, layer, animation, start_advert_layer, style,
+      AppendInstance(scene, instance, layer, animation, style,
                      level->track, level->world_bounds);
       if (instance.purpose == TRACK_PURPOSE_BLOCK) {
         for (std::size_t i = before; i < level->track.size(); ++i) {

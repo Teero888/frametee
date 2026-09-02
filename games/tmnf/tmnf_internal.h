@@ -320,10 +320,6 @@ struct TrackInstance {
   // Provenance is retained so runtime presentation that belongs exclusively to
   // the authored race start cannot leak onto visually similar scenery.
   bool start_line = false;
-  // The curved metal carrier above the start arch. TMNF overlays the race
-  // advert on its broad faces at runtime rather than assigning a distinct
-  // material in the solid archive.
-  bool start_billboard = false;
 };
 
 // A track's geometry and materials, decoded from the installed game. Meshes are
@@ -395,9 +391,6 @@ public:
   // use that channel for gloss instead, so it is enabled from the material's
   // shader rather than guessed from the pixels.
   TextureAnimation Animation(std::uint32_t layer) const;
-  std::optional<std::uint32_t> StartAdvertLayer(const PackSet &packs);
-  // The standard Stadium 2:1 direction screens are a Bink animation. All
-  // frames are decoded and packed once while loading the level.
   std::optional<std::uint32_t> DirectionSignLayer(const PackSet &packs);
   // How the material is meant to be drawn, read from the shader it is built
   // from. Cached alongside the layer, because both come from the same file.
