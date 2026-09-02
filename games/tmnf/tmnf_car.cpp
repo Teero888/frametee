@@ -246,11 +246,31 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
     const int suspended = SuspendedWheel(face.part);
     const float drop = suspended >= 0 ? wheels.damper[static_cast<std::size_t>(suspended)] : 0.f;
 
+    // A link stays bolted to the chassis at one end, so it cannot drop with the
+    // wheel: it swings, far end down by the same travel. The angle is whatever
+    // carries the wheel end through that drop, and everything between the two
+    // ends follows it, which is what keeps a rod meeting the wheel it holds.
+    const bool link = IsVehicleLinkPart(face.part);
+    const float reach = link ? model.reach[face.part] : 0.f;
+    float sin_swing = 0.f, cos_swing = 1.f;
+    if (link && std::fabs(reach) > 1e-4f) {
+      sin_swing = std::clamp(-drop / reach, -1.f, 1.f);
+      cos_swing = std::sqrt(std::max(0.f, 1.f - sin_swing * sin_swing));
+    }
+
     const auto place = [&](ft_vec3 p) {
       if (wheel) {
         p = Add(Rotate(local, p), model.hub[face.part]);
+        p.y -= drop;
+      } else if (link) {
+        const ft_vec3 &pivot = model.pivot[face.part];
+        const float dx = p.x - pivot.x;
+        const float dy = p.y - pivot.y;
+        p.x = pivot.x + dx * cos_swing - dy * sin_swing;
+        p.y = pivot.y + dx * sin_swing + dy * cos_swing;
+      } else {
+        p.y -= drop;
       }
-      p.y -= drop;
       return Add(pose.position, Rotate(pose.rotation, p));
     };
     // Body panels come out of the pack unpainted, and the editor's colour for

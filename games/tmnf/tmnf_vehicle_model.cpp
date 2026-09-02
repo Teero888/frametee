@@ -88,15 +88,29 @@ bool NamesTheLivery(const std::string &material_path) {
 std::uint8_t PartForName(const char *name) {
   if (name == nullptr) return VEHICLE_PART_BODY;
   const std::string_view value(name);
-  if (value.find("FLWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_FL;
-  if (value.find("FRWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_FR;
-  if (value.find("RRWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_RR;
-  if (value.find("RLWheel") != std::string_view::npos) return VEHICLE_PART_WHEEL_RL;
-  // The guards and hubs turn with nothing, but they drop with their wheel.
-  if (value.find("FLGuard") != std::string_view::npos) return VEHICLE_PART_GUARD_FL;
-  if (value.find("FRGuard") != std::string_view::npos) return VEHICLE_PART_GUARD_FR;
-  if (value.find("RRHub") != std::string_view::npos) return VEHICLE_PART_HUB_RR;
-  if (value.find("RLHub") != std::string_view::npos) return VEHICLE_PART_HUB_RL;
+
+  // Every moving piece of a corner is named for it: "1FLArmTop", "2RRWheel".
+  // The detail level in front of the corner is why these are searched for
+  // rather than compared against.
+  static constexpr std::string_view kCorners[kVehicleCorners] = {"FL", "FR", "RR", "RL"};
+  for (int corner = 0; corner < static_cast<int>(kVehicleCorners); ++corner) {
+    const std::size_t at = value.find(kCorners[corner]);
+    if (at == std::string_view::npos) continue;
+    const std::string_view piece = value.substr(at + 2u);
+
+    if (piece.rfind("Wheel", 0u) == 0u) return static_cast<std::uint8_t>(corner);
+    // The upright and the guard over it are carried by the wheel.
+    if (piece.rfind("Hub", 0u) == 0u || piece.rfind("Guard", 0u) == 0u)
+      return static_cast<std::uint8_t>(VEHICLE_PART_CARRIER_FL + corner);
+    // The rest are hinged to the chassis. "Dir" steers a front corner and
+    // "Cardan" drives a rear one, but both swing the same way.
+    if (piece.rfind("ArmTop", 0u) == 0u) return VehicleLinkPart(corner, VEHICLE_LINK_ARM_TOP);
+    if (piece.rfind("ArmBot", 0u) == 0u) return VehicleLinkPart(corner, VEHICLE_LINK_ARM_BOTTOM);
+    if (piece.rfind("ArmDir", 0u) == 0u || piece.rfind("Cardan", 0u) == 0u)
+      return VehicleLinkPart(corner, VEHICLE_LINK_ARM_STEER);
+    if (piece.rfind("Susp", 0u) == 0u) return VehicleLinkPart(corner, VEHICLE_LINK_SPRING);
+    break;
+  }
   return VEHICLE_PART_BODY;
 }
 
@@ -526,6 +540,28 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
       face.b = Sub(face.b, hub);
       face.c = Sub(face.c, hub);
     }
+  }
+
+  // Where each hinged link is bolted to the chassis. A suspension arm runs
+  // outboard from the car's centre line, so its inboard end is whichever end
+  // sits nearer that line, and the span between the two is what turns the
+  // wheel's travel into an angle. Reach is signed: it points the way the wheel
+  // end lies, which is what keeps left and right swinging opposite ways.
+  for (std::uint8_t part = VEHICLE_PART_LINK_FIRST; part < VEHICLE_PART_BODY; ++part) {
+    Aabb box;
+    for (const VehicleFace &face : out->faces) {
+      if (face.part != part) continue;
+      box.Add(face.a);
+      box.Add(face.b);
+      box.Add(face.c);
+    }
+    if (!box.Valid()) continue;
+    const bool outboard_is_positive = std::fabs(box.mx.x) >= std::fabs(box.mn.x);
+    const float inboard_x = outboard_is_positive ? box.mn.x : box.mx.x;
+    const float outboard_x = outboard_is_positive ? box.mx.x : box.mn.x;
+    const ft_vec3 centre = box.Center();
+    out->pivot[part] = ft_vec3{inboard_x, centre.y, centre.z};
+    out->reach[part] = outboard_x - inboard_x;
   }
 
   // How much of the car found its own picture. A body drawn in flat white is

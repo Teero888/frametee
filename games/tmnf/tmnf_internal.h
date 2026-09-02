@@ -461,39 +461,54 @@ inline constexpr float kWheelRadius = 0.364f;
 
 // The car's parts. The four wheels are in the order the simulation reports
 // contact and sliding in, so a wheel's state indexes straight into these.
+// The corners, in the order the simulation reports wheel contact in.
+inline constexpr std::uint8_t kVehicleCorners = 4u;
+
+// The pieces of one corner that are hinged to the chassis rather than carried
+// by the wheel. Each swings about its own inboard mount, so each needs its own
+// pivot; sharing one between the top and bottom arms would drag the inboard end
+// of one of them off the chassis.
+enum VehicleLink : std::uint8_t {
+  VEHICLE_LINK_ARM_TOP = 0,
+  VEHICLE_LINK_ARM_BOTTOM,
+  // The steering arm on a front corner, the driveshaft on a rear one.
+  VEHICLE_LINK_ARM_STEER,
+  VEHICLE_LINK_SPRING,
+  VEHICLE_LINK_COUNT,
+};
+
 enum VehiclePart : std::uint8_t {
   VEHICLE_PART_WHEEL_FL = 0,
   VEHICLE_PART_WHEEL_FR,
   VEHICLE_PART_WHEEL_RR,
   VEHICLE_PART_WHEEL_RL,
-  // The guard over each front wheel and the hub behind each rear one. They do
-  // not turn, but they hang off the same suspension and drop with it.
-  VEHICLE_PART_GUARD_FL,
-  VEHICLE_PART_GUARD_FR,
-  VEHICLE_PART_HUB_RR,
-  VEHICLE_PART_HUB_RL,
-  VEHICLE_PART_BODY,
+  // The upright and the guard over it: carried by the wheel, so they ride
+  // straight down with it.
+  VEHICLE_PART_CARRIER_FL,
+  VEHICLE_PART_CARRIER_FR,
+  VEHICLE_PART_CARRIER_RR,
+  VEHICLE_PART_CARRIER_RL,
+  // Four links per corner, laid out corner-major.
+  VEHICLE_PART_LINK_FIRST,
+  VEHICLE_PART_BODY = VEHICLE_PART_LINK_FIRST + kVehicleCorners * VEHICLE_LINK_COUNT,
   VEHICLE_PART_COUNT,
 };
 
+inline std::uint8_t VehicleLinkPart(int corner, VehicleLink link) {
+  return static_cast<std::uint8_t>(VEHICLE_PART_LINK_FIRST + corner * VEHICLE_LINK_COUNT + link);
+}
+
+inline bool IsVehicleLinkPart(std::uint8_t part) {
+  return part >= VEHICLE_PART_LINK_FIRST && part < VEHICLE_PART_BODY;
+}
+
 // Which wheel's suspension a part rides on, or -1 for the body.
 inline int SuspendedWheel(std::uint8_t part) {
-  switch (part) {
-  case VEHICLE_PART_WHEEL_FL:
-  case VEHICLE_PART_GUARD_FL:
-    return 0;
-  case VEHICLE_PART_WHEEL_FR:
-  case VEHICLE_PART_GUARD_FR:
-    return 1;
-  case VEHICLE_PART_WHEEL_RR:
-  case VEHICLE_PART_HUB_RR:
-    return 2;
-  case VEHICLE_PART_WHEEL_RL:
-  case VEHICLE_PART_HUB_RL:
-    return 3;
-  default:
-    return -1;
-  }
+  if (part < kVehicleCorners) return part;
+  if (part >= VEHICLE_PART_CARRIER_FL && part < VEHICLE_PART_LINK_FIRST)
+    return part - VEHICLE_PART_CARRIER_FL;
+  if (IsVehicleLinkPart(part)) return (part - VEHICLE_PART_LINK_FIRST) / VEHICLE_LINK_COUNT;
+  return -1;
 }
 
 // The four wheels themselves, which are the only parts that turn.
@@ -515,6 +530,11 @@ struct VehicleFace {
 struct VehicleModel {
   std::vector<VehicleFace> faces;
   ft_vec3 hub[VEHICLE_PART_COUNT]{};
+  // Where a hinged link is mounted to the chassis, and how far along its own
+  // axis the wheel end sits. Together they turn a wheel's travel into the angle
+  // the link swings through.
+  ft_vec3 pivot[VEHICLE_PART_COUNT]{};
+  float reach[VEHICLE_PART_COUNT]{};
   // The layer the bodywork's own livery landed on. A driver who has chosen one
   // of the installed skins has it drawn in place of this, so the two are told
   // apart by the layer rather than by marking every face.
