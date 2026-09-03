@@ -339,8 +339,16 @@ static uint64_t input_schema_hash(const game_host_t *host) {
     for (uint32_t label = 0; label < field->enum_count; ++label)
       hash = hash_string(hash, field->enum_labels ? field->enum_labels[label] : "");
   }
-  // Prediction alternatives store control selections by schema index, so the
-  // controls are as much a part of project compatibility as the input fields.
+  return hash;
+}
+
+/* Version 17 projects originally included the key-control table in the input
+ * schema hash. Controls are editor bindings, not bytes stored in a project;
+ * keep accepting those hashes so a binding-only change cannot strand a file. */
+static uint64_t legacy_control_schema_hash(const game_host_t *host) {
+  const ft_input_schema *schema = game_input_schema(host);
+  uint64_t hash = input_schema_hash(host);
+  if (!schema) return hash;
   hash = hash_u32(hash, schema->control_count);
   for (uint32_t i = 0; i < schema->control_count; ++i) {
     const ft_input_control *control = &schema->controls[i];
@@ -349,6 +357,56 @@ static uint64_t input_schema_hash(const game_host_t *host) {
     hash = hash_u32(hash, (uint32_t)control->value);
     hash = hash_u32(hash, (uint32_t)((uint64_t)control->value >> 32));
     hash = hash_u32(hash, control->flags);
+  }
+  return hash;
+}
+
+/* The multiple-binding migration collapsed controls named "foo" and
+ * "foo_alt" into one "foo" control whose default binding contains '|'.
+ * Reconstruct that one historical hash without restoring duplicate actions. */
+static uint64_t legacy_split_control_schema_hash(const game_host_t *host) {
+  const ft_input_schema *schema = game_input_schema(host);
+  uint64_t hash = input_schema_hash(host);
+  if (!schema) return hash;
+
+  uint32_t legacy_count = 0;
+  for (uint32_t i = 0; i < schema->control_count; ++i) {
+    ++legacy_count;
+    const char *binding = schema->controls[i].default_binding;
+    while (binding && (binding = strchr(binding, '|')) != NULL) {
+      ++legacy_count;
+      ++binding;
+    }
+  }
+  hash = hash_u32(hash, legacy_count);
+
+  for (uint32_t i = 0; i < schema->control_count; ++i) {
+    const ft_input_control *control = &schema->controls[i];
+    const char *binding = control->default_binding;
+    uint32_t binding_index = 0;
+    do {
+      char alternate_id[FT_NAME_MAX];
+      const char *id = control->id;
+      if (binding_index == 1) {
+        if (snprintf(alternate_id, sizeof(alternate_id), "%s_alt", control->id) >= (int)sizeof(alternate_id))
+          return UINT64_MAX;
+        id = alternate_id;
+      } else if (binding_index > 1) {
+        if (snprintf(alternate_id, sizeof(alternate_id), "%s_alt%u", control->id, binding_index) >=
+            (int)sizeof(alternate_id))
+          return UINT64_MAX;
+        id = alternate_id;
+      }
+      hash = hash_string(hash, id);
+      hash = hash_u32(hash, control->field);
+      hash = hash_u32(hash, (uint32_t)control->value);
+      hash = hash_u32(hash, (uint32_t)((uint64_t)control->value >> 32));
+      hash = hash_u32(hash, control->flags);
+
+      binding = binding ? strchr(binding, '|') : NULL;
+      if (binding) ++binding;
+      ++binding_index;
+    } while (binding);
   }
   return hash;
 }
@@ -766,7 +824,11 @@ static bool validate_document_compatibility(const project_document_t *document, 
               document->game_version, game_host_active_version(host));
     return false;
   }
-  if (document->input_record_size != game_input_size(host) || document->input_schema_hash != input_schema_hash(host)) {
+  const uint64_t schema_hash = input_schema_hash(host);
+  const bool compatible_schema = document->input_schema_hash == schema_hash ||
+                                 document->input_schema_hash == legacy_control_schema_hash(host) ||
+                                 document->input_schema_hash == legacy_split_control_schema_hash(host);
+  if (document->input_record_size != game_input_size(host) || !compatible_schema) {
     log_error(LOG_SOURCE, "Project '%s' uses a different input schema for game '%s'.", path, document->game_id);
     return false;
   }
