@@ -365,7 +365,9 @@ typedef struct ft_input_control {
   const char *display_name;
   const char *description;     /* tooltip, may be NULL */
   const char *category;        /* controls-window heading, may be NULL */
-  const char *default_binding; /* e.g. "A", "Ctrl+R", "MouseLeft" */
+  /* One or more defaults separated by `|`, e.g. "A", "Ctrl+R" or
+   * "UpArrow|W". Each becomes a binding on this same action. */
+  const char *default_binding;
   uint32_t field;              /* index into ft_input_schema.fields */
   int32_t value;               /* value written through input_set */
   uint32_t flags;              /* ft_input_control_flags */

@@ -51,7 +51,7 @@ typedef enum {
   ACTION_ZOOM_IN,
   ACTION_ZOOM_OUT,
   // 3D only: drives the freecam while that camera mode is selected. These are
-  // held rather than tapped, so they are read with keybinds_is_action_down.
+  // held rather than tapped, so they are read with keybinds_is_action_held.
   ACTION_FREECAM_FORWARD,
   ACTION_FREECAM_BACK,
   ACTION_FREECAM_LEFT,

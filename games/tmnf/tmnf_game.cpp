@@ -46,19 +46,13 @@ const ft_input_field kInputFields[FIELD_COUNT] = {
 };
 
 const ft_input_control kInputControls[] = {
-    {"accelerate", "Accelerate", "Throttle", "TMNF", "UpArrow", FIELD_ACCELERATE, 1, 0, nullptr},
-    {"accelerate_alt", "Accelerate (alternate)", "Throttle", "TMNF", "W", FIELD_ACCELERATE, 1, 0, nullptr},
-    {"brake", "Brake", "Brake and reverse", "TMNF", "DownArrow", FIELD_BRAKE, 1, 0, nullptr},
-    {"brake_alt", "Brake (alternate)", "Brake and reverse", "TMNF", "S", FIELD_BRAKE, 1, 0, nullptr},
-    {"steer_left", "Steer left", "Full lock left", "TMNF", "LeftArrow", FIELD_STEER, -65536, FT_CONTROL_ADD, nullptr},
-    {"steer_left_alt", "Steer left (alternate)", "Full lock left", "TMNF", "A", FIELD_STEER, -65536, FT_CONTROL_ADD,
+    {"accelerate", "Accelerate", "Throttle", "TMNF", "UpArrow|W", FIELD_ACCELERATE, 1, 0, nullptr},
+    {"brake", "Brake", "Brake and reverse", "TMNF", "DownArrow|S", FIELD_BRAKE, 1, 0, nullptr},
+    {"steer_left", "Steer left", "Full lock left", "TMNF", "LeftArrow|A", FIELD_STEER, -65536, FT_CONTROL_ADD,
      nullptr},
-    {"steer_right", "Steer right", "Full lock right", "TMNF", "RightArrow", FIELD_STEER, 65536, FT_CONTROL_ADD,
+    {"steer_right", "Steer right", "Full lock right", "TMNF", "RightArrow|D", FIELD_STEER, 65536, FT_CONTROL_ADD,
      nullptr},
-    {"steer_right_alt", "Steer right (alternate)", "Full lock right", "TMNF", "D", FIELD_STEER, 65536, FT_CONTROL_ADD,
-     nullptr},
-    {"respawn", "Respawn", "Return to the last checkpoint", "TMNF", "Delete", FIELD_RESPAWN, 1, 0, nullptr},
-    {"respawn_alt", "Respawn (alternate)", "Return to the last checkpoint", "TMNF", "Backspace", FIELD_RESPAWN, 1, 0,
+    {"respawn", "Respawn", "Return to the last checkpoint", "TMNF", "Delete|Backspace", FIELD_RESPAWN, 1, 0,
      nullptr},
 };
 

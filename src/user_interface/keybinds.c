@@ -319,6 +319,22 @@ action_t keybinds_game_action(unsigned control_index) { return (action_t)(ACTION
 action_t keybinds_linked_game_action(unsigned control_index) { return (action_t)(ACTION_LINKED_GAME_FIRST + control_index); }
 action_t keybinds_linked_extra_action(unsigned action_index) { return (action_t)(ACTION_LINKED_EXTRA_FIRST + action_index); }
 
+static void add_default_bindings(keybind_manager_t *manager, action_t action, const char *defaults) {
+  while (defaults && *defaults) {
+    const char *separator = strchr(defaults, '|');
+    size_t length = separator ? (size_t)(separator - defaults) : strlen(defaults);
+    char text[128];
+    if (length >= sizeof(text)) length = sizeof(text) - 1;
+    memcpy(text, defaults, length);
+    text[length] = '\0';
+
+    key_combo_t combo;
+    if (keybinds_parse_combo(text, &combo)) keybinds_add(manager, action, combo);
+    if (!separator) break;
+    defaults = separator + 1;
+  }
+}
+
 void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
   if (!manager) return;
   for (int action = ACTION_GAME_FIRST; action < ACTION_COUNT; ++action) {
@@ -341,8 +357,7 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
     snprintf(identifier, sizeof(identifier), "game_%s_%s", game_host_active_id(host), control->id);
     set_action_info(manager, action, identifier, control->display_name,
                     control->category && *control->category ? control->category : host->module->info.display_name);
-    key_combo_t combo;
-    if (keybinds_parse_combo(control->default_binding, &combo)) keybinds_add(manager, action, combo);
+    add_default_bindings(manager, action, control->default_binding);
   }
   manager->game_action_count = (int)count;
   manager->action_count = ACTION_GAME_FIRST + (int)count;
@@ -359,8 +374,7 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
     snprintf(name, sizeof(name), "Linked: %s", control->display_name);
     snprintf(category, sizeof(category), "%s Linked Inputs", host->module->info.display_name);
     set_action_info(manager, action, identifier, name, category);
-    key_combo_t combo;
-    if (keybinds_parse_combo(control->linked_default_binding, &combo)) keybinds_add(manager, action, combo);
+    add_default_bindings(manager, action, control->linked_default_binding);
   }
 
   unsigned linked_count = host->module->linked_action_count;
@@ -373,8 +387,7 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
     snprintf(identifier, sizeof(identifier), "game_%s_linked_%s", game_host_active_id(host), desc->id);
     snprintf(category, sizeof(category), "%s Linked Inputs", host->module->info.display_name);
     set_action_info(manager, action, identifier, desc->display_name, category);
-    key_combo_t combo;
-    if (keybinds_parse_combo(desc->default_binding, &combo)) keybinds_add(manager, action, combo);
+    add_default_bindings(manager, action, desc->default_binding);
   }
   manager->linked_action_count = (int)linked_count;
   manager->action_count = ACTION_LINKED_EXTRA_FIRST + (int)linked_count;

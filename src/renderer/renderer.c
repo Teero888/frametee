@@ -609,6 +609,7 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->camera3.yaw = -1.57f;
   renderer->camera3.pitch = 0.5f;
   renderer->camera3.fov_y = 1.0f;
+  renderer->camera3.isometric_distance = 40.f;
   // The reversed depth range makes a near plane this close free, and a far
   // plane this distant costs nothing either: what would be a precision problem
   // in an ordinary depth buffer is where a reversed one is most exact. The far
@@ -1599,7 +1600,13 @@ bool screen_ray3(gfx_handler_t *h, float sx, float sy, vec3 out_origin, vec3 out
   if (glm_vec3_norm(direction) < 1e-6f) return false;
   glm_vec3_normalize(direction);
 
-  glm_vec3_copy(eye, out_origin);
+  // Perspective rays meet at the eye. Orthographic rays are parallel and each
+  // starts at its own point on the near plane; using the eye there would make
+  // picking drift farther from the centre of the viewport.
+  if (h->user_interface.isometric_view)
+    glm_vec3_copy(world[near_index], out_origin);
+  else
+    glm_vec3_copy(eye, out_origin);
   glm_vec3_copy(direction, out_dir);
   return true;
 }
@@ -2460,13 +2467,18 @@ void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
   glm_lookat(eye, target, (vec3){0.f, 1.f, 0.f}, view);
 
   const float aspect = h->viewport[1] > 0.f ? h->viewport[0] / h->viewport[1] : 1.f;
-  // Reversed depth: the near plane lands on one and the far plane on zero.
-  // Swapping the two distances is all a zero-to-one projection needs to produce
-  // it, and it pairs a float depth buffer's dense range near zero with the
-  // perspective divide's sparse range far away, which is the difference
-  // between a track that z-fights past a hundred metres and one that does not.
-  // The pipeline compares greater-or-equal and the pass clears depth to zero.
-  glm_perspective_rh_zo(c->fov_y, aspect, c->far_z, c->near_z, proj);
+  // Reversed depth: the near plane lands on one and the far plane on zero. The
+  // isometric setting uses a true orthographic projection; tying its extent to
+  // the orbit distance keeps scroll zoom consistent with the perspective modes.
+  // Both projections swap near and far to match the greater-or-equal depth test
+  // and the pass's zero clear value.
+  if (h->user_interface.isometric_view) {
+    const float half_height = fmaxf(0.5f, c->distance * tanf(c->fov_y * 0.5f));
+    const float half_width = half_height * aspect;
+    glm_ortho_rh_zo(-half_width, half_width, -half_height, half_height, c->far_z, c->near_z, proj);
+  } else {
+    glm_perspective_rh_zo(c->fov_y, aspect, c->far_z, c->near_z, proj);
+  }
   // Vulkan's clip space has Y pointing down relative to OpenGL's, which is what
   // cglm builds for.
   proj[1][1] *= -1.f;
@@ -2563,13 +2575,19 @@ void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float t
   // A line with width is a quad turned to face the viewer: there is no line
   // width to rely on without the wideLines feature, and a camera-facing quad
   // reads the same from every angle.
-  vec3 eye;
-  renderer_camera3_eye(h, eye);
-
   vec3 dir, to_eye, side;
   glm_vec3_sub(b, a, dir);
   if (glm_vec3_norm(dir) <= 1e-6f) return;
-  glm_vec3_sub(eye, a, to_eye);
+  if (h->user_interface.isometric_view) {
+    // Every orthographic ray has the same direction, so line width must face
+    // that direction too instead of converging on the camera's eye.
+    renderer_camera3_forward(h, to_eye);
+    glm_vec3_negate(to_eye);
+  } else {
+    vec3 eye;
+    renderer_camera3_eye(h, eye);
+    glm_vec3_sub(eye, a, to_eye);
+  }
   glm_vec3_cross(dir, to_eye, side);
   if (glm_vec3_norm(side) <= 1e-6f) glm_vec3_cross(dir, (vec3){0.f, 1.f, 0.f}, side);
   glm_vec3_normalize(side);

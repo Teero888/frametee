@@ -251,9 +251,14 @@ this existed expects; set `FT_DIMENSIONS_3D` and three things change:
     cannot reach.
 
   Switching carries the current view across, so the image never jumps.
-* The renderer builds a perspective view-projection and turns on depth testing,
-  so the `*3` primitives are resolved by the depth buffer rather than by a sort
-  key. There is no `z` argument on them for that reason.
+  **Isometric view** is an independent setting in the timeline controls and
+  under Settings > Graphics. It combines with the selected camera mode, using
+  an orthographic three-quarter top-down presentation with its own remembered
+  zoom.
+* The renderer builds a perspective view-projection normally, or an
+  orthographic one while Isometric view is enabled, and turns on depth testing.
+  The `*3` primitives are therefore resolved by the depth buffer rather than by
+  a sort key; there is no `z` argument on them for that reason.
 * `ft_camera` carries `eye`, `target`, `up`, the field of view and the exact
   `view_proj` the engine renders with, so a module drawing with its own device
   can line its frame up with the engine's own primitives.

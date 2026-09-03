@@ -205,13 +205,11 @@ struct pipeline_cache_entry_t {
   uint32_t texture_count;
 };
 
-// The viewport camera for a game that declared FT_DIMENSIONS_3D. It has two
-// modes, because inspecting a run and moving through one want different things:
-// an orbit circles a point, which is right for watching a body from outside,
-// and a freecam goes where it is pointed, which is the only way to get inside
-// the geometry or look at somewhere the orbit cannot reach.
+// The viewport camera for a game that declared FT_DIMENSIONS_3D. Orbit and
+// freecam share an orientation, while the independent isometric setting swaps
+// in an orthographic, top-down presentation.
 //
-// `yaw` and `pitch` mean the same in both, so switching preserves the view.
+// `yaw` and `pitch` mean the same in every mode.
 struct camera3_t {
   vec3 target;   // what an orbit circles
   vec3 eye;      // where a freecam is; derived from the orbit otherwise
@@ -222,6 +220,15 @@ struct camera3_t {
   float near_z;
   float far_z;
   bool free_mode;
+  bool isometric_active;
+  // Restored when the independent isometric setting is switched off, so
+  // briefly inspecting the top-down view does not rewrite the regular camera.
+  float perspective_yaw;
+  float perspective_pitch;
+  float perspective_distance;
+  // The isometric view remembers its own zoom instead of inheriting the short
+  // camera distance of a chase view.
+  float isometric_distance;
   // World units per second at full tilt, scaled from the level so the same
   // controls suit an arena and a landscape.
   float move_speed;
