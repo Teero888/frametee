@@ -472,8 +472,14 @@ static void api_camera_get(ft_camera *out) {
     vec3 eye;
     renderer_camera3_eye(g_engine, eye);
     out->eye = (ft_vec3){eye[0], eye[1], eye[2]};
-    out->target = (ft_vec3){c->target[0], c->target[1], c->target[2]};
-    out->up = (ft_vec3){0.f, 1.f, 0.f};
+    if (c->free_mode) {
+      vec3 forward;
+      renderer_camera3_forward(g_engine, forward);
+      out->target = (ft_vec3){eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]};
+    } else {
+      out->target = (ft_vec3){c->target[0], c->target[1], c->target[2]};
+    }
+    out->up = c->top_down_active ? (ft_vec3){0.f, 0.f, -1.f} : (ft_vec3){0.f, 1.f, 0.f};
     out->fov_y = c->fov_y;
     out->near_z = c->near_z;
     out->far_z = c->far_z;

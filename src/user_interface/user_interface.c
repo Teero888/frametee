@@ -172,17 +172,6 @@ void render_menu_bar(ui_handler_t *ui) {
         igText("Render Elements");
         if (igCheckbox("Level", &ui->render_level)) config_save(ui);
 
-        if (game_is_3d(&ui->gfx_handler->game_host)) {
-          igSeparator();
-          igText("3D View");
-          if (igCheckbox("Isometric view", &ui->isometric_view)) {
-            ui->configured_isometric_view = ui->isometric_view;
-            config_save(ui);
-          }
-          if (igIsItemHovered(ImGuiHoveredFlags_None))
-            igSetTooltip("Orthographic three-quarter top-down view; combines with the current camera mode");
-        }
-
         // Everything else about how the world looks belongs to the game. It
         // describes its options and the editor draws them, so a module needs no
         // UI toolkit to be configurable.
@@ -713,32 +702,32 @@ void render_player_manager(ui_handler_t *ui) {
 static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra) {
   camera3_t *c = &handler->renderer.camera3;
   keybind_manager_t *keys = &handler->user_interface.keybinds;
-  const bool want_isometric = handler->user_interface.isometric_view;
+  const unsigned camera_mode = handler->renderer.camera.mode;
+  const bool want_top_down = game_camera_mode_is_top_down(&handler->game_host, camera_mode);
 
-  if (want_isometric != c->isometric_active) {
-    if (want_isometric) {
-      // Equal world-axis contributions give the canonical isometric angle.
+  if (want_top_down != c->top_down_active) {
+    if (want_top_down) {
       // Restore the zoom last used by this view rather than inheriting a chase
-      // camera that may sit only a few metres behind the player.
+      // camera that may sit only a few metres behind the player. The renderer
+      // supplies the locked, axis-aligned orientation independently of these
+      // perspective angles.
       c->perspective_yaw = c->yaw;
       c->perspective_pitch = c->pitch;
       c->perspective_distance = c->distance;
-      c->yaw = -0.7853981634f;
-      c->pitch = 0.6154797087f;
-      c->distance = c->isometric_distance;
+      c->distance = c->top_down_distance;
     } else {
       c->yaw = c->perspective_yaw;
       c->pitch = c->perspective_pitch;
       c->distance = c->perspective_distance;
     }
-    c->isometric_active = want_isometric;
+    c->top_down_active = want_top_down;
     c->orbiting = false;
   }
 
   // Flying is a camera mode, so selecting it is what turns it on. The renderer
   // carries the view across the swap; noticing that the mode changed is all
   // there is to do here.
-  const bool want_free = game_camera_mode_is_freecam(&handler->game_host, handler->renderer.camera.mode);
+  const bool want_free = game_camera_mode_is_freecam(&handler->game_host, camera_mode);
   if (want_free != c->free_mode) renderer_camera3_toggle_free(handler);
 
   float scroll_y = !hovered ? 0.f : (float)input_scroll_y();
@@ -747,9 +736,32 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
 
   double raw_dx = 0.0, raw_dy = 0.0;
   input_mouse_delta(&raw_dx, &raw_dy);
-  // The same button that pans a 2D view turns a 3D one, so the gesture a user
-  // already knows carries over into both modes.
+  // Right-drag orbits a perspective view and pans the top-down mode.
   const bool drag_down = input_mouse_down(GLFW_MOUSE_BUTTON_RIGHT);
+
+  if (want_top_down) {
+    if (scroll_y != 0.f) {
+      c->distance = glm_clamp(c->distance * (1.f - scroll_y * 0.1f), 1.f, 100000.f);
+      c->top_down_distance = c->distance;
+    }
+
+    if (drag_down && (hovered || c->orbiting)) {
+      c->orbiting = true;
+      if (handler->viewport[1] > 0.f) {
+        // Orthographic X and Z have the same world-units-per-pixel scale.
+        // Subtracting the drag makes this a grab-and-pan gesture: the world
+        // follows the mouse, matching the editor's 2D camera.
+        const float half_height = fmaxf(0.5f, c->distance * tanf(c->fov_y * 0.5f));
+        const float units_per_pixel = 2.f * half_height / handler->viewport[1];
+        c->target[0] -= (float)raw_dx * units_per_pixel;
+        c->target[2] -= (float)raw_dy * units_per_pixel;
+      }
+    } else {
+      c->orbiting = false;
+    }
+    return;
+  }
+
   if (drag_down && (hovered || c->orbiting)) {
     c->orbiting = true;
     c->yaw += (float)raw_dx * 0.005f;
@@ -764,8 +776,6 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
   if (!c->free_mode) {
     // Orbiting: the wheel changes how far out the camera sits.
     if (scroll_y != 0.f) c->distance = glm_clamp(c->distance * (1.f - scroll_y * 0.1f), 1.f, 100000.f);
-    if (want_isometric) c->isometric_distance = c->distance;
-
     timeline_state_t *ts = &handler->user_interface.timeline;
     const int group_index = model_track_group_index(ts, ts->selected_player_track_index);
     const ft_world *previous = NULL;
@@ -788,20 +798,15 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
       c->target[1] = view.target.y;
       c->target[2] = view.target.z;
 
-      // Isometric changes only how the target is viewed. A directed camera can
-      // still choose that target, but its perspective placement must not
-      // overwrite the independent top-down angle or zoom.
-      if (!want_isometric) {
-        vec3 offset;
-        offset[0] = view.eye.x - view.target.x;
-        offset[1] = view.eye.y - view.target.y;
-        offset[2] = view.eye.z - view.target.z;
-        float dist = glm_vec3_norm(offset);
-        if (dist > 0.01f && !c->orbiting) {
-          c->distance = dist;
-          c->pitch = asinf(glm_clamp(offset[1] / dist, -1.5f, 1.5f));
-          c->yaw = atan2f(offset[2], offset[0]);
-        }
+      vec3 offset;
+      offset[0] = view.eye.x - view.target.x;
+      offset[1] = view.eye.y - view.target.y;
+      offset[2] = view.eye.z - view.target.z;
+      float dist = glm_vec3_norm(offset);
+      if (dist > 0.01f && !c->orbiting) {
+        c->distance = dist;
+        c->pitch = asinf(glm_clamp(offset[1] / dist, -1.5f, 1.5f));
+        c->yaw = atan2f(offset[2], offset[0]);
       }
     } else if (current) {
       ft_value pos_val;
@@ -830,16 +835,10 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
     return;
   }
 
-  // In an isometric freecam the wheel still controls the orthographic scale.
-  // A perspective freecam uses it to trim movement speed instead, because a
+  // A perspective freecam uses the wheel to trim movement speed, because a
   // speed that suits crossing a level is unusable for lining up a nearby shot.
   if (scroll_y != 0.f) {
-    if (want_isometric) {
-      c->distance = glm_clamp(c->distance * (1.f - scroll_y * 0.1f), 1.f, 100000.f);
-      c->isometric_distance = c->distance;
-    } else {
-      c->move_speed = glm_clamp(c->move_speed * (1.f + scroll_y * 0.15f), 0.5f, 10000.f);
-    }
+    c->move_speed = glm_clamp(c->move_speed * (1.f + scroll_y * 0.15f), 0.5f, 10000.f);
   }
   // Flying is driven entirely from the keyboard, and letters are what other
   // panels are being used with: a shortcut that flies the camera while someone
@@ -856,15 +855,7 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
   // than along the world axis.
   glm_vec3_cross(right, forward, up);
   glm_vec3_normalize(up);
-
   glm_vec3_copy(forward, move_forward);
-  if (want_isometric) {
-    // Moving along an orthographic view ray changes only depth and therefore
-    // looks stationary. Pan W/S across the ground in the direction the camera
-    // faces so all four movement keys visibly translate the view.
-    move_forward[1] = 0.f;
-    if (glm_vec3_norm(move_forward) > 1e-6f) glm_vec3_normalize(move_forward);
-  }
 
   vec3 move = {0.f, 0.f, 0.f};
   if (keybinds_is_action_held(keys, ACTION_FREECAM_FORWARD)) glm_vec3_add(move, move_forward, move);
@@ -1002,9 +993,6 @@ void ui_init_config(ui_handler_t *ui) {
   ui->bg_color[1] = 0.253f;
   ui->bg_color[2] = 0.253f;
   ui->render_level = true;
-  ui->isometric_view = false;
-  ui->configured_isometric_view = false;
-
   ui->auto_save_enabled = false;
   ui->auto_save_interval_sec = 60;
   ui->last_auto_save_time = 0.0;

@@ -240,8 +240,9 @@ A game says which world it lives in through `ft_game_constraints.dimensions`.
 Leave it zero and the game is a plane, which is what every module written before
 this existed expects; set `FT_DIMENSIONS_3D` and three things change:
 
-* The viewport camera gains two modes, toggled with `F` (rebindable, listed
-  under Camera):
+* A 3D viewport includes the engine's Freecam and Top-down modes alongside the
+  modes declared by the game. The camera button in the timeline cycles them;
+  the bundled cube game's complete set is:
   * **Orbit**: right-drag to turn, wheel to pull in and out, framed on the
     level's bounds, which a 3D game describes as its ground plane. Right for
     watching a run from outside.
@@ -249,14 +250,13 @@ this existed expects; set `FT_DIMENSIONS_3D` and three things change:
     `Q`/`Ctrl` for world up and down, `Shift` to sprint, wheel to trim speed.
     The only way to get inside the geometry or look from somewhere the orbit
     cannot reach.
+  * **Top-down**: an axis-aligned orthographic view from directly above.
+    Right-drag pans across the X/Z ground plane and the wheel zooms.
 
-  Switching carries the current view across, so the image never jumps.
-  **Isometric view** is an independent setting in the timeline controls and
-  under Settings > Graphics. It combines with the selected camera mode, using
-  an orthographic three-quarter top-down presentation with its own remembered
-  zoom.
+  Top-down and perspective views remember their own zoom. Switching between
+  Orbit and Freecam carries the current perspective view across.
 * The renderer builds a perspective view-projection normally, or an
-  orthographic one while Isometric view is enabled, and turns on depth testing.
+  orthographic one in Top-down mode, and turns on depth testing.
   The `*3` primitives are therefore resolved by the depth buffer rather than by
   a sort key; there is no `z` argument on them for that reason.
 * `ft_camera` carries `eye`, `target`, `up`, the field of view and the exact

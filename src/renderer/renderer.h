@@ -206,10 +206,11 @@ struct pipeline_cache_entry_t {
 };
 
 // The viewport camera for a game that declared FT_DIMENSIONS_3D. Orbit and
-// freecam share an orientation, while the independent isometric setting swaps
-// in an orthographic, top-down presentation.
+// orbit and freecam use perspective, while the engine's top-down mode swaps in
+// an axis-aligned orthographic presentation.
 //
-// `yaw` and `pitch` mean the same in every mode.
+// `yaw` and `pitch` describe the perspective orientation and are ignored by
+// the locked top-down mode.
 struct camera3_t {
   vec3 target;   // what an orbit circles
   vec3 eye;      // where a freecam is; derived from the orbit otherwise
@@ -220,15 +221,15 @@ struct camera3_t {
   float near_z;
   float far_z;
   bool free_mode;
-  bool isometric_active;
-  // Restored when the independent isometric setting is switched off, so
+  bool top_down_active;
+  // Restored when the top-down mode is switched off, so
   // briefly inspecting the top-down view does not rewrite the regular camera.
   float perspective_yaw;
   float perspective_pitch;
   float perspective_distance;
-  // The isometric view remembers its own zoom instead of inheriting the short
+  // The top-down view remembers its own zoom instead of inheriting the short
   // camera distance of a chase view.
-  float isometric_distance;
+  float top_down_distance;
   // World units per second at full tilt, scaled from the level so the same
   // controls suit an arena and a landscape.
   float move_speed;

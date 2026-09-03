@@ -51,17 +51,12 @@ struct ui_handler_t {
   bool vsync;
   bool show_fps;
   bool render_level;
-  // Independent of Chase/Orbit/Freecam: switches a 3D viewport to an
-  // orthographic top-down presentation.
-  bool isometric_view;
-
   // Game module the user last worked with. Restored on startup so a project
   // opens under the same game it was authored in.
   char preferred_game_id[32];
   // Per-game editor state is parsed before the timeline/camera exist during
   // startup, then applied as soon as those objects are initialized.
   char configured_camera_mode_id[32];
-  bool configured_isometric_view;
   bool configured_linked_copy_input;
   // Engine-owned prediction preferences are global within one game rather
   // than project data. The config loader fills this before a timeline exists;

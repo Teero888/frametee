@@ -181,27 +181,14 @@ void renderer_draw_controls(timeline_state_t *ts) {
 
   if (ui_icon_button(ts->ui, ICON_FA_VIDEO, (ImVec2){30 * dpi_scale, 0}) && mode_count > 0) {
     camera->mode = (camera->mode + 1) % mode_count;
-    if (game_camera_mode_is_freecam(camera_host, camera->mode)) igSetWindowFocus_Str("Viewport");
+    config_save(ts->ui);
+    if (game_camera_mode_is_freecam(camera_host, camera->mode) ||
+        game_camera_mode_is_top_down(camera_host, camera->mode))
+      igSetWindowFocus_Str("Viewport");
   }
   if (igIsItemHovered(ImGuiHoveredFlags_None)) {
     const ft_camera_mode *next = game_camera_mode(camera_host, mode_count ? (camera->mode + 1) % mode_count : 0);
     igSetTooltip("Camera: %s\nClick for %s", mode ? mode->display_name : "?", next ? next->display_name : "?");
-  }
-
-  if (game_is_3d(camera_host)) {
-    igSameLine(0, btn_gap);
-    if (ts->ui->isometric_view)
-      igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.20f, 0.42f, 0.68f, 1.f});
-    const bool toggle_isometric = ui_icon_button(ts->ui, ICON_FA_CUBE, (ImVec2){30 * dpi_scale, 0});
-    if (ts->ui->isometric_view) igPopStyleColor(1);
-    if (toggle_isometric) {
-      ts->ui->isometric_view = !ts->ui->isometric_view;
-      ts->ui->configured_isometric_view = ts->ui->isometric_view;
-      config_save(ts->ui);
-      if (game_camera_mode_is_freecam(camera_host, camera->mode)) igSetWindowFocus_Str("Viewport");
-    }
-    if (igIsItemHovered(ImGuiHoveredFlags_None))
-      igSetTooltip("Isometric view: %s\nOrthographic top-down projection", ts->ui->isometric_view ? "On" : "Off");
   }
 
   igSameLine(0, btn_gap);

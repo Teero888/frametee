@@ -188,8 +188,8 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
   for (uint32_t i = 0; i < m->constraints.camera_mode_count; ++i) {
     const ft_camera_mode *mode = &m->constraints.camera_modes[i];
     if (!id_is_valid(mode->id)) FAIL("camera mode %u has an invalid id", i);
-    if (strcmp(mode->id, FT_CAMERA_MODE_FREECAM_ID) == 0)
-      FAIL("camera mode id '%s' is the engine's own freecam", mode->id);
+    if (strcmp(mode->id, FT_CAMERA_MODE_FREECAM_ID) == 0 || strcmp(mode->id, FT_CAMERA_MODE_TOP_DOWN_ID) == 0)
+      FAIL("camera mode id '%s' is reserved by the engine", mode->id);
     if (!mode->display_name || !*mode->display_name) FAIL("camera mode '%s' has no display name", mode->id);
     for (uint32_t previous = 0; previous < i; ++previous)
       if (strcmp(m->constraints.camera_modes[previous].id, mode->id) == 0) FAIL("duplicate camera mode id '%s'", mode->id);
@@ -1019,6 +1019,13 @@ static const ft_camera_mode g_freecam_mode = {FT_CAMERA_MODE_FREECAM_ID, "Freeca
                                               "Fly the camera: WASD to move, space and shift for up and down",
                                               FT_CAMERA_MODE_FREE};
 
+// A plan view is useful for every 3D world and needs no game-specific camera
+// logic. Right-drag pans it across the ground plane and the wheel changes its
+// orthographic scale.
+static const ft_camera_mode g_top_down_mode = {FT_CAMERA_MODE_TOP_DOWN_ID, "Top-down",
+                                               "Axis-aligned view from above: right-drag to pan, wheel to zoom",
+                                               FT_CAMERA_MODE_FREE};
+
 // How many modes the game itself declares, counting the stand-in it gets when
 // it declares none.
 static unsigned game_own_camera_mode_count(const game_host_t *host) {
@@ -1027,13 +1034,16 @@ static unsigned game_own_camera_mode_count(const game_host_t *host) {
 }
 
 unsigned game_camera_mode_count(const game_host_t *host) {
-  return game_own_camera_mode_count(host) + (game_is_3d(host) ? 1u : 0u);
+  return game_own_camera_mode_count(host) + (game_is_3d(host) ? 2u : 0u);
 }
 
 const ft_camera_mode *game_camera_mode(const game_host_t *host, unsigned index) {
   const ft_game_constraints *c = constraints_of(host);
   const unsigned own = game_own_camera_mode_count(host);
-  if (index >= own && game_is_3d(host)) return &g_freecam_mode;
+  if (game_is_3d(host)) {
+    if (index == own) return &g_freecam_mode;
+    if (index >= own + 1) return &g_top_down_mode;
+  }
   if (!c || c->camera_mode_count == 0) return &g_default_camera_mode;
   if (index >= own) return &c->camera_modes[0];
   return &c->camera_modes[index];
@@ -1041,6 +1051,10 @@ const ft_camera_mode *game_camera_mode(const game_host_t *host, unsigned index) 
 
 bool game_camera_mode_is_freecam(const game_host_t *host, unsigned index) {
   return game_camera_mode(host, index) == &g_freecam_mode;
+}
+
+bool game_camera_mode_is_top_down(const game_host_t *host, unsigned index) {
+  return game_camera_mode(host, index) == &g_top_down_mode;
 }
 
 bool gh_camera_update(game_host_t *host, const ft_camera_frame *frame, ft_camera *inout) {

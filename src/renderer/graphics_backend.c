@@ -706,10 +706,10 @@ static void on_level_loaded(gfx_handler_t *handler) {
       c->target[1] = span * 0.2f;
       c->target[2] = info.bounds.y + info.bounds.h * 0.5f;
       c->distance = span * 1.6f;
-      c->isometric_distance = glm_clamp(span * 1.25f, 10.f, 100000.f);
-      if (c->isometric_active) {
+      c->top_down_distance = glm_clamp(span * 1.25f, 10.f, 100000.f);
+      if (c->top_down_active) {
         c->perspective_distance = c->distance;
-        c->distance = c->isometric_distance;
+        c->distance = c->top_down_distance;
       }
       c->far_z = fmaxf(c->far_z, span * 20.f);
       // Crossing the level in a couple of seconds is a reasonable starting

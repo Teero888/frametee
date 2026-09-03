@@ -213,10 +213,11 @@ typedef struct ft_camera_mode {
 } ft_camera_mode;
 
 /* Reserved for the engine. A 3D game's mode list is presented with the engine's
- * own freecam appended to it, so a game declaring this id is rejected at load.
- * The appended mode is never passed to camera_update: the engine flies that one
- * itself. */
+ * own freecam and top-down modes appended to it, so a game declaring either id
+ * is rejected at load. The appended modes are never passed to camera_update:
+ * the engine controls them itself. */
 #define FT_CAMERA_MODE_FREECAM_ID "freecam"
+#define FT_CAMERA_MODE_TOP_DOWN_ID "top_down"
 
 /* A selectable ruleset within a game: DDNet's DDRace/FastCap, a console game's
  * region revisions, a speedrun category. Chosen before a level is loaded and

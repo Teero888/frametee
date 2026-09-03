@@ -609,7 +609,7 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->camera3.yaw = -1.57f;
   renderer->camera3.pitch = 0.5f;
   renderer->camera3.fov_y = 1.0f;
-  renderer->camera3.isometric_distance = 40.f;
+  renderer->camera3.top_down_distance = 40.f;
   // The reversed depth range makes a near plane this close free, and a far
   // plane this distant costs nothing either: what would be a precision problem
   // in an ordinary depth buffer is where a reversed one is most exact. The far
@@ -1603,7 +1603,7 @@ bool screen_ray3(gfx_handler_t *h, float sx, float sy, vec3 out_origin, vec3 out
   // Perspective rays meet at the eye. Orthographic rays are parallel and each
   // starts at its own point on the near plane; using the eye there would make
   // picking drift farther from the centre of the viewport.
-  if (h->user_interface.isometric_view)
+  if (h->renderer.camera3.top_down_active)
     glm_vec3_copy(world[near_index], out_origin);
   else
     glm_vec3_copy(eye, out_origin);
@@ -2407,6 +2407,12 @@ static primitive_ubo_t world_ubo(gfx_handler_t *h) {
 // The direction from the target out to an orbiting eye. The camera looks back
 // along it, which is what makes yaw and pitch mean the same thing in both modes.
 static void camera3_offset(const camera3_t *c, vec3 out) {
+  if (c->top_down_active) {
+    out[0] = 0.f;
+    out[1] = 1.f;
+    out[2] = 0.f;
+    return;
+  }
   const float cp = cosf(c->pitch);
   out[0] = cp * cosf(c->yaw);
   out[1] = sinf(c->pitch);
@@ -2464,15 +2470,24 @@ void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
   }
 
   mat4 view, proj;
-  glm_lookat(eye, target, (vec3){0.f, 1.f, 0.f}, view);
+  // Looking straight down makes world up parallel to the view ray, so use -Z
+  // as camera up. This keeps +X to the right and +Z toward the bottom of the
+  // viewport after Vulkan's clip-space Y correction below.
+  vec3 view_up = {0.f, 1.f, 0.f};
+  if (c->top_down_active) {
+    view_up[0] = 0.f;
+    view_up[1] = 0.f;
+    view_up[2] = -1.f;
+  }
+  glm_lookat(eye, target, view_up, view);
 
   const float aspect = h->viewport[1] > 0.f ? h->viewport[0] / h->viewport[1] : 1.f;
   // Reversed depth: the near plane lands on one and the far plane on zero. The
-  // isometric setting uses a true orthographic projection; tying its extent to
+  // top-down mode uses a true orthographic projection; tying its extent to
   // the orbit distance keeps scroll zoom consistent with the perspective modes.
   // Both projections swap near and far to match the greater-or-equal depth test
   // and the pass's zero clear value.
-  if (h->user_interface.isometric_view) {
+  if (c->top_down_active) {
     const float half_height = fmaxf(0.5f, c->distance * tanf(c->fov_y * 0.5f));
     const float half_width = half_height * aspect;
     glm_ortho_rh_zo(-half_width, half_width, -half_height, half_height, c->far_z, c->near_z, proj);
@@ -2578,7 +2593,7 @@ void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float t
   vec3 dir, to_eye, side;
   glm_vec3_sub(b, a, dir);
   if (glm_vec3_norm(dir) <= 1e-6f) return;
-  if (h->user_interface.isometric_view) {
+  if (h->renderer.camera3.top_down_active) {
     // Every orthographic ray has the same direction, so line width must face
     // that direction too instead of converging on the camera's eye.
     renderer_camera3_forward(h, to_eye);

@@ -82,7 +82,8 @@ static bool action_identifier_is_active(const ui_handler_t *ui, const char *iden
 }
 
 static bool reserved_game_editor_key(const char *key) {
-  return strcmp(key, "editor_camera_mode") == 0 || strcmp(key, "editor_isometric_view") == 0 ||
+  return strcmp(key, "editor_camera_mode") == 0 || strcmp(key, "editor_top_down_view") == 0 ||
+         strcmp(key, "editor_isometric_view") == 0 ||
          strcmp(key, "editor_linked_copy_input") == 0 ||
          strncmp(key, "editor_prediction_", strlen("editor_prediction_")) == 0;
 }
@@ -320,7 +321,6 @@ void config_load(ui_handler_t *ui) {
   game_host_t *active_host = &ui->gfx_handler->game_host;
   if (game_host_ready(active_host)) {
     ui->configured_camera_mode_id[0] = '\0';
-    ui->configured_isometric_view = false;
     ui->configured_linked_copy_input = false;
     prediction_settings_default(&ui->configured_prediction);
     config_apply_game_editor_state(ui);
@@ -482,8 +482,13 @@ void config_load(ui_handler_t *ui) {
     if (camera_mode.type == TOML_STRING)
       snprintf(ui->configured_camera_mode_id, sizeof(ui->configured_camera_mode_id), "%s", camera_mode.u.str.ptr);
 
-    toml_datum_t isometric_view = toml_get(per_game, "editor_isometric_view");
-    if (isometric_view.type == TOML_BOOLEAN) ui->configured_isometric_view = isometric_view.u.boolean;
+    // The old presentation toggle became a camera mode. Treat either spelling
+    // as a request for that mode so existing preferences migrate cleanly.
+    bool legacy_top_down = false;
+    if (config_bool(per_game, "editor_top_down_view", &legacy_top_down) && legacy_top_down)
+      snprintf(ui->configured_camera_mode_id, sizeof(ui->configured_camera_mode_id), "%s", FT_CAMERA_MODE_TOP_DOWN_ID);
+    else if (config_bool(per_game, "editor_isometric_view", &legacy_top_down) && legacy_top_down)
+      snprintf(ui->configured_camera_mode_id, sizeof(ui->configured_camera_mode_id), "%s", FT_CAMERA_MODE_TOP_DOWN_ID);
 
     toml_datum_t linked_copy = toml_get(per_game, "editor_linked_copy_input");
     if (linked_copy.type == TOML_BOOLEAN) ui->configured_linked_copy_input = linked_copy.u.boolean;
@@ -519,7 +524,6 @@ void config_apply_game_editor_state(ui_handler_t *ui) {
       }
     }
   }
-  ui->isometric_view = game_is_3d(host) && ui->configured_isometric_view;
   ui->timeline.linked_copy_input = game_has_cap(host, FT_CAP_LINKED_INPUTS) && ui->configured_linked_copy_input;
   ui->timeline.prediction = ui->configured_prediction;
 }
@@ -690,7 +694,6 @@ void config_save(ui_handler_t *ui) {
     fputs("editor_camera_mode = ", fp);
     write_toml_string(fp, mode && mode->id ? mode->id : "free");
     fputc('\n', fp);
-    fprintf(fp, "editor_isometric_view = %s\n", ui->isometric_view ? "true" : "false");
     fprintf(fp, "editor_linked_copy_input = %s\n", ui->timeline.linked_copy_input ? "true" : "false");
     write_prediction_config(fp, &ui->configured_prediction);
   }
