@@ -414,12 +414,6 @@ void config_load(ui_handler_t *ui) {
         }
       }
     }
-
-    // Game-defined presentation toggles live in the active game's table. The
-    // engine-owned prediction editor uses that table as well.
-    toml_datum_t render_level = toml_get(graphics_settings, "render_level");
-    if (render_level.type == TOML_BOOLEAN) ui->render_level = render_level.u.boolean;
-
   }
 
   toml_datum_t projects_settings = toml_get(res.toptab, "projects");
@@ -635,7 +629,6 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "fps_limit = %d\n", ui->fps_limit);
   fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
   fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);
-  fprintf(fp, "render_level = %s\n", ui->render_level ? "true" : "false");
 
   fprintf(fp, "\n[projects]\n");
   fprintf(fp, "recent = [\n");

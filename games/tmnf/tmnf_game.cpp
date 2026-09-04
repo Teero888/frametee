@@ -123,13 +123,16 @@ const ft_entity_class kEntityClasses[] = {
 // --- settings ----------------------------------------------------------------
 
 enum SettingIndex {
-  SETTING_BACKGROUND = 0,
+  SETTING_TRACK = 0,
+  SETTING_BACKGROUND,
   SETTING_BACKFACE_CULL,
   SETTING_COLLISION,
   SETTING_COUNT,
 };
 
 const ft_setting_desc kSettings[SETTING_COUNT] = {
+    {"draw_track", "Draw the track", "Draw the blocks the challenge is built from.", "Rendering", FT_VALUE_BOOL, 0.0,
+     0.0},
     {"draw_background", "Draw the stadium", "Draw the scenery shell behind the track.", "Rendering", FT_VALUE_BOOL, 0.0,
      0.0},
     {"backface_cull", "Cull back faces", "Skip triangles facing away from the camera. Halves the work on solid "
@@ -457,6 +460,10 @@ const ft_setting_desc *SettingDesc(ft_game *, std::uint32_t index) {
 bool SettingGet(ft_game *game, std::uint32_t index, ft_value *out) {
   if (!game || !out) return false;
   switch (index) {
+  case SETTING_TRACK:
+    out->kind = FT_VALUE_BOOL;
+    out->as.b = game->settings.draw_track;
+    return true;
   case SETTING_BACKGROUND:
     out->kind = FT_VALUE_BOOL;
     out->as.b = game->settings.draw_background;
@@ -476,6 +483,7 @@ bool SettingGet(ft_game *game, std::uint32_t index, ft_value *out) {
 bool SettingSet(ft_game *game, std::uint32_t index, const ft_value *value) {
   if (!game || !value) return false;
   switch (index) {
+  case SETTING_TRACK: game->settings.draw_track = value->as.b; return true;
   case SETTING_BACKGROUND: game->settings.draw_background = value->as.b; return true;
   case SETTING_BACKFACE_CULL: game->settings.backface_cull = value->as.b; return true;
   case SETTING_COLLISION: game->settings.draw_collision = value->as.b; return true;

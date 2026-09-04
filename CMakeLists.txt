@@ -93,7 +93,6 @@ set(SRCS
 	src/user_interface/snippet_editor.c
 	src/user_interface/timeline_events.c
 	src/user_interface/undo_redo.c
-	src/user_interface/entity_inspector.c
 	src/user_interface/user_interface.c
 	src/user_interface/timeline/timeline.c
 	src/user_interface/timeline/timeline_commands.c

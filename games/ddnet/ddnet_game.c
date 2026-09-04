@@ -1209,7 +1209,8 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
 
   // Presentation defaults. These are the game's, not the editor's, which is why
   // they no longer sit in the engine's ui_handler_t.
-  game->settings = (dd_settings_t){.render_players = true,
+  game->settings = (dd_settings_t){.render_map = true,
+                                   .render_players = true,
                                    .render_weapons = true,
                                    .render_particles = true,
                                    .render_pickups = true,
@@ -1466,7 +1467,8 @@ FT_GAME_EXPORT const ft_game_module *ft_game_module_entry(uint32_t engine_abi_ve
 // whatever this table describes and stores the values under this game's id.
 
 enum ddnet_setting {
-  SET_RENDER_PLAYERS = 0,
+  SET_RENDER_MAP = 0,
+  SET_RENDER_PLAYERS,
   SET_RENDER_WEAPONS,
   SET_RENDER_PARTICLES,
   SET_RENDER_PICKUPS,
@@ -1492,22 +1494,27 @@ enum ddnet_setting {
 };
 
 static const ft_setting_desc ddnet_settings[SET_COUNT] = {
-    [SET_RENDER_PLAYERS] = {"render_players", "Tees", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
-    [SET_RENDER_WEAPONS] = {"render_weapons", "Weapons and hooks", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
-    [SET_RENDER_PARTICLES] = {"render_particles", "Particles", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
-    [SET_RENDER_PICKUPS] = {"render_pickups", "Pickups", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
+    // Groups are what the Preferences window makes its pages from, so each one
+    // is a short list of things you would change together. The order below is
+    // only how the source reads: a group is gathered by name, not by adjacency.
+    [SET_RENDER_MAP] = {"render_map", "Map", "The map's own tile layers and the overlays drawn onto them", "World",
+                        FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_PLAYERS] = {"render_players", "Tees", NULL, "World", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_WEAPONS] = {"render_weapons", "Weapons and hooks", NULL, "World", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_PARTICLES] = {"render_particles", "Particles", NULL, "World", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_PICKUPS] = {"render_pickups", "Pickups", NULL, "World", FT_VALUE_BOOL, 0, 0},
     [SET_CURSOR_SCALE] = {"cursor_scale", "Crosshair scale", NULL, "Crosshair", FT_VALUE_FLOAT, 0.1, 2.0},
     [SET_CURSOR_FOLLOW] = {"cursor_follow", "Crosshair in follow camera", NULL, "Crosshair", FT_VALUE_BOOL, 0, 0},
-    [SET_CENTER_DOT] = {"center_dot", "Show center dot", "Marks the tee's exact position", "Rendering", FT_VALUE_BOOL, 0, 0},
+    [SET_CENTER_DOT] = {"center_dot", "Show center dot", "Marks the tee's exact position", "Crosshair", FT_VALUE_BOOL, 0, 0},
     [SET_RENDER_CHAT] = {"render_chat", "Show chat", NULL, "Chat", FT_VALUE_BOOL, 0, 0},
     [SET_CHAT_FONT_SIZE] = {"chat_font_size", "Chat font size", NULL, "Chat", FT_VALUE_INT, 10, 100},
     [SET_CHAT_WIDTH] = {"chat_width", "Chat width", NULL, "Chat", FT_VALUE_INT, 140, 400},
-    [SET_RENDER_EMOTICONS] = {"render_emoticons", "Emoticons", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
-    [SET_RENDER_FREEZE_BARS] = {"render_freeze_bars", "Freeze bars", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
-    [SET_RENDER_ENTITY_TEXT] = {"render_entity_text", "Map entity text", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
-    [SET_ENTITY_TEXT_SIZE] = {"entity_text_size", "Map entity text size", NULL, "Rendering", FT_VALUE_INT, 20, 100},
-    [SET_RENDER_SPEEDUPS] = {"render_speedups", "Speedup arrows", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
-    [SET_RENDER_DOORS] = {"render_doors", "Doors", NULL, "Rendering", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_EMOTICONS] = {"render_emoticons", "Emoticons", NULL, "World", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_FREEZE_BARS] = {"render_freeze_bars", "Freeze bars", NULL, "World", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_ENTITY_TEXT] = {"render_entity_text", "Entity text", NULL, "Map entities", FT_VALUE_BOOL, 0, 0},
+    [SET_ENTITY_TEXT_SIZE] = {"entity_text_size", "Entity text size", NULL, "Map entities", FT_VALUE_INT, 20, 100},
+    [SET_RENDER_SPEEDUPS] = {"render_speedups", "Speedup arrows", NULL, "Map entities", FT_VALUE_BOOL, 0, 0},
+    [SET_RENDER_DOORS] = {"render_doors", "Doors", NULL, "Map entities", FT_VALUE_BOOL, 0, 0},
     [SET_RENDER_NAMEPLATES] = {"render_nameplates", "Show nameplates", NULL, "Nameplates", FT_VALUE_BOOL, 0, 0},
     [SET_NAMEPLATE_SIZE] = {"nameplate_size", "Nameplate size", NULL, "Nameplates", FT_VALUE_INT, -50, 100},
     [SET_NAMEPLATE_CLAN] = {"nameplate_clan", "Show clan", NULL, "Nameplates", FT_VALUE_BOOL, 0, 0},
@@ -1529,6 +1536,9 @@ static const ft_setting_desc *ddnet_setting_desc(ft_game *game, uint32_t index) 
 static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
   const dd_settings_t *s = &game->settings;
   switch (index) {
+  case SET_RENDER_MAP:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_map};
+    return true;
   case SET_RENDER_PLAYERS:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_players};
     return true;
@@ -1609,6 +1619,9 @@ static int64_t clamp_setting(int64_t value, int64_t low, int64_t high) {
 static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *value) {
   dd_settings_t *s = &game->settings;
   switch (index) {
+  case SET_RENDER_MAP:
+    s->render_map = value->as.b;
+    return true;
   case SET_RENDER_PLAYERS:
     s->render_players = value->as.b;
     return true;

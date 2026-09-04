@@ -562,6 +562,10 @@ typedef struct {
 // Presentation settings. These belong to the game, not the editor, which is why
 // they moved out of the engine's ui_handler_t.
 typedef struct {
+  // The map's own tile layers. Every other visibility toggle below already
+  // belongs to the game; what counts as "the level" does too, since only the
+  // game knows what it is made of.
+  bool render_map;
   bool render_players;
   bool render_weapons;
   bool render_particles;

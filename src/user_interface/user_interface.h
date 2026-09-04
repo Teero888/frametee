@@ -1,7 +1,6 @@
 #ifndef USER_INTERFACE_H
 #define USER_INTERFACE_H
 
-#include "entity_inspector.h"
 #include "keybinds.h"
 #include "undo_redo.h"
 #include <engine/game_host.h>
@@ -11,6 +10,15 @@
 #include <stdint.h>
 #include <types.h>
 #include <user_interface/timeline/timeline.h>
+
+// A project switch that would discard unsaved work, held until the prompt is
+// answered. Kept here so the one dialog can serve every such request.
+typedef enum {
+  UI_PENDING_NONE = 0,
+  UI_PENDING_NEW_PROJECT,
+  UI_PENDING_OPEN_PROJECT,
+  UI_PENDING_LOAD_LEVEL,
+} ui_pending_action_t;
 
 struct ui_handler_t {
   struct gfx_handler_t *gfx_handler;
@@ -23,7 +31,6 @@ struct ui_handler_t {
   plugin_manager_t plugin_manager;
   tas_context_t plugin_context;
   tas_api_t plugin_api;
-  entity_inspector_t entity_inspector;
 
   ImVec2 viewport_window_pos;
   vec2 last_render_pos;
@@ -50,7 +57,6 @@ struct ui_handler_t {
   int effects_snippet_id;
   bool vsync;
   bool show_fps;
-  bool render_level;
   // Game module the user last worked with. Restored on startup so a project
   // opens under the same game it was authored in.
   char preferred_game_id[32];
@@ -82,7 +88,14 @@ struct ui_handler_t {
   // the splash doubles as the "new project" screen, so it can be raised over a loaded project and
   // dismissed again without touching it
   bool show_splash;
-  bool show_new_project_prompt;
+  // Opening or replacing a project throws away unsaved work and the timeline
+  // every panel is drawing from, so a request is only recorded here. It is
+  // carried out at one point in the frame, once the prompt below has nothing
+  // left to ask about it.
+  ui_pending_action_t pending_action;
+  char pending_path[1024];
+  bool pending_confirmed;
+  bool show_unsaved_prompt;
 };
 
 // `intra` is the interpolation between the previous tick and the current one,
@@ -93,12 +106,24 @@ void on_camera_update(struct gfx_handler_t *handler, bool hovered, float intra);
 // and neither can forget to store the choice or hand the viewport the keyboard.
 void ui_cycle_camera_mode(ui_handler_t *ui);
 bool ui_quick_save(ui_handler_t *ui);
+// Asks for a file and writes the project to it.
+void ui_save_project_as(ui_handler_t *ui);
 void ui_check_auto_save(ui_handler_t *ui);
 struct timeline_state;
 void ui_mark_unsaved(ui_handler_t *ui);
 void timeline_mark_unsaved(struct timeline_state *ts);
 // asks for confirmation when there is unsaved work, otherwise raises the splash screen right away
 void ui_request_new_project(ui_handler_t *ui);
+// Opens a project, asking about unsaved work first. A NULL path opens the file
+// dialog; cancelling it there asks nothing and changes nothing.
+void ui_request_open_project(ui_handler_t *ui, const char *path);
+// Loads a bare level under the active game, which starts an untitled project
+// and so asks about unsaved work the same way.
+void ui_request_load_level(ui_handler_t *ui, const char *path);
+// Performs a project switch that has nothing left to ask about. Call at the
+// top of a frame, before any rendering: it can replace the level, the timeline
+// and the active game outright.
+void ui_run_pending_project_switch(ui_handler_t *ui);
 
 void ui_init_config(ui_handler_t *ui);
 void camera_init(camera_t *camera);
@@ -108,8 +133,9 @@ bool ui_render_late(ui_handler_t *ui);
 void ui_post_level_load(ui_handler_t *ui);
 void ui_cleanup(ui_handler_t *ui);
 void ui_add_recent_project(ui_handler_t *ui, const char *path);
-// Draws the active game's own settings, described by the game and rendered here.
-void ui_render_game_settings(ui_handler_t *ui);
+// Hands the active game one of its UI slots to draw into, at the current
+// cursor. Public so the Preferences window can host FT_UI_SETTINGS.
+void ui_render_game_ui_slot(ui_handler_t *ui, ft_ui_slot slot, int track_index);
 bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size);
 
 #endif

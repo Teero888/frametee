@@ -600,6 +600,10 @@ struct ExportWorldSelection {
 };
 
 struct Settings {
+  // The track itself. Every other visibility toggle here already belongs to
+  // the game; what counts as "the level" does too, since only the game knows
+  // what it is made of.
+  bool draw_track = true;
   bool draw_background = true;
   // Safe because every authored mesh carries normals and winding is corrected
   // against them at load, so a culled triangle really is one facing away.

@@ -201,7 +201,6 @@ static void set_action_info(keybind_manager_t *kb, action_t action, const char *
 void keybinds_init(keybind_manager_t *manager) {
   memset(manager, 0, sizeof(keybind_manager_t));
   manager->action_count = ACTION_ENGINE_COUNT;
-  manager->show_settings_window = false;
 
   // Initialize Action Infos
   set_action_info(manager, ACTION_PLAY_PAUSE, "play_pause", "Play/Pause", "Playback");
@@ -221,6 +220,9 @@ void keybinds_init(keybind_manager_t *manager) {
   set_action_info(manager, ACTION_UNDO, "undo", "Undo", "General");
   set_action_info(manager, ACTION_REDO, "redo", "Redo", "General");
   set_action_info(manager, ACTION_SAVE_PROJECT, "save_project", "Quick Save Project", "General");
+  set_action_info(manager, ACTION_OPEN_PROJECT, "open_project", "Open Project", "General");
+  set_action_info(manager, ACTION_SAVE_PROJECT_AS, "save_project_as", "Save Project As", "General");
+  set_action_info(manager, ACTION_OPEN_CONTROLS, "open_controls", "Open Controls", "General");
 
   set_action_info(manager, ACTION_TRIM_SNIPPET, "trim_snippet", "Trim Recording", "Recording");
   set_action_info(manager, ACTION_CANCEL_RECORDING, "cancel_recording", "Cancel Recording", "Recording");
@@ -267,6 +269,9 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_UNDO, (key_combo_t){ImGuiKey_Z, true, false, false});
   keybinds_add(manager, ACTION_REDO, (key_combo_t){ImGuiKey_Y, true, false, false});
   keybinds_add(manager, ACTION_SAVE_PROJECT, (key_combo_t){ImGuiKey_S, true, false, false});
+  keybinds_add(manager, ACTION_OPEN_PROJECT, (key_combo_t){ImGuiKey_O, true, false, false});
+  keybinds_add(manager, ACTION_SAVE_PROJECT_AS, (key_combo_t){ImGuiKey_S, true, false, true});
+  keybinds_add(manager, ACTION_OPEN_CONTROLS, (key_combo_t){ImGuiKey_Comma, true, false, false});
 
   keybinds_add(manager, ACTION_TRIM_SNIPPET, (key_combo_t){ImGuiKey_F, false, false, false});
   keybinds_add(manager, ACTION_CANCEL_RECORDING, (key_combo_t){ImGuiKey_F4, false, false, false});
@@ -511,6 +516,9 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   if (keybinds_is_action_pressed(kb, ACTION_UNDO, false)) undo_manager_undo(&ui->undo_manager, ts);
   if (keybinds_is_action_pressed(kb, ACTION_REDO, false)) undo_manager_redo(&ui->undo_manager, ts);
   if (keybinds_is_action_pressed(kb, ACTION_SAVE_PROJECT, false)) ui_quick_save(ui);
+  if (keybinds_is_action_pressed(kb, ACTION_SAVE_PROJECT_AS, false)) ui_save_project_as(ui);
+  if (keybinds_is_action_pressed(kb, ACTION_OPEN_PROJECT, false)) ui_request_open_project(ui, NULL);
+  if (keybinds_is_action_pressed(kb, ACTION_OPEN_CONTROLS, false)) ui->keybinds.show_settings_window = true;
 
   if (cmd) {
     undo_manager_register_command(&ui->undo_manager, cmd);
@@ -592,98 +600,101 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
   keybind_manager_t *manager = &ui->keybinds;
   if (!manager->show_settings_window) return;
 
-  igSetNextWindowSize((ImVec2){600, 500}, ImGuiCond_FirstUseEver);
-  if (igBegin("Controls", &manager->show_settings_window, 0)) {
+  const float initial_scale = gfx_get_ui_scale();
+  igSetNextWindowSize((ImVec2){600.f * initial_scale, 500.f * initial_scale}, ImGuiCond_FirstUseEver);
+  if (!igBegin("Controls", &manager->show_settings_window, 0)) {
+    igEnd();
+    return;
+  }
 
-    igSetNextWindowPos((ImVec2){igGetIO_Nil()->DisplaySize.x * 0.5f, igGetIO_Nil()->DisplaySize.y * 0.5f}, ImGuiCond_Appearing, (ImVec2){0.5f, 0.5f});
-    if (manager->is_waiting_for_input) igOpenPopup_Str("RebindKeyPopup", ImGuiPopupFlags_AnyPopupLevel);
+  igSetNextWindowPos((ImVec2){igGetIO_Nil()->DisplaySize.x * 0.5f, igGetIO_Nil()->DisplaySize.y * 0.5f}, ImGuiCond_Appearing, (ImVec2){0.5f, 0.5f});
+  if (manager->is_waiting_for_input) igOpenPopup_Str("RebindKeyPopup", ImGuiPopupFlags_AnyPopupLevel);
 
-    if (igBeginPopupModal("RebindKeyPopup", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-      if (manager->rebind_index == -1) igText("Press keys to add binding for '%s'", manager->action_infos[manager->action_to_rebind].name);
-      else igText("Press keys to replace binding for '%s'", manager->action_infos[manager->action_to_rebind].name);
+  if (igBeginPopupModal("RebindKeyPopup", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (manager->rebind_index == -1) igText("Press keys to add binding for '%s'", manager->action_infos[manager->action_to_rebind].name);
+    else igText("Press keys to replace binding for '%s'", manager->action_infos[manager->action_to_rebind].name);
 
-      igSeparator();
-      igText("Press ESC to cancel.");
-
-      // Capture through GLFW as well, so what gets bound is exactly what the binds will later read.
-      if (input_key_pressed(GLFW_KEY_ESCAPE, false)) {
-        manager->is_waiting_for_input = false;
-        igCloseCurrentPopup();
-      } else {
-        ImGuiKey key = input_capture_pressed_key();
-        {
-          if (key != ImGuiKey_None) {
-            key_combo_t new_combo;
-            new_combo.key = key;
-            new_combo.ctrl = input_ctrl_down();
-            new_combo.alt = input_alt_down();
-            new_combo.shift = input_shift_down();
-            // Binding a modifier on its own records it as the key, not as the
-            // key and its own flag, which would read back as "Shift+Shift".
-            if (key_is_ctrl(key)) new_combo.ctrl = false;
-            if (key_is_shift(key)) new_combo.shift = false;
-            if (key_is_alt(key)) new_combo.alt = false;
-
-            // Check for perfect duplicate
-            if (has_perfect_duplicate(manager, manager->action_to_rebind, new_combo)) {
-              log_warn("Keybinds", "Duplicate binding added.");
-            }
-
-            if (manager->rebind_index == -1) {
-              // Add new
-              keybinds_add(manager, manager->action_to_rebind, new_combo);
-            } else {
-              // Replace
-              manager->bindings[manager->rebind_index].combo = new_combo;
-            }
-            config_save(ui);
-
-            manager->is_waiting_for_input = false;
-            igCloseCurrentPopup();
-          }
-        }
-      }
-      igEndPopup();
-    }
-
-    igText("Click '+' to add a binding. Click trash icon to remove.");
     igSeparator();
+    igText("Press ESC to cancel.");
 
-    if (engine_input_cursor_field() >= 0 && igCollapsingHeader_TreeNodeFlags("Aim Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-      if (igDragFloat("Sensitivity", &ui->mouse_sens, 0.5f, 1.0f, 1000.0f, "%.1f", 0)) config_save(ui);
-      if (igDragFloat("Max Distance", &ui->mouse_max_distance, 1.0f, 0.0f, 2000.0f, "%.1f", 0)) config_save(ui);
-    }
+    // Capture through GLFW as well, so what gets bound is exactly what the binds will later read.
+    if (input_key_pressed(GLFW_KEY_ESCAPE, false)) {
+      manager->is_waiting_for_input = false;
+      igCloseCurrentPopup();
+    } else {
+      ImGuiKey key = input_capture_pressed_key();
+      {
+        if (key != ImGuiKey_None) {
+          key_combo_t new_combo;
+          new_combo.key = key;
+          new_combo.ctrl = input_ctrl_down();
+          new_combo.alt = input_alt_down();
+          new_combo.shift = input_shift_down();
+          // Binding a modifier on its own records it as the key, not as the
+          // key and its own flag, which would read back as "Shift+Shift".
+          if (key_is_ctrl(key)) new_combo.ctrl = false;
+          if (key_is_shift(key)) new_combo.shift = false;
+          if (key_is_alt(key)) new_combo.alt = false;
 
-    for (int cat_idx = 0; cat_idx < manager->action_count; ++cat_idx) {
-      const char *current_category = manager->action_infos[cat_idx].category;
-      if (!*current_category) continue;
-      bool already_rendered = false;
-      for (int previous = 0; previous < cat_idx; ++previous) {
-        if (strcmp(manager->action_infos[previous].category, current_category) == 0) already_rendered = true;
-      }
-      if (already_rendered) continue;
-
-      ImGuiTreeNodeFlags flags = (strcmp(current_category, "Tracks") == 0) ? 0 : ImGuiTreeNodeFlags_DefaultOpen;
-
-      if (igCollapsingHeader_TreeNodeFlags(current_category, flags)) {
-        if (igBeginTable("KeybindsTable", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg, (ImVec2){0, 0}, 0)) {
-          igTableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
-          igTableSetupColumn("Bindings", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
-
-          for (int i = 0; i < manager->action_count; i++) {
-            if (strcmp(manager->action_infos[i].category, current_category) == 0) {
-              igTableNextRow(0, 0);
-              igTableSetColumnIndex(0);
-
-              igAlignTextToFramePadding();
-              igTextUnformatted(manager->action_infos[i].name, NULL);
-
-              igTableSetColumnIndex(1);
-              render_keybind_entry(ui, manager, (action_t)i);
-            }
+          // Check for perfect duplicate
+          if (has_perfect_duplicate(manager, manager->action_to_rebind, new_combo)) {
+            log_warn("Keybinds", "Duplicate binding added.");
           }
-          igEndTable();
+
+          if (manager->rebind_index == -1) {
+            // Add new
+            keybinds_add(manager, manager->action_to_rebind, new_combo);
+          } else {
+            // Replace
+            manager->bindings[manager->rebind_index].combo = new_combo;
+          }
+          config_save(ui);
+
+          manager->is_waiting_for_input = false;
+          igCloseCurrentPopup();
         }
+      }
+    }
+    igEndPopup();
+  }
+
+  igText("Click '+' to add a binding. Click trash icon to remove.");
+  igSeparator();
+
+  if (engine_input_cursor_field() >= 0 && igCollapsingHeader_TreeNodeFlags("Aim Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (igDragFloat("Sensitivity", &ui->mouse_sens, 0.5f, 1.0f, 1000.0f, "%.1f", 0)) config_save(ui);
+    if (igDragFloat("Max Distance", &ui->mouse_max_distance, 1.0f, 0.0f, 2000.0f, "%.1f", 0)) config_save(ui);
+  }
+
+  for (int cat_idx = 0; cat_idx < manager->action_count; ++cat_idx) {
+    const char *current_category = manager->action_infos[cat_idx].category;
+    if (!*current_category) continue;
+    bool already_rendered = false;
+    for (int previous = 0; previous < cat_idx; ++previous) {
+      if (strcmp(manager->action_infos[previous].category, current_category) == 0) already_rendered = true;
+    }
+    if (already_rendered) continue;
+
+    ImGuiTreeNodeFlags flags = (strcmp(current_category, "Tracks") == 0) ? 0 : ImGuiTreeNodeFlags_DefaultOpen;
+
+    if (igCollapsingHeader_TreeNodeFlags(current_category, flags)) {
+      if (igBeginTable("KeybindsTable", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg, (ImVec2){0, 0}, 0)) {
+        igTableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
+        igTableSetupColumn("Bindings", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0);
+
+        for (int i = 0; i < manager->action_count; i++) {
+          if (strcmp(manager->action_infos[i].category, current_category) == 0) {
+            igTableNextRow(0, 0);
+            igTableSetColumnIndex(0);
+
+            igAlignTextToFramePadding();
+            igTextUnformatted(manager->action_infos[i].name, NULL);
+
+            igTableSetColumnIndex(1);
+            render_keybind_entry(ui, manager, (action_t)i);
+          }
+        }
+        igEndTable();
       }
     }
   }

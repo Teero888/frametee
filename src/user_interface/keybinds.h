@@ -28,6 +28,9 @@ typedef enum {
   ACTION_UNDO,
   ACTION_REDO,
   ACTION_SAVE_PROJECT,
+  ACTION_OPEN_PROJECT,
+  ACTION_SAVE_PROJECT_AS,
+  ACTION_OPEN_CONTROLS,
 
   // track switching
   ACTION_SWITCH_TRACK_1,
@@ -100,6 +103,8 @@ struct keybind_manager_t {
   int bind_count;
   int bind_capacity;
 
+  // The Controls window. Every other setting is edited inline in the Settings
+  // menu; a rebindable action list is a table, which a menu cannot hold.
   bool show_settings_window;
 
   // state for the ui when re-binding a key

@@ -643,6 +643,7 @@ void dd_render(ft_game *game, const ft_render_frame *frame) {
 
   switch (frame->pass) {
   case FT_PASS_LEVEL_BACKGROUND:
+    if (!game->settings.render_map) break;
     dd_map_render(game, frame);
     dd_render_map_overlays(game, frame);
     break;

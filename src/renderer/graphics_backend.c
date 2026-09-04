@@ -759,7 +759,6 @@ bool gfx_activate_game(gfx_handler_t *handler, int game_index) {
   camera_init(&handler->renderer.camera);
   keybinds_bind_game(&ui->keybinds, &handler->game_host);
   config_load(ui);
-  entity_inspector_clear(&ui->entity_inspector);
   engine_api_set_world_extent(handler, 1.f, 1.f);
 
   snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", "unnamed_level");

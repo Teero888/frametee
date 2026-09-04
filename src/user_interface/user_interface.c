@@ -44,7 +44,7 @@ static void project_default_file_name(ui_handler_t *ui, char *out, size_t out_si
   snprintf(out, out_size, "%s.tasp", level_name);
 }
 
-static void render_game_ui_slot(ui_handler_t *ui, ft_ui_slot slot, int track_index) {
+void ui_render_game_ui_slot(ui_handler_t *ui, ft_ui_slot slot, int track_index) {
   if (!ui || !game_host_ready(&ui->gfx_handler->game_host)) return;
   timeline_state_t *timeline = &ui->timeline;
   int group_index = model_track_group_index(timeline, track_index);
@@ -61,44 +61,236 @@ static void render_game_ui_slot(ui_handler_t *ui, ft_ui_slot slot, int track_ind
   gh_ui(&ui->gfx_handler->game_host, &frame);
 }
 
+void ui_save_project_as(ui_handler_t *ui) {
+  nfdu8char_t *save_path = NULL;
+  nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
+  char default_file_name[256];
+  project_default_file_name(ui, default_file_name, sizeof(default_file_name));
+  if (NFD_SaveDialogU8(&save_path, filters, 1, NULL, default_file_name) != NFD_OKAY) return;
+  save_project(ui, save_path);
+  NFD_FreePathU8(save_path);
+}
+
+// The level filter the active game declares, or NULL when it takes no bare
+// levels. The File menu hides the item entirely in that case.
+static const ft_game_constraints *active_level_constraints(ui_handler_t *ui) {
+  const ft_game_module *module = ui->gfx_handler->game_host.module;
+  if (!module || !module->constraints.level_extension) return NULL;
+  return &module->constraints;
+}
+
+static void level_open_dialog(ui_handler_t *ui, const ft_game_constraints *constraints) {
+  nfdu8char_t *path = NULL;
+  nfdu8filteritem_t filters[] = {{constraints->level_filter_name, constraints->level_extension}};
+  nfdopendialogu8args_t args = {0};
+  args.filterList = filters;
+  args.filterCount = 1;
+  if (NFD_OpenDialogU8_With(&path, &args) != NFD_OKAY || !path) return;
+  ui_request_load_level(ui, path);
+  NFD_FreePathU8(path);
+}
+
+// The keybind the user has on an action, spelled the way the menu wants it, or
+// an empty string when nothing is bound. Menu shortcuts are labels only: the
+// binding itself is read in keybinds_process_inputs.
+static const char *menu_shortcut(ui_handler_t *ui, action_t action) {
+  keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, action, 0);
+  return bind ? keybind_get_combo_string(&bind->combo) : "";
+}
+
+// Reports rather than commands: the game's status bar, then the editor's own
+// indicators pinned to the right edge so neither depends on how wide the other
+// happens to be.
+static void render_menu_bar_status(ui_handler_t *ui) {
+  igSeparator();
+  ui_render_game_ui_slot(ui, FT_UI_STATUS_BAR, ui->timeline.selected_player_track_index);
+
+  const ImGuiStyle *style = igGetStyle();
+  char fps_text[64];
+  float cluster_width = 0.0f;
+
+  if (ui->has_unsaved_changes) {
+    cluster_width += igCalcTextSize("*", NULL, false, -1.0f).x + style->ItemSpacing.x;
+  }
+  if (ui->show_fps) {
+    ImGuiIO *io = igGetIO_Nil();
+    snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms)", io->Framerate, 1000.0f / io->Framerate);
+    cluster_width += igCalcTextSize(fps_text, NULL, false, -1.0f).x + style->ItemSpacing.x;
+  }
+  if (cluster_width <= 0.0f) return;
+
+  // Never pull the cursor backwards: a wide status bar keeps what it drew and
+  // the indicators simply follow it.
+  const float target_x = igGetWindowWidth() - cluster_width - style->FramePadding.x;
+  if (target_x > igGetCursorPosX()) igSetCursorPosX(target_x);
+
+  if (ui->has_unsaved_changes) {
+    igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){1.0f, 0.70f, 0.20f, 1.0f});
+    igTextUnformatted("*", NULL);
+    igPopStyleColor(1);
+    if (igIsItemHovered(0)) {
+      if (ui->current_project_path[0])
+        igSetTooltip("This file has been modified since it was last saved. %s to save.", menu_shortcut(ui, ACTION_SAVE_PROJECT));
+      else
+        igSetTooltip("This project has not been saved yet. %s to choose a file.", menu_shortcut(ui, ACTION_SAVE_PROJECT));
+    }
+  }
+  if (ui->show_fps) igTextUnformatted(fps_text, NULL);
+}
+
+// The active game's setting groups, once each, in the order it first mentions
+// them. Gathering by name rather than by adjacency is what lets a game list its
+// settings in whatever order suits its own source: a group is one submenu
+// however many times the descriptor array interrupts it.
+enum { MAX_GAME_SETTING_GROUPS = 24 };
+
+static const char *setting_group_name(const ft_setting_desc *desc) {
+  return (desc->group && *desc->group) ? desc->group : "General";
+}
+
+static int collect_setting_groups(game_host_t *host, const char *out[], int max) {
+  const unsigned count = gh_setting_count(host);
+  int found = 0;
+  for (unsigned i = 0; i < count && found < max; ++i) {
+    const ft_setting_desc *desc = gh_setting_desc(host, i);
+    if (!desc) continue;
+    const char *group = setting_group_name(desc);
+    bool seen = false;
+    for (int g = 0; g < found; ++g)
+      if (strcmp(out[g], group) == 0) seen = true;
+    if (!seen) out[found++] = group;
+  }
+  return found;
+}
+
+// Draws a control for every setting in `group`, described by the game and
+// rendered here, so a module needs no UI toolkit to be configurable.
+static void render_game_setting_group(ui_handler_t *ui, const char *group) {
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const unsigned count = gh_setting_count(host);
+
+  for (unsigned i = 0; i < count; ++i) {
+    const ft_setting_desc *desc = gh_setting_desc(host, i);
+    ft_value value;
+    if (!desc || !gh_setting_get(host, i, &value)) continue;
+    if (strcmp(setting_group_name(desc), group) != 0) continue;
+
+    const char *label = desc->display_name ? desc->display_name : desc->id;
+    bool changed = false;
+    switch (value.kind) {
+    case FT_VALUE_BOOL:
+      changed = igCheckbox(label, &value.as.b);
+      break;
+    case FT_VALUE_INT: {
+      int v = (int)value.as.i;
+      changed = igDragInt(label, &v, 1.f, (int)desc->min_value, (int)desc->max_value, "%d", 0);
+      value.as.i = v;
+      break;
+    }
+    case FT_VALUE_FLOAT: {
+      float v = (float)value.as.f;
+      changed = igDragFloat(label, &v, 0.02f, (float)desc->min_value, (float)desc->max_value, "%.2f", 0);
+      value.as.f = v;
+      break;
+    }
+    default:
+      break;
+    }
+
+    if (desc->description && igIsItemHovered(0)) igSetTooltip("%s", desc->description);
+    if (changed) {
+      gh_setting_set(host, i, &value);
+      config_save(ui);
+    }
+  }
+}
+
+// Everything about the run that belongs to the game rather than the editor,
+// under the game's own name so the two are never confused for each other. Its
+// groups become the submenus, so no one of them is a wall of checkboxes.
+static void render_game_settings_menu(ui_handler_t *ui) {
+  game_host_t *host = &ui->gfx_handler->game_host;
+  // Game-owned UI may reference game-owned GPU resources. Keep it out of the
+  // frame in which the splash can replace the active game.
+  if (!game_host_ready(host) || ui->gfx_handler->level == NULL || ui->show_splash) return;
+
+  const char *name = host->module ? host->module->info.display_name : NULL;
+  if (!name || !*name) name = "Game";
+
+  const char *groups[MAX_GAME_SETTING_GROUPS];
+  const int group_count = collect_setting_groups(host, groups, MAX_GAME_SETTING_GROUPS);
+  const bool draws_own_ui = host->module && host->module->ui;
+  if (group_count == 0 && !draws_own_ui) return;
+
+  igSeparator();
+  if (igBeginMenu(name, true)) {
+    for (int g = 0; g < group_count; ++g) {
+      if (igBeginMenu(groups[g], true)) {
+        render_game_setting_group(ui, groups[g]);
+        igEndMenu();
+      }
+    }
+    // Whatever the game draws for itself follows its own settings, and stands
+    // alone for a game that declares none.
+    ui_render_game_ui_slot(ui, FT_UI_SETTINGS, ui->timeline.selected_player_track_index);
+    igEndMenu();
+  }
+}
+
+// The top bar sorts items by what they do, not by what they happen to be:
+// File/Edit act on the project, View decides what is on screen, Plugins and
+// Settings own the two kinds of window that configure the editor. A "..."
+// opens a window; a checkmark toggles one.
 void render_menu_bar(ui_handler_t *ui) {
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("File", true)) {
-      if (igMenuItem_Bool("New Project", NULL, false, true)) {
-        ui_request_new_project(ui);
-      }
+      if (igMenuItem_Bool("New Project", NULL, false, true)) ui_request_new_project(ui);
       igSeparator();
-      if (igMenuItem_Bool("Save Project", "Ctrl+S", false, true)) {
-        ui_quick_save(ui);
-      }
-      if (igMenuItem_Bool("Save Project As...", "Ctrl+Shift+S", false, true)) {
-        nfdu8char_t *save_path;
-        nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
-        char default_file_name[256];
-        project_default_file_name(ui, default_file_name, sizeof(default_file_name));
-        nfdresult_t result = NFD_SaveDialogU8(&save_path, filters, 1, NULL, default_file_name);
-        if (result == NFD_OKAY) {
-          save_project(ui, save_path);
-          NFD_FreePathU8(save_path);
+      if (igMenuItem_Bool("Open Project...", menu_shortcut(ui, ACTION_OPEN_PROJECT), false, true)) ui_request_open_project(ui, NULL);
+
+      if (igBeginMenu("Open Recent", ui->num_recent_projects > 0)) {
+        for (int i = 0; i < ui->num_recent_projects; ++i) {
+          const char *path = ui->recent_projects[i];
+          const char *name = strrchr(path, '/');
+          if (!name) name = strrchr(path, '\\');
+          name = name ? name + 1 : path;
+          char label[1100];
+          snprintf(label, sizeof(label), "%s##recent_%d", name, i);
+          if (igMenuItem_Bool(label, NULL, false, true)) ui_request_open_project(ui, path);
+          if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("%s", path);
         }
+        igEndMenu();
       }
+
+      const ft_game_constraints *level = active_level_constraints(ui);
+      if (level) {
+        char label[96];
+        snprintf(label, sizeof(label), "Load Local %s...", level->level_extension);
+        if (igMenuItem_Bool(label, NULL, false, true)) level_open_dialog(ui, level);
+      }
+
+      igSeparator();
+      if (igMenuItem_Bool("Save Project", menu_shortcut(ui, ACTION_SAVE_PROJECT), false, true)) ui_quick_save(ui);
+      if (igMenuItem_Bool("Save Project As...", menu_shortcut(ui, ACTION_SAVE_PROJECT_AS), false, true)) ui_save_project_as(ui);
+      igSeparator();
+      if (igMenuItem_Bool("Exit", NULL, false, true)) glfwSetWindowShouldClose(ui->gfx_handler->window, GLFW_TRUE);
       igEndMenu();
     }
 
-    // Edit menu
     if (igBeginMenu("Edit", true)) {
       bool can_undo = undo_manager_can_undo(&ui->undo_manager);
-      if (igMenuItem_Bool("Undo", "Ctrl+Z", false, can_undo)) {
+      if (igMenuItem_Bool("Undo", menu_shortcut(ui, ACTION_UNDO), false, can_undo)) {
         undo_manager_undo(&ui->undo_manager, &ui->timeline);
       }
       bool can_redo = undo_manager_can_redo(&ui->undo_manager);
-      if (igMenuItem_Bool("Redo", "Ctrl+Y", false, can_redo)) {
+      if (igMenuItem_Bool("Redo", menu_shortcut(ui, ACTION_REDO), false, can_redo)) {
         undo_manager_redo(&ui->undo_manager, &ui->timeline);
       }
       igEndMenu();
     }
 
-    // view menu
+    // View is only about what is on screen. A window that edits settings is
+    // not a view of anything and lives under Settings instead.
     if (igBeginMenu("View", true)) {
       // Read before the item that flips it, so both halves of the disabled
       // scope below agree on one value.
@@ -108,20 +300,19 @@ void render_menu_bar(ui_handler_t *ui) {
       // The individual panels are still the user's to choose, but none of them
       // can appear while the interface is down, so they say so.
       if (!panels_visible) igBeginDisabled(true);
-      igMenuItem_BoolPtr("Controls", NULL, &ui->keybinds.show_settings_window, true);
-      igMenuItem_BoolPtr("Undo History", NULL, &ui->undo_manager.show_history_window, true);
       igMenuItem_BoolPtr("Timeline Events", NULL, &ui->show_timeline_events_window, true);
       igMenuItem_BoolPtr("Snippet Editor", NULL, &ui->show_snippet_editor_window, true);
       igMenuItem_BoolPtr("Effects", NULL, &ui->show_effects_window, true);
-      igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);
+      igMenuItem_BoolPtr("Undo History", NULL, &ui->undo_manager.show_history_window, true);
       if (!panels_visible) igEndDisabled();
+      igSeparator();
+      // An overlay, not a graphics setting: it changes what is drawn over the
+      // level and nothing about how the level is drawn.
+      if (igMenuItem_BoolPtr("Show FPS", NULL, &ui->show_fps, true)) config_save(ui);
       igEndMenu();
     }
 
-    // plugins menu
     if (igBeginMenu("Plugins", true)) {
-      igMenuItem_BoolPtr("Plugin Manager", NULL, &ui->show_plugin_manager, true);
-      igSeparator();
       if (ui->plugin_manager.count == 0) {
         igTextDisabled("No plugins found");
       } else {
@@ -147,62 +338,51 @@ void render_menu_bar(ui_handler_t *ui) {
       if (igMenuItem_Bool("Reload All", NULL, false, true)) {
         plugin_manager_reload_all(&ui->plugin_manager, ui->plugin_manager.directory);
       }
+      // The manager is a tool for the plugins listed above it, so it belongs
+      // here rather than among the workspace panels under View.
+      if (igMenuItem_Bool("Plugin Manager...", NULL, false, true)) ui->show_plugin_manager = true;
       igEndMenu();
     }
 
+    // Everything the editor remembers between sessions, edited where it is
+    // named. "Display" is the window and the GPU; what the world itself looks
+    // like belongs to the game, in its own menu at the bottom.
     if (igBeginMenu("Settings", true)) {
-      if (igBeginMenu("Graphics", true)) {
+      if (igBeginMenu("Display", true)) {
         if (igCheckbox("VSync", &ui->vsync)) {
           ui->gfx_handler->g_swap_chain_rebuild = true;
           config_save(ui);
         }
-
-        if (igCheckbox("Show FPS", &ui->show_fps)) config_save(ui);
-
         if (igSliderInt("FPS Limit", &ui->fps_limit, 0, 1000, "%d", 0)) config_save(ui);
         if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("0 = Unlimited");
-
         if (igDragFloat("LOD Bias", &ui->lod_bias, 0.1f, -5.0f, 5.0f, "%.1f", 0)) {
           ui->gfx_handler->renderer.lod_bias = ui->lod_bias;
           config_save(ui);
         }
-
         if (igColorEdit3("Background Color", ui->bg_color, ImGuiColorEditFlags_NoInputs)) config_save(ui);
-        igSeparator();
-        igText("Render Elements");
-        if (igCheckbox("Level", &ui->render_level)) config_save(ui);
-
-        // Everything else about how the world looks belongs to the game. It
-        // describes its options and the editor draws them, so a module needs no
-        // UI toolkit to be configurable.
-        ui_render_game_settings(ui);
         igEndMenu();
       }
+
+      // The one setting a menu cannot hold: a rebindable action list is a
+      // table, so it keeps the window it always had.
+      if (igMenuItem_Bool("Controls...", menu_shortcut(ui, ACTION_OPEN_CONTROLS), false, true))
+        ui->keybinds.show_settings_window = true;
+
       if (igBeginMenu("Auto-Save", true)) {
         if (igCheckbox("Enable Auto-Save", &ui->auto_save_enabled)) config_save(ui);
+        if (!ui->auto_save_enabled) igBeginDisabled(true);
         if (igSliderInt("Interval", &ui->auto_save_interval_sec, 15, 600, "%d s", 0)) config_save(ui);
+        if (!ui->auto_save_enabled) igEndDisabled();
         igEndMenu();
       }
-      render_game_ui_slot(ui, FT_UI_SETTINGS, ui->timeline.selected_player_track_index);
+
+      render_game_settings_menu(ui);
       igEndMenu();
     }
 
-    render_game_ui_slot(ui, FT_UI_MAIN_MENU, ui->timeline.selected_player_track_index);
+    ui_render_game_ui_slot(ui, FT_UI_MAIN_MENU, ui->timeline.selected_player_track_index);
 
-    if (ui->has_unsaved_changes) {
-      igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){1.0f, 0.70f, 0.20f, 1.0f});
-      igTextUnformatted("*", NULL);
-      igPopStyleColor(1);
-      if (igIsItemHovered(0)) {
-        if (ui->current_project_path[0])
-          igSetTooltip("This file has been modified since it was last saved. Ctrl+S to save.");
-        else
-          igSetTooltip("This project has not been saved yet. Ctrl+S to choose a file.");
-      }
-    }
-
-    igSeparator();
-    render_game_ui_slot(ui, FT_UI_STATUS_BAR, ui->timeline.selected_player_track_index);
+    render_menu_bar_status(ui);
     igEndMainMenuBar();
   }
 }
@@ -648,7 +828,7 @@ void render_player_manager(ui_handler_t *ui) {
               igSameLine(0, 10.f * dpi_scale);
               igTextDisabled("%s", annotation);
             }
-            render_game_ui_slot(ui, FT_UI_PLAYER_ROW, i);
+            ui_render_game_ui_slot(ui, FT_UI_PLAYER_ROW, i);
             igPopID();
           }
         }
@@ -1038,7 +1218,6 @@ void ui_init_config(ui_handler_t *ui) {
   ui->bg_color[0] = 0.253f;
   ui->bg_color[1] = 0.253f;
   ui->bg_color[2] = 0.253f;
-  ui->render_level = true;
   ui->auto_save_enabled = false;
   ui->auto_save_interval_sec = 60;
   ui->last_auto_save_time = 0.0;
@@ -1140,7 +1319,10 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui->focus_effects_window = false;
   ui->effects_snippet_id = -1;
   ui->show_plugin_manager = false;
-  entity_inspector_clear(&ui->entity_inspector);
+  ui->pending_action = UI_PENDING_NONE;
+  ui->pending_path[0] = '\0';
+  ui->pending_confirmed = false;
+  ui->show_unsaved_prompt = false;
   timeline_init(ui);
   camera_init(&gfx_handler->renderer.camera);
   config_apply_game_editor_state(ui);
@@ -1189,11 +1371,51 @@ void ui_add_recent_project(ui_handler_t *ui, const char *path) {
   config_save(ui);
 }
 
-static void render_new_project_prompt(ui_handler_t *ui) {
-  const char *popup_id = "Unsaved Changes##NewProject";
+// Carries out a confirmed project switch. Called at the top of a frame, before
+// anything has drawn: opening a project can swap the active game, and the old
+// game's level and resources must not go away between the passes that render
+// them and the panels that read them.
+void ui_run_pending_project_switch(ui_handler_t *ui) {
+  if (ui->pending_action == UI_PENDING_NONE || !ui->pending_confirmed) return;
 
-  if (ui->show_new_project_prompt) {
-    ui->show_new_project_prompt = false;
+  const ui_pending_action_t action = ui->pending_action;
+  char path[sizeof(ui->pending_path)];
+  snprintf(path, sizeof(path), "%s", ui->pending_path);
+  ui->pending_action = UI_PENDING_NONE;
+  ui->pending_path[0] = '\0';
+  ui->pending_confirmed = false;
+
+  switch (action) {
+  case UI_PENDING_NEW_PROJECT:
+    // Starting over is a moment nothing is open, so the game may change too.
+    ui->splash_stage = SPLASH_STAGE_GAME;
+    ui->show_splash = true;
+    break;
+  case UI_PENDING_OPEN_PROJECT:
+    if (path[0] && !load_project(ui, path)) log_error(LOG_SOURCE, "Could not load project from '%s'.", path);
+    break;
+  case UI_PENDING_LOAD_LEVEL:
+    if (path[0]) on_level_load_path(ui->gfx_handler, path);
+    break;
+  case UI_PENDING_NONE:
+    break;
+  }
+}
+
+// What the prompt says it is about to discard the work for.
+static const char *pending_action_phrase(ui_handler_t *ui) {
+  switch (ui->pending_action) {
+  case UI_PENDING_OPEN_PROJECT: return "opening another project";
+  case UI_PENDING_LOAD_LEVEL: return "loading another level";
+  default: return "starting a new project";
+  }
+}
+
+static void render_unsaved_prompt(ui_handler_t *ui) {
+  const char *popup_id = "Unsaved Changes##PendingAction";
+
+  if (ui->show_unsaved_prompt) {
+    ui->show_unsaved_prompt = false;
     igOpenPopup_Str(popup_id, ImGuiPopupFlags_None);
   }
 
@@ -1209,7 +1431,7 @@ static void render_new_project_prompt(ui_handler_t *ui) {
     } else {
       igText("The current project has unsaved changes.");
     }
-    igText("Save them before starting a new project?");
+    igText("Save them before %s?", pending_action_phrase(ui));
 
     igSpacing();
     igSeparator();
@@ -1221,17 +1443,19 @@ static void render_new_project_prompt(ui_handler_t *ui) {
     if (igButton("Save", button_size)) {
       // a cancelled or failed save leaves the dialog up instead of moving on
       if (ui_quick_save(ui)) {
-        ui->show_splash = true;
+        ui->pending_confirmed = true;
         igCloseCurrentPopup();
       }
     }
     igSameLine(0.0f, 8.0f);
     if (igButton("Don't Save", button_size)) {
-      ui->show_splash = true;
+      ui->pending_confirmed = true;
       igCloseCurrentPopup();
     }
     igSameLine(0.0f, 8.0f);
     if (igButton("Cancel", button_size)) {
+      ui->pending_action = UI_PENDING_NONE;
+      ui->pending_path[0] = '\0';
       igCloseCurrentPopup();
     }
     igEndPopup();
@@ -1454,6 +1678,8 @@ static void render_splash_screen(ui_handler_t *ui) {
         snprintf(level_label, sizeof(level_label), ICON_FA_MAP "  Load Local %s",
                  level_game->constraints.level_extension ? level_game->constraints.level_extension : "Level");
         if (igButton(level_label, (ImVec2){170, 42})) {
+          // The splash is already the "nothing is open" screen, so a load
+          // started here has no unsaved work of its own to ask about.
           nfdu8char_t *out_path;
           nfdu8filteritem_t filters[] = {{level_game->constraints.level_filter_name, level_ext}};
           nfdopendialogu8args_t args = {0};
@@ -1593,19 +1819,6 @@ void ui_render(ui_handler_t *ui) {
   ui->plugin_context.ui_visible = ui->show_ui;
   plugin_manager_update_all(&ui->plugin_manager);
 
-  if (ui->show_fps) {
-    if (igBeginMainMenuBar()) {
-      ImVec2 region_avail = igGetContentRegionAvail();
-      ImGuiIO *io = igGetIO_Nil();
-      char fps_text[64];
-      snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms)", io->Framerate, 1000.0f / io->Framerate);
-      ImVec2 fps_size = igCalcTextSize(fps_text, NULL, false, 0.0f);
-      igSetCursorPosX(igGetCursorPosX() + region_avail.x - fps_size.x);
-      igText("%s", fps_text);
-      igEndMainMenuBar();
-    }
-  }
-
   // Tab drops every panel the editor and the game own, so the level is left
   // with nothing over it but the menu bar. Input, shortcuts, the dock layout
   // and plugin work all carry on: what goes away is what is drawn. An empty
@@ -1617,25 +1830,27 @@ void ui_render(ui_handler_t *ui) {
     render_snippet_editor_panel(ui);
     input_effects_editor_render(ui);
 
-    keybinds_render_settings_window(ui);
     undo_manager_render_history_window(&ui->undo_manager);
     render_timeline_events_window(ui);
     if (ui->show_plugin_manager) {
       plugin_manager_render_ui(&ui->plugin_manager, &ui->show_plugin_manager);
     }
-    entity_inspector_render(&ui->entity_inspector);
     // Game-owned panels may reference game-owned GPU resources. Keep them out
     // of the frame in which the splash can replace the active game.
     if (ui->gfx_handler->level != NULL && !ui->show_splash) {
-      render_game_ui_slot(ui, FT_UI_PANELS, ui->timeline.selected_player_track_index);
+      ui_render_game_ui_slot(ui, FT_UI_PANELS, ui->timeline.selected_player_track_index);
       // Only for a game that does not place the editor in a panel of its own.
       starting_state_render_window(ui);
     }
   }
 
-  // Not a panel: the prompt answers "New Project" from the File menu, which is
-  // still there with the interface down.
-  render_new_project_prompt(ui);
+  // A settings dialog rather than a workspace panel, so Tab does not drop it:
+  // the menu that opens it is still there with the interface down.
+  keybinds_render_settings_window(ui);
+
+  // Not a panel: the prompt answers the File menu, which is still there with
+  // the interface down.
+  render_unsaved_prompt(ui);
 
   // with nothing loaded the splash is the only thing to show, otherwise it is up because
   // "New Project" raised it and the user can still dismiss it
@@ -1784,20 +1999,13 @@ bool ui_render_late(ui_handler_t *ui) {
     float wx, wy;
     screen_to_world(ui->gfx_handler, mx, my, &wx, &wy);
 
-    const ft_world *world = model_world_at_tick(&ui->timeline, ui->timeline.current_tick);
     game_host_t *host = &ui->gfx_handler->game_host;
 
-    float speed_scale = ui->timeline.is_reversing ? 2.0f : 1.0f;
-    float intra = fminf((igGetTime() - ui->timeline.last_update_time) / (1.f / (ui->timeline.playback_speed * speed_scale)), 1.f);
-    if (ui->timeline.is_reversing) intra = 1.f - intra;
-
     // A start being placed by hand takes the click before anything can read it
-    // as a selection.
+    // as a track selection.
     const bool placed_start = starting_state_take_world_click(ui, wx, wy);
-    const bool selected_entity =
-        !placed_start && entity_inspector_pick(&ui->entity_inspector, world, ui->gfx_handler, intra, mx, my);
 
-    if (!placed_start && !selected_entity) {
+    if (!placed_start) {
       int best_match = -1;
       float best_dist = 1.5f;
 
@@ -1855,7 +2063,6 @@ bool ui_render_late(ui_handler_t *ui) {
 void ui_post_level_load(ui_handler_t *ui) {
   // Anything derived from a level is derived by the game that loaded it; the
   // editor only resets what it owns.
-  entity_inspector_clear(&ui->entity_inspector);
   ui->timeline.current_tick = 0;
   ui->timeline.event_count = 0;
 }
@@ -1960,14 +2167,37 @@ bool ui_quick_save(ui_handler_t *ui) {
   }
 }
 
+// Every entry point that would throw away unsaved work funnels through here:
+// the request is recorded, and either the prompt answers for it or it is
+// already settled. `path` is ignored for UI_PENDING_NEW_PROJECT.
+static void ui_request_project_switch(ui_handler_t *ui, ui_pending_action_t action, const char *path) {
+  ui->pending_action = action;
+  snprintf(ui->pending_path, sizeof(ui->pending_path), "%s", path ? path : "");
+  ui->pending_confirmed = !ui->has_unsaved_changes;
+  ui->show_unsaved_prompt = ui->has_unsaved_changes;
+}
+
 void ui_request_new_project(ui_handler_t *ui) {
-  // Starting over is the other moment nothing is open, so the game may change.
-  ui->splash_stage = SPLASH_STAGE_GAME;
-  if (ui->has_unsaved_changes) {
-    ui->show_new_project_prompt = true;
-    return;
+  ui_request_project_switch(ui, UI_PENDING_NEW_PROJECT, NULL);
+}
+
+void ui_request_open_project(ui_handler_t *ui, const char *path) {
+  // Asking for the file first means a cancelled dialog asks nothing else.
+  char chosen[1024];
+  if (!path) {
+    nfdu8char_t *picked = NULL;
+    nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
+    if (NFD_OpenDialogU8(&picked, filters, 1, NULL) != NFD_OKAY || !picked) return;
+    snprintf(chosen, sizeof(chosen), "%s", picked);
+    NFD_FreePathU8(picked);
+    path = chosen;
   }
-  ui->show_splash = true;
+  ui_request_project_switch(ui, UI_PENDING_OPEN_PROJECT, path);
+}
+
+void ui_request_load_level(ui_handler_t *ui, const char *path) {
+  if (!path || !*path) return;
+  ui_request_project_switch(ui, UI_PENDING_LOAD_LEVEL, path);
 }
 
 void ui_mark_unsaved(ui_handler_t *ui) {
@@ -1997,54 +2227,5 @@ void ui_check_auto_save(ui_handler_t *ui) {
     log_info(LOG_SOURCE, "Auto-saving project to '%s'...", ui->current_project_path);
     save_project(ui, ui->current_project_path);
     ui->last_auto_save_time = now;
-  }
-}
-
-// Draws a control for every setting the active game publishes, grouped by the
-// headings it gave them, and saves on change.
-void ui_render_game_settings(ui_handler_t *ui) {
-  game_host_t *host = &ui->gfx_handler->game_host;
-  const unsigned count = gh_setting_count(host);
-  if (count == 0) return;
-
-  igSeparator();
-  const char *current_group = NULL;
-  for (unsigned i = 0; i < count; ++i) {
-    const ft_setting_desc *desc = gh_setting_desc(host, i);
-    ft_value value;
-    if (!desc || !gh_setting_get(host, i, &value)) continue;
-
-    if (desc->group && (!current_group || strcmp(current_group, desc->group) != 0)) {
-      current_group = desc->group;
-      igTextDisabled("%s", desc->group);
-    }
-
-    const char *label = desc->display_name ? desc->display_name : desc->id;
-    bool changed = false;
-    switch (value.kind) {
-    case FT_VALUE_BOOL:
-      changed = igCheckbox(label, &value.as.b);
-      break;
-    case FT_VALUE_INT: {
-      int v = (int)value.as.i;
-      changed = igDragInt(label, &v, 1.f, (int)desc->min_value, (int)desc->max_value, "%d", 0);
-      value.as.i = v;
-      break;
-    }
-    case FT_VALUE_FLOAT: {
-      float v = (float)value.as.f;
-      changed = igDragFloat(label, &v, 0.02f, (float)desc->min_value, (float)desc->max_value, "%.2f", 0);
-      value.as.f = v;
-      break;
-    }
-    default:
-      break;
-    }
-
-    if (desc->description && igIsItemHovered(0)) igSetTooltip("%s", desc->description);
-    if (changed) {
-      gh_setting_set(host, i, &value);
-      config_save(ui);
-    }
   }
 }

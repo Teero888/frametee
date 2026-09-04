@@ -4,7 +4,6 @@
 #include "user_interface/user_interface.h"
 #include <engine/engine_api.h>
 #include <engine/prediction.h>
-#include <user_interface/entity_inspector.h>
 #include <user_interface/starting_state.h>
 #include <user_interface/timeline/timeline_model.h>
 #include "scripting/script_engine.h"
@@ -57,8 +56,6 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
     const bool per_world = !level_pass;
     const int world_count = per_world ? ts->group_count : 1;
 
-    if (level_pass && !ui->render_level) continue;
-
     for (int group_index = 0; group_index < world_count; ++group_index) {
       if (per_world && !ts->groups[group_index]->visible) continue;
 
@@ -104,11 +101,8 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
     }
   }
 
-  // The editor's own marker for whatever the inspector has selected, drawn on
-  // top of everything the game produced.
-  entity_inspector_render_highlight(&ui->entity_inspector, handler);
-  // And for every start the user has taken over, so an override reads in the
-  // level and not only in the panel that set it.
+  // A marker for every start the user has taken over, so an override reads in
+  // the level and not only in the panel that set it.
   starting_state_render_markers(ui, handler);
 }
 
@@ -211,6 +205,11 @@ int main(int argc, char **argv) {
     int frame_result = gfx_begin_frame(&handler);
     if (frame_result == FRAME_EXIT) break;
     if (frame_result == FRAME_SKIP) continue;
+
+    // A project the menus asked for is opened here, before the frame draws
+    // anything: it can replace the level, the timeline and the active game,
+    // and everything below reads all three.
+    ui_run_pending_project_switch(&handler.user_interface);
 
     timeline_state_t *timeline = &handler.user_interface.timeline;
     float intra = 1.f;

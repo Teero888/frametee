@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <user_interface/entity_inspector.h>
 #include <user_interface/snippet_editor.h>
 #include <user_interface/timeline/timeline.h>
 #include <user_interface/timeline/timeline_model.h>
@@ -835,6 +834,74 @@ static bool validate_document_compatibility(const project_document_t *document, 
   return true;
 }
 
+// The game id sits in the fixed part of the header, before any blob, so the
+// game a project needs can be known without parsing (or being able to parse)
+// the rest of it. Reads the prefix only.
+static bool peek_project_game_id(const char *path, char *out_id, size_t out_size) {
+  // Everything ahead of the id is fixed width, and the id itself is a short
+  // length-prefixed string, so the whole prefix fits comfortably in this.
+  enum { HEADER_PREFIX_MAX = 512 };
+  FILE *file = fs_open(path, "rb");
+  if (!file) {
+    log_error(LOG_SOURCE, "Failed to open project for reading: '%s'", path);
+    return false;
+  }
+  uint8_t header[HEADER_PREFIX_MAX];
+  const size_t read = fread(header, 1, sizeof(header), file);
+  fclose(file);
+
+  byte_reader_t reader = {.data = header, .size = read, .ok = true};
+  char magic[4];
+  uint32_t version, flags, record_size, group_count, track_count;
+  uint64_t schema_hash, level_size, project_size, timeline_size;
+  if (!reader_bytes(&reader, magic, sizeof(magic)) || memcmp(magic, TAS_PROJECT_FILE_MAGIC, 4) != 0 ||
+      !reader_u32(&reader, &version)) {
+    log_error(LOG_SOURCE, "Not a FrameTee project: '%s'", path);
+    return false;
+  }
+  if (version != TAS_PROJECT_FILE_VERSION) {
+    log_error(LOG_SOURCE, "Project '%s' is version %u; this build requires version %u.", path, version,
+              TAS_PROJECT_FILE_VERSION);
+    return false;
+  }
+  if (!reader_u32(&reader, &flags) || !reader_u64(&reader, &schema_hash) || !reader_u32(&reader, &record_size) ||
+      !reader_u32(&reader, &group_count) || !reader_u32(&reader, &track_count) || !reader_u64(&reader, &level_size) ||
+      !reader_u64(&reader, &project_size) || !reader_u64(&reader, &timeline_size) ||
+      !reader_string(&reader, out_id, out_size)) {
+    log_error(LOG_SOURCE, "Malformed or incomplete v%u project: '%s'", TAS_PROJECT_FILE_VERSION, path);
+    return false;
+  }
+  return true;
+}
+
+// A project names the game it was authored under, and only that game can read
+// it. Opening one is allowed to switch to that game: the splash screen used to
+// be the only way in, which is the only reason this ever had to be the user's
+// job. Import does not go through here, because a foreign game's project has
+// nothing to contribute to the timeline this one is building.
+static bool activate_project_game(ui_handler_t *ui, const char *path) {
+  char game_id[FT_ID_MAX];
+  if (!peek_project_game_id(path, game_id, sizeof(game_id))) return false;
+
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const char *active = game_host_active_id(host);
+  if (active && strcmp(active, game_id) == 0) return true;
+
+  const int index = game_host_find_id(host, game_id);
+  if (index < 0) {
+    log_error(LOG_SOURCE, "Project '%s' needs game '%s', which is not installed.", path, game_id);
+    return false;
+  }
+  // Switching clears the level and timeline, so a load that fails after this
+  // leaves an empty project under the new game and the splash comes back up.
+  if (!gfx_activate_game(ui->gfx_handler, index)) {
+    log_error(LOG_SOURCE, "Could not switch to game '%s' to open '%s'.", game_id, path);
+    return false;
+  }
+  log_info(LOG_SOURCE, "Switched to game '%s' to open '%s'.", game_id, path);
+  return true;
+}
+
 static bool read_project_file(ui_handler_t *ui, const char *path, project_document_t *document, bool keep_session_data) {
   memset(document, 0, sizeof(*document));
   FILE *file = fs_open(path, "rb");
@@ -1036,6 +1103,7 @@ static void restore_camera(ui_handler_t *ui, const project_document_t *document)
 
 bool load_project(ui_handler_t *ui, const char *path) {
   if (!ui || !path || !ui->gfx_handler) return false;
+  if (!activate_project_game(ui, path)) return false;
   project_document_t document;
   if (!read_project_file(ui, path, &document, true)) return false;
 
@@ -1088,7 +1156,6 @@ bool load_project(ui_handler_t *ui, const char *path) {
 
   update_level_metadata(ui, &document);
   restore_camera(ui, &document);
-  entity_inspector_clear(&ui->entity_inspector);
   snprintf(ui->current_project_path, sizeof(ui->current_project_path), "%s", path);
   ui->has_unsaved_changes = false;
   ui_add_recent_project(ui, path);

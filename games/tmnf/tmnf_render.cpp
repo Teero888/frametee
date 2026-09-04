@@ -258,7 +258,7 @@ void Render(ft_game *game, const ft_render_frame *frame) {
   case FT_PASS_LEVEL_BACKGROUND:
     // Level passes are drawn once for the whole frame, whatever the editor has
     // in its timeline; the track does not belong to any one world.
-    RenderTrack(game, frame);
+    if (game->settings.draw_track) RenderTrack(game, frame);
     break;
   case FT_PASS_ENTITIES: RenderCar(game, frame); break;
   default: break;
