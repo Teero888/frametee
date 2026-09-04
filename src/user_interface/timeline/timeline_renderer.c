@@ -172,23 +172,21 @@ void renderer_draw_controls(timeline_state_t *ts) {
 
   igSameLine(0, 14 * dpi_scale);
 
-  // Cycles the camera modes the active game declared. The button lights up
-  // whenever the current mode is one the game drives rather than the user.
+  // Cycles the camera modes the active game declared, the same step the
+  // ACTION_CYCLE_CAMERA_MODE keybind takes. Both are read before the button, so
+  // the tooltip describes the mode that is on screen rather than the one the
+  // click just moved to.
   camera_t *camera = &ts->ui->gfx_handler->renderer.camera;
   game_host_t *camera_host = &ts->ui->gfx_handler->game_host;
   const unsigned mode_count = game_camera_mode_count(camera_host);
   const ft_camera_mode *mode = game_camera_mode(camera_host, camera->mode);
+  const ft_camera_mode *next = game_camera_mode(camera_host, mode_count ? (camera->mode + 1) % mode_count : 0);
+  keybind_entry_t *cycle_bind = keybinds_get_binding_for_action(&ts->ui->keybinds, ACTION_CYCLE_CAMERA_MODE, 0);
 
-  if (ui_icon_button(ts->ui, ICON_FA_VIDEO, (ImVec2){30 * dpi_scale, 0}) && mode_count > 0) {
-    camera->mode = (camera->mode + 1) % mode_count;
-    config_save(ts->ui);
-    if (game_camera_mode_is_freecam(camera_host, camera->mode) ||
-        game_camera_mode_is_top_down(camera_host, camera->mode))
-      igSetWindowFocus_Str("Viewport");
-  }
+  if (ui_icon_button(ts->ui, ICON_FA_VIDEO, (ImVec2){30 * dpi_scale, 0})) ui_cycle_camera_mode(ts->ui);
   if (igIsItemHovered(ImGuiHoveredFlags_None)) {
-    const ft_camera_mode *next = game_camera_mode(camera_host, mode_count ? (camera->mode + 1) % mode_count : 0);
-    igSetTooltip("Camera: %s\nClick for %s", mode ? mode->display_name : "?", next ? next->display_name : "?");
+    igSetTooltip("Camera: %s\nClick%s%s for %s", mode ? mode->display_name : "?", cycle_bind ? " or " : "",
+                 cycle_bind ? keybind_get_combo_string(&cycle_bind->combo) : "", next ? next->display_name : "?");
   }
 
   igSameLine(0, btn_gap);

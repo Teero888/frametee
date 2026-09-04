@@ -50,6 +50,9 @@ typedef enum {
   // camera
   ACTION_ZOOM_IN,
   ACTION_ZOOM_OUT,
+  // Steps through the camera modes the active game offers, the engine's freecam
+  // and top-down view included. The toolbar button does the same thing.
+  ACTION_CYCLE_CAMERA_MODE,
   // 3D only: drives the freecam while that camera mode is selected. These are
   // held rather than tapped, so they are read with keybinds_is_action_held.
   ACTION_FREECAM_FORWARD,

@@ -695,27 +695,18 @@ static void on_level_loaded(gfx_handler_t *handler) {
   ft_level_info info;
   if (gh_level_info(&handler->game_host, handler->level, &info) && info.bounds.w > 0.f && info.bounds.h > 0.f) {
     engine_api_set_world_extent(handler, info.bounds.w, info.bounds.h);
-    // A 3D game's bounds describe its ground plane, so the orbit camera frames
-    // that plane: centred on it, backed off far enough to see all of it, and
-    // looking slightly down. Without this the orbit sits at the origin and the
-    // level is off to one side.
+    // A 3D game's bounds describe its ground plane, so every 3D camera mode is
+    // sized from that plane: how far the orbit backs off, how wide the plan
+    // view is and how deep its slab reaches, how fast the freecam flies.
+    // Without this they all keep the shape they had for the previous level and
+    // the new one is somewhere off to one side.
     if (game_is_3d(&handler->game_host)) {
-      camera3_t *c = &handler->renderer.camera3;
       const float span = fmaxf(info.bounds.w, info.bounds.h);
-      c->target[0] = info.bounds.x + info.bounds.w * 0.5f;
-      c->target[1] = span * 0.2f;
-      c->target[2] = info.bounds.y + info.bounds.h * 0.5f;
-      c->distance = span * 1.6f;
-      c->top_down_distance = glm_clamp(span * 1.25f, 10.f, 100000.f);
-      if (c->top_down_active) {
-        c->perspective_distance = c->distance;
-        c->distance = c->top_down_distance;
-      }
-      c->far_z = fmaxf(c->far_z, span * 20.f);
-      // Crossing the level in a couple of seconds is a reasonable starting
-      // point; the wheel trims it from there while flying.
-      c->move_speed = span * 0.5f;
-      c->free_mode = false;
+      // The bounds are a ground plane, so the height to frame at is the one
+      // part of this the level does not supply: a fifth of the span puts the
+      // pivot above the surface without leaving the level.
+      vec3 center = {info.bounds.x + info.bounds.w * 0.5f, span * 0.2f, info.bounds.y + info.bounds.h * 0.5f};
+      renderer_camera3_frame_level(handler, center, span);
     }
     snprintf(handler->user_interface.loaded_level_name, sizeof(handler->user_interface.loaded_level_name), "%s", info.name ? info.name : "level");
   } else {

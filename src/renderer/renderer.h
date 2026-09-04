@@ -205,36 +205,85 @@ struct pipeline_cache_entry_t {
   uint32_t texture_count;
 };
 
-// The viewport camera for a game that declared FT_DIMENSIONS_3D. Orbit and
-// orbit and freecam use perspective, while the engine's top-down mode swaps in
-// an axis-aligned orthographic presentation.
+// What the 3D camera's zoom controls may reach, shared by the orbit's distance
+// and the plan view's extent so the same wheel behaves the same way in both.
+#define CAMERA3_MIN_EXTENT 1.f
+#define CAMERA3_MAX_EXTENT 100000.f
+// How far a perspective mode may pitch, stopping just short of the poles: at
+// exactly straight up or down the world-up the view is built from becomes
+// ambiguous and the image flips.
+#define CAMERA3_MAX_PITCH 1.5f
+// The far plane the perspective modes start from. A reversed depth buffer is at
+// its most exact where an ordinary one is worst, so a plane this distant costs
+// nothing, and it has to clear a sky: a sky is drawn on a dome tens of
+// kilometres across, and clipping it ends the world in the clear colour.
+#define CAMERA3_FAR_Z 200000.f
+// The shallowest slab the plan view will keep. A level small enough for the
+// span-derived depth to fall under this is small enough that a generous slab
+// costs nothing.
+#define CAMERA3_MIN_DEPTH 1000.f
+
+// How the viewport is pointed at a 3D world. Which of these is active is
+// derived from the game's camera mode list every frame, never toggled directly:
+// the mode the user picked is the single source of truth.
+typedef enum camera3_mode_t {
+  CAMERA3_ORBIT = 0, // circles a target the game supplies, or the engine's own
+  CAMERA3_FREECAM,   // flown by the user
+  CAMERA3_TOP_DOWN,  // locked orthographic plan view
+} camera3_mode_t;
+
+// The viewport camera for a game that declared FT_DIMENSIONS_3D.
 //
-// `yaw` and `pitch` describe the perspective orientation and are ignored by
-// the locked top-down mode.
+// Each mode owns a complete description of itself and reads none of the others'
+// fields while it runs, so a plan view can never end up framed or clipped by
+// where a freecam happened to be left. The modes meet in exactly one place,
+// renderer_camera3_set_mode(), and only over where the user was looking, so
+// that the image does not jump. What decides how a mode is projected (its zoom,
+// its clipping, the height it looks from) is its own or the level's, never
+// something it picked up from the mode before it.
 struct camera3_t {
-  vec3 target;   // what an orbit circles
-  vec3 eye;      // where a freecam is; derived from the orbit otherwise
-  float yaw;
-  float pitch;
-  float distance; // orbit radius
+  camera3_mode_t mode;
+
+  // Orbit: a point, and where the eye sits on the sphere around it. A
+  // game-driven mode writes all three every frame; a free one leaves them to
+  // the mouse.
+  vec3 orbit_target;
+  float orbit_yaw;
+  float orbit_pitch;
+  float orbit_distance;
+
+  // Freecam: an eye and where it looks, in the same angle convention as the
+  // orbit so the two agree at the moment of a switch.
+  vec3 free_eye;
+  float free_yaw;
+  float free_pitch;
+  // World units per second at full tilt, scaled from the level so the same
+  // controls suit an arena and a landscape.
+  float free_speed;
+
+  // Top-down: a plan view, looking straight down at an orthographic slab of
+  // world. `center` is the point under the middle of the viewport; panning
+  // moves it in X and Z only, and its height is the level's framing height, so
+  // the slab stays put no matter what the other modes are doing. `extent` is
+  // half the world height the viewport shows, which is what the wheel changes,
+  // and `depth` is how far above and below `center` the slab reaches: it is the
+  // near and far clipping of this mode, and it has to clear the level, because
+  // the engine is told how wide a level is but never how tall.
+  vec3 top_down_center;
+  float top_down_extent;
+  float top_down_depth;
+
+  // The lens the two perspective modes share. The plan view is orthographic and
+  // uses none of it: it derives its own extent and clipping from the fields
+  // above.
   float fov_y;
   float near_z;
   float far_z;
-  bool free_mode;
-  bool top_down_active;
-  // Restored when the top-down mode is switched off, so
-  // briefly inspecting the top-down view does not rewrite the regular camera.
-  float perspective_yaw;
-  float perspective_pitch;
-  float perspective_distance;
-  // The top-down view remembers its own zoom instead of inheriting the short
-  // camera distance of a chase view.
-  float top_down_distance;
-  // World units per second at full tilt, scaled from the level so the same
-  // controls suit an arena and a landscape.
-  float move_speed;
-  bool orbiting;
-  vec2 drag_start;
+
+  // A right-drag that began over the viewport: turning the perspective modes,
+  // panning the plan view. Held so a drag that wanders off the viewport keeps
+  // working until the button comes up.
+  bool dragging;
 };
 
 struct camera_t {
@@ -515,7 +564,9 @@ void renderer_submit_triangle3_textured(gfx_handler_t *h, vec3 a, vec3 b, vec3 c
 // before drawing; passing NULL goes back to untextured.
 void renderer_set_texture3(gfx_handler_t *h, texture_t *texture);
 void renderer_submit_box3(gfx_handler_t *h, vec3 center, vec3 size, vec4 color, bool wire);
-// Builds the view-projection the 3D paths render with, from the orbit camera.
+// Builds the view-projection the 3D paths render with, in whichever mode the
+// 3D camera is in: a perspective frustum for the orbit and the freecam, an
+// orthographic slab for the plan view.
 void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out);
 // The world-space ray under a viewport-local screen position, for picking in a
 // 3D level. Returns false when the projection cannot be inverted, which is what
@@ -525,9 +576,18 @@ void renderer_camera3_eye(gfx_handler_t *h, vec3 out);
 // Where the camera is looking, as a unit vector. Movement and the view both
 // derive from it, so the two can never disagree.
 void renderer_camera3_forward(gfx_handler_t *h, vec3 out);
-// Swaps between orbit and freecam, carrying the current view across so the
-// image does not jump at the moment of switching.
-void renderer_camera3_toggle_free(gfx_handler_t *h);
+// The world point the view is aimed at: the orbit's pivot, the ground under the
+// middle of the plan view, a point one unit along a freecam's heading. Only its
+// direction from the eye is defined for the freecam, which has no pivot.
+void renderer_camera3_target(gfx_handler_t *h, vec3 out);
+// Selects a 3D camera mode, seeding the one being entered from the one being
+// left so the image does not jump. Does nothing if that mode is already active,
+// so it is safe to call every frame.
+void renderer_camera3_set_mode(gfx_handler_t *h, camera3_mode_t mode);
+// Frames the 3D camera on a level that spans `span` world units around
+// `center`, giving every mode a starting shape derived from the level rather
+// than from whatever the last one was.
+void renderer_camera3_frame_level(gfx_handler_t *h, vec3 center, float span);
 
 bool renderer_mark_texture_external(gfx_handler_t *h, texture_t *tex);
 // An atlas that samples `src` live rather than copying it, for drawing an image

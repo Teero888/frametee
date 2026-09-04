@@ -888,7 +888,16 @@ typedef struct ft_camera {
   ft_vec3 eye;    /* camera position in world space */
   ft_vec3 target; /* the point it looks at */
   ft_vec3 up;
-  float fov_y; /* vertical field of view, radians */
+  /* Unit vector from the eye toward the target. Under an orthographic
+   * projection this, not the eye, is the direction every view ray travels in:
+   * a back-face test or a fade that uses the eye there is wrong by the angle
+   * between the two, which grows toward the edges of the view. */
+  ft_vec3 forward;
+  /* True when the engine is projecting orthographically, as it does for the
+   * top-down mode. Rays are parallel, `fov_y` and `near_z` are zero and `far_z`
+   * is the whole depth of the slab being kept. */
+  bool orthographic;
+  float fov_y; /* vertical field of view, radians; zero when orthographic */
   float near_z;
   float far_z;
   /* View-projection the engine renders with, column-major, ready to hand to a

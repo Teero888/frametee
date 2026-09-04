@@ -696,158 +696,82 @@ void render_player_manager(ui_handler_t *ui) {
   igEnd();
 }
 
-// The viewport camera for a game whose world is a volume: drag to orbit, scroll
-// to pull in and out. The 2D path below is left exactly as it was, because
-// panning a plane and orbiting a volume have nothing useful in common.
-static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra) {
+void ui_cycle_camera_mode(ui_handler_t *ui) {
+  if (!ui || !ui->gfx_handler) return;
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const unsigned count = game_camera_mode_count(host);
+  if (count == 0) return;
+
+  camera_t *camera = &ui->gfx_handler->renderer.camera;
+  camera->mode = (camera->mode + 1) % count;
+  config_save(ui);
+
+  // The engine's own modes are driven from the keyboard, and the keyboard goes
+  // wherever the focus is. Landing in one of them with the timeline focused
+  // would leave the camera unresponsive with nothing on screen to say why.
+  if (game_camera_mode_is_freecam(host, camera->mode) || game_camera_mode_is_top_down(host, camera->mode))
+    igSetWindowFocus_Str("Viewport");
+}
+
+// --- the 3D viewport camera --------------------------------------------------
+//
+// One function per mode, each writing only its own state. The mode itself is
+// not a thing this file decides: it is the game's camera mode list, read every
+// frame, so what the user picked in the toolbar and what the renderer projects
+// with can never drift apart. The 2D path below is left exactly as it was,
+// because panning a plane and orbiting a volume have nothing useful in common.
+
+// Which of the renderer's 3D modes the selected game camera mode asks for. The
+// engine appends the freecam and the plan view to every 3D game's list and
+// drives both itself; everything else is a target the game supplies, orbited.
+static camera3_mode_t camera3_mode_for(const game_host_t *host, unsigned mode) {
+  if (game_camera_mode_is_freecam(host, mode)) return CAMERA3_FREECAM;
+  if (game_camera_mode_is_top_down(host, mode)) return CAMERA3_TOP_DOWN;
+  return CAMERA3_ORBIT;
+}
+
+// A plan view: the wheel changes how much world fits on screen, a right-drag
+// slides that window over the ground. Neither its height nor its clipping is
+// touched here; both were sized from the level when it loaded and stay put.
+static void camera3_update_top_down(gfx_handler_t *handler, float scroll_y, bool dragging, double raw_dx,
+                                    double raw_dy) {
+  camera3_t *c = &handler->renderer.camera3;
+
+  if (scroll_y != 0.f)
+    c->top_down_extent =
+        glm_clamp(c->top_down_extent * (1.f - scroll_y * 0.1f), CAMERA3_MIN_EXTENT, CAMERA3_MAX_EXTENT);
+
+  if (!dragging || handler->viewport[1] <= 0.f) return;
+  // Orthographic X and Z have the same world-units-per-pixel scale. Subtracting
+  // the drag makes this a grab-and-pan gesture: the world follows the mouse,
+  // matching the editor's 2D camera.
+  const float units_per_pixel = 2.f * c->top_down_extent / handler->viewport[1];
+  c->top_down_center[0] -= (float)raw_dx * units_per_pixel;
+  c->top_down_center[2] -= (float)raw_dy * units_per_pixel;
+}
+
+// Flying. The wheel trims the speed rather than the distance, because a speed
+// that suits crossing a level is unusable for lining up a nearby shot.
+static void camera3_update_freecam(gfx_handler_t *handler, float scroll_y, bool dragging, double raw_dx,
+                                   double raw_dy) {
   camera3_t *c = &handler->renderer.camera3;
   keybind_manager_t *keys = &handler->user_interface.keybinds;
-  const unsigned camera_mode = handler->renderer.camera.mode;
-  const bool want_top_down = game_camera_mode_is_top_down(&handler->game_host, camera_mode);
 
-  if (want_top_down != c->top_down_active) {
-    if (want_top_down) {
-      // Restore the zoom last used by this view rather than inheriting a chase
-      // camera that may sit only a few metres behind the player. The renderer
-      // supplies the locked, axis-aligned orientation independently of these
-      // perspective angles.
-      c->perspective_yaw = c->yaw;
-      c->perspective_pitch = c->pitch;
-      c->perspective_distance = c->distance;
-      c->distance = c->top_down_distance;
-    } else {
-      c->yaw = c->perspective_yaw;
-      c->pitch = c->perspective_pitch;
-      c->distance = c->perspective_distance;
-    }
-    c->top_down_active = want_top_down;
-    c->orbiting = false;
+  if (dragging) {
+    c->free_yaw += (float)raw_dx * 0.005f;
+    c->free_pitch += (float)raw_dy * 0.005f;
+    c->free_pitch = glm_clamp(c->free_pitch, -CAMERA3_MAX_PITCH, CAMERA3_MAX_PITCH);
   }
+  if (scroll_y != 0.f) c->free_speed = glm_clamp(c->free_speed * (1.f + scroll_y * 0.15f), 0.5f, 10000.f);
 
-  // Flying is a camera mode, so selecting it is what turns it on. The renderer
-  // carries the view across the swap; noticing that the mode changed is all
-  // there is to do here.
-  const bool want_free = game_camera_mode_is_freecam(&handler->game_host, camera_mode);
-  if (want_free != c->free_mode) renderer_camera3_toggle_free(handler);
-
-  float scroll_y = !hovered ? 0.f : (float)input_scroll_y();
-  if (keybinds_is_action_pressed(keys, ACTION_ZOOM_IN, true)) scroll_y = 1.f;
-  if (keybinds_is_action_pressed(keys, ACTION_ZOOM_OUT, true)) scroll_y = -1.f;
-
-  double raw_dx = 0.0, raw_dy = 0.0;
-  input_mouse_delta(&raw_dx, &raw_dy);
-  // Right-drag orbits a perspective view and pans the top-down mode.
-  const bool drag_down = input_mouse_down(GLFW_MOUSE_BUTTON_RIGHT);
-
-  if (want_top_down) {
-    if (scroll_y != 0.f) {
-      c->distance = glm_clamp(c->distance * (1.f - scroll_y * 0.1f), 1.f, 100000.f);
-      c->top_down_distance = c->distance;
-    }
-
-    if (drag_down && (hovered || c->orbiting)) {
-      c->orbiting = true;
-      if (handler->viewport[1] > 0.f) {
-        // Orthographic X and Z have the same world-units-per-pixel scale.
-        // Subtracting the drag makes this a grab-and-pan gesture: the world
-        // follows the mouse, matching the editor's 2D camera.
-        const float half_height = fmaxf(0.5f, c->distance * tanf(c->fov_y * 0.5f));
-        const float units_per_pixel = 2.f * half_height / handler->viewport[1];
-        c->target[0] -= (float)raw_dx * units_per_pixel;
-        c->target[2] -= (float)raw_dy * units_per_pixel;
-      }
-    } else {
-      c->orbiting = false;
-    }
-    return;
-  }
-
-  if (drag_down && (hovered || c->orbiting)) {
-    c->orbiting = true;
-    c->yaw += (float)raw_dx * 0.005f;
-    c->pitch += (float)raw_dy * 0.005f;
-    // Stop just short of the poles: looking straight down makes the up vector
-    // ambiguous and the view flips.
-    c->pitch = glm_clamp(c->pitch, -1.5f, 1.5f);
-  } else {
-    c->orbiting = false;
-  }
-
-  if (!c->free_mode) {
-    // Orbiting: the wheel changes how far out the camera sits.
-    if (scroll_y != 0.f) c->distance = glm_clamp(c->distance * (1.f - scroll_y * 0.1f), 1.f, 100000.f);
-    timeline_state_t *ts = &handler->user_interface.timeline;
-    const int group_index = model_track_group_index(ts, ts->selected_player_track_index);
-    const ft_world *previous = NULL;
-    const ft_world *current = NULL;
-    if (group_index >= 0) model_group_world_pair(ts, group_index, ts->current_tick, &previous, &current);
-
-    ft_camera_frame frame = {0};
-    frame.struct_size = sizeof(frame);
-    frame.mode = handler->renderer.camera.mode;
-    frame.world = current;
-    frame.previous_world = previous;
-    frame.alpha = intra;
-    frame.player = model_group_local_track_index(ts, ts->selected_player_track_index);
-    frame.recording = ts->recording;
-
-    ft_camera view;
-    engine_api_camera_get(&view);
-    if (gh_camera_update(&handler->game_host, &frame, &view)) {
-      c->target[0] = view.target.x;
-      c->target[1] = view.target.y;
-      c->target[2] = view.target.z;
-
-      vec3 offset;
-      offset[0] = view.eye.x - view.target.x;
-      offset[1] = view.eye.y - view.target.y;
-      offset[2] = view.eye.z - view.target.z;
-      float dist = glm_vec3_norm(offset);
-      if (dist > 0.01f && !c->orbiting) {
-        c->distance = dist;
-        c->pitch = asinf(glm_clamp(offset[1] / dist, -1.5f, 1.5f));
-        c->yaw = atan2f(offset[2], offset[0]);
-      }
-    } else if (current) {
-      ft_value pos_val;
-      int player_idx = frame.player >= 0 ? frame.player : 0;
-      if (gh_entity_prop_get(&handler->game_host, current, FT_ENTITY_CLASS_PLAYER, player_idx, 0, &pos_val) &&
-          pos_val.kind == FT_VALUE_VEC3) {
-        if (previous) {
-          ft_value prev_val;
-          if (gh_entity_prop_get(&handler->game_host, previous, FT_ENTITY_CLASS_PLAYER, player_idx, 0, &prev_val) &&
-              prev_val.kind == FT_VALUE_VEC3) {
-            c->target[0] = glm_lerp(prev_val.as.v3.x, pos_val.as.v3.x, intra);
-            c->target[1] = glm_lerp(prev_val.as.v3.y, pos_val.as.v3.y, intra);
-            c->target[2] = glm_lerp(prev_val.as.v3.z, pos_val.as.v3.z, intra);
-          } else {
-            c->target[0] = pos_val.as.v3.x;
-            c->target[1] = pos_val.as.v3.y;
-            c->target[2] = pos_val.as.v3.z;
-          }
-        } else {
-          c->target[0] = pos_val.as.v3.x;
-          c->target[1] = pos_val.as.v3.y;
-          c->target[2] = pos_val.as.v3.z;
-        }
-      }
-    }
-    return;
-  }
-
-  // A perspective freecam uses the wheel to trim movement speed, because a
-  // speed that suits crossing a level is unusable for lining up a nearby shot.
-  if (scroll_y != 0.f) {
-    c->move_speed = glm_clamp(c->move_speed * (1.f + scroll_y * 0.15f), 0.5f, 10000.f);
-  }
   // Flying is driven entirely from the keyboard, and letters are what other
   // panels are being used with: a shortcut that flies the camera while someone
   // is working in the timeline or a plugin window is a bug, not a shortcut.
-  // Orbiting needs no such gate, because it is driven by the mouse and already
+  // Turning needs no such gate, because it is driven by the mouse and already
   // asks whether the cursor is over the viewport.
   if (!handler->user_interface.viewport_focused) return;
 
-  vec3 forward, right, up, move_forward;
+  vec3 forward, right, up;
   renderer_camera3_forward(handler, forward);
   glm_vec3_cross(forward, (vec3){0.f, 1.f, 0.f}, right);
   glm_vec3_normalize(right);
@@ -855,11 +779,10 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
   // than along the world axis.
   glm_vec3_cross(right, forward, up);
   glm_vec3_normalize(up);
-  glm_vec3_copy(forward, move_forward);
 
   vec3 move = {0.f, 0.f, 0.f};
-  if (keybinds_is_action_held(keys, ACTION_FREECAM_FORWARD)) glm_vec3_add(move, move_forward, move);
-  if (keybinds_is_action_held(keys, ACTION_FREECAM_BACK)) glm_vec3_sub(move, move_forward, move);
+  if (keybinds_is_action_held(keys, ACTION_FREECAM_FORWARD)) glm_vec3_add(move, forward, move);
+  if (keybinds_is_action_held(keys, ACTION_FREECAM_BACK)) glm_vec3_sub(move, forward, move);
   if (keybinds_is_action_held(keys, ACTION_FREECAM_RIGHT)) glm_vec3_add(move, right, move);
   if (keybinds_is_action_held(keys, ACTION_FREECAM_LEFT)) glm_vec3_sub(move, right, move);
   if (keybinds_is_action_held(keys, ACTION_FREECAM_UP)) glm_vec3_add(move, up, move);
@@ -867,10 +790,133 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
   if (glm_vec3_norm(move) <= 0.f) return;
 
   glm_vec3_normalize(move);
-  float speed = c->move_speed * igGetIO_Nil()->DeltaTime;
+  float speed = c->free_speed * igGetIO_Nil()->DeltaTime;
   if (keybinds_is_action_held(keys, ACTION_FREECAM_FAST)) speed *= 4.f;
   glm_vec3_scale(move, speed, move);
-  glm_vec3_add(c->eye, move, c->eye);
+  glm_vec3_add(c->free_eye, move, c->free_eye);
+}
+
+// Circling a point. Who owns that point depends on the mode the game declared:
+// it places the whole camera in a directed mode and only the pivot in a free
+// one, where the mouse owns the angles.
+static void camera3_update_orbit(gfx_handler_t *handler, float intra, float scroll_y, bool dragging, double raw_dx,
+                                 double raw_dy, bool directed) {
+  camera3_t *c = &handler->renderer.camera3;
+
+  if (!directed) {
+    if (dragging) {
+      c->orbit_yaw += (float)raw_dx * 0.005f;
+      c->orbit_pitch += (float)raw_dy * 0.005f;
+      // Stop just short of the poles: looking straight down makes the up vector
+      // ambiguous and the view flips.
+      c->orbit_pitch = glm_clamp(c->orbit_pitch, -CAMERA3_MAX_PITCH, CAMERA3_MAX_PITCH);
+    }
+    if (scroll_y != 0.f)
+      c->orbit_distance =
+          glm_clamp(c->orbit_distance * (1.f - scroll_y * 0.1f), CAMERA3_MIN_EXTENT, CAMERA3_MAX_EXTENT);
+  }
+
+  // Let the game place the camera. It is given the same pair of worlds and the
+  // same interpolation the renderer uses, so a locked camera tracks a smoothly
+  // drawn player instead of stepping once per tick.
+  timeline_state_t *ts = &handler->user_interface.timeline;
+  const int group_index = model_track_group_index(ts, ts->selected_player_track_index);
+  const ft_world *previous = NULL;
+  const ft_world *current = NULL;
+  if (group_index >= 0) model_group_world_pair(ts, group_index, ts->current_tick, &previous, &current);
+
+  ft_camera_frame frame = {0};
+  frame.struct_size = sizeof(frame);
+  frame.mode = handler->renderer.camera.mode;
+  frame.world = current;
+  frame.previous_world = previous;
+  frame.alpha = intra;
+  frame.player = model_group_local_track_index(ts, ts->selected_player_track_index);
+  frame.recording = ts->recording;
+
+  ft_camera view;
+  engine_api_camera_get(&view);
+  if (gh_camera_update(&handler->game_host, &frame, &view)) {
+    c->orbit_target[0] = view.target.x;
+    c->orbit_target[1] = view.target.y;
+    c->orbit_target[2] = view.target.z;
+    // A game hands back an eye and a point it looks at. Roll is not
+    // representable here and the renderer would drop it anyway, so what is kept
+    // is the pivot and the direction to the eye from it. In a free mode only
+    // the pivot is kept: the angles and the distance are the user's, and a game
+    // that wanted them should have declared the mode directed.
+    vec3 offset = {view.eye.x - view.target.x, view.eye.y - view.target.y, view.eye.z - view.target.z};
+    const float distance = glm_vec3_norm(offset);
+    if (directed && distance > 0.01f) {
+      c->orbit_distance = distance;
+      c->orbit_pitch = asinf(glm_clamp(offset[1] / distance, -1.f, 1.f));
+      c->orbit_yaw = atan2f(offset[2], offset[0]);
+    }
+    return;
+  }
+
+  // The game declined to place it, so the engine orbits the selected player.
+  if (!current) return;
+  const int player_index = frame.player >= 0 ? frame.player : 0;
+  ft_value pos_val;
+  if (!gh_entity_prop_get(&handler->game_host, current, FT_ENTITY_CLASS_PLAYER, player_index, 0, &pos_val) ||
+      pos_val.kind != FT_VALUE_VEC3)
+    return;
+
+  ft_value prev_val;
+  const bool interpolate = previous &&
+                           gh_entity_prop_get(&handler->game_host, previous, FT_ENTITY_CLASS_PLAYER, player_index, 0,
+                                              &prev_val) &&
+                           prev_val.kind == FT_VALUE_VEC3;
+  c->orbit_target[0] = interpolate ? glm_lerp(prev_val.as.v3.x, pos_val.as.v3.x, intra) : pos_val.as.v3.x;
+  c->orbit_target[1] = interpolate ? glm_lerp(prev_val.as.v3.y, pos_val.as.v3.y, intra) : pos_val.as.v3.y;
+  c->orbit_target[2] = interpolate ? glm_lerp(prev_val.as.v3.z, pos_val.as.v3.z, intra) : pos_val.as.v3.z;
+}
+
+static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra) {
+  camera3_t *c = &handler->renderer.camera3;
+  camera_t *camera = &handler->renderer.camera;
+  game_host_t *host = &handler->game_host;
+  keybind_manager_t *keys = &handler->user_interface.keybinds;
+
+  const ft_camera_mode *selected = game_camera_mode(host, camera->mode);
+  bool directed = selected && (selected->flags & FT_CAMERA_MODE_DIRECTED) != 0;
+
+  double raw_dx = 0.0, raw_dy = 0.0;
+  input_mouse_delta(&raw_dx, &raw_dy);
+  const bool drag_button = input_mouse_down(GLFW_MOUSE_BUTTON_RIGHT);
+
+  // A drag in a game-driven mode has nothing to turn: the game rewrites the
+  // camera every frame. Dropping to the first mode the user does own makes the
+  // drag do what it looks like it does, and makes the toolbar say so, instead
+  // of silently detaching the view from the mode it still claims to be in.
+  if (directed && hovered && drag_button) {
+    for (unsigned i = 0; i < game_camera_mode_count(host); ++i) {
+      const ft_camera_mode *candidate = game_camera_mode(host, i);
+      if (candidate && (candidate->flags & FT_CAMERA_MODE_FREE)) {
+        camera->mode = i;
+        directed = false;
+        break;
+      }
+    }
+  }
+
+  // The selected mode is the only thing that decides which camera runs, and
+  // this is where the one being entered is seeded from the one being left.
+  renderer_camera3_set_mode(handler, camera3_mode_for(host, camera->mode));
+
+  // A drag has to start over the viewport, but may wander off it once it has.
+  c->dragging = drag_button && (hovered || c->dragging);
+
+  float scroll_y = !hovered ? 0.f : (float)input_scroll_y();
+  if (keybinds_is_action_pressed(keys, ACTION_ZOOM_IN, true)) scroll_y = 1.f;
+  if (keybinds_is_action_pressed(keys, ACTION_ZOOM_OUT, true)) scroll_y = -1.f;
+
+  switch (c->mode) {
+  case CAMERA3_TOP_DOWN: camera3_update_top_down(handler, scroll_y, c->dragging, raw_dx, raw_dy); return;
+  case CAMERA3_FREECAM: camera3_update_freecam(handler, scroll_y, c->dragging, raw_dx, raw_dy); return;
+  case CAMERA3_ORBIT: camera3_update_orbit(handler, intra, scroll_y, c->dragging, raw_dx, raw_dy, directed); return;
+  }
 }
 
 void on_camera_update(gfx_handler_t *handler, bool hovered, float intra) {

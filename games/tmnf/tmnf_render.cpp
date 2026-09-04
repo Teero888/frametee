@@ -60,9 +60,23 @@ std::uint32_t AnimatedLayer(std::uint32_t layer, const TextureAnimation &animati
   return layer;
 }
 
+// Where the level is being looked at from. A perspective camera is a point, and
+// every triangle faces it from a slightly different direction; an orthographic
+// one is a direction, shared by every ray in the frame. Using the eye as a
+// point under the plan view culls walls at the edges of the view that are
+// plainly facing the viewer, because the eye sits above the middle of it.
+struct ViewPoint {
+  ft_vec3 eye;           // orders the work nearest first, either way
+  ft_vec3 toward_viewer; // orthographic only
+  bool orthographic = false;
+
+  // The direction a front face at `p` has to point in to be worth drawing.
+  ft_vec3 TowardViewerFrom(ft_vec3 p) const { return orthographic ? toward_viewer : Sub(eye, p); }
+};
+
 std::size_t DrawGrid(const ft_engine_api *api, const std::vector<Triangle> &triangles, const TriangleGrid &grid,
-                     const Frustum &frustum, bool have_frustum, ft_vec3 eye, bool backface_cull, float opacity,
-                     std::int32_t tick, std::size_t budget) {
+                     const Frustum &frustum, bool have_frustum, const ViewPoint &view, bool backface_cull,
+                     float opacity, std::int32_t tick, std::size_t budget) {
   if (triangles.empty() || grid.cells.empty() || budget == 0) return 0;
 
   static thread_local std::vector<VisibleCell> visible;
@@ -76,7 +90,7 @@ std::size_t DrawGrid(const ft_engine_api *api, const std::vector<Triangle> &tria
   for (const GridCell &cell : grid.cells) {
     if (cell.count == 0) continue;
     if (have_frustum && !frustum.Intersects(cell.bounds)) continue;
-    visible.push_back(VisibleCell{&cell, DistanceSq(cell.bounds, eye)});
+    visible.push_back(VisibleCell{&cell, DistanceSq(cell.bounds, view.eye)});
   }
 
   std::sort(visible.begin(), visible.end(),
@@ -95,7 +109,7 @@ std::size_t DrawGrid(const ft_engine_api *api, const std::vector<Triangle> &tria
         // that are sheets rather than solids say so, because a sheet looked at
         // from behind is still meant to be there.
         const ft_vec3 face = Cross(Sub(tri.b, tri.a), Sub(tri.c, tri.a));
-        if (Dot(face, Sub(eye, tri.a)) <= 0.f) continue;
+        if (Dot(face, view.TowardViewerFrom(tri.a)) <= 0.f) continue;
       }
       ft_color color = UnpackColor(tri.color);
       color.a *= opacity;
@@ -146,10 +160,14 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
   const bool have_frustum = frustum.Valid();
 
   // Without a usable camera, the very first frame after a level loads, fall
-  // back to the car, which is where the view is about to be.
-  ft_vec3 eye = camera.eye;
+  // back to the car, which is where the view is about to be. That stand-in is a
+  // point, so it is treated as a perspective one whatever the mode says.
+  ViewPoint view;
+  view.eye = camera.eye;
+  view.orthographic = have_frustum && camera.orthographic;
+  view.toward_viewer = Scale(camera.forward, -1.f);
   if (!have_frustum) {
-    eye = frame->world ? ToVec3(frame->world->view.car.position) : ToVec3(level->start.car.position);
+    view.eye = frame->world ? ToVec3(frame->world->view.car.position) : ToVec3(level->start.car.position);
   }
 
   const Settings &settings = game->settings;
@@ -167,17 +185,17 @@ void RenderTrack(ft_game *game, const ft_render_frame *frame) {
   // made it invisible from the only place it is ever seen from.
   if (settings.draw_background) {
     const std::size_t reserve = std::min(budget, kBackdropBudget);
-    budget -= std::min(budget, DrawGrid(api, level->backdrop, level->backdrop_grid, frustum, have_frustum, eye,
+    budget -= std::min(budget, DrawGrid(api, level->backdrop, level->backdrop_grid, frustum, have_frustum, view,
                                         /*backface_cull=*/false, opacity, frame->tick, reserve));
   }
 
-  budget -= std::min(budget, DrawGrid(api, level->track, level->track_grid, frustum, have_frustum, eye,
+  budget -= std::min(budget, DrawGrid(api, level->track, level->track_grid, frustum, have_frustum, view,
                                       settings.backface_cull, opacity, frame->tick, budget));
 
   // Blended surfaces last. Everything solid is resolved by now, so a cut-out or
   // a glow blends over what actually stands behind it rather than over whatever
   // happened to be drawn before it.
-  DrawGrid(api, level->translucent, level->translucent_grid, frustum, have_frustum, eye, settings.backface_cull,
+  DrawGrid(api, level->translucent, level->translucent_grid, frustum, have_frustum, view, settings.backface_cull,
            opacity, frame->tick, budget);
 }
 

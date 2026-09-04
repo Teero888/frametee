@@ -604,19 +604,21 @@ int renderer_init(gfx_handler_t *handler) {
     renderer_update_texture_layer(handler, renderer->primitive3d_fallback_texture, 0, white, 1, 1);
   }
 
-  // Sensible orbit for a game that has not moved the camera yet.
-  renderer->camera3.distance = 40.f;
-  renderer->camera3.yaw = -1.57f;
-  renderer->camera3.pitch = 0.5f;
+  // Sensible shapes for a game that has not loaded a level yet;
+  // renderer_camera3_frame_level() replaces them with ones scaled to the level.
+  renderer->camera3.mode = CAMERA3_ORBIT;
+  renderer->camera3.orbit_distance = 40.f;
+  renderer->camera3.orbit_yaw = -1.57f;
+  renderer->camera3.orbit_pitch = 0.5f;
+  renderer->camera3.free_yaw = -1.57f;
+  renderer->camera3.free_pitch = 0.5f;
+  renderer->camera3.free_speed = 20.f;
+  renderer->camera3.top_down_extent = 40.f;
+  renderer->camera3.top_down_depth = CAMERA3_MIN_DEPTH;
   renderer->camera3.fov_y = 1.0f;
-  renderer->camera3.top_down_distance = 40.f;
-  // The reversed depth range makes a near plane this close free, and a far
-  // plane this distant costs nothing either: what would be a precision problem
-  // in an ordinary depth buffer is where a reversed one is most exact. The far
-  // plane has to clear a sky, and a sky is drawn on a dome tens of kilometres
-  // across: clip it and the world ends in the clear colour.
+  // The reversed depth range makes a near plane this close free.
   renderer->camera3.near_z = 0.05f;
-  renderer->camera3.far_z = 200000.f;
+  renderer->camera3.far_z = CAMERA3_FAR_Z;
 
   create_buffer(handler, INITIAL_PRIMITIVE_INDICES * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_index_buffer);
@@ -1603,7 +1605,7 @@ bool screen_ray3(gfx_handler_t *h, float sx, float sy, vec3 out_origin, vec3 out
   // Perspective rays meet at the eye. Orthographic rays are parallel and each
   // starts at its own point on the near plane; using the eye there would make
   // picking drift farther from the centre of the viewport.
-  if (h->renderer.camera3.top_down_active)
+  if (h->renderer.camera3.mode == CAMERA3_TOP_DOWN)
     glm_vec3_copy(world[near_index], out_origin);
   else
     glm_vec3_copy(eye, out_origin);
@@ -2404,93 +2406,200 @@ static primitive_ubo_t world_ubo(gfx_handler_t *h) {
 // that is drawn once per frame.
 
 
-// The direction from the target out to an orbiting eye. The camera looks back
-// along it, which is what makes yaw and pitch mean the same thing in both modes.
-static void camera3_offset(const camera3_t *c, vec3 out) {
-  if (c->top_down_active) {
-    out[0] = 0.f;
-    out[1] = 1.f;
-    out[2] = 0.f;
-    return;
-  }
-  const float cp = cosf(c->pitch);
-  out[0] = cp * cosf(c->yaw);
-  out[1] = sinf(c->pitch);
-  out[2] = cp * sinf(c->yaw);
+// The unit vector from a target out to an eye placed at `yaw` and `pitch`. The
+// camera looks back along it, which is what makes the two angles mean the same
+// thing to the orbit and to the freecam.
+static void camera3_angles_to_offset(float yaw, float pitch, vec3 out) {
+  const float cp = cosf(pitch);
+  out[0] = cp * cosf(yaw);
+  out[1] = sinf(pitch);
+  out[2] = cp * sinf(yaw);
 }
 
 void renderer_camera3_eye(gfx_handler_t *h, vec3 out) {
   const camera3_t *c = &h->renderer.camera3;
-  if (c->free_mode) {
-    glm_vec3_copy((float *)c->eye, out);
+  switch (c->mode) {
+  case CAMERA3_FREECAM:
+    glm_vec3_copy((float *)c->free_eye, out);
+    return;
+  case CAMERA3_TOP_DOWN:
+    // Parked one slab above the middle of the view. Where exactly it sits along
+    // the view axis changes nothing about an orthographic image; it decides
+    // only which slab of world survives clipping, and this height is the one
+    // that puts the level in the middle of it.
+    out[0] = c->top_down_center[0];
+    out[1] = c->top_down_center[1] + c->top_down_depth;
+    out[2] = c->top_down_center[2];
+    return;
+  case CAMERA3_ORBIT:
+  default: {
+    vec3 offset;
+    camera3_angles_to_offset(c->orbit_yaw, c->orbit_pitch, offset);
+    glm_vec3_scale(offset, c->orbit_distance, offset);
+    glm_vec3_add((float *)c->orbit_target, offset, out);
     return;
   }
-  vec3 offset;
-  camera3_offset(c, offset);
-  glm_vec3_scale(offset, c->distance, offset);
-  glm_vec3_add((float *)c->target, offset, out);
+  }
 }
 
 void renderer_camera3_forward(gfx_handler_t *h, vec3 out) {
-  vec3 offset;
-  camera3_offset(&h->renderer.camera3, offset);
-  glm_vec3_negate_to(offset, out);
+  const camera3_t *c = &h->renderer.camera3;
+  switch (c->mode) {
+  case CAMERA3_TOP_DOWN:
+    glm_vec3_copy((vec3){0.f, -1.f, 0.f}, out);
+    return;
+  case CAMERA3_FREECAM:
+    camera3_angles_to_offset(c->free_yaw, c->free_pitch, out);
+    break;
+  case CAMERA3_ORBIT:
+  default: camera3_angles_to_offset(c->orbit_yaw, c->orbit_pitch, out); break;
+  }
+  glm_vec3_negate(out);
   glm_vec3_normalize(out);
 }
 
-void renderer_camera3_toggle_free(gfx_handler_t *h) {
-  camera3_t *c = &h->renderer.camera3;
-  if (!c->free_mode) {
-    // Entering the freecam: stand where the orbit already is.
-    renderer_camera3_eye(h, c->eye);
-    c->free_mode = true;
+// The point the current mode is built around, and the only thing one mode hands
+// to another when the user switches: what the orbit circles, where the freecam
+// stands, what the plan view is panned over.
+static void camera3_focus(const camera3_t *c, vec3 out) {
+  switch (c->mode) {
+  case CAMERA3_FREECAM: glm_vec3_copy((float *)c->free_eye, out); return;
+  case CAMERA3_TOP_DOWN: glm_vec3_copy((float *)c->top_down_center, out); return;
+  case CAMERA3_ORBIT:
+  default: glm_vec3_copy((float *)c->orbit_target, out); return;
+  }
+}
+
+void renderer_camera3_target(gfx_handler_t *h, vec3 out) {
+  const camera3_t *c = &h->renderer.camera3;
+  // The orbit and the plan view both aim at a real point; a freecam has only a
+  // heading, so a point one unit along it stands in. Nothing reads more than
+  // the direction out of this.
+  if (c->mode != CAMERA3_FREECAM) {
+    camera3_focus(c, out);
     return;
   }
-  // Leaving it: orbit whatever is currently in front, at the current distance,
-  // so the view is unchanged at the instant of the swap.
   vec3 forward;
   renderer_camera3_forward(h, forward);
-  glm_vec3_scale(forward, c->distance, forward);
-  glm_vec3_add(c->eye, forward, c->target);
-  c->free_mode = false;
+  glm_vec3_add((float *)c->free_eye, forward, out);
+}
+
+void renderer_camera3_set_mode(gfx_handler_t *h, camera3_mode_t mode) {
+  camera3_t *c = &h->renderer.camera3;
+  if (c->mode == mode) return;
+
+  // The one point that crosses between modes, taken before the switch: what the
+  // view being left was built around. Everything else the incoming mode needs
+  // it already has, which is why a plan view cannot inherit a freecam's height
+  // and a freecam cannot inherit a plan view's zoom.
+  vec3 focus;
+  camera3_focus(c, focus);
+
+  switch (mode) {
+  case CAMERA3_ORBIT:
+    if (c->mode == CAMERA3_FREECAM) {
+      // Pivot on what the freecam was looking at, keeping its eye and its
+      // heading, so the image is unchanged at the instant of the swap.
+      vec3 forward;
+      renderer_camera3_forward(h, forward);
+      glm_vec3_scale(forward, c->orbit_distance, forward);
+      glm_vec3_add(c->free_eye, forward, c->orbit_target);
+      c->orbit_yaw = c->free_yaw;
+      c->orbit_pitch = c->free_pitch;
+    } else {
+      // From the plan view only the ground position carries over. Straight down
+      // is the orbit's gimbal pole, so its own angles are the ones to keep, and
+      // the height it was circling at is worth more than the plan view's.
+      c->orbit_target[0] = focus[0];
+      c->orbit_target[2] = focus[2];
+    }
+    break;
+
+  case CAMERA3_FREECAM:
+    if (c->mode == CAMERA3_ORBIT) {
+      // Stand where the orbit already is, looking the same way.
+      renderer_camera3_eye(h, c->free_eye);
+      c->free_yaw = c->orbit_yaw;
+      c->free_pitch = c->orbit_pitch;
+    } else {
+      // Start over the middle of the plan view, as high as that view is wide,
+      // which is roughly the altitude it was showing. Its own heading is kept:
+      // the plan view has none worth inheriting.
+      c->free_eye[0] = focus[0];
+      c->free_eye[1] = focus[1] + c->top_down_extent;
+      c->free_eye[2] = focus[2];
+    }
+    break;
+
+  case CAMERA3_TOP_DOWN:
+    // Pan to what was being looked at, and nothing else: the height of the slab
+    // and its depth belong to the level, and the zoom belongs to this mode,
+    // which remembers the one it was last used at.
+    c->top_down_center[0] = focus[0];
+    c->top_down_center[2] = focus[2];
+    break;
+  }
+
+  c->mode = mode;
+  c->dragging = false;
+}
+
+void renderer_camera3_frame_level(gfx_handler_t *h, vec3 center, float span) {
+  camera3_t *c = &h->renderer.camera3;
+  span = fmaxf(span, 1.f);
+
+  glm_vec3_copy(center, c->orbit_target);
+  c->orbit_distance = span * 1.6f;
+
+  glm_vec3_copy(center, c->top_down_center);
+  // Half of a viewport that shows the level with a margin around it.
+  c->top_down_extent = glm_clamp(span * 0.6f, CAMERA3_MIN_EXTENT, CAMERA3_MAX_EXTENT);
+  // The engine is told how wide a level is and never how tall, so the plan view
+  // keeps a slab as deep as the level is wide, centred on the height the level
+  // is framed at. Nothing a perspective mode can see falls outside it, and a
+  // reversed depth buffer still separates millimetres over a range that size.
+  c->top_down_depth = fmaxf(span, CAMERA3_MIN_DEPTH);
+
+  // Crossing the level in a couple of seconds is a reasonable starting point;
+  // the wheel trims it from there while flying.
+  c->free_speed = span * 0.5f;
+  // Far enough out that a level this size never reaches the plane, whatever the
+  // previous level asked for.
+  c->far_z = fmaxf(span * 20.f, CAMERA3_FAR_Z);
+
+  // The level is framed by the orbit, and the freecam is parked on that framing
+  // rather than left wherever the previous level was flown to. Selecting the
+  // freecam re-seeds it from here.
+  c->mode = CAMERA3_ORBIT;
+  c->dragging = false;
 }
 
 void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
   const camera3_t *c = &h->renderer.camera3;
-  vec3 eye;
+  vec3 eye, target;
   renderer_camera3_eye(h, eye);
+  renderer_camera3_target(h, target);
 
-  vec3 target;
-  if (c->free_mode) {
-    vec3 forward;
-    renderer_camera3_forward(h, forward);
-    glm_vec3_add(eye, forward, target);
-  } else {
-    glm_vec3_copy((float *)c->target, target);
-  }
+  // Looking straight down makes world up parallel to the view ray, so the plan
+  // view uses -Z as camera up. That keeps +X to the right and +Z toward the
+  // bottom of the viewport after Vulkan's clip-space Y correction below.
+  vec3 view_up = {0.f, 1.f, 0.f};
+  if (c->mode == CAMERA3_TOP_DOWN) glm_vec3_copy((vec3){0.f, 0.f, -1.f}, view_up);
 
   mat4 view, proj;
-  // Looking straight down makes world up parallel to the view ray, so use -Z
-  // as camera up. This keeps +X to the right and +Z toward the bottom of the
-  // viewport after Vulkan's clip-space Y correction below.
-  vec3 view_up = {0.f, 1.f, 0.f};
-  if (c->top_down_active) {
-    view_up[0] = 0.f;
-    view_up[1] = 0.f;
-    view_up[2] = -1.f;
-  }
   glm_lookat(eye, target, view_up, view);
 
   const float aspect = h->viewport[1] > 0.f ? h->viewport[0] / h->viewport[1] : 1.f;
-  // Reversed depth: the near plane lands on one and the far plane on zero. The
-  // top-down mode uses a true orthographic projection; tying its extent to
-  // the orbit distance keeps scroll zoom consistent with the perspective modes.
-  // Both projections swap near and far to match the greater-or-equal depth test
-  // and the pass's zero clear value.
-  if (c->top_down_active) {
-    const float half_height = fmaxf(0.5f, c->distance * tanf(c->fov_y * 0.5f));
+  // Reversed depth: both projections swap near and far to match the
+  // greater-or-equal depth test and the pass's zero clear value.
+  if (c->mode == CAMERA3_TOP_DOWN) {
+    // A true orthographic projection, sized by the mode's own extent. Its
+    // clipping is the slab the eye was parked above: the far plane is one depth
+    // below the level's framing height and the near plane one above it, so what
+    // the plan view shows depends on the level and on nothing else.
+    const float half_height = fmaxf(c->top_down_extent, CAMERA3_MIN_EXTENT);
     const float half_width = half_height * aspect;
-    glm_ortho_rh_zo(-half_width, half_width, -half_height, half_height, c->far_z, c->near_z, proj);
+    glm_ortho_rh_zo(-half_width, half_width, -half_height, half_height, c->top_down_depth * 2.f, 0.f, proj);
   } else {
     glm_perspective_rh_zo(c->fov_y, aspect, c->far_z, c->near_z, proj);
   }
@@ -2593,7 +2702,7 @@ void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float t
   vec3 dir, to_eye, side;
   glm_vec3_sub(b, a, dir);
   if (glm_vec3_norm(dir) <= 1e-6f) return;
-  if (h->renderer.camera3.top_down_active) {
+  if (h->renderer.camera3.mode == CAMERA3_TOP_DOWN) {
     // Every orthographic ray has the same direction, so line width must face
     // that direction too instead of converging on the camera's eye.
     renderer_camera3_forward(h, to_eye);

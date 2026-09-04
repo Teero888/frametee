@@ -464,25 +464,28 @@ static void api_camera_get(ft_camera *out) {
   const float max_y = fmaxf(top, bottom);
   out->visible = (ft_rect){min_x, min_y, max_x - min_x, max_y - min_y};
 
-  // A 3D game gets the orbit camera it is actually being rendered with, down to
-  // the exact view-projection, so a module drawing with its own device lines up
+  // A 3D game gets the camera it is actually being rendered with, down to the
+  // exact view-projection, so a module drawing with its own device lines up
   // with the engine's own primitives instead of guessing at a matrix.
   if (game_is_3d(&g_engine->game_host)) {
     const camera3_t *c = &g_engine->renderer.camera3;
-    vec3 eye;
+    const bool orthographic = c->mode == CAMERA3_TOP_DOWN;
+    vec3 eye, forward, target;
     renderer_camera3_eye(g_engine, eye);
+    renderer_camera3_forward(g_engine, forward);
+    renderer_camera3_target(g_engine, target);
     out->eye = (ft_vec3){eye[0], eye[1], eye[2]};
-    if (c->free_mode) {
-      vec3 forward;
-      renderer_camera3_forward(g_engine, forward);
-      out->target = (ft_vec3){eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]};
-    } else {
-      out->target = (ft_vec3){c->target[0], c->target[1], c->target[2]};
-    }
-    out->up = c->top_down_active ? (ft_vec3){0.f, 0.f, -1.f} : (ft_vec3){0.f, 1.f, 0.f};
-    out->fov_y = c->fov_y;
-    out->near_z = c->near_z;
-    out->far_z = c->far_z;
+    out->forward = (ft_vec3){forward[0], forward[1], forward[2]};
+    out->target = (ft_vec3){target[0], target[1], target[2]};
+    // Looking straight down leaves world up parallel to the view, so the plan
+    // view rolls its own up onto -Z. See renderer_camera3_view_proj.
+    out->up = orthographic ? (ft_vec3){0.f, 0.f, -1.f} : (ft_vec3){0.f, 1.f, 0.f};
+    out->orthographic = orthographic;
+    // The plan view has no lens: its extent and its clipping come from the
+    // level, and a game that needs either reads them off the view-projection.
+    out->fov_y = orthographic ? 0.f : c->fov_y;
+    out->near_z = orthographic ? 0.f : c->near_z;
+    out->far_z = orthographic ? c->top_down_depth * 2.f : c->far_z;
 
     mat4 vp;
     renderer_camera3_view_proj(g_engine, vp);

@@ -88,6 +88,10 @@ struct ui_handler_t {
 // `intra` is the interpolation between the previous tick and the current one,
 // so a game-directed camera can track what is actually drawn.
 void on_camera_update(struct gfx_handler_t *handler, bool hovered, float intra);
+// Selects the next camera mode the active game offers, wrapping at the end.
+// The toolbar button and the keybind are one action, so both come through here
+// and neither can forget to store the choice or hand the viewport the keyboard.
+void ui_cycle_camera_mode(ui_handler_t *ui);
 bool ui_quick_save(ui_handler_t *ui);
 void ui_check_auto_save(ui_handler_t *ui);
 struct timeline_state;
