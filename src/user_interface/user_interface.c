@@ -98,32 +98,7 @@ static const char *menu_shortcut(ui_handler_t *ui, action_t action) {
   return bind ? keybind_get_combo_string(&bind->combo) : "";
 }
 
-// Reports rather than commands: the game's status bar, then the editor's own
-// indicators pinned to the right edge so neither depends on how wide the other
-// happens to be.
 static void render_menu_bar_status(ui_handler_t *ui) {
-  igSeparator();
-  ui_render_game_ui_slot(ui, FT_UI_STATUS_BAR, ui->timeline.selected_player_track_index);
-
-  const ImGuiStyle *style = igGetStyle();
-  char fps_text[64];
-  float cluster_width = 0.0f;
-
-  if (ui->has_unsaved_changes) {
-    cluster_width += igCalcTextSize("*", NULL, false, -1.0f).x + style->ItemSpacing.x;
-  }
-  if (ui->show_fps) {
-    ImGuiIO *io = igGetIO_Nil();
-    snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms)", io->Framerate, 1000.0f / io->Framerate);
-    cluster_width += igCalcTextSize(fps_text, NULL, false, -1.0f).x + style->ItemSpacing.x;
-  }
-  if (cluster_width <= 0.0f) return;
-
-  // Never pull the cursor backwards: a wide status bar keeps what it drew and
-  // the indicators simply follow it.
-  const float target_x = igGetWindowWidth() - cluster_width - style->FramePadding.x;
-  if (target_x > igGetCursorPosX()) igSetCursorPosX(target_x);
-
   if (ui->has_unsaved_changes) {
     igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){1.0f, 0.70f, 0.20f, 1.0f});
     igTextUnformatted("*", NULL);
@@ -135,7 +110,9 @@ static void render_menu_bar_status(ui_handler_t *ui) {
         igSetTooltip("This project has not been saved yet. %s to choose a file.", menu_shortcut(ui, ACTION_SAVE_PROJECT));
     }
   }
-  if (ui->show_fps) igTextUnformatted(fps_text, NULL);
+
+  igSeparator();
+  ui_render_game_ui_slot(ui, FT_UI_STATUS_BAR, ui->timeline.selected_player_track_index);
 }
 
 // The active game's setting groups, once each, in the order it first mentions
@@ -1818,6 +1795,22 @@ void ui_render(ui_handler_t *ui) {
   // tas_context_t::ui_visible. Set before the update that reads it.
   ui->plugin_context.ui_visible = ui->show_ui;
   plugin_manager_update_all(&ui->plugin_manager);
+
+  // Pinned to the right edge, so it runs after everything that appends to the
+  // menu bar: the editor's menus, the game's, and every plugin's. Anything
+  // drawn after this would be pushed off past it.
+  if (ui->show_fps) {
+    if (igBeginMainMenuBar()) {
+      ImVec2 region_avail = igGetContentRegionAvail();
+      ImGuiIO *io = igGetIO_Nil();
+      char fps_text[64];
+      snprintf(fps_text, sizeof(fps_text), "FPS: %.1f (%.2f ms)", io->Framerate, 1000.0f / io->Framerate);
+      ImVec2 fps_size = igCalcTextSize(fps_text, NULL, false, 0.0f);
+      igSetCursorPosX(igGetCursorPosX() + region_avail.x - fps_size.x);
+      igText("%s", fps_text);
+      igEndMainMenuBar();
+    }
+  }
 
   // Tab drops every panel the editor and the game own, so the level is left
   // with nothing over it but the menu bar. Input, shortcuts, the dock layout
