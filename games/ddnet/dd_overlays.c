@@ -586,7 +586,9 @@ void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame) {
         }
       }
       if (!game->settings.render_entity_text) continue;
-      if (map->tele_layer.type && map->tele_layer.type[index])
+      // CFRM tiles use the last activated checkpoint, not their own number.
+      if (map->tele_layer.type && map->tele_layer.type[index] &&
+          map->tele_layer.type[index] != TILE_TELECHECKIN && map->tele_layer.type[index] != TILE_TELECHECKINEVIL)
         map_text(game, DD_Z_MAP_TELE_TEXT, x, y, DD_ENTITY_TEXT_CENTER, map->tele_layer.number[index]);
       if (map->switch_layer.type && map->switch_layer.type[index]) {
         map_text(game, DD_Z_MAP_SWITCH_TEXT, x, y, DD_ENTITY_TEXT_TOP, map->switch_layer.number[index]);

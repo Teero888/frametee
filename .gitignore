@@ -14,6 +14,8 @@ todo.txt
 .claude
 build-pgo
 perfwork
+discord*
+
 # Rust example game module build output
 games/*/target/
 data/games/tmnf/Packs
