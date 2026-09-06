@@ -107,7 +107,6 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
 }
 
 int main(int argc, char **argv) {
-  const char *auto_script = NULL;
   // Renders the level for a few frames, writes the viewport to a file and
   // exits. This is how a render gets checked without a person looking at it.
   const char *screenshot_path = NULL;
@@ -120,14 +119,26 @@ int main(int argc, char **argv) {
   // decides what the string means, exactly as it does for the level a start
   // screen requests.
   const char *level_path = NULL;
+  const char *variant_id = NULL;
+
+  const char **plugin_argv = (const char **)malloc(sizeof(const char *) * argc);
+  int plugin_argc = 0;
+
   for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--auto") == 0 && i + 1 < argc) {
+    if (strcmp(argv[i], "--headless") == 0) {
       g_is_headless = true;
-      auto_script = argv[++i];
     } else if (strcmp(argv[i], "--game") == 0 && i + 1 < argc) {
       g_forced_game_id = argv[++i];
+    } else if (strncmp(argv[i], "--game=", 7) == 0) {
+      g_forced_game_id = argv[i] + 7;
     } else if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
       level_path = argv[++i];
+    } else if (strncmp(argv[i], "--level=", 8) == 0) {
+      level_path = argv[i] + 8;
+    } else if (strcmp(argv[i], "--variant") == 0 && i + 1 < argc) {
+      variant_id = argv[++i];
+    } else if (strncmp(argv[i], "--variant=", 10) == 0) {
+      variant_id = argv[i] + 10;
     } else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
       screenshot_path = argv[++i];
     } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
@@ -135,20 +146,34 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--pick") == 0 && i + 1 < argc) {
       pick_pixel = argv[++i];
     } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
-      // Read back out of the environment by the window creation in
-      // graphics_backend.c, which runs before this loop's result is available
-      // to it any other way.
       set_environment_variable("FRAMETEE_WINDOW_SIZE", argv[i + 1]);
       set_environment_variable("FRAMETEE_VIEWPORT_SIZE", argv[++i]);
     } else if (strcmp(argv[i], "--list-games") == 0) {
       g_list_games = true;
       g_is_headless = true;
+    } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+      printf("Usage: frametee [options] [plugin-options]\n\n"
+             "Interactive options:\n"
+             "  --game <id>             Select game on startup (e.g. tmnf, ddnet)\n"
+             "  --level <path>          Open level immediately\n"
+             "  --list-games            List discovered game modules and exit\n\n"
+             "Headless options:\n"
+             "  --headless              Run without window or graphics\n"
+             "  --game <id>             Game module to use (e.g. tmnf, ddnet)\n"
+             "  --level <path>          Level file to load\n"
+             "  --variant <id>          Ruleset variant (DDNet: ddrace, race, fastcap)\n\n"
+             "All unconsumed options are forwarded to the active plugin CLI handler.\n");
+      free(plugin_argv);
+      return 0;
+    } else {
+      plugin_argv[plugin_argc++] = argv[i];
     }
   }
 
   logger_init();
 
   if (g_list_games) {
+    free(plugin_argv);
     game_host_t game_host;
     game_host_init(&game_host, NULL);
     game_host_discover(&game_host, "games");
@@ -158,16 +183,53 @@ int main(int argc, char **argv) {
   }
 
   static struct gfx_handler_t handler;
-  if (init_gfx_handler(&handler) != 0) return 1;
+  if (init_gfx_handler(&handler) != 0) {
+    free(plugin_argv);
+    return 1;
+  }
 
   script_engine_init(&handler.user_interface, &handler.user_interface.plugin_api);
 
-  if (g_is_headless && auto_script) {
-    script_engine_run(auto_script);
-    log_info("ScriptEngine", "Auto script finished.");
+  if (g_is_headless) {
+    if (!level_path) {
+      log_error("Main", "--headless requires --level <path>");
+      free(plugin_argv);
+      gfx_cleanup(&handler);
+      return 1;
+    }
+
+    if (g_forced_game_id) {
+      int game_idx = game_host_find_id(&handler.game_host, g_forced_game_id);
+      if (game_idx >= 0) {
+        gfx_activate_game(&handler, game_idx);
+      } else {
+        log_error("Main", "Game module '%s' not found.", g_forced_game_id);
+        free(plugin_argv);
+        gfx_cleanup(&handler);
+        return 1;
+      }
+    }
+
+    if (variant_id) {
+      game_host_set_variant(&handler.game_host, variant_id);
+    }
+
+    on_level_load_path(&handler, level_path);
+    if (!handler.level) {
+      log_error("Main", "Failed to load level '%s'.", level_path);
+      free(plugin_argv);
+      gfx_cleanup(&handler);
+      return 1;
+    }
+
+    model_add_new_track(&handler.user_interface.timeline, 1);
+
+    int res = plugin_manager_run_cli(&handler.user_interface.plugin_manager, plugin_argc, plugin_argv);
+    free(plugin_argv);
     gfx_cleanup(&handler);
-    return 0;
+    return res;
   }
+  free(plugin_argv);
 
   if (level_path) {
     on_level_load_path(&handler, level_path);

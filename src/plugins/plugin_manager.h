@@ -71,6 +71,7 @@ struct loaded_plugin_t {
   plugin_update_func update;
   plugin_shutdown_func shutdown;
   plugin_show_ui_func show_ui;
+  plugin_cli_func cli;
   void *data; // plugin-specific data
   plugin_status_t status;
   bool enabled;
@@ -94,6 +95,7 @@ const void *plugin_manager_running_plugin(void);
 void plugin_manager_init(plugin_manager_t *manager, tas_context_t *context, tas_api_t *api, ui_handler_t *host_ui);
 void plugin_manager_load_all(plugin_manager_t *manager, const char *directory);
 void plugin_manager_update_all(plugin_manager_t *manager);
+int plugin_manager_run_cli(plugin_manager_t *manager, int argc, const char **argv);
 void plugin_manager_shutdown(plugin_manager_t *manager);
 void plugin_manager_reload_all(plugin_manager_t *manager, const char *directory);
 

@@ -22,6 +22,7 @@ typedef void *(*plugin_init_func)(tas_context_t *context, const tas_api_t *api);
 typedef void (*plugin_shutdown_func)(void *plugin_data);
 typedef void (*plugin_update_func)(void *plugin_data);
 typedef void (*plugin_show_ui_func)(void *plugin_data);
+typedef int (*plugin_cli_func)(void *plugin_data, int argc, const char **argv);
 
 // passed to plugins to provide read-only access to high-level application state.
 struct tas_context_t {
@@ -154,6 +155,7 @@ struct tas_api_t {
 #define GET_PLUGIN_INIT_FUNC_NAME "plugin_init"
 #define GET_PLUGIN_UPDATE_FUNC_NAME "plugin_update"
 #define GET_PLUGIN_SHUTDOWN_FUNC_NAME "plugin_shutdown"
+#define GET_PLUGIN_CLI_FUNC_NAME "plugin_cli"
 
 // Everything in this header is a shape two separately compiled programs agree
 // on, and a plugin built against a different version of it calls through

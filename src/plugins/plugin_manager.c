@@ -332,11 +332,16 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
   // they have not made, and it is refused before the library is opened rather
   // than after, because after is too late.
   if (!p->approved_sha256[0] || strcmp(p->approved_sha256, p->sha256) != 0) {
-    p->status = PLUGIN_STATUS_CHANGED;
-    snprintf(p->error_msg, sizeof(p->error_msg),
-             "The files in this plugin's directory have changed since it was enabled, so it was not loaded.");
-    log_warn(LOG_SOURCE, "'%s' changed since it was last enabled; not loading it.", p->key);
-    return false;
+    if (manager->context && manager->context->is_headless) {
+      log_info(LOG_SOURCE, "Headless mode: auto-approving updated plugin '%s'.", p->key);
+      snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
+    } else {
+      p->status = PLUGIN_STATUS_CHANGED;
+      snprintf(p->error_msg, sizeof(p->error_msg),
+               "The files in this plugin's directory have changed since it was enabled, so it was not loaded.");
+      log_warn(LOG_SOURCE, "'%s' changed since it was last enabled; not loading it.", p->key);
+      return false;
+    }
   }
 
   // A plugin whose manifest names another game is not going to be used this
@@ -366,6 +371,7 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
     plugin_update_func update;
     plugin_shutdown_func shutdown;
     plugin_show_ui_func show_ui;
+    plugin_cli_func cli;
     plugin_abi_version_func abi_version;
   } u;
 
@@ -402,6 +408,9 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
 
   u.sym = fs_get_symbol(handle, "plugin_show_ui");
   p->show_ui = u.show_ui;
+
+  u.sym = fs_get_symbol(handle, GET_PLUGIN_CLI_FUNC_NAME);
+  p->cli = u.cli;
 
   if (!p->init) {
     p->status = PLUGIN_STATUS_ERROR;
@@ -1140,4 +1149,58 @@ void plugin_manager_render_ui(plugin_manager_t *manager, bool *p_open) {
     render_plugin_detail(manager, selected_index, 0.f, dpi);
   }
   igEnd();
+}
+
+int plugin_manager_run_cli(plugin_manager_t *manager, int argc, const char **argv) {
+  if (!manager) return 1;
+  const char *target_plugin = NULL;
+  int arg_start = 0;
+  if (argc >= 2 && strcmp(argv[0], "--plugin") == 0) {
+    target_plugin = argv[1];
+    arg_start = 2;
+  }
+
+  // In headless CLI execution, ensure plugins matching the active game (or targeted plugin) are loaded
+  for (int i = 0; i < manager->count; ++i) {
+    loaded_plugin_t *p = &manager->plugins[i];
+    if (target_plugin) {
+      if (strcmp(p->key, target_plugin) != 0 && strcmp(p->info_name, target_plugin) != 0)
+        continue;
+    } else {
+      if (!plugin_manager_matches_active_game(manager, p))
+        continue;
+    }
+    if (p->status != PLUGIN_STATUS_LOADED) {
+      p->enabled = true;
+      if (!p->approved_sha256[0]) {
+        snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
+      }
+      plugin_manager_load_plugin(manager, i);
+    }
+  }
+
+  int ran = 0;
+  for (int i = 0; i < manager->count; ++i) {
+    loaded_plugin_t *p = &manager->plugins[i];
+    if (p->status != PLUGIN_STATUS_LOADED || !p->cli || !p->data) continue;
+    if (target_plugin && strcmp(p->key, target_plugin) != 0 && strcmp(p->info_name, target_plugin) != 0)
+      continue;
+
+    g_running_plugin = p->handle;
+    int res = p->cli(p->data, argc - arg_start, argv + arg_start);
+    g_running_plugin = NULL;
+    ran++;
+    if (res != 0) return res;
+    if (target_plugin) return res;
+  }
+
+  if (ran == 0) {
+    if (target_plugin) {
+      log_error(LOG_SOURCE, "Targeted plugin '%s' not found or does not implement plugin_cli.", target_plugin);
+    } else {
+      log_error(LOG_SOURCE, "No loaded plugin provides a CLI handler (plugin_cli).");
+    }
+    return 1;
+  }
+  return 0;
 }
