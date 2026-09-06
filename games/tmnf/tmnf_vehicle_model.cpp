@@ -510,7 +510,7 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
     // Some older packs keep their finest authored tree disabled and make the
     // next detail level the first visible one. An empty level is therefore not
     // a cheap model to accept; keep looking until one actually has geometry.
-    Log(game, FT_LOG_TRACE, "  car detail level %zu: %zu triangles", chosen + 1u, out->faces.size());
+    Log(game, FT_LOG_TRACE, "car detail level %zu: %zu triangles", chosen + 1u, out->faces.size());
     if (!out->faces.empty() && (out->faces.size() <= kBudget || chosen + 1u >= levels.size())) break;
   }
 
