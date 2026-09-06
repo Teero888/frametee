@@ -653,6 +653,17 @@ struct ft_level {
 
 // ft_world is defined by <tmnf/tmnf_game.h>, included above.
 
+namespace tmnf {
+struct TrackBrowser {
+  const ft_engine_api *engine = nullptr;
+  std::string tracks_root;
+  std::vector<Campaign> campaigns;
+  int selected_campaign = 0;
+  bool scanned = false;
+  char filter[64] = {};
+};
+} // namespace tmnf
+
 struct ft_game {
   const ft_engine_api *engine = nullptr;
   bool headless = false;
@@ -697,11 +708,7 @@ struct ft_game {
   std::vector<std::string> skins;
   std::string skins_folder;
 
-  // The track browser on the start screen.
-  std::string tracks_root;
-  std::vector<tmnf::Campaign> campaigns;
-  int selected_campaign = 0;
-  bool scanned = false;
+
 };
 
 namespace tmnf {
@@ -730,7 +737,7 @@ void WorldStep(ft_game *game, ft_world *world, const void *inputs, std::uint32_t
 
 std::vector<std::byte> ReadFileBytes(const char *path);
 std::string ResolveTracks(const ft_engine_api *api);
-void ScanTracks(ft_game *game);
+void ScanTracks(TrackBrowser *game);
 
 ft_level *LevelLoad(ft_game *game, const char *path);
 void LevelDestroy(ft_game *game, ft_level *level);
@@ -804,7 +811,8 @@ void ExportWindowRender(ft_game *game);
 
 void UiAttach(const ft_engine_api *engine);
 void Ui(ft_game *game, const ft_ui_frame *frame);
-void ReleaseThumbnails(ft_game *game);
+void Splash(const ft_engine_api *engine, void **context, const ft_ui_frame *frame);
+void SplashDestroy(void *context);
 
 // --- shared helpers ----------------------------------------------------------
 

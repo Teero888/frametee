@@ -59,6 +59,9 @@ typedef enum {
 } map_sort_mode_t;
 
 typedef struct online_map_manager_t {
+    const ft_engine_api *engine;
+    pthread_t json_thread;
+    bool json_thread_started;
     online_map_category_t ddnet;
     online_map_category_t kog;
     online_map_category_t unique;
@@ -118,11 +121,11 @@ typedef struct online_map_manager_t {
     pthread_mutex_t mutex;
 } online_map_manager_t;
 
-void online_map_manager_init(online_map_manager_t *mgr, ft_game *game);
-void online_map_manager_update(online_map_manager_t *mgr, ft_game *game);
-void online_map_manager_cleanup(online_map_manager_t *mgr, ft_game *game);
+void online_map_manager_init(online_map_manager_t *mgr, const ft_engine_api *engine);
+void online_map_manager_update(online_map_manager_t *mgr, const ft_engine_api *engine);
+void online_map_manager_cleanup(online_map_manager_t *mgr, const ft_engine_api *engine);
 
 // Renders the online map grid & search controls. Returns true if a map was selected and loaded!
-bool render_online_map_browser(ft_game *game, online_map_manager_t *mgr, float avail_width, float avail_height);
+bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t *mgr, float avail_width, float avail_height);
 
 #endif // DD_MAPS_H

@@ -72,8 +72,9 @@ static size_t api_resolve_data_path(const char *relative, char *out, size_t out_
   // Every game keeps its assets under data/games/<id>/, so a module can ship
   // textures and shaders without knowing where the editor was installed. The
   // data directory belongs to the executable, not to whichever working
-  // directory happened to launch it.
-  const char *id = game_host_active_id(&g_engine->game_host);
+  // directory happened to launch it. The id is the caller's, not the active
+  // game's: a game the start screen is only showing still reads its own files.
+  const char *id = game_host_calling_id(&g_engine->game_host);
   char executable_dir[GAME_HOST_MAX_PATH];
   if (!fs_get_executable_dir(executable_dir, sizeof(executable_dir))) snprintf(executable_dir, sizeof(executable_dir), ".");
   return api_format_path(out, out_size, "%s%cdata%cgames%c%s%c%s", executable_dir, PATH_SEP, PATH_SEP, PATH_SEP, id,
@@ -117,7 +118,7 @@ static void api_free_file_data(void *data) { free(data); }
 // Downloads and generated files belong beside the user's config, not in the
 // install directory, which may not even be writable.
 static size_t api_resolve_cache_path(const char *relative, char *out, size_t out_size) {
-  const char *id = game_host_active_id(&g_engine->game_host);
+  const char *id = game_host_calling_id(&g_engine->game_host);
   char base[GAME_HOST_MAX_PATH];
   if (!fs_get_config_dir(base, sizeof(base))) snprintf(base, sizeof(base), ".");
 
@@ -537,15 +538,16 @@ static void api_imgui_allocators(void **alloc_fn, void **free_fn, void **user_da
 // --- engine feedback ---------------------------------------------------------
 
 // A game's start screen picks a level and asks the editor to open it, which is
-// the same path the user's own file dialog takes.
+// the same path the user's own file dialog takes: recorded here and carried out
+// at the top of the next frame, because this is called from inside the game's
+// own UI callback and opening a level can replace the game that is running.
 static bool api_request_level(const char *path) {
   if (!g_engine || !path || !*path) return false;
-  on_level_load_path(g_engine, path);
-  if (g_engine->level) {
-    g_engine->user_interface.show_splash = false;
-    return true;
-  }
-  return false;
+  if (g_engine->game_host.calling_index >= 0)
+    ui_splash_open(&g_engine->user_interface, UI_PENDING_LOAD_LEVEL, path);
+  else
+    ui_request_load_level(&g_engine->user_interface, path);
+  return true;
 }
 
 static uint64_t api_imgui_texture_id(ft_texture *texture) {

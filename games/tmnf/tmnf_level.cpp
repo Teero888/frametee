@@ -263,7 +263,7 @@ bool DescribeCampaign(const std::filesystem::path &relative, Campaign *campaign)
   return true;
 }
 
-void ScanTracks(ft_game *game) {
+void ScanTracks(TrackBrowser *game) {
   game->scanned = true;
   game->campaigns.clear();
   game->tracks_root = ResolveTracks(game->engine);
@@ -309,10 +309,7 @@ void ScanTracks(ft_game *game) {
     }
   }
 
-  std::size_t track_count = 0;
-  for (const Campaign &campaign : game->campaigns) track_count += campaign.tracks.size();
-  Log(game, FT_LOG_INFO, "Found %zu playable tracks in %zu campaigns under %s", track_count, game->campaigns.size(),
-      game->tracks_root.c_str());
+
 }
 
 // --- loading -----------------------------------------------------------------

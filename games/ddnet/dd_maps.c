@@ -27,21 +27,19 @@
 // renderer and the filesystem helpers. It is DDNet's start screen, so it now
 // lives with DDNet and reaches the editor only through the ABI.
 
-// Every engine service this browser uses reaches the host through the game it
-// belongs to. Only one game instance exists at a time, so the entry points below
-// park it here rather than threading it through the download workers.
-static ft_game *g_game = NULL;
-
-static const ft_engine_api *host(void) { return g_game ? g_game->engine : NULL; }
+// The browser owns no game instance. Its workers only retain the host service
+// table; cache paths are resolved on the UI thread before work is submitted.
+static const ft_engine_api *g_engine = NULL;
+static const ft_engine_api *host(void) { return g_engine; }
 
 __attribute__((unused)) static void maps_log(ft_log_level level, const char *fmt, ...) {
-  if (!g_game) return;
+  if (!g_engine) return;
   char message[512];
   va_list args;
   va_start(args, fmt);
   vsnprintf(message, sizeof(message), fmt, args);
   va_end(args);
-  if (g_game->engine && g_game->engine->log) g_game->engine->log(level, "DDNet Maps", message);
+  if (g_engine && g_engine->log) g_engine->log(level, "DDNet Maps", message);
 }
 
 #define log_info(cat, ...) maps_log(FT_LOG_INFO, __VA_ARGS__)
@@ -56,7 +54,7 @@ __attribute__((unused)) static void maps_log(ft_log_level level, const char *fmt
 
 static FILE *fs_open(const char *path, const char *mode) { return fopen(path, mode); }
 
-// Everything this browser downloads lands in the game's cache directory, which
+// Everything this browser downloads lands in the engine's cache directory, which
 // the editor resolves and creates.
 static bool fs_get_config_dir(char *out, size_t size) {
   if (!host() || !host()->resolve_cache_path) return false;
@@ -238,14 +236,14 @@ static void add_item_to_category(online_map_category_t *cat, const online_map_it
     cat->items[cat->count++] = *item;
 }
 
-static void clear_category(online_map_category_t *cat, ft_game *game) {
+static void clear_category(online_map_category_t *cat, const ft_engine_api *engine) {
     if (!cat->items) return;
     for (int i = 0; i < cat->count; i++) {
         online_map_item_t *item = &cat->items[i];
         if (item->thumb_preview_texture) {
             destroy_imgui_texture_ref(&item->thumb_preview_texture);
         }
-        if (game && item->thumb_texture_res) {
+        if (engine && item->thumb_texture_res) {
             maps_destroy_texture(item->thumb_texture_res);
             item->thumb_texture_res = NULL;
         }
@@ -554,9 +552,11 @@ static void *map_download_worker(void *arg) {
     return NULL;
 }
 
-void online_map_manager_init(online_map_manager_t *mgr, ft_game *game) {
+void online_map_manager_init(online_map_manager_t *mgr, const ft_engine_api *engine) {
     memset(mgr, 0, sizeof(*mgr));
-    g_game = game;
+    g_engine = engine;
+    mgr->engine = engine;
+    mgr->initialized = true;
     pthread_mutex_init(&mgr->mutex, NULL);
     
     char config_dir[512];
@@ -598,9 +598,8 @@ void online_map_manager_init(online_map_manager_t *mgr, ft_game *game) {
     snprintf(args->json_file_path, sizeof(args->json_file_path), "%.*s", (int)(sizeof(args->json_file_path) - 1), json_file_path);
     
     mgr->json_fetching = true;
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, fetch_json_thread, args) == 0) {
-        pthread_detach(thread);
+    if (pthread_create(&mgr->json_thread, NULL, fetch_json_thread, args) == 0) {
+        mgr->json_thread_started = true;
     } else {
         mgr->json_fetching = false;
         free(args);
@@ -609,7 +608,7 @@ void online_map_manager_init(online_map_manager_t *mgr, ft_game *game) {
     mgr->initialized = true;
 }
 
-static void update_category_textures(online_map_category_t *cat, ft_game *game) {
+static void update_category_textures(online_map_category_t *cat, const ft_engine_api *engine) {
     for (int i = 0; i < cat->count; i++) {
         online_map_item_t *item = &cat->items[i];
         
@@ -617,7 +616,7 @@ static void update_category_textures(online_map_category_t *cat, ft_game *game) 
             if (item->thumb_preview_texture) {
                 destroy_imgui_texture_ref(&item->thumb_preview_texture);
             }
-            if (game && item->thumb_texture_res) {
+            if (engine && item->thumb_texture_res) {
                 maps_destroy_texture(item->thumb_texture_res);
                 item->thumb_texture_res = NULL;
             }
@@ -628,7 +627,7 @@ static void update_category_textures(online_map_category_t *cat, ft_game *game) 
     }
 }
 
-static void load_icon_texture_if_needed(ft_game *game, const char *file_path, ft_texture **out_res, ImTextureRef **out_tex) {
+static void load_icon_texture_if_needed(const ft_engine_api *engine, const char *file_path, ft_texture **out_res, ImTextureRef **out_tex) {
     if (*out_tex != NULL) return;
     FILE *f = fs_open(file_path, "rb");
     if (!f) return;
@@ -654,8 +653,8 @@ static online_map_item_t *find_map_item(online_map_manager_t *mgr, const char *n
     return NULL;
 }
 
-void online_map_manager_update(online_map_manager_t *mgr, ft_game *game) {
-    g_game = game;
+void online_map_manager_update(online_map_manager_t *mgr, const ft_engine_api *engine) {
+    g_engine = engine;
     if (!mgr->initialized) return;
     
     pthread_mutex_lock(&mgr->mutex);
@@ -667,9 +666,9 @@ void online_map_manager_update(online_map_manager_t *mgr, ft_game *game) {
     
     if (should_reload && has_config_dir) {
         // Safe to clear and destroy previous textures/references on the main thread
-        clear_category(&mgr->ddnet, game);
-        clear_category(&mgr->kog, game);
-        clear_category(&mgr->unique, game);
+        clear_category(&mgr->ddnet, engine);
+        clear_category(&mgr->kog, engine);
+        clear_category(&mgr->unique, engine);
         
         char json_file_path[1024];
         snprintf(json_file_path, sizeof(json_file_path), "%s/cache/maps.json", config_dir);
@@ -700,9 +699,9 @@ void online_map_manager_update(online_map_manager_t *mgr, ft_game *game) {
         snprintf(p2, sizeof(p2), "%s/cache/icons/unique.png", config_dir);
         snprintf(p3, sizeof(p3), "%s/cache/icons/kog.png", config_dir);
         
-        load_icon_texture_if_needed(game, p1, &mgr->icon_ddnet_res, &mgr->icon_ddnet_tex);
-        load_icon_texture_if_needed(game, p2, &mgr->icon_unique_res, &mgr->icon_unique_tex);
-        load_icon_texture_if_needed(game, p3, &mgr->icon_kog_res, &mgr->icon_kog_tex);
+        load_icon_texture_if_needed(engine, p1, &mgr->icon_ddnet_res, &mgr->icon_ddnet_tex);
+        load_icon_texture_if_needed(engine, p2, &mgr->icon_unique_res, &mgr->icon_unique_tex);
+        load_icon_texture_if_needed(engine, p3, &mgr->icon_kog_res, &mgr->icon_kog_tex);
     }
     
     // Process finished thumbnail download tasks
@@ -760,13 +759,17 @@ void online_map_manager_update(online_map_manager_t *mgr, ft_game *game) {
         g_map_task.in_use = false;
     }
     
-    update_category_textures(&mgr->ddnet, game);
-    update_category_textures(&mgr->kog, game);
-    update_category_textures(&mgr->unique, game);
+    update_category_textures(&mgr->ddnet, engine);
+    update_category_textures(&mgr->kog, engine);
+    update_category_textures(&mgr->unique, engine);
 }
 
-void online_map_manager_cleanup(online_map_manager_t *mgr, ft_game *game) {
-    g_game = game;
+void online_map_manager_cleanup(online_map_manager_t *mgr, const ft_engine_api *engine) {
+    g_engine = engine;
+    if (mgr->json_thread_started) {
+        pthread_join(mgr->json_thread, NULL);
+        mgr->json_thread_started = false;
+    }
     for (int i = 0; i < MAX_THUMB_LOAD_TASKS; i++) {
         if (g_thumb_tasks[i].in_use) {
             pthread_join(g_thumb_threads[i], NULL);
@@ -783,17 +786,17 @@ void online_map_manager_cleanup(online_map_manager_t *mgr, ft_game *game) {
     }
     
     if (mgr->icon_ddnet_tex) destroy_imgui_texture_ref(&mgr->icon_ddnet_tex);
-    if (game && mgr->icon_ddnet_res) maps_destroy_texture(mgr->icon_ddnet_res);
+    if (engine && mgr->icon_ddnet_res) maps_destroy_texture(mgr->icon_ddnet_res);
     
     if (mgr->icon_unique_tex) destroy_imgui_texture_ref(&mgr->icon_unique_tex);
-    if (game && mgr->icon_unique_res) maps_destroy_texture(mgr->icon_unique_res);
+    if (engine && mgr->icon_unique_res) maps_destroy_texture(mgr->icon_unique_res);
     
     if (mgr->icon_kog_tex) destroy_imgui_texture_ref(&mgr->icon_kog_tex);
-    if (game && mgr->icon_kog_res) maps_destroy_texture(mgr->icon_kog_res);
+    if (engine && mgr->icon_kog_res) maps_destroy_texture(mgr->icon_kog_res);
     
-    clear_category(&mgr->ddnet, game);
-    clear_category(&mgr->kog, game);
-    clear_category(&mgr->unique, game);
+    clear_category(&mgr->ddnet, engine);
+    clear_category(&mgr->kog, engine);
+    clear_category(&mgr->unique, engine);
     
     pthread_mutex_destroy(&mgr->mutex);
     mgr->initialized = false;
@@ -863,7 +866,7 @@ static void trigger_map_download(online_map_item_t *item) {
     pthread_create(&g_map_thread, NULL, map_download_worker, &g_map_task);
 }
 
-static void load_online_map(ft_game *game, const online_map_item_t *item) {
+static void load_online_map(const ft_engine_api *engine, const online_map_item_t *item) {
     // The editor owns "which level is open", so the browser asks rather than
     // reaching in and loading one itself.
     if (host()) host()->request_level(item->local_map_path);
@@ -978,14 +981,14 @@ static bool render_custom_tab_icon_only(int tab_index, int active_tab, ImTexture
     return clicked;
 }
 
-bool render_online_map_browser(ft_game *game, online_map_manager_t *mgr, float avail_width, float avail_height) {
-    g_game = game;
+bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t *mgr, float avail_width, float avail_height) {
+    g_engine = engine;
     (void)avail_height;
     if (!mgr->initialized) {
-        online_map_manager_init(mgr, game);
+        online_map_manager_init(mgr, engine);
     }
     
-    online_map_manager_update(mgr, game);
+    online_map_manager_update(mgr, engine);
     
     bool map_loaded = false;
     
@@ -1370,7 +1373,7 @@ bool render_online_map_browser(ft_game *game, online_map_manager_t *mgr, float a
                             FILE *mf = fs_open(item->local_map_path, "rb");
                             if (mf) {
                                 fclose(mf);
-                                load_online_map(game, item);
+                                load_online_map(engine, item);
                                 map_loaded = true;
                             } else {
                                 trigger_map_download(item);
@@ -1385,7 +1388,7 @@ bool render_online_map_browser(ft_game *game, online_map_manager_t *mgr, float a
                                 long fsize = ftell(check_mf);
                                 fclose(check_mf);
                                 if (fsize > 0) {
-                                    load_online_map(game, item);
+                                    load_online_map(engine, item);
                                     map_loaded = true;
                                     g_map_task.target_name[0] = '\0';
                                 }

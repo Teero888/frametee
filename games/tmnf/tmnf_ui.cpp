@@ -57,7 +57,7 @@ bool ExtractThumbnail(const std::vector<std::byte> &file, const std::byte **out,
   return true;
 }
 
-void ReleaseThumbnail(ft_game *game, TrackEntry &track) {
+void ReleaseThumbnail(TrackBrowser *game, TrackEntry &track) {
   if (track.thumbnail) {
     const ImTextureID id = ImTextureRef_GetTexID(AsRef(track.thumbnail));
     if (id && game->engine && game->engine->imgui_texture_release)
@@ -69,7 +69,7 @@ void ReleaseThumbnail(ft_game *game, TrackEntry &track) {
   track.texture = nullptr;
 }
 
-void LoadThumbnail(ft_game *game, TrackEntry &track) {
+void LoadThumbnail(TrackBrowser *game, TrackEntry &track) {
   track.thumbnail_tried = true;
   if (!game->engine || !game->engine->texture_create || !game->engine->imgui_texture_id) return;
 
@@ -121,7 +121,7 @@ bool Matches(const TrackEntry &track, const char *filter) {
   return lower(track.name).find(lower(filter)) != std::string::npos;
 }
 
-void DrawTrackGrid(ft_game *game, Campaign &campaign, const char *filter) {
+void DrawTrackGrid(TrackBrowser *game, Campaign &campaign, const char *filter) {
   const ImVec2_c region = igGetContentRegionAvail();
   const int columns = std::max(1, static_cast<int>((region.x + kThumbSpacing) / (kThumbSize + kThumbSpacing)));
 
@@ -181,7 +181,7 @@ void DrawTrackGrid(ft_game *game, Campaign &campaign, const char *filter) {
 
 // Textures for cards that have scrolled away are handed back, and the card is
 // marked so it decodes again if the user scrolls back to it.
-void EvictOffscreen(ft_game *game, Campaign &campaign) {
+void EvictOffscreen(TrackBrowser *game, Campaign &campaign) {
   for (TrackEntry &track : campaign.tracks) {
     if (!track.visible_this_frame && track.texture) {
       ReleaseThumbnail(game, track);
@@ -232,7 +232,7 @@ const char *CollectionLabel(const std::string &collection) {
   return collection == "StarTrack" ? "Star Track" : collection.c_str();
 }
 
-std::vector<std::string> Collections(const ft_game *game) {
+std::vector<std::string> Collections(const TrackBrowser *game) {
   std::vector<std::string> result;
   for (const Campaign &campaign : game->campaigns) {
     if (std::find(result.begin(), result.end(), campaign.collection) == result.end())
@@ -246,7 +246,7 @@ std::vector<std::string> Collections(const ft_game *game) {
   return result;
 }
 
-std::vector<std::string> FacetValues(const ft_game *game, const std::string &collection, const std::string &mode,
+std::vector<std::string> FacetValues(const TrackBrowser *game, const std::string &collection, const std::string &mode,
                                      const std::string &environment, CampaignFacet facet) {
   std::vector<std::string> result;
   for (const Campaign &campaign : game->campaigns) {
@@ -264,7 +264,7 @@ std::vector<std::string> FacetValues(const ft_game *game, const std::string &col
   return result;
 }
 
-int FindCampaign(const ft_game *game, const std::string &collection, const std::string &mode,
+int FindCampaign(const TrackBrowser *game, const std::string &collection, const std::string &mode,
                  const std::string &environment, const std::string &difficulty) {
   int best = -1;
   int best_score = 0;
@@ -286,7 +286,7 @@ int FindCampaign(const ft_game *game, const std::string &collection, const std::
   return best;
 }
 
-void SelectCampaign(ft_game *game, int index) {
+void SelectCampaign(TrackBrowser *game, int index) {
   if (index < 0 || index >= static_cast<int>(game->campaigns.size()) || index == game->selected_campaign) return;
 
   if (game->selected_campaign >= 0 && game->selected_campaign < static_cast<int>(game->campaigns.size())) {
@@ -314,7 +314,7 @@ bool FilterButton(const char *label, bool selected) {
   return clicked;
 }
 
-int DrawFacetRow(ft_game *game, const char *label, const Campaign &current, CampaignFacet facet,
+int DrawFacetRow(TrackBrowser *game, const char *label, const Campaign &current, CampaignFacet facet,
                  const std::vector<std::string> &values) {
   if (values.size() <= 1) return -1;
 
@@ -365,11 +365,12 @@ void UiAttach(const ft_engine_api *engine) {
   attached = true;
 }
 
-void ReleaseThumbnails(ft_game *game) {
-  if (!game) return;
-  for (Campaign &campaign : game->campaigns) {
+void SplashDestroy(void *context) {
+  auto *game = static_cast<TrackBrowser *>(context);
+  UiAttach(game->engine);
+  for (Campaign &campaign : game->campaigns)
     for (TrackEntry &track : campaign.tracks) ReleaseThumbnail(game, track);
-  }
+  delete game;
 }
 
 void Ui(ft_game *game, const ft_ui_frame *frame) {
@@ -394,9 +395,20 @@ void Ui(ft_game *game, const ft_ui_frame *frame) {
     ExportWindowRender(game);
     return;
   }
-  if (frame->slot != FT_UI_SPLASH) return;
+}
 
-  static char filter[64] = {};
+void Splash(const ft_engine_api *engine, void **context, const ft_ui_frame *frame) {
+  if (!engine || !frame || frame->state.headless) return;
+  UiAttach(engine);
+  auto *game = static_cast<TrackBrowser *>(*context);
+  if (!game) {
+    game = new TrackBrowser();
+    game->engine = engine;
+    *context = game;
+  }
+
+
+  auto &filter = game->filter;
 
   igAlignTextToFramePadding();
   igTextUnformatted("Choose a track", nullptr);
@@ -408,11 +420,6 @@ void Ui(ft_game *game, const ft_ui_frame *frame) {
   igInputTextWithHint("##filter", "Search tracks", filter, sizeof(filter), 0, nullptr, nullptr);
   igSeparator();
   igSpacing();
-
-  if (game->packs.empty()) {
-    DrawMissingGameData();
-    return;
-  }
 
   if (!game->scanned) ScanTracks(game);
 

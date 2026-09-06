@@ -251,44 +251,39 @@ static bool imgui_queue_needs_trickling(void) {
   return has_key && has_text && ctx->WantTextInputNextFrame == 1;
 }
 
-// Brings up the game layer: builds the service table, finds the installed game
-// modules and activates one. The engine can run with none active; it just has
-// nothing to simulate or draw until a game is chosen.
+// Brings up the game layer: builds the service table and finds the installed
+// game modules. It activates none of them. The editor comes up on its start
+// screen with nothing open, and a game only starts existing once the user
+// picks something to open with it -- until then there is no instance, no
+// atlases or pipelines, no game keybinds and no game-specific plugins.
 static void init_game_layer(gfx_handler_t *handler) {
   const ft_engine_api *api = engine_api_init(handler);
   game_host_init(&handler->game_host, api);
   game_host_discover(&handler->game_host, "games");
+}
 
-  // A --game argument wins over the config, which in turn wins over "whatever
-  // loaded first" so a fresh install still comes up with something usable.
-  extern const char *g_forced_game_id;
-
-  // FRAMETEE_DEFAULT_GAME_ID is a build-time setting, not engine knowledge: a
-  // distribution names the game it ships as its default, and without it the
-  // engine simply takes the first module in id order.
+// The game to bring up for a level that never passed the start screen -- one
+// named by --level on the command line, or opened by a script. A --game
+// argument wins over the config, which in turn wins over "whatever loaded
+// first" so a fresh install still comes up with something usable.
+//
+// FRAMETEE_DEFAULT_GAME_ID is a build-time setting, not engine knowledge: a
+// distribution names the game it ships as its default, and without it the
+// engine simply takes the first module in id order.
 #ifndef FRAMETEE_DEFAULT_GAME_ID
 #define FRAMETEE_DEFAULT_GAME_ID ""
 #endif
+static int startup_game_index(const gfx_handler_t *handler) {
+  extern const char *g_forced_game_id;
   const char *const wanted[3] = {g_forced_game_id, handler->user_interface.preferred_game_id, FRAMETEE_DEFAULT_GAME_ID};
   for (int w = 0; w < 3; ++w) {
     if (!wanted[w] || !*wanted[w]) continue;
-    if (game_host_activate_id(&handler->game_host, wanted[w])) {
-      snprintf(handler->user_interface.preferred_game_id, sizeof(handler->user_interface.preferred_game_id), "%s", wanted[w]);
-      keybinds_bind_game(&handler->user_interface.keybinds, &handler->game_host);
-      config_load(&handler->user_interface);
-      return;
-    }
+    const int index = game_host_find_id(&handler->game_host, wanted[w]);
+    if (index >= 0) return index;
   }
-  for (int i = 0; i < handler->game_host.count; ++i) {
-    if (!handler->game_host.slots[i].usable) continue;
-    if (!game_host_activate_index(&handler->game_host, i)) continue;
-    snprintf(handler->user_interface.preferred_game_id, sizeof(handler->user_interface.preferred_game_id), "%s",
-             handler->game_host.slots[i].id);
-    keybinds_bind_game(&handler->user_interface.keybinds, &handler->game_host);
-    config_load(&handler->user_interface);
-    return;
-  }
-  log_warn(LOG_SOURCE, "No game module could be activated; the editor has nothing to simulate.");
+  for (int i = 0; i < handler->game_host.count; ++i)
+    if (handler->game_host.slots[i].usable) return i;
+  return -1;
 }
 
 int init_gfx_handler(gfx_handler_t *handler) {
@@ -392,7 +387,6 @@ int init_gfx_handler(gfx_handler_t *handler) {
   }
 
   init_game_layer(handler);
-  gh_resources_create(&handler->game_host);
   ui_init(&handler->user_interface, handler);
 
   return 0;
@@ -728,26 +722,26 @@ static void begin_untitled_project(ui_handler_t *ui) {
   ui->last_auto_save_time = 0.0;
 }
 
-bool gfx_activate_game(gfx_handler_t *handler, int game_index) {
-  if (!handler || game_index < 0 || game_index >= handler->game_host.count) return false;
-  if (game_index == handler->game_host.active) return true;
-
+// Everything the outgoing game owns has to go while its module is still there
+// to destroy it: worlds and levels are opaque module-owned objects, and the
+// incoming game would otherwise be handed foreign pointers on its first render
+// or simulation callback.
+static void release_active_game_state(gfx_handler_t *handler) {
   ui_handler_t *ui = &handler->user_interface;
-
-  // Worlds and levels are opaque module-owned objects. They must be destroyed
-  // while the old module is still active; otherwise the new game would receive
-  // foreign pointers on its first render or simulation callback.
   snippet_editor_reset();
   undo_manager_cleanup(&ui->undo_manager);
   undo_manager_init(&ui->undo_manager);
   timeline_cleanup(&ui->timeline);
   gh_level_destroy(&handler->game_host, handler->level);
   handler->level = NULL;
+}
 
-  if (!game_host_activate_index(&handler->game_host, game_index)) {
-    timeline_init(ui);
-    return false;
-  }
+// The other half: everything the editor keeps per game, rebuilt around the one
+// that has just become active. Its rendering resources are created here rather
+// than on activation, so a game is only made to build atlases and pipelines
+// once the editor has actually committed to running it.
+static bool adopt_active_game(gfx_handler_t *handler) {
+  ui_handler_t *ui = &handler->user_interface;
   if (!gh_resources_create(&handler->game_host)) {
     log_error(LOG_SOURCE, "The selected game could not create its rendering resources.");
     game_host_deactivate(&handler->game_host);
@@ -765,40 +759,75 @@ bool gfx_activate_game(gfx_handler_t *handler, int game_index) {
   ui->loaded_level_path[0] = '\0';
   ui->current_project_path[0] = '\0';
   ui->has_unsaved_changes = false;
+  // Only a game the editor actually ran is worth coming back up under, which is
+  // why this is recorded here and not where the start screen offers the choice.
+  snprintf(ui->preferred_game_id, sizeof(ui->preferred_game_id), "%s", game_host_active_id(&handler->game_host));
+  config_save(ui);
   plugin_manager_on_game_changed(&ui->plugin_manager);
   return true;
 }
 
-void on_level_load_path(gfx_handler_t *handler, const char *level_path) {
-  ui_handler_t *ui = &handler->user_interface;
-  begin_untitled_project(ui);
-  snprintf(ui->loaded_level_path, sizeof(ui->loaded_level_path), "%s", level_path);
-  timeline_cleanup(&ui->timeline);
-  timeline_init(ui);
+bool gfx_activate_game(gfx_handler_t *handler, int game_index) {
+  if (!handler || game_index < 0 || game_index >= handler->game_host.count) return false;
+  game_host_browse_clear(&handler->game_host);
+  if (game_index == handler->game_host.active && game_host_ready(&handler->game_host)) return true;
 
-  gh_level_destroy(&handler->game_host, handler->level);
-  handler->level = gh_level_load_path(&handler->game_host, level_path);
-  if (!handler->level) {
+  release_active_game_state(handler);
+  if (!game_host_activate_index(&handler->game_host, game_index)) {
+    timeline_init(&handler->user_interface);
+    return false;
+  }
+  return adopt_active_game(handler);
+}
+
+// File/CLI/script loads use the running game, or the configured default when
+// nothing is running. Browsing another game has no influence on these callers.
+static bool ensure_active_game(gfx_handler_t *handler) {
+  if (!handler) return false;
+  if (game_host_ready(&handler->game_host)) return true;
+  const int index = startup_game_index(handler);
+  if (index < 0) {
+    log_error(LOG_SOURCE, "No game module is available to open this level.");
+    return false;
+  }
+  return gfx_activate_game(handler, index);
+}
+
+void on_level_load_path(gfx_handler_t *handler, const char *level_path) {
+  if (!level_path || !*level_path || !ensure_active_game(handler)) return;
+  ft_level *level = gh_level_load_path(&handler->game_host, level_path);
+  if (!level) {
     log_error(LOG_SOURCE, "The active game could not load '%s'", level_path);
     return;
   }
+  ui_handler_t *ui = &handler->user_interface;
+  begin_untitled_project(ui);
+  timeline_cleanup(&ui->timeline);
+  gh_level_destroy(&handler->game_host, handler->level);
+  handler->level = level;
+  timeline_init(ui);
+  snprintf(ui->loaded_level_path, sizeof(ui->loaded_level_path), "%s", level_path);
   log_info(LOG_SOURCE, "Loaded level '%s'", level_path);
-
   on_level_loaded(handler);
-  ui_post_level_load(&handler->user_interface);
+  ui_post_level_load(ui);
 }
 
 void on_level_load_memory(struct gfx_handler_t *handler, const unsigned char *level_buffer, size_t size) {
-  begin_untitled_project(&handler->user_interface);
-  handler->user_interface.loaded_level_path[0] = '\0';
-  gh_level_destroy(&handler->game_host, handler->level);
-  handler->level = gh_level_load_memory(&handler->game_host, level_buffer, size);
-  if (!handler->level) {
+  if (!ensure_active_game(handler)) return;
+  ft_level *level = gh_level_load_memory(&handler->game_host, level_buffer, size);
+  if (!level) {
     log_error(LOG_SOURCE, "The active game could not load the level from memory");
     return;
   }
+  ui_handler_t *ui = &handler->user_interface;
+  begin_untitled_project(ui);
+  timeline_cleanup(&ui->timeline);
+  gh_level_destroy(&handler->game_host, handler->level);
+  handler->level = level;
+  timeline_init(ui);
+  ui->loaded_level_path[0] = '\0';
   on_level_loaded(handler);
-  ui_post_level_load(&handler->user_interface);
+  ui_post_level_load(ui);
 }
 
 // initialization and cleanup

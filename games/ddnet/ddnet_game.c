@@ -5,6 +5,7 @@
 // (dd_gfx.c, dd_render.c, dd_particles.c, dd_anim_*.c) and none of them are
 // visible to the engine.
 
+#include "dd_character_state.h"
 #include "dd_input_effects.h"
 #include "dd_internal.h"
 #include "dd_maps.h"
@@ -1113,7 +1114,7 @@ typedef struct {
 static size_t ddnet_world_serialize(ft_game *game, const ft_world *world, void *out, size_t out_size) {
   (void)game;
   if (!world) return 0;
-  const size_t needed = sizeof(ddnet_state_header) + (size_t)world->core.m_NumCharacters * sizeof(SCharacterCore);
+  const size_t needed = sizeof(ddnet_state_header) + (size_t)world->core.m_NumCharacters * sizeof(dd_character_state_v1);
   if (!out) return needed;
   if (out_size < needed) return 0;
 
@@ -1121,10 +1122,11 @@ static size_t ddnet_world_serialize(ft_game *game, const ft_world *world, void *
                                .version = 1,
                                .game_tick = world->core.m_GameTick,
                                .character_count = world->core.m_NumCharacters,
-                               .character_size = (uint32_t)sizeof(SCharacterCore)};
+                               .character_size = (uint32_t)sizeof(dd_character_state_v1)};
   memcpy(out, &header, sizeof(header));
-  if (world->core.m_NumCharacters > 0)
-    memcpy((char *)out + sizeof(header), world->core.m_pCharacters, (size_t)world->core.m_NumCharacters * sizeof(SCharacterCore));
+  for (int i = 0; i < world->core.m_NumCharacters; ++i)
+    dd_character_state_write((char *)out + sizeof(header) + (size_t)i * sizeof(dd_character_state_v1),
+                             &world->core.m_pCharacters[i]);
   return needed;
 }
 
@@ -1134,31 +1136,21 @@ static bool ddnet_world_deserialize(ft_game *game, ft_world *world, const void *
   ddnet_state_header header;
   memcpy(&header, data, sizeof(header));
   if (header.magic != DDNET_STATE_MAGIC || header.version != 1) return false;
-  // A character grew or shrank between builds, so the bytes cannot be trusted.
-  if (header.character_size != sizeof(SCharacterCore)) {
+  if (header.character_size != sizeof(dd_character_state_v1)) {
     dd_log(game, FT_LOG_WARN, "Stored world was written by a different physics build; ignoring it.");
     return false;
   }
   if (header.character_count < 0) return false;
-  if (size < sizeof(header) + (size_t)header.character_count * sizeof(SCharacterCore)) return false;
+  if ((size_t)header.character_count > (size - sizeof(header)) / sizeof(dd_character_state_v1)) return false;
 
   while (world->core.m_NumCharacters > header.character_count)
     wc_remove_character(&world->core, world->core.m_NumCharacters - 1);
   if (header.character_count > world->core.m_NumCharacters)
     if (!wc_add_character(&world->core, header.character_count - world->core.m_NumCharacters)) return false;
 
-  const SCharacterCore *stored = (const SCharacterCore *)((const char *)data + sizeof(header));
   for (int i = 0; i < header.character_count; ++i) {
     SCharacterCore *live = &world->core.m_pCharacters[i];
-    // Everything except the back-pointers, which belong to this world and would
-    // be dangling if they came out of the file.
-    struct WorldCore *world_ptr = live->m_pWorld;
-    SCollision *collision = live->m_pCollision;
-    STuningParams *tuning = live->m_pTuning;
-    *live = stored[i];
-    live->m_pWorld = world_ptr;
-    live->m_pCollision = collision;
-    live->m_pTuning = tuning;
+    dd_character_state_read(live, (const char *)data + sizeof(header) + (size_t)i * sizeof(dd_character_state_v1));
     live->m_Id = i;
     cc_calc_indices(live);
   }
@@ -1260,11 +1252,6 @@ static void ddnet_resources_destroy(ft_game *game) {
   // before releasing browser/map ImGui descriptors which may have appeared in
   // the preceding frame.
   dd_gfx_destroy(game);
-  if (game->maps) {
-    online_map_manager_cleanup(game->maps, game);
-    free(game->maps);
-    game->maps = NULL;
-  }
   dd_player_panel_cleanup(game);
   dd_skin_browser_cleanup(game);
 }
@@ -1321,19 +1308,30 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
     dd_events_render(game, frame);
     dd_export_window_render(game);
     break;
-  case FT_UI_SPLASH: {
-    if (!game->maps) {
-      game->maps = calloc(1, sizeof(*game->maps));
-      if (game->maps) online_map_manager_init(game->maps, game);
-    }
-    if (!game->maps) break;
-    const ImVec2 avail = igGetContentRegionAvail();
-    render_online_map_browser(game, game->maps, avail.x, avail.y);
-    break;
-  }
   default:
     break;
   }
+}
+
+// The map browser is available before DDNet's runtime is constructed.
+static void ddnet_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *frame) {
+  if (!engine || !frame || frame->state.headless) return;
+  dd_imgui_attach(engine);
+  online_map_manager_t *maps = *context;
+  if (!maps) {
+    maps = calloc(1, sizeof(*maps));
+    if (!maps) return;
+    online_map_manager_init(maps, engine);
+    *context = maps;
+  }
+  const ImVec2 avail = igGetContentRegionAvail();
+  render_online_map_browser(engine, maps, avail.x, avail.y);
+}
+
+static void ddnet_splash_destroy(void *context) {
+  online_map_manager_t *maps = context;
+  online_map_manager_cleanup(maps, maps->engine);
+  free(maps);
 }
 
 // Keeps one particle system per world the editor is showing.
@@ -1385,6 +1383,8 @@ static const ft_game_module module = {
     .entity_classes = entity_classes,
     .entity_class_count = DD_CLASS_COUNT,
 
+    .splash = ddnet_splash,
+    .splash_destroy = ddnet_splash_destroy,
     .create = ddnet_create,
     .destroy = ddnet_destroy,
 

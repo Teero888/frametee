@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 17u
+#define FT_GAME_ABI_VERSION 18u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -1024,7 +1024,10 @@ typedef struct ft_engine_api {
 
   /* --- engine feedback --- */
   /* Asks the editor to open a level by path, exactly as if the user had picked
-   * it. A game's start screen uses this once the user chooses something. */
+   * it. A game's start screen uses this once the user chooses something. True
+   * means the editor accepted the request, not that the level is loaded: it
+   * opens at the start of the next frame, since this is called from inside the
+   * ui callback and opening a level may replace the game making the call. */
   bool (*request_level)(const char *path);
   /* An ImGui texture handle for a texture the game created, so a module's own
    * panels can draw it. Zero when the texture cannot be shown. The value is an
@@ -1429,6 +1432,16 @@ typedef struct ft_game_module {
   bool (*input_effect_ui)(ft_game *game, uint32_t index, const ft_input_effect_ui_frame *frame,
                           void *parameters, uint32_t parameter_size, const void *runtime,
                           uint32_t runtime_size);
+  /* ---- start screen (optional; independent of the running game) ----
+   * Called before create(), and also while another game/project is active.
+   * Keep only browser state (map lists, thumbnails, filters) in *context;
+   * never construct a game, world or simulation here. The host initializes
+   * *context to NULL and calls splash_destroy before releasing non-NULL state.
+   * Use engine->request_level to queue the user's selection. The running game
+   * is changed only after this callback returns and the open is confirmed.
+   * Stateless screens may leave *context NULL and omit splash_destroy. */
+  void (*splash)(const ft_engine_api *engine, void **context, const ft_ui_frame *frame);
+  void (*splash_destroy)(void *context);
 } ft_game_module;
 
 /* The one symbol a module must export.

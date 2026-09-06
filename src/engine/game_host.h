@@ -3,12 +3,9 @@
 
 // The engine's side of the game module ABI.
 //
-// The host discovers game modules, performs the ABI handshake, keeps exactly
-// one of them active, and answers every "may I?" question the rest of the
-// engine has to ask before touching a world. Nothing outside this file calls a
-// module's function pointers directly: the gh_* wrappers below null-check the
-// optional entries and apply the module's constraints, so an engine call site
-// never has to care whether a game implements a given feature.
+// The host discovers module metadata and owns one running game. The splash
+// selection and its lightweight browser have independent state: browsing never
+// calls a game's constructor or changes the running game's ruleset.
 
 #include <frametee/game_abi.h>
 #include <stdbool.h>
@@ -36,6 +33,12 @@ typedef struct game_host_t {
   ft_game *instance;
   const ft_engine_api *engine_api;
 
+  int browsed; // selected slot, -1 when no game is selected on the splash
+  char browsed_variant_id[FT_ID_MAX];
+  int browser_index; // owner of browser_context, retired at a frame boundary
+  void *browser_context;
+  int calling_index; // ambient API identity during browser callbacks, else -1
+
   char directory[GAME_HOST_MAX_PATH];
   char variant_id[FT_ID_MAX];
   // Id of the active game, or "" when none. Held in the host rather than read
@@ -52,13 +55,27 @@ void game_host_init(game_host_t *host, const ft_engine_api *engine_api);
 // so the UI can explain the problem instead of silently ignoring them.
 int game_host_discover(game_host_t *host, const char *directory);
 bool game_host_activate_index(game_host_t *host, int index);
-bool game_host_activate_id(game_host_t *host, const char *id);
 void game_host_deactivate(game_host_t *host);
 void game_host_shutdown(game_host_t *host);
+
+// Browsing only selects module metadata and a ruleset. It never creates a game.
+bool game_host_browse(game_host_t *host, int index);
+void game_host_browse_clear(game_host_t *host);
+// Retire a deselected browser before the next frame draws, or at shutdown.
+void game_host_browser_sync(game_host_t *host);
+int game_host_browsed_index(const game_host_t *host);
+const ft_game_module *game_host_browsed_module(const game_host_t *host);
+const char *game_host_browsed_variant(const game_host_t *host);
+void game_host_browsed_set_variant(game_host_t *host, const char *variant_id);
 
 int game_host_find_id(const game_host_t *host, const char *id);
 static inline bool game_host_ready(const game_host_t *host) { return host && host->instance != NULL; }
 const char *game_host_active_id(const game_host_t *host);
+// The game an ambient service is answering for. That is the active game,
+// except while the host is inside a call to a browsed one: a game being looked
+// at resolves its own data and cache directories rather than borrowing those
+// of whatever happens to be open.
+const char *game_host_calling_id(const game_host_t *host);
 const char *game_host_active_version(const game_host_t *host);
 // Prints every discovered module and what it allows, including the ones that
 // were rejected and why. Backs the --list-games command.
@@ -144,6 +161,9 @@ bool gh_input_effect_ui(game_host_t *host, unsigned index, const ft_input_effect
 void gh_update(game_host_t *host, const ft_engine_state *state);
 void gh_render(game_host_t *host, const ft_render_frame *frame);
 void gh_ui(game_host_t *host, const ft_ui_frame *frame);
+// The same call for the start screen, which draws whichever game is being
+// browsed rather than the one that is open.
+void gh_browsed_ui(game_host_t *host, const ft_ui_frame *frame);
 // Default placement for the windows the active game opens, or NULL when it asks
 // for none. Borrowed from the module and valid while it stays loaded.
 const ft_panel_desc *gh_panels(game_host_t *host, uint32_t *out_count);
@@ -169,8 +189,8 @@ unsigned gh_status_lines(game_host_t *host, const ft_world *world, int player, f
 // has nothing to say about that player.
 bool gh_player_label(game_host_t *host, const ft_world *world, int player, char *out, size_t out_size);
 
-// True when the active game draws its own start screen, so the editor knows
-// whether to fall back to its own.
+// True when the game the start screen is showing draws its own, so the editor
+// knows whether to fall back to its own.
 bool game_provides_splash(const game_host_t *host);
 
 // Camera modes the active game offers. Falls back to a single free view when a

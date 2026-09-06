@@ -19,14 +19,28 @@
 extern "C" {
 #endif
 
-// The layouts the engine hands around as opaque pointers. Keep in step with
-// games/ddnet/dd_internal.h.
+// The layout the engine hands around as an opaque pointer. The game itself
+// includes this definition too, so plugins and the module cannot drift apart.
+struct dd_physics_particle_event;
+struct dd_physics_damage_event;
+struct dd_physics_sound_event;
 struct ft_world {
   SWorldCore core;
   ft_level *level;
+  ft_game *game;
   // Which editor world this belongs to. Every cached copy of one shares it, so
   // effects raised while stepping land in the right particle system.
   int index;
+  bool render_physics_effects;
+  struct dd_physics_particle_event *physics_particle_events;
+  int physics_particle_event_count;
+  int physics_particle_event_capacity;
+  struct dd_physics_damage_event *physics_damage_events;
+  int physics_damage_event_count;
+  int physics_damage_event_capacity;
+  struct dd_physics_sound_event *physics_sound_events;
+  int physics_sound_event_count;
+  int physics_sound_event_capacity;
 };
 
 // Reads a world handed over by the engine, e.g. from tas_api_t::get_world_state_at.

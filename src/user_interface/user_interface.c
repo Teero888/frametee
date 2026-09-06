@@ -187,9 +187,7 @@ static void render_game_setting_group(ui_handler_t *ui, const char *group) {
 // groups become the submenus, so no one of them is a wall of checkboxes.
 static void render_game_settings_menu(ui_handler_t *ui) {
   game_host_t *host = &ui->gfx_handler->game_host;
-  // Game-owned UI may reference game-owned GPU resources. Keep it out of the
-  // frame in which the splash can replace the active game.
-  if (!game_host_ready(host) || ui->gfx_handler->level == NULL || ui->show_splash) return;
+  if (!game_host_ready(host) || ui->gfx_handler->level == NULL) return;
 
   const char *name = host->module ? host->module->info.display_name : NULL;
   if (!name || !*name) name = "Game";
@@ -1348,14 +1346,20 @@ void ui_add_recent_project(ui_handler_t *ui, const char *path) {
   config_save(ui);
 }
 
+static void ui_request_project_switch(ui_handler_t *ui, ui_pending_action_t action, const char *path);
+
 // Carries out a confirmed project switch. Called at the top of a frame, before
 // anything has drawn: opening a project can swap the active game, and the old
 // game's level and resources must not go away between the passes that render
 // them and the panels that read them.
 void ui_run_pending_project_switch(ui_handler_t *ui) {
+  game_host_browser_sync(&ui->gfx_handler->game_host);
   if (ui->pending_action == UI_PENDING_NONE || !ui->pending_confirmed) return;
 
   const ui_pending_action_t action = ui->pending_action;
+  const int game_index = ui->pending_game_index;
+  char variant[FT_ID_MAX];
+  snprintf(variant, sizeof(variant), "%s", ui->pending_variant_id);
   char path[sizeof(ui->pending_path)];
   snprintf(path, sizeof(path), "%s", ui->pending_path);
   ui->pending_action = UI_PENDING_NONE;
@@ -1364,15 +1368,25 @@ void ui_run_pending_project_switch(ui_handler_t *ui) {
 
   switch (action) {
   case UI_PENDING_NEW_PROJECT:
-    // Starting over is a moment nothing is open, so the game may change too.
+    // Opening the picker is observational; the current project remains live.
+    game_host_browse_clear(&ui->gfx_handler->game_host);
     ui->splash_stage = SPLASH_STAGE_GAME;
     ui->show_splash = true;
     break;
   case UI_PENDING_OPEN_PROJECT:
+    // A project names the game it was authored under, so whatever the start
+    // screen was showing has no say in it.
+    game_host_browse_clear(&ui->gfx_handler->game_host);
     if (path[0] && !load_project(ui, path)) log_error(LOG_SOURCE, "Could not load project from '%s'.", path);
     break;
   case UI_PENDING_LOAD_LEVEL:
-    if (path[0]) on_level_load_path(ui->gfx_handler, path);
+    if (path[0]) {
+      if (game_index >= 0) {
+        if (!gfx_activate_game(ui->gfx_handler, game_index)) break;
+        game_host_set_variant(&ui->gfx_handler->game_host, variant);
+      }
+      on_level_load_path(ui->gfx_handler, path);
+    }
     break;
   case UI_PENDING_NONE:
     break;
@@ -1474,9 +1488,10 @@ static struct ImTextureRef_c *splash_game_thumbnail(gfx_handler_t *gfx, const ga
   return entry->ref;
 }
 
-// Returns true when a game was chosen. Switching is safe here precisely because
-// nothing is open: worlds and inputs belong to whichever game made them, so the
-// start screen is the one place the choice can still change freely.
+// Returns true when a game was chosen. Choosing one here costs nothing: the
+// game is built far enough to draw its own start screen and no further, and
+// whatever the editor already has open stays open and untouched until the user
+// actually starts a run.
 static bool render_splash_game_picker(ui_handler_t *ui, float width) {
   (void)width;
   game_host_t *host = &ui->gfx_handler->game_host;
@@ -1540,16 +1555,15 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
         ImDrawList_AddText_Vec2(draw_list, txt_pos, IM_COL32(140, 150, 170, 255), status_txt, NULL);
       }
 
-      const ImU32 border_color = hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140);
-      ImDrawList_AddRect(draw_list, card_min, card_max, border_color, 8.0f, ImDrawFlags_None, hovered ? 1.8f : 1.0f);
+      const int browsed = game_host_browsed_index(host) >= 0 ? game_host_browsed_index(host) : host->active;
+      const bool current = i == browsed;
+      const ImU32 border_color = current      ? IM_COL32(120, 200, 255, 255)
+                                 : hovered    ? IM_COL32(90, 175, 255, 255)
+                                              : IM_COL32(48, 56, 75, 140);
+      ImDrawList_AddRect(draw_list, card_min, card_max, border_color, 8.0f, ImDrawFlags_None,
+                         (hovered || current) ? 1.8f : 1.0f);
 
-      if (clicked) {
-        if (i == host->active || gfx_activate_game(ui->gfx_handler, i)) {
-          snprintf(ui->preferred_game_id, sizeof(ui->preferred_game_id), "%s", slot->id);
-          config_save(ui);
-          chosen = true;
-        }
-      }
+      if (clicked) chosen = game_host_browse(host, i);
       igPopID();
     }
     igEndTable();
@@ -1572,10 +1586,10 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
 }
 
 static void render_splash_variant_selector(game_host_t *host) {
-  const ft_game_module *module = host->module;
+  const ft_game_module *module = game_host_browsed_module(host);
   if (!module || !module->constraints.variants || module->constraints.variant_count <= 1) return;
 
-  const char *current = game_host_variant(host);
+  const char *current = game_host_browsed_variant(host);
   const ft_game_variant *current_variant = &module->constraints.variants[0];
   for (uint32_t i = 0; i < module->constraints.variant_count; ++i) {
     if (current && strcmp(module->constraints.variants[i].id, current) == 0) {
@@ -1592,10 +1606,33 @@ static void render_splash_variant_selector(game_host_t *host) {
     for (uint32_t i = 0; i < module->constraints.variant_count; ++i) {
       const ft_game_variant *variant = &module->constraints.variants[i];
       if (igSelectable_Bool(variant->display_name, variant == current_variant, 0, (ImVec2){0, 0}))
-        game_host_set_variant(host, variant->id);
+        game_host_browsed_set_variant(host, variant->id);
     }
     igEndCombo();
   }
+}
+
+// Backing out of the start screen drops whatever game it was only showing and
+// leaves the editor with exactly what it had.
+static void splash_dismiss(ui_handler_t *ui) {
+  game_host_browse_clear(&ui->gfx_handler->game_host);
+  ui->show_splash = false;
+  igCloseCurrentPopup();
+}
+
+// Capture the chosen game/ruleset with the request. The browser remains
+// independent while the unsaved-work prompt is pending; only confirmation can
+// activate a game or change its live ruleset.
+void ui_splash_open(ui_handler_t *ui, ui_pending_action_t action, const char *path) {
+  if (!ui || !path || !*path) return;
+  ui_request_project_switch(ui, action, path);
+  if (action == UI_PENDING_LOAD_LEVEL) {
+    game_host_t *host = &ui->gfx_handler->game_host;
+    ui->pending_game_index = game_host_browsed_index(host);
+    snprintf(ui->pending_variant_id, sizeof(ui->pending_variant_id), "%s", game_host_browsed_variant(host));
+  }
+  ui->show_splash = false;
+  igCloseCurrentPopup();
 }
 
 static void render_splash_screen(ui_handler_t *ui) {
@@ -1648,15 +1685,14 @@ static void render_splash_screen(ui_handler_t *ui) {
       if (ui->splash_stage == SPLASH_STAGE_START && igButton(ICON_FA_ARROW_LEFT "  Games", (ImVec2){170, 42}))
         ui->splash_stage = SPLASH_STAGE_GAME;
 
-      const ft_game_module *level_game = ui->gfx_handler->game_host.module;
+      const ft_game_module *level_game = game_host_browsed_module(&ui->gfx_handler->game_host);
       const char *level_ext = level_game ? level_game->constraints.level_extension : NULL;
       if (ui->splash_stage == SPLASH_STAGE_START && level_ext) {
         char level_label[64];
         snprintf(level_label, sizeof(level_label), ICON_FA_MAP "  Load Local %s",
                  level_game->constraints.level_extension ? level_game->constraints.level_extension : "Level");
         if (igButton(level_label, (ImVec2){170, 42})) {
-          // The splash is already the "nothing is open" screen, so a load
-          // started here has no unsaved work of its own to ask about.
+          // The open is deferred until the next frame, after any unsaved-work prompt.
           nfdu8char_t *out_path;
           nfdu8filteritem_t filters[] = {{level_game->constraints.level_filter_name, level_ext}};
           nfdopendialogu8args_t args = {0};
@@ -1664,10 +1700,8 @@ static void render_splash_screen(ui_handler_t *ui) {
           args.filterCount = 1;
           nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
           if (result == NFD_OKAY) {
-            on_level_load_path(ui->gfx_handler, out_path);
+            ui_splash_open(ui, UI_PENDING_LOAD_LEVEL, out_path);
             NFD_FreePathU8(out_path);
-            ui->show_splash = false;
-            igCloseCurrentPopup();
           }
         }
       }
@@ -1680,10 +1714,8 @@ static void render_splash_screen(ui_handler_t *ui) {
         args.filterCount = 1;
         nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
         if (result == NFD_OKAY) {
-          load_project(ui, out_path);
+          ui_splash_open(ui, UI_PENDING_OPEN_PROJECT, out_path);
           NFD_FreePathU8(out_path);
-          ui->show_splash = false;
-          igCloseCurrentPopup();
         }
       }
 
@@ -1716,11 +1748,7 @@ static void render_splash_screen(ui_handler_t *ui) {
             char item_lbl[1050];
             snprintf(item_lbl, sizeof(item_lbl), "%s  %s", ICON_FA_FILE, filename);
 
-            if (igButton(item_lbl, (ImVec2){0.0f, 32.0f})) {
-              load_project(ui, path);
-              ui->show_splash = false;
-              igCloseCurrentPopup();
-            }
+            if (igButton(item_lbl, (ImVec2){0.0f, 32.0f})) ui_splash_open(ui, UI_PENDING_OPEN_PROJECT, path);
             if (igIsItemHovered(ImGuiHoveredFlags_None)) {
               igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8.0f, 6.0f});
               if (igBeginTooltip()) {
@@ -1752,6 +1780,7 @@ static void render_splash_screen(ui_handler_t *ui) {
       if (ui->splash_stage == SPLASH_STAGE_GAME) {
         if (render_splash_game_picker(ui, avail.x)) ui->splash_stage = SPLASH_STAGE_START;
       } else {
+        const ft_game_module *shown = game_host_browsed_module(&ui->gfx_handler->game_host);
         render_splash_variant_selector(&ui->gfx_handler->game_host);
 
         ft_ui_frame frame = {0};
@@ -1760,22 +1789,24 @@ static void render_splash_screen(ui_handler_t *ui) {
         frame.tick = ui->timeline.current_tick;
         frame.player = ui->timeline.selected_player_track_index;
         engine_api_fill_state(&frame.state);
-        gh_ui(&ui->gfx_handler->game_host, &frame);
+        gh_browsed_ui(&ui->gfx_handler->game_host, &frame);
 
         // A game with no start screen of its own still gets a usable one: the
         // sidebar can open a level or a project.
         if (!game_provides_splash(&ui->gfx_handler->game_host))
           igTextDisabled("%s has no start screen. Open a level or a project from the left.",
-                         ui->plugin_context.active_game_id);
+                         shown ? shown->info.display_name : "This game");
       }
     }
     igEndChild();
 
-    // clicking the backdrop puts you back on the current project.
-    if (ui->gfx_handler->level != NULL && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) && !igIsAnyItemActive() &&
-        !igIsWindowHovered(ImGuiHoveredFlags_AnyWindow | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
-      ui->show_splash = false;
-      igCloseCurrentPopup();
+    // clicking the backdrop puts you back on the current project, which is
+    // still there however many other games were looked at on the way.
+    if (ui->gfx_handler->level != NULL &&
+        (igIsKeyPressed_Bool(ImGuiKey_Escape, false) ||
+         (igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) && !igIsAnyItemActive() &&
+          !igIsWindowHovered(ImGuiHoveredFlags_AnyWindow | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)))) {
+      splash_dismiss(ui);
     }
 
     igEndPopup();
@@ -1828,9 +1859,10 @@ void ui_render(ui_handler_t *ui) {
     if (ui->show_plugin_manager) {
       plugin_manager_render_ui(&ui->plugin_manager, &ui->show_plugin_manager);
     }
-    // Game-owned panels may reference game-owned GPU resources. Keep them out
-    // of the frame in which the splash can replace the active game.
-    if (ui->gfx_handler->level != NULL && !ui->show_splash) {
+    // Drawn even under the start screen: browsing another game there cannot
+    // touch this one, and an open that can only lands at the top of the next
+    // frame, so the project stays on screen until it is really replaced.
+    if (ui->gfx_handler->level != NULL) {
       ui_render_game_ui_slot(ui, FT_UI_PANELS, ui->timeline.selected_player_track_index);
       // Only for a game that does not place the editor in a panel of its own.
       starting_state_render_window(ui);
@@ -2165,6 +2197,8 @@ bool ui_quick_save(ui_handler_t *ui) {
 // already settled. `path` is ignored for UI_PENDING_NEW_PROJECT.
 static void ui_request_project_switch(ui_handler_t *ui, ui_pending_action_t action, const char *path) {
   ui->pending_action = action;
+  ui->pending_game_index = -1;
+  ui->pending_variant_id[0] = '\0';
   snprintf(ui->pending_path, sizeof(ui->pending_path), "%s", path ? path : "");
   ui->pending_confirmed = !ui->has_unsaved_changes;
   ui->show_unsaved_prompt = ui->has_unsaved_changes;
@@ -2172,6 +2206,8 @@ static void ui_request_project_switch(ui_handler_t *ui, ui_pending_action_t acti
 
 void ui_request_new_project(ui_handler_t *ui) {
   ui_request_project_switch(ui, UI_PENDING_NEW_PROJECT, NULL);
+  ui->pending_confirmed = true;
+  ui->show_unsaved_prompt = false;
 }
 
 void ui_request_open_project(ui_handler_t *ui, const char *path) {

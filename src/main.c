@@ -225,11 +225,11 @@ int main(int argc, char **argv) {
 
     // Everything in the viewport is drawn by the active game. The engine
     // decides the passes and their order; what happens inside each one is the
-    // game's business entirely.
-    // The splash is also the game-selection boundary. Do not record commands
-    // for the previous game while its resources may be destroyed later in the
-    // same UI frame by activating a new project.
-    if (handler.level != NULL && !handler.user_interface.show_splash) {
+    // game's business entirely. This runs under the start screen too: nothing
+    // drawn later in the frame can replace the game whose resources these
+    // commands reference, because every project switch waits for the call
+    // above.
+    if (handler.level != NULL) {
       render_game_passes(&handler, intra);
     }
     renderer_flush_queue(&handler, handler.current_frame_command_buffer);

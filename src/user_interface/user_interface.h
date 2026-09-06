@@ -94,6 +94,8 @@ struct ui_handler_t {
   // left to ask about it.
   ui_pending_action_t pending_action;
   char pending_path[1024];
+  int pending_game_index; // captured when the user chooses a map; -1 uses current/default
+  char pending_variant_id[FT_ID_MAX];
   bool pending_confirmed;
   bool show_unsaved_prompt;
 };
@@ -120,6 +122,10 @@ void ui_request_open_project(ui_handler_t *ui, const char *path);
 // Loads a bare level under the active game, which starts an untitled project
 // and so asks about unsaved work the same way.
 void ui_request_load_level(ui_handler_t *ui, const char *path);
+// An open started from the start screen: a level, a project, or a map the
+// game's own browser picked. Recorded rather than performed, so the project
+// that screen is covering keeps drawing until the switch below runs.
+void ui_splash_open(ui_handler_t *ui, ui_pending_action_t action, const char *path);
 // Performs a project switch that has nothing left to ask about. Call at the
 // top of a frame, before any rendering: it can replace the level, the timeline
 // and the active game outright.

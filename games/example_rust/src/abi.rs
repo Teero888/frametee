@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 17;
+pub const FT_GAME_ABI_VERSION: u32 = 18;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -515,6 +515,8 @@ pub struct ft_game_module {
     pub input_effect_default: *const c_void,
     pub input_effect_apply: *const c_void,
     pub input_effect_ui: *const c_void,
+    pub splash: Option<unsafe extern "C" fn(*const ft_engine_api, *mut *mut c_void, *const ft_ui_frame)>,
+    pub splash_destroy: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
 // The vtable is immutable static data shared with the engine thread.

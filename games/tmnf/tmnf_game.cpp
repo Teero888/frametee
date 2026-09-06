@@ -163,7 +163,6 @@ ft_game *GameCreate(const ft_engine_api *engine) {
 
 void GameDestroy(ft_game *game) {
   if (!game) return;
-  ReleaseThumbnails(game);
   game->race_session.reset();
   game->race_cameras.reset();
   CloseSandbox(game);
@@ -529,6 +528,8 @@ ft_game_module BuildModule() {
   module.entity_classes = kEntityClasses;
   module.entity_class_count = 1;
 
+  module.splash = Splash;
+  module.splash_destroy = SplashDestroy;
   module.create = GameCreate;
   module.destroy = GameDestroy;
 

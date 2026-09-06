@@ -7,7 +7,7 @@
 #ifndef DD_INTERNAL_H
 #define DD_INTERNAL_H
 
-#include <frametee/game_abi.h>
+#include "include/ddnet/ddnet_game.h"
 
 #include <ddnet_physics/gamecore.h>
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -59,14 +59,14 @@
 // effects from entities that were created and destroyed in one tick are not
 // lost. Only callback types that become demo events need to be retained here;
 // smoke, bullet trails and confetti are client-side presentation effects.
-typedef struct {
+typedef struct dd_physics_particle_event {
   float x;
   float y;
   int type;
   int client_id;
 } dd_physics_particle_event_t;
 
-typedef struct {
+typedef struct dd_physics_damage_event {
   float x;
   float y;
   float angle;
@@ -74,7 +74,7 @@ typedef struct {
   int client_id;
 } dd_physics_damage_event_t;
 
-typedef struct {
+typedef struct dd_physics_sound_event {
   float x;
   float y;
   int sound_id;
@@ -100,25 +100,6 @@ struct ft_level {
 
   // Tile layers uploaded for rendering; owned by the module, rebuilt per level.
   ft_texture *layer_textures[3];
-};
-
-struct ft_world {
-  SWorldCore core;
-  ft_level *level;
-  ft_game *game;
-  // Which editor world this belongs to. Every cached copy of one shares it, so
-  // effects raised while stepping land in the right particle system.
-  int index;
-  dd_physics_particle_event_t *physics_particle_events;
-  int physics_particle_event_count;
-  int physics_particle_event_capacity;
-  dd_physics_damage_event_t *physics_damage_events;
-  int physics_damage_event_count;
-  int physics_damage_event_capacity;
-  dd_physics_sound_event_t *physics_sound_events;
-  int physics_sound_event_count;
-  int physics_sound_event_capacity;
-  bool render_physics_effects;
 };
 
 // --- sprites ----------------------------------------------------------------
@@ -613,7 +594,6 @@ struct ft_game {
 
   // The start screen this game shows before a run: its map browser. Held by
   // pointer so this header stays free of the browser's own types.
-  struct online_map_manager_t *maps;
   struct dd_skin_browser_t *skin_browser;
   struct dd_player_panel_t *player_panel;
   bool show_skin_browser;

@@ -302,8 +302,8 @@ static void render(ft_game *game, const ft_render_frame *frame) {
 
 // The start screen. A game owns its own, which is how the engine avoids
 // knowing anything about what a level is for a particular game.
-static void ui(ft_game *game, const ft_ui_frame *frame) {
-  if (!game || !frame || frame->slot != FT_UI_SPLASH) return;
+static void splash(const ft_engine_api *engine, void **context, const ft_ui_frame *frame) {
+  if (!engine || !frame || frame->slot != FT_UI_SPLASH) return;
 
   igTextUnformatted("Cube Arena", NULL);
   igSpacing();
@@ -312,8 +312,8 @@ static void ui(ft_game *game, const ft_ui_frame *frame) {
   igSeparator();
   igSpacing();
 
-  if (igButton("Start cube arena", (ImVec2){220.f, 48.f}) && game->engine && game->engine->request_level)
-    game->engine->request_level("builtin:cube-arena");
+  if (igButton("Start cube arena", (ImVec2){220.f, 48.f}) && engine && engine->request_level)
+    engine->request_level("builtin:cube-arena");
 }
 
 // --- module ------------------------------------------------------------------
@@ -356,7 +356,7 @@ static const ft_game_module module = {
     .entity_prop_get = entity_prop_get,
     .entity_prop_set = entity_prop_set,
     .render = render,
-    .ui = ui,
+    .splash = splash,
 };
 
 FT_GAME_EXPORT const ft_game_module *ft_game_module_entry(uint32_t engine_abi_version) {

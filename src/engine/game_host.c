@@ -275,9 +275,73 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
 #undef FAIL
 }
 
+// The descriptor guard gh_input_effect_desc applies, written against a module
+// and an instance so validation does not depend on host wrappers.
+static const ft_input_effect_desc *effect_desc_of(const ft_game_module *m, ft_game *instance, unsigned index) {
+  if (!m->input_effect_desc || index >= (m->input_effect_count ? m->input_effect_count(instance) : 0)) return NULL;
+  const ft_input_effect_desc *desc = m->input_effect_desc(instance, index);
+  if (!desc || desc->struct_size != sizeof(*desc) || !id_is_valid(desc->id) || !desc->display_name ||
+      !*desc->display_name || desc->parameter_size > FT_INPUT_EFFECT_PARAMETER_MAX ||
+      desc->runtime_size > FT_INPUT_EFFECT_RUNTIME_MAX)
+    return NULL;
+  return desc;
+}
+
+// Input effects are declared by the instance rather than by the module table,
+// so they can only be checked once a game has been built. A game that fails
+// here is unusable and must be destroyed before it is exposed to the editor.
+static bool instance_effects_valid(const ft_game_module *m, ft_game *instance, const char *id) {
+  const unsigned count = m->input_effect_count ? m->input_effect_count(instance) : 0;
+  if (count > 64) {
+    log_error(LOG_SOURCE, "Game '%s' declares %u input effects; the editor supports at most 64.", id, count);
+    return false;
+  }
+  for (unsigned effect = 0; effect < count; ++effect) {
+    const ft_input_effect_desc *desc = effect_desc_of(m, instance, effect);
+    if (!desc) {
+      log_error(LOG_SOURCE, "Game '%s' has an invalid input effect descriptor at index %u.", id, effect);
+      return false;
+    }
+    for (unsigned previous = 0; previous < effect; ++previous) {
+      const ft_input_effect_desc *other = effect_desc_of(m, instance, previous);
+      if (other && strcmp(desc->id, other->id) == 0) {
+        log_error(LOG_SOURCE, "Game '%s' declares duplicate input effect id '%s'.", id, desc->id);
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Resolve a ruleset for either the running game or an independent browser selection.
+static void resolve_variant(const ft_game_module *module, const char *variant_id, char *out, size_t out_size) {
+  if (!module) return;
+  const ft_game_constraints *c = &module->constraints;
+  if (variant_id)
+    for (uint32_t i = 0; i < c->variant_count; ++i)
+      if (c->variants[i].id && strcmp(c->variants[i].id, variant_id) == 0) {
+        snprintf(out, out_size, "%s", variant_id);
+        return;
+      }
+  snprintf(out, out_size, "%s", c->variant_count > 0 && c->variants[0].id ? c->variants[0].id : "");
+}
+
+// Render resources go first: destroying them waits on outstanding GPU work,
+// which the instance's own teardown must not run underneath. Both halves are
+// called even for an instance that never created resources, because a module
+// is free to release there anything its panels acquired.
+static void destroy_instance(const ft_game_module *module, ft_game *instance) {
+  if (!module || !instance) return;
+  if (module->resources_destroy) module->resources_destroy(instance);
+  module->destroy(instance);
+}
+
 void game_host_init(game_host_t *host, const ft_engine_api *engine_api) {
   memset(host, 0, sizeof(*host));
   host->active = -1;
+  host->browsed = -1;
+  host->browser_index = -1;
+  host->calling_index = -1;
   host->engine_api = engine_api;
 }
 
@@ -411,6 +475,8 @@ bool game_host_activate_index(game_host_t *host, int index) {
   if (index < 0 || index >= host->count) return false;
   game_module_slot_t *slot = &host->slots[index];
   if (!slot->usable) return false;
+  // An outright activation settles the question the start screen was asking.
+  game_host_browse_clear(host);
   if (host->active == index && host->instance) return true;
 
   game_host_deactivate(host);
@@ -434,24 +500,13 @@ bool game_host_activate_index(game_host_t *host, int index) {
   }
 
   host->instance = instance;
-  const unsigned effect_count = gh_input_effect_count(host);
-  if (effect_count > 64) {
-    log_error(LOG_SOURCE, "Game '%s' declares %u input effects; the editor supports at most 64.", slot->id, effect_count);
-    goto invalid_effects;
-  }
-  for (unsigned effect = 0; effect < effect_count; ++effect) {
-    const ft_input_effect_desc *desc = gh_input_effect_desc(host, effect);
-    if (!desc) {
-      log_error(LOG_SOURCE, "Game '%s' has an invalid input effect descriptor at index %u.", slot->id, effect);
-      goto invalid_effects;
-    }
-    for (unsigned previous = 0; previous < effect; ++previous) {
-      const ft_input_effect_desc *other = gh_input_effect_desc(host, previous);
-      if (other && strcmp(desc->id, other->id) == 0) {
-        log_error(LOG_SOURCE, "Game '%s' declares duplicate input effect id '%s'.", slot->id, desc->id);
-        goto invalid_effects;
-      }
-    }
+  if (!instance_effects_valid(slot->module, instance, slot->id)) {
+    slot->module->destroy(instance);
+    host->instance = NULL;
+    host->module = NULL;
+    host->active = -1;
+    host->active_id[0] = '\0';
+    return false;
   }
   // Bind the module-declared control table to its schema before recording can
   // write any fields.
@@ -459,29 +514,11 @@ bool game_host_activate_index(game_host_t *host, int index) {
   game_host_set_variant(host, NULL);
   log_info(LOG_SOURCE, "Activated game '%s'.", slot->display_name);
   return true;
-
-invalid_effects:
-  slot->module->destroy(instance);
-  host->instance = NULL;
-  host->module = NULL;
-  host->active = -1;
-  host->active_id[0] = '\0';
-  return false;
-}
-
-bool game_host_activate_id(game_host_t *host, const char *id) {
-  const int index = game_host_find_id(host, id);
-  if (index < 0) {
-    log_error(LOG_SOURCE, "No game module provides id '%s'.", id ? id : "(null)");
-    return false;
-  }
-  return game_host_activate_index(host, index);
 }
 
 void game_host_deactivate(game_host_t *host) {
   if (!host->instance) return;
-  if (host->module->resources_destroy) host->module->resources_destroy(host->instance);
-  host->module->destroy(host->instance);
+  destroy_instance(host->module, host->instance);
   host->instance = NULL;
   host->module = NULL;
   host->active = -1;
@@ -489,7 +526,54 @@ void game_host_deactivate(game_host_t *host) {
   host->active_id[0] = '\0';
 }
 
+// --- the start screen --------------------------------------------------------
+
+bool game_host_browse(game_host_t *host, int index) {
+  if (!host || index < 0 || index >= host->count || !host->slots[index].usable) return false;
+  if (host->browsed == index) return true;
+  host->browsed = index;
+  resolve_variant(host->slots[index].module, index == host->active ? host->variant_id : NULL,
+                  host->browsed_variant_id, sizeof(host->browsed_variant_id));
+  return true;
+}
+
+void game_host_browse_clear(game_host_t *host) {
+  if (!host) return;
+  host->browsed = -1;
+  host->browsed_variant_id[0] = '\0';
+}
+
+// Selection can change inside an ImGui callback. Retire its browser next frame,
+// after that callback and its draw commands have finished using the context.
+void game_host_browser_sync(game_host_t *host) {
+  if (!host || host->browser_index < 0 || host->browser_index == host->browsed) return;
+  const ft_game_module *module = host->slots[host->browser_index].module;
+  host->calling_index = host->browser_index;
+  if (host->browser_context && module->splash_destroy) module->splash_destroy(host->browser_context);
+  host->calling_index = -1;
+  host->browser_context = NULL;
+  host->browser_index = -1;
+}
+
+int game_host_browsed_index(const game_host_t *host) { return host ? host->browsed : -1; }
+
+const ft_game_module *game_host_browsed_module(const game_host_t *host) {
+  return host && host->browsed >= 0 ? host->slots[host->browsed].module : NULL;
+}
+
+const char *game_host_browsed_variant(const game_host_t *host) {
+  return host && host->browsed >= 0 ? host->browsed_variant_id : "";
+}
+
+void game_host_browsed_set_variant(game_host_t *host, const char *variant_id) {
+  if (!host || host->browsed < 0) return;
+  resolve_variant(host->slots[host->browsed].module, variant_id, host->browsed_variant_id,
+                  sizeof(host->browsed_variant_id));
+}
+
 void game_host_shutdown(game_host_t *host) {
+  game_host_browse_clear(host);
+  game_host_browser_sync(host);
   game_host_deactivate(host);
   // This is process shutdown, not a hot reload. Unloading a Rust cdylib here
   // tears down its private copy of the Rust runtime while allocator and TLS
@@ -500,10 +584,17 @@ void game_host_shutdown(game_host_t *host) {
   free(host->slots);
   memset(host, 0, sizeof(*host));
   host->active = -1;
+  host->browsed = -1;
 }
 
 const char *game_host_active_id(const game_host_t *host) {
   if (!host) return "";
+  return host->active_id;
+}
+
+const char *game_host_calling_id(const game_host_t *host) {
+  if (!host) return "";
+  if (host->calling_index >= 0) return host->slots[host->calling_index].id;
   return host->active_id;
 }
 
@@ -512,20 +603,7 @@ const char *game_host_active_version(const game_host_t *host) {
 }
 
 void game_host_set_variant(game_host_t *host, const char *variant_id) {
-  if (!host || !host->module) return;
-  const ft_game_constraints *c = &host->module->constraints;
-  if (variant_id) {
-    for (uint32_t i = 0; i < c->variant_count; ++i) {
-      if (c->variants[i].id && strcmp(c->variants[i].id, variant_id) == 0) {
-        snprintf(host->variant_id, sizeof(host->variant_id), "%s", variant_id);
-        return;
-      }
-    }
-  }
-  if (c->variant_count > 0 && c->variants[0].id)
-    snprintf(host->variant_id, sizeof(host->variant_id), "%s", c->variants[0].id);
-  else
-    host->variant_id[0] = '\0';
+  if (host) resolve_variant(host->module, variant_id, host->variant_id, sizeof(host->variant_id));
 }
 
 const char *game_host_variant(const game_host_t *host) {
@@ -789,13 +867,7 @@ unsigned gh_input_effect_count(game_host_t *host) {
 
 const ft_input_effect_desc *gh_input_effect_desc(game_host_t *host, unsigned index) {
   REQUIRE_GAME(NULL);
-  if (!m->input_effect_desc || index >= gh_input_effect_count(host)) return NULL;
-  const ft_input_effect_desc *desc = m->input_effect_desc(host->instance, index);
-  if (!desc || desc->struct_size != sizeof(*desc) || !id_is_valid(desc->id) || !desc->display_name ||
-      !*desc->display_name || desc->parameter_size > FT_INPUT_EFFECT_PARAMETER_MAX ||
-      desc->runtime_size > FT_INPUT_EFFECT_RUNTIME_MAX)
-    return NULL;
-  return desc;
+  return effect_desc_of(m, host->instance, index);
 }
 
 int gh_input_effect_find(game_host_t *host, const char *id) {
@@ -856,6 +928,16 @@ void gh_render(game_host_t *host, const ft_render_frame *frame) {
 void gh_ui(game_host_t *host, const ft_ui_frame *frame) {
   REQUIRE_GAME();
   if (m->ui) m->ui(host->instance, frame);
+}
+
+void gh_browsed_ui(game_host_t *host, const ft_ui_frame *frame) {
+  const ft_game_module *module = game_host_browsed_module(host);
+  if (!module || !module->splash || !frame || frame->state.headless) return;
+  game_host_browser_sync(host);
+  host->browser_index = host->browsed;
+  host->calling_index = host->browsed;
+  module->splash(host->engine_api, &host->browser_context, frame);
+  host->calling_index = -1;
 }
 
 const ft_panel_desc *gh_panels(game_host_t *host, uint32_t *out_count) {
@@ -1076,7 +1158,6 @@ bool gh_player_label(game_host_t *host, const ft_world *world, int player, char 
 }
 
 bool game_provides_splash(const game_host_t *host) {
-  // A game that implements the UI hook at all is assumed to handle the splash
-  // slot; there is no finer signal, and drawing nothing is a valid choice.
-  return host && host->module && host->module->ui != NULL;
+  const ft_game_module *module = game_host_browsed_module(host);
+  return module && module->splash != NULL;
 }

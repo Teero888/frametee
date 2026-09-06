@@ -774,8 +774,8 @@ unsafe extern "C" fn render(game: *mut c_void, frame: *const ft_render_frame) {
 
 }
 
-unsafe extern "C" fn ui(game: *mut c_void, frame: *const ft_ui_frame) {
-    if game.is_null() || frame.is_null() || (*frame).slot != FT_UI_SPLASH {
+unsafe extern "C" fn splash(engine: *const ft_engine_api, _context: *mut *mut c_void, frame: *const ft_ui_frame) {
+    if engine.is_null() || frame.is_null() || (*frame).slot != FT_UI_SPLASH {
         return;
     }
 
@@ -787,7 +787,6 @@ unsafe extern "C" fn ui(game: *mut c_void, frame: *const ft_ui_frame) {
     igSpacing();
 
     if igButton(cstr(START_BUTTON), ImVec2 { x: 220.0, y: 48.0 }) {
-        let engine = (*(game as *mut Game)).engine;
         if !engine.is_null() {
             if let Some(request_level) = (*engine).request_level {
                 request_level(cstr(BUILTIN_ARENA));
@@ -873,7 +872,7 @@ static MODULE: ft_game_module = ft_game_module {
     resources_create: std::ptr::null(),
     resources_destroy: std::ptr::null(),
 
-    ui: Some(ui),
+    ui: None,
     panels: std::ptr::null(),
     panel_count: 0,
     collect_events: std::ptr::null(),
@@ -903,6 +902,8 @@ static MODULE: ft_game_module = ft_game_module {
     input_effect_default: std::ptr::null(),
     input_effect_apply: std::ptr::null(),
     input_effect_ui: std::ptr::null(),
+    splash: Some(splash),
+    splash_destroy: None,
 };
 
 /// The one symbol the engine looks for.

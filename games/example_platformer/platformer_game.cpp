@@ -784,7 +784,12 @@ void ui(ft_game *game, const ft_ui_frame *frame) {
     player_panel(game, frame);
     return;
   }
-  if (frame->slot != FT_UI_SPLASH) return;
+}
+
+void splash(const ft_engine_api *engine, void **context, const ft_ui_frame *frame) {
+  (void)context;
+  if (!engine || !frame) return;
+
 
   igPushFont(nullptr, 22.f);
   igTextUnformatted("Raylib Platformer", nullptr);
@@ -819,7 +824,7 @@ void ui(ft_game *game, const ft_ui_frame *frame) {
     ImDrawList_AddText_Vec2(draw, ImVec2{min.x + 12.f, min.y + 12.f}, title, kBuiltinLevels[i].name, nullptr);
     ImDrawList_AddText_Vec2(draw, ImVec2{min.x + 12.f, min.y + 34.f}, description, kBuiltinLevels[i].description, nullptr);
 
-    if (clicked) game->engine->request_level(kBuiltinLevels[i].id);
+    if (clicked) engine->request_level(kBuiltinLevels[i].id);
 
     igEndGroup();
     igPopID();
@@ -927,6 +932,7 @@ const ft_game_module kModule = {
     .linked_actions = nullptr,
     .linked_action_count = 0,
     .linked_input_update = nullptr,
+    .splash = splash,
 };
 
 } // namespace

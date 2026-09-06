@@ -662,33 +662,39 @@ void config_save(ui_handler_t *ui) {
       }
     }
 
-    const unsigned setting_count = gh_setting_count(host);
-    fputs("\n[game.", fp);
-    write_toml_key(fp, game_host_active_id(host));
-    fputs("]\n", fp);
-    toml_datum_t old_active = old_game.type == TOML_TABLE ? toml_get(old_game, game_host_active_id(host)) : (toml_datum_t){0};
-    write_preserved_values(fp, old_active, skip_active_game_value, host);
-    for (unsigned i = 0; i < setting_count; ++i) {
-      const ft_setting_desc *desc = gh_setting_desc(host, i);
-      ft_value value;
-      if (!desc || !desc->id || !gh_setting_get(host, i, &value)) continue;
-      if (value.kind != FT_VALUE_BOOL && value.kind != FT_VALUE_INT && value.kind != FT_VALUE_FLOAT) continue;
-      write_toml_key(fp, desc->id);
-      fputs(" = ", fp);
-      switch (value.kind) {
-      case FT_VALUE_BOOL: fputs(value.as.b ? "true\n" : "false\n", fp); break;
-      case FT_VALUE_INT: fprintf(fp, "%lld\n", (long long)value.as.i); break;
-      case FT_VALUE_FLOAT: fprintf(fp, "%.17g\n", value.as.f); break;
-      default: break;
+    // With no game running there is no active table to write, and the loop
+    // above has already carried every stored one through untouched. Writing one
+    // anyway would name it after the empty active id and bury the editor state
+    // of whichever game was open last in a table nothing reads back.
+    if (game_host_ready(host)) {
+      const unsigned setting_count = gh_setting_count(host);
+      fputs("\n[game.", fp);
+      write_toml_key(fp, game_host_active_id(host));
+      fputs("]\n", fp);
+      toml_datum_t old_active = old_game.type == TOML_TABLE ? toml_get(old_game, game_host_active_id(host)) : (toml_datum_t){0};
+      write_preserved_values(fp, old_active, skip_active_game_value, host);
+      for (unsigned i = 0; i < setting_count; ++i) {
+        const ft_setting_desc *desc = gh_setting_desc(host, i);
+        ft_value value;
+        if (!desc || !desc->id || !gh_setting_get(host, i, &value)) continue;
+        if (value.kind != FT_VALUE_BOOL && value.kind != FT_VALUE_INT && value.kind != FT_VALUE_FLOAT) continue;
+        write_toml_key(fp, desc->id);
+        fputs(" = ", fp);
+        switch (value.kind) {
+        case FT_VALUE_BOOL: fputs(value.as.b ? "true\n" : "false\n", fp); break;
+        case FT_VALUE_INT: fprintf(fp, "%lld\n", (long long)value.as.i); break;
+        case FT_VALUE_FLOAT: fprintf(fp, "%.17g\n", value.as.f); break;
+        default: break;
+        }
       }
+      const camera_t *camera = &ui->gfx_handler->renderer.camera;
+      const ft_camera_mode *mode = game_camera_mode(host, camera->mode);
+      fputs("editor_camera_mode = ", fp);
+      write_toml_string(fp, mode && mode->id ? mode->id : "free");
+      fputc('\n', fp);
+      fprintf(fp, "editor_linked_copy_input = %s\n", ui->timeline.linked_copy_input ? "true" : "false");
+      write_prediction_config(fp, &ui->configured_prediction);
     }
-    const camera_t *camera = &ui->gfx_handler->renderer.camera;
-    const ft_camera_mode *mode = game_camera_mode(host, camera->mode);
-    fputs("editor_camera_mode = ", fp);
-    write_toml_string(fp, mode && mode->id ? mode->id : "free");
-    fputc('\n', fp);
-    fprintf(fp, "editor_linked_copy_input = %s\n", ui->timeline.linked_copy_input ? "true" : "false");
-    write_prediction_config(fp, &ui->configured_prediction);
   }
 
   fprintf(fp, "\n[auto_save]\n");
