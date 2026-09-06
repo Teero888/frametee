@@ -303,7 +303,7 @@ static void read_manifest(loaded_plugin_t *p) {
 // config's record of what the user approved, the editor's digest of the
 // directory as it is now, and the manifest beside the library. This is the only
 // call to fs_load_library in the editor, so no caller can get past it.
-bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
+static bool plugin_manager_load_plugin_internal(plugin_manager_t *manager, int index, bool ignore_game) {
   loaded_plugin_t *p = &manager->plugins[index];
   if (p->status == PLUGIN_STATUS_LOADED) return true;
 
@@ -350,7 +350,7 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
   // because the library's own answer is checked again below as soon as it is
   // up. That check is what a manifest cannot talk its way past; this one just
   // means an honest plugin for another game never has to be run to be skipped.
-  if (!plugin_manager_matches_active_game(manager, p)) {
+  if (!ignore_game && !plugin_manager_matches_active_game(manager, p)) {
     p->status = PLUGIN_STATUS_WRONG_GAME;
     snprintf(p->error_msg, sizeof(p->error_msg), "Written for game '%s', which is not active.", plugin_target_game(p));
     log_info(LOG_SOURCE, "Skipping '%s': its manifest says it belongs to game '%s'.", p->key, plugin_target_game(p));
@@ -423,7 +423,7 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
   // The library's own answer, which is the authority: a manifest that stayed
   // quiet, or claimed this game while the code says otherwise, is caught here.
   read_game_id(handle, p);
-  if (!plugin_manager_matches_active_game(manager, p)) {
+  if (!ignore_game && !plugin_manager_matches_active_game(manager, p)) {
     p->status = PLUGIN_STATUS_WRONG_GAME;
     snprintf(p->error_msg, sizeof(p->error_msg), "Written for game '%s', which is not active.", p->game_id);
     log_info(LOG_SOURCE, "Skipping '%s': it belongs to game '%s'.", p->path, p->game_id);
@@ -454,6 +454,10 @@ bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
     p->handle = NULL;
     return false;
   }
+}
+
+bool plugin_manager_load_plugin(plugin_manager_t *manager, int index) {
+  return plugin_manager_load_plugin_internal(manager, index, false);
 }
 
 void plugin_manager_unload_plugin(plugin_manager_t *manager, int index) {
@@ -639,12 +643,14 @@ void plugin_manager_load_all(plugin_manager_t *manager, const char *directory) {
 
     loaded_plugin_t *p = &manager->plugins[index];
 
-    // 3. Determine if it is enabled in config
+    // 3. Determine if it is enabled in config (headless runs ignore config.toml for reproducibility)
     bool enabled = false;
-    if (has_toml && plugins_table.type == TOML_TABLE) {
-      toml_datum_t val = toml_get(plugins_table, key);
-      if (val.type == TOML_BOOLEAN) {
-        enabled = val.u.boolean;
+    if (!manager->context || !manager->context->is_headless) {
+      if (has_toml && plugins_table.type == TOML_TABLE) {
+        toml_datum_t val = toml_get(plugins_table, key);
+        if (val.type == TOML_BOOLEAN) {
+          enabled = val.u.boolean;
+        }
       }
     }
     p->enabled = enabled;
@@ -1151,56 +1157,117 @@ void plugin_manager_render_ui(plugin_manager_t *manager, bool *p_open) {
   igEnd();
 }
 
-int plugin_manager_run_cli(plugin_manager_t *manager, int argc, const char **argv) {
-  if (!manager) return 1;
-  const char *target_plugin = NULL;
-  int arg_start = 0;
-  if (argc >= 2 && strcmp(argv[0], "--plugin") == 0) {
-    target_plugin = argv[1];
-    arg_start = 2;
-  }
+bool plugin_manager_activate(plugin_manager_t *manager, const char *key_or_name) {
+  if (!manager || !key_or_name) return false;
 
-  // In headless CLI execution, ensure plugins matching the active game (or targeted plugin) are loaded
   for (int i = 0; i < manager->count; ++i) {
     loaded_plugin_t *p = &manager->plugins[i];
-    if (target_plugin) {
-      if (strcmp(p->key, target_plugin) != 0 && strcmp(p->info_name, target_plugin) != 0)
-        continue;
-    } else {
-      if (!plugin_manager_matches_active_game(manager, p))
-        continue;
-    }
-    if (p->status != PLUGIN_STATUS_LOADED) {
+    if (strcmp(p->key, key_or_name) == 0 || strcmp(p->info_name, key_or_name) == 0) {
       p->enabled = true;
       if (!p->approved_sha256[0]) {
         snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
       }
-      plugin_manager_load_plugin(manager, i);
+      if (p->status == PLUGIN_STATUS_LOADED) return true;
+      return plugin_manager_load_plugin(manager, i);
     }
   }
+
+  log_error(LOG_SOURCE, "Plugin '%s' was not found.", key_or_name);
+  return false;
+}
+
+int plugin_manager_run_cli(plugin_manager_t *manager, int argc, const char **argv) {
+  if (!manager) return 1;
 
   int ran = 0;
   for (int i = 0; i < manager->count; ++i) {
     loaded_plugin_t *p = &manager->plugins[i];
     if (p->status != PLUGIN_STATUS_LOADED || !p->cli || !p->data) continue;
-    if (target_plugin && strcmp(p->key, target_plugin) != 0 && strcmp(p->info_name, target_plugin) != 0)
-      continue;
 
     g_running_plugin = p->handle;
-    int res = p->cli(p->data, argc - arg_start, argv + arg_start);
+    int res = p->cli(p->data, argc, argv);
     g_running_plugin = NULL;
     ran++;
     if (res != 0) return res;
-    if (target_plugin) return res;
   }
 
   if (ran == 0) {
-    if (target_plugin) {
-      log_error(LOG_SOURCE, "Targeted plugin '%s' not found or does not implement plugin_cli.", target_plugin);
-    } else {
-      log_error(LOG_SOURCE, "No loaded plugin provides a CLI handler (plugin_cli).");
+    if (argc > 0) {
+      log_error(LOG_SOURCE, "No active plugin provides a CLI handler to process arguments.");
+      log_error(LOG_SOURCE, "Use --plugin <name> to activate a plugin (e.g. frametee --plugin <name> ...).");
     }
-    return 1;
+    return argc > 0 ? 1 : 0;
   }
   return 0;
+}
+
+void plugin_manager_print_available(plugin_manager_t *manager) {
+  if (!manager || manager->count == 0) return;
+
+  printf("\nAvailable plugins:\n");
+  for (int i = 0; i < manager->count; ++i) {
+    loaded_plugin_t *p = &manager->plugins[i];
+    const char *target_game = plugin_target_game(p);
+    const char *game_label = (target_game && target_game[0]) ? target_game : "global";
+    const char *desc = p->info_description[0] ? p->info_description : p->info_name;
+
+    if (desc && desc[0]) {
+      printf("  %-22s [%-6s]  %s\n", p->key, game_label, desc);
+    } else {
+      printf("  %-22s [%-6s]\n", p->key, game_label);
+    }
+  }
+
+  printf("\nTo activate plugin(s) and view their CLI options, run:\n"
+         "  frametee --plugin <name...> --help\n");
+}
+
+void plugin_manager_print_help(plugin_manager_t *manager, int plugin_count, const char **plugin_names) {
+  if (!manager) return;
+
+  logger_set_quiet(true);
+
+  for (int n = 0; n < plugin_count; ++n) {
+    const char *target = plugin_names[n];
+    int idx = -1;
+    for (int i = 0; i < manager->count; ++i) {
+      if (strcmp(manager->plugins[i].key, target) == 0 || strcmp(manager->plugins[i].info_name, target) == 0) {
+        idx = i;
+        break;
+      }
+    }
+
+    if (idx < 0) {
+      printf("\nPlugin '%s' not found.\n", target);
+      continue;
+    }
+
+    loaded_plugin_t *p = &manager->plugins[idx];
+    if (p->status != PLUGIN_STATUS_LOADED) {
+      p->enabled = true;
+      if (!p->approved_sha256[0]) {
+        snprintf(p->approved_sha256, sizeof(p->approved_sha256), "%s", p->sha256);
+      }
+      plugin_manager_load_plugin_internal(manager, idx, true);
+    }
+
+    if (p->status == PLUGIN_STATUS_LOADED && p->cli && p->data) {
+      const char *name = plugin_display_name(p);
+      const char *target_game = plugin_target_game(p);
+      if (target_game && target_game[0]) {
+        printf("\nPlugin '%s' (game: %s) options:\n", name, target_game);
+      } else {
+        printf("\nPlugin '%s' options:\n", name);
+      }
+
+      const char *help_args[] = {"--help"};
+      g_running_plugin = p->handle;
+      p->cli(p->data, 1, help_args);
+      g_running_plugin = NULL;
+    } else if (p->status == PLUGIN_STATUS_LOADED) {
+      printf("\nPlugin '%s' does not provide command line options.\n", plugin_display_name(p));
+    } else {
+      printf("\nPlugin '%s' could not be loaded: %s\n", p->key, p->error_msg[0] ? p->error_msg : "unknown error");
+    }
+  }
 }

@@ -15,6 +15,7 @@
 
 static const char *level_strings[] = {"INFO", "WARN", "ERROR"};
 static const char *level_colors[] = {BLUE, YELLOW, RED};
+static bool g_logger_quiet = false;
 
 void logger_init(void) {
 #ifdef _WIN32
@@ -30,7 +31,13 @@ void logger_init(void) {
 #endif
 }
 
+void logger_set_quiet(bool quiet) {
+  g_logger_quiet = quiet;
+}
+
 void logger_log(log_level_t level, const char *source, const char *format, ...) {
+  if (g_logger_quiet && level < LOG_LEVEL_ERROR) return;
+
   time_t timer;
   char time_buffer[26];
   struct tm *tm_info;

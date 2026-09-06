@@ -121,8 +121,14 @@ int main(int argc, char **argv) {
   const char *level_path = NULL;
   const char *variant_id = NULL;
 
+#define MAX_CLI_PLUGINS 64
+  const char *forced_plugins[MAX_CLI_PLUGINS];
+  int num_forced_plugins = 0;
+
   const char **plugin_argv = (const char **)malloc(sizeof(const char *) * argc);
   int plugin_argc = 0;
+
+  bool show_help = false;
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--headless") == 0) {
@@ -139,6 +145,26 @@ int main(int argc, char **argv) {
       variant_id = argv[++i];
     } else if (strncmp(argv[i], "--variant=", 10) == 0) {
       variant_id = argv[i] + 10;
+    } else if (strcmp(argv[i], "--plugin") == 0 || strcmp(argv[i], "--plugins") == 0) {
+      while (i + 1 < argc && argv[i + 1][0] != '-') {
+        char *arg_copy = strdup(argv[++i]);
+        char *tok = strtok(arg_copy, ",");
+        while (tok) {
+          if (num_forced_plugins < MAX_CLI_PLUGINS) {
+            forced_plugins[num_forced_plugins++] = tok;
+          }
+          tok = strtok(NULL, ",");
+        }
+      }
+    } else if (strncmp(argv[i], "--plugin=", 9) == 0) {
+      char *arg_copy = strdup(argv[i] + 9);
+      char *tok = strtok(arg_copy, ",");
+      while (tok) {
+        if (num_forced_plugins < MAX_CLI_PLUGINS) {
+          forced_plugins[num_forced_plugins++] = tok;
+        }
+        tok = strtok(NULL, ",");
+      }
     } else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
       screenshot_path = argv[++i];
     } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
@@ -152,25 +178,17 @@ int main(int argc, char **argv) {
       g_list_games = true;
       g_is_headless = true;
     } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-      printf("Usage: frametee [options] [plugin-options]\n\n"
-             "Interactive options:\n"
-             "  --game <id>             Select game on startup (e.g. tmnf, ddnet)\n"
-             "  --level <path>          Open level immediately\n"
-             "  --list-games            List discovered game modules and exit\n\n"
-             "Headless options:\n"
-             "  --headless              Run without window or graphics\n"
-             "  --game <id>             Game module to use (e.g. tmnf, ddnet)\n"
-             "  --level <path>          Level file to load\n"
-             "  --variant <id>          Ruleset variant (DDNet: ddrace, race, fastcap)\n\n"
-             "All unconsumed options are forwarded to the active plugin CLI handler.\n");
-      free(plugin_argv);
-      return 0;
+      show_help = true;
     } else {
       plugin_argv[plugin_argc++] = argv[i];
     }
   }
 
   logger_init();
+  if (show_help) {
+    g_is_headless = true;
+    logger_set_quiet(true);
+  }
 
   if (g_list_games) {
     free(plugin_argv);
@@ -186,6 +204,32 @@ int main(int argc, char **argv) {
   if (init_gfx_handler(&handler) != 0) {
     free(plugin_argv);
     return 1;
+  }
+
+  if (show_help) {
+    printf("Usage: frametee [options] [plugin-options]\n\n"
+           "Interactive options:\n"
+           "  --game <id>             Select game on startup (e.g. tmnf, ddnet)\n"
+           "  --level <path>          Open level immediately\n"
+           "  --list-games            List discovered game modules and exit\n"
+           "  --plugin <name...>      Activate one or more plugins for this session\n\n"
+           "Headless options:\n"
+           "  --headless              Run without window or graphics\n"
+           "  --game <id>             Game module to use (e.g. tmnf, ddnet)\n"
+           "  --level <path>          Level file to load\n"
+           "  --variant <id>          Ruleset variant (DDNet: ddrace, race, fastcap)\n"
+           "  --plugin <name...>      Activate one or more plugins for this session\n"
+           "  --help, -h              Show this help message\n");
+
+    if (num_forced_plugins > 0) {
+      plugin_manager_print_help(&handler.user_interface.plugin_manager, num_forced_plugins, forced_plugins);
+    } else {
+      plugin_manager_print_available(&handler.user_interface.plugin_manager);
+    }
+    printf("\n");
+    free(plugin_argv);
+    gfx_cleanup(&handler);
+    return 0;
   }
 
   script_engine_init(&handler.user_interface, &handler.user_interface.plugin_api);
@@ -224,12 +268,24 @@ int main(int argc, char **argv) {
 
     model_add_new_track(&handler.user_interface.timeline, 1);
 
+    for (int p = 0; p < num_forced_plugins; ++p) {
+      if (!plugin_manager_activate(&handler.user_interface.plugin_manager, forced_plugins[p])) {
+        log_error("Main", "Failed to activate plugin '%s'.", forced_plugins[p]);
+        free(plugin_argv);
+        gfx_cleanup(&handler);
+        return 1;
+      }
+    }
+
     int res = plugin_manager_run_cli(&handler.user_interface.plugin_manager, plugin_argc, plugin_argv);
     free(plugin_argv);
     gfx_cleanup(&handler);
     return res;
   }
-  free(plugin_argv);
+
+  for (int p = 0; p < num_forced_plugins; ++p) {
+    plugin_manager_activate(&handler.user_interface.plugin_manager, forced_plugins[p]);
+  }
 
   if (level_path) {
     on_level_load_path(&handler, level_path);

@@ -24,6 +24,7 @@ typedef enum { LOG_LEVEL_INFO,
 extern "C" {
 #endif
 LOGGER_API void logger_init(void);
+LOGGER_API void logger_set_quiet(bool quiet);
 LOGGER_API void logger_log(log_level_t level, const char *source, const char *format, ...);
 #ifdef __cplusplus
 }

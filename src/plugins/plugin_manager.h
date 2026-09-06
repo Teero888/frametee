@@ -96,6 +96,9 @@ void plugin_manager_init(plugin_manager_t *manager, tas_context_t *context, tas_
 void plugin_manager_load_all(plugin_manager_t *manager, const char *directory);
 void plugin_manager_update_all(plugin_manager_t *manager);
 int plugin_manager_run_cli(plugin_manager_t *manager, int argc, const char **argv);
+bool plugin_manager_activate(plugin_manager_t *manager, const char *key_or_name);
+void plugin_manager_print_available(plugin_manager_t *manager);
+void plugin_manager_print_help(plugin_manager_t *manager, int plugin_count, const char **plugin_names);
 void plugin_manager_shutdown(plugin_manager_t *manager);
 void plugin_manager_reload_all(plugin_manager_t *manager, const char *directory);
 
