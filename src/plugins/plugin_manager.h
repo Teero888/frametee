@@ -2,9 +2,9 @@
 #define PLUGIN_MANAGER_H
 
 #include "plugin_api.h"
-#include <types.h>
 #include <stdbool.h>
 #include <system/sha256.h>
+#include <types.h>
 
 typedef enum {
   PLUGIN_STATUS_UNLOADED = 0,
@@ -28,15 +28,15 @@ struct loaded_plugin_t {
   char directory[1024];
   char path[1024];
   char key[128]; // the directory's name, which is also the config key
-  void *handle; // DLL/SO handle
-  
+  void *handle;  // DLL/SO handle
+
   // What the editor shows about a plugin, all of it read from the manifest, so
   // all of it the author's claim rather than anything the editor established.
   char info_name[128];
   char info_author[128];
   char info_version[64];
   char info_description[512];
-  
+
   // Game this plugin is written for, empty when it is global. Owned copy, since
   // the string lives in the library and the library may be unloaded. Read from
   // the library itself, so it is only authoritative once game_id_known is true.

@@ -13,7 +13,10 @@
 #define ARENA_Z 40.f
 #define CUBE_HALF 1.5f
 
-enum { FIELD_PUSH_X = 0, FIELD_PUSH_Z, FIELD_JUMP, FIELD_COUNT };
+enum { FIELD_PUSH_X = 0,
+       FIELD_PUSH_Z,
+       FIELD_JUMP,
+       FIELD_COUNT };
 
 typedef struct cube_input {
   int8_t push_x;
@@ -39,12 +42,9 @@ struct ft_world {
 // --- input -------------------------------------------------------------------
 
 static const ft_input_field input_fields[FIELD_COUNT] = {
-    {"push_x", "Push X", "Nudge along X", FT_INPUT_INT, FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X, -1, 1, 0, 0.f, 0.f, 0.f, NULL,
-     0, {0.4f, 0.8f, 1.f, 1.f}},
-    {"push_z", "Push Z", "Nudge along Z", FT_INPUT_INT, FT_INPUT_FLAG_TIMELINE_LANE, -1, 1, 0, 0.f, 0.f, 0.f, NULL, 0,
-     {0.5f, 1.f, 0.6f, 1.f}},
-    {"jump", "Jump", "Only fires from the floor", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE, 0, 1, 0, 0.f, 0.f, 0.f, NULL, 0,
-     {1.f, 0.85f, 0.35f, 1.f}},
+    {"push_x", "Push X", "Nudge along X", FT_INPUT_INT, FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X, -1, 1, 0, 0.f, 0.f, 0.f, NULL, 0, {0.4f, 0.8f, 1.f, 1.f}},
+    {"push_z", "Push Z", "Nudge along Z", FT_INPUT_INT, FT_INPUT_FLAG_TIMELINE_LANE, -1, 1, 0, 0.f, 0.f, 0.f, NULL, 0, {0.5f, 1.f, 0.6f, 1.f}},
+    {"jump", "Jump", "Only fires from the floor", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE, 0, 1, 0, 0.f, 0.f, 0.f, NULL, 0, {1.f, 0.85f, 0.35f, 1.f}},
 };
 
 static const ft_input_control input_controls[] = {
@@ -67,7 +67,9 @@ static const ft_input_schema input_schema = {
 
 // --- properties --------------------------------------------------------------
 
-enum { PROP_POSITION = 0, PROP_VELOCITY, PROP_COUNT };
+enum { PROP_POSITION = 0,
+       PROP_VELOCITY,
+       PROP_COUNT };
 
 // A 3D game describes its positions as vectors of three, which is what
 // FT_VALUE_VEC3 exists for: the inspector shows one row rather than three.
@@ -161,7 +163,8 @@ static void world_step(ft_game *game, ft_world *world, const void *inputs, uint3
   }
 
   world->vel[1] -= 0.021f; // gravity
-  for (int i = 0; i < 3; ++i) world->pos[i] += world->vel[i];
+  for (int i = 0; i < 3; ++i)
+    world->pos[i] += world->vel[i];
 
   bounce_axis(&world->pos[0], &world->vel[0], CUBE_HALF, ARENA_X - CUBE_HALF);
   bounce_axis(&world->pos[1], &world->vel[1], CUBE_HALF, ARENA_Y - CUBE_HALF);
@@ -196,10 +199,17 @@ static void input_set(ft_game *game, void *record, uint32_t field, int64_t value
   cube_input *in = record;
   if (!in) return;
   switch (field) {
-  case FIELD_PUSH_X: in->push_x = (int8_t)value; break;
-  case FIELD_PUSH_Z: in->push_z = (int8_t)value; break;
-  case FIELD_JUMP: in->jump = value ? 1 : 0; break;
-  default: break;
+  case FIELD_PUSH_X:
+    in->push_x = (int8_t)value;
+    break;
+  case FIELD_PUSH_Z:
+    in->push_z = (int8_t)value;
+    break;
+  case FIELD_JUMP:
+    in->jump = value ? 1 : 0;
+    break;
+  default:
+    break;
   }
 }
 
@@ -208,10 +218,14 @@ static int64_t input_get(ft_game *game, const void *record, uint32_t field) {
   const cube_input *in = record;
   if (!in) return 0;
   switch (field) {
-  case FIELD_PUSH_X: return in->push_x;
-  case FIELD_PUSH_Z: return in->push_z;
-  case FIELD_JUMP: return in->jump;
-  default: return 0;
+  case FIELD_PUSH_X:
+    return in->push_x;
+  case FIELD_PUSH_Z:
+    return in->push_z;
+  case FIELD_JUMP:
+    return in->jump;
+  default:
+    return 0;
   }
 }
 
@@ -234,7 +248,8 @@ static bool entity_prop_get(ft_game *game, const ft_world *world, uint32_t class
     out->kind = FT_VALUE_VEC3;
     out->as.v3 = (ft_vec3){world->vel[0], world->vel[1], world->vel[2]};
     return true;
-  default: return false;
+  default:
+    return false;
   }
 }
 
@@ -243,7 +258,8 @@ static bool entity_prop_get(ft_game *game, const ft_world *world, uint32_t class
 static bool entity_prop_set(ft_game *game, ft_world *world, uint32_t class_index, int32_t entity, uint32_t prop, const ft_value *value) {
   (void)game;
   if (!world || !value || class_index != 0 || entity != 0 || value->kind != FT_VALUE_VEC3) return false;
-  float *target = prop == PROP_POSITION ? world->pos : prop == PROP_VELOCITY ? world->vel : NULL;
+  float *target = prop == PROP_POSITION ? world->pos : prop == PROP_VELOCITY ? world->vel
+                                                                             : NULL;
   if (!target) return false;
   target[0] = value->as.v3.x;
   target[1] = value->as.v3.y;

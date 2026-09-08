@@ -227,7 +227,8 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
   // everything else is the body and is drawn where it was authored.
   ft_color tint[VEHICLE_PART_COUNT];
   bool replace[VEHICLE_PART_COUNT] = {};
-  for (std::size_t i = 0; i < 4; ++i) tint[i] = WheelStateColor(car, i, &replace[i]);
+  for (std::size_t i = 0; i < 4; ++i)
+    tint[i] = WheelStateColor(car, i, &replace[i]);
 
   // Each wheel rolls about its own axle on the angle the simulation reports for
   // it, and the front pair is steered on top of that, so the roll goes first.

@@ -42,25 +42,43 @@ std::string Lowered(std::string_view text) {
 ft_color SurfaceColor(std::uint8_t surface, bool *known) {
   *known = true;
   switch (surface) {
-  case 0: return ft_color{0.55f, 0.55f, 0.57f, 1.f};  // concrete
-  case 1: return ft_color{0.48f, 0.48f, 0.50f, 1.f};  // pavement
-  case 2: return ft_color{0.30f, 0.52f, 0.24f, 1.f};  // grass
-  case 3: return ft_color{0.72f, 0.88f, 0.95f, 1.f};  // ice
-  case 4: return ft_color{0.56f, 0.58f, 0.62f, 1.f};  // metal
-  case 5: return ft_color{0.83f, 0.74f, 0.52f, 1.f};  // sand
-  case 6: return ft_color{0.52f, 0.38f, 0.26f, 1.f};  // dirt
-  case 8: return ft_color{0.48f, 0.36f, 0.25f, 1.f};  // dirt road
+  case 0:
+    return ft_color{0.55f, 0.55f, 0.57f, 1.f}; // concrete
+  case 1:
+    return ft_color{0.48f, 0.48f, 0.50f, 1.f}; // pavement
+  case 2:
+    return ft_color{0.30f, 0.52f, 0.24f, 1.f}; // grass
+  case 3:
+    return ft_color{0.72f, 0.88f, 0.95f, 1.f}; // ice
+  case 4:
+    return ft_color{0.56f, 0.58f, 0.62f, 1.f}; // metal
+  case 5:
+    return ft_color{0.83f, 0.74f, 0.52f, 1.f}; // sand
+  case 6:
+    return ft_color{0.52f, 0.38f, 0.26f, 1.f}; // dirt
+  case 8:
+    return ft_color{0.48f, 0.36f, 0.25f, 1.f}; // dirt road
   case 9:
-  case 10: return ft_color{0.20f, 0.20f, 0.22f, 1.f}; // rubber
-  case 12: return ft_color{0.46f, 0.44f, 0.42f, 1.f}; // rock
-  case 13: return ft_color{0.18f, 0.42f, 0.62f, 0.75f}; // water
-  case 14: return ft_color{0.55f, 0.40f, 0.24f, 1.f};  // wood
-  case 15: return ft_color{0.80f, 0.24f, 0.20f, 1.f};  // danger
-  case 16: return ft_color{0.30f, 0.31f, 0.34f, 1.f};  // asphalt
-  case 21: return ft_color{0.92f, 0.94f, 0.97f, 1.f};  // snow
-  case 26: return ft_color{0.95f, 0.65f, 0.12f, 1.f};  // turbo
-  case 27: return ft_color{0.66f, 0.82f, 0.92f, 1.f};  // road ice
-  default: break;
+  case 10:
+    return ft_color{0.20f, 0.20f, 0.22f, 1.f}; // rubber
+  case 12:
+    return ft_color{0.46f, 0.44f, 0.42f, 1.f}; // rock
+  case 13:
+    return ft_color{0.18f, 0.42f, 0.62f, 0.75f}; // water
+  case 14:
+    return ft_color{0.55f, 0.40f, 0.24f, 1.f}; // wood
+  case 15:
+    return ft_color{0.80f, 0.24f, 0.20f, 1.f}; // danger
+  case 16:
+    return ft_color{0.30f, 0.31f, 0.34f, 1.f}; // asphalt
+  case 21:
+    return ft_color{0.92f, 0.94f, 0.97f, 1.f}; // snow
+  case 26:
+    return ft_color{0.95f, 0.65f, 0.12f, 1.f}; // turbo
+  case 27:
+    return ft_color{0.66f, 0.82f, 0.92f, 1.f}; // road ice
+  default:
+    break;
   }
   *known = false;
   return ft_color{0.5f, 0.5f, 0.52f, 1.f};
@@ -187,7 +205,8 @@ void TriangleGrid::Build(std::vector<Triangle> &triangles, const Aabb &bounds) {
 
   // Count, prefix sum, scatter: one pass more than a vector of vectors, and no
   // per-cell allocation at all.
-  for (const Triangle &tri : triangles) cells[cell_of(tri)].count++;
+  for (const Triangle &tri : triangles)
+    cells[cell_of(tri)].count++;
 
   std::uint32_t running = 0;
   for (GridCell &cell : cells) {
@@ -308,8 +327,6 @@ void ScanTracks(TrackBrowser *game) {
       break;
     }
   }
-
-
 }
 
 // --- loading -----------------------------------------------------------------
@@ -346,13 +363,15 @@ bool IsSkyDome(const TrackMesh &mesh, const TrackInstance &instance) {
   // dome is two of them.
   if (mesh.vertices.empty() || mesh.vertices.size() > 4096u || !mesh.has_uv) return false;
   Aabb box;
-  for (const TrackVertex &vertex : mesh.vertices) box.Add(TransformPoint(instance.transform, vertex.position));
+  for (const TrackVertex &vertex : mesh.vertices)
+    box.Add(TransformPoint(instance.transform, vertex.position));
   return box.Valid() && box.mx.y - box.mn.y > kSkyDomeHeight;
 }
 
 bool IsDistantScenery(const TrackMesh &mesh, const TrackInstance &instance) {
   Aabb box;
-  for (const TrackVertex &vertex : mesh.vertices) box.Add(TransformPoint(instance.transform, vertex.position));
+  for (const TrackVertex &vertex : mesh.vertices)
+    box.Add(TransformPoint(instance.transform, vertex.position));
   if (!box.Valid()) return false;
   return box.mx.x - box.mn.x > kSceneryFootprint || box.mx.z - box.mn.z > kSceneryFootprint;
 }
@@ -385,7 +404,8 @@ bool IsGrassBlades(const TrackMesh &mesh) {
   if (mesh.indices.size() < 3u * 64u) return false;
 
   Aabb box;
-  for (const TrackVertex &vertex : mesh.vertices) box.Add(vertex.position);
+  for (const TrackVertex &vertex : mesh.vertices)
+    box.Add(vertex.position);
   if (!box.Valid() || box.mx.y - box.mn.y > kGrassBladeHeight) return false;
   if (box.mx.x - box.mn.x < kGrassBladeFootprint || box.mx.z - box.mn.z < kGrassBladeFootprint) return false;
 
@@ -687,7 +707,9 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   }
 
   BuildStats stats;
-  enum : std::uint8_t { kUnknown, kYes, kNo };
+  enum : std::uint8_t { kUnknown,
+                        kYes,
+                        kNo };
   std::vector<std::uint8_t> grass_blades(scene.meshes.size(), kUnknown);
   Aabb backdrop_bounds;
   // The blocks the track is actually built from, as opposed to the hills and

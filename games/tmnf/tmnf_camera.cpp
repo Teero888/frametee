@@ -22,7 +22,9 @@
 namespace tmnf {
 namespace {
 
-enum CameraModeIndex { CAMERA_RACE = 0, CAMERA_ORBIT, CAMERA_MODE_COUNT };
+enum CameraModeIndex { CAMERA_RACE = 0,
+                       CAMERA_ORBIT,
+                       CAMERA_MODE_COUNT };
 
 // How far behind and above the car the view sits when the game's own camera
 // could not be decoded. Rough, but it keeps a track drivable rather than

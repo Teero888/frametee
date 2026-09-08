@@ -1,6 +1,6 @@
-#include "dd_internal.h"
 #include "dd_imcol.h"
 #include "dd_imgui.h"
+#include "dd_internal.h"
 #include "dd_profile.h"
 
 #include <ctype.h>
@@ -19,8 +19,8 @@
 #define dd_mkdir(path) _mkdir(path)
 #else
 #define DD_PATH_SEP '/'
-#include <sys/stat.h>
 #include <strings.h>
+#include <sys/stat.h>
 #define dd_strcasecmp strcasecmp
 #define dd_mkdir(path) mkdir(path, 0755)
 #endif

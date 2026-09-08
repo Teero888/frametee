@@ -51,7 +51,8 @@ std::uint32_t StartLightFrame(std::int32_t tick) {
   // The hidden physics pre-roll ends at timeline tick zero. Negative ticks,
   // when a caller exposes that pre-roll, show the authored red/amber phases;
   // a normal run starts and remains on green instead of cycling mid-race.
-  return tick < -100 ? 2u : tick < 0 ? 1u : 0u;
+  return tick < -100 ? 2u : tick < 0 ? 1u
+                                     : 0u;
 }
 
 std::uint32_t AnimatedLayer(std::uint32_t layer, const TextureAnimation &animation, std::int32_t tick) {
@@ -260,8 +261,11 @@ void Render(ft_game *game, const ft_render_frame *frame) {
     // in its timeline; the track does not belong to any one world.
     if (game->settings.draw_track) RenderTrack(game, frame);
     break;
-  case FT_PASS_ENTITIES: RenderCar(game, frame); break;
-  default: break;
+  case FT_PASS_ENTITIES:
+    RenderCar(game, frame);
+    break;
+  default:
+    break;
   }
 }
 

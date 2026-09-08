@@ -103,7 +103,8 @@ void DecodeColorBlock(const unsigned char *block, bool allow_punchthrough, std::
   palette[3][3] = punchthrough ? 0u : 255u;
 
   const std::uint32_t bits = ReadU32(block + 4);
-  for (int i = 0; i < 16; ++i) std::memcpy(out[i], palette[(bits >> (2 * i)) & 3u], 4);
+  for (int i = 0; i < 16; ++i)
+    std::memcpy(out[i], palette[(bits >> (2 * i)) & 3u], 4);
 }
 
 void DecodeDxt3Alpha(const unsigned char *block, std::uint8_t out[16][4]) {
@@ -127,8 +128,10 @@ void DecodeDxt5Alpha(const unsigned char *block, std::uint8_t out[16][4]) {
     alpha[7] = 255u;
   }
   std::uint64_t bits = 0u;
-  for (int i = 0; i < 6; ++i) bits |= static_cast<std::uint64_t>(block[2 + i]) << (8 * i);
-  for (int i = 0; i < 16; ++i) out[i][3] = alpha[(bits >> (3 * i)) & 7u];
+  for (int i = 0; i < 6; ++i)
+    bits |= static_cast<std::uint64_t>(block[2 + i]) << (8 * i);
+  for (int i = 0; i < 16; ++i)
+    out[i][3] = alpha[(bits >> (3 * i)) & 7u];
 }
 
 // The top mip of a DDS, as RGBA8. Only the top level is read: the engine builds
@@ -239,9 +242,9 @@ bool DecodeBink(const std::vector<unsigned char> &bytes, std::uint32_t *width, s
   MemoryVideo video{bytes.data(), bytes.size(), 0u};
   auto *io_buffer = static_cast<std::uint8_t *>(av_malloc(kIoBufferSize));
   AVIOContext *io = io_buffer != nullptr
-                          ? avio_alloc_context(io_buffer, static_cast<int>(kIoBufferSize), 0, &video,
-                                               &ReadVideo, nullptr, &SeekVideo)
-                          : nullptr;
+                        ? avio_alloc_context(io_buffer, static_cast<int>(kIoBufferSize), 0, &video,
+                                             &ReadVideo, nullptr, &SeekVideo)
+                        : nullptr;
   AVFormatContext *format = avformat_alloc_context();
   AVCodecContext *codec = nullptr;
   AVPacket *packet = nullptr;
@@ -409,12 +412,14 @@ void Resample(const std::vector<std::uint8_t> &src, std::uint32_t sw, std::uint3
       for (std::uint32_t sy = y0; sy < y1 && sy < sh; ++sy) {
         for (std::uint32_t sx = x0; sx < x1 && sx < sw; ++sx) {
           const std::uint8_t *p = &src[(static_cast<std::size_t>(sy) * sw + sx) * 4u];
-          for (int c = 0; c < 4; ++c) sum[c] += p[c];
+          for (int c = 0; c < 4; ++c)
+            sum[c] += p[c];
           ++count;
         }
       }
       std::uint8_t *out = &(*dst)[(static_cast<std::size_t>(y) * dw + x) * 4u];
-      for (int c = 0; c < 4; ++c) out[c] = count ? static_cast<std::uint8_t>(sum[c] / count) : 0u;
+      for (int c = 0; c < 4; ++c)
+        out[c] = count ? static_cast<std::uint8_t>(sum[c] / count) : 0u;
     }
   }
 }
@@ -428,7 +433,6 @@ bool EqualsIgnoreCase(std::string_view a, std::string_view b) {
   }
   return true;
 }
-
 
 // One member of a zip archive, by name.
 //
@@ -537,9 +541,25 @@ std::string Lower(std::string_view text) {
 // surface's own appearance whatever else is around them.
 bool IsNamedSupport(const std::string &lower_name) {
   static const char *const kReject[] = {
-      "envmap",   "envcubic", "cube",  "cloud",  "specular", "hemispec", "fresnel", "reflec",
-      "selfillum", "shadow",  "normal", "bump",  "noise",    "sprite",   "flare",   "distort",
-      "ramp",     "gloss",    "damage",
+      "envmap",
+      "envcubic",
+      "cube",
+      "cloud",
+      "specular",
+      "hemispec",
+      "fresnel",
+      "reflec",
+      "selfillum",
+      "shadow",
+      "normal",
+      "bump",
+      "noise",
+      "sprite",
+      "flare",
+      "distort",
+      "ramp",
+      "gloss",
+      "damage",
   };
   for (const char *pattern : kReject)
     if (lower_name.find(pattern) != std::string::npos) return true;
@@ -548,14 +568,18 @@ bool IsNamedSupport(const std::string &lower_name) {
 
 TextureRole RoleOfSuffix(char letter) {
   switch (letter) {
-  case 'd': return TEXTURE_ROLE_DIFFUSE;
-  case 'l': return TEXTURE_ROLE_LIGHT;
+  case 'd':
+    return TEXTURE_ROLE_DIFFUSE;
+  case 'l':
+    return TEXTURE_ROLE_LIGHT;
   case 'n':
   case 's':
   case 'i':
   case 'o':
-  case 'h': return TEXTURE_ROLE_REJECT;
-  default: return TEXTURE_ROLE_PLAIN;
+  case 'h':
+    return TEXTURE_ROLE_REJECT;
+  default:
+    return TEXTURE_ROLE_PLAIN;
   }
 }
 
@@ -1020,12 +1044,14 @@ void TextureLibrary::Clear() {
 // asking for a gigabyte of them.
 std::uint32_t TextureLibrary::ChoosePageSize() const {
   std::uint32_t largest = kMinTexturePageSize;
-  for (const Page &page : layers_) largest = std::max({largest, page.width, page.height});
+  for (const Page &page : layers_)
+    largest = std::max({largest, page.width, page.height});
 
   // Round up to a power of two: a mip chain is exact on one and lopsided on
   // anything else, and every one of the game's own textures is one already.
   std::uint32_t size = kMinTexturePageSize;
-  while (size < largest && size < kMaxTexturePageSize) size *= 2u;
+  while (size < largest && size < kMaxTexturePageSize)
+    size *= 2u;
 
   const std::size_t bytes_per_page = 4u; // RGBA8
   while (size > kMinTexturePageSize &&
@@ -1103,7 +1129,8 @@ bool TextureLibrary::Upload(ft_game *game) {
     // solid walls. What makes the blend behave instead is drawing the blended
     // surfaces after the solid ones; see ft_level::translucent.
     if (!page.alpha_used) {
-      for (std::size_t p = 3u; p < uploaded->size(); p += 4u) (*uploaded)[p] = 255u;
+      for (std::size_t p = 3u; p < uploaded->size(); p += 4u)
+        (*uploaded)[p] = 255u;
     }
 
     api->texture_update_layer(texture_, static_cast<std::uint32_t>(i), uploaded->data(), page_size_, page_size_);

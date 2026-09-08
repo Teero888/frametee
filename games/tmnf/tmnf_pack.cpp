@@ -65,7 +65,8 @@ std::string Lowered(std::string_view text) {
 std::string NormalizePath(std::string_view path) {
   std::string out;
   out.reserve(path.size());
-  for (const char c : path) out.push_back(c == '/' ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+  for (const char c : path)
+    out.push_back(c == '/' ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
   return out;
 }
 
@@ -114,7 +115,8 @@ bool PackSet::Open(const std::string &packs_dir, const std::vector<std::string> 
     keys_.reset();
     return false;
   }
-  for (const std::string &name : pack_names) OpenOne(name);
+  for (const std::string &name : pack_names)
+    OpenOne(name);
   return !packs_.empty();
 }
 

@@ -30,19 +30,13 @@ namespace {
 // --- input schema ------------------------------------------------------------
 
 const ft_input_field kInputFields[FIELD_COUNT] = {
-    {"accelerate", "Accelerate", "Throttle", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE, 0, 1, 0, 0.f, 0.f, 0.f,
-     nullptr, 0, {0.40f, 1.00f, 0.50f, 1.f}},
-    {"brake", "Brake", "Brake and reverse", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE, 0, 1, 0, 0.f, 0.f, 0.f, nullptr,
-     0, {1.00f, 0.45f, 0.40f, 1.f}},
-    {"steer", "Steer", "Full lock is 65536 either way, exactly as the game stores it", FT_INPUT_INT,
-     FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X, -65536, 65536, 0, 0.f, 0.f, 0.f, nullptr, 0,
-     {0.45f, 0.75f, 1.00f, 1.f}},
+    {"accelerate", "Accelerate", "Throttle", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE, 0, 1, 0, 0.f, 0.f, 0.f, nullptr, 0, {0.40f, 1.00f, 0.50f, 1.f}},
+    {"brake", "Brake", "Brake and reverse", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE, 0, 1, 0, 0.f, 0.f, 0.f, nullptr, 0, {1.00f, 0.45f, 0.40f, 1.f}},
+    {"steer", "Steer", "Full lock is 65536 either way, exactly as the game stores it", FT_INPUT_INT, FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X, -65536, 65536, 0, 0.f, 0.f, 0.f, nullptr, 0, {0.45f, 0.75f, 1.00f, 1.f}},
     // Respawn acts on the tick it is pressed rather than while held, which is
     // what the latched and trigger flags tell the timeline to draw and to
     // clear after every tick.
-    {"respawn", "Respawn", "Return to the last checkpoint", FT_INPUT_BOOL,
-     FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_LATCHED | FT_INPUT_FLAG_TRIGGER, 0, 1, 0, 0.f, 0.f, 0.f, nullptr, 0,
-     {1.00f, 0.85f, 0.35f, 1.f}},
+    {"respawn", "Respawn", "Return to the last checkpoint", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_LATCHED | FT_INPUT_FLAG_TRIGGER, 0, 1, 0, 0.f, 0.f, 0.f, nullptr, 0, {1.00f, 0.85f, 0.35f, 1.f}},
 };
 
 const ft_input_control kInputControls[] = {
@@ -223,13 +217,20 @@ void InputSet(ft_game *, void *record, std::uint32_t field, std::int64_t value) 
   auto *in = static_cast<TmnfInput *>(record);
   if (!in) return;
   switch (field) {
-  case FIELD_ACCELERATE: in->accelerate = value ? 1u : 0u; break;
-  case FIELD_BRAKE: in->brake = value ? 1u : 0u; break;
-  case FIELD_RESPAWN: in->respawn = value ? 1u : 0u; break;
+  case FIELD_ACCELERATE:
+    in->accelerate = value ? 1u : 0u;
+    break;
+  case FIELD_BRAKE:
+    in->brake = value ? 1u : 0u;
+    break;
+  case FIELD_RESPAWN:
+    in->respawn = value ? 1u : 0u;
+    break;
   case FIELD_STEER:
     in->steer = static_cast<std::int32_t>(std::clamp<std::int64_t>(value, -kAnalogInputScale, kAnalogInputScale));
     break;
-  default: break;
+  default:
+    break;
   }
 }
 
@@ -237,11 +238,16 @@ std::int64_t InputGet(ft_game *, const void *record, std::uint32_t field) {
   const auto *in = static_cast<const TmnfInput *>(record);
   if (!in) return 0;
   switch (field) {
-  case FIELD_ACCELERATE: return in->accelerate;
-  case FIELD_BRAKE: return in->brake;
-  case FIELD_RESPAWN: return in->respawn;
-  case FIELD_STEER: return in->steer;
-  default: return 0;
+  case FIELD_ACCELERATE:
+    return in->accelerate;
+  case FIELD_BRAKE:
+    return in->brake;
+  case FIELD_RESPAWN:
+    return in->respawn;
+  case FIELD_STEER:
+    return in->steer;
+  default:
+    return 0;
   }
 }
 
@@ -263,7 +269,8 @@ std::int32_t EntityCount(ft_game *, const ft_world *world, std::uint32_t entity_
 
 int WheelsOnGround(const sim::CarState &car) {
   int count = 0;
-  for (bool contact : car.wheelContact) count += contact ? 1 : 0;
+  for (bool contact : car.wheelContact)
+    count += contact ? 1 : 0;
   return count;
 }
 
@@ -301,25 +308,42 @@ bool EntityPropGet(ft_game *, const ft_world *world, std::uint32_t entity_class,
   };
 
   switch (prop) {
-  case PROP_POSITION: return vec3(ToVec3(car.position));
-  case PROP_VELOCITY: return vec3(ToVec3(car.linearSpeed));
+  case PROP_POSITION:
+    return vec3(ToVec3(car.position));
+  case PROP_VELOCITY:
+    return vec3(ToVec3(car.linearSpeed));
   // The simulation reports metres per second; the game's own readout, and
   // every speed a TrackMania run is discussed in, is kilometres per hour.
-  case PROP_SPEED: return number(ToKmh(car.signedSpeed));
-  case PROP_GEAR: return integer(car.gear);
-  case PROP_RPM: return number(car.rpm);
-  case PROP_STEERING: return number(view.steering);
-  case PROP_TURNING_RATE: return number(car.turningRate);
-  case PROP_LOCAL_SPEED: return vec3(ToVec3(car.localSpeed));
-  case PROP_WHEELS_ON_GROUND: return integer(WheelsOnGround(car));
-  case PROP_SLIDING: return boolean(AnyWheelSliding(car));
-  case PROP_FREE_WHEELING: return boolean(car.freeWheeling);
-  case PROP_TURBO: return number(car.turbo);
-  case PROP_ENGINE: return boolean(world->state.EngineOn());
-  case PROP_CHECKPOINTS: return integer(view.checkpointsCollected);
-  case PROP_RESPAWNS: return integer(view.respawnCount);
-  case PROP_TIME: return number(static_cast<double>(view.timeMs) / 1000.0);
-  default: return false;
+  case PROP_SPEED:
+    return number(ToKmh(car.signedSpeed));
+  case PROP_GEAR:
+    return integer(car.gear);
+  case PROP_RPM:
+    return number(car.rpm);
+  case PROP_STEERING:
+    return number(view.steering);
+  case PROP_TURNING_RATE:
+    return number(car.turningRate);
+  case PROP_LOCAL_SPEED:
+    return vec3(ToVec3(car.localSpeed));
+  case PROP_WHEELS_ON_GROUND:
+    return integer(WheelsOnGround(car));
+  case PROP_SLIDING:
+    return boolean(AnyWheelSliding(car));
+  case PROP_FREE_WHEELING:
+    return boolean(car.freeWheeling);
+  case PROP_TURBO:
+    return number(car.turbo);
+  case PROP_ENGINE:
+    return boolean(world->state.EngineOn());
+  case PROP_CHECKPOINTS:
+    return integer(view.checkpointsCollected);
+  case PROP_RESPAWNS:
+    return integer(view.respawnCount);
+  case PROP_TIME:
+    return number(static_cast<double>(view.timeMs) / 1000.0);
+  default:
+    return false;
   }
 }
 
@@ -344,7 +368,8 @@ bool EntityPropSet(ft_game *game, ft_world *world, std::uint32_t entity_class, s
     if (value->kind != FT_VALUE_BOOL) return false;
     edit.engineOn = value->as.b;
     break;
-  default: return false;
+  default:
+    return false;
   }
 
   // One simulation serves every world, so editing a state is as much a use of
@@ -475,18 +500,28 @@ bool SettingGet(ft_game *game, std::uint32_t index, ft_value *out) {
     out->kind = FT_VALUE_BOOL;
     out->as.b = game->settings.draw_collision;
     return true;
-  default: return false;
+  default:
+    return false;
   }
 }
 
 bool SettingSet(ft_game *game, std::uint32_t index, const ft_value *value) {
   if (!game || !value) return false;
   switch (index) {
-  case SETTING_TRACK: game->settings.draw_track = value->as.b; return true;
-  case SETTING_BACKGROUND: game->settings.draw_background = value->as.b; return true;
-  case SETTING_BACKFACE_CULL: game->settings.backface_cull = value->as.b; return true;
-  case SETTING_COLLISION: game->settings.draw_collision = value->as.b; return true;
-  default: return false;
+  case SETTING_TRACK:
+    game->settings.draw_track = value->as.b;
+    return true;
+  case SETTING_BACKGROUND:
+    game->settings.draw_background = value->as.b;
+    return true;
+  case SETTING_BACKFACE_CULL:
+    game->settings.backface_cull = value->as.b;
+    return true;
+  case SETTING_COLLISION:
+    game->settings.draw_collision = value->as.b;
+    return true;
+  default:
+    return false;
   }
 }
 

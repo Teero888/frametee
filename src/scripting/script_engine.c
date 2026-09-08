@@ -6,9 +6,9 @@
 #include <string.h>
 #include <system/fs.h>
 #include <system/save.h>
+#include <types.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <user_interface/timeline_events.h>
-#include <types.h>
 
 #define LOG_SOURCE "ScriptEngine"
 

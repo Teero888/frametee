@@ -33,7 +33,8 @@ static bool semver_core_number(const char **cursor) {
   const char *start = *cursor;
   if (*start < '0' || *start > '9') return false;
   if (*start == '0' && start[1] >= '0' && start[1] <= '9') return false;
-  while (**cursor >= '0' && **cursor <= '9') ++*cursor;
+  while (**cursor >= '0' && **cursor <= '9')
+    ++*cursor;
   return *cursor > start;
 }
 
@@ -73,10 +74,10 @@ static bool semver_is_valid(const char *version) {
 // module that fails here is kept in the list with the reason, so the game
 // picker can show why it is unusable instead of pretending it does not exist.
 static bool validate_module(const ft_game_module *m, char *error, size_t error_size) {
-#define FAIL(...)                            \
-  do {                                       \
+#define FAIL(...)                             \
+  do {                                        \
     snprintf(error, error_size, __VA_ARGS__); \
-    return false;                            \
+    return false;                             \
   } while (0)
 
   if (!m) FAIL("entry point returned NULL");
@@ -681,7 +682,6 @@ float game_default_camera_height(const game_host_t *host) {
   return (c && c->default_camera_height > 0.f) ? c->default_camera_height : 20.f;
 }
 
-
 const ft_input_schema *game_input_schema(const game_host_t *host) {
   return (host && host->module) ? host->module->input_schema : NULL;
 }
@@ -707,9 +707,9 @@ int game_input_field_index(const game_host_t *host, const char *field_id) {
 
 // --- call wrappers ----------------------------------------------------------
 
-#define REQUIRE_GAME(ret)                       \
-  if (!host || !host->instance) return ret;     \
-  const ft_game_module *m = host->module;       \
+#define REQUIRE_GAME(ret)                   \
+  if (!host || !host->instance) return ret; \
+  const ft_game_module *m = host->module;   \
   (void)m
 
 ft_level *gh_level_load_path(game_host_t *host, const char *path) {
@@ -1037,7 +1037,8 @@ void game_host_print_listing(const game_host_t *host) {
     printf("      players %d..%s, %d ticks/s, %s cast\n", c->min_players, max_players, c->ticks_per_second,
            (c->caps & FT_CAP_DYNAMIC_PLAYERS) ? "dynamic" : "fixed");
     printf("      inputs:");
-    for (uint32_t f = 0; f < slot->module->input_schema->field_count; ++f) printf(" %s", slot->module->input_schema->fields[f].id);
+    for (uint32_t f = 0; f < slot->module->input_schema->field_count; ++f)
+      printf(" %s", slot->module->input_schema->fields[f].id);
     printf("\n");
     printf("      controls:");
     for (uint32_t action = 0; action < slot->module->input_schema->control_count; ++action)

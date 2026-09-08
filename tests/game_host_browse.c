@@ -5,8 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct ft_game { int index; };
-typedef struct browser_state { int index; } browser_state;
+struct ft_game {
+  int index;
+};
+typedef struct browser_state {
+  int index;
+} browser_state;
 
 static game_host_t host;
 static int creates[2], destroys[2], resource_creates[2], browser_draws[2], browser_destroys[2];
@@ -59,8 +63,12 @@ int main(void) {
   const ft_input_field field = {.id = "cursor", .flags = FT_INPUT_FLAG_RECORDING_CURSOR};
   const ft_input_schema schema = {.record_size = 8, .fields = &field, .field_count = 1};
   const ft_game_module module = {.constraints = {.variants = variants, .variant_count = 2},
-                                  .input_schema = &schema, .create = create, .destroy = destroy,
-                                  .resources_create = resources_create, .splash = splash, .splash_destroy = splash_destroy};
+                                 .input_schema = &schema,
+                                 .create = create,
+                                 .destroy = destroy,
+                                 .resources_create = resources_create,
+                                 .splash = splash,
+                                 .splash_destroy = splash_destroy};
   game_host_init(&host, &engine);
   host.slots = calloc(2, sizeof(*host.slots));
   assert(host.slots);

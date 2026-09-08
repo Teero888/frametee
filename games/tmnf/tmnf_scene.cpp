@@ -34,14 +34,14 @@
 // reads them and what that costs.
 #include "engine/game/material_render_definition.h"
 #include "engine/rendering/plug_material.h"
-#include "engine/scene/plug_solid.h"
 #include "engine/rendering/plug_tree.h"
 #include "engine/rendering/plug_visual.h"
+#include "engine/scene/plug_solid.h"
 #include "engine/scene/replay_scene_placements.h"
 #include "engine/scene/static_scene_model.h"
+#include "format/archive/archive_class_ids.h"
 #include "format/pack/block_info_catalog/installed_pack_asset_repository.h"
 #include "format/pack/installed/installed_pack_key_catalog.h"
-#include "format/archive/archive_class_ids.h"
 #include "format/replay/replay_file.h"
 #include "format/static_solid/static_scene_archive_loader.h"
 #include "format/static_solid/static_scene_asset_linker.h"
@@ -108,8 +108,8 @@ std::optional<std::pair<ResolvedMaterialDefinition, std::string>> ResolveMateria
 // load reached by some spelling this never tried unaccounted for, and they come
 // out untextured.
 std::unordered_map<std::uint32_t, std::string> ResolveMaterialVocabulary(InstalledPackAssetRepository &assets,
-                                                                        const PackSet &packs,
-                                                                        const std::string &pack_name) {
+                                                                         const PackSet &packs,
+                                                                         const std::string &pack_name) {
   std::unordered_map<std::uint32_t, std::string> by_index;
   const auto remember = [&](const std::optional<ResolvedMaterialDefinition> &resolved, const std::string &path) {
     if (resolved && resolved->material.asset.IsValid())
@@ -182,7 +182,8 @@ void NameMaterials(const std::unordered_map<std::uint32_t, std::string> &by_inde
 // left has to match the unresolved nodes one-for-one before any of it is used.
 namespace {
 std::string LowerAscii(std::string value) {
-  for (char &c : value) c = (char)std::tolower((unsigned char)c);
+  for (char &c : value)
+    c = (char)std::tolower((unsigned char)c);
   return value;
 }
 
@@ -190,7 +191,7 @@ std::string BaseName(const std::string &path) {
   const std::size_t slash = path.find_last_of("\\/");
   return slash == std::string::npos ? path : path.substr(slash + 1);
 }
-}  // namespace
+} // namespace
 
 void NameMaterialsFromSolids(InstalledPackAssetRepository &assets, const PackSet &packs,
                              const std::string &pack_name, StaticSolidArchiveLoadSession &session) {
@@ -292,12 +293,15 @@ TrackTransform ToTransform(const GmIso4 &iso) {
 
 TrackPurpose ToPurpose(StaticScenePurpose purpose) {
   switch (purpose) {
-  case StaticScenePurpose::PlacedBlock: return TRACK_PURPOSE_BLOCK;
+  case StaticScenePurpose::PlacedBlock:
+    return TRACK_PURPOSE_BLOCK;
   case StaticScenePurpose::Clip:
   case StaticScenePurpose::Helper:
   case StaticScenePurpose::CheckpointTrigger:
-  case StaticScenePurpose::DedicatedInitialCollision: return TRACK_PURPOSE_HIDDEN;
-  default: return TRACK_PURPOSE_SCENERY;
+  case StaticScenePurpose::DedicatedInitialCollision:
+    return TRACK_PURPOSE_HIDDEN;
+  default:
+    return TRACK_PURPOSE_SCENERY;
   }
 }
 
@@ -336,15 +340,32 @@ std::string DefaultMaterialForSurface(const std::string &pack_name, std::uint8_t
   if (LowerAscii(pack_name) != "stadium") return std::string();
   const char *name = nullptr;
   switch (surface) {
-    case 0: name = "StadiumPlatform"; break;      // Concrete
-    case 1: name = "StadiumPlatform"; break;      // Pavement
-    case 2: name = "StadiumGrass"; break;         // Grass
-    case 4: name = "StadiumRoadBorderMetal"; break;  // Metal
-    case 6: name = "StadiumDirt"; break;          // Dirt
-    case 8: name = "StadiumDirtRoad"; break;      // DirtRoad
-    case 9: name = "StadiumRoadBorderRubber"; break; // Rubber
-    case 16: name = "StadiumRoad"; break;         // Asphalt
-    default: return std::string();
+  case 0:
+    name = "StadiumPlatform";
+    break; // Concrete
+  case 1:
+    name = "StadiumPlatform";
+    break; // Pavement
+  case 2:
+    name = "StadiumGrass";
+    break; // Grass
+  case 4:
+    name = "StadiumRoadBorderMetal";
+    break; // Metal
+  case 6:
+    name = "StadiumDirt";
+    break; // Dirt
+  case 8:
+    name = "StadiumDirtRoad";
+    break; // DirtRoad
+  case 9:
+    name = "StadiumRoadBorderRubber";
+    break; // Rubber
+  case 16:
+    name = "StadiumRoad";
+    break; // Asphalt
+  default:
+    return std::string();
   }
   return pack_name + "\\Media\\Material\\" + name + ".Material.Gbx";
 }
@@ -491,14 +512,22 @@ private:
 
 std::string EnvironmentPackName(fv::MapEnvironment environment) {
   switch (environment) {
-  case fv::MapEnvironment::Alpine: return "Alpine";
-  case fv::MapEnvironment::Speed: return "Speed";
-  case fv::MapEnvironment::Rally: return "Rally";
-  case fv::MapEnvironment::Island: return "Island";
-  case fv::MapEnvironment::Coast: return "Coast";
-  case fv::MapEnvironment::Bay: return "Bay";
-  case fv::MapEnvironment::Stadium: return "Stadium";
-  case fv::MapEnvironment::Unknown: break;
+  case fv::MapEnvironment::Alpine:
+    return "Alpine";
+  case fv::MapEnvironment::Speed:
+    return "Speed";
+  case fv::MapEnvironment::Rally:
+    return "Rally";
+  case fv::MapEnvironment::Island:
+    return "Island";
+  case fv::MapEnvironment::Coast:
+    return "Coast";
+  case fv::MapEnvironment::Bay:
+    return "Bay";
+  case fv::MapEnvironment::Stadium:
+    return "Stadium";
+  case fv::MapEnvironment::Unknown:
+    break;
   }
   return {};
 }
@@ -618,8 +647,7 @@ bool BuildTrackScene(ft_game *game, const PackSet &packs, const void *challenge_
       size.y = std::max(std::fabs(bounds->halfExtents.y) * 2.f + 1.f, 4.f);
       size.z = std::max(std::fabs(bounds->halfExtents.z) * 2.f + 1.f, 4.f);
     }
-    out->checkpoints.push_back({static_cast<std::uint32_t>(out->checkpoints.size()), identity->raceBlockId,
-                                {center.x, center.y, center.z}, {size.x, size.y, size.z}});
+    out->checkpoints.push_back({static_cast<std::uint32_t>(out->checkpoints.size()), identity->raceBlockId, {center.x, center.y, center.z}, {size.x, size.y, size.z}});
   }
 
   // Which squares of the map carry a terrain modifier.

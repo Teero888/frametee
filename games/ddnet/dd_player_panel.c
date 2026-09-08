@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 enum {
   DD_PANEL_PREVIEW_SIZE = 128,
 };

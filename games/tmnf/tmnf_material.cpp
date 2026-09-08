@@ -50,7 +50,10 @@ u32 ReadWordAt(const unsigned char *bytes) {
          (static_cast<u32>(bytes[3]) << 24u);
 }
 
-enum class IdEncoding : u32 { Unknown = 0u, TextTagged = 1u, InlineNames = 2u, SharedNames = 3u };
+enum class IdEncoding : u32 { Unknown = 0u,
+                              TextTagged = 1u,
+                              InlineNames = 2u,
+                              SharedNames = 3u };
 
 class Cursor;
 
@@ -185,10 +188,14 @@ bool Cursor::ReadNodeReference(const GbxBodyExternalReference **external, bool *
   if (!ReadWord(class_id)) return false;
   internal_seen_[node_index] = 1u;
   switch (class_id) {
-  case TMNF_CLASS_CPlugMaterialCustom: return ReadMaterialCustom();
-  case TMNF_CLASS_CPlugShaderApply: return ReadShaderApply();
-  case TMNF_CLASS_CPlugBitmapApply: return ReadBitmapApply(nullptr);
-  default: return false;
+  case TMNF_CLASS_CPlugMaterialCustom:
+    return ReadMaterialCustom();
+  case TMNF_CLASS_CPlugShaderApply:
+    return ReadShaderApply();
+  case TMNF_CLASS_CPlugBitmapApply:
+    return ReadBitmapApply(nullptr);
+  default:
+    return false;
   }
 }
 
@@ -256,7 +263,8 @@ bool Cursor::ReadShaderApply() {
     case ArchiveChunkIdValue(CPlugShaderApplyArchiveChunkId::ApplyFields):
       if (!SkipBytes(8u)) return false;
       break;
-    default: return false;
+    default:
+      return false;
     }
   }
 }
@@ -345,7 +353,8 @@ bool Cursor::ReadMaterialCustom() {
         return false;
       break;
     }
-    default: return false;
+    default:
+      return false;
     }
   }
 }
@@ -381,8 +390,18 @@ bool Cursor::SkipDeviceSets(u32 chunk) {
 // it sorted ahead of GDiffuse/PxzDiffuse/BaseColor it was winning on stadium
 // terrain and tiling blades across the whole field instead of the ground.
 const char *const kDiffuseSamplers[] = {
-    "Diffuse", "Blend1",   "Panorama",   "Advert",    "Glow",      "Soil",
-    "Grass",   "Foam 1",   "GDiffuse",   "PxzDiffuse", "PyDiffuse", "BaseColor",
+    "Diffuse",
+    "Blend1",
+    "Panorama",
+    "Advert",
+    "Glow",
+    "Soil",
+    "Grass",
+    "Foam 1",
+    "GDiffuse",
+    "PxzDiffuse",
+    "PyDiffuse",
+    "BaseColor",
     "PxzBaseColor",
 };
 

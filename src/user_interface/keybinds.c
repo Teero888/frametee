@@ -1,12 +1,11 @@
-#include <engine/int_math.h>
 #include "keybinds.h"
-#include <frametee/icons.h>
-#include <GLFW/glfw3.h>
-#include <system/input.h>
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
 #include "user_interface.h"
+#include <GLFW/glfw3.h>
+#include <engine/int_math.h>
+#include <frametee/icons.h>
 #include <limits.h>
 #include <logger/logger.h>
 #include <renderer/graphics_backend.h>
@@ -15,6 +14,7 @@
 #include <string.h>
 #include <system/config.h>
 #include <system/include_cimgui.h>
+#include <system/input.h>
 
 // Binds read GLFW directly. Imgui trickles its event queue, holding back every mouse position
 // queued behind a key or wheel event, which put input several frames behind the hardware at high

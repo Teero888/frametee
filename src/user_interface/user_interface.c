@@ -1068,9 +1068,15 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
   if (keybinds_is_action_pressed(keys, ACTION_ZOOM_OUT, true)) scroll_y = -1.f;
 
   switch (c->mode) {
-  case CAMERA3_TOP_DOWN: camera3_update_top_down(handler, scroll_y, c->dragging, raw_dx, raw_dy); return;
-  case CAMERA3_FREECAM: camera3_update_freecam(handler, scroll_y, c->dragging, raw_dx, raw_dy); return;
-  case CAMERA3_ORBIT: camera3_update_orbit(handler, intra, scroll_y, c->dragging, raw_dx, raw_dy, directed); return;
+  case CAMERA3_TOP_DOWN:
+    camera3_update_top_down(handler, scroll_y, c->dragging, raw_dx, raw_dy);
+    return;
+  case CAMERA3_FREECAM:
+    camera3_update_freecam(handler, scroll_y, c->dragging, raw_dx, raw_dy);
+    return;
+  case CAMERA3_ORBIT:
+    camera3_update_orbit(handler, intra, scroll_y, c->dragging, raw_dx, raw_dy, directed);
+    return;
   }
 }
 
@@ -1396,9 +1402,12 @@ void ui_run_pending_project_switch(ui_handler_t *ui) {
 // What the prompt says it is about to discard the work for.
 static const char *pending_action_phrase(ui_handler_t *ui) {
   switch (ui->pending_action) {
-  case UI_PENDING_OPEN_PROJECT: return "opening another project";
-  case UI_PENDING_LOAD_LEVEL: return "loading another level";
-  default: return "starting a new project";
+  case UI_PENDING_OPEN_PROJECT:
+    return "opening another project";
+  case UI_PENDING_LOAD_LEVEL:
+    return "loading another level";
+  default:
+    return "starting a new project";
   }
 }
 
@@ -1557,9 +1566,9 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
 
       const int browsed = game_host_browsed_index(host) >= 0 ? game_host_browsed_index(host) : host->active;
       const bool current = i == browsed;
-      const ImU32 border_color = current      ? IM_COL32(120, 200, 255, 255)
-                                 : hovered    ? IM_COL32(90, 175, 255, 255)
-                                              : IM_COL32(48, 56, 75, 140);
+      const ImU32 border_color = current   ? IM_COL32(120, 200, 255, 255)
+                                 : hovered ? IM_COL32(90, 175, 255, 255)
+                                           : IM_COL32(48, 56, 75, 140);
       ImDrawList_AddRect(draw_list, card_min, card_max, border_color, 8.0f, ImDrawFlags_None,
                          (hovered || current) ? 1.8f : 1.0f);
 

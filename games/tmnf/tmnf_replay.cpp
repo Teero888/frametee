@@ -62,8 +62,8 @@ enum : std::uint8_t {
   kActionFinishLine,
 };
 
-constexpr std::array<std::string_view, 6> kInputActions = {"Accelerate",         "Brake",      "Steer",
-                                                           "Respawn",            "_FakeIsRaceRunning",
+constexpr std::array<std::string_view, 6> kInputActions = {"Accelerate", "Brake", "Steer",
+                                                           "Respawn", "_FakeIsRaceRunning",
                                                            "_FakeFinishLine"};
 
 const ft_exporter_desc kReplayExporter = {

@@ -6,15 +6,15 @@
 #include <types.h>
 
 #ifndef LOGGER_API
-#  ifdef _WIN32
-#    if defined(BUILDING_LOGGER) || defined(frametee_EXPORTS)
-#      define LOGGER_API __declspec(dllexport)
-#    else
-#      define LOGGER_API __declspec(dllimport)
-#    endif
-#  else
-#    define LOGGER_API extern
-#  endif
+#ifdef _WIN32
+#if defined(BUILDING_LOGGER) || defined(frametee_EXPORTS)
+#define LOGGER_API __declspec(dllexport)
+#else
+#define LOGGER_API __declspec(dllimport)
+#endif
+#else
+#define LOGGER_API extern
+#endif
 #endif
 
 typedef enum { LOG_LEVEL_INFO,

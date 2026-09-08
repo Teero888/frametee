@@ -1,9 +1,9 @@
 #ifndef ENGINE_PREDICTION_H
 #define ENGINE_PREDICTION_H
 
+#include <frametee/game_abi.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <frametee/game_abi.h>
 
 #define MAX_PREDICTION_LINES 8
 #define MAX_PREDICTION_NAME 64

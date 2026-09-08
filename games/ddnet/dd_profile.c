@@ -99,12 +99,24 @@ void dd_hsl_components_to_rgb(float h, float s, float l, float out_rgb[3]) {
   int sector = (int)floorf(h1) % 6;
   if (sector < 0) sector += 6;
   switch (sector) {
-  case 0: r = c, g = x; break;
-  case 1: r = x, g = c; break;
-  case 2: g = c, b = x; break;
-  case 3: g = x, b = c; break;
-  case 4: r = x, b = c; break;
-  default: r = c, b = x; break;
+  case 0:
+    r = c, g = x;
+    break;
+  case 1:
+    r = x, g = c;
+    break;
+  case 2:
+    g = c, b = x;
+    break;
+  case 3:
+    g = x, b = c;
+    break;
+  case 4:
+    r = x, b = c;
+    break;
+  default:
+    r = c, b = x;
+    break;
   }
 
   const float m = l - 0.5f * c;

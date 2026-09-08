@@ -24,18 +24,18 @@
 #include "engine/rendering/plug_material.h"
 #include "engine/rendering/plug_tree.h"
 #include "engine/rendering/plug_visual.h"
+#include "format/archive/archive_class_ids.h"
+#include "format/pack/block_info_catalog/installed_pack_asset_repository.h"
 #include "format/pack/installed/installed_pack_key_catalog.h"
 #include "format/pack/installed/plug_file_pack.h"
 #include "format/pack/installed_vehicle_asset_graph.h"
 #include "format/static_solid/static_scene_archive_loader.h"
 #include "format/static_solid/static_scene_archive_models.h"
 #include "format/static_solid/static_solid_archive_assembler.h"
-#include "format/static_solid/static_solid_archive_id.h"
-#include "format/pack/block_info_catalog/installed_pack_asset_repository.h"
 #include "format/static_solid/static_solid_archive_definitions.h"
-#include "format/archive/archive_class_ids.h"
 #include "format/static_solid/static_solid_archive_graph.h"
 #include "format/static_solid/static_solid_archive_graph_writer.h"
+#include "format/static_solid/static_solid_archive_id.h"
 #include "format/static_solid/static_solid_descriptor_dependency_queue.h"
 
 #include <algorithm>
@@ -74,7 +74,8 @@ const char *TreeName(const CPlugTree &tree) {
 // game names it "<Car>Skin", and it is the one a livery archive supplies.
 bool NamesTheLivery(const std::string &material_path) {
   std::string lower = material_path;
-  for (char &c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  for (char &c : lower)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   return lower.find("skin") != std::string::npos;
 }
 
@@ -140,7 +141,8 @@ std::vector<CPlugTree *> DetailLevels(const CPlugTree &root) {
   std::sort(levels.begin(), levels.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
   std::vector<CPlugTree *> ordered;
   ordered.reserve(levels.size());
-  for (const auto &level : levels) ordered.push_back(level.second);
+  for (const auto &level : levels)
+    ordered.push_back(level.second);
   return ordered;
 }
 
@@ -377,14 +379,22 @@ private:
 
 std::string VehiclePackName(fv::VehicleModel vehicle) {
   switch (vehicle) {
-  case fv::VehicleModel::SnowCar: return "Alpine";
-  case fv::VehicleModel::DesertCar: return "Speed";
-  case fv::VehicleModel::RallyCar: return "Rally";
-  case fv::VehicleModel::IslandCar: return "Island";
-  case fv::VehicleModel::CoastCar: return "Coast";
-  case fv::VehicleModel::BayCar: return "Bay";
-  case fv::VehicleModel::StadiumCar: return "Stadium";
-  case fv::VehicleModel::Unknown: break;
+  case fv::VehicleModel::SnowCar:
+    return "Alpine";
+  case fv::VehicleModel::DesertCar:
+    return "Speed";
+  case fv::VehicleModel::RallyCar:
+    return "Rally";
+  case fv::VehicleModel::IslandCar:
+    return "Island";
+  case fv::VehicleModel::CoastCar:
+    return "Coast";
+  case fv::VehicleModel::BayCar:
+    return "Bay";
+  case fv::VehicleModel::StadiumCar:
+    return "Stadium";
+  case fv::VehicleModel::Unknown:
+    break;
   }
   return {};
 }
@@ -394,14 +404,22 @@ std::string VehiclePackName(fv::VehicleModel vehicle) {
 // "Speed") and the folder is the car ("StadiumCar", "American").
 std::string VehicleSkinFolder(fv::VehicleModel vehicle) {
   switch (vehicle) {
-  case fv::VehicleModel::SnowCar: return "SnowCar";
-  case fv::VehicleModel::DesertCar: return "American";
-  case fv::VehicleModel::RallyCar: return "Rally";
-  case fv::VehicleModel::IslandCar: return "SportCar";
-  case fv::VehicleModel::CoastCar: return "CoastCar";
-  case fv::VehicleModel::BayCar: return "BayCar";
-  case fv::VehicleModel::StadiumCar: return "StadiumCar";
-  case fv::VehicleModel::Unknown: break;
+  case fv::VehicleModel::SnowCar:
+    return "SnowCar";
+  case fv::VehicleModel::DesertCar:
+    return "American";
+  case fv::VehicleModel::RallyCar:
+    return "Rally";
+  case fv::VehicleModel::IslandCar:
+    return "SportCar";
+  case fv::VehicleModel::CoastCar:
+    return "CoastCar";
+  case fv::VehicleModel::BayCar:
+    return "BayCar";
+  case fv::VehicleModel::StadiumCar:
+    return "StadiumCar";
+  case fv::VehicleModel::Unknown:
+    break;
   }
   return {};
 }
@@ -522,7 +540,7 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
   // The wheels are drawn in their own space so they can be turned, so each one
   // needs the hub it turns about.
   std::size_t wheel_faces = 0;
-  for (std::uint8_t part = VEHICLE_PART_WHEEL_FL; part <= VEHICLE_PART_WHEEL_RL; ++part) {  // wheels only
+  for (std::uint8_t part = VEHICLE_PART_WHEEL_FL; part <= VEHICLE_PART_WHEEL_RL; ++part) { // wheels only
     Aabb box;
     for (const VehicleFace &face : out->faces) {
       if (face.part != part) continue;

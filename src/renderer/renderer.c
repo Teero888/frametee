@@ -1,31 +1,31 @@
 #include "renderer.h"
-#include <system/fs.h>
 #include "graphics_backend.h"
 #include <cglm/cglm.h>
 #include <limits.h>
 #include <logger/logger.h>
 #include <stdint.h>
-#include <vulkan/vulkan_core.h>
 #include <system/compat_threads.h>
+#include <system/fs.h>
+#include <vulkan/vulkan_core.h>
 
 static pthread_mutex_t g_vulkan_mutex;
 static pthread_once_t g_vulkan_mutex_once = PTHREAD_ONCE_INIT;
 
 static void init_vulkan_mutex(void) {
-    pthread_mutexattr_t attr;
-    pthread_mutexattr_init(&attr);
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init(&g_vulkan_mutex, &attr);
-    pthread_mutexattr_destroy(&attr);
+  pthread_mutexattr_t attr;
+  pthread_mutexattr_init(&attr);
+  pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+  pthread_mutex_init(&g_vulkan_mutex, &attr);
+  pthread_mutexattr_destroy(&attr);
 }
 
 void renderer_lock(void) {
-    pthread_once(&g_vulkan_mutex_once, init_vulkan_mutex);
-    pthread_mutex_lock(&g_vulkan_mutex);
+  pthread_once(&g_vulkan_mutex_once, init_vulkan_mutex);
+  pthread_mutex_lock(&g_vulkan_mutex);
 }
 
 void renderer_unlock(void) {
-    pthread_mutex_unlock(&g_vulkan_mutex);
+  pthread_mutex_unlock(&g_vulkan_mutex);
 }
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -212,57 +212,57 @@ static void transition_image_layout(gfx_handler_t *handler, VkCommandPool pool, 
   VkPipelineStageFlags destination_stage;
 
   switch (old_layout) {
-    case VK_IMAGE_LAYOUT_UNDEFINED:
-      barrier.srcAccessMask = 0;
-      source_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-      break;
-    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-      barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-      source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-      break;
-    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-      barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-      source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-      break;
-    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-      barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-      source_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-      break;
-    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-      barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-      source_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-      break;
-    default:
-      barrier.srcAccessMask = 0;
-      source_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-      break;
+  case VK_IMAGE_LAYOUT_UNDEFINED:
+    barrier.srcAccessMask = 0;
+    source_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    break;
+  case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    break;
+  case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    break;
+  case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    source_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    break;
+  case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    source_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    break;
+  default:
+    barrier.srcAccessMask = 0;
+    source_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    break;
   }
 
   switch (new_layout) {
-    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-      barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-      destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-      break;
-    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-      barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-      destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-      break;
-    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-      barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-      destination_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-      break;
-    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-      barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-      destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-      break;
-    case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-      barrier.dstAccessMask = 0;
-      destination_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-      break;
-    default:
-      barrier.dstAccessMask = 0;
-      destination_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-      break;
+  case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    break;
+  case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    break;
+  case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    destination_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    break;
+  case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    break;
+  case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+    barrier.dstAccessMask = 0;
+    destination_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    break;
+  default:
+    barrier.dstAccessMask = 0;
+    destination_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    break;
   }
 
   vkCmdPipelineBarrier(command_buffer, source_stage, destination_stage, 0, 0, NULL, 0, NULL, 1, &barrier);
@@ -631,7 +631,6 @@ int renderer_init(gfx_handler_t *handler) {
   vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0, &renderer->ubo_buffer_ptr);
   renderer->dynamic_ubo_buffer.mapped_memory = renderer->ubo_buffer_ptr;
 
-
   // Game Skin Sprites (32x16 grid, 32px unit)
 
   log_info(LOG_SOURCE, "Renderer initialized successfully.");
@@ -722,7 +721,6 @@ void renderer_cleanup(gfx_handler_t *handler) {
     }
   }
   vkDestroyCommandPool(device, renderer->transfer_command_pool, allocator);
-
 
   if (renderer->transient_memory) {
     free(renderer->transient_memory);
@@ -1398,8 +1396,8 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   }
   for (uint32_t i = 0; i < texture_count; ++i) {
     texture_t *tex = (textures && textures[i] && textures[i]->active && textures[i]->image_view != VK_NULL_HANDLE && textures[i]->sampler != VK_NULL_HANDLE)
-                          ? textures[i]
-                          : handler->renderer.default_texture;
+                         ? textures[i]
+                         : handler->renderer.default_texture;
     image_infos[i] = (VkDescriptorImageInfo){
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         .imageView = tex->image_view,
@@ -1659,7 +1657,6 @@ static void setup_vertex_descriptions(void) {
       (VkVertexInputAttributeDescription){.binding = 0, .location = 1, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(vertex_t, color)};
   mesh_attribute_descriptions[2] =
       (VkVertexInputAttributeDescription){.binding = 0, .location = 2, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex_t, tex_coord)};
-
 
   // Atlas instanced data
   uint32_t i = 0;
@@ -2164,12 +2161,6 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
   renderer->primitive_index_count += 6;
 }
 
-
-
-
-
-
-
 // Stage one layer of an array texture and rebuild its mip chain.
 static void upload_texture_layer(gfx_handler_t *h, texture_t *array, VkFormat format, int layer, const void *src, VkDeviceSize bytes) {
   if (!array) return;
@@ -2205,9 +2196,6 @@ static void upload_texture_layer(gfx_handler_t *h, texture_t *array, VkFormat fo
   }
 }
 
-
-
-
 // Slices `source_atlas` into a texture array, one sprite per layer, and gives
 // the atlas renderer its instance ring. Split out from the path-based helper so
 // a game module can build an atlas from pixels it produced itself.
@@ -2226,7 +2214,8 @@ static void renderer_build_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar
     atlas_layout.bindings[0] = atlas_binding_desc[0];
     atlas_layout.bindings[1] = atlas_binding_desc[1];
     atlas_layout.attr_count = 9;
-    for (uint32_t i = 0; i < 9; ++i) atlas_layout.attrs[i] = atlas_attrib_descs[i];
+    for (uint32_t i = 0; i < 9; ++i)
+      atlas_layout.attrs[i] = atlas_attrib_descs[i];
     ar->shader->layout = &atlas_layout;
   }
 
@@ -2398,13 +2387,11 @@ static primitive_ubo_t world_ubo(gfx_handler_t *h) {
   return ubo;
 }
 
-
 // --- 3D primitives -----------------------------------------------------------
 //
 // A 3D game's geometry is resolved by the depth buffer, so unlike the 2D path
 // there is no command queue and no sorting: vertices go straight into a stream
 // that is drawn once per frame.
-
 
 // The unit vector from a target out to an eye placed at `yaw` and `pitch`. The
 // camera looks back along it, which is what makes the two angles mean the same
@@ -2452,7 +2439,9 @@ void renderer_camera3_forward(gfx_handler_t *h, vec3 out) {
     camera3_angles_to_offset(c->free_yaw, c->free_pitch, out);
     break;
   case CAMERA3_ORBIT:
-  default: camera3_angles_to_offset(c->orbit_yaw, c->orbit_pitch, out); break;
+  default:
+    camera3_angles_to_offset(c->orbit_yaw, c->orbit_pitch, out);
+    break;
   }
   glm_vec3_negate(out);
   glm_vec3_normalize(out);
@@ -2463,10 +2452,16 @@ void renderer_camera3_forward(gfx_handler_t *h, vec3 out) {
 // stands, what the plan view is panned over.
 static void camera3_focus(const camera3_t *c, vec3 out) {
   switch (c->mode) {
-  case CAMERA3_FREECAM: glm_vec3_copy((float *)c->free_eye, out); return;
-  case CAMERA3_TOP_DOWN: glm_vec3_copy((float *)c->top_down_center, out); return;
+  case CAMERA3_FREECAM:
+    glm_vec3_copy((float *)c->free_eye, out);
+    return;
+  case CAMERA3_TOP_DOWN:
+    glm_vec3_copy((float *)c->top_down_center, out);
+    return;
   case CAMERA3_ORBIT:
-  default: glm_vec3_copy((float *)c->orbit_target, out); return;
+  default:
+    glm_vec3_copy((float *)c->orbit_target, out);
+    return;
   }
 }
 
@@ -2744,8 +2739,7 @@ void renderer_submit_box3(gfx_handler_t *h, vec3 center, vec3 size, vec4 color, 
   }
 
   if (wire) {
-    static const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3},
-                                     {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+    static const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
     const float thickness = fmaxf(fmaxf(size[0], size[1]), size[2]) * 0.01f;
     for (int i = 0; i < 12; ++i)
       renderer_submit_line3(h, corner[edges[i][0]], corner[edges[i][1]], color, thickness > 0.f ? thickness : 0.02f);
@@ -2916,9 +2910,6 @@ static int compare_render_commands(const void *a, const void *b) {
   return 0;
 }
 
-
-
-
 // Room for one more command in the z-sorted queue, however many a frame draws.
 //
 // Nothing holds a pointer into this array across a submit -- a command is
@@ -3077,8 +3068,10 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   qsort(r->queue.commands, r->queue.count, sizeof(render_command_t), compare_render_commands);
 
   // Reset all instance counters
-  for (uint32_t i = 0; i < r->dynamic_atlas_count; ++i) r->dynamic_atlases[i]->instance_count = 0;
-  for (uint32_t i = 0; i < r->custom_pipeline_count; ++i) r->custom_pipelines[i].instance_count = 0;
+  for (uint32_t i = 0; i < r->dynamic_atlas_count; ++i)
+    r->dynamic_atlases[i]->instance_count = 0;
+  for (uint32_t i = 0; i < r->custom_pipeline_count; ++i)
+    r->custom_pipelines[i].instance_count = 0;
 
   struct atlas_renderer_t *active_ar = NULL;
   bool ar_screen_space = false;
@@ -3104,7 +3097,6 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       }
     }
 
-
     // Flush primitives if switching to non-primitive
     if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_RECT_ROUNDED && q->type != RENDER_CMD_CIRCLE_FILLED &&
         q->type != RENDER_CMD_TRIANGLE_FILLED &&
@@ -3114,7 +3106,6 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     }
 
     switch (q->type) {
-
 
     case RENDER_CMD_ATLAS_BATCH:
       if (active_ar == NULL) {
@@ -3203,7 +3194,6 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
   }
 
-
   if (r->primitive_index_count > 0) {
     flush_primitives(h, cmd);
   }
@@ -3221,9 +3211,11 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
 
 static uint32_t format_bytes_per_pixel(VkFormat format) {
   switch (format) {
-  case VK_FORMAT_R8G8_UNORM: return 2;
+  case VK_FORMAT_R8G8_UNORM:
+    return 2;
   case VK_FORMAT_R8G8B8A8_UNORM:
-  default: return 4;
+  default:
+    return 4;
   }
 }
 
@@ -3372,7 +3364,8 @@ atlas_renderer_t *renderer_create_texture_atlas(gfx_handler_t *h, texture_t *src
     alias_layout.bindings[0] = atlas_binding_desc[0];
     alias_layout.bindings[1] = atlas_binding_desc[1];
     alias_layout.attr_count = 9;
-    for (uint32_t i = 0; i < 9; ++i) alias_layout.attrs[i] = atlas_attrib_descs[i];
+    for (uint32_t i = 0; i < 9; ++i)
+      alias_layout.attrs[i] = atlas_attrib_descs[i];
     ar->shader->layout = &alias_layout;
   }
   ar->max_instances = 256;
@@ -3421,13 +3414,20 @@ void renderer_destroy_atlas(gfx_handler_t *h, atlas_renderer_t *ar) {
 
 static VkFormat vertex_format_to_vk(int format) {
   switch (format) {
-  case 0: return VK_FORMAT_R32_SFLOAT;
-  case 1: return VK_FORMAT_R32G32_SFLOAT;
-  case 2: return VK_FORMAT_R32G32B32_SFLOAT;
-  case 3: return VK_FORMAT_R32G32B32A32_SFLOAT;
-  case 4: return VK_FORMAT_R32_SINT;
-  case 5: return VK_FORMAT_R32_UINT;
-  default: return VK_FORMAT_UNDEFINED;
+  case 0:
+    return VK_FORMAT_R32_SFLOAT;
+  case 1:
+    return VK_FORMAT_R32G32_SFLOAT;
+  case 2:
+    return VK_FORMAT_R32G32B32_SFLOAT;
+  case 3:
+    return VK_FORMAT_R32G32B32A32_SFLOAT;
+  case 4:
+    return VK_FORMAT_R32_SINT;
+  case 5:
+    return VK_FORMAT_R32_UINT;
+  default:
+    return VK_FORMAT_UNDEFINED;
   }
 }
 
@@ -3572,7 +3572,8 @@ void renderer_submit_instances(gfx_handler_t *h, custom_pipeline_t *pipe, float 
   cmd->data.instances.start = start;
   cmd->data.instances.count = count;
   cmd->data.instances.texture_count = texture_count < MAX_TEXTURES_PER_DRAW ? texture_count : MAX_TEXTURES_PER_DRAW;
-  for (uint32_t i = 0; i < cmd->data.instances.texture_count; ++i) cmd->data.instances.textures[i] = textures[i];
+  for (uint32_t i = 0; i < cmd->data.instances.texture_count; ++i)
+    cmd->data.instances.textures[i] = textures[i];
 }
 
 static void record_preview_layer_update(VkCommandBuffer cmd, texture_t *texture, uint32_t layer, VkBuffer staging) {
@@ -3707,12 +3708,12 @@ texture_t *renderer_render_instances_preview(gfx_handler_t *h, custom_pipeline_t
 
   VkFramebuffer framebuffer = VK_NULL_HANDLE;
   const VkFramebufferCreateInfo framebuffer_info = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-                                                      .renderPass = render_pass,
-                                                      .attachmentCount = 1,
-                                                      .pAttachments = &target->image_view,
-                                                      .width = framebuffer_width,
-                                                      .height = framebuffer_height,
-                                                      .layers = 1};
+                                                    .renderPass = render_pass,
+                                                    .attachmentCount = 1,
+                                                    .pAttachments = &target->image_view,
+                                                    .width = framebuffer_width,
+                                                    .height = framebuffer_height,
+                                                    .layers = 1};
   if (vkCreateFramebuffer(h->g_device, &framebuffer_info, h->g_allocator, &framebuffer) != VK_SUCCESS) {
     if (!render_into_destination) renderer_destroy_texture(h, target);
     return NULL;
@@ -3758,11 +3759,11 @@ texture_t *renderer_render_instances_preview(gfx_handler_t *h, custom_pipeline_t
   }
 
   VkDescriptorPoolSize pool_sizes[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-                                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, texture_count}};
+                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, texture_count}};
   const VkDescriptorPoolCreateInfo pool_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                                                 .maxSets = 1,
-                                                 .poolSizeCount = texture_count ? 2u : 1u,
-                                                 .pPoolSizes = pool_sizes};
+                                                .maxSets = 1,
+                                                .poolSizeCount = texture_count ? 2u : 1u,
+                                                .pPoolSizes = pool_sizes};
   VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
   check_vk_result(vkCreateDescriptorPool(h->g_device, &pool_info, h->g_allocator, &descriptor_pool));
 
@@ -3800,11 +3801,11 @@ texture_t *renderer_render_instances_preview(gfx_handler_t *h, custom_pipeline_t
     record_preview_layer_update(cmd, updates[i].texture, updates[i].layer, staging_buffers[i].buffer);
   const VkClearValue clear = {.color = {.float32 = {clear_color[0], clear_color[1], clear_color[2], clear_color[3]}}};
   const VkRenderPassBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                                      .renderPass = render_pass,
-                                      .framebuffer = framebuffer,
-                                      .renderArea = {{0, 0}, {framebuffer_width, framebuffer_height}},
-                                      .clearValueCount = render_into_destination ? 0u : 1u,
-                                      .pClearValues = render_into_destination ? NULL : &clear};
+                                       .renderPass = render_pass,
+                                       .framebuffer = framebuffer,
+                                       .renderArea = {{0, 0}, {framebuffer_width, framebuffer_height}},
+                                       .clearValueCount = render_into_destination ? 0u : 1u,
+                                       .pClearValues = render_into_destination ? NULL : &clear};
   vkCmdBeginRenderPass(cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
   if (render_into_destination) {
     const VkClearAttachment clear_attachment = {
@@ -3861,7 +3862,8 @@ void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, me
   cmd->data.mesh_draw.pipeline = pipe;
   cmd->data.mesh_draw.mesh = mesh;
   cmd->data.mesh_draw.texture_count = texture_count < MAX_TEXTURES_PER_DRAW ? texture_count : MAX_TEXTURES_PER_DRAW;
-  for (uint32_t i = 0; i < cmd->data.mesh_draw.texture_count; ++i) cmd->data.mesh_draw.textures[i] = textures[i];
+  for (uint32_t i = 0; i < cmd->data.mesh_draw.texture_count; ++i)
+    cmd->data.mesh_draw.textures[i] = textures[i];
   cmd->data.mesh_draw.uniform_size = (uint32_t)uniform_size;
   if (uniforms && uniform_size > 0) memcpy(cmd->data.mesh_draw.uniforms, uniforms, uniform_size);
 }
@@ -4004,11 +4006,11 @@ int renderer_capture_offscreen_ppm(gfx_handler_t *handler, const char *path) {
   // exactly that much when it composites. Capturing the rest would frame the
   // render in whatever the last resize left behind.
   const uint32_t width = handler->viewport[0] > 0.f && (uint32_t)handler->viewport[0] < handler->offscreen_width
-                                 ? (uint32_t)handler->viewport[0]
-                                 : handler->offscreen_width;
+                             ? (uint32_t)handler->viewport[0]
+                             : handler->offscreen_width;
   const uint32_t height = handler->viewport[1] > 0.f && (uint32_t)handler->viewport[1] < handler->offscreen_height
-                                  ? (uint32_t)handler->viewport[1]
-                                  : handler->offscreen_height;
+                              ? (uint32_t)handler->viewport[1]
+                              : handler->offscreen_height;
   if (width == 0 || height == 0) return 1;
 
   vkDeviceWaitIdle(handler->g_device);

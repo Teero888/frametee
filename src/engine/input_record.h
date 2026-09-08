@@ -22,7 +22,6 @@
 // so it is checked against the schema at load rather than being open ended.
 #define ENGINE_MAX_INPUT_RECORD 64
 
-
 typedef union input_record_t {
   // Gives bytes enough alignment for every record layout accepted by the
   // module validator, including DDNet's explicitly 8-byte-aligned input.

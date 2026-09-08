@@ -2,8 +2,8 @@
 #define SCRIPT_ENGINE_H
 
 #include <plugins/plugin_api.h>
-#include <types.h>
 #include <stdbool.h>
+#include <types.h>
 
 typedef void (*script_command_cb)(int argc, const char **argv);
 

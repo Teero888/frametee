@@ -1,9 +1,9 @@
 #include "api_impl.h"
 #include "../logger/logger.h"
 #include "../renderer/graphics_backend.h"
+#include "../scripting/script_engine.h"
 #include "../user_interface/timeline/timeline_commands.h"
 #include "../user_interface/timeline/timeline_model.h"
-#include "../scripting/script_engine.h"
 #include "renderer/renderer.h"
 #include <engine/input_record.h>
 #include <limits.h>
@@ -196,7 +196,7 @@ static bool api_find_snippet_at(int track_index, int tick, int *out_snippet_id, 
 }
 
 static struct undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset, int count, const void *new_inputs,
-                                                 size_t record_stride) {
+                                                size_t record_stride) {
   game_host_t *host = &g_ui_handler_for_api->gfx_handler->game_host;
   const size_t record_size = game_input_size(host);
   if (!new_inputs || count <= 0 || record_stride < record_size) return NULL;
@@ -305,7 +305,9 @@ static void api_draw_rect_filled_world(vec2 pos, vec2 size, float z, vec4 color)
 
 static void api_draw_text_world(vec2 pos, const char *text, vec4 color) {
   // Not implemented yet in renderer, but we should have a stub to avoid NULL call
-  (void)pos; (void)text; (void)color;
+  (void)pos;
+  (void)text;
+  (void)color;
 }
 
 static void api_draw_line_world3(vec3 start, vec3 end, vec4 color, float thickness) {
@@ -323,7 +325,7 @@ static void api_draw_box_world3(vec3 center, vec3 size, vec4 color, bool wire) {
 static void api_screen_to_world(float screen_x, float screen_y, float *world_x, float *world_y) {
   float lx = screen_x - g_ui_handler_for_api->viewport_window_pos.x;
   float ly = screen_y - g_ui_handler_for_api->viewport_window_pos.y;
-  
+
   static ImGuiWindow *s_viewport_window = NULL;
   if (!s_viewport_window) {
     s_viewport_window = igFindWindowByName("Viewport");
@@ -332,7 +334,7 @@ static void api_screen_to_world(float screen_x, float screen_y, float *world_x, 
     lx -= s_viewport_window->DecoOuterSizeX1;
     ly -= s_viewport_window->DecoOuterSizeY1;
   }
-  
+
   screen_to_world(g_ui_handler_for_api->gfx_handler, lx, ly, world_x, world_y);
 }
 
@@ -388,7 +390,7 @@ static void api_world_to_screen(float world_x, float world_y, float *screen_x, f
   world_to_screen(g_ui_handler_for_api->gfx_handler, world_x, world_y, screen_x, screen_y);
   *screen_x += g_ui_handler_for_api->viewport_window_pos.x;
   *screen_y += g_ui_handler_for_api->viewport_window_pos.y;
-  
+
   static ImGuiWindow *s_viewport_window = NULL;
   if (!s_viewport_window) {
     s_viewport_window = igFindWindowByName("Viewport");

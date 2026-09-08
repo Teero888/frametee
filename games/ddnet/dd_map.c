@@ -141,10 +141,10 @@ static bool create_map_pipeline(ft_game *game) {
   // convention map.frag.glsl samples in; 0..1 would render the level upside
   // down and at half scale.
   const ft_vertex vertices[4] = {
-      {{-1.f, -1.f}, {1.f, 1.f, 1.f}, {-1.f, 1.f}},  // top left
-      {{1.f, -1.f}, {1.f, 1.f, 1.f}, {1.f, 1.f}},    // top right
-      {{1.f, 1.f}, {1.f, 1.f, 1.f}, {1.f, -1.f}},    // bottom right
-      {{-1.f, 1.f}, {1.f, 1.f, 1.f}, {-1.f, -1.f}},  // bottom left
+      {{-1.f, -1.f}, {1.f, 1.f, 1.f}, {-1.f, 1.f}}, // top left
+      {{1.f, -1.f}, {1.f, 1.f, 1.f}, {1.f, 1.f}},   // top right
+      {{1.f, 1.f}, {1.f, 1.f, 1.f}, {1.f, -1.f}},   // bottom right
+      {{-1.f, 1.f}, {1.f, 1.f, 1.f}, {-1.f, -1.f}}, // bottom left
   };
   const uint32_t indices[6] = {0, 1, 2, 2, 3, 0};
   game->gfx.map_mesh = game->engine->mesh_create(vertices, 4, sizeof(ft_vertex), indices, 6);
@@ -164,7 +164,8 @@ void dd_map_create(ft_game *game, ft_level *level) {
       {map->tune_layer.type, map->speedup_layer.type, map->switch_layer.type},
       {map->game_layer.flags, map->front_layer.flags, map->switch_layer.flags},
   };
-  for (int i = 0; i < 3; ++i) level->layer_textures[i] = layer_texture(game, planes[i], map->width, map->height);
+  for (int i = 0; i < 3; ++i)
+    level->layer_textures[i] = layer_texture(game, planes[i], map->width, map->height);
 }
 
 void dd_map_destroy(ft_game *game, ft_level *level) {

@@ -17,7 +17,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-
 // SHA-256 Implementation
 // Necessary for creating a valid demo header
 typedef struct {

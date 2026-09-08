@@ -59,7 +59,10 @@ constexpr int kTicksPerSecond = 60;
 
 // --- input -------------------------------------------------------------------
 
-enum InputField { kLeft = 0, kRight, kJump, kFieldCount };
+enum InputField { kLeft = 0,
+                  kRight,
+                  kJump,
+                  kFieldCount };
 
 // One byte per button. The engine copies these around without ever looking
 // inside, which is what lets it store a game's inputs it has never seen.
@@ -71,12 +74,9 @@ struct PlatformerInput {
 };
 
 const ft_input_field kInputFields[kFieldCount] = {
-    {"left", "Left", "Hold to accelerate left", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X, 0, 1, 0, 0.f, 0.f, 0.f,
-     nullptr, 0, {0.4f, 0.7f, 1.0f, 1.0f}},
-    {"right", "Right", "Hold to accelerate right", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X, 0, 1, 0, 0.f, 0.f,
-     0.f, nullptr, 0, {0.4f, 1.0f, 0.7f, 1.0f}},
-    {"jump", "Jump", "Only fires from the ground", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE, 0, 1, 0, 0.f, 0.f, 0.f, nullptr, 0,
-     {1.0f, 0.85f, 0.35f, 1.0f}},
+    {"left", "Left", "Hold to accelerate left", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X, 0, 1, 0, 0.f, 0.f, 0.f, nullptr, 0, {0.4f, 0.7f, 1.0f, 1.0f}},
+    {"right", "Right", "Hold to accelerate right", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X, 0, 1, 0, 0.f, 0.f, 0.f, nullptr, 0, {0.4f, 1.0f, 0.7f, 1.0f}},
+    {"jump", "Jump", "Only fires from the ground", FT_INPUT_BOOL, FT_INPUT_FLAG_TIMELINE_LANE, 0, 1, 0, 0.f, 0.f, 0.f, nullptr, 0, {1.0f, 0.85f, 0.35f, 1.0f}},
 };
 
 const ft_input_control kInputControls[] = {
@@ -86,13 +86,22 @@ const ft_input_control kInputControls[] = {
 };
 
 const ft_input_schema kInputSchema = {
-    sizeof(ft_input_schema), sizeof(PlatformerInput), alignof(PlatformerInput), kInputFields, kFieldCount,
-    kInputControls, static_cast<uint32_t>(sizeof(kInputControls) / sizeof(kInputControls[0])),
+    sizeof(ft_input_schema),
+    sizeof(PlatformerInput),
+    alignof(PlatformerInput),
+    kInputFields,
+    kFieldCount,
+    kInputControls,
+    static_cast<uint32_t>(sizeof(kInputControls) / sizeof(kInputControls[0])),
 };
 
 // --- properties --------------------------------------------------------------
 
-enum PlayerProp { kPropPosition = 0, kPropVelocity, kPropGrounded, kPropCoins, kPlayerPropCount };
+enum PlayerProp { kPropPosition = 0,
+                  kPropVelocity,
+                  kPropGrounded,
+                  kPropCoins,
+                  kPlayerPropCount };
 
 const ft_prop_desc kPlayerProps[kPlayerPropCount] = {
     {"position", "Position", "Movement", "tiles", FT_VALUE_VEC2, FT_PROP_WRITABLE | FT_PROP_STARTING | FT_PROP_SUMMARY, 0.0, 0.0},
@@ -101,7 +110,9 @@ const ft_prop_desc kPlayerProps[kPlayerPropCount] = {
     {"coins", "Coins", "Progress", nullptr, FT_VALUE_INT, FT_PROP_SUMMARY, 0.0, 0.0},
 };
 
-enum CoinProp { kCoinPosition = 0, kCoinTaken, kCoinPropCount };
+enum CoinProp { kCoinPosition = 0,
+                kCoinTaken,
+                kCoinPropCount };
 
 const ft_prop_desc kCoinProps[kCoinPropCount] = {
     {"position", "Position", nullptr, "tiles", FT_VALUE_VEC2, FT_PROP_SUMMARY, 0.0, 0.0},
@@ -110,7 +121,9 @@ const ft_prop_desc kCoinProps[kCoinPropCount] = {
 
 // Class 0 must be the player. Everything after it is pickable in the viewport
 // as long as it exposes a property called "position".
-enum EntityClass { kClassPlayer = 0, kClassCoin, kEntityClassCount };
+enum EntityClass { kClassPlayer = 0,
+                   kClassCoin,
+                   kEntityClassCount };
 
 const ft_entity_class kEntityClasses[kEntityClassCount] = {
     {"player", "Runner", kPlayerProps, kPlayerPropCount},
@@ -119,7 +132,9 @@ const ft_entity_class kEntityClasses[kEntityClassCount] = {
 
 // --- settings ----------------------------------------------------------------
 
-enum Setting { kSettingGrid = 0, kSettingTrail, kSettingCount };
+enum Setting { kSettingGrid = 0,
+               kSettingTrail,
+               kSettingCount };
 
 const ft_setting_desc kSettings[kSettingCount] = {
     {"show_grid", "Tile grid", "Draw a line on every tile boundary", "Platformer", FT_VALUE_BOOL, 0.0, 0.0},
@@ -128,7 +143,9 @@ const ft_setting_desc kSettings[kSettingCount] = {
 
 // --- camera ------------------------------------------------------------------
 
-enum CameraMode { kCameraFree = 0, kCameraFollow, kCameraModeCount };
+enum CameraMode { kCameraFree = 0,
+                  kCameraFollow,
+                  kCameraModeCount };
 
 const ft_camera_mode kCameraModes[kCameraModeCount] = {
     {"free", "Free", "Pan and zoom by hand", 0},
@@ -165,8 +182,8 @@ struct ft_world {
   Vector2 position{4.f, 4.f};
   Vector2 velocity{0.f, 0.f};
   bool grounded = false;
-  uint32_t coins_taken = 0;  // bit per coin index
-  int32_t finish_tick = -1;  // tick the goal was reached on, or -1
+  uint32_t coins_taken = 0; // bit per coin index
+  int32_t finish_tick = -1; // tick the goal was reached on, or -1
 };
 
 static_assert(std::is_trivially_copyable_v<ft_world>, "FrameTee snapshots copy raylib-backed worlds by value");
@@ -236,10 +253,12 @@ ft_level *build_level(int index) {
     if (x >= 0 && y >= 0 && x < kLevelWidth && y < kLevelHeight) level->solid[static_cast<size_t>(y) * kLevelWidth + x] = 1;
   };
   auto floor_run = [&](int x0, int x1, int y) {
-    for (int x = x0; x < x1; ++x) set(x, y);
+    for (int x = x0; x < x1; ++x)
+      set(x, y);
   };
   auto pillar = [&](int x, int y0, int y1) {
-    for (int y = y0; y < y1; ++y) set(x, y);
+    for (int y = y0; y < y1; ++y)
+      set(x, y);
   };
   auto coin = [&](float x, float y) {
     if (level->coins.size() < kMaxCoins) level->coins.push_back({x, y});
@@ -480,10 +499,14 @@ void input_default(ft_game *, void *record) { std::memset(record, 0, sizeof(Plat
 int64_t input_get(ft_game *, const void *record, uint32_t field) {
   const auto *in = static_cast<const PlatformerInput *>(record);
   switch (field) {
-  case kLeft: return in->left != 0;
-  case kRight: return in->right != 0;
-  case kJump: return in->jump != 0;
-  default: return 0;
+  case kLeft:
+    return in->left != 0;
+  case kRight:
+    return in->right != 0;
+  case kJump:
+    return in->jump != 0;
+  default:
+    return 0;
   }
 }
 
@@ -491,10 +514,17 @@ void input_set(ft_game *, void *record, uint32_t field, int64_t value) {
   auto *in = static_cast<PlatformerInput *>(record);
   const uint8_t v = value ? 1 : 0;
   switch (field) {
-  case kLeft: in->left = v; break;
-  case kRight: in->right = v; break;
-  case kJump: in->jump = v; break;
-  default: break;
+  case kLeft:
+    in->left = v;
+    break;
+  case kRight:
+    in->right = v;
+    break;
+  case kJump:
+    in->jump = v;
+    break;
+  default:
+    break;
   }
 }
 
@@ -508,9 +538,12 @@ void input_describe(ft_game *, const void *record, char *out, size_t out_size) {
 
 int32_t entity_count(ft_game *, const ft_world *world, uint32_t entity_class) {
   switch (entity_class) {
-  case kClassPlayer: return 1;
-  case kClassCoin: return coin_count(world ? world->level : nullptr);
-  default: return 0;
+  case kClassPlayer:
+    return 1;
+  case kClassCoin:
+    return coin_count(world ? world->level : nullptr);
+  default:
+    return 0;
   }
 }
 
@@ -528,7 +561,8 @@ bool entity_prop_get(ft_game *, const ft_world *world, uint32_t entity_class, in
       out->kind = FT_VALUE_BOOL;
       out->as.b = (world->coins_taken & (1u << entity)) != 0;
       return true;
-    default: return false;
+    default:
+      return false;
     }
   }
 
@@ -550,16 +584,22 @@ bool entity_prop_get(ft_game *, const ft_world *world, uint32_t entity_class, in
     out->kind = FT_VALUE_INT;
     out->as.i = coins_taken(world);
     return true;
-  default: return false;
+  default:
+    return false;
   }
 }
 
 bool entity_prop_set(ft_game *, ft_world *world, uint32_t entity_class, int32_t entity, uint32_t prop, const ft_value *value) {
   if (entity_class != kClassPlayer || entity != 0 || !world || !value) return false;
   switch (prop) {
-  case kPropPosition: world->position = to_ray(value->as.v); return true;
-  case kPropVelocity: world->velocity = to_ray(value->as.v); return true;
-  default: return false;
+  case kPropPosition:
+    world->position = to_ray(value->as.v);
+    return true;
+  case kPropVelocity:
+    world->velocity = to_ray(value->as.v);
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -732,16 +772,22 @@ bool setting_get(ft_game *game, uint32_t index, ft_value *out) {
     out->kind = FT_VALUE_FLOAT;
     out->as.f = game->camera_lead;
     return true;
-  default: return false;
+  default:
+    return false;
   }
 }
 
 bool setting_set(ft_game *game, uint32_t index, const ft_value *value) {
   if (!game || !value) return false;
   switch (index) {
-  case kSettingGrid: game->show_grid = value->as.b; return true;
-  case kSettingTrail: game->camera_lead = value->as.f; return true;
-  default: return false;
+  case kSettingGrid:
+    game->show_grid = value->as.b;
+    return true;
+  case kSettingTrail:
+    game->camera_lead = value->as.f;
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -789,7 +835,6 @@ void ui(ft_game *game, const ft_ui_frame *frame) {
 void splash(const ft_engine_api *engine, void **context, const ft_ui_frame *frame) {
   (void)context;
   if (!engine || !frame) return;
-
 
   igPushFont(nullptr, 22.f);
   igTextUnformatted("Raylib Platformer", nullptr);

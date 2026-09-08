@@ -101,10 +101,22 @@ static const ft_sprite_rect cursor_rects[CURSOR_SPRITE_COUNT] = {
     [CURSOR_HAMMER] = {0, 0, 64, 64}, [CURSOR_GUN] = {0, 128, 64, 64}, [CURSOR_SHOTGUN] = {0, 192, 64, 64}, [CURSOR_GRENADE] = {0, 256, 64, 64}, [CURSOR_LASER] = {0, 384, 64, 64}, [CURSOR_NINJA] = {0, 320, 64, 64}};
 
 static const ft_sprite_rect emoticon_rects[DD_EMOTICON_COUNT] = {
-    {0, 0, 128, 128},     {128, 0, 128, 128},   {256, 0, 128, 128},   {384, 0, 128, 128},
-    {0, 128, 128, 128},   {128, 128, 128, 128}, {256, 128, 128, 128}, {384, 128, 128, 128},
-    {0, 256, 128, 128},   {128, 256, 128, 128}, {256, 256, 128, 128}, {384, 256, 128, 128},
-    {0, 384, 128, 128},   {128, 384, 128, 128}, {256, 384, 128, 128}, {384, 384, 128, 128},
+    {0, 0, 128, 128},
+    {128, 0, 128, 128},
+    {256, 0, 128, 128},
+    {384, 0, 128, 128},
+    {0, 128, 128, 128},
+    {128, 128, 128, 128},
+    {256, 128, 128, 128},
+    {384, 128, 128, 128},
+    {0, 256, 128, 128},
+    {128, 256, 128, 128},
+    {256, 256, 128, 128},
+    {384, 256, 128, 128},
+    {0, 384, 128, 128},
+    {128, 384, 128, 128},
+    {256, 384, 128, 128},
+    {384, 384, 128, 128},
 };
 
 void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...) {
@@ -206,7 +218,8 @@ static bool load_freeze_bar_sheet(ft_game *game) {
       unsigned char *dst = sheet + ((size_t)y * sheet_w + src_x) * 4u;
       unsigned char *mirror = sheet + ((size_t)y * sheet_w + (DD_FREEZE_MIRRORED + sprite) * cell_w) * 4u;
       memcpy(dst, src, (size_t)cell_w * 4u);
-      for (uint32_t x = 0; x < cell_w; ++x) memcpy(mirror + (size_t)x * 4u, src + (size_t)(cell_w - 1u - x) * 4u, 4u);
+      for (uint32_t x = 0; x < cell_w; ++x)
+        memcpy(mirror + (size_t)x * 4u, src + (size_t)(cell_w - 1u - x) * 4u, 4u);
     }
   }
   dd_free_png(pixels);
@@ -452,13 +465,13 @@ static bool build_skin_layers(const stbi_uc *source, int src_w, int src_h, uint8
   // Both sheets go through the same layout so one set of uvs addresses either.
 #define COPY_PART(src_x, src_y, w, h, dst_x, dst_y)                                                                                        \
   do {                                                                                                                                     \
-    const int sx_ = (int)((src_x) * scale), sy_ = (int)((src_y) * scale);                                                                   \
-    const int sw_ = (int)((w) * scale), sh_ = (int)((h) * scale);                                                                           \
-    stbir_resize_uint8_linear(pixels + ((size_t)sy_ * src_w + sx_) * 4, sw_, sh_, src_w * 4,                                                \
-                              out_rgba + ((size_t)(dst_y) * final_width + (dst_x)) * 4, (w) * 2, (h) * 2, final_width * 4, STBIR_RGBA_PM);  \
-    stbir_resize_uint8_linear(gray + ((size_t)sy_ * src_w + sx_) * 2, sw_, sh_, src_w * 2,                                                  \
-                              out_weights + ((size_t)(dst_y) * final_width + (dst_x)) * 2, (w) * 2, (h) * 2, final_width * 2,               \
-                              STBIR_2CHANNEL);                                                                                              \
+    const int sx_ = (int)((src_x) * scale), sy_ = (int)((src_y) * scale);                                                                  \
+    const int sw_ = (int)((w) * scale), sh_ = (int)((h) * scale);                                                                          \
+    stbir_resize_uint8_linear(pixels + ((size_t)sy_ * src_w + sx_) * 4, sw_, sh_, src_w * 4,                                               \
+                              out_rgba + ((size_t)(dst_y) * final_width + (dst_x)) * 4, (w) * 2, (h) * 2, final_width * 4, STBIR_RGBA_PM); \
+    stbir_resize_uint8_linear(gray + ((size_t)sy_ * src_w + sx_) * 2, sw_, sh_, src_w * 2,                                                 \
+                              out_weights + ((size_t)(dst_y) * final_width + (dst_x)) * 2, (w) * 2, (h) * 2, final_width * 2,              \
+                              STBIR_2CHANNEL);                                                                                             \
   } while (0)
 
   COPY_PART(0, 0, 96, 96, 8, 8);        // body

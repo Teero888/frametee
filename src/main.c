@@ -1,18 +1,17 @@
 #include "logger/logger.h"
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
+#include "scripting/script_engine.h"
 #include "user_interface/user_interface.h"
 #include <engine/engine_api.h>
 #include <engine/prediction.h>
-#include <user_interface/starting_state.h>
-#include <user_interface/timeline/timeline_model.h>
-#include "scripting/script_engine.h"
 #include <math.h>
-#include <user_interface/timeline/timeline_model.h>
-#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <user_interface/starting_state.h>
+#include <user_interface/timeline/timeline_model.h>
 
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
@@ -37,7 +36,6 @@ static int set_environment_variable(const char *name, const char *value) {
   return setenv(name, value, 1);
 #endif
 }
-
 
 // Walks the game through one frame of rendering: every visible world, in every
 // pass, with the interpolation the playhead is currently between. The engine
@@ -391,8 +389,7 @@ int main(int argc, char **argv) {
             }
           }
         }
-      }
-      else
+      } else
         log_error("Main", "Could not capture the viewport to '%s'", screenshot_path);
       break;
     }

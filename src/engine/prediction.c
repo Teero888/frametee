@@ -34,9 +34,14 @@ static bool player_position3(game_host_t *host, const ft_world *world, int playe
 }
 
 static const float s_line_colors[][4] = {
-    {0.25f, 0.72f, 1.00f, 0.78f}, {1.00f, 0.48f, 0.18f, 0.82f}, {0.35f, 0.95f, 0.48f, 0.82f},
-    {0.95f, 0.35f, 0.72f, 0.82f}, {0.75f, 0.48f, 1.00f, 0.82f}, {1.00f, 0.85f, 0.25f, 0.82f},
-    {0.20f, 0.90f, 0.85f, 0.82f}, {1.00f, 0.35f, 0.35f, 0.82f},
+    {0.25f, 0.72f, 1.00f, 0.78f},
+    {1.00f, 0.48f, 0.18f, 0.82f},
+    {0.35f, 0.95f, 0.48f, 0.82f},
+    {0.95f, 0.35f, 0.72f, 0.82f},
+    {0.75f, 0.48f, 1.00f, 0.82f},
+    {1.00f, 0.85f, 0.25f, 0.82f},
+    {0.20f, 0.90f, 0.85f, 0.82f},
+    {1.00f, 0.35f, 0.35f, 0.82f},
 };
 
 void prediction_line_default(prediction_line_t *line, int index) {
@@ -176,9 +181,15 @@ static bool color_rule_value(game_host_t *host, const ft_world *world, int playe
     return false;
 
   switch (value.kind) {
-  case FT_VALUE_BOOL: *out = value.as.b ? 1.0 : 0.0; break;
-  case FT_VALUE_INT: *out = (double)value.as.i; break;
-  case FT_VALUE_FLOAT: *out = value.as.f; break;
+  case FT_VALUE_BOOL:
+    *out = value.as.b ? 1.0 : 0.0;
+    break;
+  case FT_VALUE_INT:
+    *out = (double)value.as.i;
+    break;
+  case FT_VALUE_FLOAT:
+    *out = value.as.f;
+    break;
   case FT_VALUE_VEC2:
     if (resolved->rule->component == PREDICTION_COMPONENT_X) *out = value.as.v.x;
     else if (resolved->rule->component == PREDICTION_COMPONENT_Y) *out = value.as.v.y;
@@ -197,7 +208,8 @@ static bool color_rule_value(game_host_t *host, const ft_world *world, int playe
     else
       return false;
     break;
-  default: return false;
+  default:
+    return false;
   }
   return isfinite(*out);
 }
@@ -210,10 +222,14 @@ static bool color_rule_equal(const resolved_color_rule_t *resolved, double a, do
 
 static bool color_rule_condition(const resolved_color_rule_t *resolved, double value) {
   switch (resolved->rule->comparison) {
-  case PREDICTION_COMPARE_EQUAL: return color_rule_equal(resolved, value, resolved->rule->target);
-  case PREDICTION_COMPARE_LESS: return value < resolved->rule->target;
-  case PREDICTION_COMPARE_GREATER: return value > resolved->rule->target;
-  case PREDICTION_COMPARE_CHANGED: return false;
+  case PREDICTION_COMPARE_EQUAL:
+    return color_rule_equal(resolved, value, resolved->rule->target);
+  case PREDICTION_COMPARE_LESS:
+    return value < resolved->rule->target;
+  case PREDICTION_COMPARE_GREATER:
+    return value > resolved->rule->target;
+  case PREDICTION_COMPARE_CHANGED:
+    return false;
   }
   return false;
 }
@@ -320,7 +336,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
   ft_vec2 *positions = calloc((size_t)players, sizeof(*positions));
   vec3 *positions3 = calloc((size_t)players, sizeof(*positions3));
   bool *have_position = calloc((size_t)players, sizeof(*have_position));
-  float(*active_colors)[4] = calloc((size_t)players, sizeof(*active_colors));
+  float (*active_colors)[4] = calloc((size_t)players, sizeof(*active_colors));
   color_rule_runtime_t *rule_runtime =
       calloc((size_t)players * MAX_PREDICTION_COLOR_RULES, sizeof(*rule_runtime));
   line_segment_t *segments = malloc(sizeof(*segments) * (size_t)length * (size_t)selected);
@@ -553,7 +569,7 @@ static bool render_rule_component(prediction_color_rule_t *rule, ft_value_kind k
   int selected_index = count - 1;
   for (int i = 0; i < count; ++i) {
     const prediction_rule_component_t component = kind == FT_VALUE_VEC2 && i == 2 ? PREDICTION_COMPONENT_MAGNITUDE
-                                                                                   : components[i];
+                                                                                  : components[i];
     if (rule->component == component) selected_index = i;
   }
 
@@ -561,7 +577,7 @@ static bool render_rule_component(prediction_color_rule_t *rule, ft_value_kind k
   if (igBeginCombo("Component", names[kind == FT_VALUE_VEC2 && selected_index == 2 ? 3 : selected_index], 0)) {
     for (int i = 0; i < count; ++i) {
       const prediction_rule_component_t component = kind == FT_VALUE_VEC2 && i == 2 ? PREDICTION_COMPONENT_MAGNITUDE
-                                                                                     : components[i];
+                                                                                    : components[i];
       const int name_index = kind == FT_VALUE_VEC2 && i == 2 ? 3 : i;
       if (igSelectable_Bool(names[name_index], rule->component == component, 0, (ImVec2){0.f, 0.f})) {
         rule->component = component;
@@ -721,7 +737,7 @@ void prediction_render_menu(timeline_state_t *timeline) {
           igPushID_Int((int)control);
           bool selected = (line->controls & (UINT64_C(1) << control)) != 0;
           const char *label = schema->controls[control].display_name ? schema->controls[control].display_name
-                                                                    : schema->controls[control].id;
+                                                                     : schema->controls[control].id;
           if (igCheckbox(label, &selected)) {
             if (selected) line->controls |= UINT64_C(1) << control;
             else line->controls &= ~(UINT64_C(1) << control);
@@ -751,14 +767,18 @@ void prediction_render_menu(timeline_state_t *timeline) {
 
   igSeparatorText("Groups and tracks");
   if (igButton("All", (ImVec2){0.f, 0.f})) {
-    for (int group = 0; group < timeline->group_count; ++group) timeline->groups[group]->prediction_enabled = true;
-    for (int track = 0; track < timeline->player_track_count; ++track) timeline->player_tracks[track].prediction_enabled = true;
+    for (int group = 0; group < timeline->group_count; ++group)
+      timeline->groups[group]->prediction_enabled = true;
+    for (int track = 0; track < timeline->player_track_count; ++track)
+      timeline->player_tracks[track].prediction_enabled = true;
     project_changed = true;
   }
   igSameLine(0.f, 6.f * dpi);
   if (igButton("None", (ImVec2){0.f, 0.f})) {
-    for (int group = 0; group < timeline->group_count; ++group) timeline->groups[group]->prediction_enabled = false;
-    for (int track = 0; track < timeline->player_track_count; ++track) timeline->player_tracks[track].prediction_enabled = false;
+    for (int group = 0; group < timeline->group_count; ++group)
+      timeline->groups[group]->prediction_enabled = false;
+    for (int track = 0; track < timeline->player_track_count; ++track)
+      timeline->player_tracks[track].prediction_enabled = false;
     project_changed = true;
   }
   for (int group_index = 0; group_index < timeline->group_count; ++group_index) {

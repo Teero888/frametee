@@ -1,11 +1,11 @@
-#include <renderer/graphics_backend.h>
 #include "config.h"
 #include "fs.h"
 #include <logger/logger.h>
+#include <plugins/plugin_manager.h>
+#include <renderer/graphics_backend.h>
 #include <system/include_cimgui.h>
 #include <tomlc17.h>
 #include <user_interface/keybinds.h>
-#include <plugins/plugin_manager.h>
 #include <user_interface/user_interface.h>
 
 #include <limits.h>
@@ -31,13 +31,27 @@ static void write_toml_string(FILE *fp, const char *text) {
   fputc('"', fp);
   for (const unsigned char *cursor = (const unsigned char *)(text ? text : ""); *cursor; ++cursor) {
     switch (*cursor) {
-    case '"': fputs("\\\"", fp); break;
-    case '\\': fputs("\\\\", fp); break;
-    case '\b': fputs("\\b", fp); break;
-    case '\t': fputs("\\t", fp); break;
-    case '\n': fputs("\\n", fp); break;
-    case '\f': fputs("\\f", fp); break;
-    case '\r': fputs("\\r", fp); break;
+    case '"':
+      fputs("\\\"", fp);
+      break;
+    case '\\':
+      fputs("\\\\", fp);
+      break;
+    case '\b':
+      fputs("\\b", fp);
+      break;
+    case '\t':
+      fputs("\\t", fp);
+      break;
+    case '\n':
+      fputs("\\n", fp);
+      break;
+    case '\f':
+      fputs("\\f", fp);
+      break;
+    case '\r':
+      fputs("\\r", fp);
+      break;
     default:
       if (*cursor < 0x20) fprintf(fp, "\\u%04x", *cursor);
       else fputc(*cursor, fp);
@@ -51,10 +65,18 @@ static void write_toml_key(FILE *fp, const char *key) { write_toml_string(fp, ke
 
 static bool write_toml_value(FILE *fp, toml_datum_t value) {
   switch (value.type) {
-  case TOML_STRING: write_toml_string(fp, value.u.str.ptr); return true;
-  case TOML_INT64: fprintf(fp, "%lld", (long long)value.u.int64); return true;
-  case TOML_FP64: fprintf(fp, "%.17g", value.u.fp64); return true;
-  case TOML_BOOLEAN: fputs(value.u.boolean ? "true" : "false", fp); return true;
+  case TOML_STRING:
+    write_toml_string(fp, value.u.str.ptr);
+    return true;
+  case TOML_INT64:
+    fprintf(fp, "%lld", (long long)value.u.int64);
+    return true;
+  case TOML_FP64:
+    fprintf(fp, "%.17g", value.u.fp64);
+    return true;
+  case TOML_BOOLEAN:
+    fputs(value.u.boolean ? "true" : "false", fp);
+    return true;
   case TOML_ARRAY:
     fputc('[', fp);
     for (int i = 0; i < value.u.arr.size; ++i) {
@@ -63,7 +85,8 @@ static bool write_toml_value(FILE *fp, toml_datum_t value) {
     }
     fputc(']', fp);
     return true;
-  default: return false;
+  default:
+    return false;
   }
 }
 
@@ -467,7 +490,8 @@ void config_load(ui_handler_t *ui) {
         else if (stored.type == TOML_INT64) value.as.f = (double)stored.u.int64;
         else continue;
         break;
-      default: continue;
+      default:
+        continue;
       }
       gh_setting_set(host, i, &value);
     }
@@ -681,10 +705,17 @@ void config_save(ui_handler_t *ui) {
         write_toml_key(fp, desc->id);
         fputs(" = ", fp);
         switch (value.kind) {
-        case FT_VALUE_BOOL: fputs(value.as.b ? "true\n" : "false\n", fp); break;
-        case FT_VALUE_INT: fprintf(fp, "%lld\n", (long long)value.as.i); break;
-        case FT_VALUE_FLOAT: fprintf(fp, "%.17g\n", value.as.f); break;
-        default: break;
+        case FT_VALUE_BOOL:
+          fputs(value.as.b ? "true\n" : "false\n", fp);
+          break;
+        case FT_VALUE_INT:
+          fprintf(fp, "%lld\n", (long long)value.as.i);
+          break;
+        case FT_VALUE_FLOAT:
+          fprintf(fp, "%.17g\n", value.as.f);
+          break;
+        default:
+          break;
         }
       }
       const camera_t *camera = &ui->gfx_handler->renderer.camera;

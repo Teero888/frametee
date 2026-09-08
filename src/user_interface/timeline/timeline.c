@@ -1,10 +1,10 @@
-#include <engine/int_math.h>
 #include "timeline.h"
 #include "../user_interface.h"
 #include "renderer/graphics_backend.h"
 #include "timeline_interaction.h"
 #include "timeline_model.h"
 #include "timeline_renderer.h"
+#include <engine/int_math.h>
 #include <string.h>
 #include <system/include_cimgui.h>
 

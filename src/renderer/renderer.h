@@ -298,7 +298,6 @@ struct camera_t {
   uint32_t mode;
 };
 
-
 struct sprite_definition_t {
   uint32_t x, y, w, h;
 };
@@ -506,7 +505,6 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
 void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh, shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count);
 void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
-
 texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas, uint32_t tile_width, uint32_t tile_height, uint32_t num_tiles_x, uint32_t num_tiles_y);
 void screen_to_world(gfx_handler_t *handler, float screen_x, float screen_y, float *world_x, float *world_y);
 void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy);
@@ -514,7 +512,6 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
 // thread synchronization
 void renderer_lock(void);
 void renderer_unlock(void);
-
 
 void create_image(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_layers, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory);
 VkImageView create_image_view_aspect(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels,
@@ -626,6 +623,5 @@ texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t wid
 // chrome -- to a binary PPM. Returns 0 on success. Meant for --screenshot and
 // for checking a render from a script rather than by eye.
 int renderer_capture_offscreen_ppm(gfx_handler_t *handler, const char *path);
-
 
 #endif // RENDERER_H

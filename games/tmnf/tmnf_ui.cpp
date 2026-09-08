@@ -191,13 +191,18 @@ void EvictOffscreen(TrackBrowser *game, Campaign &campaign) {
   }
 }
 
-enum class CampaignFacet { Mode, Environment, Difficulty };
+enum class CampaignFacet { Mode,
+                           Environment,
+                           Difficulty };
 
 const std::string &FacetValue(const Campaign &campaign, CampaignFacet facet) {
   switch (facet) {
-  case CampaignFacet::Mode: return campaign.mode;
-  case CampaignFacet::Environment: return campaign.environment;
-  case CampaignFacet::Difficulty: return campaign.difficulty;
+  case CampaignFacet::Mode:
+    return campaign.mode;
+  case CampaignFacet::Environment:
+    return campaign.environment;
+  case CampaignFacet::Difficulty:
+    return campaign.difficulty;
   }
   return campaign.mode;
 }
@@ -214,7 +219,8 @@ int FacetRank(const std::string &value, CampaignFacet facet) {
   static const char *const environments[] = {"Stadium", "Bay", "Coast", "Desert", "Island", "Rally", "Snow"};
   static const char *const difficulties[] = {"White", "Green", "Blue", "Red", "Black"};
   switch (facet) {
-  case CampaignFacet::Mode: return OrderedRank(value, modes, static_cast<int>(std::size(modes)));
+  case CampaignFacet::Mode:
+    return OrderedRank(value, modes, static_cast<int>(std::size(modes)));
   case CampaignFacet::Environment:
     return OrderedRank(value, environments, static_cast<int>(std::size(environments)));
   case CampaignFacet::Difficulty:
@@ -329,8 +335,10 @@ int DrawFacetRow(TrackBrowser *game, const char *label, const Campaign &current,
 
     igPopID();
     switch (facet) {
-    case CampaignFacet::Mode: return FindCampaign(game, current.collection, value, {}, {});
-    case CampaignFacet::Environment: return FindCampaign(game, current.collection, current.mode, value, {});
+    case CampaignFacet::Mode:
+      return FindCampaign(game, current.collection, value, {}, {});
+    case CampaignFacet::Environment:
+      return FindCampaign(game, current.collection, current.mode, value, {});
     case CampaignFacet::Difficulty:
       return FindCampaign(game, current.collection, current.mode, current.environment, value);
     }
@@ -369,7 +377,8 @@ void SplashDestroy(void *context) {
   auto *game = static_cast<TrackBrowser *>(context);
   UiAttach(game->engine);
   for (Campaign &campaign : game->campaigns)
-    for (TrackEntry &track : campaign.tracks) ReleaseThumbnail(game, track);
+    for (TrackEntry &track : campaign.tracks)
+      ReleaseThumbnail(game, track);
   delete game;
 }
 
@@ -406,7 +415,6 @@ void Splash(const ft_engine_api *engine, void **context, const ft_ui_frame *fram
     game->engine = engine;
     *context = game;
   }
-
 
   auto &filter = game->filter;
 

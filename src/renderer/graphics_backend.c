@@ -1,14 +1,14 @@
 #include "graphics_backend.h"
-#include <engine/engine_api.h>
 #include "renderer.h"
+#include <engine/engine_api.h>
 #include <logger/logger.h>
 #include <math.h>
 #include <stdbool.h>
 #include <system/config.h>
 #include <system/input.h>
-#include <user_interface/user_interface.h>
 #include <user_interface/snippet_editor.h>
 #include <user_interface/timeline/timeline_model.h>
+#include <user_interface/user_interface.h>
 
 extern bool g_is_headless;
 
@@ -107,7 +107,6 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(VkDebugUtilsMessageSe
   return VK_FALSE;
 }
 #endif
-
 
 static struct {
   GLFWwindow *window;
@@ -242,9 +241,12 @@ static bool imgui_queue_needs_trickling(void) {
       keys_seen[keys_seen_count++] = e->Key.Key;
       break;
 
-    case ImGuiInputEventType_Text: has_text = true; break;
+    case ImGuiInputEventType_Text:
+      has_text = true;
+      break;
 
-    default: break;
+    default:
+      break;
     }
   }
 
@@ -360,7 +362,6 @@ int init_gfx_handler(gfx_handler_t *handler) {
     glfwTerminate();
     return 1;
   }
-
 
   if (!handler->quad_mesh) {
     vertex_t quad_vertices[] = {
@@ -641,7 +642,6 @@ void gfx_cleanup(gfx_handler_t *handler) {
   }
 
   ui_cleanup(&handler->user_interface);
-
 
   gh_level_destroy(&handler->game_host, handler->level);
   handler->level = NULL;

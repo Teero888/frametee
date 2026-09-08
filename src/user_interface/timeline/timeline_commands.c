@@ -1037,7 +1037,7 @@ undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
 
       if (a->end_tick == b->start_tick &&
           input_effect_stack_mergeable(a->effects, a->effect_count, b->effects, b->effect_count)) { // Adjacent and representable
-        if (!merged_something) {                                                                   // First merge operation
+        if (!merged_something) {                                                                    // First merge operation
           cmd->track_index = ti;
           cmd->target_snippet_id = a->id;
           cmd->original_target_end_tick = a->end_tick;

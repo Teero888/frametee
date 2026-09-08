@@ -53,7 +53,11 @@ inline constexpr forevervalidator::SimulationBackend kSimulationBackend =
 
 // --- input record ------------------------------------------------------------
 
-enum InputField { FIELD_ACCELERATE = 0, FIELD_BRAKE, FIELD_STEER, FIELD_RESPAWN, FIELD_COUNT };
+enum InputField { FIELD_ACCELERATE = 0,
+                  FIELD_BRAKE,
+                  FIELD_STEER,
+                  FIELD_RESPAWN,
+                  FIELD_COUNT };
 
 // Laid out so the record is eight bytes with natural alignment; the engine
 // stores arrays of these in snippets and project files.

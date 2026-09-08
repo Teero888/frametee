@@ -169,13 +169,13 @@ static bool add_glyph(dd_text_renderer_t *text, FT_Face face, uint32_t codepoint
 
   dd_text_glyph_t *glyph = &text->glyphs[text->glyph_count];
   *glyph = (dd_text_glyph_t){.codepoint = codepoint,
-                            .glyph_index = glyph_index,
-                            .width = visible ? width : 0u,
-                            .height = visible ? height : 0u,
-                            .offset_x = (float)(slot->metrics.horiBearingX >> 6),
-                            .offset_y = (float)-((slot->metrics.height >> 6) - (slot->metrics.horiBearingY >> 6)),
-                            .advance_x = (float)(slot->advance.x >> 6),
-                            .visible = visible};
+                             .glyph_index = glyph_index,
+                             .width = visible ? width : 0u,
+                             .height = visible ? height : 0u,
+                             .offset_x = (float)(slot->metrics.horiBearingX >> 6),
+                             .offset_y = (float)-((slot->metrics.height >> 6) - (slot->metrics.horiBearingY >> 6)),
+                             .advance_x = (float)(slot->advance.x >> 6),
+                             .visible = visible};
 
   glyph->sprite_index = *sprite_count;
   if (!pack_rect(width, height, pack_x, pack_y, row_height, &rects[(*sprite_count)++])) return false;
@@ -313,8 +313,8 @@ static bool create_entity_atlas(ft_game *game, int style) {
   }
   for (uint32_t value = 0; value < DD_ENTITY_NUMBER_COUNT; ++value) {
     rects[value] = (ft_sprite_rect){(value % 16u) * DD_ENTITY_CELL_SIZE,
-                                   (value / 16u) * DD_ENTITY_CELL_SIZE,
-                                   DD_ENTITY_CELL_SIZE, DD_ENTITY_CELL_SIZE};
+                                    (value / 16u) * DD_ENTITY_CELL_SIZE,
+                                    DD_ENTITY_CELL_SIZE, DD_ENTITY_CELL_SIZE};
   }
 
   // CMapImages::InitOverlayTextures. cl_text_entities_size scales the glyph box
@@ -325,8 +325,8 @@ static bool create_entity_atlas(ft_game *game, int style) {
   if (texture_size > 64) texture_size = 64;
   const int vertical_center_offset = (64 - texture_size) / 2 + (int)((float)texture_size * 0.1f);
   const int initial_y = style == DD_ENTITY_TEXT_BOTTOM ? 32 + vertical_center_offset / 2
-                                                       : style == DD_ENTITY_TEXT_TOP ? vertical_center_offset / 2
-                                                                                     : vertical_center_offset;
+                        : style == DD_ENTITY_TEXT_TOP  ? vertical_center_offset / 2
+                                                       : vertical_center_offset;
   if (style != DD_ENTITY_TEXT_CENTER) texture_size /= 2;
   const char *samples[3] = {"1", "10", "100"};
   const int first_values[3] = {1, 10, 100};
@@ -594,7 +594,8 @@ void dd_text_set_entity_scale(ft_game *game, int scale) {
   text->entity_scale = scale;
   if (!text->face || !text->entity_atlases[0]) return;
 
-  for (int style = 0; style < DD_ENTITY_TEXT_STYLE_COUNT; ++style) create_entity_atlas(game, style);
+  for (int style = 0; style < DD_ENTITY_TEXT_STYLE_COUNT; ++style)
+    create_entity_atlas(game, style);
   // Baking a sheet leaves FreeType on the entity pixel size; the glyph atlas
   // and its kerning live in the 64px metric space they were measured in.
   FT_Set_Pixel_Sizes((FT_Face)text->face, 0, DD_TEXT_BAKED_SIZE);

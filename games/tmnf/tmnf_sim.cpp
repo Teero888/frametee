@@ -11,8 +11,8 @@
 // library with --whole-archive and the submodule carries no export decoration,
 // so its internal symbols land in the .so with default visibility.
 
-#include <tmnf/tmnf_sim.h>
 #include <tmnf/tmnf_game.h>
+#include <tmnf/tmnf_sim.h>
 
 #include "format/assets/replay_asset_repository.h"
 #include "format/pack/default_vehicle_pack_archive.h"
@@ -317,7 +317,7 @@ std::unique_ptr<World> World::Open(const std::string &packs, const void *challen
     return fail("could not build the track's scene");
 
   ReplaySimulationDefinitionBuild definition = BuildReplaySimulationDefinition(m.vehicle_sources,
-                                                                              m.preload.WaterDefinition());
+                                                                               m.preload.WaterDefinition());
   if (!definition) return fail("could not build the vehicle simulation");
   m.definition = std::move(definition).Value();
   // Only Stadium's specialised kernels are certified exact; see the field's

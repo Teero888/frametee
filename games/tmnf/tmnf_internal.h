@@ -707,8 +707,6 @@ struct ft_game {
   // whenever the car changes.
   std::vector<std::string> skins;
   std::string skins_folder;
-
-
 };
 
 namespace tmnf {

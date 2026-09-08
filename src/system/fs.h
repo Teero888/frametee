@@ -1,8 +1,8 @@
 #ifndef FS_H
 #define FS_H
 
-#include <stdio.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #ifdef _WIN32
 #define PATH_SEP '\\'
@@ -14,7 +14,7 @@
 
 /**
  * @brief Opens a file with UTF-8 path support.
- * 
+ *
  * On Windows, this converts the UTF-8 path and mode to UTF-16 and uses _wfopen.
  * On other platforms, it calls fopen directly.
  */
@@ -22,7 +22,7 @@ FILE *fs_open(const char *path, const char *mode);
 
 /**
  * @brief Gets the config directory path.
- * 
+ *
  * Returns true if successful and out_path contains the path.
  */
 bool fs_get_config_dir(char *out_path, size_t size);
@@ -41,10 +41,10 @@ bool fs_get_executable_dir(char *out_path, size_t size);
 typedef struct fs_dir_t fs_dir_t;
 
 typedef struct {
-    // Large enough for WIN32_FIND_DATA::cFileName as well as the usual POSIX
-    // NAME_MAX, without silently turning a real entry into a different name.
-    char name[1024];
-    bool is_directory;
+  // Large enough for WIN32_FIND_DATA::cFileName as well as the usual POSIX
+  // NAME_MAX, without silently turning a real entry into a different name.
+  char name[1024];
+  bool is_directory;
 } fs_dirent_t;
 
 fs_dir_t *fs_opendir(const char *path);

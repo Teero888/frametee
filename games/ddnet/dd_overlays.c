@@ -277,7 +277,8 @@ static int chat_word_length(const char *text) {
   int i = 0;
   // The separators are ASCII and a UTF-8 continuation byte is never one of
   // them, so scanning bytes lands on the same boundary decoding would.
-  while (text[i] && text[i] != '\n' && text[i] != '\t' && text[i] != ' ') ++i;
+  while (text[i] && text[i] != '\n' && text[i] != '\t' && text[i] != ' ')
+    ++i;
   return text[i] ? i + 1 : i;
 }
 
@@ -297,7 +298,8 @@ static int chat_fit(ft_game *game, float size, const char *text, int length, flo
   int fit = 0, glyphs = 0;
   for (int i = 0; i < length;) {
     int next = i + 1;
-    while (next < length && ((unsigned char)text[next] & 0xC0u) == 0x80u) ++next;
+    while (next < length && ((unsigned char)text[next] & 0xC0u) == 0x80u)
+      ++next;
     if (chat_measure(game, size, text, next) > budget) break;
     fit = next;
     ++glyphs;

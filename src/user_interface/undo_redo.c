@@ -1,6 +1,6 @@
 #include "undo_redo.h"
-#include "user_interface.h"
 #include "timeline/timeline_model.h"
+#include "user_interface.h"
 #include <stdlib.h>
 #include <string.h>
 #include <system/include_cimgui.h>
