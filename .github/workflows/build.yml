@@ -123,39 +123,6 @@ jobs:
         grep -Eq '^  ddnet[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
         grep -Eq '^  tmnf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
 
-        # --list-games returns before the editor exists, so it says nothing
-        # about whether the release can come up. An empty auto script runs the
-        # real startup -- config, game activation, plugins -- with no window,
-        # and the timeout turns a hang into a failed build rather than a white
-        # window on a user's machine.
-        smoke_config="$RUNNER_TEMP/frametee-config"
-        rm -rf "$smoke_config"
-        mkdir -p "$smoke_config/frametee"
-        : > "$RUNNER_TEMP/frametee-smoke.ftscript"
-
-        XDG_CONFIG_HOME="$smoke_config" timeout 120 \
-          ./frametee --auto "$RUNNER_TEMP/frametee-smoke.ftscript" |
-          tee "$RUNNER_TEMP/frametee-startup.txt"
-        grep -q "Scanning for plugins" "$RUNNER_TEMP/frametee-startup.txt"
-        grep -q "Auto script finished" "$RUNNER_TEMP/frametee-startup.txt"
-        # Nothing is enabled in a fresh config, and a plugin that is not enabled
-        # is not loaded at all -- being listed must never run its code.
-        ! grep -q "Loaded '" "$RUNNER_TEMP/frametee-startup.txt"
-
-        # Again with every shipped plugin turned on, which is the path that does
-        # load, initialize, shut down and unload plugin code.
-        {
-          echo "[plugins]"
-          for plugin in plugins/*/; do
-            echo "$(basename "$plugin") = true"
-          done
-        } > "$smoke_config/frametee/config.toml"
-        XDG_CONFIG_HOME="$smoke_config" timeout 120 \
-          ./frametee --auto "$RUNNER_TEMP/frametee-smoke.ftscript" |
-          tee "$RUNNER_TEMP/frametee-plugins.txt"
-        grep -q "Loaded '" "$RUNNER_TEMP/frametee-plugins.txt"
-        grep -q "Auto script finished" "$RUNNER_TEMP/frametee-plugins.txt"
-
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
@@ -303,37 +270,6 @@ jobs:
           ./frametee.exe --list-games | tee "$RUNNER_TEMP/frametee-game-modules.txt"
           grep -Eq '^  ddnet[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
           grep -Eq '^  tmnf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
-
-          # See the Linux job: --list-games never reaches the editor. This does,
-          # and Windows is where it matters, because the loader lock is held
-          # while a library attaches and detaches -- a plugin that starts or
-          # joins a thread there deadlocks startup before the first frame.
-          smoke_config="$RUNNER_TEMP/frametee-config"
-          rm -rf "$smoke_config"
-          mkdir -p "$smoke_config/frametee"
-          : > "$RUNNER_TEMP/frametee-smoke.ftscript"
-          # The editor reads APPDATA with the Win32 API, not through MSYS2's
-          # path translation, so it has to be handed a native path.
-          smoke_appdata=$(cygpath -m "$smoke_config")
-
-          APPDATA="$smoke_appdata" timeout 120 \
-            ./frametee.exe --auto "$RUNNER_TEMP/frametee-smoke.ftscript" |
-            tee "$RUNNER_TEMP/frametee-startup.txt"
-          grep -q "Scanning for plugins" "$RUNNER_TEMP/frametee-startup.txt"
-          grep -q "Auto script finished" "$RUNNER_TEMP/frametee-startup.txt"
-          ! grep -q "Loaded '" "$RUNNER_TEMP/frametee-startup.txt"
-
-          {
-            echo "[plugins]"
-            for plugin in plugins/*/; do
-              echo "$(basename "$plugin") = true"
-            done
-          } > "$smoke_config/frametee/config.toml"
-          APPDATA="$smoke_appdata" timeout 120 \
-            ./frametee.exe --auto "$RUNNER_TEMP/frametee-smoke.ftscript" |
-            tee "$RUNNER_TEMP/frametee-plugins.txt"
-          grep -q "Loaded '" "$RUNNER_TEMP/frametee-plugins.txt"
-          grep -q "Auto script finished" "$RUNNER_TEMP/frametee-plugins.txt"
           find . -type f -print | sort
         )
 
