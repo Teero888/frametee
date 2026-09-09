@@ -99,7 +99,7 @@ typedef struct {
   uint32_t m_SpawnGeneration;
 } dd_character_state_v1;
 
-_Static_assert(sizeof(dd_character_state_v1) == 544, "DDNet version 1 character record changed");
+typedef char dd_character_state_v1_size_check[sizeof(dd_character_state_v1) == 544 ? 1 : -1];
 
 #define DD_CHARACTER_STATE_FIELDS(FIELD, ARRAY) \
   FIELD(m_Id)                                   \

@@ -1202,6 +1202,8 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
   // Presentation defaults. These are the game's, not the editor's, which is why
   // they no longer sit in the engine's ui_handler_t.
   game->settings = (dd_settings_t){.render_map = true,
+                                   .map_detail = true,
+                                   .entities_view = false,
                                    .render_players = true,
                                    .render_weapons = true,
                                    .render_particles = true,
@@ -1490,10 +1492,14 @@ enum ddnet_setting {
   SET_NAMEPLATE_CLAN_SIZE,
   SET_NAMEPLATE_OFFSET,
   SET_AUTO_FINISH_EVENTS,
+  SET_ENTITIES_VIEW,
+  SET_MAP_DETAIL,
   SET_COUNT
 };
 
 static const ft_setting_desc ddnet_settings[SET_COUNT] = {
+    [SET_ENTITIES_VIEW] = {"entities_view", "Entities view", "Show collision and entity tiles instead of the map design", "World", FT_VALUE_BOOL, 0, 0},
+    [SET_MAP_DETAIL] = {"map_detail", "Map detail", "Render decorative detail layers", "World", FT_VALUE_BOOL, 0, 0},
     // Groups are what the Preferences window makes its pages from, so each one
     // is a short list of things you would change together. The order below is
     // only how the source reads: a group is gathered by name, not by adjacency.
@@ -1536,6 +1542,12 @@ static const ft_setting_desc *ddnet_setting_desc(ft_game *game, uint32_t index) 
 static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
   const dd_settings_t *s = &game->settings;
   switch (index) {
+  case SET_ENTITIES_VIEW:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->entities_view};
+    return true;
+  case SET_MAP_DETAIL:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->map_detail};
+    return true;
   case SET_RENDER_MAP:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_map};
     return true;
@@ -1619,6 +1631,12 @@ static int64_t clamp_setting(int64_t value, int64_t low, int64_t high) {
 static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *value) {
   dd_settings_t *s = &game->settings;
   switch (index) {
+  case SET_ENTITIES_VIEW:
+    s->entities_view = value->as.b;
+    return true;
+  case SET_MAP_DETAIL:
+    s->map_detail = value->as.b;
+    return true;
   case SET_RENDER_MAP:
     s->render_map = value->as.b;
     return true;

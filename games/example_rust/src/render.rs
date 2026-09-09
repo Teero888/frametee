@@ -81,6 +81,7 @@ impl BevyRenderer {
             format: 0, // FT_TEXTURE_RGBA8
             mipmaps: false,
             linear_filter: true,
+            repeat: false,
         };
         let texture = (api.texture_create?)(&desc);
         if texture.is_null() {

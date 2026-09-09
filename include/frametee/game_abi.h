@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 18u
+#define FT_GAME_ABI_VERSION 19u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -708,6 +708,7 @@ typedef struct ft_texture_desc {
   ft_texture_format format;
   bool mipmaps;
   bool linear_filter;
+  bool repeat; /* repeat U/V instead of clamping at image edges */
 } ft_texture_desc;
 
 /* The graphics API the engine's device belongs to. A module compares this
@@ -1135,6 +1136,12 @@ typedef struct ft_engine_api {
    * viewport. Export/scanning queries step the same physics with this false so
    * they cannot fill or rewind particle, sound or trail state. */
   bool (*presentation_effects_enabled)(void);
+  /* Draw an index range from a shared immutable mesh. Ranges use absolute
+   * vertex indices and must contain complete triangles. */
+  void (*draw_mesh_range)(ft_pipeline *pipeline, float z, ft_mesh *mesh,
+                          uint32_t first_index, uint32_t index_count,
+                          ft_texture *const *textures, uint32_t texture_count,
+                          const void *uniforms, size_t uniform_size);
 } ft_engine_api;
 
 /* The layer a 3D triangle names when it carries no texture. */

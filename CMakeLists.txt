@@ -684,3 +684,8 @@ if(TARGET tmnf_game)
         COMPONENT Runtime
     )
 endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-_Static_assert(sizeof(dd_event_payload_t) <= FT_TIMELINE_EVENT_DATA_MAX, "DDNet event payload exceeds the ABI limit");
+typedef char dd_event_payload_size_check[sizeof(dd_event_payload_t) <= FT_TIMELINE_EVENT_DATA_MAX ? 1 : -1];
 
 static const char *const event_names[DD_EVENT_COUNT] = {
     "Chat", "Broadcast", "KillMsg", "SoundGlobal", "Emoticon", "VoteSet", "VoteStatus", "DDRaceTime", "Record"};

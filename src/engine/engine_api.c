@@ -152,6 +152,11 @@ static ft_texture *api_texture_create(const ft_texture_desc *desc) {
   const uint32_t layers = desc->layers ? desc->layers : 1;
   texture_t *tex = renderer_create_texture_layered(g_engine, (const unsigned char *)desc->pixels, desc->width, desc->height, layers,
                                                    abi_texture_format(desc->format), desc->mipmaps, desc->linear_filter);
+  if (tex && desc->repeat) {
+    vkDestroySampler(g_engine->g_device, tex->sampler, g_engine->g_allocator);
+    tex->sampler = create_texture_sampler_wrapped(g_engine, desc->mipmaps ? tex->mip_levels : 1,
+                                                  desc->linear_filter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+  }
   return (ft_texture *)tex;
 }
 
@@ -274,8 +279,7 @@ static ft_mesh *api_mesh_create(const void *vertices, uint32_t vertex_count, uin
 }
 
 static void api_mesh_destroy(ft_mesh *mesh) {
-  // Meshes live in the renderer's fixed table and are released with it.
-  (void)mesh;
+  if (have_graphics() && mesh) renderer_destroy_mesh(g_engine, AS_MESH(mesh));
 }
 
 // --- drawing -----------------------------------------------------------------
@@ -432,6 +436,14 @@ static void api_draw_instances(ft_pipeline *pipeline, float z, ft_texture *const
                                uint32_t count) {
   if (!have_graphics() || !pipeline) return;
   renderer_submit_instances(g_engine, AS_PIPELINE(pipeline), z, (texture_t *const *)textures, texture_count, instances, count);
+}
+
+static void api_draw_mesh_range(ft_pipeline *pipeline, float z, ft_mesh *mesh,
+                                uint32_t first_index, uint32_t index_count, ft_texture *const *textures,
+                                uint32_t texture_count, const void *uniforms, size_t uniform_size) {
+  if (!have_graphics() || !mesh || !pipeline) return;
+  renderer_submit_mesh_range(g_engine, AS_PIPELINE(pipeline), z, AS_MESH(mesh), first_index, index_count,
+                             (texture_t *const *)textures, texture_count, uniforms, uniform_size);
 }
 
 static void api_draw_mesh(ft_pipeline *pipeline, float z, ft_mesh *mesh, ft_texture *const *textures, uint32_t texture_count,
@@ -823,6 +835,7 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .draw_text = api_draw_text,
       .draw_instances = api_draw_instances,
       .draw_mesh = api_draw_mesh,
+      .draw_mesh_range = api_draw_mesh_range,
       .camera_get = api_camera_get,
       .camera_set = api_camera_set,
       .screen_to_world = api_screen_to_world,

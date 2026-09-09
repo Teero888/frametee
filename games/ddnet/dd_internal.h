@@ -100,6 +100,7 @@ struct ft_level {
 
   // Tile layers uploaded for rendering; owned by the module, rebuilt per level.
   ft_texture *layer_textures[3];
+  struct dd_map_design *design;
 };
 
 // --- sprites ----------------------------------------------------------------
@@ -518,6 +519,8 @@ typedef struct {
   // Level rendering.
   ft_texture *entities;
   ft_pipeline *map_pipeline;
+  ft_pipeline *design_tiles, *design_quads;
+  ft_texture *design_white, *design_white_tiles;
   ft_mesh *map_mesh;
 
   dd_skin_instance_t *skin_batch;
@@ -547,6 +550,8 @@ typedef struct {
   // belongs to the game; what counts as "the level" does too, since only the
   // game knows what it is made of.
   bool render_map;
+  bool entities_view;
+  bool map_detail;
   bool render_players;
   bool render_weapons;
   bool render_particles;
@@ -710,6 +715,9 @@ void dd_level_build_pickups(ft_level *level);
 
 void dd_map_create(ft_game *game, ft_level *level);
 void dd_map_destroy(ft_game *game, ft_level *level);
+void dd_map_design_create(ft_game *game, ft_level *level);
+void dd_map_design_destroy(ft_game *game, ft_level *level);
+void dd_map_design_render(ft_game *game, const ft_render_frame *frame);
 void dd_map_render(ft_game *game, const ft_render_frame *frame);
 
 // PNG decoding lives with the other graphics code so only one translation unit

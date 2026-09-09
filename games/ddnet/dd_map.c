@@ -154,6 +154,7 @@ static bool create_map_pipeline(ft_game *game) {
 void dd_map_create(ft_game *game, ft_level *level) {
   if (game->headless || !level) return;
   dd_map_destroy(game, level);
+  dd_map_design_create(game, level);
   if (!create_map_pipeline(game)) return;
 
   if (!game->gfx.entities) game->gfx.entities = entities_array(game);
@@ -170,6 +171,7 @@ void dd_map_create(ft_game *game, ft_level *level) {
 
 void dd_map_destroy(ft_game *game, ft_level *level) {
   if (!level) return;
+  dd_map_design_destroy(game, level);
   for (int i = 0; i < 3; ++i) {
     if (level->layer_textures[i]) game->engine->texture_destroy(level->layer_textures[i]);
     level->layer_textures[i] = NULL;

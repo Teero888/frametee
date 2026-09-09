@@ -1276,13 +1276,18 @@ texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsig
 
 mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count, uint32_t *indices, uint32_t index_count) {
   renderer_state_t *renderer = &handler->renderer;
-  if (renderer->mesh_count >= MAX_MESHES) {
+  uint32_t slot = 0;
+  while (slot < MAX_MESHES && renderer->meshes[slot].active)
+    ++slot;
+  if (slot == MAX_MESHES) {
     log_error(LOG_SOURCE, "Maximum mesh count (%d) reached.", MAX_MESHES);
     return NULL;
   }
 
-  mesh_t *mesh = &renderer->meshes[renderer->mesh_count];
-  mesh->id = renderer->mesh_count++;
+  mesh_t *mesh = &renderer->meshes[slot];
+  memset(mesh, 0, sizeof(*mesh));
+  mesh->id = slot;
+  if (renderer->mesh_count <= slot) renderer->mesh_count = slot + 1;
   mesh->active = true;
   mesh->vertex_count = vertex_count;
   mesh->index_count = index_count;
@@ -1332,6 +1337,18 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
   return mesh;
 }
 
+void renderer_destroy_mesh(gfx_handler_t *h, mesh_t *mesh) {
+  if (!mesh || !mesh->active) return;
+  vkDeviceWaitIdle(h->g_device);
+  vkDestroyBuffer(h->g_device, mesh->vertex_buffer.buffer, h->g_allocator);
+  vkFreeMemory(h->g_device, mesh->vertex_buffer.memory, h->g_allocator);
+  if (mesh->index_buffer.buffer != VK_NULL_HANDLE) {
+    vkDestroyBuffer(h->g_device, mesh->index_buffer.buffer, h->g_allocator);
+    vkFreeMemory(h->g_device, mesh->index_buffer.memory, h->g_allocator);
+  }
+  memset(mesh, 0, sizeof(*mesh));
+}
+
 void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &handler->renderer;
   uint32_t frame_pool_index = handler->g_main_window_data.FrameIndex % 3;
@@ -1350,7 +1367,7 @@ void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer
   vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 }
 void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh, shader_t *shader, texture_t **textures,
-                        uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count) {
+                        uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count, uint32_t first_index, uint32_t index_count) {
   if (!mesh || !shader || !mesh->active || !shader->active) return;
   renderer_state_t *renderer = &handler->renderer;
 
@@ -1425,7 +1442,7 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
   vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &descriptor_set, 0, NULL);
 
   if (mesh->index_count > 0) {
-    vkCmdDrawIndexed(command_buffer, mesh->index_count, 1, 0, 0, 0);
+    vkCmdDrawIndexed(command_buffer, index_count, 1, first_index, 0, 0);
   } else {
     vkCmdDraw(command_buffer, mesh->vertex_count, 1, 0, 0);
   }
@@ -3181,7 +3198,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
         const bool has_uniforms = q->data.mesh_draw.uniform_size > 0;
         renderer_draw_mesh(h, cmd, q->data.mesh_draw.mesh, mesh_pipe->shader, (texture_t **)q->data.mesh_draw.textures,
                            q->data.mesh_draw.texture_count, has_uniforms ? ubos : NULL, has_uniforms ? ubo_sizes : NULL,
-                           has_uniforms ? 1 : 0);
+                           has_uniforms ? 1 : 0, q->data.mesh_draw.first_index, q->data.mesh_draw.index_count);
       }
       break;
     }
@@ -3251,7 +3268,7 @@ texture_t *renderer_create_texture_layered(gfx_handler_t *h, const unsigned char
     texture->sampler = create_texture_sampler(h, 1, linear_filter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     return texture;
   }
-  if (layers <= 1 && format == VK_FORMAT_R8G8B8A8_UNORM) {
+  if (layers <= 1 && format == VK_FORMAT_R8G8B8A8_UNORM && !mipmaps) {
     g_next_texture_filter = linear_filter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
     texture_t *tex = renderer_create_texture_from_rgba(h, pixels, (int)width, (int)height);
     g_next_texture_filter = VK_FILTER_LINEAR;
@@ -3259,7 +3276,17 @@ texture_t *renderer_create_texture_layered(gfx_handler_t *h, const unsigned char
   }
 
   texture_t *tex = renderer_create_texture_2d_array(h, width, height, layers, format);
-  if (!tex || !pixels) return tex;
+  if (!tex) return NULL;
+  // A single layer is a sampler2D, and disabled mipmaps must not expose
+  // uninitialized lower levels through either the view or the sampler.
+  if (layers == 1 || !mipmaps) {
+    vkDestroyImageView(h->g_device, tex->image_view, h->g_allocator);
+    tex->image_view = create_image_view(h, tex->image, format,
+                                        layers == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY, mipmaps ? tex->mip_levels : 1, layers);
+  }
+  vkDestroySampler(h->g_device, tex->sampler, h->g_allocator);
+  tex->sampler = create_texture_sampler(h, mipmaps ? tex->mip_levels : 1, linear_filter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+  if (!pixels) return tex;
 
   const VkDeviceSize layer_bytes = (VkDeviceSize)width * height * format_bytes_per_pixel(format);
   const VkDeviceSize total = layer_bytes * layers;
@@ -3846,8 +3873,17 @@ texture_t *renderer_render_instances_preview(gfx_handler_t *h, custom_pipeline_t
 
 void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh, texture_t *const *textures,
                           uint32_t texture_count, const void *uniforms, size_t uniform_size) {
+  if (!mesh) return;
+  renderer_submit_mesh_range(h, pipe, z, mesh, 0, mesh->index_count, textures, texture_count, uniforms, uniform_size);
+}
+
+void renderer_submit_mesh_range(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh,
+                                uint32_t first_index, uint32_t index_count, texture_t *const *textures,
+                                uint32_t texture_count, const void *uniforms, size_t uniform_size) {
   renderer_state_t *r = &h->renderer;
-  if (!pipe || !pipe->active || !mesh) return;
+  if (!pipe || !pipe->active || !mesh || !mesh->active) return;
+  if (first_index > mesh->index_count || index_count > mesh->index_count - first_index) return;
+  if (mesh->index_count && (!index_count || index_count % 3 || first_index % 3)) return;
   if (texture_count > 0 && !textures) return;
   if (uniform_size > 0 && !uniforms) return;
   if (uniform_size > MAX_QUEUED_UNIFORM_BYTES) {
@@ -3861,6 +3897,8 @@ void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, me
   cmd->z = z;
   cmd->data.mesh_draw.pipeline = pipe;
   cmd->data.mesh_draw.mesh = mesh;
+  cmd->data.mesh_draw.first_index = first_index;
+  cmd->data.mesh_draw.index_count = index_count;
   cmd->data.mesh_draw.texture_count = texture_count < MAX_TEXTURES_PER_DRAW ? texture_count : MAX_TEXTURES_PER_DRAW;
   for (uint32_t i = 0; i < cmd->data.mesh_draw.texture_count; ++i)
     cmd->data.mesh_draw.textures[i] = textures[i];

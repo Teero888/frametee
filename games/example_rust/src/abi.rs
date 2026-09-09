@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 18;
+pub const FT_GAME_ABI_VERSION: u32 = 19;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -289,6 +289,7 @@ pub struct ft_texture_desc {
     pub format: u32,
     pub mipmaps: bool,
     pub linear_filter: bool,
+    pub repeat: bool,
 }
 
 #[repr(C)]
@@ -423,6 +424,7 @@ pub struct ft_engine_api {
     pub timeline_active_world: *const c_void,
     pub timeline_range: *const c_void,
     pub presentation_effects_enabled: *const c_void,
+    pub draw_mesh_range: *const c_void,
 }
 
 /// The module vtable. Field order and count must match `ft_game_module`

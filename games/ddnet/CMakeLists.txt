@@ -75,6 +75,8 @@ add_library(ddnet_game MODULE
     dd_anim_data.c
     dd_anim_system.c
     dd_map.c
+    dd_map_design.c
+    dd_map_math.c
     dd_maps.c
     dd_imgui.c
     dd_skin_browser.c
@@ -88,7 +90,8 @@ add_library(ddnet_game MODULE
 set_target_properties(ddnet_game PROPERTIES
     PREFIX ""
     OUTPUT_NAME "ddnet"
-    C_STANDARD 11
+    C_STANDARD 99
+    C_STANDARD_REQUIRED ON
     C_VISIBILITY_PRESET hidden
 )
 if(UNIX AND NOT APPLE)

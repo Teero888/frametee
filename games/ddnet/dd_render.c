@@ -644,8 +644,13 @@ void dd_render(ft_game *game, const ft_render_frame *frame) {
   switch (frame->pass) {
   case FT_PASS_LEVEL_BACKGROUND:
     if (!game->settings.render_map) break;
-    dd_map_render(game, frame);
-    dd_render_map_overlays(game, frame);
+    if (game->settings.entities_view) {
+      dd_map_render(game, frame);
+      dd_render_map_overlays(game, frame);
+    } else dd_map_design_render(game, frame);
+    break;
+  case FT_PASS_LEVEL_FOREGROUND:
+    if (game->settings.render_map && !game->settings.entities_view) dd_map_design_render(game, frame);
     break;
   case FT_PASS_ENTITIES: {
     // Entity passes are per world. The old port tried to draw particles from a
@@ -665,8 +670,6 @@ void dd_render(ft_game *game, const ft_render_frame *frame) {
   case FT_PASS_OVERLAY:
     dd_render_world_overlays(game, frame);
     if (frame->active) render_cursor(game, frame);
-    break;
-  case FT_PASS_LEVEL_FOREGROUND:
     break;
   default:
     break;

@@ -378,6 +378,11 @@ void dd_gfx_destroy(ft_game *game) {
 
   if (gfx->skin_pipeline) game->engine->pipeline_destroy(gfx->skin_pipeline);
   if (gfx->map_pipeline) game->engine->pipeline_destroy(gfx->map_pipeline);
+  if (gfx->map_mesh) game->engine->mesh_destroy(gfx->map_mesh);
+  if (gfx->design_tiles) game->engine->pipeline_destroy(gfx->design_tiles);
+  if (gfx->design_quads) game->engine->pipeline_destroy(gfx->design_quads);
+  if (gfx->design_white) game->engine->texture_destroy(gfx->design_white);
+  if (gfx->design_white_tiles) game->engine->texture_destroy(gfx->design_white_tiles);
   if (gfx->entities) game->engine->texture_destroy(gfx->entities);
   if (gfx->gameskin) game->engine->atlas_destroy(gfx->gameskin);
   if (gfx->particles) game->engine->atlas_destroy(gfx->particles);

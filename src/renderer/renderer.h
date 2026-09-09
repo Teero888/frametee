@@ -390,6 +390,7 @@ struct render_command_t {
       uint32_t texture_count;
       uint8_t uniforms[MAX_QUEUED_UNIFORM_BYTES];
       uint32_t uniform_size;
+      uint32_t first_index, index_count;
     } mesh_draw;
   } data;
 };
@@ -502,7 +503,7 @@ void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex);
 mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count, uint32_t *indices, uint32_t index_count);
 
 void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
-void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh, shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count);
+void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh, shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count, uint32_t first_index, uint32_t index_count);
 void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
 texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas, uint32_t tile_width, uint32_t tile_height, uint32_t num_tiles_x, uint32_t num_tiles_y);
@@ -616,6 +617,10 @@ texture_t *renderer_render_instances_preview(gfx_handler_t *h, custom_pipeline_t
 // through here, which is what lets it sit above or below the entities by z.
 void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh, texture_t *const *textures,
                           uint32_t texture_count, const void *uniforms, size_t uniform_size);
+void renderer_submit_mesh_range(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh,
+                                uint32_t first_index, uint32_t index_count, texture_t *const *textures,
+                                uint32_t texture_count, const void *uniforms, size_t uniform_size);
+void renderer_destroy_mesh(gfx_handler_t *h, mesh_t *mesh);
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t layer_count, VkFormat format);
 

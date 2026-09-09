@@ -108,6 +108,7 @@ int main(int argc, char **argv) {
   // Renders the level for a few frames, writes the viewport to a file and
   // exits. This is how a render gets checked without a person looking at it.
   const char *screenshot_path = NULL;
+  const char *capture_view = NULL;
   int screenshot_frames = 60;
   // "x,y" in captured-image pixels. Reports the world-space ray under that
   // pixel, which is how a question about a render ("what is that grey?") turns
@@ -165,6 +166,8 @@ int main(int argc, char **argv) {
       }
     } else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
       screenshot_path = argv[++i];
+    } else if (strcmp(argv[i], "--view") == 0 && i + 1 < argc) {
+      capture_view = argv[++i];
     } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
       screenshot_frames = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--pick") == 0 && i + 1 < argc) {
@@ -211,6 +214,11 @@ int main(int argc, char **argv) {
            "  --level <path>          Open level immediately\n"
            "  --list-games            List discovered game modules and exit\n"
            "  --plugin <name...>      Activate one or more plugins for this session\n\n"
+           "Capture options:\n"
+           "  --screenshot <path>     Save viewport as PPM and exit\n"
+           "  --size <width>x<height> Set capture dimensions\n"
+           "  --view <x,y,width>      Pin the 2D world view for capture\n"
+           "  --frames <count>        Frames before capture (default: 60)\n\n"
            "Headless options:\n"
            "  --headless              Run without window or graphics\n"
            "  --game <id>             Game module to use (e.g. tmnf, ddnet)\n"
@@ -338,6 +346,19 @@ int main(int argc, char **argv) {
     }
 
     on_camera_update(&handler, viewport_hovered, intra);
+    // Pin a 2D capture to a repeatable world view, independently of window
+    // layout and mouse events. Width is in the game's world units.
+    if (screenshot_path && capture_view && handler.level && !game_is_3d(&handler.game_host)) {
+      float x, y, width;
+      if (sscanf(capture_view, "%f,%f,%f", &x, &y, &width) == 3 &&
+          isfinite(x) && isfinite(y) && isfinite(width) && width > 0.f) {
+        handler.renderer.camera.pos[0] = x / handler.world_width;
+        handler.renderer.camera.pos[1] = y / handler.world_height;
+        handler.renderer.camera.zoom = 2.f * handler.world_width /
+                                       (width * fmaxf(handler.world_width, handler.world_height) * 0.001f);
+        handler.renderer.camera.zoom_wanted = handler.renderer.camera.zoom;
+      }
+    }
 
     // Everything in the viewport is drawn by the active game. The engine
     // decides the passes and their order; what happens inside each one is the
