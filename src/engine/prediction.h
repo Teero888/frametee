@@ -43,8 +43,8 @@ typedef struct prediction_line_t {
   // The first line follows authored inputs. Additional lines hold the input at
   // the playhead and apply their selected reflected controls to it.
   bool use_timeline_inputs;
-  // Ordered, edge-triggered rules. A matching rule latches its colour for the
-  // rest of the prediction; a later rule wins when several trigger together.
+  // Ordered rules evaluated per segment, falling back to the line colour.
+  // Later matches win; CHANGED matches only ticks with a property change.
   prediction_color_rule_t color_rules[MAX_PREDICTION_COLOR_RULES];
   int color_rule_count;
 } prediction_line_t;

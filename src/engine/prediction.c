@@ -148,7 +148,6 @@ typedef struct resolved_color_rule_t {
 typedef struct color_rule_runtime_t {
   double previous;
   bool have_previous;
-  bool condition;
 } color_rule_runtime_t;
 
 static bool color_rule_property_supported(ft_value_kind kind) {
@@ -260,26 +259,11 @@ static void resolve_color_rules(game_host_t *host, const prediction_line_t *line
   }
 }
 
-static void initialize_player_color(game_host_t *host, const ft_world *world, int player,
-                                    const prediction_line_t *line, const resolved_color_rule_t *resolved,
-                                    color_rule_runtime_t *runtime, float color[4]) {
-  memcpy(color, line->color, sizeof(line->color));
-  for (int rule_index = 0; rule_index < line->color_rule_count && rule_index < MAX_PREDICTION_COLOR_RULES;
-       ++rule_index) {
-    const resolved_color_rule_t *rule = &resolved[rule_index];
-    double value;
-    if (!color_rule_value(host, world, player, rule, &value)) continue;
-    color_rule_runtime_t *state = &runtime[rule_index];
-    state->previous = value;
-    state->have_previous = true;
-    if (rule->rule->comparison == PREDICTION_COMPARE_CHANGED) continue;
-    state->condition = color_rule_condition(rule, value);
-    if (state->condition) memcpy(color, rule->rule->color, sizeof(rule->rule->color));
-  }
-}
-
 static void update_player_color(game_host_t *host, const ft_world *world, int player, const prediction_line_t *line,
                                 const resolved_color_rule_t *resolved, color_rule_runtime_t *runtime, float color[4]) {
+  // Re-evaluate every segment so an expired rule reveals the next matching
+  // rule (or the base colour), instead of leaving its colour latched.
+  memcpy(color, line->color, sizeof(line->color));
   for (int rule_index = 0; rule_index < line->color_rule_count && rule_index < MAX_PREDICTION_COLOR_RULES;
        ++rule_index) {
     const resolved_color_rule_t *rule = &resolved[rule_index];
@@ -287,7 +271,6 @@ static void update_player_color(game_host_t *host, const ft_world *world, int pl
     double value;
     if (!color_rule_value(host, world, player, rule, &value)) {
       state->have_previous = false;
-      state->condition = false;
       continue;
     }
 
@@ -295,9 +278,7 @@ static void update_player_color(game_host_t *host, const ft_world *world, int pl
     if (rule->rule->comparison == PREDICTION_COMPARE_CHANGED) {
       triggered = state->have_previous && !color_rule_equal(rule, value, state->previous);
     } else {
-      const bool condition = color_rule_condition(rule, value);
-      triggered = condition && !state->condition;
-      state->condition = condition;
+      triggered = color_rule_condition(rule, value);
     }
     state->previous = value;
     state->have_previous = true;
@@ -367,7 +348,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
     for (int player = 0; player < players; ++player) {
       const int track = model_group_track_index(timeline, group_index, player);
       if (track < 0 || !timeline->player_tracks[track].prediction_enabled) continue;
-      initialize_player_color(host, world, player, line, resolved_rules,
+      update_player_color(host, world, player, line, resolved_rules,
                               rule_runtime + (size_t)player * MAX_PREDICTION_COLOR_RULES, active_colors[player]);
       if (is_3d) {
         vec3 current_pos, previous_pos;
@@ -599,15 +580,15 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
     }
     const char *preview = rule->comparison == PREDICTION_COMPARE_CHANGED
                               ? "Changes"
-                              : (rule->target != 0.0 ? "Becomes true" : "Becomes false");
+                              : (rule->target != 0.0 ? "Is true" : "Is false");
     if (igBeginCombo("Trigger", preview, 0)) {
-      if (igSelectable_Bool("Becomes true", rule->comparison == PREDICTION_COMPARE_EQUAL && rule->target != 0.0, 0,
+      if (igSelectable_Bool("Is true", rule->comparison == PREDICTION_COMPARE_EQUAL && rule->target != 0.0, 0,
                             (ImVec2){0.f, 0.f})) {
         rule->comparison = PREDICTION_COMPARE_EQUAL;
         rule->target = 1.0;
         changed = true;
       }
-      if (igSelectable_Bool("Becomes false", rule->comparison == PREDICTION_COMPARE_EQUAL && rule->target == 0.0, 0,
+      if (igSelectable_Bool("Is false", rule->comparison == PREDICTION_COMPARE_EQUAL && rule->target == 0.0, 0,
                             (ImVec2){0.f, 0.f})) {
         rule->comparison = PREDICTION_COMPARE_EQUAL;
         rule->target = 0.0;
@@ -622,7 +603,7 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
     return changed;
   }
 
-  static const char *names[] = {"Equals", "Drops below", "Rises above", "Changes"};
+  static const char *names[] = {"Equals", "Is below", "Is above", "Changes"};
   int comparison = (int)rule->comparison;
   if (comparison < 0 || comparison > PREDICTION_COMPARE_CHANGED) comparison = PREDICTION_COMPARE_EQUAL;
   if (igBeginCombo("Trigger", names[comparison], 0)) {
@@ -647,8 +628,8 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
 static bool render_color_rules(prediction_line_t *line, int line_index, const ft_entity_class *player_class) {
   bool changed = false;
   if (!igTreeNode_Str("Color triggers")) return false;
-  igTextWrapped("A trigger changes this player's line colour from that segment onward. Later rules win when they "
-                "trigger on the same tick.");
+  igTextWrapped("Rules colour each segment while their conditions match. Otherwise the line uses its base colour. "
+                "Later matching rules win. Changes matches only ticks when the property changes.");
 
   int remove = -1;
   for (int rule_index = 0; rule_index < line->color_rule_count; ++rule_index) {
