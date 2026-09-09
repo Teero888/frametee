@@ -448,7 +448,8 @@ void setup_docking(ui_handler_t *ui) {
   igPopStyleVar(3);
 
   // create the main dockspace
-  igDockSpace(main_dockspace_id, (ImVec2){0.0f, 0.0f}, ImGuiDockNodeFlags_PassthruCentralNode | ImGuiDockNodeFlags_NoWindowMenuButton, NULL);
+  igDockSpace(main_dockspace_id, (ImVec2){0.0f, 0.0f},
+              ImGuiDockNodeFlags_PassthruCentralNode | ImGuiDockNodeFlags_NoWindowMenuButton, NULL);
   igEnd();
 
   // build the initial layout programmatically
@@ -1826,11 +1827,9 @@ static void render_splash_screen(ui_handler_t *ui) {
 
 void ui_render(ui_handler_t *ui) {
   interaction_update_recording_input(ui);
-  render_menu_bar(ui);
 
   keybinds_process_inputs(ui);
   interaction_handle_playback_and_shortcuts(&ui->timeline);
-  setup_docking(ui);
   // Read by plugins for the same reason the panels below are gated: see
   // tas_context_t::ui_visible. Set before the update that reads it.
   ui->plugin_context.ui_visible = ui->show_ui;
@@ -1978,19 +1977,27 @@ static void draw_character_inspector(ui_handler_t *ui, ImVec2 start) {
   igPopFont();
 }
 
-bool ui_render_late(ui_handler_t *ui) {
-  bool hovered = false;
-
-  if (!ui->gfx_handler->offscreen_initialized || ui->gfx_handler->offscreen_texture == NULL)
-    return false;
-
+static void begin_viewport_window(void) {
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0, 0});
+  // With zero padding, a window border clips the outer image pixels. The
+  // viewport fills the content rectangle and must never acquire scroll offsets.
+  igPushStyleVar_Float(ImGuiStyleVar_WindowBorderSize, 0.f);
+  igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, 0.f);
+  igSetNextWindowScroll((ImVec2){0, 0});
   igBegin("Viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+}
 
-  // render the main game viewport texture
-  ImVec2 start = igGetCursorScreenPos();
-  const ImVec2 viewport_content_pos = start;
-  *(ImVec2_c *)&ui->gfx_handler->viewport[0] = igGetContentRegionAvail();
+void ui_begin_frame(ui_handler_t *ui) {
+  render_menu_bar(ui);
+  setup_docking(ui);
+  // Resolve the docked content rectangle before the camera and Vulkan render
+  // target use it. The later Begin appends the image to this same window;
+  // ImGui keeps its layout fixed for the remainder of the frame.
+  begin_viewport_window();
+  *(ImVec2_c *)&ui->viewport_window_pos = igGetCursorScreenPos();
+  ImVec2 avail = igGetContentRegionAvail();
+  ui->gfx_handler->viewport[0] = fmaxf(1.f, floorf(avail.x));
+  ui->gfx_handler->viewport[1] = fmaxf(1.f, floorf(avail.y));
   // A capture is only worth comparing against another one taken the same way,
   // and the window manager is free to ignore the size the window asked for --
   // it may tile it, or half it. Pinning the drawn region here fixes both the
@@ -2006,19 +2013,29 @@ bool ui_render_late(ui_handler_t *ui) {
       }
     }
   }
+  const ImVec2 end = {ui->viewport_window_pos.x + avail.x, ui->viewport_window_pos.y + avail.y};
+  ui->viewport_hovered = igIsWindowHovered(0) && igIsMouseHoveringRect(ui->viewport_window_pos, end, true);
+  ui->viewport_focused = igIsWindowFocused(0);
+  igEnd();
+  igPopStyleVar(3);
+}
+
+bool ui_render_late(ui_handler_t *ui) {
+  bool hovered = false;
+
+  if (!ui->gfx_handler->offscreen_initialized || ui->gfx_handler->offscreen_texture == NULL)
+    return false;
+
+  begin_viewport_window();
+  ImVec2 start = ui->viewport_window_pos;
+  const ImVec2 viewport_content_pos = start;
+  igSetCursorScreenPos(start);
 
   ImVec2 img_size = {ui->gfx_handler->viewport[0], ui->gfx_handler->viewport[1]};
-  ImVec2 uv0 = {0, 0};
-  ImVec2 uv1 = {1.0f, 1.0f};
-  if (ui->gfx_handler->offscreen_width > 0 && ui->gfx_handler->offscreen_height > 0) {
-    uv1.x = (float)ui->gfx_handler->viewport[0] / ui->gfx_handler->offscreen_width;
-    uv1.y = (float)ui->gfx_handler->viewport[1] / ui->gfx_handler->offscreen_height;
-  }
-  igImage(*ui->gfx_handler->offscreen_texture, img_size, uv0, uv1);
-  igPopStyleVar(1);
+  igImage(*ui->gfx_handler->offscreen_texture, img_size, (ImVec2){0, 0}, (ImVec2){1, 1});
+  igPopStyleVar(3);
 
-  *(ImVec2_c *)&ui->viewport_window_pos = igGetWindowPos();
-  ui->viewport_hovered = igIsWindowHovered(0);
+  ui->viewport_hovered = igIsItemHovered(0);
   ui->viewport_focused = igIsWindowFocused(0);
   hovered = ui->viewport_hovered;
 
@@ -2086,7 +2103,7 @@ bool ui_render_late(ui_handler_t *ui) {
     ui->show_ui = !ui->show_ui;
   }
 
-  if (ui->show_ui && ui->timeline.selected_player_track_index >= 0) {
+  if (ui->timeline.selected_player_track_index >= 0) {
     draw_character_inspector(ui, start);
   }
 

@@ -301,7 +301,6 @@ int main(int argc, char **argv) {
       log_error("Main", "Could not open level '%s'", level_path);
   }
 
-  bool viewport_hovered = false;
   double last_time = glfwGetTime();
 
   while (1) {
@@ -326,14 +325,15 @@ int main(int argc, char **argv) {
     }
     last_time = now;
 
+    // A project the menus asked for is opened here, before the frame draws
+    // anything: it can replace the level, the timeline and the active game,
+    // and everything below reads all three. This also precedes the menu and
+    // viewport layout in gfx_begin_frame, which may reference game resources.
+    ui_run_pending_project_switch(&handler.user_interface);
+
     int frame_result = gfx_begin_frame(&handler);
     if (frame_result == FRAME_EXIT) break;
     if (frame_result == FRAME_SKIP) continue;
-
-    // A project the menus asked for is opened here, before the frame draws
-    // anything: it can replace the level, the timeline and the active game,
-    // and everything below reads all three.
-    ui_run_pending_project_switch(&handler.user_interface);
 
     timeline_state_t *timeline = &handler.user_interface.timeline;
     float intra = 1.f;
@@ -345,7 +345,7 @@ int main(int argc, char **argv) {
       if (timeline->is_reversing) intra = 1.f - intra;
     }
 
-    on_camera_update(&handler, viewport_hovered, intra);
+    on_camera_update(&handler, handler.user_interface.viewport_hovered, intra);
     // Pin a 2D capture to a repeatable world view, independently of window
     // layout and mouse events. Width is in the game's world units.
     if (screenshot_path && capture_view && handler.level && !game_is_3d(&handler.game_host)) {
@@ -390,7 +390,7 @@ int main(int argc, char **argv) {
       io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     }
 
-    viewport_hovered = gfx_end_frame(&handler);
+    gfx_end_frame(&handler);
 
     if (screenshot_path != NULL && --screenshot_frames <= 0) {
       // A few frames in, so the level has settled and the viewport has been

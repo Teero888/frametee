@@ -32,7 +32,7 @@ struct ui_handler_t {
   tas_context_t plugin_context;
   tas_api_t plugin_api;
 
-  ImVec2 viewport_window_pos;
+  ImVec2 viewport_window_pos; // Screen-space origin of the viewport image, excluding decorations.
   vec2 last_render_pos;
   vec2 recording_mouse_pos;
   bool viewport_focused;
@@ -134,6 +134,7 @@ void ui_run_pending_project_switch(ui_handler_t *ui);
 void ui_init_config(ui_handler_t *ui);
 void camera_init(camera_t *camera);
 void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);
+void ui_begin_frame(ui_handler_t *ui);
 void ui_render(ui_handler_t *ui);
 bool ui_render_late(ui_handler_t *ui);
 void ui_post_level_load(ui_handler_t *ui);

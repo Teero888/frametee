@@ -270,7 +270,9 @@ static int api_do_export_run_to_group(const char *name, int start_tick, int coun
 static const char *api_get_level_name(void) { return g_ui_handler_for_api->loaded_level_name; }
 static const char *api_get_level_path(void) { return g_ui_handler_for_api->loaded_level_path; }
 static bool api_viewport_accepts_input(bool continuing_drag) {
-  return g_ui_handler_for_api->viewport_focused && (g_ui_handler_for_api->viewport_hovered || continuing_drag);
+  if (continuing_drag)
+    return g_ui_handler_for_api->viewport_focused;
+  return g_ui_handler_for_api->viewport_hovered;
 }
 
 static void api_register_undo_command(struct undo_command_t *command) {
@@ -325,16 +327,6 @@ static void api_draw_box_world3(vec3 center, vec3 size, vec4 color, bool wire) {
 static void api_screen_to_world(float screen_x, float screen_y, float *world_x, float *world_y) {
   float lx = screen_x - g_ui_handler_for_api->viewport_window_pos.x;
   float ly = screen_y - g_ui_handler_for_api->viewport_window_pos.y;
-
-  static ImGuiWindow *s_viewport_window = NULL;
-  if (!s_viewport_window) {
-    s_viewport_window = igFindWindowByName("Viewport");
-  }
-  if (s_viewport_window) {
-    lx -= s_viewport_window->DecoOuterSizeX1;
-    ly -= s_viewport_window->DecoOuterSizeY1;
-  }
-
   screen_to_world(g_ui_handler_for_api->gfx_handler, lx, ly, world_x, world_y);
 }
 
@@ -343,16 +335,6 @@ static bool api_screen_ray_world3(float screen_x, float screen_y, vec3 out_origi
   // from ImGui and are relative to the whole window.
   float lx = screen_x - g_ui_handler_for_api->viewport_window_pos.x;
   float ly = screen_y - g_ui_handler_for_api->viewport_window_pos.y;
-
-  static ImGuiWindow *s_viewport_window = NULL;
-  if (!s_viewport_window) {
-    s_viewport_window = igFindWindowByName("Viewport");
-  }
-  if (s_viewport_window) {
-    lx -= s_viewport_window->DecoOuterSizeX1;
-    ly -= s_viewport_window->DecoOuterSizeY1;
-  }
-
   return screen_ray3(g_ui_handler_for_api->gfx_handler, lx, ly, out_origin, out_dir);
 }
 
@@ -376,13 +358,6 @@ static bool api_world_to_screen3(vec3 world, float *screen_x, float *screen_y) {
 
   *screen_x = (ndc_x + 1.0f) * 0.5f * gfx->viewport[0] + g_ui_handler_for_api->viewport_window_pos.x;
   *screen_y = (ndc_y + 1.0f) * 0.5f * gfx->viewport[1] + g_ui_handler_for_api->viewport_window_pos.y;
-
-  static ImGuiWindow *s_viewport_window = NULL;
-  if (!s_viewport_window) s_viewport_window = igFindWindowByName("Viewport");
-  if (s_viewport_window) {
-    *screen_x += s_viewport_window->DecoOuterSizeX1;
-    *screen_y += s_viewport_window->DecoOuterSizeY1;
-  }
   return true;
 }
 
@@ -390,15 +365,6 @@ static void api_world_to_screen(float world_x, float world_y, float *screen_x, f
   world_to_screen(g_ui_handler_for_api->gfx_handler, world_x, world_y, screen_x, screen_y);
   *screen_x += g_ui_handler_for_api->viewport_window_pos.x;
   *screen_y += g_ui_handler_for_api->viewport_window_pos.y;
-
-  static ImGuiWindow *s_viewport_window = NULL;
-  if (!s_viewport_window) {
-    s_viewport_window = igFindWindowByName("Viewport");
-  }
-  if (s_viewport_window) {
-    *screen_x += s_viewport_window->DecoOuterSizeX1;
-    *screen_y += s_viewport_window->DecoOuterSizeY1;
-  }
 }
 
 static double api_get_time(void) {

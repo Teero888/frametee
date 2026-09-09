@@ -382,8 +382,19 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->viewport[0] = (float)fb_width;
   handler->viewport[1] = (float)fb_height;
 
+  const char *forced = getenv("FRAMETEE_VIEWPORT_SIZE");
+  if (forced != NULL) {
+    int w = 0, h = 0;
+    if (sscanf(forced, "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+      handler->viewport[0] = (float)w;
+      handler->viewport[1] = (float)h;
+    }
+  }
+
   // initialize offscreen target to match the viewport size
-  if (init_offscreen_resources(handler, (uint32_t)fb_width, (uint32_t)fb_height) != 0) {
+  uint32_t init_w = handler->viewport[0] > 0.0f ? (uint32_t)handler->viewport[0] : (uint32_t)fb_width;
+  uint32_t init_h = handler->viewport[1] > 0.0f ? (uint32_t)handler->viewport[1] : (uint32_t)fb_height;
+  if (init_offscreen_resources(handler, init_w, init_h) != 0) {
     log_warn(LOG_SOURCE, "Failed to create offscreen resources. The ImGui game view will be disabled.");
   }
 
@@ -425,12 +436,25 @@ int gfx_begin_frame(gfx_handler_t *handler) {
                                            handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
     handler->g_main_window_data.FrameIndex = 0;
     handler->g_swap_chain_rebuild = false;
+  }
 
-    int fb_width, fb_height;
-    glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
-    handler->viewport[0] = (float)fb_width;
-    handler->viewport[1] = (float)fb_height;
-    recreate_offscreen_if_needed(handler, (uint32_t)fb_width, (uint32_t)fb_height);
+  // Layout first: the viewport excludes the actual menu/tab bars and panels,
+  // whose sizes depend on docking and UI scale, not a fixed pixel allowance.
+  ImGui_ImplVulkan_NewFrame();
+  ImGui_ImplGlfw_NewFrame();
+  flush_imgui_mouse_pos();
+  igGetIO_Nil()->ConfigInputTrickleEventQueue = imgui_queue_needs_trickling();
+  igNewFrame();
+  ui_begin_frame(&handler->user_interface);
+
+  // Recreate offscreen target to match the viewport size if changed
+  uint32_t target_w = handler->viewport[0] > 0.0f ? (uint32_t)handler->viewport[0] : (uint32_t)fb_width;
+  uint32_t target_h = handler->viewport[1] > 0.0f ? (uint32_t)handler->viewport[1] : (uint32_t)fb_height;
+  if (target_w > 0 && target_h > 0 &&
+      (handler->offscreen_width != target_w || handler->offscreen_height != target_h)) {
+    vkDeviceWaitIdle(handler->g_device);
+    renderer_frame_completed(handler);
+    recreate_offscreen_if_needed(handler, target_w, target_h);
   }
 
   // Acquire Image and Begin Command Buffer
@@ -446,6 +470,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
     handler->g_swap_chain_rebuild = true;
     // Skip this frame if the swapchain is invalid
+    igEndFrame();
     return FRAME_SKIP;
   }
   check_vk_result(err);
@@ -470,15 +495,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   // render pass, which is why this sits ahead of it.
   renderer_sync_external_textures(handler, fd->CommandBuffer, true);
 
-  // Start ImGui and Renderer Frames
-  ImGui_ImplVulkan_NewFrame();
-  ImGui_ImplGlfw_NewFrame();
-  // Whatever motion is still held goes out here, so imgui starts the frame on the position the
-  // cursor is at now. Both of these run after the backend has queued its own events, so the queue
-  // being judged is the one igNewFrame() is about to process.
-  flush_imgui_mouse_pos();
-  igGetIO_Nil()->ConfigInputTrickleEventQueue = imgui_queue_needs_trickling();
-  igNewFrame();
+  // The renderer now uses the same dimensions that ImGui will display.
   renderer_begin_frame(handler, handler->current_frame_command_buffer);
 
   // Begin offscreen render pass (for game rendering)
@@ -664,6 +681,14 @@ void gfx_cleanup(gfx_handler_t *handler) {
     handler->retire_imgui_count = 0;
     renderer_cleanup(handler);
     destroy_offscreen_resources(handler);
+    if (handler->offscreen_render_pass != VK_NULL_HANDLE) {
+      vkDestroyRenderPass(handler->g_device, handler->offscreen_render_pass, handler->g_allocator);
+      handler->offscreen_render_pass = VK_NULL_HANDLE;
+    }
+    if (handler->offscreen_sampler != VK_NULL_HANDLE) {
+      vkDestroySampler(handler->g_device, handler->offscreen_sampler, handler->g_allocator);
+      handler->offscreen_sampler = VK_NULL_HANDLE;
+    }
     clear_glfw_callbacks(handler->window);
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -1221,74 +1246,78 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
   handler->offscreen_image_view = create_image_view(handler, handler->offscreen_image, format, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
 
   // create sampler
-  handler->offscreen_sampler = create_texture_sampler(handler, 1, VK_FILTER_LINEAR);
+  if (handler->offscreen_sampler == VK_NULL_HANDLE) {
+    handler->offscreen_sampler = create_texture_sampler(handler, 1, VK_FILTER_LINEAR);
+  }
 
-  // Create a render pass for the offscreen image. Final layout will be SHADER_READ_ONLY_OPTIMAL
-  VkAttachmentDescription color_attachment = {
-      .flags = 0,
-      .format = format,
-      .samples = VK_SAMPLE_COUNT_1_BIT,
-      .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-      .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-      .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-      .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-  };
+  // Create a render pass for the offscreen image if needed. Final layout will be SHADER_READ_ONLY_OPTIMAL
+  if (handler->offscreen_render_pass == VK_NULL_HANDLE) {
+    VkAttachmentDescription color_attachment = {
+        .flags = 0,
+        .format = format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
 
-  VkAttachmentReference color_attachment_ref = {
-      .attachment = 0,
-      .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-  };
+    VkAttachmentReference color_attachment_ref = {
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
 
-  handler->offscreen_depth_format = VK_FORMAT_D32_SFLOAT;
-  VkAttachmentDescription depth_attachment = {
-      .format = handler->offscreen_depth_format,
-      .samples = VK_SAMPLE_COUNT_1_BIT,
-      .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-      .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-      .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-      .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-  };
-  VkAttachmentReference depth_attachment_ref = {
-      .attachment = 1,
-      .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-  };
+    handler->offscreen_depth_format = VK_FORMAT_D32_SFLOAT;
+    VkAttachmentDescription depth_attachment = {
+        .format = handler->offscreen_depth_format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+    VkAttachmentReference depth_attachment_ref = {
+        .attachment = 1,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
 
-  VkSubpassDescription subpass = {
-      .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-      .colorAttachmentCount = 1,
-      .pColorAttachments = &color_attachment_ref,
-      .pDepthStencilAttachment = &depth_attachment_ref,
-  };
+    VkSubpassDescription subpass = {
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &color_attachment_ref,
+        .pDepthStencilAttachment = &depth_attachment_ref,
+    };
 
-  VkSubpassDependency dependency = {
-      .srcSubpass = VK_SUBPASS_EXTERNAL,
-      .dstSubpass = 0,
-      .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-      .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-      .srcAccessMask = 0,
-      .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-      .dependencyFlags = 0,
-  };
+    VkSubpassDependency dependency = {
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .dependencyFlags = 0,
+    };
 
-  const VkAttachmentDescription offscreen_attachments[2] = {color_attachment, depth_attachment};
-  VkRenderPassCreateInfo rp_info = {
-      .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-      .attachmentCount = 2,
-      .pAttachments = offscreen_attachments,
-      .subpassCount = 1,
-      .pSubpasses = &subpass,
-      .dependencyCount = 1,
-      .pDependencies = &dependency,
-  };
+    const VkAttachmentDescription offscreen_attachments[2] = {color_attachment, depth_attachment};
+    VkRenderPassCreateInfo rp_info = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 2,
+        .pAttachments = offscreen_attachments,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &dependency,
+    };
 
-  VkResult err = vkCreateRenderPass(handler->g_device, &rp_info, handler->g_allocator, &handler->offscreen_render_pass);
-  if (err != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "Failed to create offscreen render pass (%d)", err);
-    return 1;
+    VkResult err = vkCreateRenderPass(handler->g_device, &rp_info, handler->g_allocator, &handler->offscreen_render_pass);
+    if (err != VK_SUCCESS) {
+      log_error(LOG_SOURCE, "Failed to create offscreen render pass (%d)", err);
+      return 1;
+    }
   }
 
   // Depth image for that attachment, matching the colour target's extent.
@@ -1314,11 +1343,9 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
       .layers = 1,
   };
 
-  err = vkCreateFramebuffer(handler->g_device, &fb_info, handler->g_allocator, &handler->offscreen_framebuffer);
+  VkResult err = vkCreateFramebuffer(handler->g_device, &fb_info, handler->g_allocator, &handler->offscreen_framebuffer);
   if (err != VK_SUCCESS) {
     log_error(LOG_SOURCE, "Failed to create offscreen framebuffer (%d)", err);
-    vkDestroyRenderPass(handler->g_device, handler->offscreen_render_pass, handler->g_allocator);
-    handler->offscreen_render_pass = VK_NULL_HANDLE;
     return 1;
   }
 
@@ -1343,14 +1370,6 @@ static void destroy_offscreen_resources(gfx_handler_t *handler) {
   if (handler->offscreen_framebuffer != VK_NULL_HANDLE) {
     vkDestroyFramebuffer(handler->g_device, handler->offscreen_framebuffer, handler->g_allocator);
     handler->offscreen_framebuffer = VK_NULL_HANDLE;
-  }
-  if (handler->offscreen_render_pass != VK_NULL_HANDLE) {
-    vkDestroyRenderPass(handler->g_device, handler->offscreen_render_pass, handler->g_allocator);
-    handler->offscreen_render_pass = VK_NULL_HANDLE;
-  }
-  if (handler->offscreen_sampler != VK_NULL_HANDLE) {
-    vkDestroySampler(handler->g_device, handler->offscreen_sampler, handler->g_allocator);
-    handler->offscreen_sampler = VK_NULL_HANDLE;
   }
   if (handler->offscreen_depth_view != VK_NULL_HANDLE) {
     vkDestroyImageView(handler->g_device, handler->offscreen_depth_view, handler->g_allocator);
