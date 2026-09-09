@@ -19,8 +19,8 @@ if(NOT FRAMETEE_BUILD_TMNF)
     return()
 endif()
 
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ForeverValidator/CMakeLists.txt")
-    message(WARNING "FRAMETEE_BUILD_TMNF is ON but games/tmnf/ForeverValidator is missing. "
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/libs/ForeverValidator/CMakeLists.txt")
+    message(WARNING "FRAMETEE_BUILD_TMNF is ON but libs/ForeverValidator is missing. "
                     "Run: git submodule update --init --recursive")
     return()
 endif()
@@ -90,7 +90,7 @@ endif()
 # its encoder portably (including the static Windows arrangement below).
 find_package(ZLIB REQUIRED)
 
-add_subdirectory(ForeverValidator ${CMAKE_BINARY_DIR}/forevervalidator EXCLUDE_FROM_ALL)
+add_subdirectory("${CMAKE_SOURCE_DIR}/libs/ForeverValidator" ${CMAKE_BINARY_DIR}/forevervalidator EXCLUDE_FROM_ALL)
 
 # The validator's objects are linked into a loadable module.
 set_target_properties(forevervalidator_core forevervalidator_native PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -246,7 +246,7 @@ if(NOT WIN32)
     # Private linkage keeps the archives out of a consumer's link line, so the
     # one usage requirement they did carry is restated here.
     target_include_directories(forevervalidator_shared INTERFACE
-        "${CMAKE_CURRENT_SOURCE_DIR}/ForeverValidator/include")
+        "${CMAKE_SOURCE_DIR}/libs/ForeverValidator/include")
 
     target_link_options(forevervalidator_shared PRIVATE "-Wl,-Bsymbolic-functions")
 
@@ -332,7 +332,7 @@ target_include_directories(tmnf_game PRIVATE
     # visual model (tmnf_vehicle_model.cpp) and the simulation itself
     # (tmnf_sim.cpp), which drives ReplaySimulationSession rather than the
     # published sandbox -- see tmnf/tmnf_sim.h for why.
-    ${CMAKE_CURRENT_SOURCE_DIR}/ForeverValidator/src
+    ${CMAKE_SOURCE_DIR}/libs/ForeverValidator/src
 )
 
 target_compile_definitions(tmnf_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)

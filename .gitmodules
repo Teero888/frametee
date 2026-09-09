@@ -17,5 +17,5 @@
 	path = libs/toml
 	url = https://github.com/cktan/tomlc17.git
 [submodule "games/tmnf/ForeverValidator"]
-	path = games/tmnf/ForeverValidator
+	path = libs/ForeverValidator
 	url = https://github.com/Teero888/ForeverValidator.git
