@@ -92,8 +92,7 @@ static const ft_world *api_get_initial_world(void) {
   return ts->groups[ts->active_group_index]->initial_world;
 }
 
-// Borrowed from the timeline's own cache, so a plugin must not hold it across
-// another timeline query.
+// Return an owned simulation copy; the timeline cache remains private.
 static ft_world *api_get_world_state_at(int tick) {
   timeline_state_t *ts = &g_ui_handler_for_api->timeline;
   if (ts->active_group_index < 0 || ts->active_group_index >= ts->group_count) return NULL;
@@ -108,6 +107,59 @@ static ft_world *api_get_world_state_at(int tick) {
 
 static void api_destroy_world(ft_world *world) {
   gh_world_destroy(&g_ui_handler_for_api->gfx_handler->game_host, world);
+}
+
+static ft_world *api_clone_world(const ft_world *source) {
+  if (!source || !g_ui_handler_for_api->gfx_handler->level) return NULL;
+  game_host_t *host = &g_ui_handler_for_api->gfx_handler->game_host;
+  ft_world *copy = gh_world_create(host, g_ui_handler_for_api->gfx_handler->level,
+                                  gh_world_player_count(host, source), g_ui_handler_for_api->timeline.active_group_index);
+  if (copy) gh_world_copy(host, copy, source);
+  return copy;
+}
+
+static void api_copy_world(ft_world *destination, const ft_world *source) {
+  if (destination && source) gh_world_copy(&g_ui_handler_for_api->gfx_handler->game_host, destination, source);
+}
+
+static bool api_step_world(ft_world *world, const void *inputs, uint32_t player_count) {
+  game_host_t *host = &g_ui_handler_for_api->gfx_handler->game_host;
+  if (!world || !inputs || player_count != (uint32_t)gh_world_player_count(host, world)) return false;
+  const int before = gh_world_tick(host, world);
+  if (before == INT_MAX) return false;
+  gh_world_step(host, world, inputs, player_count);
+  return gh_world_tick(host, world) == before + 1;
+}
+
+static int api_world_tick(const ft_world *world) {
+  return world ? gh_world_tick(&g_ui_handler_for_api->gfx_handler->game_host, world) : -1;
+}
+static int api_world_player_count(const ft_world *world) {
+  return world ? gh_world_player_count(&g_ui_handler_for_api->gfx_handler->game_host, world) : 0;
+}
+static bool api_world_player_view(const ft_world *world, int player, ft_player_view *out) {
+  return world && out && gh_world_player_view(&g_ui_handler_for_api->gfx_handler->game_host, world, player, out);
+}
+static uint32_t api_entity_class_count(void) {
+  return gh_entity_class_count(&g_ui_handler_for_api->gfx_handler->game_host);
+}
+static const ft_entity_class *api_entity_class(uint32_t index) {
+  return gh_entity_class(&g_ui_handler_for_api->gfx_handler->game_host, index);
+}
+static int api_entity_count(const ft_world *world, uint32_t entity_class) {
+  return world ? gh_entity_count(&g_ui_handler_for_api->gfx_handler->game_host, world, entity_class) : 0;
+}
+static bool api_entity_prop_get(const ft_world *world, uint32_t entity_class, int entity, uint32_t property, ft_value *out) {
+  return world && out && gh_entity_prop_get(&g_ui_handler_for_api->gfx_handler->game_host, world, entity_class, entity, property, out);
+}
+static bool api_entity_prop_set(ft_world *world, uint32_t entity_class, int entity, uint32_t property, const ft_value *value) {
+  return world && value && gh_entity_prop_set(&g_ui_handler_for_api->gfx_handler->game_host, world, entity_class, entity, property, value);
+}
+static size_t api_serialize_world(const ft_world *world, void *out, size_t capacity) {
+  return world ? gh_world_serialize(&g_ui_handler_for_api->gfx_handler->game_host, world, out, capacity) : 0;
+}
+static bool api_deserialize_world(ft_world *world, const void *data, size_t size) {
+  return world && data && gh_world_deserialize(&g_ui_handler_for_api->gfx_handler->game_host, world, data, size);
 }
 
 // Schema reflection, so a plugin can edit inputs without knowing the layout.
@@ -447,5 +499,18 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .get_camera_info = api_get_camera_info,
       .register_script_command = api_register_script_command,
       .save_file_dialog = api_save_file_dialog,
+      .clone_world = api_clone_world,
+      .copy_world = api_copy_world,
+      .step_world = api_step_world,
+      .world_tick = api_world_tick,
+      .world_player_count = api_world_player_count,
+      .world_player_view = api_world_player_view,
+      .entity_class_count = api_entity_class_count,
+      .entity_class = api_entity_class,
+      .entity_count = api_entity_count,
+      .entity_prop_get = api_entity_prop_get,
+      .entity_prop_set = api_entity_prop_set,
+      .serialize_world = api_serialize_world,
+      .deserialize_world = api_deserialize_world,
   };
 }

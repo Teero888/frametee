@@ -992,13 +992,13 @@ static void camera3_update_orbit(gfx_handler_t *handler, float intra, float scro
 
   ft_camera view;
   engine_api_camera_get(&view);
+  view.use_view_proj = false;
   if (gh_camera_update(&handler->game_host, &frame, &view)) {
     c->orbit_target[0] = view.target.x;
     c->orbit_target[1] = view.target.y;
     c->orbit_target[2] = view.target.z;
-    // A game hands back an eye and a point it looks at. Roll is not
-    // representable here and the renderer would drop it anyway, so what is kept
-    // is the pivot and the direction to the eye from it. In a free mode only
+    // Retain a pivot and heading for switching to a user-controlled camera.
+    // A directed game may also provide its exact lens and roll. In a free mode only
     // the pivot is kept: the angles and the distance are the user's, and a game
     // that wanted them should have declared the mode directed.
     vec3 offset = {view.eye.x - view.target.x, view.eye.y - view.target.y, view.eye.z - view.target.z};
@@ -1007,6 +1007,19 @@ static void camera3_update_orbit(gfx_handler_t *handler, float intra, float scro
       c->orbit_distance = distance;
       c->orbit_pitch = asinf(glm_clamp(offset[1] / distance, -1.f, 1.f));
       c->orbit_yaw = atan2f(offset[2], offset[0]);
+    }
+    if (directed && view.use_view_proj) {
+      bool finite = true;
+      for (int i = 0; i < 16; ++i) finite = finite && isfinite(view.view_proj[i]);
+      // ABI float arrays need not have cglm's SIMD alignment.
+      mat4 matrix;
+      memcpy(matrix, view.view_proj, sizeof(matrix));
+      const float determinant = glm_mat4_det(matrix);
+      finite = finite && isfinite(determinant) && determinant != 0.f;
+      if (finite) {
+        c->directed_camera = view;
+        c->directed_camera_valid = true;
+      }
     }
     return;
   }
@@ -1060,6 +1073,7 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
   // The selected mode is the only thing that decides which camera runs, and
   // this is where the one being entered is seeded from the one being left.
   renderer_camera3_set_mode(handler, camera3_mode_for(host, camera->mode));
+  c->directed_camera_valid = false;
 
   // A drag has to start over the viewport, but may wander off it once it has.
   c->dragging = drag_button && (hovered || c->dragging);
@@ -1692,7 +1706,8 @@ static void render_splash_screen(ui_handler_t *ui) {
       igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.10f, 0.5f});
       igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f);
 
-      if (ui->splash_stage == SPLASH_STAGE_START && igButton(ICON_FA_ARROW_LEFT "  Games", (ImVec2){170, 42}))
+      const float btn_w = -1.0f;
+      if (ui->splash_stage == SPLASH_STAGE_START && igButton(ICON_FA_ARROW_LEFT "  Games", (ImVec2){btn_w, 42}))
         ui->splash_stage = SPLASH_STAGE_GAME;
 
       const ft_game_module *level_game = game_host_browsed_module(&ui->gfx_handler->game_host);
@@ -1701,7 +1716,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         char level_label[64];
         snprintf(level_label, sizeof(level_label), ICON_FA_MAP "  Load Local %s",
                  level_game->constraints.level_extension ? level_game->constraints.level_extension : "Level");
-        if (igButton(level_label, (ImVec2){170, 42})) {
+        if (igButton(level_label, (ImVec2){btn_w, 42})) {
           // The open is deferred until the next frame, after any unsaved-work prompt.
           nfdu8char_t *out_path;
           nfdu8filteritem_t filters[] = {{level_game->constraints.level_filter_name, level_ext}};
@@ -1716,7 +1731,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         }
       }
 
-      if (igButton(ICON_FA_FOLDER_OPEN "  Load Project", (ImVec2){170, 42})) {
+      if (igButton(ICON_FA_FOLDER_OPEN "  Load Project", (ImVec2){btn_w, 42})) {
         nfdu8char_t *out_path;
         nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
         nfdopendialogu8args_t args = {0};
@@ -1758,7 +1773,7 @@ static void render_splash_screen(ui_handler_t *ui) {
             char item_lbl[1050];
             snprintf(item_lbl, sizeof(item_lbl), "%s  %s", ICON_FA_FILE, filename);
 
-            if (igButton(item_lbl, (ImVec2){0.0f, 32.0f})) ui_splash_open(ui, UI_PENDING_OPEN_PROJECT, path);
+            if (igButton(item_lbl, (ImVec2){-1.0f, 32.0f})) ui_splash_open(ui, UI_PENDING_OPEN_PROJECT, path);
             if (igIsItemHovered(ImGuiHoveredFlags_None)) {
               igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8.0f, 6.0f});
               if (igBeginTooltip()) {

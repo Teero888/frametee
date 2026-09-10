@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const FT_GAME_ABI_VERSION: u32 = 19;
+pub const FT_GAME_ABI_VERSION: u32 = 20;
 pub const FT_GAME_ABI_REVISION: u32 = 0;
 
 pub const FT_CAP_DYNAMIC_PLAYERS: u32 = 1 << 0;
@@ -205,10 +205,13 @@ pub struct ft_camera {
     pub eye: ft_vec3,
     pub target: ft_vec3,
     pub up: ft_vec3,
+    pub forward: ft_vec3,
+    pub orthographic: bool,
     pub fov_y: f32,
     pub near_z: f32,
     pub far_z: f32,
     pub view_proj: [f32; 16],
+    pub use_view_proj: bool,
 }
 
 #[repr(C)]

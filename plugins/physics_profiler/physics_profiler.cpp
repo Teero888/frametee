@@ -1,42 +1,78 @@
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #if defined(_OPENMP)
 #include <omp.h>
 #endif
 #include <thread>
+#include <vector>
 
 #define CIMGUI_INCLUDED
 #include "imgui.h"
 #include "plugin_api.h"
-// This plugin is DDNet-specific, so it may read the game's worlds directly.
-#include <ddnet/ddnet_game.h>
+#include "profiler_common.h"
 #include <logger/logger.h>
 
-extern "C" {
-#include <gamecore.h>
-}
+void benchmark_generic(const tas_api_t *api, int iterations, int ticks_per_iteration, bool use_multithreading, std::atomic<int> &progress) {
+  if (!api || !api->get_initial_world()) return;
 
-static inline unsigned int fast_rand_u32(unsigned int *state) {
-  unsigned int x = *state;
-  x ^= x << 13;
-  x ^= x >> 17;
-  x ^= x << 5;
-  *state = x;
-  return x;
-}
+  const uint32_t record_size = api->input_record_size ? api->input_record_size() : 0;
+  const int player_count = api->world_player_count ? api->world_player_count(api->get_initial_world()) : 1;
+  if (record_size == 0 || player_count <= 0) return;
 
-static inline int fast_rand_range(unsigned int *state, int min, int max) { return min + (fast_rand_u32(state) % (max - min + 1)); }
+  std::vector<uint8_t> input_buffer(record_size * player_count, 0);
+  for (int p = 0; p < player_count; ++p) {
+    if (api->input_default) api->input_default(input_buffer.data() + p * record_size);
+  }
 
-static inline void generate_random_input(SPlayerInput *pInput, unsigned int *seed) {
-  pInput->m_Direction = static_cast<int8_t>(fast_rand_range(seed, -1, 1));
-  pInput->m_Jump = static_cast<uint8_t>(fast_rand_range(seed, 0, 1));
-  pInput->m_Fire = static_cast<uint8_t>(fast_rand_range(seed, 0, 1));
-  pInput->m_Hook = static_cast<uint8_t>(fast_rand_range(seed, 0, 1));
-  pInput->m_TargetX = static_cast<int16_t>(fast_rand_range(seed, -1000, 1000));
-  pInput->m_TargetY = static_cast<int16_t>(fast_rand_range(seed, -1000, 1000));
-  pInput->m_WantedWeapon = static_cast<uint8_t>(fast_rand_range(seed, 0, NUM_WEAPONS - 1));
+  ft_world *StartWorld = api->clone_world(api->get_initial_world());
+  if (!StartWorld) return;
+
+  if (use_multithreading) {
+#pragma omp parallel for
+    for (int i = 0; i < iterations; ++i) {
+      FrameMarkNamed("Worker Thread Frame");
+      ZoneScopedN("Single Iteration (Parallel)");
+
+      ft_world *thread_world = api->clone_world(StartWorld);
+      if (!thread_world) {
+        progress++;
+        continue;
+      }
+
+      for (int t = 0; t < ticks_per_iteration; ++t) {
+        ZoneScopedN("Physics Tick");
+        api->step_world(thread_world, input_buffer.data(), player_count);
+      }
+      api->destroy_world(thread_world);
+      progress++;
+    }
+  } else {
+    ft_world *world = api->clone_world(StartWorld);
+    if (!world) {
+      api->destroy_world(StartWorld);
+      return;
+    }
+
+    for (int i = 0; i < iterations; ++i) {
+      FrameMarkNamed("Worker Thread Frame");
+      ZoneScopedN("Single Iteration (Serial)");
+
+      api->copy_world(world, StartWorld);
+      for (int t = 0; t < ticks_per_iteration; ++t) {
+        ZoneScopedN("Physics Tick");
+        api->step_world(world, input_buffer.data(), player_count);
+      }
+      progress++;
+    }
+    api->destroy_world(world);
+  }
+
+  api->destroy_world(StartWorld);
 }
 
 class PhysicsProfilerPlugin {
@@ -58,7 +94,7 @@ private:
 
 public:
   PhysicsProfilerPlugin(tas_context_t *pContext, const tas_api_t *pAPI)
-      : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_Iterations(200), m_TicksPerIteration(500), m_UseMultiThreading(true),
+      : m_pAPI(pAPI), m_pContext(pContext), m_ShowWindow(true), m_Iterations(100), m_TicksPerIteration(200), m_UseMultiThreading(true),
         m_IsRunning(false), m_Progress(0), m_LastElapsedTime(0.0) {
 
     log_info("Physics Profiler", "Plugin initialized.");
@@ -74,7 +110,7 @@ public:
   void ToggleWindow() { m_ShowWindow = !m_ShowWindow; }
 
   void Benchmark() {
-    if (!m_pAPI->get_initial_world()) return;
+    if (!m_pAPI || !m_pAPI->get_initial_world()) return;
     ZoneScopedN("Benchmark Execution"); // Tracy Zone for the whole benchmark
 
     m_IsRunning = true;
@@ -82,59 +118,23 @@ public:
     m_LastElapsedTime = 0.0;
     auto startTime = std::chrono::high_resolution_clock::now();
 
-    SWorldCore StartWorld = wc_empty();
-    wc_copy_world(&StartWorld, const_cast<SWorldCore *>(ddnet_world(m_pAPI->get_initial_world())));
+    const char *active_game = m_pContext ? m_pContext->active_game_id : "";
+    const bool is_sm64 = (active_game && std::strcmp(active_game, "sm64") == 0);
+    const bool is_ddnet = (active_game && std::strcmp(active_game, "ddnet") == 0);
 
-    unsigned int global_seed = 0; // (unsigned)time(NULL);
-    if (m_UseMultiThreading) {
-#pragma omp parallel for
-      for (int i = 0; i < m_Iterations; ++i) {
-        FrameMarkNamed("Worker Thread Frame");
-        ZoneScopedN("Single Iteration (Parallel)");
-
-        unsigned int run_seed = global_seed ^ (i * 0x9E3779B9u);
-        SWorldCore World = {};
-        wc_copy_world(&World, &StartWorld);
-        for (int t = 0; t < m_TicksPerIteration; ++t) {
-          ZoneScopedN("Physics Tick");
-          unsigned int local_seed = run_seed ^ i;
-          for (int c = 0; c < World.m_NumCharacters; c++) {
-            SPlayerInput Input = {};
-            generate_random_input(&Input, &local_seed);
-            cc_on_input(&World.m_pCharacters[c], &Input);
-          }
-          wc_tick(&World);
-        }
-        wc_free(&World);
-        m_Progress++;
-      }
+    if (is_sm64) {
+      m_LastElapsedTime = benchmark_sm64(m_pAPI, m_Iterations, m_TicksPerIteration, m_UseMultiThreading, m_Progress);
+      m_IsRunning = false;
+      return;
+    } else if (is_ddnet) {
+      benchmark_ddnet(m_pAPI, m_Iterations, m_TicksPerIteration, m_UseMultiThreading, m_Progress);
     } else {
-      for (int i = 0; i < m_Iterations; ++i) {
-        FrameMarkNamed("Worker Thread Frame");
-        ZoneScopedN("Single Iteration (Serial)");
-
-        unsigned int run_seed = global_seed ^ (i * 0x9E3779B9u);
-        SWorldCore World = {};
-        wc_copy_world(&World, &StartWorld);
-        for (int t = 0; t < m_TicksPerIteration; ++t) {
-          ZoneScopedN("Physics Tick");
-          unsigned int local_seed = run_seed ^ i;
-          for (int c = 0; c < World.m_NumCharacters; c++) {
-            SPlayerInput Input = {};
-            generate_random_input(&Input, &local_seed);
-            cc_on_input(&World.m_pCharacters[c], &Input);
-          }
-          wc_tick(&World);
-        }
-        wc_free(&World);
-        m_Progress++;
-      }
+      benchmark_generic(m_pAPI, m_Iterations, m_TicksPerIteration, m_UseMultiThreading, m_Progress);
     }
 
     auto endTime = std::chrono::high_resolution_clock::now();
     m_LastElapsedTime = std::chrono::duration<double>(endTime - startTime).count();
 
-    wc_free(&StartWorld);
     m_IsRunning = false;
   }
 
@@ -147,8 +147,33 @@ public:
     m_BenchmarkThread = std::thread(&PhysicsProfilerPlugin::Benchmark, this);
   }
 
+  int RunCli(int argc, const char **argv) {
+    for (int i = 0; i < argc; ++i) {
+      if (std::strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) {
+        m_Iterations = std::atoi(argv[++i]);
+      } else if (std::strcmp(argv[i], "--ticks") == 0 && i + 1 < argc) {
+        m_TicksPerIteration = std::atoi(argv[++i]);
+      } else if (std::strcmp(argv[i], "--serial") == 0) {
+        m_UseMultiThreading = false;
+      }
+    }
+    if (!m_pAPI || !m_pAPI->get_initial_world()) {
+      std::fprintf(stderr, "Physics Profiler: No initial world available to benchmark.\n");
+      return 1;
+    }
+    Benchmark();
+    if (m_LastElapsedTime < 0) { std::fprintf(stderr, "Physics Profiler: benchmark failed\n"); return 1; }
+    const long long TotalTicks = (long long)m_Progress.load() * m_TicksPerIteration;
+    const double TicksPerSecond = m_LastElapsedTime > 0.0 ? TotalTicks / m_LastElapsedTime : 0.0;
+    const char *game = m_pContext ? m_pContext->active_game_id : "unknown";
+    std::printf("Physics Profiler [%s]: %lld ticks in %.4f seconds (%.2f ticks/sec)\n",
+                game, TotalTicks, m_LastElapsedTime, TicksPerSecond);
+    return 0;
+  }
+
   void Update() {
-    ImGui::SetCurrentContext(m_pContext->imgui_context);
+    if (!m_pContext || !m_pContext->imgui_context) return;
+    ImGui::SetCurrentContext(static_cast<ImGuiContext *>(m_pContext->imgui_context));
     if (ImGui::BeginMainMenuBar()) {
       if (ImGui::BeginMenu("Physics Profiler")) {
         ImGui::MenuItem("Show Window", nullptr, &m_ShowWindow);
@@ -161,8 +186,20 @@ public:
     // profiling run started before it went down carries on regardless.
     if (m_ShowWindow && m_pContext->ui_visible) {
       if (ImGui::Begin("Physics Profiler", &m_ShowWindow)) {
-        ImGui::Text("Benchmark controls for the ddnet_physics library.");
-        ImGui::Text("Uses the current initial world to benchmark, add as many players as you want");
+        const char *active_game = m_pContext ? m_pContext->active_game_id : "";
+        const bool is_sm64 = (active_game && std::strcmp(active_game, "sm64") == 0);
+        const bool is_ddnet = (active_game && std::strcmp(active_game, "ddnet") == 0);
+
+        if (is_sm64) {
+          ImGui::Text("Benchmark controls for Super Mario 64 physics.");
+          ImGui::Text("Uses the current initial world to benchmark SM64 simulation ticks.");
+        } else if (is_ddnet) {
+          ImGui::Text("Benchmark controls for the ddnet_physics library.");
+          ImGui::Text("Uses the current initial world to benchmark, add as many players as you want");
+        } else {
+          ImGui::Text("Benchmark controls for %s physics.", (active_game && *active_game) ? active_game : "game");
+          ImGui::Text("Uses the current initial world to benchmark simulation ticks.");
+        }
         ImGui::Separator();
 
         ImGui::InputInt("Iterations", &m_Iterations);
@@ -172,23 +209,36 @@ public:
         ImGui::Separator();
 
         if (m_IsRunning) {
-          ImGui::Text("Benchmark in progress...");
-          ImGui::ProgressBar((float)m_Progress / m_Iterations);
+          ImGui::Text("Benchmark in progress... (%d / %d)", m_Progress.load(), m_Iterations);
+          ImGui::ProgressBar((float)m_Progress / std::max(1, m_Iterations));
         } else {
+          const bool has_world = (m_pAPI && m_pAPI->get_initial_world() != nullptr);
+          if (!has_world) ImGui::BeginDisabled(true);
           if (ImGui::Button("Start Benchmark")) {
             StartBenchmarkThread();
           }
+          if (!has_world) {
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("(load a level first)");
+          }
+
+          if (m_LastElapsedTime < 0.0) ImGui::TextUnformatted("SM64 benchmark failed; see the log for the runtime error.");
           if (m_LastElapsedTime > 0.0) {
             ImGui::Text("Last run took: %.4f seconds", m_LastElapsedTime);
-            long long TotalTicks = (long long)m_Iterations * m_TicksPerIteration;
-            double TicksPerSecond = TotalTicks / m_LastElapsedTime;
+            long long TotalTicks = (long long)m_Progress.load() * m_TicksPerIteration;
+            double TicksPerSecond = m_LastElapsedTime > 0.0 ? TotalTicks / m_LastElapsedTime : 0.0;
             ImGui::Separator();
             ImGui::Text("Raw Performance Metrics:");
             ImGui::Text("  Total Ticks: %lld", TotalTicks);
-            ImGui::Text("  Ticks/Second: %f M", TicksPerSecond / 1e6);
+            if (TicksPerSecond >= 1e6) {
+              ImGui::Text("  Ticks/Second: %.2f M", TicksPerSecond / 1e6);
+            } else {
+              ImGui::Text("  Ticks/Second: %.0f (%.2f k)", TicksPerSecond, TicksPerSecond / 1e3);
+            }
             ImGui::Separator();
             ImGui::Text("In-Game Time Simulated Per Real-World Second:");
-            const double TICKS_PER_INGAME_SECOND = 50.0;
+            const double TICKS_PER_INGAME_SECOND = is_sm64 ? 30.0 : (is_ddnet ? 50.0 : 60.0);
             double InGameSeconds = TicksPerSecond / TICKS_PER_INGAME_SECOND;
             double InGameMinutes = InGameSeconds / 60.0;
             double InGameHours = InGameMinutes / 60.0;
@@ -230,13 +280,10 @@ extern "C" {
 
 FT_PLUGIN_ABI_EXPORT()
 
-// Benchmarks ddnet_physics itself, so it only makes sense while DDNet is the
-// active game.
-FT_API const char *plugin_game_id() { return "ddnet"; }
+// No plugin_game_id() is exported, making this a multi-game plugin supporting
+// DDNet, SM64, and any other supported game engine.
 
 FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
-  // Before the plugin object, so every Tracy macro below it runs against a
-  // started profiler.
   profiler_startup();
   return new PhysicsProfilerPlugin(context, api);
 }
@@ -244,11 +291,13 @@ FT_API void *plugin_init(tas_context_t *context, const tas_api_t *api) {
 FT_API void plugin_update(void *plugin_data) { static_cast<PhysicsProfilerPlugin *>(plugin_data)->Update(); }
 
 FT_API void plugin_shutdown(void *plugin_data) {
-  // The benchmark thread is joined by the destructor, so the profiler outlives
-  // the last zone it can emit.
   delete static_cast<PhysicsProfilerPlugin *>(plugin_data);
   profiler_shutdown();
 }
 
 FT_API void plugin_show_ui(void *plugin_data) { static_cast<PhysicsProfilerPlugin *>(plugin_data)->ToggleWindow(); }
+
+FT_API int plugin_cli(void *plugin_data, int argc, const char **argv) {
+  return static_cast<PhysicsProfilerPlugin *>(plugin_data)->RunCli(argc, argv);
+}
 }

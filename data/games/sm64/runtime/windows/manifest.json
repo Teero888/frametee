@@ -1,0 +1,36 @@
+{
+  "format": 1,
+  "lock_format": "pwbox-sodium-compatible-with-wafel",
+  "sm64ex_revision": "54cd27ccee45a2403b45f07a00d6043c51149969",
+  "unlocker": "sm64_lock.exe",
+  "unlocker_sha256": "d1d7c3fe90edb8261eae8bc897f2d20fd0e0c68f1dce41e3d8c30440ccf23593",
+  "runtimes": [
+    {
+      "version": "us",
+      "target": "windows",
+      "rom_sha256": "17ce077343c6133f8c9f2d6d6d9a4ab62c8cd2aa57c40aea1f490b4c8bb21d91",
+      "library": "frametee_sm64_us.dll",
+      "library_sha256": "19811be9f33b523c393d37f54c2f75274b77ac78ae935783c764cc95ad213f0f",
+      "locked_library": "frametee_sm64_us.dll.locked",
+      "locked_library_sha256": "0b44fd85f8374495704a2d4b172e5680b477d7b6cb9d668a6e867dcdc41f3c98"
+    },
+    {
+      "version": "jp",
+      "target": "windows",
+      "rom_sha256": "9cf7a80db321b07a8d461fe536c02c87b7412433953891cdec9191bfad2db317",
+      "library": "frametee_sm64_jp.dll",
+      "library_sha256": "75575a67c294e444b337ec7032f6151d4e7cb895dfebb993a1361c0b7fc23c79",
+      "locked_library": "frametee_sm64_jp.dll.locked",
+      "locked_library_sha256": "d14012314aee19dac4532c39b4957816621ce05e7c70428b151beb56419e0e86"
+    },
+    {
+      "version": "eu",
+      "target": "windows",
+      "rom_sha256": "c792e5ebcba34c8d98c0c44cf29747c8ee67e7b907fcc77887f9ff2523f80572",
+      "library": "frametee_sm64_eu.dll",
+      "library_sha256": "03b74f8c87619ae9dbbf67155c1ff3f3269339bc531ae48581fbb5a20597d811",
+      "locked_library": "frametee_sm64_eu.dll.locked",
+      "locked_library_sha256": "6c9a774b87c1d2f08e25f1d97728f28418f90064774dd8eefccf7ed1cc70b69b"
+    }
+  ]
+}

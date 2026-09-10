@@ -1,0 +1,17 @@
+[package]
+name = "frametee-sm64-lock"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Locks FrameTee's SM64 runtime library to a matching ROM"
+
+[dependencies]
+exonum_sodiumoxide = "0.0.24"
+pwbox = "0.5.0"
+rand = "0.8.4"
+serde_json = "1.0.64"
+
+[[bin]]
+name = "sm64_lock"
+path = "src/main.rs"

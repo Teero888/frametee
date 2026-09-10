@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 19u
+#define FT_GAME_ABI_VERSION 20u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -905,6 +905,10 @@ typedef struct ft_camera {
    * shader. A game rendering with its own device needs exactly this to line its
    * frame up with the engine's own drawing. */
   float view_proj[16];
+  /* A directed camera_update may set this to use its exact view_proj, up and
+   * lens values for rendering and picking, including camera roll. Reset for
+   * every callback; ignored in user-controlled modes. */
+  bool use_view_proj;
 } ft_camera;
 
 /* Read-only snapshot of engine state a module may want while drawing or

@@ -491,7 +491,17 @@ file(GLOB_RECURSE GAME_ASSET_SOURCES CONFIGURE_DEPENDS
 )
 set(GAME_ASSET_OUTPUTS "")
 foreach(ASSET ${GAME_ASSET_SOURCES})
+    # Per-game ignore rules describe source-tree housekeeping, never runtime
+    # assets. SM64 stages platform-specific locked runtimes separately below.
+    if(ASSET MATCHES "/\\.gitignore$" OR ASSET MATCHES "/games/sm64/runtime/")
+        continue()
+    endif()
     if(ASSET MATCHES "/shaders/.*\\.(glsl|spv)$")
+        continue()
+    endif()
+    # The SM64 ROM is always supplied beside the executable by the player.
+    # Do not copy an arbitrary local ROM into build or release data.
+    if(ASSET MATCHES "/games/sm64/.*\\.(n64|N64|z64|Z64|v64|V64)$")
         continue()
     endif()
     file(RELATIVE_PATH ASSET_REL "${CMAKE_SOURCE_DIR}/data" "${ASSET}")
@@ -660,6 +670,18 @@ if(TARGET ddnet_game)
             endif()
         endif()
     endforeach()
+endif()
+
+if(TARGET sm64_game)
+    # The source GLSL stays in the checkout; the compiled shaders are the
+    # runtime assets that accompany the module and native SM64 library.
+    install(DIRECTORY "${CMAKE_BINARY_DIR}/data/games/sm64/"
+        DESTINATION "data/games/sm64"
+        COMPONENT Runtime
+        FILES_MATCHING
+        PATTERN "*.spv"
+        PATTERN "thumbnail.png"
+    )
 endif()
 
 if(TARGET tmnf_game)

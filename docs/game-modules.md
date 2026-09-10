@@ -262,6 +262,11 @@ this existed expects; set `FT_DIMENSIONS_3D` and three things change:
 * `ft_camera` carries `eye`, `target`, `up`, the field of view and the exact
   `view_proj` the engine renders with, so a module drawing with its own device
   can line its frame up with the engine's own primitives.
+  A directed `camera_update` may set `use_view_proj` and return its exact
+  matrix, up vector and lens, preserving native camera roll and projection for
+  rendering and picking. The flag is reset before each callback and ignored
+  in user-controlled modes. This requires game ABI 20; rebuild game modules,
+  including the Rust ABI mirror, against the updated header.
 
 Positions in a volume are `FT_VALUE_VEC3`, which the inspector, the starting
 state overrides and the project format all understand.

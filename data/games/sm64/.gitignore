@@ -1,0 +1,15 @@
+# Original ROMs and legacy plaintext native libraries are local inputs and
+# build outputs. Locked release runtimes under runtime/ are tracked.
+*.n64
+*.N64
+*.z64
+*.Z64
+*.v64
+*.V64
+libsm64.so
+libsm64.dylib
+libsm64.dll
+sm64_lock
+sm64_lock.exe
+runtime/*/sm64_lock
+runtime/*/sm64_lock.exe

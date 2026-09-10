@@ -1389,9 +1389,12 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
 
   uint32_t binding_count = ubo_count + texture_count;
   VLA(VkWriteDescriptorSet, descriptor_writes, binding_count);
-  VLA(VkDescriptorBufferInfo, buffer_infos, ubo_count);
-  VLA(VkDescriptorImageInfo, image_infos, texture_count);
-  VLA(VkDeviceSize, ubo_offsets, ubo_count);
+  // C does not permit a zero-length VLA. Texture-only draws such as the SM64
+  // presentation quad have no UBOs, while untextured primitives have no
+  // images, so reserve one unused slot for either empty collection.
+  VLA(VkDescriptorBufferInfo, buffer_infos, ubo_count ? ubo_count : 1);
+  VLA(VkDescriptorImageInfo, image_infos, texture_count ? texture_count : 1);
+  VLA(VkDeviceSize, ubo_offsets, ubo_count ? ubo_count : 1);
 
   uint32_t current_binding = 0;
   for (uint32_t i = 0; i < ubo_count; ++i) {
@@ -2422,6 +2425,11 @@ static void camera3_angles_to_offset(float yaw, float pitch, vec3 out) {
 
 void renderer_camera3_eye(gfx_handler_t *h, vec3 out) {
   const camera3_t *c = &h->renderer.camera3;
+  if (c->mode == CAMERA3_ORBIT && c->directed_camera_valid) {
+    const ft_vec3 eye = c->directed_camera.eye;
+    glm_vec3_copy((vec3){eye.x, eye.y, eye.z}, out);
+    return;
+  }
   switch (c->mode) {
   case CAMERA3_FREECAM:
     glm_vec3_copy((float *)c->free_eye, out);
@@ -2448,6 +2456,12 @@ void renderer_camera3_eye(gfx_handler_t *h, vec3 out) {
 
 void renderer_camera3_forward(gfx_handler_t *h, vec3 out) {
   const camera3_t *c = &h->renderer.camera3;
+  if (c->mode == CAMERA3_ORBIT && c->directed_camera_valid) {
+    const ft_camera *v = &c->directed_camera;
+    glm_vec3_copy((vec3){v->target.x-v->eye.x, v->target.y-v->eye.y, v->target.z-v->eye.z}, out);
+    glm_vec3_normalize(out);
+    return;
+  }
   switch (c->mode) {
   case CAMERA3_TOP_DOWN:
     glm_vec3_copy((vec3){0.f, -1.f, 0.f}, out);
@@ -2484,6 +2498,11 @@ static void camera3_focus(const camera3_t *c, vec3 out) {
 
 void renderer_camera3_target(gfx_handler_t *h, vec3 out) {
   const camera3_t *c = &h->renderer.camera3;
+  if (c->mode == CAMERA3_ORBIT && c->directed_camera_valid) {
+    const ft_vec3 target = c->directed_camera.target;
+    glm_vec3_copy((vec3){target.x, target.y, target.z}, out);
+    return;
+  }
   // The orbit and the plan view both aim at a real point; a freecam has only a
   // heading, so a point one unit along it stands in. Nothing reads more than
   // the direction out of this.
@@ -2578,16 +2597,22 @@ void renderer_camera3_frame_level(gfx_handler_t *h, vec3 center, float span) {
   // Far enough out that a level this size never reaches the plane, whatever the
   // previous level asked for.
   c->far_z = fmaxf(span * 20.f, CAMERA3_FAR_Z);
+  c->near_z = fminf(fmaxf(span * 0.005f, 0.5f), 50.0f);
 
   // The level is framed by the orbit, and the freecam is parked on that framing
   // rather than left wherever the previous level was flown to. Selecting the
   // freecam re-seeds it from here.
   c->mode = CAMERA3_ORBIT;
   c->dragging = false;
+  c->directed_camera_valid = false;
 }
 
 void renderer_camera3_view_proj(gfx_handler_t *h, mat4 out) {
   const camera3_t *c = &h->renderer.camera3;
+  if (c->mode == CAMERA3_ORBIT && c->directed_camera_valid) {
+    memcpy(out, c->directed_camera.view_proj, sizeof(mat4));
+    return;
+  }
   vec3 eye, target;
   renderer_camera3_eye(h, eye);
   renderer_camera3_target(h, target);

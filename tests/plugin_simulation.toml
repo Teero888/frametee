@@ -1,0 +1,3 @@
+name = "Simulation integration test"
+description = "Headless test of the generic plugin simulation API"
+game = "sm64"

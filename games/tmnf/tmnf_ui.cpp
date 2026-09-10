@@ -36,9 +36,6 @@ ImTextureRef *AsRef(void *thumbnail) { return static_cast<ImTextureRef *>(thumbn
 void DrawMissingGameData() {
   igTextWrapped("TrackMania game data is not installed.");
   igSpacing();
-  igTextWrapped("Get an official release at:");
-  igTextLinkOpenURL(kOfficialReleaseUrl, kOfficialReleaseUrl);
-  igSpacing();
   igTextWrapped("Copy its Packs and GameData folders into data/games/tmnf/ beside FrameTee, then reopen FrameTee.");
 }
 

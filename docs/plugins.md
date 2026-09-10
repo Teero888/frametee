@@ -20,6 +20,26 @@ run, so the manifest is the only description there is, and what the editor knows
 before you enable something is: the name of its directory, whatever its manifest
 claims, and the checksum it computed itself.
 
+## Simulation access (plugin ABI 4)
+
+Plugins can run the active game's simulation without a graphics device. Obtain
+an owned world with `get_world_state_at(tick)` or `clone_world(get_initial_world())`,
+then call `step_world` with tightly packed input records for every player. Use
+the input schema callbacks to construct those records. `copy_world` resets an
+existing search branch without repeatedly allocating worlds.
+
+`entity_class_count`, `entity_class`, `entity_count`, and `entity_prop_get` expose
+game state, including SM64's full three-dimensional Mario position and velocity.
+`entity_prop_set` edits writable properties on an owned world. `serialize_world`
+and `deserialize_world` persist that game's state using its versioned format.
+These operations do not modify timeline inputs; use the undoable snippet or
+group APIs to publish a computed result into the editor.
+
+Call these services on the host thread and release owned worlds with
+`destroy_world` before shutdown or a game switch. Metadata pointers are borrowed
+from the active module. Rebuild plugins against ABI 4; the loader rejects older
+ABI versions before calling their entry points.
+
 ## Layout
 
 A plugin is a directory inside `plugins/`, holding its library, its manifest,

@@ -416,6 +416,7 @@ int main(int argc, char **argv) {
     }
   }
 
+  free(plugin_argv);
   gfx_cleanup(&handler);
   return 0;
 }

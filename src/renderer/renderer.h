@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <types.h>
+#include <frametee/game_abi.h>
 #include <vulkan/vulkan_core.h>
 
 #define MAX_SHADERS 16
@@ -251,6 +252,8 @@ struct camera3_t {
   float orbit_yaw;
   float orbit_pitch;
   float orbit_distance;
+  bool directed_camera_valid;
+  ft_camera directed_camera;
 
   // Freecam: an eye and where it looks, in the same angle convention as the
   // orbit so the two agree at the moment of a switch.

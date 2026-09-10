@@ -145,6 +145,24 @@ struct tas_api_t {
   // filter_name/filter_ext describe a single file type (e.g. "FrameTee Script", "ftee"), both may be NULL.
   // returns false when the user cancelled, the dialog failed, or the app runs headless.
   bool (*save_file_dialog)(const char *filter_name, const char *filter_ext, const char *default_name, char *out_path, int out_path_size);
+
+  // Graphics-free simulation of plugin-owned worlds. Clone a borrowed timeline
+  // world before changing it; destroy every owned world before game/plugin
+  // shutdown. Calls use the active game and level and run on the host thread.
+  // copy_world reuses a destination for repeated search/prediction branches.
+  ft_world *(*clone_world)(const ft_world *source);
+  void (*copy_world)(ft_world *destination, const ft_world *source);
+  bool (*step_world)(ft_world *world, const void *inputs, uint32_t player_count);
+  int (*world_tick)(const ft_world *world);
+  int (*world_player_count)(const ft_world *world);
+  bool (*world_player_view)(const ft_world *world, int player, ft_player_view *out);
+  uint32_t (*entity_class_count)(void);
+  const ft_entity_class *(*entity_class)(uint32_t index);
+  int (*entity_count)(const ft_world *world, uint32_t entity_class);
+  bool (*entity_prop_get)(const ft_world *world, uint32_t entity_class, int entity, uint32_t property, ft_value *out);
+  bool (*entity_prop_set)(ft_world *world, uint32_t entity_class, int entity, uint32_t property, const ft_value *value);
+  size_t (*serialize_world)(const ft_world *world, void *out, size_t capacity);
+  bool (*deserialize_world)(ft_world *world, const void *data, size_t size);
 };
 
 // A plugin's name, author, version and description come from the manifest
@@ -164,7 +182,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 3u
+#define FRAMETEE_PLUGIN_ABI_VERSION 4u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

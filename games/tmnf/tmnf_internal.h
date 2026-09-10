@@ -36,9 +36,8 @@
 
 namespace tmnf {
 
-inline constexpr char kOfficialReleaseUrl[] = "https://archive.org/details/trackmania-united-forever";
 inline constexpr char kGameDataInstallHint[] =
-    "Get an official release at https://archive.org/details/trackmania-united-forever and copy its Packs and "
+    "Get an official release at of Trackmania United Forever and copy its Packs and "
     "GameData folders into data/games/tmnf/ beside FrameTee.";
 
 using forevervalidator::AnalogInputState;

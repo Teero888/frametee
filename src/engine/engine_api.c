@@ -459,6 +459,7 @@ static void api_draw_mesh(ft_pipeline *pipeline, float z, ft_mesh *mesh, ft_text
 
 static void api_camera_get(ft_camera *out) {
   if (!out || !g_engine) return;
+  memset(out, 0, sizeof(*out));
   out->struct_size = sizeof(*out);
   out->position = (ft_vec2){g_engine->renderer.camera.pos[0] * g_engine->world_width, g_engine->renderer.camera.pos[1] * g_engine->world_height};
   out->zoom = g_engine->renderer.camera.zoom;
@@ -499,6 +500,14 @@ static void api_camera_get(ft_camera *out) {
     out->fov_y = orthographic ? 0.f : c->fov_y;
     out->near_z = orthographic ? 0.f : c->near_z;
     out->far_z = orthographic ? c->top_down_depth * 2.f : c->far_z;
+    if (c->mode == CAMERA3_ORBIT && c->directed_camera_valid) {
+      out->up = c->directed_camera.up;
+      out->orthographic = c->directed_camera.orthographic;
+      out->fov_y = c->directed_camera.fov_y;
+      out->near_z = c->directed_camera.near_z;
+      out->far_z = c->directed_camera.far_z;
+      out->use_view_proj = true;
+    }
 
     mat4 vp;
     renderer_camera3_view_proj(g_engine, vp);

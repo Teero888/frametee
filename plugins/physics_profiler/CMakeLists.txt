@@ -38,6 +38,8 @@ find_package(Vulkan REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
     physics_profiler.cpp
+    ddnet_profiler.cpp
+    sm64_profiler.cpp
 )
 
 if(UNIX AND NOT APPLE)
@@ -71,6 +73,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${HOST_APP_DIR}/src"
     "${HOST_APP_DIR}/include"
     "${HOST_APP_DIR}/games/ddnet/include"
+    "${HOST_APP_DIR}/games/sm64/include"
     "${HOST_APP_DIR}/src/plugins"
     "${HOST_APP_DIR}/libs/cimgui"
     "${HOST_APP_DIR}/libs/cimgui/imgui"

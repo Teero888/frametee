@@ -4,6 +4,5 @@
 name = "Physics Profiler"
 author = "Teero"
 version = "1.0.0"
-description = "Integrates Tracy to benchmark the ddnet_physics library."
-game = "ddnet"
+description = "Integrates Tracy to benchmark physics simulation (DDNet and SM64)."
 repository = "https://github.com/Teero888/frametee/tree/master/plugins/physics_profiler"

@@ -309,8 +309,10 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
   // A 3D game's prediction is a line through the world, not a stripe on a map.
   const bool is_3d = game_is_3d(host);
   // The 2D thickness is a fraction of a normalised playfield; in a volume it is
-  // metres, and a line thinner than a wheel is one nobody can see.
-  const float thickness3 = fmaxf(settings->thickness * 4.f, 0.12f);
+  // scaled to world coordinates using the game's camera distance scale so it
+  // remains clearly visible across games with different world units (e.g. TMNF metres vs SM64 units).
+  const float scale3 = game_default_camera_height(host) / 20.0f;
+  const float thickness3 = fmaxf(settings->thickness * 4.f, 0.12f) * (scale3 > 0.f ? scale3 : 1.f);
 
   uint8_t *packed_inputs = calloc((size_t)players, input_size);
   input_record_t *held_inputs = calloc((size_t)players, sizeof(*held_inputs));
