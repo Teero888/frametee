@@ -1196,6 +1196,10 @@ typedef struct ft_render_frame {
   /* True when this world owns the editor's focus: the one whose player is
    * selected, whose HUD is shown, and which the camera follows. */
   bool active;
+  /* True for the first world rendered in a multi-world pass. */
+  bool first_world;
+  /* True for the final world rendered in a multi-world pass. */
+  bool last_world;
 } ft_render_frame;
 
 /* Everything a game needs to place the camera for a frame. */

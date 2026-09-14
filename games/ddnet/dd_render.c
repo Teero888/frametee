@@ -43,7 +43,7 @@ static const ft_player_setup *setup_for(const ft_render_frame *frame, int index)
 
 // --- tee parts ---------------------------------------------------------------
 
-static void submit_tee_hand(ft_game *game, const vec2 center_phys, const vec2 dir, float angle_offset, float off_x, float off_y,
+static void submit_tee_hand(ft_game *game, const vec2 center_phys, const vec2 dir, float base_angle, float angle_offset, float off_x, float off_y,
                             int skin, const vec3 col_body, bool custom, bool hook_hand) {
   vec2 dir_y = {-dir[1], dir[0]};
   if (dir[0] < 0.0f) {
@@ -55,7 +55,7 @@ static void submit_tee_hand(ft_game *game, const vec2 center_phys, const vec2 di
 
   // Mirrored into the renderer's angle convention, the same way aim_angle is.
   const float sign = dir[0] < 0.0f ? -1.0f : 1.0f;
-  const float render_angle = atan2f(-dir[1], dir[0]) - sign * angle_offset;
+  const float render_angle = base_angle - sign * angle_offset;
   dd_hand_push(game, hand, 10.0f / PX_PER_TILE, skin, render_angle, (float *)col_body, custom, hook_hand);
 }
 
@@ -111,6 +111,7 @@ typedef struct {
   vec3 feet_col;
   bool custom;
   vec2 dir;
+  float aim_angle;
   dd_anim_state_t anim;
   bool in_air;
   bool stationary;
@@ -118,11 +119,26 @@ typedef struct {
   float attack_ticks_passed;
 } tee_visual_t;
 
+static inline bool fast_check_point(const SCollision *col, float x, float y) {
+  const int Nx = (int)(x + 0.5f) >> 5;
+  const int Ny = (int)(y + 0.5f) >> 5;
+  return (col->m_pTileInfos[col->m_pWidthLookup[Ny] + Nx] & INFO_ISSOLID) != 0;
+}
+
 static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const SWorldCore *world, const SWorldCore *prev_world, int index,
                              float intra, const vec2 pos, tee_visual_t *out) {
   const SCharacterCore *core = &world->m_pCharacters[index];
 
-  dd_anim_state_set(&out->anim, &anim_base, 0.0f);
+  static dd_anim_state_t s_anim_base_idle;
+  static dd_anim_state_t s_anim_base_inair;
+  static bool s_anim_precomp_done = false;
+  if (!s_anim_precomp_done) {
+    dd_anim_state_set(&s_anim_base_idle, &anim_base, 0.0f);
+    dd_anim_state_add(&s_anim_base_idle, &anim_idle, 0.0f, 1.0f);
+    dd_anim_state_set(&s_anim_base_inair, &anim_base, 0.0f);
+    dd_anim_state_add(&s_anim_base_inair, &anim_inair, 0.0f, 1.0f);
+    s_anim_precomp_done = true;
+  }
 
   out->stationary = fabsf(vgetx(core->m_Vel) * 256.f) <= 1;
   const bool running = fabsf(vgetx(core->m_Vel) * 256.f) >= 5000;
@@ -130,22 +146,29 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
       (core->m_Input.m_Direction == -1 && vgetx(core->m_Vel) > 0) || (core->m_Input.m_Direction == 1 && vgetx(core->m_Vel) < 0);
   out->inactive = get_flag_sit(&core->m_Input);
   out->in_air = !(core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) ||
-                !(check_point(core->m_pCollision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16)));
+                !fast_check_point(core->m_pCollision, vgetx(core->m_Pos), vgety(core->m_Pos) + 16.0f);
   out->attack_ticks_passed = (world->m_GameTick - core->m_AttackTick) + intra;
   const float last_attack_time = out->attack_ticks_passed / (float)GAME_TICK_SPEED;
 
-  float walk_time = fmodf(pos[0] * PX_PER_TILE, 100.0f) / 100.0f;
-  float run_time = fmodf(pos[0] * PX_PER_TILE, 200.0f) / 200.0f;
-  if (walk_time < 0.0f) walk_time += 1.0f;
-  if (run_time < 0.0f) run_time += 1.0f;
-
-  if (out->in_air) dd_anim_state_add(&out->anim, &anim_inair, 0.0f, 1.0f);
-  else if (out->stationary) {
-    if (out->inactive) dd_anim_state_add(&out->anim, core->m_Input.m_Direction < 0 ? &anim_sit_left : &anim_sit_right, 0.0f, 1.0f);
-    else dd_anim_state_add(&out->anim, &anim_idle, 0.0f, 1.0f);
-  } else if (!want_other_dir) {
-    if (running) dd_anim_state_add(&out->anim, vgetx(core->m_Vel) < 0.0f ? &anim_run_left : &anim_run_right, run_time, 1.0f);
-    else dd_anim_state_add(&out->anim, &anim_walk, walk_time, 1.0f);
+  if (out->in_air) {
+    out->anim = s_anim_base_inair;
+  } else if (out->stationary) {
+    if (out->inactive) {
+      dd_anim_state_set(&out->anim, &anim_base, 0.0f);
+      dd_anim_state_add(&out->anim, core->m_Input.m_Direction < 0 ? &anim_sit_left : &anim_sit_right, 0.0f, 1.0f);
+    } else {
+      out->anim = s_anim_base_idle;
+    }
+  } else {
+    dd_anim_state_set(&out->anim, &anim_base, 0.0f);
+    if (!want_other_dir) {
+      float walk_time = fmodf(pos[0] * PX_PER_TILE, 100.0f) / 100.0f;
+      float run_time = fmodf(pos[0] * PX_PER_TILE, 200.0f) / 200.0f;
+      if (walk_time < 0.0f) walk_time += 1.0f;
+      if (run_time < 0.0f) run_time += 1.0f;
+      if (running) dd_anim_state_add(&out->anim, vgetx(core->m_Vel) < 0.0f ? &anim_run_left : &anim_run_right, run_time, 1.0f);
+      else dd_anim_state_add(&out->anim, &anim_walk, walk_time, 1.0f);
+    }
   }
   if (core->m_ActiveWeapon == WEAPON_HAMMER) dd_anim_state_add(&out->anim, &anim_hammer_swing, last_attack_time * 5.f, 1.0f);
   if (core->m_ActiveWeapon == WEAPON_NINJA) dd_anim_state_add(&out->anim, &anim_ninja_swing, last_attack_time * 2.f, 1.0f);
@@ -154,17 +177,50 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   out->dir[0] = lint2((float)prev_input->m_TargetX, (float)core->m_Input.m_TargetX, intra);
   out->dir[1] = lint2((float)prev_input->m_TargetY, (float)core->m_Input.m_TargetY, intra);
   glm_vec2_normalize(out->dir);
+  out->aim_angle = atan2f(-out->dir[1], out->dir[0]);
 
-  dd_player_profile_t profile;
-  dd_profile_from_setup(setup_for(frame, index), &profile);
-  out->skin = dd_gfx_skin_index(game, profile.skin);
-  out->custom = profile.use_custom_color != 0;
-  glm_vec3_copy((vec3){1.f, 1.f, 1.f}, out->feet_col);
-  glm_vec3_copy((vec3){0.f, 0.f, 0.f}, out->body_col);
+  typedef struct {
+    const void *setup_data;
+    uint32_t setup_data_size;
+    int skin;
+    bool custom;
+    vec3 body_col;
+    vec3 feet_col;
+  } tee_profile_cache_t;
 
-  if (out->custom) {
-    dd_hsl_to_rgb(profile.color_body, out->body_col);
-    dd_hsl_to_rgb(profile.color_feet, out->feet_col);
+  static tee_profile_cache_t s_tee_profile_cache = {0};
+  static bool s_tee_profile_cache_valid = false;
+
+  const ft_player_setup *setup = setup_for(frame, index);
+  const void *setup_data = setup ? setup->data : NULL;
+  const uint32_t setup_data_size = setup ? setup->data_size : 0;
+
+  if (s_tee_profile_cache_valid && s_tee_profile_cache.setup_data == setup_data &&
+      s_tee_profile_cache.setup_data_size == setup_data_size) {
+    out->skin = s_tee_profile_cache.skin;
+    out->custom = s_tee_profile_cache.custom;
+    glm_vec3_copy(s_tee_profile_cache.feet_col, out->feet_col);
+    glm_vec3_copy(s_tee_profile_cache.body_col, out->body_col);
+  } else {
+    dd_player_profile_t profile;
+    dd_profile_from_setup(setup, &profile);
+    out->skin = dd_gfx_skin_index(game, profile.skin);
+    out->custom = profile.use_custom_color != 0;
+    glm_vec3_copy((vec3){1.f, 1.f, 1.f}, out->feet_col);
+    glm_vec3_copy((vec3){0.f, 0.f, 0.f}, out->body_col);
+
+    if (out->custom) {
+      dd_hsl_to_rgb(profile.color_body, out->body_col);
+      dd_hsl_to_rgb(profile.color_feet, out->feet_col);
+    }
+
+    s_tee_profile_cache.setup_data = setup_data;
+    s_tee_profile_cache.setup_data_size = setup_data_size;
+    s_tee_profile_cache.skin = out->skin;
+    s_tee_profile_cache.custom = out->custom;
+    glm_vec3_copy(out->feet_col, s_tee_profile_cache.feet_col);
+    glm_vec3_copy(out->body_col, s_tee_profile_cache.body_col);
+    s_tee_profile_cache_valid = true;
   }
 
   if (core->m_FreezeTime > 0 || core->m_ActiveWeapon == WEAPON_NINJA) {
@@ -200,17 +256,12 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
                           const tee_visual_t *tee, float intra, const vec2 pos) {
   if (core->m_FreezeTime || core->m_ActiveWeapon >= NUM_WEAPONS) return;
   const dd_weapon_spec_t *spec = &dd_game_data.weapons.id[core->m_ActiveWeapon];
-  const float aim_angle = atan2f(-tee->dir[1], tee->dir[0]);
+  const float aim_angle = tee->aim_angle;
   const bool is_sit = tee->inactive && !tee->in_air && tee->stationary;
   const float flip_factor = (tee->dir[0] < 0.0f) ? -1.0f : 1.0f;
 
-  vec2 phys_prev = {vgetx(core->m_PrevPos), vgety(core->m_PrevPos)};
-  vec2 phys_curr = {vgetx(core->m_Pos), vgety(core->m_Pos)};
-  vec2 phys_pos;
-  lerp2(phys_prev, phys_curr, intra, phys_pos);
-
-  vec2 weapon_pos;
-  glm_vec2_copy(phys_pos, weapon_pos);
+  vec2 phys_pos = {pos[0] * PX_PER_TILE, pos[1] * PX_PER_TILE};
+  vec2 weapon_pos = {phys_pos[0], phys_pos[1]};
 
   float anim_attach_angle_rad = tee->anim.attach.angle * (2.0f * M_PI);
   float weapon_angle = anim_attach_angle_rad + aim_angle;
@@ -313,29 +364,42 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
     }
   }
 
-  if (weapon_sprite_id != -1) {
-    const ft_sprite_rect *rect = dd_sprite_rect(game, game->gfx.gameskin, (uint32_t)weapon_sprite_id);
-    if (rect) {
-      const float f = sqrtf((float)rect->w * rect->w + (float)rect->h * rect->h);
-      vec2 weapon_size = {spec->visual_size * ((float)rect->w / f) / PX_PER_TILE, spec->visual_size * ((float)rect->h / f) / PX_PER_TILE};
-      weapon_size[1] *= flip_factor;
-      vec2 render_pos = {weapon_pos[0] / PX_PER_TILE, weapon_pos[1] / PX_PER_TILE};
-      dd_draw_sprite(game, game->gfx.gameskin, DD_Z_WEAPONS, render_pos, weapon_size, weapon_angle, (uint32_t)weapon_sprite_id,
-                     (vec4){1.f, 1.f, 1.f, 1.f});
+  static vec2 s_weapon_base_size[NUM_WEAPONS];
+  static bool s_weapon_size_init = false;
+  if (!s_weapon_size_init) {
+    const int sprites[NUM_WEAPONS] = {
+        GAMESKIN_HAMMER_BODY, GAMESKIN_GUN_BODY, GAMESKIN_SHOTGUN_BODY,
+        GAMESKIN_GRENADE_BODY, GAMESKIN_LASER_BODY, GAMESKIN_NINJA_BODY};
+    for (int w = 0; w < NUM_WEAPONS; ++w) {
+      const dd_weapon_spec_t *wspec = &dd_game_data.weapons.id[w];
+      const ft_sprite_rect *rect = dd_sprite_rect(game, game->gfx.gameskin, (uint32_t)sprites[w]);
+      if (rect) {
+        const float f = sqrtf((float)rect->w * rect->w + (float)rect->h * rect->h);
+        s_weapon_base_size[w][0] = wspec->visual_size * ((float)rect->w / f) / PX_PER_TILE;
+        s_weapon_base_size[w][1] = wspec->visual_size * ((float)rect->h / f) / PX_PER_TILE;
+      }
     }
+    s_weapon_size_init = true;
+  }
+
+  if (weapon_sprite_id != -1) {
+    vec2 weapon_size = {s_weapon_base_size[core->m_ActiveWeapon][0],
+                        s_weapon_base_size[core->m_ActiveWeapon][1] * flip_factor};
+    vec2 render_pos = {weapon_pos[0] / PX_PER_TILE, weapon_pos[1] / PX_PER_TILE};
+    dd_weapon_push(game, render_pos, weapon_size, weapon_angle, (uint32_t)weapon_sprite_id);
   }
   (void)pos;
 
   // Only these three are held with a visible hand in DDNet.
   switch (core->m_ActiveWeapon) {
   case WEAPON_GUN:
-    submit_tee_hand(game, weapon_pos, tee->dir, -3.0f * M_PI / 4.0f, -15.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false);
+    submit_tee_hand(game, weapon_pos, tee->dir, aim_angle, -3.0f * M_PI / 4.0f, -15.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false);
     break;
   case WEAPON_SHOTGUN:
-    submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -5.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false);
+    submit_tee_hand(game, weapon_pos, tee->dir, aim_angle, -M_PI / 2.0f, -5.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false);
     break;
   case WEAPON_GRENADE:
-    submit_tee_hand(game, weapon_pos, tee->dir, -M_PI / 2.0f, -4.0f, 7.0f, tee->skin, tee->body_col, tee->custom, false);
+    submit_tee_hand(game, weapon_pos, tee->dir, aim_angle, -M_PI / 2.0f, -4.0f, 7.0f, tee->skin, tee->body_col, tee->custom, false);
     break;
   default:
     break;
@@ -376,22 +440,36 @@ static void render_hook(ft_game *game, const SWorldCore *world, const SCharacter
                                  .sprite_index = GAMESKIN_HOOK_CHAIN,
                                  .color = {1.f, 1.f, 1.f, 1.f},
                                  .tiling = {chain_size[0] * 1.5f, 1.f}};
-    dd_draw_sprites(game, game->gfx.gameskin, DD_Z_HOOK, &draw, 1);
+    dd_hook_push(game, &draw);
   }
 
-  const ft_sprite_rect *head = dd_sprite_rect(game, game->gfx.gameskin, GAMESKIN_HOOK_HEAD);
-  if (head) {
-    vec2 head_size = {(float)head->w / 64.0f, (float)head->h / 64.0f};
-    dd_draw_sprite(game, game->gfx.gameskin, DD_Z_HOOK, hook_pos, head_size, angle, GAMESKIN_HOOK_HEAD, (vec4){1.f, 1.f, 1.f, 1.f});
+  static vec2 s_hook_head_size = {0};
+  static bool s_hook_head_init = false;
+  if (!s_hook_head_init) {
+    const ft_sprite_rect *head = dd_sprite_rect(game, game->gfx.gameskin, GAMESKIN_HOOK_HEAD);
+    if (head) {
+      s_hook_head_size[0] = (float)head->w / 64.0f;
+      s_hook_head_size[1] = (float)head->h / 64.0f;
+    }
+    s_hook_head_init = true;
   }
+  const ft_sprite_draw head_draw = {.pos = {hook_pos[0], hook_pos[1]},
+                                    .size = {s_hook_head_size[0], s_hook_head_size[1]},
+                                    .rotation = angle,
+                                    .sprite_index = GAMESKIN_HOOK_HEAD,
+                                    .color = {1.f, 1.f, 1.f, 1.f},
+                                    .tiling = {1.f, 1.f}};
+  dd_hook_push(game, &head_draw);
 
   vec2 hook_center = {pos[0] * PX_PER_TILE, pos[1] * PX_PER_TILE};
-  submit_tee_hand(game, hook_center, direction, -M_PI / 2.0f, 20.0f, 0.0f, tee->skin, tee->body_col, tee->custom, true);
+  submit_tee_hand(game, hook_center, direction, angle, -M_PI / 2.0f, 20.0f, 0.0f, tee->skin, tee->body_col, tee->custom, true);
 }
 
 // --- entities ----------------------------------------------------------------
 
 static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world, float intra) {
+  if (!world->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE] &&
+      !world->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]) return;
   int id = 0;
   for (SProjectile *ent = (SProjectile *)world->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
        ent = (SProjectile *)ent->m_Base.m_pNextTypeEntity) {
@@ -470,12 +548,13 @@ static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world
 
 static void render_pickups(ft_game *game, const ft_render_frame *frame, const SWorldCore *world, float intra) {
   const ft_level *level = frame->level;
-  if (!game->settings.render_pickups || !level || level->num_pickups <= 0) return;
+  if (!game->settings.render_pickups || !frame->active || !level || level->num_pickups <= 0) return;
 
   const bool unique_race = world->m_UniqueRace;
   const int selected = frame->selected_player;
 
-  ft_sprite_draw *draws = malloc(sizeof(ft_sprite_draw) * (size_t)level->num_pickups);
+  ft_sprite_draw stack_draws[128];
+  ft_sprite_draw *draws = (size_t)level->num_pickups <= 128 ? stack_draws : malloc(sizeof(ft_sprite_draw) * (size_t)level->num_pickups);
   if (!draws) return;
   uint32_t count = 0;
 
@@ -553,7 +632,7 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const SW
   }
 
   if (count > 0) dd_draw_sprites(game, game->gfx.gameskin, DD_Z_PICKUPS, draws, count);
-  free(draws);
+  if (draws != stack_draws) free(draws);
 }
 
 // --- entry point -------------------------------------------------------------
@@ -573,17 +652,14 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
   render_pickups(game, frame, world, intra);
 
   if (game->settings.render_players) {
-    dd_skins_begin(game);
-
     // Cull to the viewport with a margin wide enough that a tee entering the
     // screen is already drawn by the time any part of it is visible.
-    ft_camera camera;
-    game->engine->camera_get(&camera);
+    const ft_rect *vis = &frame->state.camera.visible;
     const float margin = 6.0f;
-    const float min_x = camera.visible.x - margin;
-    const float max_x = camera.visible.x + camera.visible.w + margin;
-    const float min_y = camera.visible.y - margin;
-    const float max_y = camera.visible.y + camera.visible.h + margin;
+    const float min_x = vis->x - margin;
+    const float max_x = vis->x + vis->w + margin;
+    const float min_y = vis->y - margin;
+    const float max_y = vis->y + vis->h + margin;
 
     for (int i = 0; i < world->m_NumCharacters; ++i) {
       const SCharacterCore *core = &world->m_pCharacters[i];
@@ -630,8 +706,6 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
         render_weapon(game, world, core, prev_core, &tee, intra, p);
       }
     }
-
-    dd_skins_flush(game);
   }
 
   render_projectiles_and_lasers(game, world, intra);
@@ -653,18 +727,22 @@ void dd_render(ft_game *game, const ft_render_frame *frame) {
     if (game->settings.render_map && !game->settings.entities_view) dd_map_design_render(game, frame);
     break;
   case FT_PASS_ENTITIES: {
+    if (frame->first_world || frame->world_index <= 0) {
+      dd_skins_begin(game);
+    }
     // Entity passes are per world. The old port tried to draw particles from a
     // shared level pass, whose world_index is deliberately -1, so none could
     // ever be selected or rendered.
-    dd_particle_system_t *particles = NULL;
     if (game->settings.render_particles && frame->world_index >= 0) {
       dd_particles_advance(game, frame->world_index, frame->level, frame->tick, frame->alpha);
-      particles = dd_particles_for(game, frame->world_index);
-      if (particles) dd_particles_render(particles, game, 0);
+      dd_particle_system_t *particles = dd_particles_for(game, frame->world_index);
+      if (particles) dd_particles_render(particles, game, -1);
     }
     render_entities(game, frame);
     dd_render_doors(game, frame);
-    if (particles) dd_particles_render(particles, game, 1);
+    if (frame->last_world || frame->world_index < 0 || frame->world_index >= frame->world_count - 1) {
+      dd_skins_flush(game);
+    }
     break;
   }
   case FT_PASS_OVERLAY:

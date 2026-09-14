@@ -18,6 +18,7 @@ struct player_profile_t {
 
 // Per-player presentation in the ABI's form. The returned array is valid until
 // the next call and holds one entry per track in `group_index`, in track order.
+void ui_player_setups_prepare(ui_handler_t *ui);
 const ft_player_setup *ui_player_setups(ui_handler_t *ui, int group_index, uint32_t *out_count);
 
 #endif // PLAYER_PROFILE_H

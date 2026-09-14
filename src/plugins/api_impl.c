@@ -265,8 +265,56 @@ static struct undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset,
 // wanted: the bulk edit below records itself as one snapshot instead.
 static void discard_undo_command(undo_command_t *command) {
   if (!command) return;
-  if (command->cleanup) command->cleanup(command);
-  free(command);
+  if (command->cleanup) {
+    command->cleanup(command);
+  } else {
+    free(command);
+  }
+}
+
+static bool s_undo_suppressed = false;
+static bool s_bulk_edit_active = false;
+static int s_bulk_edit_original_active_group = -1;
+static timeline_data_snapshot_t *s_bulk_edit_before = NULL;
+static char s_bulk_edit_description[64] = {0};
+
+static void api_set_undo_suppressed(bool suppressed) {
+  s_undo_suppressed = suppressed;
+}
+
+static void api_begin_bulk_edit(const char *description) {
+  if (s_bulk_edit_active) return;
+  s_bulk_edit_active = true;
+  s_bulk_edit_original_active_group = g_ui_handler_for_api ? g_ui_handler_for_api->timeline.active_group_index : -1;
+  if (!s_undo_suppressed && description && description[0]) {
+    snprintf(s_bulk_edit_description, sizeof(s_bulk_edit_description), "%s", description);
+    s_bulk_edit_before = commands_capture_timeline_data(&g_ui_handler_for_api->timeline);
+  } else {
+    s_bulk_edit_description[0] = '\0';
+    s_bulk_edit_before = NULL;
+  }
+}
+
+static void api_end_bulk_edit(void) {
+  if (!s_bulk_edit_active) return;
+  ui_handler_t *ui = g_ui_handler_for_api;
+  timeline_state_t *ts = &ui->timeline;
+
+  if (s_bulk_edit_original_active_group >= 0 && s_bulk_edit_original_active_group < ts->group_count) {
+    model_set_active_group(ts, s_bulk_edit_original_active_group);
+  }
+  s_bulk_edit_original_active_group = -1;
+
+  model_recalc_physics(ts, 0);
+
+  if (s_bulk_edit_before) {
+    undo_command_t *change = commands_create_timeline_data_change(
+        ui, s_bulk_edit_before, s_bulk_edit_description[0] ? s_bulk_edit_description : "Bulk Edit");
+    if (change) undo_manager_register_command(&ui->undo_manager, change);
+    s_bulk_edit_before = NULL;
+  }
+  s_bulk_edit_description[0] = '\0';
+  s_bulk_edit_active = false;
 }
 
 static int api_do_export_run_to_group(const char *name, int start_tick, int count, const void *records,
@@ -277,13 +325,17 @@ static int api_do_export_run_to_group(const char *name, int start_tick, int coun
   const size_t record_size = game_input_size(host);
   if (!records || count <= 0 || record_stride < record_size || start_tick < 0) return -1;
 
-  timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
-  if (!before) return -1;
+  const bool record_undo = !s_undo_suppressed && !s_bulk_edit_active;
+  timeline_data_snapshot_t *before = NULL;
+  if (record_undo) {
+    before = commands_capture_timeline_data(ts);
+    if (!before) return -1;
+  }
 
   char group_name[MAX_TIMELINE_GROUP_NAME];
   snprintf(group_name, sizeof(group_name), "%s", name && name[0] ? name : "Run");
   if (!model_add_group(ts, group_name)) {
-    commands_free_timeline_data_snapshot(before);
+    if (before) commands_free_timeline_data_snapshot(before);
     return -1;
   }
 
@@ -295,7 +347,7 @@ static int api_do_export_run_to_group(const char *name, int start_tick, int coun
   int track_index = -1;
   discard_undo_command(timeline_api_create_track(ui, NULL, &track_index));
   if (track_index < 0) {
-    commands_free_timeline_data_snapshot(before);
+    if (before) commands_free_timeline_data_snapshot(before);
     return -1;
   }
 
@@ -303,7 +355,7 @@ static int api_do_export_run_to_group(const char *name, int start_tick, int coun
   discard_undo_command(timeline_api_create_snippet(ui, track_index, start_tick, count, &snippet_id));
   input_snippet_t *snippet = snippet_id >= 0 ? model_find_snippet_by_id(ts, snippet_id, NULL) : NULL;
   if (!snippet) {
-    commands_free_timeline_data_snapshot(before);
+    if (before) commands_free_timeline_data_snapshot(before);
     return -1;
   }
 
@@ -312,10 +364,14 @@ static int api_do_export_run_to_group(const char *name, int start_tick, int coun
   for (int i = 0; i < writable; ++i)
     memcpy(window[i].bytes, (const uint8_t *)records + (size_t)i * record_stride, record_size);
 
-  model_recalc_physics(ts, start_tick);
+  if (!s_bulk_edit_active) {
+    model_recalc_physics(ts, start_tick);
+  }
 
-  undo_command_t *change = commands_create_timeline_data_change(ui, before, "Export Run to Group");
-  if (change) undo_manager_register_command(&ui->undo_manager, change);
+  if (record_undo && before) {
+    undo_command_t *change = commands_create_timeline_data_change(ui, before, "Export Run to Group");
+    if (change) undo_manager_register_command(&ui->undo_manager, change);
+  }
   return group_index;
 }
 
@@ -512,5 +568,8 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .entity_prop_set = api_entity_prop_set,
       .serialize_world = api_serialize_world,
       .deserialize_world = api_deserialize_world,
+      .begin_bulk_edit = api_begin_bulk_edit,
+      .end_bulk_edit = api_end_bulk_edit,
+      .set_undo_suppressed = api_set_undo_suppressed,
   };
 }

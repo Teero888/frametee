@@ -10,7 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <system/save.h>
 #include <user_interface/starting_state.h>
+#include <user_interface/timeline/timeline_commands.h>
 #include <user_interface/timeline/timeline_model.h>
 
 #define GLFW_INCLUDE_NONE
@@ -44,8 +46,27 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
   ui_handler_t *ui = &handler->user_interface;
   timeline_state_t *ts = &ui->timeline;
 
+  ui_player_setups_prepare(ui);
+
   static const ft_render_pass passes[] = {FT_PASS_LEVEL_BACKGROUND, FT_PASS_ENTITIES, FT_PASS_LEVEL_FOREGROUND, FT_PASS_OVERLAY};
   const int selected_track = ts->selected_player_track_index;
+  const int selected_group = model_track_group_index(ts, selected_track);
+  const int selected_local = selected_group >= 0 ? model_group_local_track_index(ts, selected_track) : -1;
+
+  ft_engine_state base_state;
+  engine_api_fill_state(&base_state);
+
+  typedef struct {
+    const ft_world *previous;
+    const ft_world *current;
+  } cached_world_pair_t;
+
+  static cached_world_pair_t *s_cached_pairs = NULL;
+  static int s_cached_pairs_cap = 0;
+  if (ts->group_count > s_cached_pairs_cap) {
+    s_cached_pairs = realloc(s_cached_pairs, (size_t)ts->group_count * sizeof(cached_world_pair_t));
+    s_cached_pairs_cap = ts->group_count;
+  }
 
   for (size_t pass_index = 0; pass_index < sizeof(passes) / sizeof(passes[0]); ++pass_index) {
     // Level layers are shared by every simulation group and are drawn once.
@@ -54,13 +75,31 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
     const bool per_world = !level_pass;
     const int world_count = per_world ? ts->group_count : 1;
 
+    int first_visible_group = -1;
+    int last_visible_group = -1;
+    for (int g = 0; g < world_count; ++g) {
+      if (!per_world || ts->groups[g]->visible) {
+        if (first_visible_group < 0) first_visible_group = g;
+        last_visible_group = g;
+      }
+    }
+
     for (int group_index = 0; group_index < world_count; ++group_index) {
       if (per_world && !ts->groups[group_index]->visible) continue;
 
       const ft_world *previous = NULL;
       const ft_world *current = NULL;
       if (per_world) {
-        model_group_world_pair(ts, group_index, ts->current_tick, &previous, &current);
+        if (passes[pass_index] == FT_PASS_OVERLAY && s_cached_pairs) {
+          previous = s_cached_pairs[group_index].previous;
+          current = s_cached_pairs[group_index].current;
+        } else {
+          model_group_world_pair(ts, group_index, ts->current_tick, &previous, &current);
+          if (s_cached_pairs) {
+            s_cached_pairs[group_index].previous = previous;
+            s_cached_pairs[group_index].current = current;
+          }
+        }
       } else if (ts->active_group_index >= 0 && ts->active_group_index < ts->group_count) {
         model_group_world_pair(ts, ts->active_group_index, ts->current_tick, &previous, &current);
       }
@@ -81,9 +120,9 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
       frame.world_index = per_world ? group_index : -1;
       frame.world_count = ts->group_count;
       frame.active = !per_world || group_index == ts->active_group_index;
-      frame.selected_player = per_world && model_track_group_index(ts, selected_track) == group_index
-                                  ? model_group_local_track_index(ts, selected_track)
-                                  : -1;
+      frame.first_world = (group_index == first_visible_group);
+      frame.last_world = (group_index == last_visible_group);
+      frame.selected_player = (per_world && group_index == selected_group) ? selected_local : -1;
       if (per_world) {
         const float *color = ts->groups[group_index]->color;
         frame.accent = (ft_color){color[0], color[1], color[2], color[3]};
@@ -91,10 +130,11 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
         frame.accent = (ft_color){1.f, 1.f, 1.f, 1.f};
       }
       frame.player_setups = ui_player_setups(ui, group_index, &frame.player_setup_count);
-      engine_api_fill_state(&frame.state);
+      frame.state = base_state;
 
       gh_render(&handler->game_host, &frame);
-      if (per_world && passes[pass_index] == FT_PASS_ENTITIES)
+
+      if (per_world && passes[pass_index] == FT_PASS_ENTITIES && ui->timeline.prediction.enabled)
         prediction_render_group(ui, group_index, previous, current, intra);
     }
   }
@@ -104,12 +144,53 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
   starting_state_render_markers(ui, handler);
 }
 
+static void setup_benchmark_groups(ui_handler_t *ui, int target_groups) {
+  timeline_state_t *ts = &ui->timeline;
+  log_info("Benchmark", "Setting up %d benchmark groups...", target_groups);
+  double t0 = glfwGetTime();
+
+  game_host_t *host = &ui->gfx_handler->game_host;
+  size_t rec_size = game_input_size(host);
+  if (rec_size == 0) rec_size = 64;
+  int num_ticks = 6000;
+  uint8_t *dummy_records = calloc((size_t)num_ticks, rec_size);
+
+  for (int g = ts->group_count; g < target_groups; ++g) {
+    char name[64];
+    snprintf(name, sizeof(name), "Benchmark Group %d", g + 1);
+    model_add_group(ts, name);
+    model_set_active_group(ts, g);
+    model_sync_tracks_to_world(ts, g);
+    int track_idx = -1;
+    undo_command_t *cmd1 = timeline_api_create_track(ui, NULL, &track_idx);
+    if (cmd1) { if (cmd1->cleanup) cmd1->cleanup(cmd1); else free(cmd1); }
+    if (track_idx >= 0) {
+      int snip_id = -1;
+      undo_command_t *cmd2 = timeline_api_create_snippet(ui, track_idx, 0, num_ticks, &snip_id);
+      if (cmd2) { if (cmd2->cleanup) cmd2->cleanup(cmd2); else free(cmd2); }
+      input_snippet_t *snip = model_find_snippet_by_id(ts, snip_id, NULL);
+      if (snip) {
+        input_record_t *win = snippet_window(snip);
+        for (int t = 0; t < num_ticks && t < snip->input_count; ++t) {
+          memcpy(win[t].bytes, dummy_records + (size_t)t * rec_size, rec_size);
+        }
+      }
+    }
+  }
+  free(dummy_records);
+  model_set_active_group(ts, 0);
+  model_recalc_physics(ts, 0);
+  double t1 = glfwGetTime();
+  log_info("Benchmark", "Setup %d groups in %.2f ms", target_groups, (t1 - t0) * 1000.0);
+}
+
 int main(int argc, char **argv) {
   // Renders the level for a few frames, writes the viewport to a file and
   // exits. This is how a render gets checked without a person looking at it.
   const char *screenshot_path = NULL;
   const char *capture_view = NULL;
   int screenshot_frames = 60;
+  int benchmark_groups = 0;
   // "x,y" in captured-image pixels. Reports the world-space ray under that
   // pixel, which is how a question about a render ("what is that grey?") turns
   // into a question about the level.
@@ -118,6 +199,7 @@ int main(int argc, char **argv) {
   // decides what the string means, exactly as it does for the level a start
   // screen requests.
   const char *level_path = NULL;
+  const char *project_path = NULL;
   const char *variant_id = NULL;
 
 #define MAX_CLI_PLUGINS 64
@@ -175,6 +257,12 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
       set_environment_variable("FRAMETEE_WINDOW_SIZE", argv[i + 1]);
       set_environment_variable("FRAMETEE_VIEWPORT_SIZE", argv[++i]);
+    } else if (strcmp(argv[i], "--benchmark-groups") == 0 && i + 1 < argc) {
+      benchmark_groups = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--project") == 0 && i + 1 < argc) {
+      project_path = argv[++i];
+    } else if (strncmp(argv[i], "--project=", 10) == 0) {
+      project_path = argv[i] + 10;
     } else if (strcmp(argv[i], "--list-games") == 0) {
       g_list_games = true;
       g_is_headless = true;
@@ -293,11 +381,23 @@ int main(int argc, char **argv) {
     plugin_manager_activate(&handler.user_interface.plugin_manager, forced_plugins[p]);
   }
 
-  if (level_path) {
-    on_level_load_path(&handler, level_path);
-    if (handler.level)
+  if (project_path) {
+    if (load_project(&handler.user_interface, project_path)) {
       handler.user_interface.show_splash = false;
-    else
+      if (benchmark_groups > 0) {
+        setup_benchmark_groups(&handler.user_interface, benchmark_groups);
+      }
+    } else {
+      log_error("Main", "Could not load project '%s'", project_path);
+    }
+  } else if (level_path) {
+    on_level_load_path(&handler, level_path);
+    if (handler.level) {
+      handler.user_interface.show_splash = false;
+      if (benchmark_groups > 0) {
+        setup_benchmark_groups(&handler.user_interface, benchmark_groups);
+      }
+    } else
       log_error("Main", "Could not open level '%s'", level_path);
   }
 
@@ -366,13 +466,26 @@ int main(int argc, char **argv) {
     // drawn later in the frame can replace the game whose resources these
     // commands reference, because every project switch waits for the call
     // above.
+    double t_render_start = glfwGetTime();
     if (handler.level != NULL) {
       render_game_passes(&handler, intra);
     }
+    double t_render_done = glfwGetTime();
     renderer_flush_queue(&handler, handler.current_frame_command_buffer);
+    double t_flush_done = glfwGetTime();
 
     ui_check_auto_save(&handler.user_interface);
     ui_render(&handler.user_interface);
+    double t_ui_done = glfwGetTime();
+
+    if (benchmark_groups > 0 || project_path) {
+      double total_ms = (t_ui_done - t_render_start) * 1000.0;
+      log_info("Benchmark", "Frame %d: passes=%.2f ms, flush=%.2f ms, ui=%.2f ms, total=%.2f ms (%.1f FPS, %d groups)",
+               screenshot_frames, (t_render_done - t_render_start) * 1000.0,
+               (t_flush_done - t_render_done) * 1000.0,
+               (t_ui_done - t_flush_done) * 1000.0,
+               total_ms, total_ms > 0.0 ? 1000.0 / total_ms : 999.0, handler.user_interface.timeline.group_count);
+    }
 
     // Mouse locking logic for recording
     ImGuiIO *io = igGetIO_Nil();

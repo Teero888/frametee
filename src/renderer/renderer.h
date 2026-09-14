@@ -381,7 +381,7 @@ struct render_command_t {
     } line_batch;
     struct {
       custom_pipeline_t *pipeline;
-      uint32_t start;
+      const void *instances;
       uint32_t count;
       texture_t *textures[MAX_TEXTURES_PER_DRAW];
       uint32_t texture_count;
@@ -400,6 +400,7 @@ struct render_command_t {
 
 struct render_queue_t {
   render_command_t *commands;
+  render_command_t **sort_ptrs;
   uint32_t count;
   // How many it holds now. A frame that submits more gets a bigger array.
   uint32_t capacity;

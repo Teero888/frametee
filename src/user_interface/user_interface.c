@@ -617,14 +617,23 @@ void render_player_manager(ui_handler_t *ui) {
     int pending_track_remove = -1;
     int pending_clone_track = -1;
     int pending_clone_group = -1;
-    for (int group_index = 0; group_index < ts->group_count; ++group_index) {
-      timeline_group_t *group = ts->groups[group_index];
+    ImGuiListClipper *group_clipper = NULL;
+    if (ts->group_count > 32) {
+      group_clipper = ImGuiListClipper_ImGuiListClipper();
+      ImGuiListClipper_Begin(group_clipper, ts->group_count, igGetFrameHeightWithSpacing());
+    }
+
+    while (!group_clipper || ImGuiListClipper_Step(group_clipper)) {
+      int start_grp = group_clipper ? group_clipper->DisplayStart : 0;
+      int end_grp = group_clipper ? group_clipper->DisplayEnd : ts->group_count;
+      for (int group_index = start_grp; group_index < end_grp; ++group_index) {
+        timeline_group_t *group = ts->groups[group_index];
       igPushID_Int(10000 + group_index);
 
       ImVec4 header_color = {group->color[0], group->color[1], group->color[2], group_index == ts->active_group_index ? 0.55f : 0.28f};
       igPushStyleColor_Vec4(ImGuiCol_Header, header_color);
       igPushStyleColor_Vec4(ImGuiCol_HeaderHovered, (ImVec4){group->color[0], group->color[1], group->color[2], 0.65f});
-      bool open = igCollapsingHeader_TreeNodeFlags(group->name, ImGuiTreeNodeFlags_DefaultOpen);
+      bool open = igCollapsingHeader_TreeNodeFlags(group->name, ts->group_count > 8 ? 0 : ImGuiTreeNodeFlags_DefaultOpen);
       igPopStyleColor(2);
       if (igIsItemClicked(ImGuiMouseButton_Left)) model_set_active_group(ts, group_index);
       if (igBeginPopupContextItem("##group_context", ImGuiPopupFlags_MouseButtonRight)) {
@@ -815,6 +824,12 @@ void render_player_manager(ui_handler_t *ui) {
       }
       igPopID();
     }
+    if (!group_clipper) break;
+  }
+  if (group_clipper) {
+    ImGuiListClipper_End(group_clipper);
+    ImGuiListClipper_destroy(group_clipper);
+  }
     if (pending_clone_track >= 0) {
       timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
       if (before && model_clone_track_to_group(ts, pending_clone_track, pending_clone_group, NULL))

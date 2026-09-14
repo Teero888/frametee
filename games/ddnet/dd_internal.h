@@ -331,6 +331,7 @@ typedef struct {
   int active_count;
   dd_flow_event_t flow_events[DD_MAX_FLOW_EVENTS];
   int next_flow_index;
+  int active_flow_events;
   double current_time;
   int last_simulated_tick;
   uint32_t rng_seed;
@@ -541,6 +542,40 @@ typedef struct {
   dd_skin_instance_t *overlay_batch;
   uint32_t overlay_batch_count;
   uint32_t overlay_batch_capacity;
+
+  ft_sprite_draw *weapon_batch;
+  uint32_t weapon_batch_count;
+  uint32_t weapon_batch_capacity;
+
+  ft_sprite_draw *hook_batch;
+  uint32_t hook_batch_count;
+  uint32_t hook_batch_capacity;
+
+  ft_sprite_draw *particle_batch_front;
+  uint32_t particle_batch_front_count;
+  uint32_t particle_batch_front_capacity;
+
+  ft_sprite_draw *particle_batch_back;
+  uint32_t particle_batch_back_count;
+  uint32_t particle_batch_back_capacity;
+
+  ft_sprite_draw *particle_batch_extra_front;
+  uint32_t particle_batch_extra_front_count;
+  uint32_t particle_batch_extra_front_capacity;
+
+  ft_sprite_draw *particle_batch_extra_back;
+  uint32_t particle_batch_extra_back_count;
+  uint32_t particle_batch_extra_back_capacity;
+
+  ft_sprite_draw *particle_batch_gameskin_front;
+  uint32_t particle_batch_gameskin_front_count;
+  uint32_t particle_batch_gameskin_front_capacity;
+
+  ft_sprite_draw *particle_batch_gameskin_back;
+  uint32_t particle_batch_gameskin_back_count;
+  uint32_t particle_batch_gameskin_back_capacity;
+
+  int last_skin_index;
 } dd_gfx_t;
 
 // Presentation settings. These belong to the game, not the editor, which is why
@@ -688,6 +723,9 @@ void dd_skins_begin(ft_game *game);
 void dd_skin_push(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 dir, const dd_anim_state_t *anim, vec3 col_body, vec3 col_feet,
                   bool custom);
 void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, vec3 col_body, bool custom, bool hook_hand);
+void dd_weapon_push(ft_game *game, vec2 pos, vec2 size, float rotation, uint32_t sprite);
+void dd_hook_push(ft_game *game, const ft_sprite_draw *draw);
+void dd_particle_push(ft_game *game, int atlas_type, int layer, vec2 pos, vec2 size, float rotation, uint32_t sprite, vec4 color);
 void dd_skins_flush(ft_game *game);
 // A tee in HUD space: an explicit alpha, and its own flush so it can be drawn
 // from a pass that runs after the world's tees have already gone out.

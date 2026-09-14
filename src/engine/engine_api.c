@@ -296,7 +296,8 @@ static void api_draw_sprites(ft_atlas *atlas, float z, const ft_sprite_draw *dra
   atlas_renderer_t *ar = AS_ATLAS(atlas);
 
   // The renderer batches by atlas, so the whole array goes in as one command.
-  atlas_instance_t *instances = malloc(sizeof(atlas_instance_t) * count);
+  atlas_instance_t stack_instances[128];
+  atlas_instance_t *instances = count <= 128 ? stack_instances : malloc(sizeof(atlas_instance_t) * count);
   if (!instances) return;
   for (uint32_t i = 0; i < count; ++i) {
     const ft_sprite_draw *d = &draws[i];
@@ -313,7 +314,7 @@ static void api_draw_sprites(ft_atlas *atlas, float z, const ft_sprite_draw *dra
     copy_color(&d->color, inst->color);
   }
   renderer_submit_atlas_batch(g_engine, ar, z, instances, count, false);
-  free(instances);
+  if (instances != stack_instances) free(instances);
 }
 
 static void api_draw_texture(float z, ft_texture *texture, ft_rect dst, ft_color tint) {
@@ -457,8 +458,31 @@ static void api_draw_mesh(ft_pipeline *pipeline, float z, ft_mesh *mesh, ft_text
 
 // --- camera ------------------------------------------------------------------
 
+static ft_camera s_cached_camera;
+static float s_last_cam_pos[2];
+static float s_last_cam_zoom = -999.f;
+static uint32_t s_last_cam_mode = UINT32_MAX;
+static float s_last_viewport[2];
+static float s_last_world_size[2];
+static bool s_has_cached_camera = false;
+
 static void api_camera_get(ft_camera *out) {
   if (!out || !g_engine) return;
+
+  const bool is_3d = game_is_3d(&g_engine->game_host);
+  if (!is_3d && s_has_cached_camera &&
+      g_engine->renderer.camera.pos[0] == s_last_cam_pos[0] &&
+      g_engine->renderer.camera.pos[1] == s_last_cam_pos[1] &&
+      g_engine->renderer.camera.zoom == s_last_cam_zoom &&
+      g_engine->renderer.camera.mode == s_last_cam_mode &&
+      g_engine->viewport[0] == s_last_viewport[0] &&
+      g_engine->viewport[1] == s_last_viewport[1] &&
+      g_engine->world_width == s_last_world_size[0] &&
+      g_engine->world_height == s_last_world_size[1]) {
+    *out = s_cached_camera;
+    return;
+  }
+
   memset(out, 0, sizeof(*out));
   out->struct_size = sizeof(*out);
   out->position = (ft_vec2){g_engine->renderer.camera.pos[0] * g_engine->world_width, g_engine->renderer.camera.pos[1] * g_engine->world_height};
@@ -512,6 +536,17 @@ static void api_camera_get(ft_camera *out) {
     mat4 vp;
     renderer_camera3_view_proj(g_engine, vp);
     memcpy(out->view_proj, vp, sizeof(out->view_proj));
+  } else {
+    s_cached_camera = *out;
+    s_last_cam_pos[0] = g_engine->renderer.camera.pos[0];
+    s_last_cam_pos[1] = g_engine->renderer.camera.pos[1];
+    s_last_cam_zoom = g_engine->renderer.camera.zoom;
+    s_last_cam_mode = g_engine->renderer.camera.mode;
+    s_last_viewport[0] = g_engine->viewport[0];
+    s_last_viewport[1] = g_engine->viewport[1];
+    s_last_world_size[0] = g_engine->world_width;
+    s_last_world_size[1] = g_engine->world_height;
+    s_has_cached_camera = true;
   }
 }
 

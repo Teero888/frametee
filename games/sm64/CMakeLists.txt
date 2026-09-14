@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" ON)
+option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" OFF) # THIS IS WORK IN PROGRESS AND NOT YET FUNCTIONAL DON'T TRY IT
 if(NOT FRAMETEE_BUILD_SM64)
     return()
 endif()

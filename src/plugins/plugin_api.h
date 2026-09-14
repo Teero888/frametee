@@ -163,6 +163,17 @@ struct tas_api_t {
   bool (*entity_prop_set)(ft_world *world, uint32_t entity_class, int entity, uint32_t property, const ft_value *value);
   size_t (*serialize_world)(const ft_world *world, void *out, size_t capacity);
   bool (*deserialize_world)(ft_world *world, const void *data, size_t size);
+
+  // Bulk edit operations: coalesces multi-step operations (such as batch exporting
+  // runs to groups) into a single timeline data snapshot in the undo history, and
+  // avoids redundant per-item physics cache recalculations.
+  // If description is NULL, undo recording is completely bypassed for the bulk operation.
+  void (*begin_bulk_edit)(const char *description);
+  void (*end_bulk_edit)(void);
+
+  // Global override to suppress creating undo commands for operations like
+  // export_run_to_group.
+  void (*set_undo_suppressed)(bool suppressed);
 };
 
 // A plugin's name, author, version and description come from the manifest
@@ -182,7 +193,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 4u
+#define FRAMETEE_PLUGIN_ABI_VERSION 5u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

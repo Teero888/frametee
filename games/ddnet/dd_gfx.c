@@ -291,7 +291,7 @@ static bool create_skin_pipeline(ft_game *game) {
                            .instance_attrs = attrs,
                            .instance_attr_count = (uint32_t)(sizeof(attrs) / sizeof(attrs[0])),
                            .instance_stride = sizeof(dd_skin_instance_t),
-                           .max_instances_per_frame = 4096,
+                           .max_instances_per_frame = 131072,
                            .texture_count = 2, // colour sheet + weight sheet
                            .alpha_blend = true};
   game->gfx.skin_pipeline = game->engine->pipeline_create(&desc);
@@ -398,7 +398,16 @@ void dd_gfx_destroy(ft_game *game) {
   free(gfx->skin_batch);
   free(gfx->hand_batch);
   free(gfx->hook_hand_batch);
+  free(gfx->weapon_batch);
+  free(gfx->hook_batch);
+  free(gfx->particle_batch_front);
+  free(gfx->particle_batch_back);
+  free(gfx->particle_batch_extra_front);
+  free(gfx->particle_batch_extra_back);
+  free(gfx->particle_batch_gameskin_front);
+  free(gfx->particle_batch_gameskin_back);
   memset(gfx, 0, sizeof(*gfx));
+  gfx->last_skin_index = -1;
 }
 
 // --- skins -------------------------------------------------------------------
@@ -611,8 +620,17 @@ int dd_gfx_skin_index(ft_game *game, const char *name) {
   dd_gfx_t *gfx = &game->gfx;
   if (!name || !*name) return gfx->default_skin;
 
+  if (gfx->last_skin_index >= 0 && gfx->last_skin_index < DD_MAX_PLAYER_SKINS &&
+      gfx->skins[gfx->last_skin_index].used &&
+      strcmp(gfx->skins[gfx->last_skin_index].name, name) == 0) {
+    return gfx->skins[gfx->last_skin_index].loaded ? gfx->last_skin_index : gfx->default_skin;
+  }
+
   for (int i = 0; i < DD_MAX_PLAYER_SKINS; ++i) {
-    if (gfx->skins[i].used && strcmp(gfx->skins[i].name, name) == 0) return gfx->skins[i].loaded ? i : gfx->default_skin;
+    if (gfx->skins[i].used && strcmp(gfx->skins[i].name, name) == 0) {
+      gfx->last_skin_index = i;
+      return gfx->skins[i].loaded ? i : gfx->default_skin;
+    }
   }
 
   int layer = -1;
@@ -635,6 +653,7 @@ int dd_gfx_skin_index(ft_game *game, const char *name) {
     dd_log(game, FT_LOG_WARN, "Skin '%s' could not be loaded.", name);
     return gfx->default_skin;
   }
+  gfx->last_skin_index = layer;
   return layer;
 }
 
@@ -779,6 +798,14 @@ void dd_skins_begin(ft_game *game) {
   game->gfx.skin_batch_count = 0;
   game->gfx.hand_batch_count = 0;
   game->gfx.hook_hand_batch_count = 0;
+  game->gfx.weapon_batch_count = 0;
+  game->gfx.hook_batch_count = 0;
+  game->gfx.particle_batch_front_count = 0;
+  game->gfx.particle_batch_back_count = 0;
+  game->gfx.particle_batch_extra_front_count = 0;
+  game->gfx.particle_batch_extra_back_count = 0;
+  game->gfx.particle_batch_gameskin_front_count = 0;
+  game->gfx.particle_batch_gameskin_back_count = 0;
 }
 
 static dd_skin_instance_t *hand_batch_push(dd_skin_instance_t **batch, uint32_t *count, uint32_t *batch_capacity) {
@@ -789,9 +816,7 @@ static dd_skin_instance_t *hand_batch_push(dd_skin_instance_t **batch, uint32_t 
     *batch = grown;
     *batch_capacity = capacity;
   }
-  dd_skin_instance_t *inst = &(*batch)[(*count)++];
-  memset(inst, 0, sizeof(*inst));
-  return inst;
+  return &(*batch)[(*count)++];
 }
 
 static dd_skin_instance_t *skin_batch_push(ft_game *game) {
@@ -803,9 +828,7 @@ static dd_skin_instance_t *skin_batch_push(ft_game *game) {
     gfx->skin_batch = grown;
     gfx->skin_batch_capacity = capacity;
   }
-  dd_skin_instance_t *inst = &gfx->skin_batch[gfx->skin_batch_count++];
-  memset(inst, 0, sizeof(*inst));
-  return inst;
+  return &gfx->skin_batch[gfx->skin_batch_count++];
 }
 
 void dd_skin_push(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 dir, const dd_anim_state_t *anim, vec3 col_body, vec3 col_feet,
@@ -854,17 +877,95 @@ void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, v
   inst->pos[0] = pos[0];
   inst->pos[1] = pos[1];
   inst->alpha = 1.f;
-  // A hand quad spans its sprite exactly, so no 1.25 headroom here.
   inst->scale = scale;
   inst->skin_index = skin;
   inst->eye_state = 6;
-  // The hand rides the weapon, which can put it outside the tee's own quad, so
-  // it is drawn as its own instance rotated by attach.angle.
+  inst->attach[0] = 0.f;
+  inst->attach[1] = 0.f;
   inst->attach[2] = angle;
+  inst->body[0] = 0.f; inst->body[1] = 0.f; inst->body[2] = 0.f;
+  inst->back_foot[0] = 0.f; inst->back_foot[1] = 0.f; inst->back_foot[2] = 0.f;
+  inst->front_foot[0] = 0.f; inst->front_foot[1] = 0.f; inst->front_foot[2] = 0.f;
+  inst->dir[0] = 0.f; inst->dir[1] = 0.f;
   glm_vec3_copy(col_body, inst->col_body);
   glm_vec3_copy(col_body, inst->col_feet);
   inst->col_custom = custom ? 1 : 0;
   inst->mode = DD_SKIN_MODE_HAND;
+}
+
+void dd_weapon_push(ft_game *game, vec2 pos, vec2 size, float rotation, uint32_t sprite) {
+  if (!game->gfx.ready) return;
+  dd_gfx_t *gfx = &game->gfx;
+  if (gfx->weapon_batch_count >= gfx->weapon_batch_capacity) {
+    const uint32_t capacity = gfx->weapon_batch_capacity ? gfx->weapon_batch_capacity * 2 : 256;
+    ft_sprite_draw *grown = realloc(gfx->weapon_batch, (size_t)capacity * sizeof(*grown));
+    if (!grown) return;
+    gfx->weapon_batch = grown;
+    gfx->weapon_batch_capacity = capacity;
+  }
+  ft_sprite_draw *d = &gfx->weapon_batch[gfx->weapon_batch_count++];
+  d->pos.x = pos[0];
+  d->pos.y = pos[1];
+  d->size.x = size[0];
+  d->size.y = size[1];
+  d->rotation = rotation;
+  d->sprite_index = sprite;
+  d->color = (ft_color){1.f, 1.f, 1.f, 1.f};
+  d->tiling.x = 1.f;
+  d->tiling.y = 1.f;
+}
+
+void dd_hook_push(ft_game *game, const ft_sprite_draw *draw) {
+  if (!game->gfx.ready || !draw) return;
+  dd_gfx_t *gfx = &game->gfx;
+  if (gfx->hook_batch_count >= gfx->hook_batch_capacity) {
+    const uint32_t capacity = gfx->hook_batch_capacity ? gfx->hook_batch_capacity * 2 : 256;
+    ft_sprite_draw *grown = realloc(gfx->hook_batch, (size_t)capacity * sizeof(*grown));
+    if (!grown) return;
+    gfx->hook_batch = grown;
+    gfx->hook_batch_capacity = capacity;
+  }
+  gfx->hook_batch[gfx->hook_batch_count++] = *draw;
+}
+
+void dd_particle_push(ft_game *game, int atlas_type, int layer, vec2 pos, vec2 size, float rotation, uint32_t sprite, vec4 color) {
+  if (!game->gfx.ready) return;
+  dd_gfx_t *gfx = &game->gfx;
+  ft_sprite_draw **batch;
+  uint32_t *count;
+  uint32_t *capacity;
+
+  if (atlas_type == 1) {
+    batch = layer ? &gfx->particle_batch_gameskin_front : &gfx->particle_batch_gameskin_back;
+    count = layer ? &gfx->particle_batch_gameskin_front_count : &gfx->particle_batch_gameskin_back_count;
+    capacity = layer ? &gfx->particle_batch_gameskin_front_capacity : &gfx->particle_batch_gameskin_back_capacity;
+  } else if (atlas_type == 3) {
+    batch = layer ? &gfx->particle_batch_extra_front : &gfx->particle_batch_extra_back;
+    count = layer ? &gfx->particle_batch_extra_front_count : &gfx->particle_batch_extra_back_count;
+    capacity = layer ? &gfx->particle_batch_extra_front_capacity : &gfx->particle_batch_extra_back_capacity;
+  } else {
+    batch = layer ? &gfx->particle_batch_front : &gfx->particle_batch_back;
+    count = layer ? &gfx->particle_batch_front_count : &gfx->particle_batch_back_count;
+    capacity = layer ? &gfx->particle_batch_front_capacity : &gfx->particle_batch_back_capacity;
+  }
+
+  if (*count >= *capacity) {
+    const uint32_t new_cap = *capacity ? *capacity * 2 : 1024;
+    ft_sprite_draw *grown = realloc(*batch, (size_t)new_cap * sizeof(*grown));
+    if (!grown) return;
+    *batch = grown;
+    *capacity = new_cap;
+  }
+  ft_sprite_draw *d = &(*batch)[(*count)++];
+  d->pos.x = pos[0];
+  d->pos.y = pos[1];
+  d->size.x = size[0];
+  d->size.y = size[1];
+  d->rotation = rotation;
+  d->sprite_index = sprite;
+  d->color = to_color(color);
+  d->tiling.x = 1.f;
+  d->tiling.y = 1.f;
 }
 
 // Hands and bodies go in as two draws at their own depths, so a hand gripping
@@ -916,20 +1017,59 @@ void dd_skins_flush_overlay(ft_game *game) {
 
 void dd_skins_flush(ft_game *game) {
   dd_gfx_t *gfx = &game->gfx;
-  if (!gfx->ready || !gfx->skin_pipeline || !gfx->skin_array || !gfx->skin_color_array) return;
-  ft_texture *textures[2] = {gfx->skin_array, gfx->skin_color_array};
+  if (!gfx->ready) return;
 
-  if (gfx->hook_hand_batch_count > 0) {
-    game->engine->draw_instances(gfx->skin_pipeline, DD_Z_HOOK_HAND, textures, 2, gfx->hook_hand_batch, gfx->hook_hand_batch_count);
-    gfx->hook_hand_batch_count = 0;
+  if (gfx->particle_batch_back_count > 0 && gfx->particles) {
+    dd_draw_sprites(game, gfx->particles, DD_Z_PARTICLES_BACK, gfx->particle_batch_back, gfx->particle_batch_back_count);
+    gfx->particle_batch_back_count = 0;
   }
-  if (gfx->hand_batch_count > 0) {
-    game->engine->draw_instances(gfx->skin_pipeline, DD_Z_WEAPON_HAND, textures, 2, gfx->hand_batch, gfx->hand_batch_count);
-    gfx->hand_batch_count = 0;
+  if (gfx->particle_batch_extra_back_count > 0 && gfx->extras) {
+    dd_draw_sprites(game, gfx->extras, DD_Z_PARTICLES_BACK, gfx->particle_batch_extra_back, gfx->particle_batch_extra_back_count);
+    gfx->particle_batch_extra_back_count = 0;
   }
-  if (gfx->skin_batch_count > 0) {
-    game->engine->draw_instances(gfx->skin_pipeline, DD_Z_SKINS, textures, 2, gfx->skin_batch, gfx->skin_batch_count);
-    gfx->skin_batch_count = 0;
+  if (gfx->particle_batch_gameskin_back_count > 0 && gfx->gameskin) {
+    dd_draw_sprites(game, gfx->gameskin, DD_Z_PARTICLES_BACK, gfx->particle_batch_gameskin_back, gfx->particle_batch_gameskin_back_count);
+    gfx->particle_batch_gameskin_back_count = 0;
+  }
+
+  if (gfx->skin_pipeline && gfx->skin_array && gfx->skin_color_array) {
+    ft_texture *textures[2] = {gfx->skin_array, gfx->skin_color_array};
+
+    if (gfx->hook_hand_batch_count > 0) {
+      game->engine->draw_instances(gfx->skin_pipeline, DD_Z_HOOK_HAND, textures, 2, gfx->hook_hand_batch, gfx->hook_hand_batch_count);
+      gfx->hook_hand_batch_count = 0;
+    }
+    if (gfx->hand_batch_count > 0) {
+      game->engine->draw_instances(gfx->skin_pipeline, DD_Z_WEAPON_HAND, textures, 2, gfx->hand_batch, gfx->hand_batch_count);
+      gfx->hand_batch_count = 0;
+    }
+    if (gfx->skin_batch_count > 0) {
+      game->engine->draw_instances(gfx->skin_pipeline, DD_Z_SKINS, textures, 2, gfx->skin_batch, gfx->skin_batch_count);
+      gfx->skin_batch_count = 0;
+    }
+  }
+
+  if (gfx->hook_batch_count > 0 && gfx->gameskin) {
+    dd_draw_sprites(game, gfx->gameskin, DD_Z_HOOK, gfx->hook_batch, gfx->hook_batch_count);
+    gfx->hook_batch_count = 0;
+  }
+
+  if (gfx->weapon_batch_count > 0 && gfx->gameskin) {
+    dd_draw_sprites(game, gfx->gameskin, DD_Z_WEAPONS, gfx->weapon_batch, gfx->weapon_batch_count);
+    gfx->weapon_batch_count = 0;
+  }
+
+  if (gfx->particle_batch_front_count > 0 && gfx->particles) {
+    dd_draw_sprites(game, gfx->particles, DD_Z_PARTICLES_FRONT, gfx->particle_batch_front, gfx->particle_batch_front_count);
+    gfx->particle_batch_front_count = 0;
+  }
+  if (gfx->particle_batch_extra_front_count > 0 && gfx->extras) {
+    dd_draw_sprites(game, gfx->extras, DD_Z_PARTICLES_FRONT, gfx->particle_batch_extra_front, gfx->particle_batch_extra_front_count);
+    gfx->particle_batch_extra_front_count = 0;
+  }
+  if (gfx->particle_batch_gameskin_front_count > 0 && gfx->gameskin) {
+    dd_draw_sprites(game, gfx->gameskin, DD_Z_PARTICLES_FRONT, gfx->particle_batch_gameskin_front, gfx->particle_batch_gameskin_front_count);
+    gfx->particle_batch_gameskin_front_count = 0;
   }
 }
 

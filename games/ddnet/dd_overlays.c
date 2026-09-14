@@ -78,6 +78,7 @@ static float draw_nameplate_line(ft_game *game, float center_x, float bottom, fl
 
 static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
   if (!game->settings.render_nameplates || !frame->world) return;
+  if (frame->world_count > 32 && !frame->active && frame->selected_player < 0) return;
   const SWorldCore *world = &frame->world->core;
   ft_camera camera;
   game->engine->camera_get(&camera);
@@ -508,6 +509,7 @@ static void render_chat(ft_game *game, const ft_render_frame *frame) {
 
 static void render_emoticons(ft_game *game, const ft_render_frame *frame) {
   if (!game->settings.render_emoticons || !game->gfx.emoticons || !frame->world) return;
+  if (!game->engine->timeline_event_count || game->engine->timeline_event_count() == 0) return;
   visible_event emotes[64];
   const int count = recent_events(game, frame, DD_EVENT_EMOTICON, 2 * GAME_TICK_SPEED, emotes, 64);
   const SWorldCore *world = &frame->world->core;
@@ -536,7 +538,7 @@ void dd_render_world_overlays(ft_game *game, const ft_render_frame *frame) {
   render_freeze_bars(game, frame);
   render_emoticons(game, frame);
   render_chat(game, frame);
-  dd_skins_flush_overlay(game);
+  if (frame->last_world || frame->active) dd_skins_flush_overlay(game);
 }
 
 // DDNet draws editor/speed_arrow.png as a single 35px quad centred on the tile

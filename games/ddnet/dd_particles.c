@@ -57,6 +57,7 @@ void dd_particles_reset(dd_particle_system_t *ps) {
   ps->active_count = 0;
   memset(ps->flow_events, 0, sizeof(ps->flow_events));
   ps->next_flow_index = 0;
+  ps->active_flow_events = 0;
   ps->current_time = 0.0;
   ps->last_simulated_tick = -1;
   ps->rng_seed = 0;
@@ -155,6 +156,7 @@ static void flow_add(dd_particle_system_t *ps, vec2 pos, float strength) {
   ps->flow_events[id].time = ps->current_time;
   ps->flow_events[id].strength = strength;
   ps->flow_events[id].creation_tick = (int)(ps->current_time * 50.0 + 0.1);
+  ps->active_flow_events++;
   glm_vec2_copy(pos, ps->flow_events[id].pos);
 }
 
@@ -172,6 +174,7 @@ static void init_flow_decay_table(void) {
 static void flow_get(dd_particle_system_t *ps, double sim_time, vec2 pos, vec2 out_vel) {
   out_vel[0] = 0;
   out_vel[1] = 0;
+  if (ps->active_flow_events <= 0) return;
   if (!g_flow_decay_inited) init_flow_decay_table();
 
   for (int i = 0; i < DD_MAX_FLOW_EVENTS; ++i) {
@@ -199,8 +202,11 @@ static void flow_get(dd_particle_system_t *ps, double sim_time, vec2 pos, vec2 o
   }
 }
 
-static bool point_is_solid(SCollision *collision, float x, float y) {
-  return collision && check_point(collision, vec2_init(x, y));
+static inline bool point_is_solid(const SCollision *collision, float x, float y) {
+  if (!collision) return false;
+  const int Nx = (int)(x + 0.5f) >> 5;
+  const int Ny = (int)(y + 0.5f) >> 5;
+  return (collision->m_pTileInfos[collision->m_pWidthLookup[Ny] + Nx] & INFO_ISSOLID) != 0;
 }
 
 static void move_point(SCollision *collision, vec2 *inout_pos, vec2 *inout_vel, float elasticity) {
@@ -245,7 +251,18 @@ static void particle_simulate_step(dd_particle_system_t *ps, dd_particle_t *p, v
   }
 
   if (p->friction > 0.0f) {
-    glm_vec2_scale(vel, powf(p->friction, dt / 0.05f), vel);
+    float factor;
+    if (fabsf(dt - 0.02f) < 1e-5f) {
+      if (p->friction == 0.7f) factor = 0.8668778f;
+      else if (p->friction == 0.8f) factor = 0.9146101f;
+      else if (p->friction == 0.9f) factor = 0.9587315f;
+      else if (p->friction == 0.4f) factor = 0.6931448f;
+      else if (p->friction == 0.6f) factor = 0.8151799f;
+      else factor = powf(p->friction, 0.4f);
+    } else {
+      factor = powf(p->friction, dt / 0.05f);
+    }
+    glm_vec2_scale(vel, factor, vel);
   }
 
   vec2 move;
@@ -327,38 +344,48 @@ void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer) {
 
   // Frustum culling bounds in pixel coordinates. The engine converts screen to
   // world for us; the rest of this file thinks in DDNet pixels.
+  static ft_rect s_last_vis = {0};
+  static float s_cached_cam_min_x, s_cached_cam_max_x, s_cached_cam_min_y, s_cached_cam_max_y;
+  static bool s_has_cam_bounds = false;
+
+  float cam_min_x, cam_max_x, cam_min_y, cam_max_y;
   ft_camera camera;
   engine->camera_get(&camera);
 
-  const float margin = 200.0f; // pixel margin for large particles
-  const float cam_min_x = camera.visible.x * PX_PER_TILE - margin;
-  const float cam_max_x = (camera.visible.x + camera.visible.w) * PX_PER_TILE + margin;
-  const float cam_min_y = camera.visible.y * PX_PER_TILE - margin;
-  const float cam_max_y = (camera.visible.y + camera.visible.h) * PX_PER_TILE + margin;
-
-  float z_layer = layer ? DD_Z_PARTICLES_FRONT : DD_Z_PARTICLES_BACK;
+  if (s_has_cam_bounds && memcmp(&camera.visible, &s_last_vis, sizeof(ft_rect)) == 0) {
+    cam_min_x = s_cached_cam_min_x;
+    cam_max_x = s_cached_cam_max_x;
+    cam_min_y = s_cached_cam_min_y;
+    cam_max_y = s_cached_cam_max_y;
+  } else {
+    const float margin = 200.0f; // pixel margin for large particles
+    cam_min_x = camera.visible.x * PX_PER_TILE - margin;
+    cam_max_x = (camera.visible.x + camera.visible.w) * PX_PER_TILE + margin;
+    cam_min_y = camera.visible.y * PX_PER_TILE - margin;
+    cam_max_y = (camera.visible.y + camera.visible.h) * PX_PER_TILE + margin;
+    s_last_vis = camera.visible;
+    s_cached_cam_min_x = cam_min_x;
+    s_cached_cam_max_x = cam_max_x;
+    s_cached_cam_min_y = cam_min_y;
+    s_cached_cam_max_y = cam_max_y;
+    s_has_cam_bounds = true;
+  }
 
   for (int i = 0; i < ps->active_count; ++i) {
     dd_particle_t *p = &ps->particles[i];
 
-    if (g_group_layer[p->group] != layer) continue;
+    int particle_layer = g_group_layer[p->group];
+    if (layer >= 0 && particle_layer != layer) continue;
 
     double age = ps->current_time - p->spawn_time;
     if (age < 0 || age > p->life_span) continue;
 
     vec2 pos;
-    float rot;
-    float size;
-    vec4 col;
     if (p->sprite_index == GAMESKIN_STAR_0) {
       const float remaining_life = p->life_span - (float)age;
       const float move_mix = fminf(fmaxf((remaining_life - 0.60f) / 0.15f, 0.0f), 1.0f);
       pos[0] = p->start_pos[0] + p->start_vel[0] * 75.0f * (1.0f - move_mix);
       pos[1] = p->start_pos[1] + p->start_vel[1] * 75.0f * (1.0f - move_mix);
-      rot = p->rot + remaining_life * 2.0f;
-      size = p->start_size;
-      glm_vec4_copy(p->color, col);
-      col[3] *= fminf(fmaxf(remaining_life / 0.1f, 0.0f), 1.0f);
     } else {
       // Interpolate between the two simulated states straddling the render time. Never extrapolate
       // past the newer one: that is what pushed particles into walls a step before the collision
@@ -368,12 +395,6 @@ void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer) {
       alpha = fminf(fmaxf(alpha, 0.0f), 1.0f);
       pos[0] = p->prev_pos[0] + (p->current_pos[0] - p->prev_pos[0]) * alpha;
       pos[1] = p->prev_pos[1] + (p->current_pos[1] - p->prev_pos[1]) * alpha;
-
-      rot = p->rot + p->rot_speed * (float)age;
-      float life_frac = (float)age / p->life_span;
-      size = p->start_size * (1.0f - life_frac) + p->end_size * life_frac;
-      glm_vec4_copy(p->color, col);
-      if (p->use_alpha_fading) col[3] = p->start_alpha * (1.0f - life_frac) + p->end_alpha * life_frac;
     }
 
     // Camera frustum culling
@@ -381,13 +402,29 @@ void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer) {
       continue;
     }
 
+    float rot;
+    float size;
+    vec4 col;
+    if (p->sprite_index == GAMESKIN_STAR_0) {
+      const float remaining_life = p->life_span - (float)age;
+      rot = p->rot + remaining_life * 2.0f;
+      size = p->start_size;
+      glm_vec4_copy(p->color, col);
+      col[3] *= fminf(fmaxf(remaining_life / 0.1f, 0.0f), 1.0f);
+    } else {
+      rot = p->rot + p->rot_speed * (float)age;
+      float life_frac = (float)age / p->life_span;
+      size = p->start_size * (1.0f - life_frac) + p->end_size * life_frac;
+      glm_vec4_copy(p->color, col);
+      if (p->use_alpha_fading) col[3] = p->start_alpha * (1.0f - life_frac) + p->end_alpha * life_frac;
+    }
+
     // The sprite index carries which sheet it came from as an offset.
     int atlas_type = (p->sprite_index < PARTICLE_SPRITE_OFFSET) ? 1 : (p->sprite_index < EXTRA_SPRITE_OFFSET ? 2 : 3);
-    ft_atlas *target = (atlas_type == 1) ? game->gfx.gameskin : (atlas_type == 2 ? game->gfx.particles : game->gfx.extras);
     int render_sprite_idx = p->sprite_index - (atlas_type == 1 ? 0 : (atlas_type == 2 ? PARTICLE_SPRITE_OFFSET : EXTRA_SPRITE_OFFSET));
 
-    dd_draw_sprite(game, target, z_layer, (vec2){pos[0] / 32.f, pos[1] / 32.f}, (vec2){size / 32.f, size / 32.f}, rot,
-                   (uint32_t)render_sprite_idx, col);
+    dd_particle_push(game, atlas_type, particle_layer, (vec2){pos[0] / 32.f, pos[1] / 32.f}, (vec2){size / 32.f, size / 32.f}, rot,
+                     (uint32_t)render_sprite_idx, col);
   }
 }
 
@@ -926,6 +963,7 @@ void dd_particles_advance(ft_game *game, int world_index, const ft_level *level,
     dd_particles_reset(ps);
     return;
   }
+  if (ps->active_count == 0) return;
 
   // The simulation runs one step ahead of the rendered time; rendering
   // interpolates between the two, so this only has to set where "now" is.

@@ -526,7 +526,9 @@ void dd_text_draw_outlined(ft_game *game, float z, ft_vec2 position, float size,
   const size_t capacity = strlen(value);
   // Outline pass first, then fill, in one array: a batch keeps the order it was
   // given, so the fill lands on top without needing a second depth.
-  ft_sprite_draw *draws = malloc((capacity ? capacity : 1u) * 2u * sizeof(*draws));
+  const size_t total_quads = (capacity ? capacity : 1u) * 2u;
+  ft_sprite_draw stack_draws[128];
+  ft_sprite_draw *draws = total_quads <= 128 ? stack_draws : malloc(total_quads * sizeof(*draws));
   if (!draws) return;
 
   const uint32_t variant = outline_variant_for(outline_reference_px);
@@ -576,7 +578,7 @@ void dd_text_draw_outlined(ft_game *game, float z, ft_vec2 position, float size,
     memmove(draws + outline_count, fills, (size_t)fill_count * sizeof(*draws));
   if (outline_count + fill_count > 0u)
     game->engine->draw_sprites(text->atlas, z, draws, outline_count + fill_count);
-  free(draws);
+  if (draws != stack_draws) free(draws);
 }
 
 void dd_text_draw(ft_game *game, float z, ft_vec2 position, float size, ft_color color, const char *value) {

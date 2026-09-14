@@ -66,7 +66,9 @@ static char *read_file(const char *filename, size_t *length);
 static VkShaderModule create_shader_module(gfx_handler_t *handler, const char *code, size_t code_size);
 static primitive_ubo_t world_ubo(gfx_handler_t *h);
 static void upload_texture_layer(gfx_handler_t *h, texture_t *array, VkFormat format, int layer, const void *src, VkDeviceSize bytes);
-static void renderer_flush_custom_instances(gfx_handler_t *h, VkCommandBuffer cmd, const render_command_t *q);
+static void renderer_flush_custom_instances_batch(gfx_handler_t *h, VkCommandBuffer cmd, custom_pipeline_t *pipe,
+                                                 texture_t *const *textures, uint32_t texture_count,
+                                                 uint32_t start_index, uint32_t count);
 static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t base_layer,
                           uint32_t layer_count);
 static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer);
@@ -538,8 +540,9 @@ int renderer_init(gfx_handler_t *handler) {
 
   // Initialize the render queue
   renderer->queue.commands = malloc(sizeof(render_command_t) * INITIAL_RENDER_COMMANDS);
+  renderer->queue.sort_ptrs = malloc(sizeof(render_command_t *) * INITIAL_RENDER_COMMANDS);
   renderer->queue.count = 0;
-  renderer->queue.capacity = renderer->queue.commands ? INITIAL_RENDER_COMMANDS : 0;
+  renderer->queue.capacity = (renderer->queue.commands && renderer->queue.sort_ptrs) ? INITIAL_RENDER_COMMANDS : 0;
 
   setup_vertex_descriptions();
 
@@ -560,12 +563,12 @@ int renderer_init(gfx_handler_t *handler) {
                                        .queueFamilyIndex = handler->g_queue_family};
   check_vk_result(vkCreateCommandPool(handler->g_device, &pool_info, handler->g_allocator, &renderer->transfer_command_pool));
 
-  VkDescriptorPoolSize pool_sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096},
-                                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096 * MAX_TEXTURES_PER_DRAW}};
+  VkDescriptorPoolSize pool_sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16384},
+                                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384 * MAX_TEXTURES_PER_DRAW}};
   for (int i = 0; i < 3; i++) { // triple buffering
     VkDescriptorPoolCreateInfo pool_create_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                                    .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
-                                                   .maxSets = 4096,
+                                                   .maxSets = 16384,
                                                    .poolSizeCount = sizeof(pool_sizes) / sizeof(pool_sizes[0]),
                                                    .pPoolSizes = pool_sizes};
     check_vk_result(vkCreateDescriptorPool(handler->g_device, &pool_create_info, handler->g_allocator, &renderer->frame_descriptor_pools[i]));
@@ -645,6 +648,10 @@ void renderer_cleanup(gfx_handler_t *handler) {
   if (renderer->queue.commands) {
     free(renderer->queue.commands);
     renderer->queue.commands = NULL;
+  }
+  if (renderer->queue.sort_ptrs) {
+    free(renderer->queue.sort_ptrs);
+    renderer->queue.sort_ptrs = NULL;
   }
 
   vkDeviceWaitIdle(device);
@@ -1385,7 +1392,14 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &pso->descriptor_set_layout};
   VkResult err = vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set);
-  check_vk_result_line(err, __LINE__);
+  if (err != VK_SUCCESS) {
+    static uint32_t s_last_frame_warned = UINT32_MAX;
+    if (s_last_frame_warned != handler->g_main_window_data.FrameIndex) {
+      s_last_frame_warned = handler->g_main_window_data.FrameIndex;
+      log_error(LOG_SOURCE, "Descriptor allocation failed in renderer_draw_mesh (pool exhausted, err=%d)", err);
+    }
+    return;
+  }
 
   uint32_t binding_count = ubo_count + texture_count;
   VLA(VkWriteDescriptorSet, descriptor_writes, binding_count);
@@ -2928,9 +2942,9 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
   // It is reset globally once at the start of renderer_flush_queue.
 }
 
-static int compare_render_commands(const void *a, const void *b) {
-  const render_command_t *cmd_a = (const render_command_t *)a;
-  const render_command_t *cmd_b = (const render_command_t *)b;
+static int compare_command_pointers(const void *a, const void *b) {
+  const render_command_t *cmd_a = *(const render_command_t * const *)a;
+  const render_command_t *cmd_b = *(const render_command_t * const *)b;
   if (cmd_a->z < cmd_b->z) return -1;
   if (cmd_a->z > cmd_b->z) return 1;
 
@@ -2942,6 +2956,17 @@ static int compare_render_commands(const void *a, const void *b) {
     if (cmd_a->data.atlas_batch.ar > cmd_b->data.atlas_batch.ar) return 1;
     if (cmd_a->data.atlas_batch.screen_space != cmd_b->data.atlas_batch.screen_space) {
       return cmd_a->data.atlas_batch.screen_space ? 1 : -1;
+    }
+  }
+
+  if (cmd_a->type == RENDER_CMD_INSTANCES) {
+    if (cmd_a->data.instances.pipeline < cmd_b->data.instances.pipeline) return -1;
+    if (cmd_a->data.instances.pipeline > cmd_b->data.instances.pipeline) return 1;
+    if (cmd_a->data.instances.texture_count < cmd_b->data.instances.texture_count) return -1;
+    if (cmd_a->data.instances.texture_count > cmd_b->data.instances.texture_count) return 1;
+    for (uint32_t t = 0; t < cmd_a->data.instances.texture_count; ++t) {
+      if (cmd_a->data.instances.textures[t] < cmd_b->data.instances.textures[t]) return -1;
+      if (cmd_a->data.instances.textures[t] > cmd_b->data.instances.textures[t]) return 1;
     }
   }
 
@@ -2974,7 +2999,13 @@ static bool queue_reserve_one(renderer_state_t *renderer) {
     }
     return false;
   }
+  render_command_t **grown_ptrs = realloc(renderer->queue.sort_ptrs, (size_t)capacity * sizeof(*grown_ptrs));
+  if (!grown_ptrs) {
+    renderer->queue.commands = grown;
+    return false;
+  }
   renderer->queue.commands = grown;
+  renderer->queue.sort_ptrs = grown_ptrs;
   renderer->queue.capacity = capacity;
   return true;
 }
@@ -3075,20 +3106,39 @@ void renderer_submit_atlas_batch(struct gfx_handler_t *h, struct atlas_renderer_
                                  uint32_t count, bool screen_space) {
   if (!ar || !instances || count == 0 || (size_t)count > SIZE_MAX / sizeof(*instances)) return;
 
-  // Allocate from transient memory
+  renderer_state_t *r = &h->renderer;
   const size_t size = (size_t)count * sizeof(*instances);
-  if (h->renderer.transient_offset > h->renderer.transient_capacity ||
-      size > h->renderer.transient_capacity - h->renderer.transient_offset) {
+  if (r->transient_offset > r->transient_capacity ||
+      size > r->transient_capacity - r->transient_offset) {
     log_error(LOG_SOURCE, "Transient memory exhausted! Cannot submit atlas batch.");
     return;
   }
-  if (!queue_reserve_one(&h->renderer)) return;
 
-  void *dest = h->renderer.transient_memory + h->renderer.transient_offset;
+  // Check if we can merge directly with the preceding command
+  if (r->queue.count > 0) {
+    render_command_t *prev = &r->queue.commands[r->queue.count - 1];
+    if (prev->type == RENDER_CMD_ATLAS_BATCH &&
+        prev->z == z &&
+        prev->data.atlas_batch.ar == ar &&
+        prev->data.atlas_batch.screen_space == screen_space) {
+      void *expected_next = (char *)prev->data.atlas_batch.instances + (size_t)prev->data.atlas_batch.count * sizeof(atlas_instance_t);
+      void *cur_dest = r->transient_memory + r->transient_offset;
+      if (cur_dest == expected_next) {
+        memcpy(cur_dest, instances, size);
+        r->transient_offset += size;
+        prev->data.atlas_batch.count += count;
+        return;
+      }
+    }
+  }
+
+  if (!queue_reserve_one(r)) return;
+
+  void *dest = r->transient_memory + r->transient_offset;
   memcpy(dest, instances, size);
-  h->renderer.transient_offset += size;
+  r->transient_offset += size;
 
-  render_command_t *cmd = &h->renderer.queue.commands[h->renderer.queue.count++];
+  render_command_t *cmd = &r->queue.commands[r->queue.count++];
   cmd->type = RENDER_CMD_ATLAS_BATCH;
   cmd->z = z;
   cmd->data.atlas_batch.ar = ar;
@@ -3103,11 +3153,13 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
 
   // Stamp submission order first: the array index before sorting is exactly the order the commands
   // were queued in, and the comparator uses it to break ties.
-  for (uint32_t i = 0; i < r->queue.count; ++i)
+  for (uint32_t i = 0; i < r->queue.count; ++i) {
     r->queue.commands[i].seq = i;
+    r->queue.sort_ptrs[i] = &r->queue.commands[i];
+  }
 
-  // Sort by Z-order
-  qsort(r->queue.commands, r->queue.count, sizeof(render_command_t), compare_render_commands);
+  // Sort by Z-order using fast pointer array
+  qsort(r->queue.sort_ptrs, r->queue.count, sizeof(render_command_t *), compare_command_pointers);
 
   // Reset all instance counters
   for (uint32_t i = 0; i < r->dynamic_atlas_count; ++i)
@@ -3119,8 +3171,13 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   bool ar_screen_space = false;
   uint32_t batch_start_idx = 0;
 
+  custom_pipeline_t *active_pipe = NULL;
+  uint32_t pipe_batch_start_idx = 0;
+  texture_t *active_pipe_textures[MAX_TEXTURES_PER_DRAW] = {0};
+  uint32_t active_pipe_texture_count = 0;
+
   for (uint32_t i = 0; i < r->queue.count; i++) {
-    render_command_t *q = &r->queue.commands[i];
+    render_command_t *q = r->queue.sort_ptrs[i];
 
     // Check if we need to flush atlas buffer
     bool is_atlas = q->type == RENDER_CMD_ATLAS_BATCH;
@@ -3136,6 +3193,32 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
         uint32_t count = active_ar->instance_count - batch_start_idx;
         renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
         active_ar = NULL;
+      }
+    }
+
+    // Check if we need to flush custom pipeline buffer
+    bool is_instances = q->type == RENDER_CMD_INSTANCES;
+    if (active_pipe != NULL) {
+      bool flush = !is_instances;
+      if (is_instances) {
+        if (q->data.instances.pipeline != active_pipe ||
+            q->data.instances.texture_count != active_pipe_texture_count) {
+          flush = true;
+        } else {
+          for (uint32_t t = 0; t < active_pipe_texture_count; ++t) {
+            if (q->data.instances.textures[t] != active_pipe_textures[t]) {
+              flush = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (flush) {
+        uint32_t count = active_pipe->instance_count - pipe_batch_start_idx;
+        renderer_flush_custom_instances_batch(h, cmd, active_pipe, active_pipe_textures, active_pipe_texture_count,
+                                             pipe_batch_start_idx, count);
+        active_pipe = NULL;
       }
     }
 
@@ -3211,7 +3294,36 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       // A module technique breaks the primitive batch the same way a mesh does,
       // otherwise its instances would land behind primitives queued before it.
       if (r->primitive_index_count > 0) flush_primitives(h, cmd);
-      renderer_flush_custom_instances(h, cmd, q);
+
+      if (active_pipe == NULL) {
+        active_pipe = q->data.instances.pipeline;
+        active_pipe_texture_count = q->data.instances.texture_count;
+        for (uint32_t t = 0; t < active_pipe_texture_count; ++t)
+          active_pipe_textures[t] = q->data.instances.textures[t];
+        pipe_batch_start_idx = active_pipe->instance_count;
+      }
+
+      // Check for space
+      if (active_pipe->instance_count > active_pipe->max_instances ||
+          q->data.instances.count > active_pipe->max_instances - active_pipe->instance_count) {
+        // Flush current batch
+        uint32_t count = active_pipe->instance_count - pipe_batch_start_idx;
+        renderer_flush_custom_instances_batch(h, cmd, active_pipe, active_pipe_textures, active_pipe_texture_count,
+                                             pipe_batch_start_idx, count);
+        pipe_batch_start_idx = active_pipe->instance_count;
+
+        if (active_pipe->instance_count > active_pipe->max_instances ||
+            q->data.instances.count > active_pipe->max_instances - active_pipe->instance_count) {
+          log_error(LOG_SOURCE, "Custom pipeline batch too large for buffer! (Req: %u, Max: %u, Cur: %u)",
+                    q->data.instances.count, active_pipe->max_instances, active_pipe->instance_count);
+          break;
+        }
+      }
+
+      memcpy((char *)active_pipe->instance_ptr + (size_t)active_pipe->instance_count * active_pipe->instance_stride,
+             q->data.instances.instances,
+             (size_t)q->data.instances.count * active_pipe->instance_stride);
+      active_pipe->instance_count += q->data.instances.count;
       break;
 
     case RENDER_CMD_MESH: {
@@ -3234,6 +3346,12 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
   if (active_ar != NULL) {
     uint32_t count = active_ar->instance_count - batch_start_idx;
     renderer_flush_atlas_instances(h, cmd, active_ar, batch_start_idx, count, ar_screen_space);
+  }
+
+  if (active_pipe != NULL) {
+    uint32_t count = active_pipe->instance_count - pipe_batch_start_idx;
+    renderer_flush_custom_instances_batch(h, cmd, active_pipe, active_pipe_textures, active_pipe_texture_count,
+                                         pipe_batch_start_idx, count);
   }
 
   if (r->primitive_index_count > 0) {
@@ -3606,24 +3724,58 @@ void renderer_submit_instances(gfx_handler_t *h, custom_pipeline_t *pipe, float 
   renderer_state_t *r = &h->renderer;
   if (!pipe || !pipe->active || !pipe->instance_ptr || pipe->instance_stride == 0 || count == 0 || !instances) return;
   if (texture_count > 0 && !textures) return;
-  if (pipe->instance_count > pipe->max_instances || count > pipe->max_instances - pipe->instance_count ||
-      (size_t)count > SIZE_MAX / pipe->instance_stride) {
-    log_error(LOG_SOURCE, "Custom pipeline instance ring exhausted (%u).", pipe->max_instances);
+
+  const size_t size = (size_t)count * pipe->instance_stride;
+  if (r->transient_offset > r->transient_capacity || size > r->transient_capacity - r->transient_offset) {
+    static uint32_t s_last_frame_warned = UINT32_MAX;
+    if (s_last_frame_warned != h->g_main_window_data.FrameIndex) {
+      s_last_frame_warned = h->g_main_window_data.FrameIndex;
+      log_error(LOG_SOURCE, "Transient memory exhausted! Cannot submit instances.");
+    }
     return;
   }
+  const uint32_t clamped_tex_count = texture_count < MAX_TEXTURES_PER_DRAW ? texture_count : MAX_TEXTURES_PER_DRAW;
+
+  // Check if we can merge directly with the preceding command
+  if (r->queue.count > 0) {
+    render_command_t *prev = &r->queue.commands[r->queue.count - 1];
+    if (prev->type == RENDER_CMD_INSTANCES &&
+        prev->z == z &&
+        prev->data.instances.pipeline == pipe &&
+        prev->data.instances.texture_count == clamped_tex_count) {
+      bool textures_match = true;
+      for (uint32_t t = 0; t < clamped_tex_count; ++t) {
+        if (prev->data.instances.textures[t] != textures[t]) {
+          textures_match = false;
+          break;
+        }
+      }
+      if (textures_match) {
+        void *expected_next = (char *)prev->data.instances.instances + (size_t)prev->data.instances.count * pipe->instance_stride;
+        void *cur_dest = (char *)r->transient_memory + r->transient_offset;
+        if (cur_dest == expected_next) {
+          memcpy(cur_dest, instances, size);
+          r->transient_offset += size;
+          prev->data.instances.count += count;
+          return;
+        }
+      }
+    }
+  }
+
   if (!queue_reserve_one(r)) return;
 
-  const uint32_t start = pipe->instance_count;
-  memcpy(pipe->instance_ptr + (size_t)start * pipe->instance_stride, instances, (size_t)count * pipe->instance_stride);
-  pipe->instance_count += count;
+  void *dest = (char *)r->transient_memory + r->transient_offset;
+  memcpy(dest, instances, size);
+  r->transient_offset += size;
 
   render_command_t *cmd = &r->queue.commands[r->queue.count++];
   cmd->type = RENDER_CMD_INSTANCES;
   cmd->z = z;
   cmd->data.instances.pipeline = pipe;
-  cmd->data.instances.start = start;
+  cmd->data.instances.instances = dest;
   cmd->data.instances.count = count;
-  cmd->data.instances.texture_count = texture_count < MAX_TEXTURES_PER_DRAW ? texture_count : MAX_TEXTURES_PER_DRAW;
+  cmd->data.instances.texture_count = clamped_tex_count;
   for (uint32_t i = 0; i < cmd->data.instances.texture_count; ++i)
     cmd->data.instances.textures[i] = textures[i];
 }
@@ -3931,12 +4083,13 @@ void renderer_submit_mesh_range(gfx_handler_t *h, custom_pipeline_t *pipe, float
   if (uniforms && uniform_size > 0) memcpy(cmd->data.mesh_draw.uniforms, uniforms, uniform_size);
 }
 
-static void renderer_flush_custom_instances(gfx_handler_t *h, VkCommandBuffer cmd, const render_command_t *q) {
+static void renderer_flush_custom_instances_batch(gfx_handler_t *h, VkCommandBuffer cmd, custom_pipeline_t *pipe,
+                                                 texture_t *const *textures, uint32_t texture_count,
+                                                 uint32_t start_index, uint32_t count) {
+  if (count == 0 || !pipe || !pipe->active || !pipe->shader) return;
   renderer_state_t *r = &h->renderer;
-  custom_pipeline_t *pipe = q->data.instances.pipeline;
-  if (!pipe || !pipe->active || !pipe->shader) return;
 
-  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, pipe->shader, 1, q->data.instances.texture_count, h->g_main_window_data.RenderPass);
+  pipeline_cache_entry_t *pso = get_or_create_pipeline(h, pipe->shader, 1, texture_count, h->g_main_window_data.RenderPass);
   if (!pso) return;
 
   primitive_ubo_t ubo = world_ubo(h);
@@ -3957,7 +4110,11 @@ static void renderer_flush_custom_instances(gfx_handler_t *h, VkCommandBuffer cm
                                     .descriptorSetCount = 1,
                                     .pSetLayouts = &pso->descriptor_set_layout};
   if (vkAllocateDescriptorSets(h->g_device, &ai, &desc) != VK_SUCCESS) {
-    log_error(LOG_SOURCE, "Descriptor allocation failed for a module pipeline");
+    static uint32_t s_last_frame_warned = UINT32_MAX;
+    if (s_last_frame_warned != h->g_main_window_data.FrameIndex) {
+      s_last_frame_warned = h->g_main_window_data.FrameIndex;
+      log_error(LOG_SOURCE, "Descriptor allocation failed for a module pipeline");
+    }
     return;
   }
 
@@ -3971,8 +4128,8 @@ static void renderer_flush_custom_instances(gfx_handler_t *h, VkCommandBuffer cm
                                                  .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                                  .descriptorCount = 1,
                                                  .pBufferInfo = &b_info};
-  for (uint32_t i = 0; i < q->data.instances.texture_count; ++i) {
-    texture_t *tex = q->data.instances.textures[i];
+  for (uint32_t i = 0; i < texture_count; ++i) {
+    texture_t *tex = textures[i];
     if (!tex || !tex->active || tex->image_view == VK_NULL_HANDLE || tex->sampler == VK_NULL_HANDLE) tex = r->default_texture;
     if (!tex || !tex->active || tex->image_view == VK_NULL_HANDLE || tex->sampler == VK_NULL_HANDLE) {
       log_error(LOG_SOURCE, "Module draw has no valid texture for binding %u.", i);
@@ -3992,11 +4149,11 @@ static void renderer_flush_custom_instances(gfx_handler_t *h, VkCommandBuffer cm
   mesh_t *quad = h->quad_mesh;
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
   VkBuffer bufs[2] = {quad->vertex_buffer.buffer, pipe->instance_buffer.buffer};
-  VkDeviceSize offs[2] = {0, (VkDeviceSize)q->data.instances.start * pipe->instance_stride};
+  VkDeviceSize offs[2] = {0, (VkDeviceSize)start_index * pipe->instance_stride};
   vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
   vkCmdBindIndexBuffer(cmd, quad->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0, NULL);
-  vkCmdDrawIndexed(cmd, quad->index_count, q->data.instances.count, 0, 0, 0);
+  vkCmdDrawIndexed(cmd, quad->index_count, count, 0, 0, 0);
 }
 
 bool renderer_update_texture_layer(gfx_handler_t *h, texture_t *tex, uint32_t layer, const void *pixels, uint32_t width, uint32_t height) {

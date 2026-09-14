@@ -61,29 +61,62 @@ int renderer_screen_y_to_track_index(const timeline_state_t *ts, float screen_y)
   return (track_index >= ts->player_track_count) ? -1 : track_index;
 }
 
+typedef struct {
+  int group_index;
+  int start_offset;
+} playhead_group_entry_t;
+
+static int compare_playhead_entries(const void *a, const void *b) {
+  const playhead_group_entry_t *ea = (const playhead_group_entry_t *)a;
+  const playhead_group_entry_t *eb = (const playhead_group_entry_t *)b;
+  if (ea->start_offset != eb->start_offset) {
+    return (ea->start_offset < eb->start_offset) ? 1 : -1;
+  }
+  return ea->group_index - eb->group_index;
+}
+
 // Playheads are drawn from left to right. When their handles overlap, this leaves the rightmost
 // playhead in front. The unclamped tick breaks ties at tick zero, where several groups can share
 // the same visible position while approaching it from different offsets.
-static int renderer_next_playhead_group(const timeline_state_t *ts, int previous_group) {
-  int next_group = -1;
-  int previous_offset = previous_group >= 0 ? ts->groups[previous_group]->start_offset : 0;
+// Visit distinct offsets from largest to smallest to draw their playheads from left to right
+// and deduplicate groups whose offset is exactly equal.
+static int collect_playhead_groups(const timeline_state_t *ts, int *out_groups, int capacity) {
+  if (!ts || ts->group_count <= 0 || capacity <= 0) return 0;
 
-  for (int group_index = 0; group_index < ts->group_count; ++group_index) {
-    int offset = ts->groups[group_index]->start_offset;
-    // Unclamped playhead ticks are current_tick - start_offset. Visit distinct offsets from
-    // largest to smallest to draw their playheads from left to right and deduplicate groups whose
-    // offset is exactly equal.
-    if (previous_group >= 0 && offset >= previous_offset) continue;
-
-    if (next_group < 0) {
-      next_group = group_index;
-      continue;
-    }
-
-    int next_offset = ts->groups[next_group]->start_offset;
-    if (offset > next_offset || (offset == next_offset && group_index < next_group)) next_group = group_index;
+  playhead_group_entry_t stack_entries[64];
+  playhead_group_entry_t *entries = stack_entries;
+  if (ts->group_count > 64) {
+    entries = malloc(sizeof(*entries) * (size_t)ts->group_count);
+    if (!entries) return 0;
   }
-  return next_group;
+
+  int candidate_count = 0;
+  for (int i = 0; i < ts->group_count; ++i) {
+    if (i != ts->active_group_index && !ts->groups[i]->visible) continue;
+    entries[candidate_count++] = (playhead_group_entry_t){
+        .group_index = i,
+        .start_offset = ts->groups[i]->start_offset,
+    };
+  }
+
+  if (candidate_count == 0) {
+    if (entries != stack_entries) free(entries);
+    return 0;
+  }
+
+  qsort(entries, (size_t)candidate_count, sizeof(*entries), compare_playhead_entries);
+
+  int count = 0;
+  int last_offset = 0;
+  for (int i = 0; i < candidate_count && count < capacity; ++i) {
+    if (count == 0 || entries[i].start_offset < last_offset) {
+      out_groups[count++] = entries[i].group_index;
+      last_offset = entries[i].start_offset;
+    }
+  }
+
+  if (entries != stack_entries) free(entries);
+  return count;
 }
 
 int renderer_hit_test_playhead_handle(const timeline_state_t *ts, ImRect header_bb, ImVec2 position) {
@@ -93,20 +126,38 @@ int renderer_hit_test_playhead_handle(const timeline_state_t *ts, ImRect header_
 
   int frontmost_group = -1;
   float hit_half_width = 7.0f * dpi_scale;
-  for (int group_index = renderer_next_playhead_group(ts, -1); group_index >= 0;
-       group_index = renderer_next_playhead_group(ts, group_index)) {
+  int stack_groups[64];
+  int *group_list = stack_groups;
+  if (ts->group_count > 64) {
+    group_list = malloc(sizeof(int) * (size_t)ts->group_count);
+    if (!group_list) return -1;
+  }
+  int group_count = collect_playhead_groups(ts, group_list, ts->group_count);
+
+  for (int i = 0; i < group_count; ++i) {
+    int group_index = group_list[i];
     float x = renderer_tick_to_screen_x(ts, model_group_playhead_tick(ts, group_index), header_bb.Min.x);
     if (x < header_bb.Min.x || x > header_bb.Max.x) continue;
     if (fabsf(position.x - x) <= hit_half_width) frontmost_group = group_index;
   }
+
+  if (group_list != stack_groups) free(group_list);
   return frontmost_group;
 }
 
 int renderer_find_nearest_playhead(const timeline_state_t *ts, ImRect header_bb, float position_x) {
   int nearest_group = -1;
   float nearest_distance = 0.0f;
-  for (int group_index = renderer_next_playhead_group(ts, -1); group_index >= 0;
-       group_index = renderer_next_playhead_group(ts, group_index)) {
+  int stack_groups[64];
+  int *group_list = stack_groups;
+  if (ts->group_count > 64) {
+    group_list = malloc(sizeof(int) * (size_t)ts->group_count);
+    if (!group_list) return -1;
+  }
+  int group_count = collect_playhead_groups(ts, group_list, ts->group_count);
+
+  for (int i = 0; i < group_count; ++i) {
+    int group_index = group_list[i];
     float x = renderer_tick_to_screen_x(ts, model_group_playhead_tick(ts, group_index), header_bb.Min.x);
     float distance = fabsf(position_x - x);
     // Render order is back-to-front, so an equal-distance candidate encountered later is the
@@ -116,6 +167,8 @@ int renderer_find_nearest_playhead(const timeline_state_t *ts, ImRect header_bb,
       nearest_distance = distance;
     }
   }
+
+  if (group_list != stack_groups) free(group_list);
   return nearest_group;
 }
 
@@ -302,8 +355,17 @@ void renderer_draw_playhead_line(timeline_state_t *ts, ImDrawList *draw_list, Im
   float dpi_scale = gfx_get_ui_scale();
   float y0 = renderer_get_track_screen_y(ts, 0);
   float y1 = renderer_get_track_screen_y(ts, ts->player_track_count - 1) + ts->track_height * dpi_scale;
-  for (int group_index = renderer_next_playhead_group(ts, -1); group_index >= 0;
-       group_index = renderer_next_playhead_group(ts, group_index)) {
+
+  int stack_groups[64];
+  int *group_list = stack_groups;
+  if (ts->group_count > 64) {
+    group_list = malloc(sizeof(int) * (size_t)ts->group_count);
+    if (!group_list) return;
+  }
+  int group_count = collect_playhead_groups(ts, group_list, ts->group_count);
+
+  for (int i = 0; i < group_count; ++i) {
+    int group_index = group_list[i];
     int playhead_tick = model_group_playhead_tick(ts, group_index);
 
     float playhead_x = renderer_tick_to_screen_x(ts, playhead_tick, timeline_rect.Min.x);
@@ -313,12 +375,23 @@ void renderer_draw_playhead_line(timeline_state_t *ts, ImDrawList *draw_list, Im
                                                                  ts->groups[group_index]->color[2], 0.95f});
     ImDrawList_AddLine(draw_list, (ImVec2){playhead_x, y0}, (ImVec2){playhead_x, y1}, color, 2.0f * dpi_scale);
   }
+
+  if (group_list != stack_groups) free(group_list);
 }
 
 void renderer_draw_playhead_handle(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_rect, ImRect header_bb) {
   float dpi_scale = gfx_get_ui_scale();
-  for (int group_index = renderer_next_playhead_group(ts, -1); group_index >= 0;
-       group_index = renderer_next_playhead_group(ts, group_index)) {
+
+  int stack_groups[64];
+  int *group_list = stack_groups;
+  if (ts->group_count > 64) {
+    group_list = malloc(sizeof(int) * (size_t)ts->group_count);
+    if (!group_list) return;
+  }
+  int group_count = collect_playhead_groups(ts, group_list, ts->group_count);
+
+  for (int i = 0; i < group_count; ++i) {
+    int group_index = group_list[i];
     int playhead_tick = model_group_playhead_tick(ts, group_index);
     float group_x = renderer_tick_to_screen_x(ts, playhead_tick, timeline_rect.Min.x);
     if (group_x < timeline_rect.Min.x || group_x > timeline_rect.Max.x) continue;
@@ -332,6 +405,8 @@ void renderer_draw_playhead_handle(timeline_state_t *ts, ImDrawList *draw_list, 
     ImDrawList_AddLine(draw_list, (ImVec2){group_x, header_bb.Max.y - 5.0f * dpi_scale}, (ImVec2){group_x, header_bb.Max.y}, color,
                        2.0f * dpi_scale);
   }
+
+  if (group_list != stack_groups) free(group_list);
 }
 
 void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
