@@ -19,6 +19,6 @@
 [submodule "games/tmnf/ForeverValidator"]
 	path = libs/ForeverValidator
 	url = https://github.com/Teero888/ForeverValidator.git
-[submodule "libs/sm64ex"]
-	path = libs/sm64ex
-	url = https://github.com/sm64pc/sm64ex.git
+[submodule "libs/sm64_physics"]
+	path = libs/sm64_physics
+	url = https://github.com/Teero888/sm64_physics.git

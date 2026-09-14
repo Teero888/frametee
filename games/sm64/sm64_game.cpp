@@ -181,14 +181,13 @@ static const ft_camera_mode camera_modes[]={
 static bool camera_update(ft_game *,const ft_camera_frame *f,ft_camera *out){
   std::lock_guard lock(bridge_mutex);
   if(!f->world)return false;
-  if(f->mode > 0)return false;
   sm64_camera camera{};
   if(!sm64_ft_camera(f->world->handle,out->aspect,&camera))return false;
   out->eye={camera.eye[0],camera.eye[1],camera.eye[2]};
   out->target={camera.target[0],camera.target[1],camera.target[2]};
   out->up={camera.up[0],camera.up[1],camera.up[2]};
   out->fov_y=camera.fov_y;out->near_z=camera.near_z;out->far_z=camera.far_z;
-  out->orthographic=false;out->use_view_proj=true;
+  out->orthographic=false;out->use_view_proj=(f->mode == 0);
   std::memcpy(out->view_proj,camera.view_proj,sizeof(out->view_proj));
   return true;
 }
@@ -362,7 +361,7 @@ static bool card_matches_filter(const CourseCard &card, const char *filter) {
 static void draw_course_grid(const ft_engine_api *e, Setup &s, const std::shared_ptr<struct RuntimePreparation> &task,
                              const CourseCard *cards, size_t count);
 struct RuntimePaths {
-  std::filesystem::path directory,locked_directory,cache_directory,unlocker;
+  std::filesystem::path directory,cache_directory;
   std::string extension;
 };
 struct SelectedRuntime {
@@ -378,15 +377,15 @@ struct RuntimePreparation {
 };
 static std::mutex preparation_mutex;
 static std::shared_ptr<RuntimePreparation> preparation;
-static bool regular_file(const std::filesystem::path &path){std::error_code error;return std::filesystem::is_regular_file(path,error);}
+[[maybe_unused]] static bool regular_file(const std::filesystem::path &path){std::error_code error;return std::filesystem::is_regular_file(path,error);}
 static bool runtime_paths(const ft_engine_api *e,RuntimePaths *out){
   char directory[4096]{},cache[4096]{};
   if(!e||!e->resolve_data_path||!e->resolve_cache_path||!e->resolve_data_path("",directory,sizeof(directory))||!e->resolve_cache_path("runtime",cache,sizeof(cache)))return false;
-  out->directory=directory;out->locked_directory=out->directory/"runtime";out->cache_directory=cache;
+  out->directory=directory;out->cache_directory=cache;
 #ifdef _WIN32
-  out->extension=".dll";out->unlocker=out->locked_directory/"sm64_lock.exe";
+  out->extension=".dll";
 #else
-  out->extension=".so";out->unlocker=out->locked_directory/"sm64_lock";
+  out->extension=".so";
 #endif
   return true;
 }
@@ -413,37 +412,14 @@ static bool find_runtime(const RuntimePaths &paths,SelectedRuntime *out,std::str
   if(iterator_error){*error="Cannot inspect data/games/sm64: "+iterator_error.message();return false;}
   if(candidates.empty()){*error=found_rom_file?"The SM64 ROM is not a supported unmodified US, JP, or EU ROM.":"Place a legally obtained, unmodified SM64 ROM (.z64, .n64, or .v64) in data/games/sm64 next to FrameTee.";return false;}
   std::sort(candidates.begin(),candidates.end(),[](const Candidate &a,const Candidate &b){const int ap=version_priority(a.version),bp=version_priority(b.version);return ap==bp?a.path.generic_string()<b.path.generic_string():ap<bp;});
-  for(const Candidate &candidate:candidates){
-    const auto locked=paths.locked_directory/("frametee_sm64_"+candidate.version+paths.extension+".locked");
-    if(!regular_file(locked))continue;
-    out->rom=candidate.path;out->locked=locked;out->version=candidate.version;
-    out->cache_rom=paths.cache_directory/("baserom."+candidate.version+".z64");
-    out->cache_library=paths.cache_directory/("frametee_sm64_"+candidate.version+paths.extension);return true;
-  }
-  *error="This FrameTee build has no locked native runtime for the supplied SM64 ROM revision.";return false;
+  out->rom=candidates.front().path;
+  out->version=candidates.front().version;
+  out->cache_rom=candidates.front().path;
+  out->cache_library="";
+  return true;
 }
-static bool run_unlocker(const RuntimePaths &paths,const SelectedRuntime &runtime,std::string *error){
-  const std::vector<std::string> values={paths.unlocker.string(),"--unlock","--input",runtime.locked.string(),"--output",runtime.cache_library.string(),"--rom",runtime.rom.string()};
-#ifdef _WIN32
-  auto quote=[](const std::wstring &value){std::wstring output=L"\"";size_t slashes=0;for(wchar_t character:value){if(character==L'\\'){++slashes;continue;}if(character==L'\"')output.append(slashes*2+1,L'\\');else output.append(slashes,L'\\');slashes=0;output.push_back(character);}output.append(slashes*2,L'\\');output.push_back(L'\"');return output;};
-  std::wstring command;for(const std::string &value:values){if(!command.empty())command.push_back(L' ');const std::filesystem::path argument(value);command+=quote(argument.wstring());}
-  std::vector<wchar_t> mutable_command(command.begin(),command.end());mutable_command.push_back(L'\0');STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};
-  if(!CreateProcessW(paths.unlocker.wstring().c_str(),mutable_command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&startup,&process)){*error="Could not start the bundled SM64 unlocker (Windows error "+std::to_string(GetLastError())+").";return false;}
-  const bool waited=WaitForSingleObject(process.hProcess,INFINITE)==WAIT_OBJECT_0;DWORD status=1;if(waited)GetExitCodeProcess(process.hProcess,&status);CloseHandle(process.hThread);CloseHandle(process.hProcess);
-  if(!waited||status!=0){*error="The SM64 runtime could not be unlocked. Check that the ROM is an exact, unmodified supported original.";return false;}return true;
-#else
-  std::vector<char *> args;args.reserve(values.size()+1);for(const std::string &value:values)args.push_back(const_cast<char *>(value.c_str()));args.push_back(nullptr);pid_t process{};
-  const int spawn_error=posix_spawn(&process,values.front().c_str(),nullptr,nullptr,args.data(),environ);int status=0;const bool waited=spawn_error==0&&waitpid(process,&status,0)==process;
-  if(!waited||!WIFEXITED(status)||WEXITSTATUS(status)!=0){*error=spawn_error?"Could not start the bundled SM64 unlocker: "+std::string(std::strerror(spawn_error)):"The SM64 runtime could not be unlocked. Check that the ROM is an exact, unmodified supported original.";return false;}return true;
-#endif
-}
-static void unlock_runtime(std::shared_ptr<RuntimePreparation> task,RuntimePaths paths,SelectedRuntime runtime){
-  std::string error;std::error_code copy_error;const bool unlocked=run_unlocker(paths,runtime,&error);if(unlocked){std::filesystem::create_directories(runtime.cache_rom.parent_path(),copy_error);if(!copy_error)std::filesystem::copy_file(runtime.rom,runtime.cache_rom,std::filesystem::copy_options::overwrite_existing,copy_error);if(copy_error)error="Could not cache the SM64 ROM: "+copy_error.message();}
-  std::lock_guard lock(task->mutex);if(unlocked&&!copy_error){task->runtime=std::move(runtime);task->state.store(RuntimePreparation::State::Ready);}else {task->error=std::move(error);task->state.store(RuntimePreparation::State::Failed);}
-}
-static std::shared_ptr<RuntimePreparation> prepare_runtime(const RuntimePaths &paths,const SelectedRuntime &runtime){
-  std::lock_guard lock(preparation_mutex);if(!preparation)preparation=std::make_shared<RuntimePreparation>();auto task=preparation;if(task->state.load()!=RuntimePreparation::State::Idle)return task;
-  task->state.store(RuntimePreparation::State::Unlocking);std::thread([task,paths,runtime]{unlock_runtime(task,paths,runtime);}).detach();return task;
+static std::shared_ptr<RuntimePreparation> prepare_runtime(const RuntimePaths &,const SelectedRuntime &runtime){
+  std::lock_guard lock(preparation_mutex);if(!preparation)preparation=std::make_shared<RuntimePreparation>();auto task=preparation;if(task->state.load()==RuntimePreparation::State::Idle){task->runtime=runtime;task->state.store(RuntimePreparation::State::Ready);}return task;
 }
 static void retry_preparation(){std::lock_guard lock(preparation_mutex);preparation.reset();}
 
@@ -504,8 +480,8 @@ static void draw_course_grid(const ft_engine_api *e, Setup &s, const std::shared
       std::snprintf(config_name, sizeof(config_name), "course_%u.sm64", card.level_id);
       char config[4096]{};
       if (!e->request_level || !e->resolve_cache_path(config_name, config, sizeof(config)) ||
-          !sm64_ft_write_config(config, task->runtime.cache_rom.string().c_str(),
-                                task->runtime.cache_library.string().c_str(), "", 0, card.level_id,
+          !sm64_ft_write_config(config, task->runtime.rom.string().c_str(),
+                                "", "", 0, card.level_id,
                                 s.error, sizeof(s.error))) {
         if (!s.error[0]) std::snprintf(s.error, sizeof(s.error), "FrameTee could not create the SM64 project.");
       } else {
@@ -605,12 +581,6 @@ static void splash(const ft_engine_api *e,void **context,const ft_ui_frame *f){
 
   if(!runtime_paths(e,&paths)){
     std::snprintf(s.error,sizeof(s.error),"FrameTee could not resolve its SM64 data or cache directory.");
-    igTextUnformatted("Super Mario 64",nullptr);
-    igTextWrapped("%s",s.error);
-    return;
-  }
-  if(!regular_file(paths.unlocker)){
-    std::snprintf(s.error,sizeof(s.error),"The bundled SM64 unlocker is missing from this FrameTee installation.");
     igTextUnformatted("Super Mario 64",nullptr);
     igTextWrapped("%s",s.error);
     return;

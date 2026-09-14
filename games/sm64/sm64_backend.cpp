@@ -1,6 +1,10 @@
 #include "sm64_bridge.h"
 #include "sm64_vulkan.h"
 #include "full_game/scene.h"
+#include "fast3d/gfx_pc.h"
+#include "fast3d/gfx_rendering_api.h"
+#define SM64_PHYSICS_TYPES_DEFINED 1
+#include <sm64_physics.h>
 
 #include <algorithm>
 #include <array>
@@ -24,218 +28,69 @@
 #include <utility>
 #include <vector>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-#include <dlfcn.h>
-#include <elf.h>
-#include <link.h>
-#endif
-
 namespace {
 
 constexpr size_t kMaxFrames = 10'000'000;
 constexpr size_t kMovieHeaderSize = 0x400;
-// Small immutable pages keep nearby search branches from duplicating large
-// mostly unchanged ranges. Native display-list memory is excluded below.
-constexpr size_t kSnapshotChunkSize = 4 * 1024;
 std::atomic<uint64_t> next_revision{1};
 
-struct Pad {
-  uint16_t buttons;
-  int8_t stick_x;
-  int8_t stick_y;
-  int8_t ext_stick_x;
-  int8_t ext_stick_y;
-  uint8_t error;
-};
-static_assert(sizeof(Pad) == 8);
-
-struct RenderApi {
-  bool (*z_is_from_0_to_1)();
-  void (*unload_shader)(void *);
-  void (*load_shader)(void *);
-  void *(*create_and_load_new_shader)(uint32_t);
-  void *(*lookup_shader)(uint32_t);
-  void (*shader_get_info)(void *, uint8_t *, bool *);
-  uint32_t (*new_texture)();
-  void (*select_texture)(int, uint32_t);
-  void (*upload_texture)(const uint8_t *, int, int);
-  void (*set_sampler_parameters)(int, bool, uint32_t, uint32_t);
-  void (*set_depth_test)(bool);
-  void (*set_depth_mask)(bool);
-  void (*set_zmode_decal)(bool);
-  void (*set_viewport)(int, int, int, int);
-  void (*set_scissor)(int, int, int, int);
-  void (*set_use_alpha)(bool);
-  void (*draw_triangles)(float *, size_t, size_t);
-  void (*init)();
-  void (*on_resize)();
-  void (*start_frame)();
-  void (*end_frame)();
-  void (*finish_render)();
-  void (*shutdown)();
-};
-// SM64EX currently has 23 callbacks. Older full-game libsm64 builds omit the
-// final shutdown callback and safely consume this common prefix.
-static_assert(sizeof(RenderApi) == 23 * sizeof(void *));
-
-struct Segment {
-  uint8_t *address = nullptr;
-  size_t size = 0;
-};
-
-struct Snapshot {
-  // A timeline state owns a small table of immutable pages. Adjacent states
-  // point at the same chunks until the game changes one, so a long TAS does
-  // not retain one complete .data/.bss image for every frame.
-  std::vector<std::vector<std::shared_ptr<const std::vector<uint8_t>>>> chunks;
-};
-
-struct Runtime {
-#ifdef _WIN32
-  HMODULE handle = nullptr;
-#else
-  void *handle = nullptr;
-#endif
-  std::filesystem::path path;
-  void (*init)() = nullptr;
-  void (*update)() = nullptr;
-  void (*set_render_api)(RenderApi *) = nullptr;
-  void (*render_display_list)(uint32_t, uint32_t) = nullptr;
-  bool (*get_scene_camera)(sm64_scene_camera *) = nullptr;
-  void (*prepare_scene)(const sm64_scene_config *) = nullptr;
-  bool (*get_mario_pose)(sm64_scene_mario *) = nullptr;
-  bool (*edit_mario)(uint32_t, const uint32_t *) = nullptr;
-  Pad *pads = nullptr;
-  void **mario_state = nullptr;
-  std::vector<Segment> segments;
-  std::shared_ptr<const Snapshot> power_on;
-  // Keep the comparison baseline alive even when its world is destroyed or
-  // overwritten by a branch copy.
-  mutable std::shared_ptr<const Snapshot> active_snapshot;
-  ::sm64_world *active_world = nullptr;
-  // One native game image may back several setup files. Its globals can only
-  // represent one activated state at a time.
-  sm64_vulkan *vk_renderers[2]{};
-  unsigned render_slot = 0;
-  std::mutex mutex;
-
-  ~Runtime() {
-    for (auto *renderer : vk_renderers) if (renderer) sm64_vulkan_destroy(renderer);
-#ifdef _WIN32
-    if (handle) FreeLibrary(handle);
-#else
-    if (handle) dlclose(handle);
-#endif
-  }
-};
-
-struct InputHistory {
-  std::vector<std::shared_ptr<std::vector<sm64_input>>> chunks;
-  size_t size = 0;
-
-  void push(sm64_input input) {
-    if (chunks.empty() || chunks.back()->size() == 256) {
-      chunks.push_back(std::make_shared<std::vector<sm64_input>>());
-      chunks.back()->reserve(256);
-    } else if (!chunks.back().unique()) {
-      chunks.back() = std::make_shared<std::vector<sm64_input>>(*chunks.back());
-    }
-    chunks.back()->push_back(input);
-    ++size;
-  }
-
-  std::vector<sm64_input> flatten() const {
-    std::vector<sm64_input> result;
-    result.reserve(size);
-    for (const auto &chunk : chunks) result.insert(result.end(), chunk->begin(), chunk->end());
-    return result;
-  }
-};
-
-struct StateEdit {
-  uint32_t frame = 0, property = 0;
-  std::array<uint32_t, 3> value{};
-};
-constexpr size_t kMaxEdits = 1'000'000;
-
-struct RomInfo {
-  uint32_t crc = 0;
-  uint8_t country = 0;
-};
-
-struct Session {
-  std::shared_ptr<Runtime> runtime;
-  std::shared_ptr<const Snapshot> initial;
-  std::vector<sm64_input> prefix;
-  RomInfo rom;
-  std::string rom_path, movie_path;
-  uint32_t start_frame = 0;
-  uint64_t fingerprint = 0;
-  std::string level_name = "Super Mario 64";
-  uint32_t level_id = 16;
-};
-
-const char *get_level_title(uint32_t id) {
-  switch (id) {
-    case 9: return "Super Mario 64 - Bob-omb Battlefield";
-    case 24: return "Super Mario 64 - Whomp's Fortress";
-    case 12: return "Super Mario 64 - Jolly Roger Bay";
-    case 5: return "Super Mario 64 - Cool, Cool Mountain";
-    case 4: return "Super Mario 64 - Big Boo's Haunt";
-    case 7: return "Super Mario 64 - Hazy Maze Cave";
-    case 22: return "Super Mario 64 - Lethal Lava Land";
-    case 8: return "Super Mario 64 - Shifting Sand Land";
-    case 23: return "Super Mario 64 - Dire, Dire Docks";
-    case 10: return "Super Mario 64 - Snowman's Land";
-    case 11: return "Super Mario 64 - Wet-Dry World";
-    case 36: return "Super Mario 64 - Tall, Tall Mountain";
-    case 13: return "Super Mario 64 - Tiny-Huge Island";
-    case 14: return "Super Mario 64 - Tick Tock Clock";
-    case 15: return "Super Mario 64 - Rainbow Ride";
-    case 16: return "Super Mario 64 - Castle Grounds";
-    case 6: return "Super Mario 64 - Inside Castle";
-    case 26: return "Super Mario 64 - Castle Courtyard";
-    case 17: return "Super Mario 64 - Bowser in the Dark World";
-    case 19: return "Super Mario 64 - Bowser in the Fire Sea";
-    case 21: return "Super Mario 64 - Bowser in the Sky";
-    case 30: return "Super Mario 64 - Bowser in the Dark World (Boss)";
-    case 33: return "Super Mario 64 - Bowser in the Fire Sea (Boss)";
-    case 34: return "Super Mario 64 - Bowser in the Sky (Boss)";
-    case 27: return "Super Mario 64 - Princess's Secret Slide";
-    case 28: return "Super Mario 64 - Cavern of the Metal Cap";
-    case 29: return "Super Mario 64 - Tower of the Wing Cap";
-    case 18: return "Super Mario 64 - Vanish Cap Under the Moat";
-    case 31: return "Super Mario 64 - Wing Mario Over the Rainbow";
-    case 20: return "Super Mario 64 - The Secret Aquarium";
-    default: return "Super Mario 64";
-  }
+static inline uint32_t read_u32_be(const uint8_t *p) {
+  return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
 }
 
-} // namespace
+static inline int16_t read_s16_be(const uint8_t *p) {
+  return int16_t((uint16_t(p[0]) << 8) | uint16_t(p[1]));
+}
 
-struct sm64_level {
-  std::shared_ptr<Session> session;
-};
+[[maybe_unused]] static inline uint16_t read_u16_be(const uint8_t *p) {
+  return (uint16_t(p[0]) << 8) | uint16_t(p[1]);
+}
 
-struct sm64_world {
-  std::shared_ptr<Session> session;
-  std::shared_ptr<const Snapshot> state;
-  InputHistory history;
-  std::shared_ptr<std::vector<StateEdit>> edits = std::make_shared<std::vector<StateEdit>>();
-  sm64_view view{};
-  sm64_scene_camera camera{};
-  sm64_scene_mario pose{};
-  uint64_t revision = next_revision.fetch_add(1, std::memory_order_relaxed);
-  bool dirty = false;
-  bool scratch = false;
-};
+static bool decompress_mio0(const uint8_t *src, size_t src_size, std::vector<uint8_t> &dest) {
+  if (!src || src_size < 16) return false;
+  uint32_t magic = read_u32_be(src);
+  if (magic != 0x4D494F30) return false; // "MIO0"
+  uint32_t dest_size = read_u32_be(src + 4);
+  uint32_t comp_offset = read_u32_be(src + 8);
+  uint32_t uncomp_offset = read_u32_be(src + 12);
+  if (comp_offset > src_size || uncomp_offset > src_size) return false;
 
-namespace {
+  dest.clear();
+  dest.reserve(dest_size);
+
+  uint32_t flag_offset = 16;
+  uint32_t flags = 0;
+  int bit_idx = 0;
+
+  while (dest.size() < dest_size) {
+    if (bit_idx == 0) {
+      if (flag_offset + 4 > src_size) return false;
+      flags = read_u32_be(src + flag_offset);
+      flag_offset += 4;
+      bit_idx = 32;
+    }
+    bool bit = (flags >> 31) & 1;
+    flags <<= 1;
+    bit_idx--;
+
+    if (bit) {
+      if (uncomp_offset >= src_size) return false;
+      dest.push_back(src[uncomp_offset++]);
+    } else {
+      if (comp_offset + 2 > src_size) return false;
+      uint8_t b1 = src[comp_offset++];
+      uint8_t b2 = src[comp_offset++];
+      uint32_t length = (b1 >> 4) + 3;
+      uint32_t disp = ((b1 & 0x0F) << 8) | b2;
+      if (dest.size() < disp + 1) return false;
+      size_t offset = dest.size() - (disp + 1);
+      for (uint32_t i = 0; i < length && dest.size() < dest_size; ++i) {
+        dest.push_back(dest[offset + i]);
+      }
+    }
+  }
+  return true;
+}
 
 void write_error(char *out, size_t size, const std::string &message) {
   if (!out || size == 0) return;
@@ -271,13 +126,34 @@ std::vector<uint8_t> read_bytes(const std::filesystem::path &path) {
   return bytes;
 }
 
-uint64_t hash_bytes(uint64_t seed, const std::vector<uint8_t> &bytes) {
-  constexpr uint64_t prime = 1099511628211ull;
-  for (uint8_t byte : bytes) {
-    seed ^= byte;
-    seed *= prime;
+std::vector<uint8_t> normalized_rom(std::vector<uint8_t> bytes) {
+  if (bytes.size() != 8 * 1024 * 1024) fail("Expected an 8 MiB vanilla SM64 ROM");
+  if (std::equal(bytes.begin(), bytes.begin() + 4, std::array<uint8_t, 4>{0x80, 0x37, 0x12, 0x40}.begin())) return bytes;
+  if (std::equal(bytes.begin(), bytes.begin() + 4, std::array<uint8_t, 4>{0x37, 0x80, 0x40, 0x12}.begin())) {
+    for (size_t i = 0; i < bytes.size(); i += 2) std::swap(bytes[i], bytes[i + 1]);
+    return bytes;
   }
-  return seed;
+  if (std::equal(bytes.begin(), bytes.begin() + 4, std::array<uint8_t, 4>{0x40, 0x12, 0x37, 0x80}.begin())) {
+    for (size_t i = 0; i < bytes.size(); i += 4) std::reverse(bytes.begin() + i, bytes.begin() + i + 4);
+    return bytes;
+  }
+  fail("Unrecognized N64 ROM byte order");
+}
+
+struct RomInfo {
+  uint32_t crc = 0;
+  uint8_t country = 0;
+};
+
+RomInfo inspect_rom(const std::vector<uint8_t> &rom) {
+  const uint32_t crc = (uint32_t(rom[0x10]) << 24) | (uint32_t(rom[0x11]) << 16) |
+                       (uint32_t(rom[0x12]) << 8) | uint32_t(rom[0x13]);
+  const uint8_t country = rom[0x3e];
+  if (!((crc == 0x635a2bff && country == 'E') || (crc == 0x4eaa3d0e && country == 'J') ||
+        (crc == 0xa03cf036 && country == 'P'))) {
+    fail("Only original US, JP and EU SM64 revisions are supported");
+  }
+  return {crc, country};
 }
 
 std::string json_string(std::string_view json, std::string_view key, bool required = true) {
@@ -331,37 +207,30 @@ uint32_t json_u32(std::string_view json, std::string_view key) {
   return static_cast<uint32_t>(result);
 }
 
-std::filesystem::path resolve(const std::filesystem::path &base, const std::string &value) {
-  const std::filesystem::path path(value);
-  return path.is_absolute() ? path : base / path;
+std::filesystem::path resolve(const std::filesystem::path &base, const std::string &path) {
+  if (path.empty()) return {};
+  const std::filesystem::path p(path);
+  if (p.is_absolute()) return p;
+  return base / p;
 }
 
-std::vector<uint8_t> normalized_rom(std::vector<uint8_t> bytes) {
-  if (bytes.size() != 8 * 1024 * 1024) fail("Expected an 8 MiB vanilla SM64 ROM");
-  if (std::equal(bytes.begin(), bytes.begin() + 4, std::array<uint8_t, 4>{0x80, 0x37, 0x12, 0x40}.begin())) return bytes;
-  if (std::equal(bytes.begin(), bytes.begin() + 4, std::array<uint8_t, 4>{0x37, 0x80, 0x40, 0x12}.begin())) {
-    for (size_t i = 0; i < bytes.size(); i += 2) std::swap(bytes[i], bytes[i + 1]);
-    return bytes;
+std::string escape_json(std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  for (const char c : value) {
+    switch (c) {
+      case '\"': result += "\\\""; break;
+      case '\\': result += "\\\\"; break;
+      case '\n': result += "\\n"; break;
+      case '\r': result += "\\r"; break;
+      case '\t': result += "\\t"; break;
+      default: result.push_back(c); break;
+    }
   }
-  if (std::equal(bytes.begin(), bytes.begin() + 4, std::array<uint8_t, 4>{0x40, 0x12, 0x37, 0x80}.begin())) {
-    for (size_t i = 0; i < bytes.size(); i += 4) std::reverse(bytes.begin() + i, bytes.begin() + i + 4);
-    return bytes;
-  }
-  fail("Unrecognized N64 ROM byte order");
+  return result;
 }
 
-RomInfo inspect_rom(const std::vector<uint8_t> &rom) {
-  const uint32_t crc = (uint32_t(rom[0x10]) << 24) | (uint32_t(rom[0x11]) << 16) |
-                       (uint32_t(rom[0x12]) << 8) | uint32_t(rom[0x13]);
-  const uint8_t country = rom[0x3e];
-  if (!((crc == 0x635a2bff && country == 'E') || (crc == 0x4eaa3d0e && country == 'J') ||
-        (crc == 0xa03cf036 && country == 'P'))) {
-    fail("Only original US, JP and EU SM64 revisions are supported");
-  }
-  return {crc, country};
-}
-
-std::vector<sm64_input> load_m64_prefix(const std::filesystem::path &path, uint32_t frames, RomInfo rom) {
+[[maybe_unused]] static std::vector<sm64_input> load_m64_prefix(const std::filesystem::path &path, uint32_t frames, RomInfo rom) {
   if (path.empty()) return std::vector<sm64_input>(frames);
   const auto bytes = read_bytes(path);
   if (bytes.size() < kMovieHeaderSize || std::memcmp(bytes.data(), "M64\x1a", 4) != 0) fail("Invalid M64 movie");
@@ -377,414 +246,6 @@ std::vector<sm64_input> load_m64_prefix(const std::filesystem::path &path, uint3
     inputs.push_back({uint16_t(uint16_t(input[0]) << 8 | input[1]), static_cast<int8_t>(input[2]), static_cast<int8_t>(input[3])});
   }
   return inputs;
-}
-
-std::shared_ptr<Snapshot> capture(const Runtime &runtime, const Snapshot *previous = nullptr) {
-  auto snapshot = std::make_shared<Snapshot>();
-  snapshot->chunks.reserve(runtime.segments.size());
-  for (size_t segment_index = 0; segment_index < runtime.segments.size(); ++segment_index) {
-    const Segment &segment = runtime.segments[segment_index];
-    auto &chunks = snapshot->chunks.emplace_back();
-    const size_t num_chunks = (segment.size + kSnapshotChunkSize - 1) / kSnapshotChunkSize;
-    chunks.reserve(num_chunks);
-    const auto *old_chunks = previous && segment_index < previous->chunks.size() ? &previous->chunks[segment_index] : nullptr;
-    for (size_t offset = 0; offset < segment.size; offset += kSnapshotChunkSize) {
-      const size_t chunk_size = std::min(kSnapshotChunkSize, segment.size - offset);
-      if (old_chunks && chunks.size() < old_chunks->size()) {
-        const auto &old = (*old_chunks)[chunks.size()];
-        if (old && old->size() == chunk_size && std::memcmp(segment.address + offset, old->data(), chunk_size) == 0) {
-          chunks.push_back(old);
-          continue;
-        }
-      }
-      chunks.push_back(std::make_shared<const std::vector<uint8_t>>(segment.address + offset, segment.address + offset + chunk_size));
-    }
-  }
-  return snapshot;
-}
-
-void restore(const Runtime &runtime, const std::shared_ptr<const Snapshot> &state) {
-  const Snapshot &snapshot = *state;
-  if (snapshot.chunks.size() != runtime.segments.size()) fail("SM64 snapshot has incompatible memory sections");
-  if (runtime.active_snapshot == state) return;
-  const Snapshot *current = runtime.active_snapshot.get();
-  for (size_t i = 0; i < runtime.segments.size(); ++i) {
-    const Segment &segment = runtime.segments[i];
-    const auto &chunks = snapshot.chunks[i];
-    const auto *cur_chunks = current && i < current->chunks.size() ? &current->chunks[i] : nullptr;
-    size_t offset = 0;
-    for (size_t c = 0; c < chunks.size(); ++c) {
-      const auto &chunk = chunks[c];
-      if (!chunk || chunk->empty() || offset + chunk->size() > segment.size) fail("SM64 snapshot has incompatible memory size");
-      if (!cur_chunks || c >= cur_chunks->size() || (*cur_chunks)[c] != chunk) {
-        if (std::memcmp(segment.address + offset, chunk->data(), chunk->size()) != 0)
-          std::memcpy(segment.address + offset, chunk->data(), chunk->size());
-      }
-      offset += chunk->size();
-    }
-    if (offset != segment.size) fail("SM64 snapshot has incompatible memory size");
-  }
-  runtime.active_snapshot = state;
-}
-
-#ifndef _WIN32
-std::vector<Segment> elf_segments(const std::filesystem::path &path, void *handle) {
-  const auto file = read_bytes(path);
-  if (file.size() < sizeof(Elf64_Ehdr)) fail("SM64 backend is not a 64-bit ELF shared library");
-  const auto *header = reinterpret_cast<const Elf64_Ehdr *>(file.data());
-  if (std::memcmp(header->e_ident, ELFMAG, SELFMAG) != 0 || header->e_ident[EI_CLASS] != ELFCLASS64) {
-    fail("SM64 backend is not a 64-bit ELF shared library");
-  }
-  if (header->e_shoff == 0 || header->e_shentsize != sizeof(Elf64_Shdr) ||
-      header->e_shnum == 0 || header->e_shstrndx >= header->e_shnum ||
-      header->e_shoff + size_t(header->e_shnum) * sizeof(Elf64_Shdr) > file.size()) {
-    fail("SM64 backend has no readable ELF section table");
-  }
-  const auto *sections = reinterpret_cast<const Elf64_Shdr *>(file.data() + header->e_shoff);
-  const Elf64_Shdr &names_section = sections[header->e_shstrndx];
-  if (names_section.sh_offset + names_section.sh_size > file.size()) fail("SM64 backend has invalid ELF section names");
-  const char *names = reinterpret_cast<const char *>(file.data() + names_section.sh_offset);
-  link_map *map = nullptr;
-  if (dlinfo(handle, RTLD_DI_LINKMAP, &map) != 0 || !map) fail("Cannot locate loaded SM64 library");
-  std::vector<Segment> result;
-  for (uint16_t i = 0; i < header->e_shnum; ++i) {
-    const Elf64_Shdr &section = sections[i];
-    if (!(section.sh_flags & SHF_ALLOC) || !(section.sh_flags & SHF_WRITE) || section.sh_size == 0 || section.sh_name >= names_section.sh_size) continue;
-    const std::string_view name(names + section.sh_name);
-    if (name != ".data" && name != ".bss") continue;
-    result.push_back({reinterpret_cast<uint8_t *>(map->l_addr + section.sh_addr), static_cast<size_t>(section.sh_size)});
-  }
-  if (result.empty()) fail("SM64 backend has no mutable .data/.bss sections");
-  return result;
-}
-#else
-std::vector<Segment> pe_segments(HMODULE module) {
-  const auto *base = reinterpret_cast<const uint8_t *>(module);
-  const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(base);
-  if (dos->e_magic != IMAGE_DOS_SIGNATURE) fail("SM64 backend is not a Windows DLL");
-  const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS64 *>(base + dos->e_lfanew);
-  if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) fail("SM64 backend is not a 64-bit Windows DLL");
-  const IMAGE_SECTION_HEADER *section = IMAGE_FIRST_SECTION(nt);
-  std::vector<Segment> result;
-  for (uint16_t i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
-    char raw_name[9]{};
-    std::memcpy(raw_name, section->Name, 8);
-    const std::string_view name(raw_name);
-    if (name != ".data" && name != ".bss") continue;
-    const size_t size = std::max<size_t>(section->Misc.VirtualSize, section->SizeOfRawData);
-    if (size) result.push_back({const_cast<uint8_t *>(base) + section->VirtualAddress, size});
-  }
-  if (result.empty()) fail("SM64 backend has no mutable .data/.bss sections");
-  return result;
-}
-#endif
-
-void *symbol(const Runtime &runtime, const char *name) {
-#ifdef _WIN32
-  return reinterpret_cast<void *>(GetProcAddress(runtime.handle, name));
-#else
-  return dlsym(runtime.handle, name);
-#endif
-}
-
-std::mutex runtimes_mutex;
-std::map<std::filesystem::path, std::weak_ptr<Runtime>> runtimes;
-
-std::shared_ptr<Runtime> open_runtime(const std::filesystem::path &requested_path) {
-  const std::filesystem::path path = std::filesystem::absolute(requested_path).lexically_normal();
-  std::lock_guard lock(runtimes_mutex);
-  if (const auto found = runtimes.find(path); found != runtimes.end()) {
-    if (auto runtime = found->second.lock()) return runtime;
-  }
-  auto runtime = std::make_shared<Runtime>();
-  runtime->path = path;
-#ifdef _WIN32
-  runtime->handle = LoadLibraryW(path.wstring().c_str());
-  if (!runtime->handle) fail("Cannot load SM64 library: Windows error " + std::to_string(GetLastError()));
-#else
-  runtime->handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-  if (!runtime->handle) fail(std::string("Cannot load SM64 library: ") + dlerror());
-#endif
-  runtime->init = reinterpret_cast<void (*)()>(symbol(*runtime, "sm64_init"));
-  runtime->update = reinterpret_cast<void (*)()>(symbol(*runtime, "sm64_update"));
-  runtime->set_render_api = reinterpret_cast<void (*)(RenderApi *)>(symbol(*runtime, "sm64_set_render_api"));
-  runtime->render_display_list = reinterpret_cast<void (*)(uint32_t, uint32_t)>(symbol(*runtime, "sm64_render_display_list"));
-  runtime->get_scene_camera = reinterpret_cast<bool (*)(sm64_scene_camera *)>(symbol(*runtime, "sm64_get_scene_camera"));
-  runtime->prepare_scene = reinterpret_cast<void (*)(const sm64_scene_config *)>(symbol(*runtime, "sm64_prepare_scene"));
-  runtime->edit_mario = reinterpret_cast<bool (*)(uint32_t, const uint32_t *)>(symbol(*runtime, "sm64_edit_mario"));
-  runtime->get_mario_pose = reinterpret_cast<bool (*)(sm64_scene_mario *)>(symbol(*runtime, "sm64_get_mario_pose"));
-  runtime->pads = reinterpret_cast<Pad *>(symbol(*runtime, "gControllerPads"));
-  runtime->mario_state = reinterpret_cast<void **>(symbol(*runtime, "gMarioState"));
-  if (!runtime->init || !runtime->update || !runtime->set_render_api || !runtime->render_display_list || !runtime->pads || !runtime->mario_state) {
-    fail("The selected library is not FrameTee's full-game libsm64 backend. Build the native full-game library for this platform.");
-  }
-#ifdef _WIN32
-  runtime->segments = pe_segments(runtime->handle);
-#else
-  runtime->segments = elf_segments(path, runtime->handle);
-#endif
-  // Current runtimes regenerate display lists on every render. Exclude their
-  // large transient pool from all simulation snapshots (legacy images retain it).
-  auto render_memory = reinterpret_cast<void (*)(void **, size_t *)>(symbol(*runtime, "sm64_render_memory"));
-  if (render_memory) {
-    void *address = nullptr; size_t size = 0;
-    render_memory(&address, &size);
-    const uintptr_t begin = reinterpret_cast<uintptr_t>(address), end = begin + size;
-    std::vector<Segment> simulation;
-    for (auto segment : runtime->segments) {
-      const uintptr_t first = reinterpret_cast<uintptr_t>(segment.address), last = first + segment.size;
-      if (end <= first || begin >= last) simulation.push_back(segment);
-      else {
-        if (begin > first) simulation.push_back({segment.address, begin - first});
-        if (end < last) simulation.push_back({reinterpret_cast<uint8_t *>(end), last - end});
-      }
-    }
-    runtime->segments = std::move(simulation);
-  }
-  runtime->init();
-  runtime->power_on = capture(*runtime);
-  runtime->active_snapshot = runtime->power_on;
-  runtimes[path] = runtime;
-  return runtime;
-}
-
-sm64_view inspect(Runtime &runtime, uint32_t frame) {
-  sm64_view result{};
-  result.frame = frame;
-  if (!runtime.mario_state || !*runtime.mario_state) return result;
-  const auto *mario = static_cast<const uint8_t *>(*runtime.mario_state);
-  std::memcpy(&result.action, mario + 0x0c, sizeof(result.action));
-  std::memcpy(result.pos, mario + 0x3c, sizeof(result.pos));
-  std::memcpy(result.vel, mario + 0x48, sizeof(result.vel));
-  int16_t health = 0;
-  std::memcpy(&health, mario + 0xea, sizeof(health));
-  result.health = health;
-  result.valid = result.action != 0;
-  return result;
-}
-
-bool valid_edit(const StateEdit &edit) {
-  if (edit.property < 2) {
-    float values[3];
-    std::memcpy(values, edit.value.data(), sizeof(values));
-    for (float value : values) if (!std::isfinite(value) || std::abs(value) > 1'000'000.f) return false;
-    return true;
-  }
-  return edit.property == 3 && edit.value[0] <= 0x880 && edit.value[1] == 0 && edit.value[2] == 0;
-}
-
-void apply_edit(Runtime &runtime, const StateEdit &edit) {
-  if (!valid_edit(edit)) fail("Invalid SM64 state edit");
-  if (!inspect(runtime, 0).valid) fail("Mario is not active");
-  if (runtime.edit_mario) {
-    if (!runtime.edit_mario(edit.property, edit.value.data())) fail("Native SM64 state edit failed");
-    runtime.active_snapshot = nullptr;
-    return;
-  }
-  auto *mario = static_cast<uint8_t *>(*runtime.mario_state);
-  if (edit.property < 2) {
-    std::memcpy(mario + (edit.property == 0 ? 0x3c : 0x48), edit.value.data(), 12);
-  } else {
-    const int16_t health = static_cast<int16_t>(edit.value[0]);
-    std::memcpy(mario + 0xea, &health, sizeof(health));
-  }
-  runtime.active_snapshot = nullptr;
-}
-
-void set_input(Runtime &runtime, sm64_input input) {
-  runtime.pads[0].buttons = input.buttons;
-  runtime.pads[0].stick_x = input.stick_x;
-  runtime.pads[0].stick_y = input.stick_y;
-}
-
-void replay(Runtime &runtime, const std::shared_ptr<const Snapshot> &start, const std::vector<sm64_input> &inputs) {
-  restore(runtime, start);
-  runtime.active_snapshot = nullptr;
-  for (const sm64_input input : inputs) {
-    set_input(runtime, input);
-    runtime.update();
-  }
-  runtime.active_snapshot = nullptr;
-}
-
-void sync_active_world(Runtime &runtime, sm64_world *target) {
-  if (runtime.active_world == target) return;
-  if (runtime.active_world && runtime.active_world->dirty) {
-    {
-      runtime.active_world->state = capture(runtime, runtime.active_world->state.get());
-      runtime.active_snapshot = runtime.active_world->state;
-    }
-    runtime.active_world->dirty = false;
-  }
-  if (target && target->state) {
-    restore(runtime, target->state);
-  }
-  runtime.active_world = target;
-}
-
-// Fast3D caches hold pointers owned by the renderer, and rendering also writes
-// dimensions read by the game. Neither may enter a simulation snapshot. Restore
-// the exact pre-render state on every exit, including backend failures.
-struct RenderStateGuard {
-  Runtime &runtime;
-  std::shared_ptr<const Snapshot> state;
-  explicit RenderStateGuard(sm64_world &world) : runtime(*world.session->runtime) {
-    sync_active_world(runtime, &world);
-    if (world.dirty) {
-      {
-        world.state = capture(runtime, world.state.get());
-      }
-      world.dirty = false;
-    }
-    state = world.state;
-    runtime.active_snapshot = nullptr;
-  }
-  ~RenderStateGuard() { restore(runtime, state); }
-};
-
-void multiply_matrix(float out[16], const float a[16], const float b[16]) {
-  float result[16]{};
-  for (int col = 0; col < 4; ++col)
-    for (int row = 0; row < 4; ++row)
-      for (int k = 0; k < 4; ++k) result[col*4+row] += a[k*4+row] * b[col*4+k];
-  std::memcpy(out, result, sizeof(result));
-}
-
-bool normalize_vector(float v[3]) {
-  const float length = std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-  if (!std::isfinite(length) || length < 1.e-6f) return false;
-  for (int i = 0; i < 3; ++i) v[i] /= length;
-  return true;
-}
-
-// Must be inside RenderStateGuard: scene traversal allocates native display
-// lists and updates render-only object/animation bookkeeping.
-void prepare_scene(Runtime &runtime, const sm64_render_config &config) {
-  if (!config.mode) {
-    if (runtime.prepare_scene) {
-      sm64_scene_config scene{};
-      scene.ghosts = config.ghosts; scene.ghost_count = config.ghost_count; scene.scene_only = config.scene_only;
-      scene.width = config.width; scene.height = config.height;
-      runtime.prepare_scene(&scene);
-    }
-    return;
-  }
-  if (!runtime.prepare_scene) fail("This SM64 runtime has no editor camera support; rebuild or reinstall the runtime");
-  if (config.mode > 2) fail("Invalid SM64 camera mode");
-  for (float value : config.view_proj) if (!std::isfinite(value)) fail("Invalid SM64 camera matrix");
-  sm64_scene_config scene{};
-  scene.ghosts = config.ghosts; scene.ghost_count = config.ghost_count; scene.scene_only = config.scene_only;
-  scene.mode = config.mode; scene.width = config.width; scene.height = config.height;
-  float back[3], right[3], up[3];
-  for (int i = 0; i < 3; ++i) {
-    if (!std::isfinite(config.eye[i]) || !std::isfinite(config.target[i])) fail("Invalid SM64 camera position");
-    back[i] = config.eye[i] - config.target[i];
-  }
-  if (!normalize_vector(back)) fail("SM64 camera eye and target coincide");
-  for (int i = 0; i < 3; ++i)
-    right[i] = config.up[(i+1)%3]*back[(i+2)%3] - config.up[(i+2)%3]*back[(i+1)%3];
-  if (!normalize_vector(right)) fail("Invalid SM64 camera up vector");
-  for (int i = 0; i < 3; ++i) up[i] = back[(i+1)%3]*right[(i+2)%3] - back[(i+2)%3]*right[(i+1)%3];
-  float inverse_view[16]{};
-  for (int i = 0; i < 3; ++i) {
-    scene.view[i*4] = inverse_view[i] = right[i];
-    scene.view[i*4+1] = inverse_view[4+i] = up[i];
-    scene.view[i*4+2] = inverse_view[8+i] = back[i];
-    scene.view[12] -= right[i]*config.eye[i];
-    scene.view[13] -= up[i]*config.eye[i];
-    scene.view[14] -= back[i]*config.eye[i];
-    inverse_view[12+i] = config.eye[i];
-  }
-  inverse_view[15] = scene.view[15] = 1.f;
-  multiply_matrix(scene.projection, config.view_proj, inverse_view);
-  const float aspect_compensation = (float(config.width)/config.height) / (4.f/3.f);
-  for (int col = 0; col < 4; ++col) {
-    // Undo engine Vulkan Y/reversed Z; Fast3D applies its own aspect correction.
-    scene.projection[col*4] *= aspect_compensation;
-    scene.projection[col*4+1] *= -1.f;
-    scene.projection[col*4+2] = scene.projection[col*4+3] - 2.f*scene.projection[col*4+2];
-  }
-  std::memcpy(scene.eye, config.eye, sizeof(scene.eye));
-  std::memcpy(scene.target, config.target, sizeof(scene.target));
-  runtime.prepare_scene(&scene);
-}
-
-void update_world(sm64_world &world, sm64_input input) {
-  if (world.history.size >= kMaxFrames) fail("Movie frame limit reached");
-  Runtime &runtime = *world.session->runtime;
-  sync_active_world(runtime, &world);
-  set_input(runtime, input);
-  runtime.update();
-  runtime.active_snapshot = nullptr;
-  world.dirty = true;
-  world.history.push(input);
-  world.view = inspect(runtime, static_cast<uint32_t>(world.history.size));
-  if (runtime.get_scene_camera) runtime.get_scene_camera(&world.camera);
-  if (runtime.get_mario_pose) runtime.get_mario_pose(&world.pose);
-  world.revision = next_revision.fetch_add(1, std::memory_order_relaxed);
-}
-
-std::vector<uint8_t> encode_state(const sm64_world &world) {
-  const auto inputs = world.history.flatten();
-  std::vector<uint8_t> result;
-  result.reserve(24 + inputs.size() * 4 + world.edits->size() * 20);
-  result.insert(result.end(), {'F', 'T', 'S', 'M', '6', '4', '0', '3'});
-  const uint64_t fingerprint = world.session->fingerprint;
-  for (int i = 0; i < 8; ++i) result.push_back(static_cast<uint8_t>(fingerprint >> (i * 8)));
-  const uint32_t count = static_cast<uint32_t>(inputs.size());
-  for (int i = 0; i < 4; ++i) result.push_back(static_cast<uint8_t>(count >> (i * 8)));
-  const uint32_t edit_count = static_cast<uint32_t>(world.edits->size());
-  for (int i = 0; i < 4; ++i) result.push_back(static_cast<uint8_t>(edit_count >> (i * 8)));
-  for (sm64_input input : inputs) {
-    result.push_back(static_cast<uint8_t>(input.buttons));
-    result.push_back(static_cast<uint8_t>(input.buttons >> 8));
-    result.push_back(static_cast<uint8_t>(input.stick_x));
-    result.push_back(static_cast<uint8_t>(input.stick_y));
-  }
-  for (const StateEdit &edit : *world.edits) {
-    const uint32_t values[] = {edit.frame, edit.property, edit.value[0], edit.value[1], edit.value[2]};
-    for (uint32_t value : values)
-      for (int i = 0; i < 4; ++i) result.push_back(static_cast<uint8_t>(value >> (i * 8)));
-  }
-  return result;
-}
-
-struct SavedState {
-  std::vector<sm64_input> inputs;
-  std::shared_ptr<std::vector<StateEdit>> edits = std::make_shared<std::vector<StateEdit>>();
-};
-
-SavedState decode_state(const sm64_world &world, const uint8_t *data, size_t size) {
-  if (!data || size < 20 || (std::memcmp(data, "FTSM6402", 8) != 0 && std::memcmp(data, "FTSM6403", 8) != 0)) fail("Invalid SM64 state");
-  const bool version3 = data[7] == '3';
-  const size_t header_size = version3 ? 24 : 20;
-  if (size < header_size) fail("Invalid SM64 state length");
-  uint64_t fingerprint = 0;
-  for (int i = 0; i < 8; ++i) fingerprint |= uint64_t(data[8 + i]) << (i * 8);
-  if (fingerprint != world.session->fingerprint) fail("State belongs to a different ROM, backend, or starting movie");
-  uint32_t count = 0;
-  for (int i = 0; i < 4; ++i) count |= uint32_t(data[16 + i]) << (i * 8);
-  uint32_t edit_count = 0;
-  if (version3) for (int i = 0; i < 4; ++i) edit_count |= uint32_t(data[20 + i]) << (i * 8);
-  if (count > kMaxFrames || edit_count > kMaxEdits || size != header_size + size_t(count) * 4 + size_t(edit_count) * 20) fail("Invalid SM64 state length");
-  SavedState result;
-  result.inputs.reserve(count);
-  for (size_t i = 0; i < count; ++i) {
-    const uint8_t *input = data + header_size + i * 4;
-    result.inputs.push_back({uint16_t(input[0] | uint16_t(input[1]) << 8), static_cast<int8_t>(input[2]), static_cast<int8_t>(input[3])});
-  }
-  result.edits->reserve(edit_count);
-  for (size_t i = 0; i < edit_count; ++i) {
-    const uint8_t *bytes = data + header_size + size_t(count) * 4 + i * 20;
-    uint32_t values[5]{};
-    for (int v = 0; v < 5; ++v)
-      for (int b = 0; b < 4; ++b) values[v] |= uint32_t(bytes[v * 4 + b]) << (b * 8);
-    StateEdit edit{values[0], values[1], {values[2], values[3], values[4]}};
-    if (edit.frame > count || (!result.edits->empty() && edit.frame < result.edits->back().frame) || !valid_edit(edit))
-      fail("Invalid SM64 state edit journal");
-    result.edits->push_back(edit);
-  }
-  return result;
 }
 
 void write_m64(const std::filesystem::path &path, const RomInfo &rom, const std::vector<sm64_input> &inputs) {
@@ -813,6 +274,69 @@ void write_m64(const std::filesystem::path &path, const RomInfo &rom, const std:
   }
   if (!file) fail("Cannot write " + path.string());
 }
+
+std::string get_level_title(uint32_t dest) {
+  switch (dest) {
+    case 9: return "Super Mario 64 - Bob-omb Battlefield";
+    case 24: return "Super Mario 64 - Whomp's Fortress";
+    case 12: return "Super Mario 64 - Jolly Roger Bay";
+    case 5: return "Super Mario 64 - Cool, Cool Mountain";
+    case 4: return "Super Mario 64 - Big Boo's Haunt";
+    case 7: return "Super Mario 64 - Hazy Maze Cave";
+    case 22: return "Super Mario 64 - Lethal Lava Land";
+    case 8: return "Super Mario 64 - Shifting Sand Land";
+    case 23: return "Super Mario 64 - Dire, Dire Docks";
+    case 10: return "Super Mario 64 - Snowman's Land";
+    case 11: return "Super Mario 64 - Wet-Dry World";
+    case 36: return "Super Mario 64 - Tall, Tall Mountain";
+    case 13: return "Super Mario 64 - Tiny-Huge Island";
+    case 14: return "Super Mario 64 - Tick Tock Clock";
+    case 15: return "Super Mario 64 - Rainbow Ride";
+    case 16: return "Super Mario 64 - Castle Grounds";
+    case 6: return "Super Mario 64 - Inside Castle";
+    case 26: return "Super Mario 64 - Castle Courtyard";
+    case 17: return "Super Mario 64 - Bowser in the Dark World";
+    case 19: return "Super Mario 64 - Bowser in the Fire Sea";
+    case 21: return "Super Mario 64 - Bowser in the Sky";
+    case 30: return "Super Mario 64 - Bowser in the Dark World Battle";
+    case 33: return "Super Mario 64 - Bowser in the Fire Sea Battle";
+    case 34: return "Super Mario 64 - Bowser in the Sky Battle";
+    case 27: return "Super Mario 64 - The Princess's Secret Slide";
+    case 28: return "Super Mario 64 - Cavern of the Metal Cap";
+    case 29: return "Super Mario 64 - Tower of the Wing Cap";
+    case 18: return "Super Mario 64 - Vanish Cap Under the Moat";
+    case 31: return "Super Mario 64 - Wing Mario Over the Rainbow";
+    case 20: return "Super Mario 64 - The Secret Aquarium";
+    default: return "Super Mario 64";
+  }
+}
+
+// Software Renderer
+struct RenderApi {
+  bool (*z_is_from_0_to_1)();
+  void (*unload_shader)(void *);
+  void (*load_shader)(void *);
+  void *(*create_and_load_new_shader)(uint32_t);
+  void *(*lookup_shader)(uint32_t);
+  void (*shader_get_info)(void *, uint8_t *, bool *);
+  uint32_t (*new_texture)();
+  void (*select_texture)(int, uint32_t);
+  void (*upload_texture)(const uint8_t *, int, int);
+  void (*set_sampler_parameters)(int, bool, uint32_t, uint32_t);
+  void (*set_depth_test)(bool);
+  void (*set_depth_mask)(bool);
+  void (*set_zmode_decal)(bool);
+  void (*set_viewport)(int, int, int, int);
+  void (*set_scissor)(int, int, int, int);
+  void (*set_use_alpha)(bool);
+  void (*draw_triangles)(float *, size_t, size_t);
+  void (*init)();
+  void (*on_resize)();
+  void (*start_frame)();
+  void (*end_frame)();
+  void (*finish_render)();
+  void (*shutdown)();
+};
 
 struct Color {
   float r = 0, g = 0, b = 0, a = 1;
@@ -850,15 +374,14 @@ class SoftwareRenderer {
     width_ = width;
     height_ = height;
     editor_camera_ = editor_camera;
-    textures_.clear();
     selected_[0] = selected_[1] = 0;
     active_textures_[0] = active_textures_[1] = nullptr;
     upload_texture_ = 0;
-    shaders_.clear();
     shader_ = nullptr;
-    next_texture_ = 1;
-    // Match gfx_init's zeroed state cache. Otherwise the first background
-    // writes depth without a callback ever disabling it, hiding the scene.
+    draw_calls_ = 0;
+    drawn_triangles_ = 0;
+    rasterized_triangles_ = 0;
+    pixels_written_ = 0;
     depth_test_ = false;
     depth_mask_ = false;
     alpha_blend_ = false;
@@ -867,11 +390,20 @@ class SoftwareRenderer {
     scissor_ = viewport_;
     depth_.assign(size_t(width) * height, std::numeric_limits<float>::infinity());
     for (size_t i = 0; i < size_t(width) * height; ++i) {
-      pixels_[i * 4] = 0;
-      pixels_[i * 4 + 1] = 0;
-      pixels_[i * 4 + 2] = 0;
+      pixels_[i * 4] = 68;
+      pixels_[i * 4 + 1] = 132;
+      pixels_[i * 4 + 2] = 181;
       pixels_[i * 4 + 3] = 255;
     }
+  }
+
+  void clear_cache() {
+    textures_.clear();
+    shaders_.clear();
+    next_texture_ = 1;
+    selected_[0] = selected_[1] = 0;
+    active_textures_[0] = active_textures_[1] = nullptr;
+    shader_ = nullptr;
   }
 
   static RenderApi api();
@@ -930,8 +462,16 @@ class SoftwareRenderer {
     texture.cmt = cmt;
     update_active_texture(tile);
   }
+  uint32_t draw_calls_ = 0;
+  uint32_t drawn_triangles_ = 0;
+  uint32_t rasterized_triangles_ = 0;
+  uint32_t pixels_written_ = 0;
   void draw(float *buffer, size_t length, size_t triangles) {
-    if (!buffer || !shader_ || triangles == 0 || length % (triangles * 3) != 0) return;
+    draw_calls_++;
+    drawn_triangles_ += triangles;
+    if (!buffer || !shader_ || triangles == 0 || length % (triangles * 3) != 0) {
+      return;
+    }
     const size_t stride = length / (triangles * 3);
     for (size_t triangle = 0; triangle < triangles; ++triangle) {
       draw_triangle(buffer + triangle * stride * 3, stride);
@@ -1024,27 +564,35 @@ class SoftwareRenderer {
     const float w1 = b1 * vertices[1].invw * inv_denom;
     const float w2 = b2 * vertices[2].invw * inv_denom;
 
+    if (!shader_) return {};
     const uint32_t id = shader_->id;
     const bool used_textures[2] = {shader_->used_textures[0], shader_->used_textures[1]};
-    const uint8_t input_count = shader_->input_count;
+    const uint8_t input_count = std::min<uint8_t>(shader_->input_count, 4);
     size_t offset = 4;
     Color texels[2]{};
     if (used_textures[0] || used_textures[1]) {
-      const Color uv = interpolate_weights(vertices, int(offset), 2, w0, w1, w2);
-      texels[0] = texture(0, uv.r, uv.g);
-      texels[1] = texture(1, uv.r, uv.g);
+      if (offset + 2 <= stride) {
+        const Color uv = interpolate_weights(vertices, int(offset), 2, w0, w1, w2);
+        texels[0] = texture(0, uv.r, uv.g);
+        texels[1] = texture(1, uv.r, uv.g);
+      }
       offset += 2;
     }
     Color fog{};
     if (id & (1u << 25)) {
-      fog = interpolate_weights(vertices, int(offset), 4, w0, w1, w2);
+      if (offset + 4 <= stride) {
+        fog = interpolate_weights(vertices, int(offset), 4, w0, w1, w2);
+      }
       offset += 4;
     }
     std::array<Color, 4> inputs{};
     const bool alpha = (id & (1u << 24)) != 0;
+    const size_t comp = alpha ? 4 : 3;
     for (uint8_t i = 0; i < input_count; ++i) {
-      inputs[i] = interpolate_weights(vertices, int(offset), alpha ? 4 : 3, w0, w1, w2);
-      offset += alpha ? 4 : 3;
+      if (offset + comp <= stride) {
+        inputs[i] = interpolate_weights(vertices, int(offset), int(comp), w0, w1, w2);
+      }
+      offset += comp;
     }
     if (offset > stride) return {};
     const auto item = [&](uint8_t code, bool alpha_only) -> Color {
@@ -1082,18 +630,14 @@ class SoftwareRenderer {
   }
 
   void draw_triangle(const float *data, size_t stride) {
-    // gfx_pc hands the rendering API homogeneous clip coordinates. Hardware
-    // APIs clip those coordinates automatically; do the same before CPU
-    // rasterization so geometry crossing the screen or near plane remains
-    // well formed.
     const auto distance = [](const float *vertex, int plane) {
       switch (plane) {
-        case 0: return vertex[0] + vertex[3]; // left
-        case 1: return vertex[3] - vertex[0]; // right
-        case 2: return vertex[1] + vertex[3]; // bottom
-        case 3: return vertex[3] - vertex[1]; // top
-        case 4: return vertex[2] + vertex[3]; // near (OpenGL depth)
-        default: return vertex[3] - vertex[2]; // far
+        case 0: return vertex[0] + vertex[3];
+        case 1: return vertex[3] - vertex[0];
+        case 2: return vertex[1] + vertex[3];
+        case 3: return vertex[3] - vertex[1];
+        case 4: return vertex[2] + vertex[3];
+        default: return vertex[3] - vertex[2];
       }
     };
     bool needs_clipping = false;
@@ -1141,6 +685,7 @@ class SoftwareRenderer {
 
   void rasterize_triangle(const float *data, size_t stride) {
     if (stride < 4) return;
+    rasterized_triangles_++;
     Vertex vertices[3];
     for (int i = 0; i < 3; ++i) {
       vertices[i].data = data + size_t(i) * stride;
@@ -1185,6 +730,7 @@ class SoftwareRenderer {
       out[2] = static_cast<uint8_t>(color.b * 255);
       out[3] = static_cast<uint8_t>(color.a * 255);
       if (depth_mask_) depth_[index] = depth;
+      pixels_written_++;
     }
   }
 
@@ -1206,7 +752,9 @@ thread_local SoftwareRenderer *active_renderer = nullptr;
 SoftwareRenderer &renderer() { return *active_renderer; }
 bool rapi_z() { return false; }
 void rapi_unload(void *) {}
-void rapi_load(void *shader) { renderer().set_shader(shader); }
+void rapi_load(void *shader) {
+  renderer().set_shader(shader);
+}
 void *rapi_create(uint32_t id) { return renderer().lookup_shader(id); }
 void *rapi_lookup(uint32_t id) { return renderer().lookup_shader(id); }
 void rapi_info(void *shader, uint8_t *inputs, bool *textures) { renderer().shader_info(shader, inputs, textures); }
@@ -1229,175 +777,652 @@ RenderApi SoftwareRenderer::api() {
           rapi_void, rapi_void, rapi_void, rapi_void, rapi_void, rapi_void};
 }
 
-std::string escape_json(std::string_view value) {
-  std::string result;
-  result.reserve(value.size());
-  for (const char c : value) {
-    if (c == '\\' || c == '\"') result.push_back('\\');
-    result.push_back(c);
-  }
+// Mario Skeleton and Bones Animation
+struct OffsetSizePair { uint32_t offset; uint32_t size; };
+struct Animation {
+  int16_t flags; int16_t animYTransDivisor; int16_t startFrame; int16_t loopStart; int16_t loopEnd;
+  int16_t unusedBoneCount; const int16_t *values; const uint16_t *index; uint32_t length;
+};
+struct MarioAnimsObj { uint32_t numEntries; const struct Animation *addrPlaceholder; struct OffsetSizePair entries[209]; };
+extern "C" const struct MarioAnimsObj gMarioAnims;
+
+static inline int32_t retrieve_anim_index(int32_t frame, const uint16_t **attributes) {
+  int32_t result;
+  if (frame < (*attributes)[0]) result = (*attributes)[1] + frame;
+  else result = (*attributes)[1] + (*attributes)[0] - 1;
+  *attributes += 2;
   return result;
+}
+
+struct MarioBoneDef { int parent; float base_trans[3]; uint32_t dl_addr; };
+static const MarioBoneDef kMarioBones[20] = {
+    {-1, {0, 0, 0}, 0},                   // 0: root
+    {0,  {0, 0, 0}, 0x0400CC98},          // 1: butt
+    {1,  {68, 0, 0}, 0x04010370},         // 2: torso
+    {2,  {87, 0, 0}, 0x040119A0},         // 3: head
+    {2,  {67, -10, 79}, 0},               // 4: L shoulder
+    {4,  {0, 0, 0}, 0x0400D1D8},          // 5: L upper arm
+    {5,  {65, 0, 0}, 0x0400D2F8},         // 6: L forearm
+    {6,  {60, 0, 0}, 0x0400D8F0},         // 7: L hand
+    {2,  {68, -10, -79}, 0},              // 8: R shoulder
+    {8,  {0, 0, 0}, 0x0400DDE8},          // 9: R upper arm
+    {9,  {65, 0, 0}, 0x0400DF08},         // 10: R forearm
+    {10, {60, 0, 0}, 0x0400E458},         // 11: R hand
+    {1,  {13, -8, 42}, 0},                // 12: L hip
+    {12, {0, 0, 0}, 0x0400E7B0},          // 13: L thigh
+    {13, {89, 0, 0}, 0x0400E918},         // 14: L shin
+    {14, {67, 0, 0}, 0x0400ECA0},         // 15: L foot
+    {1,  {13, -8, -42}, 0},               // 16: R hip
+    {16, {0, 0, 0}, 0x0400EFB8},          // 17: R thigh
+    {17, {89, 0, 0}, 0x0400F1D8},         // 18: R shin
+    {18, {67, 0, 0}, 0x0400F4E8},         // 19: R foot
+};
+
+typedef float Mat4[4][4];
+static void mat4_mul(Mat4 dest, const Mat4 a, const Mat4 b) {
+  Mat4 tmp{};
+  for (int i = 0; i < 4; ++i)
+    for (int j = 0; j < 4; ++j)
+      for (int k = 0; k < 4; ++k)
+        tmp[i][j] += a[i][k] * b[k][j];
+  memcpy(dest, tmp, sizeof(tmp));
+}
+
+static inline float sins(int16_t angle) { return std::sin(float(angle) * (3.14159265358979323846f / 32768.0f)); }
+static inline float coss(int16_t angle) { return std::cos(float(angle) * (3.14159265358979323846f / 32768.0f)); }
+
+static void mtxf_rotate_xyz_and_translate(Mat4 dest, const float b[3], const int16_t c[3]) {
+  float sx = sins(c[0]), cx = coss(c[0]);
+  float sy = sins(c[1]), cy = coss(c[1]);
+  float sz = sins(c[2]), cz = coss(c[2]);
+
+  dest[0][0] = cy * cz; dest[0][1] = cy * sz; dest[0][2] = -sy; dest[0][3] = 0;
+  dest[1][0] = sx * sy * cz - cx * sz; dest[1][1] = sx * sy * sz + cx * cz; dest[1][2] = sx * cy; dest[1][3] = 0;
+  dest[2][0] = cx * sy * cz + sx * sz; dest[2][1] = cx * sy * sz - sx * cz; dest[2][2] = cx * cy; dest[2][3] = 0;
+  dest[3][0] = b[0]; dest[3][1] = b[1]; dest[3][2] = b[2]; dest[3][3] = 1;
+}
+
+static void render_mario_fast3d(const sm64_scene_mario &mario, const Mat4 V) {
+  int animID = mario.anim_id >= 0 && mario.anim_id < 209 ? mario.anim_id : 0;
+  int frame = mario.anim_frame >= 0 ? mario.anim_frame : 0;
+  const auto &pair = gMarioAnims.entries[animID];
+  const auto *anim = (const Animation *)((const uint8_t *)&gMarioAnims + pair.offset);
+  const int16_t *vals = (const int16_t *)((const uint8_t *)anim + (uintptr_t)anim->values);
+  const uint16_t *attr = (const uint16_t *)((const uint8_t *)anim + (uintptr_t)anim->index);
+
+  float root_trans[3] = {
+      (float)vals[retrieve_anim_index(frame, &attr)],
+      (float)vals[retrieve_anim_index(frame, &attr)],
+      (float)vals[retrieve_anim_index(frame, &attr)]
+  };
+
+  int16_t bone_rots[20][3]{};
+  for (int b = 0; b < 20; ++b) {
+    bone_rots[b][0] = vals[retrieve_anim_index(frame, &attr)];
+    bone_rots[b][1] = vals[retrieve_anim_index(frame, &attr)];
+    bone_rots[b][2] = vals[retrieve_anim_index(frame, &attr)];
+  }
+
+  Mat4 mario_world;
+  mtxf_rotate_xyz_and_translate(mario_world, mario.pos, mario.angle);
+
+  Mat4 bone_mats[20];
+  for (int i = 0; i < 20; ++i) {
+    const auto &b = kMarioBones[i];
+    float trans[3] = {b.base_trans[0], b.base_trans[1], b.base_trans[2]};
+    if (i == 0) {
+      trans[0] += root_trans[0];
+      trans[1] += root_trans[1];
+      trans[2] += root_trans[2];
+    }
+    Mat4 local_m;
+    mtxf_rotate_xyz_and_translate(local_m, trans, bone_rots[i]);
+    if (b.parent == -1) {
+      mat4_mul(bone_mats[i], local_m, mario_world);
+    } else {
+      mat4_mul(bone_mats[i], local_m, bone_mats[b.parent]);
+    }
+  }
+
+  for (int i = 0; i < 20; ++i) {
+    if (kMarioBones[i].dl_addr != 0) {
+      Mat4 bone_view;
+      mat4_mul(bone_view, bone_mats[i], V);
+      gfx_set_modelview(bone_view);
+      uint32_t off = kMarioBones[i].dl_addr & 0xFFFFFF;
+      if (g_sm64_segments[4]) {
+        gfx_run_dl(reinterpret_cast<Gfx *>(const_cast<uint8_t *>(g_sm64_segments[4] + off)));
+      }
+    }
+  }
+}
+
+} // namespace
+
+struct sm64_level {
+  uint32_t level_id = 9;
+  std::string level_name;
+  std::string rom_path;
+  std::vector<sm64_terrain_triangle> triangles;
+  std::vector<sm64_terrain_region> regions;
+  float spawn_x = 0.0f;
+  float spawn_y = 0.0f;
+  float spawn_z = 0.0f;
+  int16_t spawn_yaw = 0;
+  uint32_t area1_geo = 0;
+  std::vector<uint32_t> display_lists;
+  std::unordered_map<uint8_t, std::vector<uint8_t>> segments;
+  RomInfo rom_info{};
+};
+
+struct sm64_world {
+  std::shared_ptr<const sm64_level> level;
+  sm64_sim_world *sim = nullptr;
+  sm64_view view{};
+  sm64_scene_mario pose{};
+  uint64_t revision = next_revision.fetch_add(1, std::memory_order_relaxed);
+  bool scratch = false;
+  uint32_t edit_count = 0;
+  std::vector<sm64_input> history;
+
+  ~sm64_world() {
+    if (sim) {
+      sm64_world_destroy(sim);
+      sim = nullptr;
+    }
+  }
+};
+
+namespace {
+
+static std::mutex g_vk_mutex;
+static sm64_vulkan *g_vk_renderers[2] = {nullptr, nullptr};
+static unsigned g_render_slot = 0;
+
+thread_local const sm64_world *g_current_render_world = nullptr;
+thread_local const sm64_render_config *g_current_render_config = nullptr;
+
+static void render_scene_fast3d(const sm64_world *world, const sm64_render_config *config) {
+  if (!world || !world->level || !config) return;
+  const auto &level = *world->level;
+
+  // 1. Reset frame state and bind segments
+  gfx_start_frame();
+  for (const auto &[seg, data] : level.segments) {
+    if (seg < 32 && !data.empty()) {
+      g_sm64_segments[seg] = data.data();
+    }
+  }
+
+  // 2. Set viewport dimensions and aspect ratio
+  gfx_current_dimensions.width = config->width;
+  gfx_current_dimensions.height = config->height;
+  gfx_current_dimensions.aspect_ratio = float(config->width) / float(config->height);
+
+  // 3. Camera matrices
+  float eye[3], target[3], up[3];
+  float fovy = 45.0f * (3.14159265358979323846f / 180.0f);
+  float near_z = 100.0f, far_z = 20000.0f;
+
+  if (config->mode == 0) {
+    sm64_camera cam{};
+    if (sm64_world_camera(world->sim, gfx_current_dimensions.aspect_ratio, &cam)) {
+      eye[0] = cam.eye[0]; eye[1] = cam.eye[1]; eye[2] = cam.eye[2];
+      target[0] = cam.target[0]; target[1] = cam.target[1]; target[2] = cam.target[2];
+      up[0] = cam.up[0]; up[1] = cam.up[1]; up[2] = cam.up[2];
+      fovy = cam.fov_y;
+      near_z = cam.near_z;
+      far_z = cam.far_z;
+    } else {
+      eye[0] = config->eye[0]; eye[1] = config->eye[1]; eye[2] = config->eye[2];
+      target[0] = config->target[0]; target[1] = config->target[1]; target[2] = config->target[2];
+      up[0] = config->up[0]; up[1] = config->up[1]; up[2] = config->up[2];
+    }
+  } else {
+    eye[0] = config->eye[0]; eye[1] = config->eye[1]; eye[2] = config->eye[2];
+    target[0] = config->target[0]; target[1] = config->target[1]; target[2] = config->target[2];
+    up[0] = config->up[0]; up[1] = config->up[1]; up[2] = config->up[2];
+  }
+
+  float fwd[3] = {target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]};
+  float flen = std::sqrt(fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]);
+  if (flen < 1e-4f) { fwd[0] = 0; fwd[1] = 0; fwd[2] = -1; flen = 1; }
+  fwd[0] /= flen; fwd[1] /= flen; fwd[2] /= flen;
+
+  float rgt[3] = {up[1]*fwd[2] - up[2]*fwd[1], up[2]*fwd[0] - up[0]*fwd[2], up[0]*fwd[1] - up[1]*fwd[0]};
+  float rlen = std::sqrt(rgt[0]*rgt[0] + rgt[1]*rgt[1] + rgt[2]*rgt[2]);
+  if (rlen < 1e-4f) { rgt[0] = 1; rgt[1] = 0; rgt[2] = 0; rlen = 1; }
+  rgt[0] /= rlen; rgt[1] /= rlen; rgt[2] /= rlen;
+
+  float u[3] = {fwd[1]*rgt[2] - fwd[2]*rgt[1], fwd[2]*rgt[0] - fwd[0]*rgt[2], fwd[0]*rgt[1] - fwd[1]*rgt[0]};
+
+  Mat4 V = {
+      {rgt[0], u[0], -fwd[0], 0.0f},
+      {rgt[1], u[1], -fwd[1], 0.0f},
+      {rgt[2], u[2], -fwd[2], 0.0f},
+      {-(rgt[0]*eye[0] + rgt[1]*eye[1] + rgt[2]*eye[2]),
+       -(u[0]*eye[0] + u[1]*eye[1] + u[2]*eye[2]),
+        (fwd[0]*eye[0] + fwd[1]*eye[1] + fwd[2]*eye[2]),
+       1.0f}
+  };
+
+  float base_aspect = 4.0f / 3.0f;
+  float tan_half = std::tan(fovy / 2.0f);
+  Mat4 P = {
+      {1.0f / (base_aspect * tan_half), 0.0f, 0.0f, 0.0f},
+      {0.0f, 1.0f / tan_half, 0.0f, 0.0f},
+      {0.0f, 0.0f, (near_z + far_z) / (near_z - far_z), -1.0f},
+      {0.0f, 0.0f, (2.0f * near_z * far_z) / (near_z - far_z), 0.0f}
+  };
+
+  gfx_set_projection(P);
+  gfx_set_modelview(V);
+
+  // 4. Run terrain display lists
+  for (uint32_t dl : level.display_lists) {
+    uint8_t seg = (dl >> 24) & 0x1F;
+    uint32_t off = dl & 0xFFFFFF;
+    auto it = level.segments.find(seg);
+    if (it != level.segments.end() && off < it->second.size()) {
+      gfx_run_dl(reinterpret_cast<Gfx *>(const_cast<uint8_t *>(it->second.data() + off)));
+    }
+  }
+
+  // 5. Render Mario (unless scene_only)
+  if (!config->scene_only && world->pose.valid) {
+    render_mario_fast3d(world->pose, V);
+  }
+
+  // 6. Render Ghosts
+  if (config->ghosts && config->ghost_count > 0) {
+    for (uint32_t g = 0; g < config->ghost_count; ++g) {
+      if (config->ghosts[g].valid) {
+        render_mario_fast3d(config->ghosts[g], V);
+      }
+    }
+  }
+
+  // 7. Flush Fast3D buffer
+  gfx_flush();
 }
 
 } // namespace
 
 extern "C" sm64_level *sm64_ft_open(const char *path, const char *, char *error, size_t error_size) {
-  return boundary<sm64_level *>(error, error_size, nullptr, [&] {
+  return boundary<sm64_level *>(error, error_size, nullptr, [&]() -> sm64_level * {
     if (!path) fail("Missing SM64 setup path");
-    const std::filesystem::path config_path(path);
-    const auto config_bytes = read_bytes(config_path);
-    const std::string config(config_bytes.begin(), config_bytes.end());
-    const std::filesystem::path base = config_path.has_parent_path() ? config_path.parent_path() : ".";
-    const auto rom_bytes = normalized_rom(read_bytes(resolve(base, json_string(config, "rom"))));
-    const RomInfo rom = inspect_rom(rom_bytes);
-    const std::filesystem::path library_path = resolve(base, json_string(config, "library"));
-    const uint32_t start_frame = json_u32(config, "start_frame");
-    const uint32_t target_level = json_u32(config, "level");
-    const std::string movie = json_string(config, "movie", false);
+    std::filesystem::path config_path(path);
+    std::string config_str;
+    std::string rom_path;
+    uint32_t target_level = 0;
+    uint32_t start_frame = 0;
+    std::string movie_path;
 
-    auto session = std::make_shared<Session>();
-    session->runtime = open_runtime(library_path);
-    session->rom = rom;
-    session->rom_path = std::filesystem::absolute(resolve(base, json_string(config, "rom"))).string();
-    session->movie_path = movie.empty() ? "" : std::filesystem::absolute(resolve(base, movie)).string();
-    session->start_frame = start_frame;
-    Runtime &runtime = *session->runtime;
-    std::lock_guard lock(runtime.mutex);
-    sync_active_world(runtime, nullptr);
-
-    uint32_t dest = target_level != 0 ? target_level : 16;
-    session->level_id = dest;
-    session->level_name = get_level_title(dest);
-
-    std::vector<sm64_input> prefix;
-    if (!movie.empty()) {
-      prefix = load_m64_prefix(resolve(base, movie), start_frame, rom);
-      replay(runtime, runtime.power_on, prefix);
-      session->initial = capture(runtime, runtime.power_on.get());
+    if (config_path.extension() == ".sm64") {
+      const auto config_bytes = read_bytes(config_path);
+      config_str.assign(config_bytes.begin(), config_bytes.end());
+      const std::filesystem::path base = config_path.has_parent_path() ? config_path.parent_path() : ".";
+      rom_path = resolve(base, json_string(config_str, "rom")).string();
+      target_level = json_u32(config_str, "level");
+      start_frame = json_u32(config_str, "start_frame");
+      (void)start_frame;
+      movie_path = json_string(config_str, "movie", false);
+      if (!movie_path.empty()) movie_path = resolve(base, movie_path).string();
     } else {
-      restore(runtime, runtime.power_on);
-      runtime.active_snapshot = nullptr;
-      auto *skip_intro = reinterpret_cast<bool *>(symbol(runtime, "configSkipIntro"));
-      if (skip_intro) *skip_intro = true;
-      auto startup_update = reinterpret_cast<void (*)()>(symbol(runtime, "sm64_update_startup"));
+      rom_path = path;
+      target_level = 9; // Default to Bob-omb Battlefield
+    }
 
-      prefix.reserve(200 + 120);
-      for (uint32_t frame = 1; frame < 199; ++frame) {
-        sm64_input in{};
-        // Skip-intro still leaves the title/file-select state machine active.
-        // Feed the same deterministic Start/A sequence used by the original
-        // host path so the full game loop reaches playable Castle Grounds.
-        if (frame >= 110 && frame <= 150 && (frame % 2 == 0)) in.buttons = 0x1000;
-        else if (frame >= 160 && frame <= 175 && (frame % 2 == 0)) in.buttons = 0x8000;
-        set_input(runtime, in);
-        (startup_update ? startup_update : runtime.update)();
-        prefix.push_back(in);
+    if (target_level == 0) target_level = 16; // Default to Castle Grounds
+
+    auto rom_bytes = normalized_rom(read_bytes(rom_path));
+    RomInfo rom_info = inspect_rom(rom_bytes);
+
+    // Identify Segment 15 base and Segment 2 bounds based on region
+    uint32_t seg15_base = 0x2ABCA0;
+    uint32_t seg2_start = 0x108A40;
+    uint32_t seg2_end = 0x114750;
+
+    if (rom_info.country == 'J') {
+      seg15_base = 0x2AA240;
+      seg2_start = 0x1076D0;
+      seg2_end = 0x112B50;
+    } else if (rom_info.country == 'P') {
+      seg15_base = 0x28CEE0;
+      seg2_start = 0x0DE190;
+      seg2_end = 0x0E49F0;
+    }
+
+    auto level = std::make_unique<sm64_level>();
+    level->level_id = target_level;
+    level->level_name = get_level_title(target_level);
+    level->rom_path = std::filesystem::absolute(rom_path).string();
+    level->rom_info = rom_info;
+
+    // Segment 2: Textures & fonts
+    decompress_mio0(rom_bytes.data() + seg2_start, seg2_end - seg2_start, level->segments[0x02]);
+
+    // Segment 15 startup script decompression
+    uint32_t off = seg15_base;
+    while (off + 4 <= rom_bytes.size()) {
+      uint8_t cmd = rom_bytes[off];
+      uint8_t len = rom_bytes[off + 1];
+      if (len == 0 || off + len > rom_bytes.size()) break;
+      if (cmd == 0x18 || cmd == 0x1A) {
+        uint8_t seg = rom_bytes[off + 3];
+        uint32_t s_start = read_u32_be(rom_bytes.data() + off + 4);
+        uint32_t s_end = read_u32_be(rom_bytes.data() + off + 8);
+        if (s_start < s_end && s_end <= rom_bytes.size()) {
+          decompress_mio0(rom_bytes.data() + s_start, s_end - s_start, level->segments[seg]);
+        }
+      } else if (cmd == 0x17) {
+        uint8_t seg = rom_bytes[off + 3];
+        uint32_t s_start = read_u32_be(rom_bytes.data() + off + 4);
+        uint32_t s_end = read_u32_be(rom_bytes.data() + off + 8);
+        if (s_start < s_end && s_end <= rom_bytes.size()) {
+          level->segments[seg].assign(rom_bytes.begin() + s_start, rom_bytes.begin() + s_end);
+        }
+      } else if (cmd == 0x1D || cmd == 0x07 || cmd == 0x02) {
+        break;
       }
+      off += len;
+    }
 
-      if (dest != 16) {
-        auto initiate_warp = reinterpret_cast<void (*)(int16_t, int16_t, int16_t, int32_t)>(symbol(runtime, "initiate_warp"));
-        auto fade_into_special_warp = reinterpret_cast<void (*)(uint32_t, uint32_t)>(symbol(runtime, "fade_into_special_warp"));
-        if (initiate_warp && fade_into_special_warp) {
-          initiate_warp(static_cast<int16_t>(dest), 1, 0x0A, 0);
-          fade_into_special_warp(0, 0);
-          for (uint32_t step = 1; step <= 116; ++step) {
-            sm64_input in{};
-            if (step % 2 == 0) in.buttons = 0x8000;
-            set_input(runtime, in);
-            (startup_update ? startup_update : runtime.update)();
-            prefix.push_back(in);
+    // Locate target level in table
+    static const uint32_t kLevelList[] = {
+        4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33, 34, 36
+    };
+
+    int list_index = 5; // Default Level 9
+    for (size_t i = 0; i < std::size(kLevelList); ++i) {
+      if (kLevelList[i] == target_level) {
+        list_index = static_cast<int>(i);
+        break;
+      }
+    }
+
+    uint32_t target_seg = 0x15000000 | (0x03F4 + list_index * 0x14);
+    uint32_t rom_entry_off = seg15_base + (target_seg & 0xFFFFFF);
+    if (rom_entry_off + 16 > rom_bytes.size()) fail("Level script entry out of range");
+
+    uint32_t rom_start = read_u32_be(rom_bytes.data() + rom_entry_off + 4);
+    uint32_t rom_end = read_u32_be(rom_bytes.data() + rom_entry_off + 8);
+    uint32_t entry_addr = read_u32_be(rom_bytes.data() + rom_entry_off + 12);
+    uint32_t script_off = rom_start + (entry_addr & 0xFFFFFF);
+
+    if (rom_start < rom_end && rom_end <= rom_bytes.size()) {
+      level->segments[0x0E].assign(rom_bytes.begin() + rom_start, rom_bytes.begin() + rom_end);
+    }
+
+    uint32_t collision_addr = 0;
+
+    // Parse level script recursively
+    auto parse_script = [&](auto &self, uint32_t start_off, uint32_t end_off) -> void {
+      uint32_t cur = start_off;
+      while (cur + 4 <= end_off && cur + 4 <= rom_bytes.size()) {
+        uint8_t cmd = rom_bytes[cur];
+        uint8_t len = rom_bytes[cur + 1];
+        if (len == 0 || cur + len > rom_bytes.size()) break;
+        if (cmd == 0x18 || cmd == 0x1A) {
+          uint8_t seg = rom_bytes[cur + 3];
+          uint32_t s_start = read_u32_be(rom_bytes.data() + cur + 4);
+          uint32_t s_end = read_u32_be(rom_bytes.data() + cur + 8);
+          if (s_start < s_end && s_end <= rom_bytes.size()) {
+            decompress_mio0(rom_bytes.data() + s_start, s_end - s_start, level->segments[seg]);
+          }
+        } else if (cmd == 0x17) {
+          uint8_t seg = rom_bytes[cur + 3];
+          uint32_t s_start = read_u32_be(rom_bytes.data() + cur + 4);
+          uint32_t s_end = read_u32_be(rom_bytes.data() + cur + 8);
+          if (s_start < s_end && s_end <= rom_bytes.size()) {
+            level->segments[seg].assign(rom_bytes.begin() + s_start, rom_bytes.begin() + s_end);
+          }
+        } else if (cmd == 0x06 && len >= 8) {
+          uint32_t target = read_u32_be(rom_bytes.data() + cur + 4);
+          uint8_t t_seg = (target >> 24) & 0xFF;
+          uint32_t t_off = target & 0xFFFFFF;
+          if (t_seg == 0x15 && seg15_base + t_off < rom_bytes.size()) {
+            self(self, seg15_base + t_off, rom_bytes.size());
+          } else if (t_seg == 0x0E && rom_start + t_off < rom_end) {
+            self(self, rom_start + t_off, rom_end);
+          }
+        } else if (cmd == 0x2B && len >= 12) {
+          level->spawn_x = static_cast<float>(read_s16_be(rom_bytes.data() + cur + 6));
+          level->spawn_y = static_cast<float>(read_s16_be(rom_bytes.data() + cur + 8));
+          level->spawn_z = static_cast<float>(read_s16_be(rom_bytes.data() + cur + 10));
+        } else if (cmd == 0x1F && len >= 8) {
+          uint8_t area_id = rom_bytes[cur + 2];
+          uint32_t geo_addr = read_u32_be(rom_bytes.data() + cur + 4);
+          if (area_id == 1 || level->area1_geo == 0) {
+            level->area1_geo = geo_addr;
+          }
+        } else if (cmd == 0x2E && len >= 8) {
+          collision_addr = read_u32_be(rom_bytes.data() + cur + 4);
+        } else if (cmd == 0x07 || cmd == 0x02) {
+          break;
+        }
+        cur += len;
+      }
+    };
+
+    parse_script(parse_script, script_off, rom_end);
+
+    // Extract collision data
+    if (collision_addr != 0) {
+      uint8_t col_seg = (collision_addr >> 24) & 0x1F;
+      uint32_t col_off = collision_addr & 0xFFFFFF;
+      const auto it = level->segments.find(col_seg);
+      if (it != level->segments.end() && col_off < it->second.size()) {
+        const uint8_t *col_bytes = it->second.data();
+        size_t col_len = it->second.size();
+        size_t p = col_off;
+        std::vector<std::array<int16_t, 3>> verts;
+        while (p + 2 <= col_len) {
+          int16_t cmd = read_s16_be(col_bytes + p);
+          p += 2;
+          if (cmd == 0x0040) { // TERRAIN_LOAD_VERTICES
+            if (p + 2 > col_len) break;
+            int16_t n = read_s16_be(col_bytes + p);
+            p += 2;
+            for (int i = 0; i < n && p + 6 <= col_len; ++i) {
+              verts.push_back({read_s16_be(col_bytes + p), read_s16_be(col_bytes + p + 2), read_s16_be(col_bytes + p + 4)});
+              p += 6;
+            }
+          } else if (cmd == 0x0041) { // TERRAIN_LOAD_CONTINUE
+            continue;
+          } else if (cmd == 0x0042) { // TERRAIN_LOAD_END
+            break;
+          } else if (cmd == 0x0043) { // TERRAIN_LOAD_OBJECTS
+            if (p + 2 > col_len) break;
+            int16_t n = read_s16_be(col_bytes + p);
+            p += 2 + n * 8;
+          } else if (cmd == 0x0044) { // TERRAIN_LOAD_ENVIRONMENT
+            if (p + 2 > col_len) break;
+            int16_t n = read_s16_be(col_bytes + p);
+            p += 2;
+            for (int i = 0; i < n && p + 12 <= col_len; ++i) {
+              sm64_terrain_region reg{};
+              reg.kind = read_s16_be(col_bytes + p);
+              reg.low_x = read_s16_be(col_bytes + p + 2);
+              reg.low_z = read_s16_be(col_bytes + p + 4);
+              reg.high_x = read_s16_be(col_bytes + p + 6);
+              reg.high_z = read_s16_be(col_bytes + p + 8);
+              reg.height = read_s16_be(col_bytes + p + 10);
+              level->regions.push_back(reg);
+              p += 12;
+            }
+          } else { // Surface triangles
+            if (p + 2 > col_len) break;
+            int16_t n = read_s16_be(col_bytes + p);
+            p += 2;
+            bool has_force = (cmd == 0x0004 || cmd == 0x000e || cmd == 0x0024 ||
+                              cmd == 0x0025 || cmd == 0x0026 || cmd == 0x0027 || cmd == 0x002c);
+            for (int i = 0; i < n && p + 6 <= col_len; ++i) {
+              int16_t i1 = read_s16_be(col_bytes + p);
+              int16_t i2 = read_s16_be(col_bytes + p + 2);
+              int16_t i3 = read_s16_be(col_bytes + p + 4);
+              p += 6;
+              int16_t force = 0;
+              if (has_force && p + 2 <= col_len) {
+                force = read_s16_be(col_bytes + p);
+                p += 2;
+              }
+              if (size_t(i1) < verts.size() && size_t(i2) < verts.size() && size_t(i3) < verts.size()) {
+                sm64_terrain_triangle tri{};
+                tri.vertices[0][0] = verts[i1][0]; tri.vertices[0][1] = verts[i1][1]; tri.vertices[0][2] = verts[i1][2];
+                tri.vertices[1][0] = verts[i2][0]; tri.vertices[1][1] = verts[i2][1]; tri.vertices[1][2] = verts[i2][2];
+                tri.vertices[2][0] = verts[i3][0]; tri.vertices[2][1] = verts[i3][1]; tri.vertices[2][2] = verts[i3][2];
+                tri.type = cmd;
+                tri.force = force;
+                tri.room = 0;
+                tri.dynamic = false;
+                level->triangles.push_back(tri);
+              }
+            }
           }
         }
       }
-      if (!inspect(runtime, 0).valid) fail("SM64 automatic startup did not enter gameplay");
-      session->initial = capture(runtime, runtime.power_on.get());
     }
 
-    session->prefix = std::move(prefix);
-    uint64_t fingerprint = 1469598103934665603ull;
-    fingerprint = hash_bytes(fingerprint, rom_bytes);
-    fingerprint = hash_bytes(fingerprint, read_bytes(library_path));
-    fingerprint ^= dest;
-    fingerprint *= 1099511628211ull;
-    for (const sm64_input input : session->prefix) {
-      fingerprint ^= input.buttons;
-      fingerprint *= 1099511628211ull;
-      fingerprint ^= static_cast<uint8_t>(input.stick_x);
-      fingerprint *= 1099511628211ull;
-      fingerprint ^= static_cast<uint8_t>(input.stick_y);
-      fingerprint *= 1099511628211ull;
+    // Fallback plane if no collision
+    if (level->triangles.empty()) {
+      sm64_terrain_triangle t1{}, t2{};
+      t1.vertices[0][0] = -8192; t1.vertices[0][1] = 0; t1.vertices[0][2] = -8192;
+      t1.vertices[1][0] =  8192; t1.vertices[1][1] = 0; t1.vertices[1][2] = -8192;
+      t1.vertices[2][0] =  8192; t1.vertices[2][1] = 0; t1.vertices[2][2] =  8192;
+      level->triangles.push_back(t1);
+      t2.vertices[0][0] = -8192; t2.vertices[0][1] = 0; t2.vertices[0][2] = -8192;
+      t2.vertices[1][0] =  8192; t2.vertices[1][1] = 0; t2.vertices[1][2] =  8192;
+      t2.vertices[2][0] = -8192; t2.vertices[2][1] = 0; t2.vertices[2][2] =  8192;
+      level->triangles.push_back(t2);
     }
-    session->fingerprint = fingerprint;
-    return new sm64_level{std::move(session)};
+
+    // Extract terrain display lists by traversing Area 1 Geo layout
+    auto parse_geo = [&](auto &self, uint32_t geo_addr) -> void {
+      uint8_t seg = (geo_addr >> 24) & 0x1F;
+      uint32_t off = geo_addr & 0xFFFFFF;
+      auto it = level->segments.find(seg);
+      if (it == level->segments.end()) return;
+      const auto &data = it->second;
+
+      uint32_t cur = off;
+      while (cur + 4 <= data.size()) {
+        uint8_t cmd = data[cur];
+        if (cmd == 0x01) { // GEO_END
+          break;
+        } else if (cmd == 0x02) { // GEO_BRANCH / JUMP
+          if (cur + 8 <= data.size()) {
+            uint32_t target = read_u32_be(data.data() + cur + 4);
+            self(self, target);
+          }
+          break;
+        } else if (cmd == 0x00) { // GEO_BRANCH_AND_STORE / CALL
+          if (cur + 8 <= data.size()) {
+            uint32_t target = read_u32_be(data.data() + cur + 4);
+            self(self, target);
+          }
+          cur += 8;
+        } else if (cmd == 0x03) { // GEO_RETURN
+          break;
+        } else if (cmd == 0x15) { // GEO_DISPLAY_LIST
+          if (cur + 8 <= data.size()) {
+            uint32_t dl = read_u32_be(data.data() + cur + 4);
+            if (dl != 0 && std::find(level->display_lists.begin(), level->display_lists.end(), dl) == level->display_lists.end()) {
+              level->display_lists.push_back(dl);
+            }
+          }
+          cur += 8;
+        } else if (cmd == 0x04 || cmd == 0x05 || cmd == 0x0B || cmd == 0x0C || cmd == 0x17 || cmd == 0x20) {
+          cur += 4;
+        } else if (cmd == 0x08 || cmd == 0x13) {
+          cur += 12;
+        } else if (cmd == 0x0F) {
+          cur += 20;
+        } else if (cmd == 0x10 || cmd == 0x1F) {
+          cur += 16;
+        } else {
+          cur += 8;
+        }
+      }
+    };
+
+    if (level->area1_geo != 0) {
+      parse_geo(parse_geo, level->area1_geo);
+    }
+
+    // Fallback if no geo layout display lists were found
+    if (level->display_lists.empty()) {
+      for (size_t g = rom_start; g + 8 <= rom_end; g += 4) {
+        if (rom_bytes[g] == 0x15 && rom_bytes[g + 1] >= 1 && rom_bytes[g + 1] <= 7 &&
+            (rom_bytes[g + 4] == 0x07 || rom_bytes[g + 4] == 0x0E)) {
+          uint32_t dl = read_u32_be(rom_bytes.data() + g + 4);
+          if (std::find(level->display_lists.begin(), level->display_lists.end(), dl) == level->display_lists.end()) {
+            level->display_lists.push_back(dl);
+          }
+        }
+      }
+    }
+
+    return level.release();
   });
 }
 
-extern "C" void sm64_ft_level_free(sm64_level *level) { delete level; }
+extern "C" void sm64_ft_level_free(sm64_level *level) {
+  delete level;
+}
 
 extern "C" sm64_world *sm64_ft_world_new(const sm64_level *level, char *error, size_t error_size) {
-  return boundary<sm64_world *>(error, error_size, nullptr, [&] {
+  return boundary<sm64_world *>(error, error_size, nullptr, [&]() -> sm64_world * {
     if (!level) fail("Missing SM64 level");
     auto world = std::make_unique<sm64_world>();
-    world->session = level->session;
-    std::lock_guard lock(world->session->runtime->mutex);
-    Runtime &runtime = *world->session->runtime;
-    sync_active_world(runtime, nullptr);
-    world->state = world->session->initial;
-    restore(runtime, world->state);
-    world->view = inspect(runtime, 0);
-    if (runtime.get_scene_camera) runtime.get_scene_camera(&world->camera);
-    if (runtime.get_mario_pose) runtime.get_mario_pose(&world->pose);
-    world->dirty = false;
-    runtime.active_world = world.get();
+    world->level = std::shared_ptr<const sm64_level>(level, [](const sm64_level *) {});
+
+    world->sim = sm64_world_create(
+        level->triangles.data(), level->triangles.size(),
+        level->regions.data(), level->regions.size(),
+        static_cast<int16_t>(level->level_id),
+        level->spawn_x, level->spawn_y, level->spawn_z,
+        level->spawn_yaw);
+
+    if (!world->sim) fail("Failed to create native SM64 simulation world");
+
+    sm64_sim_world_view(world->sim, &world->view);
+    sm64_world_pose(world->sim, &world->pose);
     return world.release();
   });
 }
 
 extern "C" void sm64_ft_world_free(sm64_world *world) {
-  if (!world) return;
-  if (world->session && world->session->runtime) {
-    std::lock_guard lock(world->session->runtime->mutex);
-    if (world->session->runtime->active_world == world) {
-      world->session->runtime->active_world = nullptr;
-    }
-  }
   delete world;
 }
 
 extern "C" void sm64_ft_world_set_scratch(sm64_world *world, bool scratch) {
-  if (world) world->scratch = scratch;
+  if (!world) return;
+  world->scratch = scratch;
+  if (world->sim) sm64_world_set_scratch(world->sim, scratch);
 }
 
-extern "C" void sm64_ft_copy(sm64_world *destination, const sm64_world *source) {
-  if (!destination || !source || destination == source) return;
-  std::lock_guard lock(source->session->runtime->mutex);
-  Runtime &runtime = *source->session->runtime;
-  if (source->dirty && runtime.active_world == source) {
-    {
-      const_cast<sm64_world *>(source)->state = capture(runtime, source->state.get());
-      runtime.active_snapshot = source->state;
-    }
-    const_cast<sm64_world *>(source)->dirty = false;
-  }
-  destination->session = source->session;
-  destination->state = source->state;
-  destination->history = source->history;
-  destination->edits = source->edits;
-  destination->view = source->view;
-  destination->camera = source->camera;
-  destination->pose = source->pose;
-  destination->revision = source->revision;
-  destination->dirty = false;
-  if (runtime.active_world == destination) {
-    runtime.active_world = nullptr;
-  }
+extern "C" void sm64_ft_copy(sm64_world *dst, const sm64_world *src) {
+  if (!dst || !src || dst == src) return;
+  if (dst->sim && src->sim) sm64_world_copy(dst->sim, src->sim);
+  dst->level = src->level;
+  dst->view = src->view;
+  dst->pose = src->pose;
+  dst->revision = src->revision;
+  dst->edit_count = src->edit_count;
+  dst->history = src->history;
 }
 
 extern "C" bool sm64_ft_step(sm64_world *world, sm64_input input, char *error, size_t error_size) {
   return boundary<bool>(error, error_size, false, [&] {
-    if (!world) fail("Missing SM64 world");
-    std::lock_guard lock(world->session->runtime->mutex);
-    update_world(*world, input);
+    if (!world || !world->sim) fail("Missing SM64 world");
+    if (!sm64_world_step(world->sim, input, error, error_size)) return false;
+    sm64_sim_world_view(world->sim, &world->view);
+    sm64_world_pose(world->sim, &world->pose);
+    world->revision = sm64_world_revision(world->sim);
+    world->edit_count = sm64_world_edit_count(world->sim);
+    world->history.push_back(input);
     return true;
   });
 }
@@ -1405,134 +1430,98 @@ extern "C" bool sm64_ft_step(sm64_world *world, sm64_input input, char *error, s
 extern "C" uint32_t sm64_ft_view(const sm64_world *world, sm64_view *out) {
   if (!world || !out) return 0;
   *out = world->view;
-  return static_cast<uint32_t>(world->history.size);
+  return world->view.frame;
 }
 
-extern "C" uint64_t sm64_ft_revision(const sm64_world *world) { return world ? world->revision : 0; }
+extern "C" bool sm64_ft_pose(const sm64_world *world, sm64_scene_mario *out) {
+  if (!world || !out) return false;
+  *out = world->pose;
+  return out->valid;
+}
+
+extern "C" uint64_t sm64_ft_revision(const sm64_world *world) {
+  return world ? world->revision : 0;
+}
 
 extern "C" bool sm64_ft_camera(const sm64_world *world, float aspect, sm64_camera *out) {
-  if (!world || !out || !world->camera.valid || !std::isfinite(aspect) || aspect <= 0.f) return false;
-  const auto &camera = world->camera;
-  *out = {};
-  std::memcpy(out->eye, camera.eye, sizeof(out->eye));
-  std::memcpy(out->target, camera.target, sizeof(out->target));
-  multiply_matrix(out->view_proj, camera.projection, camera.view);
-  for (int col = 0; col < 4; ++col) {
-    out->view_proj[col*4] *= (4.f/3.f)/aspect;
-    out->view_proj[col*4+1] *= -1.f;
-    out->view_proj[col*4+2] = (out->view_proj[col*4+3] - out->view_proj[col*4+2]) * .5f;
-  }
-  for (int i = 0; i < 3; ++i) out->up[i] = -out->view_proj[i*4+1];
-  if (!normalize_vector(out->up)) return false;
-  const auto *p = camera.projection;
-  out->fov_y = 2.f*std::atan(1.f/std::sqrt(p[1]*p[1] + p[5]*p[5]));
-  out->near_z = p[14]/(p[10]-1.f);
-  out->far_z = p[14]/(p[10]+1.f);
-  for (float value : out->view_proj) if (!std::isfinite(value)) return false;
-  return true;
+  if (!world || !world->sim || !out) return false;
+  return sm64_world_camera(world->sim, aspect, out);
 }
 
 extern "C" bool sm64_ft_set(sm64_world *world, uint32_t property, const sm64_view *value, char *error, size_t error_size) {
   return boundary<bool>(error, error_size, false, [&] {
-    if (!world || !value) fail("Missing SM64 state edit");
-    std::lock_guard lock(world->session->runtime->mutex);
-    StateEdit edit{static_cast<uint32_t>(world->history.size), property, {}};
-    if (property < 2) std::memcpy(edit.value.data(), property == 0 ? value->pos : value->vel, 12);
-    else edit.value[0] = static_cast<uint32_t>(value->health);
-    if (!valid_edit(edit)) fail("Invalid SM64 property value");
-    if (world->edits->size() >= kMaxEdits) fail("SM64 state edit limit reached");
-    Runtime &runtime = *world->session->runtime;
-    sync_active_world(runtime, world);
-    if (!world->edits.unique()) world->edits = std::make_shared<std::vector<StateEdit>>(*world->edits);
-    if (world->edits->size() == world->edits->capacity())
-      world->edits->reserve(std::max<size_t>(8, world->edits->size() * 2));
-    apply_edit(runtime, edit);
-    world->edits->push_back(edit);
-    world->dirty = true;
-    world->view = inspect(runtime, static_cast<uint32_t>(world->history.size));
-    if (runtime.get_mario_pose) runtime.get_mario_pose(&world->pose);
-    world->revision = next_revision.fetch_add(1, std::memory_order_relaxed);
+    if (!world || !world->sim || !value) fail("Missing SM64 state edit");
+    if (!sm64_world_set(world->sim, property, value, error, error_size)) return false;
+    sm64_sim_world_view(world->sim, &world->view);
+    sm64_world_pose(world->sim, &world->pose);
+    world->revision = sm64_world_revision(world->sim);
+    world->edit_count = sm64_world_edit_count(world->sim);
     return true;
   });
 }
 
 extern "C" size_t sm64_ft_save(const sm64_world *world, uint8_t *out, size_t size, char *error, size_t error_size) {
-  return boundary<size_t>(error, error_size, 0, [&] {
-    if (!world) fail("Missing SM64 world");
-    const auto data = encode_state(*world);
-    if (!out) return data.size();
-    if (size < data.size()) fail("State buffer is too small");
-    std::memcpy(out, data.data(), data.size());
-    return data.size();
+  return boundary<size_t>(error, error_size, 0, [&]() -> size_t {
+    if (!world || !world->sim) fail("Missing SM64 world");
+    return sm64_world_save(world->sim, out, size, error, error_size);
   });
 }
 
 extern "C" bool sm64_ft_load(sm64_world *world, const uint8_t *data, size_t size, char *error, size_t error_size) {
   return boundary<bool>(error, error_size, false, [&] {
-    if (!world) fail("Missing SM64 world");
-    auto saved = decode_state(*world, data, size);
-    std::lock_guard lock(world->session->runtime->mutex);
-    Runtime &runtime = *world->session->runtime;
-    sync_active_world(runtime, nullptr);
-    restore(runtime, world->session->initial);
-    runtime.active_snapshot = nullptr;
-    size_t edit_index = 0;
-    for (size_t frame = 0; frame <= saved.inputs.size(); ++frame) {
-      while (edit_index < saved.edits->size() && (*saved.edits)[edit_index].frame == frame)
-        apply_edit(runtime, (*saved.edits)[edit_index++]);
-      if (frame < saved.inputs.size()) {
-        set_input(runtime, saved.inputs[frame]);
-        runtime.update();
-      }
-    }
-    world->state = capture(runtime, world->state.get());
-    world->dirty = false;
-    runtime.active_snapshot = world->state;
-    runtime.active_world = world;
-    world->history = {};
-    for (const sm64_input input : saved.inputs) world->history.push(input);
-    world->edits = std::move(saved.edits);
-    world->view = inspect(runtime, static_cast<uint32_t>(saved.inputs.size()));
-    if (runtime.get_scene_camera) runtime.get_scene_camera(&world->camera);
-    if (runtime.get_mario_pose) runtime.get_mario_pose(&world->pose);
-    world->revision = next_revision.fetch_add(1, std::memory_order_relaxed);
+    if (!world || !world->sim || !data) fail("Missing SM64 saved state");
+    if (!sm64_world_load(world->sim, data, size, error, error_size)) return false;
+    sm64_sim_world_view(world->sim, &world->view);
+    sm64_world_pose(world->sim, &world->pose);
+    world->revision = sm64_world_revision(world->sim);
+    world->edit_count = sm64_world_edit_count(world->sim);
     return true;
   });
 }
 
 extern "C" bool sm64_ft_export(const sm64_world *world, const char *path, char *error, size_t error_size) {
   return boundary<bool>(error, error_size, false, [&] {
-    if (!world || !path) fail("Missing SM64 movie path");
-    if (!world->edits->empty()) fail("M64 controller movies cannot represent state overrides; save a FrameTee project to preserve them");
-    std::vector<sm64_input> inputs = world->session->prefix;
-    const auto suffix = world->history.flatten();
-    inputs.insert(inputs.end(), suffix.begin(), suffix.end());
-    write_m64(path, world->session->rom, inputs);
+    if (!world || !world->level || !path) fail("Missing SM64 export arguments");
+    if (world->edit_count > 0) fail("M64 cannot silently discard edits");
+    write_m64(path, world->level->rom_info, world->history);
     return true;
   });
 }
 
+extern "C" sm64_physics *sm64_ft_physics_create(const sm64_world *source, char *error, size_t error_size) {
+  if (!source || !source->sim) {
+    if (error && error_size) std::snprintf(error, error_size, "Missing SM64 source world");
+    return nullptr;
+  }
+  return sm64_world_physics_create(source->sim, error, error_size);
+}
+
+static bool is_valid_render_config(const sm64_render_config *config) {
+  if (!config) return false;
+  if (config->width == 0 || config->height == 0 || config->width > 4096 || config->height > 4096) return false;
+  if (config->mode > 0) {
+    for (int i = 0; i < 16; ++i) {
+      if (!std::isfinite(config->view_proj[i])) return false;
+    }
+    for (int i = 0; i < 3; ++i) {
+      if (!std::isfinite(config->eye[i]) || !std::isfinite(config->target[i]) || !std::isfinite(config->up[i])) return false;
+    }
+    if (!std::isfinite(config->span)) return false;
+  }
+  return true;
+}
+
 extern "C" bool sm64_ft_render(const sm64_world *world, const sm64_render_config *config, uint8_t *pixels, size_t size, char *error, size_t error_size) {
   return boundary<bool>(error, error_size, false, [&] {
-    if (!world || !config || !pixels || config->width == 0 || config->height == 0 ||
-        config->width > 4096 || config->height > 4096 || size < size_t(config->width) * config->height * 4) {
+    if (!world || !config || !pixels || !is_valid_render_config(config) || size < size_t(config->width) * config->height * 4) {
       fail("Invalid SM64 render target");
     }
-    std::lock_guard lock(world->session->runtime->mutex);
-    Runtime &runtime = *world->session->runtime;
-    RenderStateGuard state_guard(*const_cast<sm64_world *>(world));
-    prepare_scene(runtime, *config);
-    SoftwareRenderer software;
-    software.begin(pixels, config->width, config->height, config->mode > 0);
-    active_renderer = &software;
+    static thread_local SoftwareRenderer g_software_renderer;
+    g_software_renderer.begin(pixels, config->width, config->height, config->mode > 0);
+    active_renderer = &g_software_renderer;
     const RenderApi api = SoftwareRenderer::api();
-    try {
-      runtime.set_render_api(const_cast<RenderApi *>(&api));
-      runtime.render_display_list(config->width, config->height);
-    } catch (...) {
-      active_renderer = nullptr;
-      throw;
-    }
+    gfx_init(nullptr, reinterpret_cast<GfxRenderingAPI *>(const_cast<RenderApi *>(&api)), "sm64");
+    render_scene_fast3d(world, config);
     active_renderer = nullptr;
     return true;
   });
@@ -1540,23 +1529,26 @@ extern "C" bool sm64_ft_render(const sm64_world *world, const sm64_render_config
 
 extern "C" bool sm64_ft_render_gpu(const sm64_world *world, const sm64_render_config *config, const ft_gpu_device *gpu, const ft_gpu_image *target_image, char *error, size_t error_size) {
   return boundary<bool>(error, error_size, false, [&] {
-    if (!world || !config || !gpu || !target_image || config->width == 0 || config->height == 0) {
+    if (!world || !config || !gpu || !target_image || !is_valid_render_config(config)) {
       fail("Invalid SM64 GPU render target");
     }
-    std::lock_guard lock(world->session->runtime->mutex);
-    Runtime &runtime = *world->session->runtime;
-    RenderStateGuard state_guard(*const_cast<sm64_world *>(world));
-    prepare_scene(runtime, *config);
-
-    auto *&renderer = runtime.vk_renderers[runtime.render_slot++ % 2];
+    std::lock_guard lock(g_vk_mutex);
+    auto *&renderer = g_vk_renderers[g_render_slot++ % 2];
     if (!renderer) {
       renderer = sm64_vulkan_create(gpu, error, error_size);
       if (!renderer) fail("Failed to create SM64 Vulkan renderer");
     }
 
+    g_current_render_world = world;
+    g_current_render_config = config;
+
     return sm64_vulkan_render(renderer,
-                              runtime.render_display_list,
-                              reinterpret_cast<void (*)(void *)>(runtime.set_render_api),
+                              [](uint32_t, uint32_t) {
+                                render_scene_fast3d(g_current_render_world, g_current_render_config);
+                              },
+                              [](void *api) {
+                                gfx_init(nullptr, reinterpret_cast<GfxRenderingAPI *>(api), "sm64");
+                              },
                               config->width,
                               config->height,
                               target_image,
@@ -1567,26 +1559,21 @@ extern "C" bool sm64_ft_render_gpu(const sm64_world *world, const sm64_render_co
 }
 
 extern "C" void sm64_ft_release_graphics(void) {
-  std::lock_guard registry_lock(runtimes_mutex);
-  for (auto &[path, weak] : runtimes) {
-    if (auto runtime = weak.lock()) {
-      std::lock_guard runtime_lock(runtime->mutex);
-      for (auto *&renderer : runtime->vk_renderers) {
-        if (renderer) sm64_vulkan_destroy(renderer);
-        renderer = nullptr;
-      }
-    }
+  std::lock_guard lock(g_vk_mutex);
+  for (auto *&renderer : g_vk_renderers) {
+    if (renderer) sm64_vulkan_destroy(renderer);
+    renderer = nullptr;
   }
+  gfx_clear_cache();
 }
 
 extern "C" const char *sm64_ft_level_name(const sm64_level *level) {
-  if (!level || !level->session) return "Super Mario 64";
-  return level->session->level_name.c_str();
+  return level ? level->level_name.c_str() : "Super Mario 64";
 }
 
 extern "C" bool sm64_ft_write_config(const char *path, const char *rom, const char *library, const char *movie, uint32_t frame, uint32_t level, char *error, size_t error_size) {
   return boundary<bool>(error, error_size, false, [&] {
-    if (!path || !rom || !library || !movie) fail("Missing SM64 setup value");
+    if (!path || !rom) fail("Missing SM64 setup value");
     const std::filesystem::path config_path(path);
     if (config_path.has_parent_path()) {
       std::error_code directory_error;
@@ -1595,106 +1582,12 @@ extern "C" bool sm64_ft_write_config(const char *path, const char *rom, const ch
     }
     std::ofstream file(path, std::ios::trunc);
     if (!file) fail(std::string("Cannot write ") + path);
-    file << "{\n  \"rom\": \"" << escape_json(rom) << "\",\n"
-         << "  \"library\": \"" << escape_json(library) << "\",\n";
-    if (movie[0]) file << "  \"movie\": \"" << escape_json(movie) << "\",\n";
+    file << "{\n  \"rom\": \"" << escape_json(rom) << "\",\n";
+    if (library && library[0]) file << "  \"library\": \"" << escape_json(library) << "\",\n";
+    if (movie && movie[0]) file << "  \"movie\": \"" << escape_json(movie) << "\",\n";
     if (level) file << "  \"level\": " << level << ",\n";
     file << "  \"start_frame\": " << frame << "\n}\n";
     if (!file) fail(std::string("Cannot write ") + path);
     return true;
   });
-}
-
-
-namespace {
-struct PhysicsOwner {
-  sm64_physics api{};
-  std::filesystem::path directory;
-  std::shared_ptr<Runtime> runtime;
-  std::weak_ptr<const Snapshot> last_checkpoint;
-  ~PhysicsOwner() {
-    runtime.reset(); // Unload the image before removing it (also on Windows).
-    if (!directory.empty()) { std::error_code ec; std::filesystem::remove_all(directory, ec); }
-  }
-};
-}
-struct sm64_checkpoint {
-  std::shared_ptr<Runtime> runtime;
-  std::shared_ptr<const Snapshot> state;
-};
-
-extern "C" sm64_physics *sm64_ft_physics_create(const sm64_world *source, char *error, size_t error_size) {
-  return boundary<sm64_physics *>(error, error_size, nullptr, [&]() -> sm64_physics * {
-    if (!source) fail("Missing SM64 source world");
-    std::shared_ptr<Session> session;
-    std::vector<sm64_input> inputs;
-    std::vector<StateEdit> edits;
-    {
-      std::lock_guard lock(source->session->runtime->mutex);
-      session = source->session;
-      inputs = source->history.flatten();
-      edits = *source->edits;
-    }
-    auto owner = std::make_unique<PhysicsOwner>();
-    const auto root = std::filesystem::temp_directory_path();
-    for (;;) {
-      const auto id = std::chrono::steady_clock::now().time_since_epoch().count();
-      auto candidate = root / ("frametee-sm64-worker-" + std::to_string(id) + "-" + std::to_string(next_revision.fetch_add(1)));
-      if (std::filesystem::create_directory(candidate)) { owner->directory = candidate; break; }
-    }
-    const auto library = owner->directory / session->runtime->path.filename();
-    std::filesystem::copy_file(session->runtime->path, library);
-    const auto config = owner->directory / "worker.sm64";
-    if (!sm64_ft_write_config(config.string().c_str(), session->rom_path.c_str(), library.string().c_str(),
-                             session->movie_path.c_str(), session->start_frame, session->level_id, error, error_size))
-      return nullptr;
-    std::unique_ptr<sm64_level> level(sm64_ft_open(config.string().c_str(), owner->directory.string().c_str(), error, error_size));
-    if (!level) return nullptr;
-    owner->runtime = level->session->runtime;
-    Runtime &runtime = *owner->runtime;
-    auto bind = reinterpret_cast<const sm64_view *(*)(uint32_t)>(symbol(runtime, "sm64_physics_bind"));
-    auto tick = reinterpret_cast<void (*)(sm64_input)>(symbol(runtime, "sm64_physics_step"));
-    if (!bind || !tick) fail("Rebuild the SM64 runtime for isolated physics support");
-    restore(runtime, level->session->initial);
-    runtime.active_snapshot = nullptr;
-    size_t edit_index = 0;
-    for (size_t frame = 0; frame <= inputs.size(); ++frame) {
-      while (edit_index < edits.size() && edits[edit_index].frame == frame) apply_edit(runtime, edits[edit_index++]);
-      if (frame < inputs.size()) { set_input(runtime, inputs[frame]); runtime.update(); }
-    }
-    auto &api = owner->api;
-    api.step = tick;
-    api.view = bind(static_cast<uint32_t>(inputs.size()));
-    api.mario = *runtime.mario_state;
-    api.owner = owner.get();
-    api.capture = [](sm64_physics *sim, char *error, size_t size) -> sm64_checkpoint * {
-      return boundary<sm64_checkpoint *>(error, size, nullptr, [&] {
-        auto &owner = *static_cast<PhysicsOwner *>(sim->owner);
-        auto previous = owner.last_checkpoint.lock();
-        auto state = capture(*owner.runtime, previous.get());
-        owner.last_checkpoint = state;
-        return new sm64_checkpoint{owner.runtime, std::move(state)};
-      });
-    };
-    api.restore = [](sm64_physics *sim, const sm64_checkpoint *state, char *error, size_t size) {
-      return boundary<bool>(error, size, false, [&] {
-        auto &owner = *static_cast<PhysicsOwner *>(sim->owner);
-        if (!state || state->runtime != owner.runtime) fail("SM64 checkpoint belongs to a different physics instance");
-        owner.runtime->active_snapshot = nullptr; // Direct ticks bypass snapshot bookkeeping.
-        restore(*owner.runtime, state->state);
-        owner.last_checkpoint = state->state;
-        sim->mario = *owner.runtime->mario_state;
-        return true;
-      });
-    };
-    api.free_checkpoint = [](sm64_checkpoint *state) { delete state; };
-    api.destroy = [](sm64_physics *sim) { if (sim) delete static_cast<PhysicsOwner *>(sim->owner); };
-    owner.release();
-    return &api;
-  });
-}
-
-extern "C" bool sm64_ft_pose(const sm64_world *world, sm64_scene_mario *out) {
-  if (!world || !out) return false;
-  *out = world->pose; return out->valid;
 }

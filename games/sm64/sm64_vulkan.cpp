@@ -539,6 +539,17 @@ static void draw_triangles(float *buf, size_t buf_len, size_t num_tris) {
   const bool opt_alpha = (shader_id & (1u << 24)) != 0;
   const uint8_t input_count = vk.current_shader ? vk.current_shader->input_count : 0;
 
+  size_t rem = (stride >= 4) ? (stride - 4) : 0;
+  bool has_tex = used_textures && (rem >= 2);
+  if (has_tex) rem -= 2;
+  bool has_fog = opt_fog && (rem >= 4);
+  if (has_fog) rem -= 4;
+  bool has_alpha = opt_alpha;
+  if (input_count > 0) {
+    if (rem >= input_count * 4) has_alpha = true;
+    else if (rem == input_count * 3) has_alpha = false;
+  }
+
   for (size_t v = 0; v < num_vertices; ++v) {
     const float *src = buf + v * stride;
     GpuVertex &out = dst[v];
@@ -548,7 +559,7 @@ static void draw_triangles(float *buf, size_t buf_len, size_t num_tris) {
     out.pos[3] = src[3];
 
     size_t cur = 4;
-    if (used_textures) {
+    if (has_tex && cur + 2 <= stride) {
       out.uv[0] = src[cur];
       out.uv[1] = src[cur + 1];
       cur += 2;
@@ -557,7 +568,7 @@ static void draw_triangles(float *buf, size_t buf_len, size_t num_tris) {
       out.uv[1] = 0.0f;
     }
 
-    if (opt_fog) {
+    if (has_fog && cur + 4 <= stride) {
       out.fog[0] = src[cur];
       out.fog[1] = src[cur + 1];
       out.fog[2] = src[cur + 2];
@@ -569,15 +580,19 @@ static void draw_triangles(float *buf, size_t buf_len, size_t num_tris) {
 
     for (int i = 0; i < 4; ++i) {
       if (i < input_count) {
-        out.inputs[i][0] = src[cur];
-        out.inputs[i][1] = src[cur + 1];
-        out.inputs[i][2] = src[cur + 2];
-        if (opt_alpha) {
-          out.inputs[i][3] = src[cur + 3];
-          cur += 4;
+        if (cur + 3 <= stride) {
+          out.inputs[i][0] = src[cur];
+          out.inputs[i][1] = src[cur + 1];
+          out.inputs[i][2] = src[cur + 2];
+          cur += 3;
+        } else {
+          out.inputs[i][0] = out.inputs[i][1] = out.inputs[i][2] = 0.0f;
+        }
+        if (has_alpha && cur < stride) {
+          out.inputs[i][3] = src[cur];
+          cur += 1;
         } else {
           out.inputs[i][3] = 1.0f;
-          cur += 3;
         }
       } else {
         out.inputs[i][0] = out.inputs[i][1] = out.inputs[i][2] = 0.0f;

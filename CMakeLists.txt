@@ -230,6 +230,7 @@ set(CGLM_SHARED OFF CACHE BOOL "Do not build cglm as a shared library" FORCE)
 add_subdirectory(libs/cglm)
 set_target_properties(cglm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_subdirectory(libs/nfd)
+add_subdirectory(libs/sm64_physics)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nfd
