@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
-option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" ON)
+# Do not build this module by default, as it is still in development and not fully functional yet. It is also not a part of the official Frametee release.
+option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" OFF)
 if(NOT FRAMETEE_BUILD_SM64)
     return()
 endif()
