@@ -99,6 +99,9 @@ static const char *menu_shortcut(ui_handler_t *ui, action_t action) {
 }
 
 static void render_menu_bar_status(ui_handler_t *ui) {
+  const bool has_level = ui->gfx_handler && ui->gfx_handler->level != NULL;
+  const bool has_level_name = has_level && ui->loaded_level_name[0] && strcmp(ui->loaded_level_name, "unnamed_level") != 0;
+
   if (ui->has_unsaved_changes) {
     igPushStyleColor_Vec4(ImGuiCol_Text, (ImVec4){1.0f, 0.70f, 0.20f, 1.0f});
     igTextUnformatted("*", NULL);
@@ -111,8 +114,14 @@ static void render_menu_bar_status(ui_handler_t *ui) {
     }
   }
 
-  igSeparator();
-  ui_render_game_ui_slot(ui, FT_UI_STATUS_BAR, ui->timeline.selected_player_track_index);
+  if (has_level) {
+    igSeparator();
+    float before_x = igGetCursorPosX();
+    ui_render_game_ui_slot(ui, FT_UI_STATUS_BAR, ui->timeline.selected_player_track_index);
+    if (igGetCursorPosX() == before_x && has_level_name) {
+      igText("%s", ui->loaded_level_name);
+    }
+  }
 }
 
 // The active game's setting groups, once each, in the order it first mentions

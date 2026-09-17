@@ -428,6 +428,7 @@ pub struct ft_engine_api {
     pub timeline_range: *const c_void,
     pub presentation_effects_enabled: *const c_void,
     pub draw_mesh_range: *const c_void,
+    pub get_level_name: *const c_void,
 }
 
 /// The module vtable. Field order and count must match `ft_game_module`

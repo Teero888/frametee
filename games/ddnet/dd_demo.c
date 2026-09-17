@@ -672,11 +672,20 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
   map_sha256_update(&hash, map_data, map_size);
   map_sha256_final(&hash, map_sha256);
 
+  const char *map_name = (game->current_level && game->current_level->name[0] && strcmp(game->current_level->name, "map") != 0)
+                             ? game->current_level->name
+                             : (game->engine && game->engine->get_level_name ? game->engine->get_level_name() : NULL);
+  if (!map_name || !*map_name || strcmp(map_name, "unnamed_level") == 0) map_name = "unnamed_map";
+  if (game->current_level && (!game->current_level->name[0] || strcmp(game->current_level->name, "map") == 0) &&
+      strcmp(map_name, "unnamed_map") != 0) {
+    snprintf(game->current_level->name, sizeof(game->current_level->name), "%s", map_name);
+  }
+
   FILE *file = fopen(request->path, "wb");
   dd_demo_writer *writer = demo_w_create();
   dd_snapshot_builder *builder = demo_sb_create();
   if (!file || !writer || !builder ||
-      !demo_w_begin(writer, file, game->current_level->name[0] ? game->current_level->name : "unnamed_map", map_crc, "Race") ||
+      !demo_w_begin(writer, file, map_name, map_crc, "Race") ||
       !demo_w_write_map(writer, map_sha256, map_data, map_size)) {
     if (builder) demo_sb_destroy(&builder);
     if (writer) demo_w_destroy(&writer);

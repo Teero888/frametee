@@ -181,9 +181,16 @@ void dd_export_window_render(ft_game *game) {
       }
     }
 
+    const char *map_name = (game->current_level && game->current_level->name[0] && strcmp(game->current_level->name, "map") != 0)
+                               ? game->current_level->name
+                               : (game->engine && game->engine->get_level_name ? game->engine->get_level_name() : NULL);
+    if (!map_name || !*map_name || strcmp(map_name, "unnamed_level") == 0) map_name = "run";
+    if (game->current_level && (!game->current_level->name[0] || strcmp(game->current_level->name, "map") == 0) &&
+        strcmp(map_name, "run") != 0) {
+      snprintf(game->current_level->name, sizeof(game->current_level->name), "%s", map_name);
+    }
     char default_name[256];
-    snprintf(default_name, sizeof(default_name), "%s.demo",
-             game->current_level && game->current_level->name[0] ? game->current_level->name : "run");
+    snprintf(default_name, sizeof(default_name), "%s.demo", map_name);
     char path[1024];
     if (!players || !pings) {
       snprintf(game->demo_export_error, sizeof(game->demo_export_error), "Could not allocate the track selection.");

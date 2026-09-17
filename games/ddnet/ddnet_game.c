@@ -848,7 +848,9 @@ static ft_level *ddnet_level_load_memory(ft_game *game, const void *data, size_t
     dd_log(game, FT_LOG_ERROR, "Failed to parse an in-memory map of %zu bytes.", size);
     return NULL;
   }
-  return level_finish(game, &map, variant_id, "map");
+  const char *name = (game && game->engine && game->engine->get_level_name) ? game->engine->get_level_name() : NULL;
+  if (!name || !*name || strcmp(name, "unnamed_level") == 0) name = "map";
+  return level_finish(game, &map, variant_id, name);
 }
 
 static void ddnet_level_destroy(ft_game *game, ft_level *level) {
@@ -1302,6 +1304,19 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
       igMenuItem_BoolPtr("Timeline Events", NULL, &game->show_events, true);
       if (igMenuItem_Bool("Export Demo...", NULL, false, game->current_level != NULL)) dd_export_window_open(game);
       igEndMenu();
+    }
+    break;
+  case FT_UI_STATUS_BAR:
+    if (game->current_level && game->current_level->name[0]) {
+      const char *name = game->current_level->name;
+      if (strcmp(name, "map") == 0 && game->engine && game->engine->get_level_name) {
+        const char *engine_name = game->engine->get_level_name();
+        if (engine_name && engine_name[0] && strcmp(engine_name, "unnamed_level") != 0) {
+          snprintf(game->current_level->name, sizeof(game->current_level->name), "%s", engine_name);
+          name = game->current_level->name;
+        }
+      }
+      igText("%s", name);
     }
     break;
   case FT_UI_PANELS:

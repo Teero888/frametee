@@ -1146,6 +1146,8 @@ typedef struct ft_engine_api {
                           uint32_t first_index, uint32_t index_count,
                           ft_texture *const *textures, uint32_t texture_count,
                           const void *uniforms, size_t uniform_size);
+  /* Returns the name of the currently loaded level/map, or empty string. */
+  const char *(*get_level_name)(void);
 } ft_engine_api;
 
 /* The layer a 3D triangle names when it carries no texture. */

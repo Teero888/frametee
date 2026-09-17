@@ -589,6 +589,26 @@ static bool write_project_file(ui_handler_t *ui, const char *path) {
     goto done;
   }
 
+  if (!ui->loaded_level_name[0] || strcmp(ui->loaded_level_name, "unnamed_level") == 0 || strcmp(ui->loaded_level_name, "map") == 0) {
+    ft_level_info info;
+    if (gh_level_info(host, ui->gfx_handler->level, &info) && info.name && info.name[0] &&
+        strcmp(info.name, "map") != 0 && strcmp(info.name, "unnamed_level") != 0) {
+      snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", info.name);
+    } else if (ui->loaded_level_path[0]) {
+      char stem[sizeof(ui->loaded_level_name)];
+      const char *slash = strrchr(ui->loaded_level_path, '/');
+#ifdef _WIN32
+      const char *back = strrchr(ui->loaded_level_path, '\\');
+      if (back && (!slash || back > slash)) slash = back;
+#endif
+      const char *file = slash ? slash + 1 : ui->loaded_level_path;
+      snprintf(stem, sizeof(stem), "%s", file);
+      char *dot = strrchr(stem, '.');
+      if (dot && dot != stem) *dot = '\0';
+      if (stem[0]) snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", stem);
+    }
+  }
+
   const camera_t *camera = &ui->gfx_handler->renderer.camera;
   const ft_camera_mode *camera_mode = game_camera_mode(host, camera->mode);
   if (!buffer_write(&buffer, TAS_PROJECT_FILE_MAGIC, 4) || !buffer_u32(&buffer, TAS_PROJECT_FILE_VERSION) ||
@@ -947,6 +967,20 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
 
   document->group_count = (int)group_count;
   document->track_count = (int)track_count;
+  if ((!document->level_name[0] || strcmp(document->level_name, "unnamed_level") == 0 || strcmp(document->level_name, "map") == 0) &&
+      document->level_path[0]) {
+    char stem[sizeof(document->level_name)];
+    const char *slash = strrchr(document->level_path, '/');
+#ifdef _WIN32
+    const char *back = strrchr(document->level_path, '\\');
+    if (back && (!slash || back > slash)) slash = back;
+#endif
+    const char *file = slash ? slash + 1 : document->level_path;
+    snprintf(stem, sizeof(stem), "%s", file);
+    char *dot = strrchr(stem, '.');
+    if (dot && dot != stem) *dot = '\0';
+    if (stem[0]) snprintf(document->level_name, sizeof(document->level_name), "%s", stem);
+  }
   if (!validate_document_compatibility(document, &ui->gfx_handler->game_host, path)) goto done;
   if (level_size == 0 && document->level_path[0] == '\0') goto malformed;
   if (keep_session_data) {
@@ -1127,8 +1161,17 @@ bool load_project(ui_handler_t *ui, const char *path) {
     goto failed_before_timeline;
   }
 
+  char previous_level_name[128];
+  char previous_level_path[1024];
+  snprintf(previous_level_name, sizeof(previous_level_name), "%s", ui->loaded_level_name);
+  snprintf(previous_level_path, sizeof(previous_level_path), "%s", ui->loaded_level_path);
+  snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", document.level_name);
+  snprintf(ui->loaded_level_path, sizeof(ui->loaded_level_path), "%s", document.level_path);
+
   ft_level *new_level = load_document_level(host, &document);
   if (!new_level) {
+    snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", previous_level_name);
+    snprintf(ui->loaded_level_path, sizeof(ui->loaded_level_path), "%s", previous_level_path);
     log_error(LOG_SOURCE, "Game '%s' could not load the level stored by '%s'.", document.game_id, path);
     goto failed_before_timeline;
   }

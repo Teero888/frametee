@@ -848,6 +848,12 @@ static bool api_timeline_range(int32_t *out_start_tick, int32_t *out_end_tick) {
 
 static bool api_presentation_effects_enabled(void) { return engine_api_presentation_effects_enabled(); }
 
+static const char *api_get_level_name(void) {
+  return (g_engine && g_engine->user_interface.loaded_level_name[0])
+             ? g_engine->user_interface.loaded_level_name
+             : "";
+}
+
 // --- assembly ----------------------------------------------------------------
 
 const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
@@ -920,6 +926,7 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .timeline_active_world = api_timeline_active_world,
       .timeline_range = api_timeline_range,
       .presentation_effects_enabled = api_presentation_effects_enabled,
+      .get_level_name = api_get_level_name,
   };
   return &api;
 }
