@@ -1182,18 +1182,27 @@ static const ft_exporter_desc ddnet_exporter = {.id = "demo",
                                                 .file_extension = "demo",
                                                 .filter_name = "DDNet Demo"};
 
+static const ft_exporter_desc ddnet_ghost_exporter = {.id = "ghost",
+                                                      .display_name = "DDNet Ghost",
+                                                      .file_extension = "gho",
+                                                      .filter_name = "DDNet Ghost"};
+
 static uint32_t ddnet_exporter_count(ft_game *game) {
   (void)game;
-  return 1;
+  return 2;
 }
 
 static const ft_exporter_desc *ddnet_exporter_desc(ft_game *game, uint32_t index) {
   (void)game;
-  return index == 0 ? &ddnet_exporter : NULL;
+  if (index == 0) return &ddnet_exporter;
+  if (index == 1) return &ddnet_ghost_exporter;
+  return NULL;
 }
 
 static bool ddnet_export_run(ft_game *game, uint32_t index, const ft_export_request *request) {
-  return index == 0 && dd_demo_export(game, request);
+  if (index == 0) return dd_demo_export(game, request);
+  if (index == 1) return dd_ghost_export_request(game, request);
+  return false;
 }
 
 static ft_game *ddnet_create(const ft_engine_api *engine) {
@@ -1303,6 +1312,7 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
       igMenuItem_BoolPtr("Skin Browser", NULL, &game->show_skin_browser, true);
       igMenuItem_BoolPtr("Timeline Events", NULL, &game->show_events, true);
       if (igMenuItem_Bool("Export Demo...", NULL, false, game->current_level != NULL)) dd_export_window_open(game);
+      if (igMenuItem_Bool("Export Ghost...", NULL, false, game->current_level != NULL)) dd_ghost_export_window_open(game);
       igEndMenu();
     }
     break;
@@ -1324,6 +1334,7 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
     if (game->show_skin_browser) dd_skin_browser_render(game, frame);
     dd_events_render(game, frame);
     dd_export_window_render(game);
+    dd_ghost_export_window_render(game);
     break;
   default:
     break;

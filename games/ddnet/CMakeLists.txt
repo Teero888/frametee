@@ -24,6 +24,19 @@ if(NOT TARGET ddnet_physics)
     add_subdirectory(${CMAKE_SOURCE_DIR}/libs/ddnet_physics ${CMAKE_BINARY_DIR}/libs/ddnet_physics)
 endif()
 
+if(NOT TARGET ddnet_ghost)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    set(SAVED_SHARED_LIB ${SHARED_LIB})
+    set(SHARED_LIB OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/libs/ddnet_ghost ${CMAKE_BINARY_DIR}/libs/ddnet_ghost)
+    set(SHARED_LIB ${SAVED_SHARED_LIB} CACHE BOOL "" FORCE)
+endif()
+if(TARGET ddnet_ghost)
+    set_target_properties(ddnet_ghost PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+    )
+endif()
+
 # The library's own shared branch decorates its API for MSVC unconditionally,
 # which is meaningless to an ELF build and does not compile there. The submodule
 # is never patched from here, so it is corrected from this side instead.
@@ -85,6 +98,7 @@ add_library(ddnet_game MODULE
     dd_events.c
     dd_export.c
     dd_demo.c
+    dd_ghost.c
 )
 
 set_target_properties(ddnet_game PROPERTIES
@@ -106,6 +120,7 @@ target_include_directories(ddnet_game PRIVATE
     ${CMAKE_SOURCE_DIR}/libs/stb
     ${CMAKE_SOURCE_DIR}/libs/cjson
     ${CMAKE_SOURCE_DIR}/libs
+    ${CMAKE_SOURCE_DIR}/libs/ddnet_ghost/include
     # This game draws its own panels with the editor's ImGui. Only the headers
     # are needed: the ig* symbols resolve against the host executable at load
     # time, exactly as the bundled plugins do.
@@ -117,7 +132,7 @@ target_compile_definitions(ddnet_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
 
 find_package(CURL REQUIRED)
 find_package(Freetype REQUIRED)
-target_link_libraries(ddnet_game PRIVATE ddnet_physics cglm CURL::libcurl Freetype::Freetype)
+target_link_libraries(ddnet_game PRIVATE ddnet_physics ddnet_ghost cglm CURL::libcurl Freetype::Freetype)
 
 # cJSON is compiled straight in; it is one file and the editor's copy is not a
 # library a module can link against.

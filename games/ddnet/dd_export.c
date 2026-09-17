@@ -129,7 +129,7 @@ void dd_export_window_render(ft_game *game) {
   igSeparator();
 
   int selected_count = 0;
-  if (igBeginChild_Str("##ddnet_export_tracks", (ImVec2){0, -82.f}, true, 0)) {
+  if (igBeginChild_Str("##ddnet_export_tracks", (ImVec2){0, -56.f}, true, 0)) {
     for (int world = 0; selection_ok && world < game->demo_export_world_count; ++world) {
       dd_demo_export_world_t *selection = &game->demo_export_worlds[world];
       igPushID_Int(world);

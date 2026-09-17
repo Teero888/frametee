@@ -16,9 +16,12 @@
 [submodule "libs/toml"]
 	path = libs/toml
 	url = https://github.com/cktan/tomlc17.git
-[submodule "games/tmnf/ForeverValidator"]
+[submodule "libs/ForeverValidator"]
 	path = libs/ForeverValidator
 	url = https://github.com/Teero888/ForeverValidator.git
 [submodule "libs/sm64_physics"]
 	path = libs/sm64_physics
 	url = https://github.com/Teero888/sm64_physics.git
+[submodule "libs/ddnet_ghost"]
+	path = libs/ddnet_ghost
+	url = https://github.com/Teero888/ddnet_ghost.git

@@ -649,6 +649,18 @@ struct ft_game {
   dd_demo_export_world_t *demo_export_worlds;
   int demo_export_world_count;
   bool preserve_demo_export_on_level_load;
+
+  // DDNet ghost export configuration
+  bool open_ghost_export;
+  int ghost_export_world;
+  int ghost_export_track;
+  int ghost_export_start_tick;
+  int ghost_export_end_tick;
+  int ghost_export_detected_start;
+  int ghost_export_detected_end;
+  float ghost_export_detected_time;
+  bool ghost_export_has_finish;
+  char ghost_export_error[160];
 };
 
 void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...);
@@ -712,6 +724,13 @@ void dd_export_window_render(ft_game *game);
 void dd_export_window_cleanup(ft_game *game);
 size_t dd_export_project_save(ft_game *game, void *out, size_t out_size);
 bool dd_export_project_load(ft_game *game, const void *data, size_t size);
+void dd_ghost_export_window_open(ft_game *game);
+void dd_ghost_export_window_render(ft_game *game);
+bool dd_ghost_scan_track(ft_game *game, int world_index, int local_player,
+                         int *out_start_tick, int *out_end_tick,
+                         float *out_time, bool *out_has_finish);
+bool dd_ghost_export(ft_game *game, int world_index, int local_player, int start_tick, int end_tick, const char *path);
+bool dd_ghost_export_request(ft_game *game, const ft_export_request *request);
 
 void dd_draw_sprite(ft_game *game, ft_atlas *atlas, float z, vec2 pos, vec2 size, float rotation, uint32_t sprite, vec4 color);
 void dd_draw_sprites(ft_game *game, ft_atlas *atlas, float z, const ft_sprite_draw *draws, uint32_t count);
