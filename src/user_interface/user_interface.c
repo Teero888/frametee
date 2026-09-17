@@ -1,6 +1,6 @@
 #include "user_interface.h"
 #include "cglm/vec2.h"
-#include "cimgui.h"
+#include <include_cimgui.h>
 #include "input_effects_editor.h"
 #include "player_profile.h"
 #include "snippet_editor.h"
@@ -28,7 +28,6 @@
 #include <string.h>
 #include <system/config.h>
 #include <system/fs.h>
-#include <system/include_cimgui.h>
 #include <system/input.h>
 #include <system/save.h>
 

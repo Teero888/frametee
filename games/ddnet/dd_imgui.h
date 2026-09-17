@@ -10,7 +10,7 @@
 #ifndef CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #endif
-#include <cimgui.h>
+#include <include_cimgui.h>
 
 #include <frametee/game_abi.h>
 

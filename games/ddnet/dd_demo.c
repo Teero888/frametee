@@ -167,7 +167,10 @@ void str_to_ints(int *pInts, size_t NumInts, const char *pStr) {
     char aBuf[sizeof(int)] = {0, 0, 0, 0};
     for (size_t c = 0; c < sizeof(int) && i * sizeof(int) + c < StrSize; c++)
       aBuf[c] = pStr[i * sizeof(int) + c];
-    pInts[i] = ((aBuf[0] + 128) << 24) | ((aBuf[1] + 128) << 16) | ((aBuf[2] + 128) << 8) | (aBuf[3] + 128);
+    pInts[i] = (int)(((uint32_t)(uint8_t)(aBuf[0] + 128) << 24) |
+                     ((uint32_t)(uint8_t)(aBuf[1] + 128) << 16) |
+                     ((uint32_t)(uint8_t)(aBuf[2] + 128) << 8) |
+                     (uint32_t)(uint8_t)(aBuf[3] + 128));
   }
   pInts[NumInts - 1] &= 0xFFFFFF00;
 }
@@ -199,8 +202,25 @@ static int demo_character_emote(const SWorldCore *world, const SCharacterCore *c
   return emotes_by_eye[eye];
 }
 
+#define DD_DEMO_VIEW_CLIP_X 4000.0f
+#define DD_DEMO_VIEW_CLIP_Y 3000.0f
+#define DD_DEMO_MAX_SNAPPED_DOORS 500
+#define DD_DEMO_MAX_SNAPPED_PICKUPS 500
+
+static bool is_point_in_view(float px, float py, const mvec2 *positions, int count, float clip_x, float clip_y) {
+  for (int i = 0; i < count; ++i) {
+    float dx = fabsf(px - vgetx(positions[i]));
+    float dy = fabsf(py - vgety(positions[i]));
+    if (dx <= clip_x && dy <= clip_y) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, const int *client_ids, int client_count,
-                       const int *client_options, SWorldCore *prev, const ft_world *current_world, bool include_static, int demo_tick,
+                       const int *client_options, SWorldCore *prev, const ft_world *current_world, bool include_static,
+                       const mvec2 *active_positions, int active_pos_count, int demo_tick,
                        int tick_delta, int *next_item_id) {
   SWorldCore *cur = (SWorldCore *)&current_world->core;
   int first_exported_local = -1;
@@ -211,22 +231,110 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     }
   }
 
+  mvec2 fallback_pos[1];
+  if (active_pos_count <= 0 && first_exported_local >= 0 && first_exported_local < cur->m_NumCharacters) {
+    fallback_pos[0] = cur->m_pCharacters[first_exported_local].m_Pos;
+    active_positions = fallback_pos;
+    active_pos_count = 1;
+  }
+
   // do pickups first since they have static ids basically
+  int pickups_snapped = 0;
   for (int i = 0; include_static && i < game->current_level->num_pickups; ++i) {
+    if (pickups_snapped >= DD_DEMO_MAX_SNAPPED_PICKUPS) break;
     const SPickup pickup = game->current_level->pickups[i];
     if (cur->m_UniqueRace &&
         ((pickup.m_Type == POWERUP_WEAPON && pickup.m_Subtype != WEAPON_GRENADE) || pickup.m_Type == POWERUP_NINJA)) {
       continue;
     }
+    if (game->current_level->num_pickups > 128) {
+      if (active_pos_count > 0) {
+        float px = vgetx(game->current_level->pickup_positions[i]);
+        float py = vgety(game->current_level->pickup_positions[i]);
+        if (!is_point_in_view(px, py, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y)) {
+          continue;
+        }
+      } else if (pickups_snapped >= 64) {
+        break;
+      }
+    }
     dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, 64 + i, sizeof(dd_netobj_ddnet_pickup));
-    if (p) {
-      p->m_X = vgetx(game->current_level->pickup_positions[i]) - MAP_EXPAND32;
-      p->m_Y = vgety(game->current_level->pickup_positions[i]) - MAP_EXPAND32;
-      p->m_Type = pickup.m_Type;
-      p->m_Subtype = pickup.m_Subtype;
-      p->m_SwitchNumber = pickup.m_Number;
-      p->m_Flags = 0;
-      // log_info("DemoExport", "Added pickup id %d at (%d, %d), type %d, subtype %d", next_item_id, p->m_X, p->m_Y, p->m_Type, p->m_Subtype);
+    if (!p) break;
+    pickups_snapped++;
+    p->m_X = vgetx(game->current_level->pickup_positions[i]) - MAP_EXPAND32;
+    p->m_Y = vgety(game->current_level->pickup_positions[i]) - MAP_EXPAND32;
+    p->m_Type = pickup.m_Type;
+    p->m_Subtype = pickup.m_Subtype;
+    p->m_SwitchNumber = pickup.m_Number;
+    p->m_Flags = 0;
+    // log_info("DemoExport", "Added pickup id %d at (%d, %d), type %d, subtype %d", next_item_id, p->m_X, p->m_Y, p->m_Type, p->m_Subtype);
+  }
+
+  // do doors and switch state
+  if (include_static && game->current_level) {
+    const SCollision *collision = &game->current_level->collision;
+
+    int doors_snapped = 0;
+    for (int i = 0; i < collision->m_NumDoors; ++i) {
+      if (doors_snapped >= DD_DEMO_MAX_SNAPPED_DOORS) break;
+      const SDoor *door = &collision->m_pDoors[i];
+      if (collision->m_NumDoors > 64) {
+        if (active_pos_count > 0) {
+          float pos_x = vgetx(door->m_Pos);
+          float pos_y = vgety(door->m_Pos);
+          float to_x = vgetx(door->m_To);
+          float to_y = vgety(door->m_To);
+          float mid_x = 0.5f * (pos_x + to_x);
+          float mid_y = 0.5f * (pos_y + to_y);
+          if (!is_point_in_view(pos_x, pos_y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y) &&
+              !is_point_in_view(to_x, to_y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y) &&
+              !is_point_in_view(mid_x, mid_y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y)) {
+            continue;
+          }
+        } else if (doors_snapped >= 64) {
+          break;
+        }
+      }
+      const int door_id = 64 + game->current_level->num_pickups + i;
+      dd_netobj_ddnet_laser *l = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, door_id, sizeof(dd_netobj_ddnet_laser));
+      if (!l) break;
+      doors_snapped++;
+
+      bool closed = (door->m_Number <= 0) ||
+                    (cur->m_pSwitches && door->m_Number < cur->m_NumSwitches && cur->m_pSwitches[door->m_Number].m_Status);
+      mvec2 from = closed ? door->m_To : door->m_Pos;
+      l->m_ToX = round_to_int(vgetx(door->m_Pos)) - MAP_EXPAND32;
+      l->m_ToY = round_to_int(vgety(door->m_Pos)) - MAP_EXPAND32;
+      l->m_FromX = round_to_int(vgetx(from)) - MAP_EXPAND32;
+      l->m_FromY = round_to_int(vgety(from)) - MAP_EXPAND32;
+      l->m_StartTick = -1;
+      l->m_Owner = -1;
+      l->m_Type = DD_LASERTYPE_DOOR;
+      l->m_Subtype = 0;
+      l->m_SwitchNumber = door->m_Number;
+      l->m_Flags = 0;
+    }
+    if (cur->m_pSwitches && cur->m_NumSwitches > 0) {
+      dd_netobj_switch_state *ss = demo_sb_add_item(sb, DD_NETOBJTYPE_SWITCHSTATE, 0, sizeof(dd_netobj_switch_state));
+      if (ss) {
+        memset(ss, 0, sizeof(*ss));
+        ss->m_HighestSwitchNumber = cur->m_NumSwitches - 1;
+        if (ss->m_HighestSwitchNumber > 255) ss->m_HighestSwitchNumber = 255;
+        for (int i = 0; i <= ss->m_HighestSwitchNumber; ++i) {
+          if (cur->m_pSwitches[i].m_Status) {
+            ss->m_aStatus[i / 32] |= (1 << (i % 32));
+          }
+        }
+        int num_timed = 0;
+        for (int i = 0; i <= ss->m_HighestSwitchNumber && num_timed < 4; ++i) {
+          if (cur->m_pSwitches[i].m_EndTick > 0 &&
+              cur->m_pSwitches[i].m_EndTick < cur->m_GameTick + 3 * 50) {
+            ss->m_aSwitchNumbers[num_timed] = i;
+            ss->m_aEndTicks[num_timed] = cur->m_pSwitches[i].m_EndTick + tick_delta;
+            num_timed++;
+          }
+        }
+      }
     }
   }
 
@@ -291,101 +399,113 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     SCharacterCore *c_prev = &prev->m_pCharacters[p];
 
     dd_netobj_client_info *ci = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, client_id, sizeof(dd_netobj_client_info));
-    char name[sizeof(profile.name)];
-    if (profile.name[0]) snprintf(name, sizeof(name), "%s", profile.name);
-    else dd_profile_display_name(game, track_index, name, sizeof(name));
-    str_to_ints(ci->m_aName, 4, name);
-    str_to_ints(ci->m_aClan, 3, profile.clan);
-    str_to_ints(ci->m_aSkin, 6, profile.skin[0] ? profile.skin : "default");
-    ci->m_Country = 0;
-    // The profile already holds what the protocol wants: DDNet's own packed
-    // hue/saturation/lightness, never converted to anything else on the way.
-    ci->m_UseCustomColor = profile.use_custom_color ? 1 : 0;
-    ci->m_ColorBody = profile.use_custom_color ? profile.color_body : 0;
-    ci->m_ColorFeet = profile.use_custom_color ? profile.color_feet : 0;
+    if (ci) {
+      char name[sizeof(profile.name)];
+      if (profile.name[0]) snprintf(name, sizeof(name), "%s", profile.name);
+      else dd_profile_display_name(game, track_index, name, sizeof(name));
+      str_to_ints(ci->m_aName, 4, name);
+      str_to_ints(ci->m_aClan, 3, profile.clan);
+      str_to_ints(ci->m_aSkin, 6, profile.skin[0] ? profile.skin : "default");
+      ci->m_Country = 0;
+      // The profile already holds what the protocol wants: DDNet's own packed
+      // hue/saturation/lightness, never converted to anything else on the way.
+      ci->m_UseCustomColor = profile.use_custom_color ? 1 : 0;
+      ci->m_ColorBody = profile.use_custom_color ? profile.color_body : 0;
+      ci->m_ColorFeet = profile.use_custom_color ? profile.color_feet : 0;
+    }
 
     dd_netobj_player_info *pi = demo_sb_add_item(sb, DD_NETOBJTYPE_PLAYERINFO, client_id, sizeof(dd_netobj_player_info));
-    pi->m_Latency = client_options ? client_options[client_id] : 0;
-    pi->m_Score = -9999;
-    pi->m_Local = 0;
-    pi->m_ClientId = client_id;
-    pi->m_Team = 0;
+    if (pi) {
+      pi->m_Latency = client_options ? client_options[client_id] : 0;
+      pi->m_Score = -9999;
+      pi->m_Local = 0;
+      pi->m_ClientId = client_id;
+      pi->m_Team = 0;
+    }
 
     dd_netobj_ddnet_player *dp = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPLAYER, client_id, sizeof(dd_netobj_ddnet_player));
-    dp->m_AuthLevel = 0;
-    dp->m_Flags = 0;
+    if (dp) {
+      dp->m_AuthLevel = 0;
+      dp->m_Flags = 0;
+    }
 
     dd_netobj_character *ch = demo_sb_add_item(sb, DD_NETOBJTYPE_CHARACTER, client_id, sizeof(dd_netobj_character));
+    if (ch) {
+      memset(ch, 0, sizeof(*ch));
+      ch->core.m_X = round_to_int(vgetx(c_cur->m_Pos)) - MAP_EXPAND32;
+      ch->core.m_Y = round_to_int(vgety(c_cur->m_Pos)) - MAP_EXPAND32;
+      ch->core.m_VelX = round_to_int(vgetx(c_cur->m_Vel) * 256.0f);
+      ch->core.m_VelY = round_to_int(vgety(c_cur->m_Vel) * 256.0f);
+      ch->core.m_HookState = c_cur->m_HookState;
+      ch->core.m_HookTick = c_cur->m_HookTick;
+      ch->core.m_HookX = round_to_int(vgetx(c_cur->m_HookPos)) - MAP_EXPAND32;
+      ch->core.m_HookY = round_to_int(vgety(c_cur->m_HookPos)) - MAP_EXPAND32;
+      ch->core.m_HookDx = round_to_int(vgetx(c_cur->m_HookDir) * 256.0f);
+      ch->core.m_HookDy = round_to_int(vgety(c_cur->m_HookDir) * 256.0f);
+      ch->core.m_HookedPlayer = remap_client_id(client_ids, client_count, c_cur->m_HookedPlayer);
+      ch->core.m_Jumped = c_cur->m_Jumped;
+      ch->core.m_Direction = c_cur->m_Input.m_Direction;
+      // setup angle
+      float tmp_angle = atan2(c_cur->m_Input.m_TargetY, c_cur->m_Input.m_TargetX);
+      if (tmp_angle < -(M_PI / 2.0f)) ch->core.m_Angle = (int)((tmp_angle + (2.0f * M_PI)) * 256.0f);
+      else ch->core.m_Angle = (int)(tmp_angle * 256.0f);
 
-    ch->core.m_X = round_to_int(vgetx(c_cur->m_Pos)) - MAP_EXPAND32;
-    ch->core.m_Y = round_to_int(vgety(c_cur->m_Pos)) - MAP_EXPAND32;
-    ch->core.m_VelX = round_to_int(vgetx(c_cur->m_Vel) * 256.0f);
-    ch->core.m_VelY = round_to_int(vgety(c_cur->m_Vel) * 256.0f);
-    ch->core.m_HookState = c_cur->m_HookState;
-    ch->core.m_HookTick = c_cur->m_HookTick;
-    ch->core.m_HookX = round_to_int(vgetx(c_cur->m_HookPos)) - MAP_EXPAND32;
-    ch->core.m_HookY = round_to_int(vgety(c_cur->m_HookPos)) - MAP_EXPAND32;
-    ch->core.m_HookDx = round_to_int(vgetx(c_cur->m_HookDir) * 256.0f);
-    ch->core.m_HookDy = round_to_int(vgety(c_cur->m_HookDir) * 256.0f);
-    ch->core.m_HookedPlayer = remap_client_id(client_ids, client_count, c_cur->m_HookedPlayer);
-    ch->core.m_Jumped = c_cur->m_Jumped;
-    ch->core.m_Direction = c_cur->m_Input.m_Direction;
-    // setup angle
-    float tmp_angle = atan2(c_cur->m_Input.m_TargetY, c_cur->m_Input.m_TargetX);
-    if (tmp_angle < -(M_PI / 2.0f)) ch->core.m_Angle = (int)((tmp_angle + (2.0f * M_PI)) * 256.0f);
-    else ch->core.m_Angle = (int)(tmp_angle * 256.0f);
+      // Physics groups run on local clocks, while a demo has one shared clock. Every absolute tick
+      // written to the protocol must be translated or the client predicts offset groups far away.
+      ch->core.m_Tick = demo_tick;
+      ch->m_Emote = demo_character_emote(cur, c_cur);
 
-    // Physics groups run on local clocks, while a demo has one shared clock. Every absolute tick
-    // written to the protocol must be translated or the client predicts offset groups far away.
-    ch->core.m_Tick = demo_tick;
-    ch->m_Emote = demo_character_emote(cur, c_cur);
-
-    ch->m_AttackTick = c_cur->m_AttackTick + tick_delta;
-    ch->core.m_Direction = c_cur->m_Input.m_Direction;
-    ch->m_Weapon = (c_cur->m_DeepFrozen || c_cur->m_FreezeTime > 0 || c_cur->m_LiveFrozen) ? WEAPON_NINJA : c_cur->m_ActiveWeapon;
-    ch->m_AmmoCount = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_aWeaponAmmo[c_cur->m_ActiveWeapon] : 0;
-    ch->m_Health = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_Health : 10;
-    ch->m_Armor = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_Armor : 10;
-    ch->m_PlayerFlags = 0;
+      ch->m_AttackTick = c_cur->m_AttackTick + tick_delta;
+      ch->core.m_Direction = c_cur->m_Input.m_Direction;
+      ch->m_Weapon = (c_cur->m_DeepFrozen || c_cur->m_FreezeTime > 0) ? WEAPON_NINJA : c_cur->m_ActiveWeapon;
+      ch->m_AmmoCount = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_aWeaponAmmo[c_cur->m_ActiveWeapon] : 0;
+      ch->m_Health = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_Health : 10;
+      ch->m_Armor = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_Armor : 10;
+      ch->m_PlayerFlags = 0;
+    }
 
     dd_netobj_ddnet_character *dc = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETCHARACTER, client_id, sizeof(dd_netobj_ddnet_character));
-    dc->m_Flags = 0;
-    if (c_cur->m_Solo) dc->m_Flags |= DD_CHARACTERFLAG_SOLO;
-    if (c_cur->m_EndlessHook) dc->m_Flags |= DD_CHARACTERFLAG_ENDLESS_HOOK;
-    if (c_cur->m_CollisionDisabled) dc->m_Flags |= DD_CHARACTERFLAG_COLLISION_DISABLED;
-    if (c_cur->m_HookHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_HOOK_HIT_DISABLED;
-    if (c_cur->m_EndlessJump) dc->m_Flags |= DD_CHARACTERFLAG_ENDLESS_JUMP;
-    if (c_cur->m_Jetpack) dc->m_Flags |= DD_CHARACTERFLAG_JETPACK;
-    if (c_cur->m_HammerHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_HAMMER_HIT_DISABLED;
-    if (c_cur->m_ShotgunHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_SHOTGUN_HIT_DISABLED;
-    if (c_cur->m_GrenadeHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_GRENADE_HIT_DISABLED;
-    if (c_cur->m_LaserHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_LASER_HIT_DISABLED;
-    if (c_cur->m_HasTelegunGun) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_GUN;
-    if (c_cur->m_HasTelegunGrenade) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_GRENADE;
-    if (c_cur->m_HasTelegunLaser) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_LASER;
-    if (c_cur->m_aWeaponGot[WEAPON_HAMMER]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_HAMMER;
-    if (c_cur->m_aWeaponGot[WEAPON_GUN]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GUN;
-    if (c_cur->m_aWeaponGot[WEAPON_SHOTGUN]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_SHOTGUN;
-    if (c_cur->m_aWeaponGot[WEAPON_GRENADE]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GRENADE;
-    if (c_cur->m_aWeaponGot[WEAPON_LASER]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_LASER;
-    if (c_cur->m_ActiveWeapon == WEAPON_NINJA) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_NINJA;
-    if (c_cur->m_LiveFrozen) dc->m_Flags |= DD_CHARACTERFLAG_MOVEMENTS_DISABLED;
+    if (dc) {
+      memset(dc, 0, sizeof(*dc));
+      dc->m_TuneZoneOverride = -1;
+      dc->m_Flags = 0;
+      if (c_cur->m_Solo) dc->m_Flags |= DD_CHARACTERFLAG_SOLO;
+      if (c_cur->m_EndlessHook) dc->m_Flags |= DD_CHARACTERFLAG_ENDLESS_HOOK;
+      if (c_cur->m_CollisionDisabled) dc->m_Flags |= DD_CHARACTERFLAG_COLLISION_DISABLED;
+      if (c_cur->m_HookHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_HOOK_HIT_DISABLED;
+      if (c_cur->m_EndlessJump) dc->m_Flags |= DD_CHARACTERFLAG_ENDLESS_JUMP;
+      if (c_cur->m_Jetpack) dc->m_Flags |= DD_CHARACTERFLAG_JETPACK;
+      if (c_cur->m_HammerHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_HAMMER_HIT_DISABLED;
+      if (c_cur->m_ShotgunHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_SHOTGUN_HIT_DISABLED;
+      if (c_cur->m_GrenadeHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_GRENADE_HIT_DISABLED;
+      if (c_cur->m_LaserHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_LASER_HIT_DISABLED;
+      if (c_cur->m_HasTelegunGun) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_GUN;
+      if (c_cur->m_HasTelegunGrenade) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_GRENADE;
+      if (c_cur->m_HasTelegunLaser) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_LASER;
+      if (c_cur->m_aWeaponGot[WEAPON_HAMMER]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_HAMMER;
+      if (c_cur->m_aWeaponGot[WEAPON_GUN]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GUN;
+      if (c_cur->m_aWeaponGot[WEAPON_SHOTGUN]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_SHOTGUN;
+      if (c_cur->m_aWeaponGot[WEAPON_GRENADE]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GRENADE;
+      if (c_cur->m_aWeaponGot[WEAPON_LASER]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_LASER;
+      if (c_cur->m_ActiveWeapon == WEAPON_NINJA) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_NINJA;
+      if (c_cur->m_LiveFrozen) dc->m_Flags |= DD_CHARACTERFLAG_MOVEMENTS_DISABLED;
 
-    dc->m_Jumps = c_cur->m_Jumps;
-    dc->m_TeleCheckpoint = c_cur->m_TeleCheckpoint;
-    dc->m_StrongWeakId = client_id;
-    dc->m_JumpedTotal = c_cur->m_JumpedTotal;
-    dc->m_NinjaActivationTick = c_cur->m_Ninja.m_ActivationTick + tick_delta;
+      dc->m_Jumps = c_cur->m_Jumps;
+      dc->m_TeleCheckpoint = c_cur->m_TeleCheckpoint;
+      dc->m_StrongWeakId = client_id;
+      dc->m_JumpedTotal = c_cur->m_JumpedTotal;
+      dc->m_NinjaActivationTick = c_cur->m_Ninja.m_ActivationTick + tick_delta;
 
-    dc->m_FreezeStart = c_cur->m_FreezeStart == 0 ? 0 : c_cur->m_FreezeStart + tick_delta;
-    dc->m_FreezeEnd = c_cur->m_DeepFrozen ? -1 : c_cur->m_FreezeTime == 0 ? 0
-                                                                          : demo_tick + c_cur->m_FreezeTime;
+      dc->m_FreezeStart = c_cur->m_FreezeStart == 0 ? 0 : c_cur->m_FreezeStart + tick_delta;
+      dc->m_FreezeEnd = c_cur->m_DeepFrozen ? -1 : c_cur->m_FreezeTime == 0 ? 0
+                                                                            : demo_tick + c_cur->m_FreezeTime;
 
-    if (c_cur->m_IsInFreeze) {
-      dc->m_Flags |= DD_CHARACTERFLAG_IN_FREEZE;
+      if (c_cur->m_IsInFreeze) {
+        dc->m_Flags |= DD_CHARACTERFLAG_IN_FREEZE;
+      }
+      dc->m_TargetX = c_cur->m_Input.m_TargetX;
+      dc->m_TargetY = c_cur->m_Input.m_TargetY;
     }
-    dc->m_TargetX = c_cur->m_Input.m_TargetX;
-    dc->m_TargetY = c_cur->m_Input.m_TargetY;
 
     if (c_cur->m_StartTick != -1 && c_prev->m_FinishTick == -1 && c_cur->m_FinishTick != -1) {
       dd_netevent_finish *nf = demo_sb_add_item(sb, DD_NETEVENTTYPE_FINISH, (*next_item_id)++, sizeof(dd_netevent_finish));
@@ -408,27 +528,35 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     switch (event->type) {
     case PARTICLE_TYPE_PLAYER_SPAWN: {
       dd_netevent_spawn *spawn = demo_sb_add_item(sb, DD_NETEVENTTYPE_SPAWN, (*next_item_id)++, sizeof(*spawn));
-      spawn->common.m_X = x;
-      spawn->common.m_Y = y;
+      if (spawn) {
+        spawn->common.m_X = x;
+        spawn->common.m_Y = y;
+      }
       break;
     }
     case PARTICLE_TYPE_PLAYER_DEATH: {
       dd_netevent_death *death = demo_sb_add_item(sb, DD_NETEVENTTYPE_DEATH, (*next_item_id)++, sizeof(*death));
-      death->common.m_X = x;
-      death->common.m_Y = y;
-      death->m_ClientId = client_id;
+      if (death) {
+        death->common.m_X = x;
+        death->common.m_Y = y;
+        death->m_ClientId = client_id;
+      }
       break;
     }
     case PARTICLE_TYPE_HAMMER_HIT: {
       dd_netevent_hammer_hit *hit = demo_sb_add_item(sb, DD_NETEVENTTYPE_HAMMERHIT, (*next_item_id)++, sizeof(*hit));
-      hit->common.m_X = x;
-      hit->common.m_Y = y;
+      if (hit) {
+        hit->common.m_X = x;
+        hit->common.m_Y = y;
+      }
       break;
     }
     case PARTICLE_TYPE_EXPLOSION: {
       dd_netevent_explosion *explosion = demo_sb_add_item(sb, DD_NETEVENTTYPE_EXPLOSION, (*next_item_id)++, sizeof(*explosion));
-      explosion->common.m_X = x;
-      explosion->common.m_Y = y;
+      if (explosion) {
+        explosion->common.m_X = x;
+        explosion->common.m_Y = y;
+      }
       break;
     }
     case PARTICLE_TYPE_AIR_JUMP:
@@ -442,9 +570,11 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     if (event->client_id >= 0 && remap_client_id(client_ids, client_count, event->client_id) < 0) continue;
     dd_netevent_sound_world *sound =
         demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(*sound));
-    sound->common.m_X = (int)event->x - MAP_EXPAND32;
-    sound->common.m_Y = (int)event->y - MAP_EXPAND32;
-    sound->m_SoundId = event->sound_id;
+    if (sound) {
+      sound->common.m_X = (int)event->x - MAP_EXPAND32;
+      sound->common.m_Y = (int)event->y - MAP_EXPAND32;
+      sound->m_SoundId = event->sound_id;
+    }
   }
   for (int i = 0; i < current_world->physics_damage_event_count; ++i) {
     const dd_physics_damage_event_t *event = &current_world->physics_damage_events[i];
@@ -456,9 +586,11 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       const float angle = start + (end - start) * (float)(indicator + 1) / (float)(event->amount + 1);
       dd_netevent_damage_ind *damage =
           demo_sb_add_item(sb, DD_NETEVENTTYPE_DAMAGEIND, (*next_item_id)++, sizeof(*damage));
-      damage->common.m_X = (int)event->x - MAP_EXPAND32;
-      damage->common.m_Y = (int)event->y - MAP_EXPAND32;
-      damage->m_Angle = (int)(angle * 256.0f);
+      if (damage) {
+        damage->common.m_X = (int)event->x - MAP_EXPAND32;
+        damage->common.m_Y = (int)event->y - MAP_EXPAND32;
+        damage->m_Angle = (int)(angle * 256.0f);
+      }
     }
   }
 
@@ -588,6 +720,72 @@ static bool write_timeline_event(dd_demo_writer *writer, const dd_event_payload_
   return true;
 }
 
+static void write_sv_tuneparams(dd_demo_writer *writer, const STuningParams *tuning) {
+  char buffer[DD_MAX_MESSAGE_SIZE];
+  dd_msg_packer packer;
+  demo_msg_init(&packer, buffer, sizeof(buffer));
+  demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_TUNEPARAMS << 1);
+
+#define PACK_TUNE(name) demo_msg_add_int(&packer, round_to_int((tuning ? tuning->m_##name : 0.0f) * 100.0f))
+  PACK_TUNE(GroundControlSpeed);
+  PACK_TUNE(GroundControlAccel);
+  PACK_TUNE(GroundFriction);
+  PACK_TUNE(GroundJumpImpulse);
+  PACK_TUNE(AirJumpImpulse);
+  PACK_TUNE(AirControlSpeed);
+  PACK_TUNE(AirControlAccel);
+  PACK_TUNE(AirFriction);
+  PACK_TUNE(HookLength);
+  PACK_TUNE(HookFireSpeed);
+  PACK_TUNE(HookDragAccel);
+  PACK_TUNE(HookDragSpeed);
+  PACK_TUNE(Gravity);
+  PACK_TUNE(VelrampStart);
+  PACK_TUNE(VelrampRange);
+  PACK_TUNE(VelrampCurvature);
+  PACK_TUNE(GunCurvature);
+  PACK_TUNE(GunSpeed);
+  PACK_TUNE(GunLifetime);
+  PACK_TUNE(ShotgunCurvature);
+  PACK_TUNE(ShotgunSpeed);
+  PACK_TUNE(ShotgunSpeeddiff);
+  PACK_TUNE(ShotgunLifetime);
+  PACK_TUNE(GrenadeCurvature);
+  PACK_TUNE(GrenadeSpeed);
+  PACK_TUNE(GrenadeLifetime);
+  PACK_TUNE(LaserReach);
+  PACK_TUNE(LaserBounceDelay);
+  PACK_TUNE(LaserBounceNum);
+  PACK_TUNE(LaserBounceCost);
+  PACK_TUNE(LaserDamage);
+  PACK_TUNE(PlayerCollision);
+  PACK_TUNE(PlayerHooking);
+  // DDNet tunings
+  {
+    float jetpack_strength = (tuning && tuning->m_JetpackStrength > 0.0f) ? tuning->m_JetpackStrength : 400.0f;
+    demo_msg_add_int(&packer, round_to_int(jetpack_strength * 100.0f));
+  }
+  PACK_TUNE(ShotgunStrength);
+  PACK_TUNE(ExplosionStrength);
+  PACK_TUNE(HammerStrength);
+  PACK_TUNE(HookDuration);
+  PACK_TUNE(HammerFireDelay);
+  PACK_TUNE(GunFireDelay);
+  PACK_TUNE(ShotgunFireDelay);
+  PACK_TUNE(GrenadeFireDelay);
+  PACK_TUNE(LaserFireDelay);
+  PACK_TUNE(NinjaFireDelay);
+  PACK_TUNE(HammerHitFireDelay);
+  demo_msg_add_int(&packer, 0); // GroundElasticityX
+  demo_msg_add_int(&packer, 0); // GroundElasticityY
+#undef PACK_TUNE
+
+  int size = demo_msg_finish(&packer);
+  if (size >= 0) {
+    demo_w_write_msg(writer, buffer, size);
+  }
+}
+
 static void free_client_maps(int **maps, int *counts, uint32_t world_count) {
   if (maps)
     for (uint32_t i = 0; i < world_count; ++i)
@@ -696,33 +894,54 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
     return false;
   }
 
+  const ft_world **curr_worlds = (const ft_world **)calloc(world_count, sizeof(const ft_world *));
+  const ft_world **prev_worlds = (const ft_world **)calloc(world_count, sizeof(const ft_world *));
   uint8_t snapshot[DD_SNAPSHOT_MAX_SIZE];
-  bool ok = true;
+  bool ok = (curr_worlds && prev_worlds);
   const int tick_span = end_tick - start_tick + 1;
-  for (int tick = start_tick; tick <= end_tick; ++tick) {
+  for (int tick = start_tick; ok && tick <= end_tick; ++tick) {
     demo_sb_clear(builder);
-    int next_item_id = 64 + game->current_level->num_pickups;
-    bool include_static = true;
-    for (uint32_t world_index = 0; world_index < world_count; ++world_index) {
-      if (!world_has_exported_client(client_maps[world_index], client_counts[world_index])) continue;
+    int num_pickups = game->current_level ? game->current_level->num_pickups : 0;
+    int num_doors = game->current_level ? game->current_level->collision.m_NumDoors : 0;
+    int next_item_id = 64 + num_pickups + num_doors;
 
-      const ft_world *previous = NULL;
-      const ft_world *current = NULL;
-      if (!game->engine->timeline_world_pair(world_index, tick, &previous, &current) || !previous || !current) {
+    mvec2 active_positions[64];
+    int active_pos_count = 0;
+    for (uint32_t wi = 0; wi < world_count; ++wi) {
+      curr_worlds[wi] = NULL;
+      prev_worlds[wi] = NULL;
+      if (!world_has_exported_client(client_maps[wi], client_counts[wi])) continue;
+      if (!game->engine->timeline_world_pair(wi, tick, &prev_worlds[wi], &curr_worlds[wi]) || !prev_worlds[wi] || !curr_worlds[wi]) {
         ok = false;
         break;
       }
-      snap_world(builder, game, (int)world_index, client_maps[world_index], client_counts[world_index], client_options,
-                 (SWorldCore *)&previous->core, current, include_static, tick - start_tick,
-                 worlds[world_index].start_offset - start_tick, &next_item_id);
-      include_static = false;
+      const SWorldCore *w_core = (const SWorldCore *)&curr_worlds[wi]->core;
+      for (int p = 0; p < w_core->m_NumCharacters && active_pos_count < 64; ++p) {
+        if (p < client_counts[wi] && client_maps[wi][p] >= 0) {
+          active_positions[active_pos_count++] = w_core->m_pCharacters[p].m_Pos;
+        }
+      }
     }
     if (!ok) break;
+
+    bool include_static = true;
+    for (uint32_t world_index = 0; world_index < world_count; ++world_index) {
+      if (!curr_worlds[world_index]) continue;
+
+      snap_world(builder, game, (int)world_index, client_maps[world_index], client_counts[world_index], client_options,
+                 (SWorldCore *)&prev_worlds[world_index]->core, curr_worlds[world_index], include_static, active_positions,
+                 active_pos_count, tick - start_tick, worlds[world_index].start_offset - start_tick, &next_item_id);
+      include_static = false;
+    }
 
     const int snapshot_size = demo_sb_finish(builder, snapshot);
     if (snapshot_size <= 0 || !demo_w_write_snap(writer, tick - start_tick, snapshot, snapshot_size)) {
       ok = false;
       break;
+    }
+
+    if (game->current_level && tick == start_tick) {
+      write_sv_tuneparams(writer, &game->current_level->collision.m_aTuningList[0]);
     }
 
     // Authored protocol messages are stored by the engine as opaque DDNet
@@ -742,6 +961,7 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
         write_timeline_event(writer, &payload, client_maps[world_index], client_counts[world_index]);
       }
     }
+
     if (request->progress && ((tick - start_tick) % 50 == 0 || tick == end_tick))
       request->progress(request->progress_user, (float)(tick - start_tick + 1) / (float)tick_span, "Writing DDNet demo");
   }
@@ -750,6 +970,8 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
   demo_sb_destroy(&builder);
   demo_w_destroy(&writer);
   fclose(file);
+  if (curr_worlds) free(curr_worlds);
+  if (prev_worlds) free(prev_worlds);
   free_client_maps(client_maps, client_counts, world_count);
   free(worlds);
   if (!ok) dd_log(game, FT_LOG_ERROR, "DDNet demo export failed while writing snapshots.");

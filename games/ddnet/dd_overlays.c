@@ -606,7 +606,7 @@ void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame) {
 // flipped -- CDoor::Read reads its m_To back as the door's own position -- so
 // RenderLaser's `Pos`, the end that carries the head, is the door's tile, and
 // its `From` is the clipped far end of the beam.
-static void draw_door(ft_game *game, vec2 pos, vec2 to, float opacity) {
+static void draw_door(ft_game *game, vec2 pos, vec2 to, float opacity, bool on) {
   // cl_laser_door_outline_color and cl_laser_door_inner_color, converted from
   // the packed HSL those defaults are stored as.
   const vec4 outer = {0.000000f, 0.133333f, 0.097255f, opacity};
@@ -615,18 +615,19 @@ static void draw_door(ft_game *game, vec2 pos, vec2 to, float opacity) {
   // unlike a shot it never collapses -- but it never reaches the full 7 and 5
   // offsets either. One tick against the default bounce delay leaves it here.
   const float ia = 1.f - (1000.f / GAME_TICK_SPEED) / 150.f;
-
-  vec2 dir;
-  glm_vec2_sub(pos, to, dir);
-  if (glm_vec2_norm(dir) > 0.f) {
-    dd_draw_line(game, DD_Z_PROJECTILES, to, pos, (float *)outer, 14.f * ia / PX_PER_TILE);
-    // ExtraOutlineFrom is zero for a door where a shot would inset both ends:
-    // only the head end is pulled in, so consecutive doors meet flush and read
-    // as one beam instead of showing a seam at every join.
-    glm_vec2_normalize(dir);
-    glm_vec2_scale(dir, 1.f / PX_PER_TILE, dir);
-    vec2 inner_to = {pos[0] - dir[0], pos[1] - dir[1]};
-    dd_draw_line(game, DD_Z_PROJECTILES + 0.01f, to, inner_to, (float *)inner, 10.f * ia / PX_PER_TILE);
+  if (on) {
+    vec2 dir;
+    glm_vec2_sub(pos, to, dir);
+    if (glm_vec2_norm(dir) > 0.f) {
+      dd_draw_line(game, DD_Z_PROJECTILES, to, pos, (float *)outer, 14.f * ia / PX_PER_TILE);
+      // ExtraOutlineFrom is zero for a door where a shot would inset both ends:
+      // only the head end is pulled in, so consecutive doors meet flush and read
+      // as one beam instead of showing a seam at every join.
+      glm_vec2_normalize(dir);
+      glm_vec2_scale(dir, 1.f / PX_PER_TILE, dir);
+      vec2 inner_to = {pos[0] - dir[0], pos[1] - dir[1]};
+      dd_draw_line(game, DD_Z_PROJECTILES + 0.01f, to, inner_to, (float *)inner, 10.f * ia / PX_PER_TILE);
+    }
   }
 
   // The head is the untextured 16x16 quad and its 12x12 inset, on the tile the
@@ -652,10 +653,7 @@ void dd_render_doors(ft_game *game, const ft_render_frame *frame) {
     const SDoor *door = &collision->m_pDoors[i];
     // A switcher that is on holds its door shut, which is also the state
     // get_move_restrictions blocks movement in. Switcher 0 is always on.
-    if (door->m_Number > 0 &&
-        (!world->m_pSwitches || door->m_Number >= world->m_NumSwitches || !world->m_pSwitches[door->m_Number].m_Status))
-      continue;
-
+    bool off = door->m_Number > 0 && (!world->m_pSwitches || door->m_Number >= world->m_NumSwitches || !world->m_pSwitches[door->m_Number].m_Status);
     vec2 from = {vgetx(door->m_Pos) / PX_PER_TILE, vgety(door->m_Pos) / PX_PER_TILE};
     vec2 to = {vgetx(door->m_To) / PX_PER_TILE, vgety(door->m_To) / PX_PER_TILE};
     if ((from[0] < camera.visible.x && to[0] < camera.visible.x) ||
@@ -663,6 +661,6 @@ void dd_render_doors(ft_game *game, const ft_render_frame *frame) {
         (from[1] < camera.visible.y && to[1] < camera.visible.y) ||
         (from[1] > camera.visible.y + camera.visible.h && to[1] > camera.visible.y + camera.visible.h))
       continue;
-    draw_door(game, from, to, frame->opacity);
+    draw_door(game, from, to, frame->opacity, !off);
   }
 }
