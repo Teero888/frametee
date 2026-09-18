@@ -1,212 +1,158 @@
 # FrameTee
 
-**FrameTee** is a Tool-Assisted Speedrun (TAS) editor built with C99, Vulkan, and ImGui.
+FrameTee is a game-agnostic **Tool-Assisted Speedrun (TAS) editor and simulation engine** for games whose physics can be reproduced outside the original game.
+The core engine is written in **C99** using **Dear ImGui** and **Vulkan**. Game-specific physics, inputs, rendering, level loading and exporting are provided through separate game modules.
+Currently supported games are [Teeworlds](https://teeworlds.com/) / [DDNet](https://ddnet.org/) and [TrackMania Nations Forever](https://store.steampowered.com/app/11020/TrackMania_Nations_Forever/). Super Mario 64 support is currently in development.
 
-The editor itself is game-agnostic: it owns the timeline, snippets, undo/redo,
-projects and rendering, while a **game module** supplies the physics, the level
-format, the visuals and the rules. Modules are shared libraries that implement
-one C ABI, so they can be written in any language that compiles to one. the
-bundled examples are in C, C++ and Rust. [DDNet](https://github.com/ddnet/ddnet)
-is the game FrameTee ships with. See [docs/game-modules.md](docs/game-modules.md).
-
-## This readme is very outdated...
-> **Note:** This project is a Work In Progress (WIP). Expect bugs, crashes, and missing features. Physics and project file formats are subject to change.
-> Currently, there is **no macOS support**.
-
----
-
-## Screenshots
+> FrameTee is a **Work In Progress**. Expect bugs, crashes and breaking changes. Physics integrations, APIs and project file formats may change between versions. macOS is currently not supported.
 
 <p align="center">
-  <img width="48%" alt="FrameTee Editor View" src="https://github.com/user-attachments/assets/a2076aa3-eeff-4466-9ed5-602126e26dc8" />
-  <img width="48%" alt="Skin Browser" src="https://github.com/user-attachments/assets/80c6a17f-b476-49c8-b1a8-fc36a3b6a9d4" />
-  <img width="48%" alt="Controls" src="https://github.com/user-attachments/assets/6d3db15d-7237-4b3b-bebf-3b772c5d8a2b" />
-</p>
+<img width="45%" height="350" alt="ddnet_gif" src="https://github.com/user-attachments/assets/40258457-b4ea-45a1-8a4b-d95f2fdd2f36" />
+<img align="top" width="48%" alt="tmnf_gif" src="https://github.com/user-attachments/assets/420f16f3-83ca-4129-9c5c-5cadec0f87c6" />
+<img height="530px" alt="ddnet_image" src="https://github.com/user-attachments/assets/91449a7d-6be8-4d88-b9ff-294106f90a28" />
+<p/>
+  
+## Games
 
----
+Game integrations are implemented as modules behind a versioned C ABI. A module provides simulation, input definitions, state reflection, level loading, rendering and exporters while FrameTee handles the editor and TAS workflow.
 
-## Features
+### DDNet / Teeworlds
 
-### Core & Rendering
-*   **Game Modules:** Games plug in as shared libraries through a versioned C ABI (C, C++, Rust, ...), and each one tells the editor what it allows: player counts, tick rate, whether worlds can be forked.
-*   **Custom Physics:** The DDNet module uses [ddnet_physics](https://github.com/Teero888/ddnet_physics) to prevent cheating.
-*   **Vulkan Renderer:** High-performance rendering pipeline, with sprite atlases and custom pipelines available to game modules.
-*   **DDNet Support:** Compatibility with DDNet maps and skins.
+The DDNet module uses [`ddnet_physics`](https://github.com/Teero888/ddnet_physics) and loads regular DDNet `.map` files.
+The following gamemodes are supported: DDRace, Race, FastCap, FastCap no weapons.
+Exporting to .demo or ghost files is also supported. `ddnet_physics` is still incomplete so some features such as draggers or plasma turrets won't work but will be implemented in the future.
+To prevent cheating on official DDNet servers, the physics have been slightly altered and exporting input sequences to cheat clients is **NOT** supported and never will be. Don't even try.
 
-### TAS Editing
-*   **Timeline Interface:** Multi-track timeline for managing inputs.
-*   **Recording:** Real-time and frame-by-frame recording capabilities.
-*   **Input Snippets:** Organize inputs into movable, resizable, and editable snippets.
-*   **Input Effects:** Build ordered, reversible per-snippet input pipelines without rewriting authored inputs.
-*   **Prediction:** Visual trajectory prediction.
-*   **Snippet Editor:** Detailed matrix editor for precise tick-by-tick modification.
-*   **Undo/Redo:** Comprehensive system for timeline operations.
-*   **Bulk Editing:** Apply changes (direction, jumping, weapons) to multiple ticks simultaneously.
+<!-- DDNet GIF -->
 
-### Advanced Control
-*   **Linked Inputs:** Games opt into schema-driven input mirroring. The DDNet module uses it for dummy-tee controls; unrelated games do not expose them.
-*   **Deepfly Support:** Dummy fire mechanics similar to the standard [deepfly bind](https://wiki.ddnet.org/wiki/Binds#Deepfly).
+### TrackMania Nations Forever
 
-### Tools & Extensibility
-*   **Exporters:** Games provide their own; DDNet exports directly to DDNet-compatible demo files.
-*   **Plugin System:** C/C++ plugin support (DLL/SO) for custom functionality, scoped either globally or to one game.
-*   **Project System:** `.tasp` project files for saving/loading work.
-*   **Keybinds:** Fully configurable keyboard and mouse bindings.
-*   **Player Identity:** Names, colours and an appearance id the active game resolves however it likes.
+TrackMania support is built around my fork of [ForeverValidator](https://github.com/Skycrafter-dev/ForeverValidator).
+FrameTee can load TrackMania Forever challenges, simulate and render the car in the 3D editor, and export runs as native `.Replay.Gbx` files.
+TrackMania's proprietary assets are not distributed with FrameTee and must come from an existing TrackMania installation. See [installation guide](https://github.com/Teero888/frametee/blob/master/data/games/tmnf/README.txt).
 
----
+<!-- TMNF GIF -->
 
-## Building
+## Timeline
 
-### Requirements
-*   **Compiler:** `clang` (recommended)
-*   **SDK:** Vulkan SDK
-*   **Libraries:** `zlib`
+The timeline is built around tracks and input snippets.
+Snippets contain authored input and can be moved, resized, split, duplicated and combined without flattening the run into a single input stream. The snippet editor exposes the active game's inputs per tick and supports direct editing of the underlying input data. Snippets can be manually created or be recorded live at variable speed. Snippets are non-destructive, resizing them or splitting them won't delete any information, just as in any video editor.
 
-### Build Instructions
+<img height="300" alt="image" src="https://github.com/user-attachments/assets/33ffbf90-fe4b-475b-9370-e3aff492c803" />
 
-1.  **Clone the repository:**
-    ```sh
-    # Make sure to clone recursively for submodules
-    git clone --recursive https://github.com/Teero888/frametee.git
-    cd frametee
-    ```
+### Snippet Effects
 
-2.  **Configure and Compile:**
-    ```sh
-    mkdir build && cd build
+Snippet effects apply non-destructive transformations to authored input.
+Effects are processed in order and can be reordered, disabled or removed without modifying the original input data. Game modules define the available effects while FrameTee handles their storage, evaluation and undo history.
 
-    # For Release
-    cmake .. -DCMAKE_BUILD_TYPE=Release
+<img height="300" alt="DDNet snippet effects image" src="https://github.com/user-attachments/assets/20427b2c-f38c-49be-846d-ee4e592edec6" />
 
-    # For optimized builds
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_AGGRESSIVE_OPTIM=On
+## Prediction
 
-    # OR for Debug (with sanitizers)
-    # cmake .. -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=On
+Prediction lines simulate future movement from the current state without modifying the timeline.
+The primary line follows the authored inputs. Additional lines can override selected inputs, allowing several possible continuations to be compared from the same simulation state.
+Prediction uses the same game simulation interface as normal playback, so it works across both 2D and 3D modules.
 
-    make -j$(nproc)
-    ```
+<img align="top" height="400" alt="image" src="https://github.com/user-attachments/assets/570483fb-b86b-4dd3-82cc-499ae5bcf5d7" />
+<img height="400" alt="image" src="https://github.com/user-attachments/assets/17ed1ee7-6845-4a99-8e3f-8ecfde112941" />
+<img height="400" alt="image" src="https://github.com/user-attachments/assets/59a03977-95f2-48fe-a463-3f8f020711b8" />
 
----
+## Groups
 
-## Controls & Configuration
+Groups represent independent simulation worlds.
+Tracks inside the same group share a world and interact normally. Separate groups maintain separate world states, which allows multiple independent runs to exist in the same project.
 
-**Configuration File:**
-*   **Linux/Unix:** `~/.config/frametee/config.toml`
-*   **Windows:** `%appdata%/frametee/config.toml`
+<img height="300" alt="image" src="https://github.com/user-attachments/assets/9df14f5d-4da0-41fc-89d3-0ba8e4948e15" />
+<img height="300" alt="image" src="https://github.com/user-attachments/assets/fbcaeb56-9ba1-4c41-b0e7-9973e5449e07" />
+<img height="300" alt="image" src="https://github.com/user-attachments/assets/2a03a444-1a57-45c9-97c0-7d837286bea4" />
 
-### Default Key Bindings
+## Starting-State Overrides
 
-The engine owns playback, timeline, project, camera and track-selection binds.
-Recording controls are declared by the active game and appear in the same
-keybind editor. These are the bundled DDNet module's defaults:
+Game modules can expose selected entity properties as editable starting-state values.
+These overrides are applied before timeline playback begins and can be used to change state such as position, velocity or other game-specific properties supported by the module.
 
-| Category | Action | Default Key |
-| :--- | :--- | :--- |
-| **Playback** | Play/Pause | `X` |
-| | Rewind (Hold) | `C` |
-| | Previous Frame | `Left Arrow`, `Mouse Button 4` |
-| | Next Frame | `Right Arrow`, `Mouse Button 5` |
-| | Adjust TPS | `Up` / `Down` Arrows |
-| **Timeline** | Select All Snippets | `Ctrl + A` |
-| | Delete Snippet | `Delete` |
-| | Split Snippet | `Ctrl + R` |
-| | Merge Snippets | `Ctrl + M` |
-| | Toggle Active | `A` |
-| **DDNet Recording** | Move | `A` / `D` |
-| | Jump | `Space` |
-| | Fire | `Mouse Left` |
-| | Hook | `Mouse Right` |
-| | Kill | `K` |
-| | Weapons | `1`-`5` (Hammer, Gun, Shotgun, Grenade, Laser) |
-| **Recording** | Trim Recording | `F` |
-| | Cancel Recording | `F4` |
-| | Toggle Linked Copy | `R` |
-| **Camera** | Zoom | `=` / `-` |
-| **Tracks** | Switch Track | `Alt + 1-9` |
+<img height="400" alt="image" src="https://github.com/user-attachments/assets/5dda3e0e-3760-49b2-b40f-d05956b763ae" />
+<img align="top" height="400" alt="image" src="https://github.com/user-attachments/assets/d69e8d54-7732-41dc-a0c0-9169d0ce89d4" />
 
----
+## Plugins
 
-## Plugin System
+Plugins extend FrameTee without modifying the core engine.
+They can inspect and modify timeline data, generate inputs, add UI, draw viewport overlays, participate in undo/redo and expose command-line functionality.
+Plugins use a versioned C API and are configured through `plugin.toml`.
+See [`docs/plugins.md`](docs/plugins.md) for the plugin API and examples.
 
-FrameTee supports extensions via shared libraries (`.dll` / `.so`) loaded from the `plugins/` directory. Plugins can interact with the editor, add UI elements via ImGui, and manipulate timeline data.
+## Command Line
 
-### Plugin Lifecycle
+FrameTee can be started directly with a selected game and level:
 
-Plugins must export four C functions:
-
-*   `plugin_info_t get_plugin_info(void)`: Returns metadata (name, author, version).
-*   `void *plugin_init(tas_context_t *context, const tas_api_t *api)`: Initialize state.
-*   `void plugin_update(void *plugin_data)`: Called every frame (UI/Logic).
-*   `void plugin_shutdown(void *plugin_data)`: Cleanup resources.
-
-### API Access
-
-Plugins interact with the host via `src/plugins/plugin_api.h`:
-
-*   **`tas_context_t`**: The shared ImGui context, headless flag, and active game id.
-    *   *Note: UI plugins must set the ImGui context using `imgui_context`.*
-*   **`tas_api_t`**: Function pointers for actions:
-    *   `do_create_track()`, `do_create_snippet()`, `do_set_inputs()`
-    *   `input_field_count()`, `input_field()`, and the typed input accessors
-    *   `log()`, `draw_line_world()`
-    *   `register_undo_command()`
-
-### Building a Plugin
-
-Plugins can be built independently without recompiling the main application.
-
-1.  **Create Directory:** `plugins/my_plugin/`
-2.  **Source File:** Implement the lifecycle functions.
-3.  **CMakeLists.txt:** Configure as a shared library.
-
-**Build Command:**
-```sh
-cd plugins/my_plugin
-cmake -S . -B build -DHOST_APP_DIR=../../
-cmake --build build
+```bash
+./frametee --game ddnet --level path/to/map.map
 ```
 
-The output binary will be copied to `build/plugins` automatically if configured like the examples. See `plugins/example_c/` and `plugins/example_cpp/` for reference.
+Installed game modules can be listed with:
 
-### Plugin Scope
-
-A plugin is global by default and stays loaded whichever game is active. To bind
-one to a single game, export:
-
-```c
-FT_API const char *plugin_game_id(void) { return "ddnet"; }
+```bash
+./frametee --list-games
 ```
 
-The host then only loads it while that game is active. Anything that reads or
-writes a game's world or input records should do this, since those bytes mean
-nothing under a different game.
+Headless mode runs the simulation without creating a window and can be combined with plugins:
 
----
+```bash
+./frametee \
+    --headless \
+    --game ddnet \
+    --level path/to/map.map \
+    --plugin my_plugin
+```
+
+Additional arguments can be forwarded to active plugins.
+
+Use:
+
+```bash
+./frametee --help
+```
+
+for the options supported by the current build.
+
+## Undo / Redo
+
+FrameTee uses a command-based undo system for timeline and state editing.
+Native editor operations and plugin-generated changes can participate in the same history, with simulation caches invalidated as required when changes are reverted or reapplied.
 
 ## Game Modules
 
-Games live in `games/`, are built to `build/games/`, and are discovered at
-startup:
+New games are integrated through [`include/frametee/game_abi.h`](include/frametee/game_abi.h).
+The ABI covers simulation, input schemas, reflected state, rendering, level loading, cameras, exporters and other game-specific functionality. Modules are compiled as shared libraries and discovered at runtime.
+See [`docs/game-modules.md`](docs/game-modules.md) for more information.
 
-```sh
-./frametee --list-games              # installed games and what each one allows
-./frametee --game example-platformer # start under a specific game
+## Building
+
+Clone the repository with its submodules:
+
+```bash
+git clone --recursive https://github.com/Teero888/frametee.git
+cd frametee
 ```
 
-The bundled modules are `ddnet` (C), a raylib-backed C++ platformer, and a
-Bevy ECS-backed Rust bouncer. Writing your own means implementing
-`include/frametee/game_abi.h` and exporting `ft_game_module_entry`. no engine
-sources, no Vulkan, no ImGui required. Full guide:
-[docs/game-modules.md](docs/game-modules.md).
+Configure and build with CMake:
 
----
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j
+```
+
+FrameTee requires CMake, a suitable C/C++ compiler, Vulkan development libraries and `glslangValidator`.
+
+Windows and Linux are currently supported.
 
 ## Contributing
 
-FrameTee is open-source. Contributions are accepted through issue reports and pull requests.
+Bug reports, fixes, game integrations, plugins and editor improvements are welcome.
 
-**Contact:**
-*   Discord: `teero777`
-*   Matrix: `@teero888:matrix.org`
+For simulation issues, include the game, level, FrameTee revision and a minimal project or input sequence that reproduces the problem where possible.
+
+### Contact
+
+Discord: `teero777`
+Matrix: `@teero888:matrix.org`
