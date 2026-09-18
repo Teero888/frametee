@@ -144,7 +144,7 @@ cmake --build build --config Release -j
 
 FrameTee requires CMake, a suitable C/C++ compiler, Vulkan development libraries and `glslangValidator`.
 
-Windows and Linux are currently supported.
+Windows and Linux are currently supported. (not msvc since it's garbage. use mingw)
 
 ## Contributing
 
