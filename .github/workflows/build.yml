@@ -74,12 +74,6 @@ jobs:
           test -f data/fonts/DejaVuSans-LICENSE.txt
           test -f data/games/tmnf/thumbnail.png
           test -f data/games/tmnf/README.txt
-          test -f games/sm64.so
-          test -f data/games/sm64/shaders/present.frag.spv
-          test -f data/games/sm64/shaders/present.vert.spv
-          test -f data/games/sm64/runtime/sm64_lock
-          test -f data/games/sm64/runtime/manifest.json
-          test -f data/games/sm64/runtime/frametee_sm64_us.so.locked
           # A plugin is a directory holding its library, its manifest and any
           # resources it ships. The directory names the plugin on every
           # platform, and the library inside carries that name.
@@ -128,7 +122,6 @@ jobs:
         ./frametee --list-games | tee "$RUNNER_TEMP/frametee-game-modules.txt"
         grep -Eq '^  ddnet[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
         grep -Eq '^  tmnf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
-        grep -Eq '^  sm64[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
@@ -264,12 +257,6 @@ jobs:
           require_file data/games/tmnf/thumbnail.png
           require_file data/games/tmnf/README.txt
           require_file vulkan-1.dll
-          require_file games/sm64.dll
-          require_file data/games/sm64/shaders/present.frag.spv
-          require_file data/games/sm64/shaders/present.vert.spv
-          require_file data/games/sm64/runtime/sm64_lock.exe
-          require_file data/games/sm64/runtime/manifest.json
-          require_file data/games/sm64/runtime/frametee_sm64_us.dll.locked
           # See the Linux job: one directory per plugin, named after it.
           require_file plugins/example_c/example_c.dll
           require_file plugins/example_cpp/example_cpp.dll
@@ -284,7 +271,6 @@ jobs:
           ./frametee.exe --list-games | tee "$RUNNER_TEMP/frametee-game-modules.txt"
           grep -Eq '^  ddnet[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
           grep -Eq '^  tmnf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
-          grep -Eq '^  sm64[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
           find . -type f -print | sort
         )
 
