@@ -179,48 +179,16 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   glm_vec2_normalize(out->dir);
   out->aim_angle = atan2f(-out->dir[1], out->dir[0]);
 
-  typedef struct {
-    const void *setup_data;
-    uint32_t setup_data_size;
-    int skin;
-    bool custom;
-    vec3 body_col;
-    vec3 feet_col;
-  } tee_profile_cache_t;
+  dd_player_profile_t profile;
+  dd_profile_from_setup(setup_for(frame, index), &profile);
+  out->skin = dd_gfx_skin_index(game, profile.skin);
+  out->custom = profile.use_custom_color != 0;
+  glm_vec3_copy((vec3){1.f, 1.f, 1.f}, out->feet_col);
+  glm_vec3_copy((vec3){0.f, 0.f, 0.f}, out->body_col);
 
-  static tee_profile_cache_t s_tee_profile_cache = {0};
-  static bool s_tee_profile_cache_valid = false;
-
-  const ft_player_setup *setup = setup_for(frame, index);
-  const void *setup_data = setup ? setup->data : NULL;
-  const uint32_t setup_data_size = setup ? setup->data_size : 0;
-
-  if (s_tee_profile_cache_valid && s_tee_profile_cache.setup_data == setup_data &&
-      s_tee_profile_cache.setup_data_size == setup_data_size) {
-    out->skin = s_tee_profile_cache.skin;
-    out->custom = s_tee_profile_cache.custom;
-    glm_vec3_copy(s_tee_profile_cache.feet_col, out->feet_col);
-    glm_vec3_copy(s_tee_profile_cache.body_col, out->body_col);
-  } else {
-    dd_player_profile_t profile;
-    dd_profile_from_setup(setup, &profile);
-    out->skin = dd_gfx_skin_index(game, profile.skin);
-    out->custom = profile.use_custom_color != 0;
-    glm_vec3_copy((vec3){1.f, 1.f, 1.f}, out->feet_col);
-    glm_vec3_copy((vec3){0.f, 0.f, 0.f}, out->body_col);
-
-    if (out->custom) {
-      dd_hsl_to_rgb(profile.color_body, out->body_col);
-      dd_hsl_to_rgb(profile.color_feet, out->feet_col);
-    }
-
-    s_tee_profile_cache.setup_data = setup_data;
-    s_tee_profile_cache.setup_data_size = setup_data_size;
-    s_tee_profile_cache.skin = out->skin;
-    s_tee_profile_cache.custom = out->custom;
-    glm_vec3_copy(out->feet_col, s_tee_profile_cache.feet_col);
-    glm_vec3_copy(out->body_col, s_tee_profile_cache.body_col);
-    s_tee_profile_cache_valid = true;
+  if (out->custom) {
+    dd_hsl_to_rgb(profile.color_body, out->body_col);
+    dd_hsl_to_rgb(profile.color_feet, out->feet_col);
   }
 
   if (core->m_FreezeTime > 0 || core->m_ActiveWeapon == WEAPON_NINJA) {
