@@ -42,7 +42,7 @@ static const ft_world *effect_world_at_tick(void *user, int32_t tick) {
 
 static void effect_reset_simulation(void *user) {
   effect_eval_context_t *context = user;
-  if (context) model_reset_physics_cache(context->timeline);
+  if (context) model_invalidate_group_physics(context->timeline, context->group_index, 0);
 }
 
 static int group_authored_end(const timeline_state_t *timeline, int group_index, int minimum) {
@@ -58,15 +58,25 @@ static int group_authored_end(const timeline_state_t *timeline, int group_index,
   return end;
 }
 
-void input_effects_invalidate(timeline_state_t *timeline) {
-  if (!timeline) return;
+void input_effects_invalidate_group(timeline_state_t *timeline, int group_index) {
+  if (!timeline || group_index < 0 || group_index >= timeline->group_count) return;
+  timeline_group_t *group = timeline->groups[group_index];
+  group->input_effects_dirty = true;
   timeline->input_effects_dirty = true;
-  ++timeline->input_effect_context_revision;
-  if (timeline->input_effect_context_revision == 0) ++timeline->input_effect_context_revision;
+  ++group->input_effect_context_revision;
+  if (group->input_effect_context_revision == 0) ++group->input_effect_context_revision;
 }
 
-void input_effects_refresh(timeline_state_t *timeline) {
-  if (timeline) timeline->input_effects_dirty = true;
+void input_effects_invalidate(timeline_state_t *timeline) {
+  if (!timeline) return;
+  for (int i = 0; i < timeline->group_count; ++i)
+    input_effects_invalidate_group(timeline, i);
+}
+
+void input_effects_refresh(timeline_state_t *timeline, int group_index) {
+  if (!timeline || group_index < 0 || group_index >= timeline->group_count) return;
+  timeline->groups[group_index]->input_effects_dirty = true;
+  timeline->input_effects_dirty = true;
 }
 
 const input_record_t *input_effects_snippet_window(const input_snippet_t *snippet) {
@@ -243,10 +253,9 @@ static bool initialize_snippet_cache(input_snippet_t *snippet) {
   return true;
 }
 
-static uint64_t effect_stage_key(const timeline_state_t *timeline, uint64_t prefix, const input_effect_t *effect,
+static uint64_t effect_stage_key(uint64_t prefix, const input_effect_t *effect,
                                  const input_record_t *inputs, int count, size_t input_size) {
   uint64_t hash = UINT64_C(1469598103934665603);
-  hash = hash_u64(hash, timeline->input_effect_context_revision);
   hash = hash_u64(hash, prefix);
   hash = hash_bytes(hash, effect->type_id, strlen(effect->type_id));
   hash = hash_bytes(hash, effect->parameters, effect->parameter_size);
@@ -313,107 +322,119 @@ bool input_effects_ensure(timeline_state_t *timeline) {
   timeline->input_effects_rebuilding = true;
   timeline->input_effects_dirty = false;
   bool ok = true;
-  for (int track = 0; track < timeline->player_track_count; ++track)
-    for (int snippet = 0; snippet < timeline->player_tracks[track].snippet_count; ++snippet)
-      if (!initialize_snippet_cache(&timeline->player_tracks[track].snippets[snippet])) ok = false;
-
   game_host_t *host = &timeline->ui->gfx_handler->game_host;
   const size_t input_size = game_input_size(host);
-  uint64_t effect_prefix = UINT64_C(1469598103934665603);
-  effect_prefix = hash_u64(effect_prefix, timeline->input_effect_context_revision);
-  for (int track_index = 0; track_index < timeline->player_track_count; ++track_index) {
-    player_track_t *track = &timeline->player_tracks[track_index];
-    const int group_index = track->group_index;
-    const int local_player = model_group_local_track_index(timeline, track_index);
-    if (group_index < 0 || local_player < 0) continue;
-    effect_eval_context_t context = {.timeline = timeline, .group_index = group_index};
-    for (int snippet_index = 0; snippet_index < track->snippet_count; ++snippet_index) {
-      input_snippet_t *snippet = &track->snippets[snippet_index];
-      if (!snippet->effect_cache_valid) continue;
-      for (int effect_index = 0; effect_index < snippet->effect_count; ++effect_index) {
-        input_effect_t *effect = &snippet->effects[effect_index];
-        if (!effect->enabled) continue;
-        input_effect_stage_cache_t *stage = effect_stage_cache(snippet, effect_index);
-        const uint64_t stage_key = effect_stage_key(timeline, effect_prefix, effect, snippet->effect_inputs,
-                                                    snippet->input_count, input_size);
-        if (stage && stage->valid && stage->key == stage_key && stage->runtime_size == effect->runtime_size &&
-            (effect->runtime_size == 0 || (stage->runtime && effect->runtime))) {
-          memcpy(snippet->effect_inputs, stage->inputs, sizeof(*stage->inputs) * (size_t)snippet->input_count);
-          if (effect->runtime_size > 0) memcpy(effect->runtime, stage->runtime, effect->runtime_size);
-          effect->runtime_ok = true;
-          effect_prefix = advance_effect_prefix(effect_prefix, snippet, effect_index, snippet->effect_inputs,
-                                                snippet->input_count, input_size);
-          continue;
-        }
+  for (int group_index = 0; group_index < timeline->group_count; ++group_index) {
+    timeline_group_t *group = timeline->groups[group_index];
+    if (!group->input_effects_dirty) continue;
+    group->input_effects_dirty = false;
+    bool has_effects = false;
+    for (int track = 0; track < timeline->player_track_count; ++track) {
+      if (timeline->player_tracks[track].group_index != group_index) continue;
+      for (int snippet = 0; snippet < timeline->player_tracks[track].snippet_count; ++snippet) {
+        input_snippet_t *item = &timeline->player_tracks[track].snippets[snippet];
+        has_effects |= item->effect_cache_valid || item->effect_count > 0;
+        if (!initialize_snippet_cache(item)) ok = false;
+      }
+    }
+    // An effect may inspect any tick in its group, including future inputs.
+    // Only groups with effects need a full replay; plain edits keep their prefix.
+    if (has_effects) model_invalidate_group_physics(timeline, group_index, 0);
+    uint64_t effect_prefix = hash_u64(UINT64_C(1469598103934665603), group->input_effect_context_revision);
+    for (int track_index = 0; track_index < timeline->player_track_count; ++track_index) {
+      player_track_t *track = &timeline->player_tracks[track_index];
+      if (track->group_index != group_index) continue;
+      const int local_player = model_group_local_track_index(timeline, track_index);
+      if (local_player < 0) continue;
+      effect_eval_context_t context = {.timeline = timeline, .group_index = group_index};
+      for (int snippet_index = 0; snippet_index < track->snippet_count; ++snippet_index) {
+        input_snippet_t *snippet = &track->snippets[snippet_index];
+        if (!snippet->effect_cache_valid) continue;
+        for (int effect_index = 0; effect_index < snippet->effect_count; ++effect_index) {
+          input_effect_t *effect = &snippet->effects[effect_index];
+          if (!effect->enabled) continue;
+          input_effect_stage_cache_t *stage = effect_stage_cache(snippet, effect_index);
+          const uint64_t stage_key = effect_stage_key(effect_prefix, effect, snippet->effect_inputs,
+                                                      snippet->input_count, input_size);
+          if (stage && stage->valid && stage->key == stage_key && stage->runtime_size == effect->runtime_size &&
+              (effect->runtime_size == 0 || (stage->runtime && effect->runtime))) {
+            memcpy(snippet->effect_inputs, stage->inputs, sizeof(*stage->inputs) * (size_t)snippet->input_count);
+            if (effect->runtime_size > 0) memcpy(effect->runtime, stage->runtime, effect->runtime_size);
+            effect->runtime_ok = true;
+            effect_prefix = advance_effect_prefix(effect_prefix, snippet, effect_index, snippet->effect_inputs,
+                                                  snippet->input_count, input_size);
+            continue;
+          }
 
-        int type_index = -1;
-        const ft_input_effect_desc *desc = input_effect_descriptor(host, effect, &type_index);
-        effect->runtime_ok = false;
-        if (!desc || desc->parameter_size != effect->parameter_size) {
-          ok = false;
-          effect_prefix = advance_effect_prefix(effect_prefix, snippet, effect_index, snippet->effect_inputs,
-                                                snippet->input_count, input_size);
-          continue;
-        }
-        if (effect->runtime_size != desc->runtime_size) {
-          unsigned char *runtime = desc->runtime_size ? calloc(1, desc->runtime_size) : NULL;
-          if (desc->runtime_size > 0 && !runtime) {
+          int type_index = -1;
+          const ft_input_effect_desc *desc = input_effect_descriptor(host, effect, &type_index);
+          effect->runtime_ok = false;
+          if (!desc || desc->parameter_size != effect->parameter_size) {
             ok = false;
             effect_prefix = advance_effect_prefix(effect_prefix, snippet, effect_index, snippet->effect_inputs,
                                                   snippet->input_count, input_size);
             continue;
           }
-          free(effect->runtime);
-          effect->runtime = runtime;
-          effect->runtime_size = desc->runtime_size;
-        }
+          if (effect->runtime_size != desc->runtime_size) {
+            unsigned char *runtime = desc->runtime_size ? calloc(1, desc->runtime_size) : NULL;
+            if (desc->runtime_size > 0 && !runtime) {
+              ok = false;
+              effect_prefix = advance_effect_prefix(effect_prefix, snippet, effect_index, snippet->effect_inputs,
+                                                    snippet->input_count, input_size);
+              continue;
+            }
+            free(effect->runtime);
+            effect->runtime = runtime;
+            effect->runtime_size = desc->runtime_size;
+          }
 
-        const int player_count = model_group_track_count(timeline, group_index);
-        ft_input_effect_frame frame = {
-            .struct_size = sizeof(frame),
-            .level = timeline->ui->gfx_handler->level,
-            .track_index = track_index,
-            .world_index = group_index,
-            .player = local_player,
-            .start_tick = snippet->start_tick,
-            .end_tick = snippet->end_tick,
-            .authored_end_tick = group_authored_end(timeline, group_index, snippet->end_tick),
-            .player_count = (uint32_t)(player_count > 0 ? player_count : 0),
-            .record_count = (uint32_t)snippet->input_count,
-            .record_stride = sizeof(input_record_t),
-            .timeline_user = &context,
-            .input_at_tick = effect_input_at_tick,
-            .world_at_tick = effect_world_at_tick,
-            .reset_simulation = effect_reset_simulation,
-        };
-        input_record_t *upstream = malloc(sizeof(*upstream) * (size_t)snippet->input_count);
-        if (!upstream) {
-          ok = false;
+          const int player_count = model_group_track_count(timeline, group_index);
+          ft_input_effect_frame frame = {
+              .struct_size = sizeof(frame),
+              .level = timeline->ui->gfx_handler->level,
+              .track_index = track_index,
+              .world_index = group_index,
+              .player = local_player,
+              .start_tick = snippet->start_tick,
+              .end_tick = snippet->end_tick,
+              .authored_end_tick = group_authored_end(timeline, group_index, snippet->end_tick),
+              .player_count = (uint32_t)(player_count > 0 ? player_count : 0),
+              .record_count = (uint32_t)snippet->input_count,
+              .record_stride = sizeof(input_record_t),
+              .timeline_user = &context,
+              .input_at_tick = effect_input_at_tick,
+              .world_at_tick = effect_world_at_tick,
+              .reset_simulation = effect_reset_simulation,
+          };
+          input_record_t *upstream = malloc(sizeof(*upstream) * (size_t)snippet->input_count);
+          if (!upstream) {
+            ok = false;
+            effect_prefix = advance_effect_prefix(effect_prefix, snippet, effect_index, snippet->effect_inputs,
+                                                  snippet->input_count, input_size);
+            continue;
+          }
+          memcpy(upstream, snippet->effect_inputs, sizeof(*upstream) * (size_t)snippet->input_count);
+          model_invalidate_group_physics(timeline, group_index, 0);
+          effect->runtime_ok = gh_input_effect_apply(host, (unsigned)type_index, &frame, effect->parameters,
+                                                     effect->parameter_size, effect->runtime, effect->runtime_size,
+                                                     snippet->effect_inputs);
+          if (!effect->runtime_ok) {
+            memcpy(snippet->effect_inputs, upstream, sizeof(*upstream) * (size_t)snippet->input_count);
+            ok = false;
+          }
+          free(upstream);
+          if (effect->runtime_ok && stage && effect_stage_store_runtime(stage, effect)) {
+            memcpy(stage->inputs, snippet->effect_inputs, sizeof(*stage->inputs) * (size_t)snippet->input_count);
+            stage->key = stage_key;
+            stage->valid = true;
+          }
           effect_prefix = advance_effect_prefix(effect_prefix, snippet, effect_index, snippet->effect_inputs,
                                                 snippet->input_count, input_size);
-          continue;
         }
-        memcpy(upstream, snippet->effect_inputs, sizeof(*upstream) * (size_t)snippet->input_count);
-        model_reset_physics_cache(timeline);
-        effect->runtime_ok = gh_input_effect_apply(host, (unsigned)type_index, &frame, effect->parameters,
-                                                   effect->parameter_size, effect->runtime, effect->runtime_size,
-                                                   snippet->effect_inputs);
-        if (!effect->runtime_ok) {
-          memcpy(snippet->effect_inputs, upstream, sizeof(*upstream) * (size_t)snippet->input_count);
-          ok = false;
-        }
-        free(upstream);
-        if (effect->runtime_ok && stage && effect_stage_store_runtime(stage, effect)) {
-          memcpy(stage->inputs, snippet->effect_inputs, sizeof(*stage->inputs) * (size_t)snippet->input_count);
-          stage->key = stage_key;
-          stage->valid = true;
-        }
-        effect_prefix = advance_effect_prefix(effect_prefix, snippet, effect_index, snippet->effect_inputs,
-                                              snippet->input_count, input_size);
       }
     }
+    if (has_effects) model_invalidate_group_physics(timeline, group_index, 0);
   }
   timeline->input_effects_rebuilding = false;
-  model_reset_physics_cache(timeline);
   return ok;
 }

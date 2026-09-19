@@ -189,6 +189,8 @@ struct timeline_group_t {
   bool export_enabled;
   bool prediction_enabled;
   int start_offset;
+  bool input_effects_dirty;
+  uint64_t input_effect_context_revision;
 
   physics_v_t vec;
   ft_world *initial_world;
@@ -235,7 +237,6 @@ struct timeline_state {
   int simulation_group_index;
   bool input_effects_dirty;
   bool input_effects_rebuilding;
-  uint64_t input_effect_context_revision;
 
   prediction_settings_t prediction;
 

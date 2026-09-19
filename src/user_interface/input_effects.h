@@ -5,13 +5,13 @@
 #include <user_interface/timeline/timeline_types.h>
 
 // Marks all derived snippet buffers stale. The next world or input lookup
-// rebuilds the complete ordered pipeline once, then playback returns to cached
-// lookups.
+// rebuilds the ordered pipeline of each dirty group once.
 void input_effects_invalidate(timeline_state_t *timeline);
+void input_effects_invalidate_group(timeline_state_t *timeline, int group_index);
 // Re-evaluates effect parameters, enablement or order while retaining every
-// compatible upstream stage. Authored inputs and simulation context changes
-// use the full invalidation above.
-void input_effects_refresh(timeline_state_t *timeline);
+// compatible upstream stage in the given group. Authored inputs and simulation
+// context changes use invalidation above.
+void input_effects_refresh(timeline_state_t *timeline, int group_index);
 bool input_effects_ensure(timeline_state_t *timeline);
 
 // Returns the evaluated window when one exists, otherwise the authored one.

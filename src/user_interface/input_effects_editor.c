@@ -47,8 +47,11 @@ static bool grow_effect_stack(input_snippet_t *snippet) {
 
 static void finish_change(ui_handler_t *ui, input_snippet_t *snippet, input_effect_t *before, int before_count,
                           const char *description) {
-  input_effects_refresh(&ui->timeline);
-  model_reset_physics_cache(&ui->timeline);
+  int track = -1;
+  model_find_snippet_by_id(&ui->timeline, snippet->id, &track);
+  int group = model_track_group_index(&ui->timeline, track);
+  input_effects_refresh(&ui->timeline, group);
+  model_invalidate_group_physics(&ui->timeline, group, 0);
   undo_command_t *command = commands_create_input_effects_change(ui, snippet->id, before, before_count, description);
   if (command) undo_manager_register_command(&ui->undo_manager, command);
   input_effect_stack_destroy(before, before_count);

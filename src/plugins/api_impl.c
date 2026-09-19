@@ -365,7 +365,7 @@ static int api_do_export_run_to_group(const char *name, int start_tick, int coun
     memcpy(window[i].bytes, (const uint8_t *)records + (size_t)i * record_stride, record_size);
 
   if (!s_bulk_edit_active) {
-    model_recalc_physics(ts, start_tick);
+    model_recalc_group_physics(ts, model_track_group_index(ts, track_index), start_tick);
   }
 
   if (record_undo && before) {

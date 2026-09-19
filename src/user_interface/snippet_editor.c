@@ -105,8 +105,19 @@ static bool begin_action(const input_snippet_t *snippet) {
 static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
   if (!editor_state.action_in_progress) return;
   editor_state.action_in_progress = false;
-
+  int first_changed = snippet->input_count;
   if (editor_state.action_before_states && editor_state.action_before_count == snippet->input_count) {
+    for (int i = 0; i < snippet->input_count; ++i) {
+      if (memcmp(&editor_state.action_before_states[i], &snippet_window(snippet)[i], sizeof(input_record_t)) != 0) {
+        first_changed = i;
+        break;
+      }
+    }
+  } else {
+    first_changed = 0;
+  }
+
+  if (first_changed < snippet->input_count && editor_state.action_before_states && editor_state.action_before_count == snippet->input_count) {
     // Every tick in the snippet is handed to the undo command; it stores the
     // before and after states so redo is exact.
     int *indices = malloc(sizeof(int) * (size_t)snippet->input_count);
@@ -123,8 +134,10 @@ static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
   editor_state.action_before_states = NULL;
   editor_state.action_before_count = 0;
 
-  model_recalc_physics(&ui->timeline, snippet->start_tick);
-  ui_mark_unsaved(ui);
+  if (first_changed < snippet->input_count) {
+    model_recalc_snippet_physics(&ui->timeline, snippet, snippet->start_tick + first_changed);
+    ui_mark_unsaved(ui);
+  }
 }
 
 // One cell of the matrix, drawn according to what kind of field it is.

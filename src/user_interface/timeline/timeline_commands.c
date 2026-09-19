@@ -176,11 +176,13 @@ typedef struct {
 } TimelinePropertyCommand;
 
 static void apply_input_effects(timeline_state_t *timeline, int snippet_id, const input_effect_t *effects, int count) {
-  input_snippet_t *snippet = model_find_snippet_by_id(timeline, snippet_id, NULL);
+  int track = -1;
+  input_snippet_t *snippet = model_find_snippet_by_id(timeline, snippet_id, &track);
   if (!snippet || count < 0 || count > MAX_SNIPPET_INPUT_EFFECTS) return;
   if (!input_effects_snippet_set_stack(snippet, effects, count)) return;
-  input_effects_refresh(timeline);
-  model_reset_physics_cache(timeline);
+  int group = model_track_group_index(timeline, track);
+  input_effects_refresh(timeline, group);
+  model_invalidate_group_physics(timeline, group, 0);
 }
 
 static void undo_input_effects(void *command, void *timeline) {
@@ -477,7 +479,7 @@ static void apply_timeline_property(TimelinePropertyCommand *command, timeline_s
     if (command->index >= 0 && command->index < ts->group_count) ts->groups[command->index]->visible = value->boolean;
     break;
   case TIMELINE_PROPERTY_GROUP_START_OFFSET:
-    if (command->index > 0 && command->index < ts->group_count) ts->groups[command->index]->start_offset = value->integer;
+    model_set_group_start_offset(ts, command->index, value->integer);
     break;
   case TIMELINE_PROPERTY_GROUP_EXPORT:
     if (command->index >= 0 && command->index < ts->group_count) ts->groups[command->index]->export_enabled = value->boolean;
@@ -627,6 +629,54 @@ undo_command_t *commands_create_group_start_offset_change(ui_handler_t *ui, int 
   return &command->base;
 }
 
+typedef struct {
+  undo_command_t base;
+  int count;
+  int before_tick, after_tick;
+  int offsets[]; // before, then after
+} AlignGroupStartsCommand;
+
+static void undo_align_group_starts(void *command, void *timeline) {
+  AlignGroupStartsCommand *c = command;
+  for (int i = 1; i < c->count; ++i)
+    model_set_group_start_offset(timeline, i, c->offsets[i]);
+  ((timeline_state_t *)timeline)->current_tick = c->before_tick;
+}
+
+static void redo_align_group_starts(void *command, void *timeline) {
+  AlignGroupStartsCommand *c = command;
+  for (int i = 1; i < c->count; ++i)
+    model_set_group_start_offset(timeline, i, c->offsets[c->count + i]);
+  ((timeline_state_t *)timeline)->current_tick = c->after_tick;
+}
+
+undo_command_t *commands_create_align_group_starts(ui_handler_t *ui) {
+  if (!ui || ui->timeline.group_count < 2) return NULL;
+  timeline_state_t *ts = &ui->timeline;
+  AlignGroupStartsCommand *c = calloc(1, sizeof(*c) + 2 * (size_t)ts->group_count * sizeof(int));
+  if (!c) return NULL;
+  c->count = ts->group_count;
+  snprintf(c->base.description, sizeof(c->base.description), "Align Group Starts");
+  c->base.undo = undo_align_group_starts;
+  c->base.redo = redo_align_group_starts;
+  c->base.cleanup = free;
+  for (int i = 0; i < c->count; ++i)
+    c->offsets[i] = ts->groups[i]->start_offset;
+  c->before_tick = ts->current_tick;
+  model_align_group_starts(ts);
+  c->after_tick = ts->current_tick;
+  bool changed = false;
+  for (int i = 0; i < c->count; ++i) {
+    c->offsets[c->count + i] = ts->groups[i]->start_offset;
+    changed |= c->offsets[i] != c->offsets[c->count + i];
+  }
+  if (!changed) {
+    free(c);
+    return NULL;
+  }
+  return &c->base;
+}
+
 undo_command_t *commands_create_group_export_change(ui_handler_t *ui, int group_index, bool before) {
   if (!ui || group_index < 0 || group_index >= ui->timeline.group_count ||
       before == ui->timeline.groups[group_index]->export_enabled) return NULL;
@@ -725,6 +775,7 @@ static undo_command_t *create_add_snippet_command(timeline_state_t *ts, int trac
   snip.layer = new_layer;
   snip.input_count = duration;
   snip.inputs = calloc(duration, sizeof(input_record_t));
+  model_snippet_normalize(&snip);
 
   if (out_snippet_id) *out_snippet_id = snip.id;
 
@@ -741,6 +792,7 @@ static undo_command_t *create_add_snippet_command(timeline_state_t *ts, int trac
     input_snippet_t *other = &track->snippets[i];
     if (other->is_active && snip.start_tick < other->end_tick && snip.end_tick > other->start_tick) {
       other->is_active = false;
+      model_recalc_snippet_physics(ts, other, other->start_tick);
       cmd->deactivated_ids = realloc(cmd->deactivated_ids, sizeof(int) * (cmd->deactivated_count + 1));
       cmd->deactivated_ids[cmd->deactivated_count++] = other->id;
     }
@@ -749,7 +801,7 @@ static undo_command_t *create_add_snippet_command(timeline_state_t *ts, int trac
   // Perform the action
   model_insert_snippet_into_track(track, &snip);
   model_compact_layers_for_track(track);
-  model_recalc_physics(ts, snip.start_tick);
+  model_recalc_group_physics(ts, track->group_index, snip.start_tick);
 
   return &cmd->base;
 }
@@ -767,7 +819,10 @@ static void apply_trim(TrimSnippetCommand *c, timeline_state_t *ts, bool redo) {
   player_track_t *track = &ts->player_tracks[track_idx];
   for (int i = 0; i < c->deactivated_count; ++i) {
     input_snippet_t *other = model_find_snippet_in_track(track, c->deactivated_ids[i]);
-    if (other) other->is_active = !redo;
+    if (other) {
+      other->is_active = !redo;
+      model_recalc_group_physics(ts, track->group_index, other->start_tick);
+    }
   }
 
   model_compact_layers_for_track(track);
@@ -810,6 +865,7 @@ undo_command_t *commands_create_trim_snippet(ui_handler_t *ui, int snippet_id, i
     if (other->id == snippet_id) continue;
     if (other->is_active && snippet->start_tick < other->end_tick && snippet->end_tick > other->start_tick) {
       other->is_active = false;
+      model_recalc_snippet_physics(ts, other, other->start_tick);
       cmd->deactivated_ids = realloc(cmd->deactivated_ids, sizeof(int) * (cmd->deactivated_count + 1));
       cmd->deactivated_ids[cmd->deactivated_count++] = other->id;
     }
@@ -882,6 +938,7 @@ undo_command_t *commands_create_move_snippets(ui_handler_t *ui, const MoveSnippe
         if (other->is_active && infos[i].new_start_tick < other->end_tick &&
             (infos[i].new_start_tick + moving_snippet->input_count) > other->start_tick) {
           other->is_active = false;
+          model_recalc_snippet_physics(ts, other, other->start_tick);
           cmd->deactivated_ids = realloc(cmd->deactivated_ids, sizeof(int) * (cmd->deactivated_count + 1));
           cmd->deactivated_ids[cmd->deactivated_count++] = other->id;
         }
@@ -927,6 +984,7 @@ undo_command_t *commands_create_duplicate_snippets(ui_handler_t *ui, const MoveS
         if (snippet_id_vector_contains(&ts->selected_snippets, other->id)) continue;
         if (other->is_active && start < other->end_tick && end > other->start_tick) {
           other->is_active = false;
+          model_recalc_snippet_physics(ts, other, other->start_tick);
           cmd->deactivated_ids = realloc(cmd->deactivated_ids, sizeof(int) * (cmd->deactivated_count + 1));
           cmd->deactivated_ids[cmd->deactivated_count++] = other->id;
         }
@@ -1132,7 +1190,10 @@ static void undo_add_snippet(void *cmd, void *ts_void) {
 
   for (int i = 0; i < c->deactivated_count; ++i) {
     input_snippet_t *s = model_find_snippet_in_track(track, c->deactivated_ids[i]);
-    if (s) s->is_active = true;
+    if (s) {
+      s->is_active = true;
+      model_recalc_snippet_physics(ts, s, s->start_tick);
+    }
   }
 
   model_compact_layers_for_track(track);
@@ -1144,12 +1205,16 @@ static void redo_add_snippet(void *cmd, void *ts_void) {
 
   for (int i = 0; i < c->deactivated_count; ++i) {
     input_snippet_t *s = model_find_snippet_in_track(track, c->deactivated_ids[i]);
-    if (s) s->is_active = false;
+    if (s) {
+      s->is_active = false;
+      model_recalc_snippet_physics(ts, s, s->start_tick);
+    }
   }
 
   input_snippet_t new_snip;
   model_snippet_clone(&new_snip, &c->snippet_copy);
   model_insert_snippet_into_track(track, &new_snip);
+  model_recalc_group_physics(ts, track->group_index, new_snip.start_tick);
   model_compact_layers_for_track(track);
 }
 static void cleanup_add_snippet_cmd(void *cmd) {
@@ -1203,6 +1268,7 @@ static void undo_delete_snippets(void *cmd, void *ts_void) {
     input_snippet_t new_snip;
     model_snippet_clone(&new_snip, &c->deleted_info[i].snippet_copy);
     model_insert_snippet_into_track(track, &new_snip);
+    model_recalc_group_physics(ts, track->group_index, new_snip.start_tick);
     if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
   }
   // Compact all affected tracks once at the end
@@ -1250,6 +1316,7 @@ static void move_snippet_logic(timeline_state_t *ts, int snippet_id, int from_tr
 
   model_remove_snippet_from_track(ts, source_track, snippet_id);
   model_insert_snippet_into_track(&ts->player_tracks[to_track_idx], &snip_copy);
+  model_recalc_group_physics(ts, ts->player_tracks[to_track_idx].group_index, to_start_tick);
 }
 
 static void undo_move_snippets(void *cmd, void *ts_void) {
@@ -1269,6 +1336,7 @@ static void undo_move_snippets(void *cmd, void *ts_void) {
     input_snippet_t *s = model_find_snippet_by_id(ts, c->deactivated_ids[i], &track_idx);
     if (s) {
       s->is_active = true;
+      model_recalc_group_physics(ts, ts->player_tracks[track_idx].group_index, s->start_tick);
       if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
     }
   }
@@ -1288,6 +1356,7 @@ static void redo_move_snippets(void *cmd, void *ts_void) {
     input_snippet_t *s = model_find_snippet_by_id(ts, c->deactivated_ids[i], &track_idx);
     if (s) {
       s->is_active = false;
+      model_recalc_group_physics(ts, ts->player_tracks[track_idx].group_index, s->start_tick);
       if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
     }
   }
@@ -1331,6 +1400,7 @@ static void undo_duplicate_snippets(void *cmd, void *ts_void) {
     input_snippet_t *s = model_find_snippet_by_id(ts, c->deactivated_ids[i], &track_idx);
     if (s) {
       s->is_active = true;
+      model_recalc_group_physics(ts, ts->player_tracks[track_idx].group_index, s->start_tick);
       if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
     }
   }
@@ -1354,6 +1424,7 @@ static void redo_duplicate_snippets(void *cmd, void *ts_void) {
     input_snippet_t *s = model_find_snippet_by_id(ts, c->deactivated_ids[i], &track_idx);
     if (s) {
       s->is_active = false;
+      model_recalc_group_physics(ts, ts->player_tracks[track_idx].group_index, s->start_tick);
       if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
     }
   }
@@ -1377,6 +1448,7 @@ static void redo_duplicate_snippets(void *cmd, void *ts_void) {
     new_snippet.layer = info->new_layer;
 
     model_insert_snippet_into_track(dst_track, &new_snippet);
+    model_recalc_group_physics(ts, dst_track->group_index, new_snippet.start_tick);
     interaction_add_snippet_to_selection(ts, new_snippet.id);
 
     if (info->new_track_index < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[info->new_track_index] = true;
@@ -1443,6 +1515,7 @@ static void redo_multi_split(void *cmd, void *ts_void) {
 
     model_trim_snippet(ts, original, original->start_tick, info->split_tick);
     model_insert_snippet_into_track(track, &right);
+    model_recalc_group_physics(ts, track->group_index, right.start_tick);
     interaction_add_snippet_to_selection(ts, right.id);
     if (track_idx < MAX_MODIFIED_TRACKS_PER_COMMAND) modified_tracks[track_idx] = true;
   }
@@ -1471,6 +1544,7 @@ static void undo_merge_snippets(void *cmd, void *ts_void) {
     input_snippet_t new_snip;
     model_snippet_clone(&new_snip, &c->merged_snippets[i].snippet_copy);
     model_insert_snippet_into_track(track, &new_snip);
+    model_recalc_group_physics(ts, track->group_index, new_snip.start_tick);
   }
   model_compact_layers_for_track(track);
 }
@@ -1540,6 +1614,7 @@ static void undo_toggle_snippets(void *cmd, void *ts_void) {
 
     input_snippet_t *target = model_find_snippet_in_track(track, info->snippet_id);
     if (!target) continue;
+    model_recalc_group_physics(ts, track->group_index, target->start_tick);
 
     if (info->new_state) {
       // It WAS activated, so deactivate it
@@ -1547,7 +1622,10 @@ static void undo_toggle_snippets(void *cmd, void *ts_void) {
       // And reactivate the ones that were overlapped
       for (int j = 0; j < info->overlapping_count; ++j) {
         input_snippet_t *overlap = model_find_snippet_in_track(track, info->overlapping_ids[j]);
-        if (overlap) overlap->is_active = true;
+        if (overlap) {
+          overlap->is_active = true;
+          model_recalc_group_physics(ts, track->group_index, overlap->start_tick);
+        }
       }
     } else {
       // It WAS deactivated, so activate it
@@ -1567,6 +1645,7 @@ static void redo_toggle_snippets(void *cmd, void *ts_void) {
 
     input_snippet_t *target = model_find_snippet_in_track(track, info->snippet_id);
     if (!target) continue;
+    model_recalc_group_physics(ts, track->group_index, target->start_tick);
 
     if (info->new_state) {
       // Activate target
@@ -1574,7 +1653,10 @@ static void redo_toggle_snippets(void *cmd, void *ts_void) {
       // Deactivate overlaps
       for (int j = 0; j < info->overlapping_count; ++j) {
         input_snippet_t *overlap = model_find_snippet_in_track(track, info->overlapping_ids[j]);
-        if (overlap) overlap->is_active = false;
+        if (overlap) {
+          overlap->is_active = false;
+          model_recalc_group_physics(ts, track->group_index, overlap->start_tick);
+        }
       }
     } else {
       // Deactivate target
@@ -1604,16 +1686,12 @@ undo_command_t *commands_create_toggle_selected_snippets_active(ui_handler_t *ui
   cmd->count = ts->selected_snippets.count;
   cmd->infos = calloc(cmd->count, sizeof(ToggleSnippetInfo));
 
-  int earliest_tick = INT_MAX;
-
   for (int i = 0; i < ts->selected_snippets.count; ++i) {
     int sid = ts->selected_snippets.ids[i];
     int track_idx;
     input_snippet_t *snippet = model_find_snippet_by_id(ts, sid, &track_idx);
 
     if (!snippet) continue;
-
-    if (snippet->start_tick < earliest_tick) earliest_tick = snippet->start_tick;
 
     ToggleSnippetInfo *info = &cmd->infos[i];
     info->snippet_id = sid;
@@ -1637,10 +1715,6 @@ undo_command_t *commands_create_toggle_selected_snippets_active(ui_handler_t *ui
 
   // Apply changes immediately (Redo logic)
   redo_toggle_snippets(&cmd->base, ts);
-
-  if (earliest_tick != INT_MAX) {
-    model_recalc_physics(ts, earliest_tick);
-  }
 
   return &cmd->base;
 }
@@ -1733,12 +1807,16 @@ undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, i
 static void apply_input_states(timeline_state_t *ts, int snippet_id, int count, const int *indices, const input_record_t *states) {
   input_snippet_t *snippet = model_find_snippet_by_id(ts, snippet_id, NULL);
   if (!snippet) return;
+  int first = snippet->input_count;
   for (int i = 0; i < count; i++) {
     int idx = indices[i];
-    if (idx >= 0 && idx < snippet->input_count) {
+    if (idx >= 0 && idx < snippet->input_count &&
+        memcmp(&snippet_window(snippet)[idx], &states[i], sizeof(input_record_t)) != 0) {
       snippet_window(snippet)[idx] = states[i];
+      first = imin(first, idx);
     }
   }
+  if (first < snippet->input_count) model_recalc_snippet_physics(ts, snippet, snippet->start_tick + first);
 }
 
 static void undo_edit_inputs(void *cmd, void *ts_void) {
@@ -1788,7 +1866,7 @@ undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id
   }
 
   // The world simulated from these inputs is now stale.
-  model_recalc_physics(ts, snippet->start_tick + tick_offset);
+  model_recalc_snippet_physics(ts, snippet, snippet->start_tick + tick_offset);
 
   return &cmd->base;
 }
@@ -1852,6 +1930,7 @@ static void restore_track_state(timeline_state_t *ts, const TrackState *state) {
     track->snippets = NULL;
   }
   model_compact_layers_for_track(track);
+  model_recalc_group_physics(ts, track->group_index, 0);
 }
 
 static void undo_commit_recording(void *cmd, void *ts_void) {
@@ -1932,7 +2011,8 @@ undo_command_t *commands_create_commit_recording(ui_handler_t *ui) {
     capture_track_state(ts, affected_indices[i], &cmd->tracks_after[i]);
   }
 
-  model_recalc_physics(ts, 0);
+  for (int i = 0; i < affected_count; ++i)
+    model_recalc_group_physics(ts, ts->player_tracks[affected_indices[i]].group_index, 0);
 
   free(affected_indices);
   return &cmd->base;

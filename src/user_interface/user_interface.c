@@ -579,11 +579,8 @@ void render_player_manager(ui_handler_t *ui) {
     if (ts->group_count > 1) {
       igSameLine(0, 5.0f * dpi_scale);
       if (igButton(ICON_FA_ARROWS_LEFT_RIGHT_TO_LINE " Align starts", (ImVec2){0, 0})) {
-        timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
-        if (before) {
-          model_align_group_starts(ts);
-          register_timeline_data_change(ui, before, "Align Group Starts");
-        }
+        undo_command_t *command = commands_create_align_group_starts(ui);
+        if (command) undo_manager_register_command(&ui->undo_manager, command);
       }
       if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("Align every group race start to Group 1");
     }
@@ -698,15 +695,16 @@ void render_player_manager(ui_handler_t *ui) {
           igBeginDisabled(true);
         }
         int offset_before_frame = group->start_offset;
+        int offset_value = group->start_offset;
         igSetNextItemWidth(120.0f * dpi_scale);
-        bool offset_changed = igDragInt("Start offset", &group->start_offset, 1.0f, -1000000, 1000000, "%d ticks", ImGuiSliderFlags_AlwaysClamp);
+        bool offset_changed = igDragInt("Start offset", &offset_value, 1.0f, -1000000, 1000000, "%d ticks", ImGuiSliderFlags_AlwaysClamp);
         if (igIsItemActivated()) {
           g_group_offset_edit_undo.active = true;
           g_group_offset_edit_undo.index = group_index;
           g_group_offset_edit_undo.before = offset_before_frame;
         }
         if (offset_changed) {
-          model_recalc_physics(ts, 0);
+          model_set_group_start_offset(ts, group_index, offset_value);
           ui_mark_unsaved(ui);
         }
         if (igIsItemDeactivatedAfterEdit() && g_group_offset_edit_undo.active && g_group_offset_edit_undo.index == group_index) {

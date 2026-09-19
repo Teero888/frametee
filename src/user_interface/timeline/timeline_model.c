@@ -148,6 +148,13 @@ void model_set_active_group(timeline_state_t *ts, int group_index) {
   ts->active_group_index = group_index;
 }
 
+void model_set_group_start_offset(timeline_state_t *ts, int group_index, int offset) {
+  if (!ts || group_index <= 0 || group_index >= ts->group_count) return;
+  ts->groups[group_index]->start_offset = offset;
+  ts->current_tick = imax(ts->current_tick, model_get_min_global_tick(ts));
+  // Worlds, effects and events all use local ticks. Their contents are unchanged.
+}
+
 void model_reset_groups_for_level(timeline_state_t *ts) {
   if (!ts || !ts->ui || !ts->ui->gfx_handler) return;
   game_host_t *host = model_host(ts);
@@ -427,7 +434,7 @@ bool model_remove_snippet_from_track(timeline_state_t *ts, player_track_t *track
       track->snippet_capacity = 0;
     }
 
-    model_recalc_physics(ts, removed_start_tick);
+    model_recalc_group_physics(ts, track->group_index, removed_start_tick);
 
     return true;
   }
@@ -460,8 +467,7 @@ void model_resize_snippet_inputs(timeline_state_t *ts, input_snippet_t *snippet,
   input_effects_snippet_discard_cache(snippet);
 
   if (!ts->recording) {
-    input_effects_invalidate(ts);
-    if (snippet->end_tick <= ts->current_tick) model_reset_physics_cache(ts);
+    model_recalc_snippet_physics(ts, snippet, snippet->start_tick);
   }
 }
 
@@ -552,14 +558,15 @@ bool model_trim_snippet(timeline_state_t *ts, input_snippet_t *snippet, int new_
     snippet->source_count += pad;
   }
 
-  int earliest = snippet->start_tick < new_start_tick ? snippet->start_tick : new_start_tick;
+  int earliest = snippet->start_tick == new_start_tick ? imin(snippet->end_tick, new_end_tick)
+                                                       : imin(snippet->start_tick, new_start_tick);
 
   snippet->source_offset = new_offset;
   snippet->input_count = new_count;
   snippet->start_tick = new_start_tick;
   snippet->end_tick = new_end_tick;
 
-  model_recalc_physics(ts, earliest);
+  model_recalc_snippet_physics(ts, snippet, earliest);
   return true;
 }
 
@@ -804,29 +811,56 @@ void model_clear_all_recording_buffers(timeline_state_t *ts) {
 
 // Physics & Playback
 
-void model_reset_physics_cache(timeline_state_t *ts) {
-  if (!ts) return;
+void model_invalidate_group_physics(timeline_state_t *ts, int group_index, int tick) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count) return;
   game_host_t *host = model_host(ts);
   if (!host) return;
-  ts->current_tick = imax(ts->current_tick, model_get_min_global_tick(ts));
-  for (int i = 0; i < ts->group_count; ++i) {
-    timeline_group_t *group = ts->groups[i];
-    group->vec.current_size = 1;
+  timeline_group_t *group = ts->groups[group_index];
+  tick = imax(0, tick);
+  // Input at tick T first changes world T+1. Preserve the snapshot at T.
+  const uint32_t keep = (uint32_t)(tick / 50) + 1;
+  if (group->vec.current_size > keep) group->vec.current_size = keep;
+  if (tick == 0) {
     group->cached_tick = -1;
     group->presentation_tick = -1;
     gh_world_copy(host, group->previous_world, group->initial_world);
     if (group->vec.data && group->vec.data[0]) gh_world_copy(host, group->vec.data[0], group->initial_world);
+  } else {
+    if (group->cached_tick > tick) group->cached_tick = -1;
+    if (group->presentation_tick > tick) group->presentation_tick = -1;
+    if (gh_world_tick(host, group->previous_world) > tick)
+      gh_world_copy(host, group->previous_world, group->vec.data[group->vec.current_size - 1]);
   }
+}
+
+void model_reset_physics_cache(timeline_state_t *ts) {
+  if (!ts) return;
+  ts->current_tick = imax(ts->current_tick, model_get_min_global_tick(ts));
+  for (int i = 0; i < ts->group_count; ++i)
+    model_invalidate_group_physics(ts, i, 0);
 }
 
 int model_max_playback_speed(const timeline_state_t *ts) {
   return game_ticks_per_second(&ts->ui->gfx_handler->game_host) * 10;
 }
 
+void model_recalc_group_physics(timeline_state_t *ts, int group_index, int tick) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count) return;
+  input_effects_invalidate_group(ts, group_index);
+  model_invalidate_group_physics(ts, group_index, tick);
+}
+
+void model_recalc_snippet_physics(timeline_state_t *ts, const input_snippet_t *snippet, int tick) {
+  int track = -1;
+  if (snippet && model_find_snippet_by_id(ts, snippet->id, &track))
+    model_recalc_group_physics(ts, model_track_group_index(ts, track), tick);
+}
+
 void model_recalc_physics(timeline_state_t *ts, int tick) {
-  (void)tick;
-  input_effects_invalidate(ts);
-  model_reset_physics_cache(ts);
+  if (!ts) return;
+  ts->current_tick = imax(ts->current_tick, model_get_min_global_tick(ts));
+  for (int i = 0; i < ts->group_count; ++i)
+    model_recalc_group_physics(ts, i, tick);
 }
 
 input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
@@ -921,11 +955,12 @@ void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_i
     input_snippet_t *other = &track->snippets[i];
     if (other->id != snippet_id_to_activate && target_snippet->start_tick < other->end_tick && target_snippet->end_tick > other->start_tick) {
       other->is_active = false;
+      model_recalc_group_physics(ts, track->group_index, other->start_tick);
     }
   }
 
   target_snippet->is_active = true;
-  model_recalc_physics(ts, target_snippet->start_tick);
+  model_recalc_group_physics(ts, track->group_index, target_snippet->start_tick);
 }
 
 // Advances `world` to `target_tick`, feeding each player the input the timeline
@@ -1089,7 +1124,7 @@ void model_apply_starting_config(timeline_state_t *ts, int track_index) {
     if (prop < 0) continue;
     gh_entity_prop_set(host, world, FT_ENTITY_CLASS_PLAYER, local_index, (unsigned)prop, &sc->overrides[i].value);
   }
-  model_recalc_physics(ts, 0);
+  model_recalc_group_physics(ts, group_index, 0);
 }
 
 // Puts a group's starting world back the way the level made it, then re-applies
@@ -1122,7 +1157,7 @@ void model_rebuild_group_start(timeline_state_t *ts, int group_index) {
     if (ts->player_tracks[track_index].group_index != group_index) continue;
     if (ts->player_tracks[track_index].starting_config.enabled) model_apply_starting_config(ts, track_index);
   }
-  model_recalc_physics(ts, 0);
+  model_recalc_group_physics(ts, group_index, 0);
 }
 
 void model_rebind_starting_strings(starting_config_t *config) {
@@ -1177,7 +1212,7 @@ player_track_t *model_clone_track_to_group(timeline_state_t *ts, int track_index
   model_rebind_starting_strings(&new_track->starting_config);
   if (out_track_index) *out_track_index = new_index;
   if (copy.starting_config.enabled) model_apply_starting_config(ts, new_index);
-  model_recalc_physics(ts, 0);
+  model_recalc_group_physics(ts, group_index, 0);
   return new_track;
 }
 
@@ -1289,7 +1324,7 @@ void model_align_group_starts(timeline_state_t *ts) {
         ts->groups[group_index]->start_offset = anchor_tick - starts[group_index];
     }
     ts->groups[0]->start_offset = 0;
-    model_recalc_physics(ts, 0);
+    ts->current_tick = imax(ts->current_tick, model_get_min_global_tick(ts));
   }
   free(starts);
 }

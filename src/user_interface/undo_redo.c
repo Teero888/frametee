@@ -112,7 +112,9 @@ void undo_manager_undo(undo_manager_t *manager, void *ts) {
   if (command) {
     command->undo(command, ts);
     push_to_stack(&manager->redo_stack, &manager->redo_owners, &manager->redo_count, &manager->redo_capacity, command, owner);
-    model_recalc_physics((timeline_state_t *)ts, 0); // Recalculate physics to be safe
+    // Built-in commands invalidate their affected histories. External commands
+    // retain the conservative fallback without changing the plugin ABI.
+    if (owner) model_recalc_physics((timeline_state_t *)ts, 0);
     mark_ui_unsaved(manager);
   }
 }
@@ -123,7 +125,9 @@ void undo_manager_redo(undo_manager_t *manager, void *ts) {
   if (command) {
     command->redo(command, ts);
     push_to_stack(&manager->undo_stack, &manager->undo_owners, &manager->undo_count, &manager->undo_capacity, command, owner);
-    model_recalc_physics((timeline_state_t *)ts, 0); // Recalculate physics to be safe
+    // Built-in commands invalidate their affected histories. External commands
+    // retain the conservative fallback without changing the plugin ABI.
+    if (owner) model_recalc_physics((timeline_state_t *)ts, 0);
     mark_ui_unsaved(manager);
   }
 }

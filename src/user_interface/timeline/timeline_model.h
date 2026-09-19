@@ -20,6 +20,7 @@ int model_group_playhead_tick(const timeline_state_t *ts, int group_index);
 int model_get_min_global_tick(const timeline_state_t *ts);
 int model_clamp_global_tick_for_group(const timeline_state_t *ts, int group_index, int tick);
 void model_set_active_group(timeline_state_t *ts, int group_index);
+void model_set_group_start_offset(timeline_state_t *ts, int group_index, int offset);
 player_track_t *model_clone_track_to_group(timeline_state_t *ts, int track_index, int group_index, int *out_track_index);
 void model_align_group_starts(timeline_state_t *ts);
 
@@ -81,6 +82,11 @@ void model_insert_snippet_into_recording_track(player_track_t *track, const inpu
 // Resets only simulated worlds. Effect implementations use this while testing
 // a derived buffer without invalidating the effect pipeline they are building.
 void model_reset_physics_cache(timeline_state_t *ts);
+// Keep snapshots through the local input tick; only later worlds are stale.
+void model_invalidate_group_physics(timeline_state_t *ts, int group_index, int tick);
+void model_recalc_group_physics(timeline_state_t *ts, int group_index, int tick);
+void model_recalc_snippet_physics(timeline_state_t *ts, const input_snippet_t *snippet, int tick);
+// Conservative fallback for changes whose affected groups are unknown.
 void model_recalc_physics(timeline_state_t *ts, int tick);
 input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
 void model_advance_tick(timeline_state_t *ts, int steps);
