@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdbool.h>
 #include <system/config.h>
+#include <system/fs.h>
 #include <system/input.h>
 #include <user_interface/snippet_editor.h>
 #include <user_interface/timeline/timeline_model.h>
@@ -261,7 +262,14 @@ static bool imgui_queue_needs_trickling(void) {
 static void init_game_layer(gfx_handler_t *handler) {
   const ft_engine_api *api = engine_api_init(handler);
   game_host_init(&handler->game_host, api);
-  game_host_discover(&handler->game_host, "games");
+  if (game_host_discover(&handler->game_host, "games") == 0) {
+    char exe_dir[1024];
+    if (fs_get_executable_dir(exe_dir, sizeof(exe_dir))) {
+      char games_dir[1024];
+      snprintf(games_dir, sizeof(games_dir), "%s/games", exe_dir);
+      game_host_discover(&handler->game_host, games_dir);
+    }
+  }
 }
 
 // The game to bring up for a level that never passed the start screen -- one

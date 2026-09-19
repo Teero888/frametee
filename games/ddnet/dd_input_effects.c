@@ -527,10 +527,12 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
   bool *anchors = calloc(count, sizeof(*anchors));
   int *attack_ticks = calloc(count, sizeof(*attack_ticks));
   int *hook_states = calloc(count, sizeof(*hook_states));
-  if (!anchors || !attack_ticks || !hook_states) {
+  bool *jetpacks = calloc(count, sizeof(*jetpacks));
+  if (!anchors || !attack_ticks || !hook_states || !jetpacks) {
     free(anchors);
     free(attack_ticks);
     free(hook_states);
+    free(jetpacks);
     return false;
   }
   anchors[0] = true;
@@ -556,11 +558,14 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
       const SCharacterCore *character = &world->core.m_pCharacters[frame->player];
       attack_ticks[row] = character->m_AttackTick;
       hook_states[row] = character->m_HookState;
+      jetpacks[row] = character->m_Jetpack && character->m_ActiveWeapon == WEAPON_GUN;
     }
     for (uint32_t row = 0; row + 1 < count; ++row) {
+      const SPlayerInput *current = (const SPlayerInput *)((unsigned char *)records + (size_t)row * frame->record_stride);
       const bool fired = attack_ticks[row + 1] != attack_ticks[row];
       const bool hooked = hook_states[row] == HOOK_IDLE && hook_states[row + 1] != HOOK_IDLE;
-      if ((fired || hooked) && !anchors[row]) {
+      const bool jetpack_active = jetpacks[row] && (current->m_Fire & 1);
+      if ((fired || hooked || jetpack_active) && !anchors[row]) {
         anchors[row] = true;
         ++runtime->anchors;
       }
@@ -618,6 +623,7 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
   free(anchors);
   free(attack_ticks);
   free(hook_states);
+  free(jetpacks);
   return true;
 }
 

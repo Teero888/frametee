@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <system/fs.h>
 #include <system/save.h>
 #include <user_interface/starting_state.h>
 #include <user_interface/timeline/timeline_commands.h>
@@ -37,6 +38,11 @@ static int set_environment_variable(const char *name, const char *value) {
 #else
   return setenv(name, value, 1);
 #endif
+}
+
+static void free_cli_args(const char **argv, char **copies, int count) {
+  free((void *)argv);
+  for (int i = 0; i < count; ++i) free(copies[i]);
 }
 
 // Walks the game through one frame of rendering: every visible world, in every
@@ -205,11 +211,14 @@ int main(int argc, char **argv) {
 #define MAX_CLI_PLUGINS 64
   const char *forced_plugins[MAX_CLI_PLUGINS];
   int num_forced_plugins = 0;
+  char *plugin_arg_copies[MAX_CLI_PLUGINS];
+  int num_plugin_arg_copies = 0;
 
   const char **plugin_argv = (const char **)malloc(sizeof(const char *) * argc);
   int plugin_argc = 0;
 
   bool show_help = false;
+  bool check_finish = false;
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--headless") == 0) {
@@ -229,6 +238,9 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--plugin") == 0 || strcmp(argv[i], "--plugins") == 0) {
       while (i + 1 < argc && argv[i + 1][0] != '-') {
         char *arg_copy = strdup(argv[++i]);
+        if (num_plugin_arg_copies < MAX_CLI_PLUGINS) {
+          plugin_arg_copies[num_plugin_arg_copies++] = arg_copy;
+        }
         char *tok = strtok(arg_copy, ",");
         while (tok) {
           if (num_forced_plugins < MAX_CLI_PLUGINS) {
@@ -239,6 +251,9 @@ int main(int argc, char **argv) {
       }
     } else if (strncmp(argv[i], "--plugin=", 9) == 0) {
       char *arg_copy = strdup(argv[i] + 9);
+      if (num_plugin_arg_copies < MAX_CLI_PLUGINS) {
+        plugin_arg_copies[num_plugin_arg_copies++] = arg_copy;
+      }
       char *tok = strtok(arg_copy, ",");
       while (tok) {
         if (num_forced_plugins < MAX_CLI_PLUGINS) {
@@ -263,6 +278,10 @@ int main(int argc, char **argv) {
       project_path = argv[++i];
     } else if (strncmp(argv[i], "--project=", 10) == 0) {
       project_path = argv[i] + 10;
+    } else if (strcmp(argv[i], "--check-finish") == 0 || strcmp(argv[i], "--checkfinish") == 0 ||
+               strcmp(argv[i], "checkfinish") == 0) {
+      check_finish = true;
+      g_is_headless = true;
     } else if (strcmp(argv[i], "--list-games") == 0) {
       g_list_games = true;
       g_is_headless = true;
@@ -280,10 +299,17 @@ int main(int argc, char **argv) {
   }
 
   if (g_list_games) {
-    free(plugin_argv);
+    free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
     game_host_t game_host;
     game_host_init(&game_host, NULL);
-    game_host_discover(&game_host, "games");
+    if (game_host_discover(&game_host, "games") == 0) {
+      char exe_dir[1024];
+      if (fs_get_executable_dir(exe_dir, sizeof(exe_dir))) {
+        char games_dir[1024];
+        snprintf(games_dir, sizeof(games_dir), "%s/games", exe_dir);
+        game_host_discover(&game_host, games_dir);
+      }
+    }
     game_host_print_listing(&game_host);
     game_host_shutdown(&game_host);
     return 0;
@@ -291,7 +317,7 @@ int main(int argc, char **argv) {
 
   static struct gfx_handler_t handler;
   if (init_gfx_handler(&handler) != 0) {
-    free(plugin_argv);
+    free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
     return 1;
   }
 
@@ -311,6 +337,8 @@ int main(int argc, char **argv) {
            "  --headless              Run without window or graphics\n"
            "  --game <id>             Game module to use (e.g. tmnf, ddnet)\n"
            "  --level <path>          Level file to load\n"
+           "  --project <path>        TAS project file to load\n"
+           "  --check-finish          Check if the run finishes (exit 0 on finish, 1 otherwise)\n"
            "  --variant <id>          Ruleset variant (DDNet: ddrace, race, fastcap)\n"
            "  --plugin <name...>      Activate one or more plugins for this session\n"
            "  --help, -h              Show this help message\n");
@@ -321,7 +349,7 @@ int main(int argc, char **argv) {
       plugin_manager_print_available(&handler.user_interface.plugin_manager);
     }
     printf("\n");
-    free(plugin_argv);
+    free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
     gfx_cleanup(&handler);
     return 0;
   }
@@ -329,50 +357,88 @@ int main(int argc, char **argv) {
   script_engine_init(&handler.user_interface, &handler.user_interface.plugin_api);
 
   if (g_is_headless) {
-    if (!level_path) {
-      log_error("Main", "--headless requires --level <path>");
-      free(plugin_argv);
+    if (project_path) {
+      if (!load_project(&handler.user_interface, project_path)) {
+        log_error("Main", "Could not load project '%s'", project_path);
+        free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
+        gfx_cleanup(&handler);
+        return 1;
+      }
+      handler.user_interface.show_splash = false;
+    } else if (level_path) {
+      if (g_forced_game_id) {
+        int game_idx = game_host_find_id(&handler.game_host, g_forced_game_id);
+        if (game_idx >= 0) {
+          gfx_activate_game(&handler, game_idx);
+        } else {
+          log_error("Main", "Game module '%s' not found.", g_forced_game_id);
+          free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
+          gfx_cleanup(&handler);
+          return 1;
+        }
+      }
+
+      if (variant_id) {
+        game_host_set_variant(&handler.game_host, variant_id);
+      }
+
+      on_level_load_path(&handler, level_path);
+      if (!handler.level) {
+        log_error("Main", "Failed to load level '%s'.", level_path);
+        free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
+        gfx_cleanup(&handler);
+        return 1;
+      }
+
+      model_add_new_track(&handler.user_interface.timeline, 1);
+    } else {
+      log_error("Main", "--headless requires --level <path> or --project <path>");
+      free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
       gfx_cleanup(&handler);
       return 1;
     }
 
-    if (g_forced_game_id) {
-      int game_idx = game_host_find_id(&handler.game_host, g_forced_game_id);
-      if (game_idx >= 0) {
-        gfx_activate_game(&handler, game_idx);
-      } else {
-        log_error("Main", "Game module '%s' not found.", g_forced_game_id);
-        free(plugin_argv);
+    for (int p = 0; p < num_forced_plugins; ++p) {
+      if (!plugin_manager_activate(&handler.user_interface.plugin_manager, forced_plugins[p])) {
+        log_error("Main", "Failed to activate plugin '%s'.", forced_plugins[p]);
+        free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
         gfx_cleanup(&handler);
         return 1;
       }
     }
 
-    if (variant_id) {
-      game_host_set_variant(&handler.game_host, variant_id);
-    }
-
-    on_level_load_path(&handler, level_path);
-    if (!handler.level) {
-      log_error("Main", "Failed to load level '%s'.", level_path);
-      free(plugin_argv);
+    if (check_finish) {
+      timeline_state_t *timeline = &handler.user_interface.timeline;
+      int max_tick = model_get_max_timeline_tick(timeline);
+      bool finished = false;
+      int finish_tick = -1;
+      int group_index = timeline->active_group_index;
+      if (group_index < 0 || group_index >= timeline->group_count) group_index = 0;
+      for (int tick = 0; tick <= max_tick; ++tick) {
+        const ft_world *world = model_group_world_at_tick(timeline, group_index, tick);
+        if (!world) continue;
+        ft_player_view view = {.struct_size = sizeof(view)};
+        if (gh_world_player_view(&handler.game_host, world, 0, &view)) {
+          if (view.flags & FT_PLAYER_FINISHED) {
+            finished = true;
+            finish_tick = tick;
+            break;
+          }
+        }
+      }
+      free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
       gfx_cleanup(&handler);
-      return 1;
-    }
-
-    model_add_new_track(&handler.user_interface.timeline, 1);
-
-    for (int p = 0; p < num_forced_plugins; ++p) {
-      if (!plugin_manager_activate(&handler.user_interface.plugin_manager, forced_plugins[p])) {
-        log_error("Main", "Failed to activate plugin '%s'.", forced_plugins[p]);
-        free(plugin_argv);
-        gfx_cleanup(&handler);
+      if (finished) {
+        printf("Run finished at tick %d\n", finish_tick);
+        return 0;
+      } else {
+        printf("Run did not finish (simulated to tick %d)\n", max_tick);
         return 1;
       }
     }
 
     int res = plugin_manager_run_cli(&handler.user_interface.plugin_manager, plugin_argc, plugin_argv);
-    free(plugin_argv);
+    free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
     gfx_cleanup(&handler);
     return res;
   }
@@ -529,7 +595,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  free(plugin_argv);
+  free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
   gfx_cleanup(&handler);
   return 0;
 }
