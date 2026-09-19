@@ -1276,14 +1276,14 @@ static int model_find_group_race_start(timeline_state_t *ts, int group_index) {
   uint8_t *inputs = players > 0 ? calloc((size_t)players, input_size) : NULL;
   int race_start = -1;
 
-  while (gh_world_tick(host, world) <= max_local_tick && race_start < 0) {
+  while (gh_world_tick(host, world) <= max_local_tick) {
     for (int local_index = 0; local_index < players; ++local_index) {
       ft_player_view view;
       if (!gh_world_player_view(host, world, local_index, &view)) continue;
       // run_start_tick is the game-agnostic notion the editor aligns on.
-      if (view.run_start_tick >= 0 && (race_start < 0 || view.run_start_tick < race_start)) race_start = view.run_start_tick;
+      if (view.run_start_tick >= 0 && (race_start < 0 || view.run_start_tick > race_start)) race_start = view.run_start_tick;
     }
-    if (race_start >= 0 || gh_world_tick(host, world) == max_local_tick) break;
+    if (gh_world_tick(host, world) == max_local_tick) break;
 
     const int input_tick = gh_world_tick(host, world);
     for (int local_index = 0; local_index < players; ++local_index) {
