@@ -219,6 +219,10 @@ static bool color_rule_equal(const resolved_color_rule_t *resolved, double a, do
   return fabs(a - b) <= scale * 1e-6;
 }
 
+static bool color_rule_is_velocity(const prediction_color_rule_t *rule) {
+  return rule && strcmp(rule->property_id, "velocity") == 0;
+}
+
 static bool color_rule_changed(const resolved_color_rule_t *resolved, double value, double previous) {
   if (color_rule_equal(resolved, value, previous)) return false;
 
@@ -242,10 +246,6 @@ static bool color_rule_changed(const resolved_color_rule_t *resolved, double val
   }
 
   return true;
-}
-
-static bool color_rule_is_velocity(const prediction_color_rule_t *rule) {
-  return rule && strcmp(rule->property_id, "velocity") == 0;
 }
 
 static bool color_rule_condition(const resolved_color_rule_t *resolved, double value) {
@@ -657,6 +657,38 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
   return changed;
 }
 
+static bool render_rule_change_mode(prediction_color_rule_t *rule) {
+  static const char *names[] = {
+      "Any",
+      "Positive",
+      "Negative",
+      "Increasing",
+      "Decreasing",
+  };
+
+  bool changed = false;
+  int mode = (int)rule->change_mode;
+
+  if (mode < PREDICTION_CHANGE_ANY || mode > PREDICTION_CHANGE_DECREASING) {
+    mode = PREDICTION_CHANGE_ANY;
+    rule->change_mode = PREDICTION_CHANGE_ANY;
+    changed = true;
+  }
+
+  if (igBeginCombo("Change type", names[mode], 0)) {
+    for (int i = PREDICTION_CHANGE_ANY; i <= PREDICTION_CHANGE_DECREASING; ++i) {
+      if (igSelectable_Bool(names[i], mode == i, 0, (ImVec2){0.f, 0.f})) {
+        rule->change_mode = (prediction_change_mode_t)i;
+        changed = true;
+      }
+    }
+
+    igEndCombo();
+  }
+
+  return changed;
+}
+
 static bool render_color_rules(prediction_line_t *line, int line_index, const ft_entity_class *player_class) {
   bool changed = false;
   if (!igTreeNode_Str("Color triggers")) return false;
@@ -705,38 +737,6 @@ static bool render_color_rules(prediction_line_t *line, int line_index, const ft
     changed = true;
   if (!can_add) igEndDisabled();
   igTreePop();
-  return changed;
-}
-
-static bool render_rule_change_mode(prediction_color_rule_t *rule) {
-  static const char *names[] = {
-      "Any",
-      "Positive",
-      "Negative",
-      "Increasing",
-      "Decreasing",
-  };
-
-  bool changed = false;
-  int mode = (int)rule->change_mode;
-
-  if (mode < PREDICTION_CHANGE_ANY || mode > PREDICTION_CHANGE_DECREASING) {
-    mode = PREDICTION_CHANGE_ANY;
-    rule->change_mode = PREDICTION_CHANGE_ANY;
-    changed = true;
-  }
-
-  if (igBeginCombo("Change type", names[mode], 0)) {
-    for (int i = PREDICTION_CHANGE_ANY; i <= PREDICTION_CHANGE_DECREASING; ++i) {
-      if (igSelectable_Bool(names[i], mode == i, 0, (ImVec2){0.f, 0.f})) {
-        rule->change_mode = (prediction_change_mode_t)i;
-        changed = true;
-      }
-    }
-
-    igEndCombo();
-  }
-
   return changed;
 }
 
