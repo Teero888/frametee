@@ -225,26 +225,19 @@ static bool color_rule_is_velocity(const prediction_color_rule_t *rule) {
 
 static bool color_rule_changed(const resolved_color_rule_t *resolved, double value, double previous) {
   if (color_rule_equal(resolved, value, previous)) return false;
-
   if (!color_rule_is_velocity(resolved->rule)) return true;
-
   switch (resolved->rule->change_mode) {
   case PREDICTION_CHANGE_ANY:
     return true;
-
   case PREDICTION_CHANGE_POSITIVE:
     return value > previous;
-
   case PREDICTION_CHANGE_NEGATIVE:
     return value < previous;
-
   case PREDICTION_CHANGE_INCREASING:
     return fabs(value) > fabs(previous);
-
   case PREDICTION_CHANGE_DECREASING:
     return fabs(value) < fabs(previous);
   }
-
   return true;
 }
 
@@ -660,8 +653,8 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
 static bool render_rule_change_mode(prediction_color_rule_t *rule) {
   static const char *names[] = {
       "Any",
-      "Positive",
-      "Negative",
+      "Positive delta",
+      "Negative delta",
       "Increasing",
       "Decreasing",
   };
