@@ -24,6 +24,14 @@ typedef enum prediction_rule_comparison_t {
   PREDICTION_COMPARE_CHANGED,
 } prediction_rule_comparison_t;
 
+typedef enum prediction_change_mode_t {
+  PREDICTION_CHANGE_ANY = 0,
+  PREDICTION_CHANGE_POSITIVE,
+  PREDICTION_CHANGE_NEGATIVE,
+  PREDICTION_CHANGE_INCREASING,
+  PREDICTION_CHANGE_DECREASING,
+} prediction_change_mode_t;
+
 typedef struct prediction_color_rule_t {
   // Player-property ids come from ft_prop_desc and remain stable when a game
   // reorders its reflected property table.
@@ -32,6 +40,7 @@ typedef struct prediction_color_rule_t {
   double target;
   prediction_rule_component_t component;
   prediction_rule_comparison_t comparison;
+  prediction_change_mode_t change_mode;
   bool enabled;
 } prediction_color_rule_t;
 
