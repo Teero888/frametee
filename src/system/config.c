@@ -221,9 +221,11 @@ static void load_prediction_config(toml_datum_t table, prediction_settings_t *se
           integer <= PREDICTION_COMPARE_CHANGED)
         rule->comparison = (prediction_rule_comparison_t)integer;
 	  prediction_config_key(key, sizeof(key), line_index, rule_index, "change_mode");
-	  if (config_integer(table, key, &integer) &&
-		  integer >= PREDICTION_CHANGE_ANY && integer <= PREDICTION_CHANGE_DECREASING)
-	    rule->change_mode = (prediction_change_mode_t)integer;
+	  if (config_number(table, key, &number)) {
+	  const int mode = (int)number;
+	  if (mode >= PREDICTION_CHANGE_ANY && mode <= PREDICTION_CHANGE_DECREASING)
+		rule->change_mode = (prediction_change_mode_t)mode;
+}
     }
   }
 }
