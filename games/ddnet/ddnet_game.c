@@ -478,9 +478,11 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   case PROP_POSITION:
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(c->m_Pos) / PX_PER_TILE, vgety(c->m_Pos) / PX_PER_TILE}};
     return true;
-  case PROP_VELOCITY:
-    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(c->m_Vel), vgety(c->m_Vel)}};
+  case PROP_VELOCITY: {
+    const float ramp = c->m_VelRamp > 0.0f ? c->m_VelRamp : 1.0f;
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(c->m_Vel) * ramp, vgety(c->m_Vel)}};
     return true;
+  }
   case PROP_ACTIVE_WEAPON:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_ActiveWeapon};
     return true;
@@ -1007,8 +1009,9 @@ static bool ddnet_world_player_view(ft_game *game, const ft_world *world, int32_
   const SCharacterCore *c = character_at(world, player);
   if (!c || !out) return false;
 
+  const float ramp = c->m_VelRamp > 0.0f ? c->m_VelRamp : 1.0f;
   out->position = (ft_vec2){vgetx(c->m_Pos) / PX_PER_TILE, vgety(c->m_Pos) / PX_PER_TILE};
-  out->velocity = (ft_vec2){vgetx(c->m_Vel), vgety(c->m_Vel)};
+  out->velocity = (ft_vec2){vgetx(c->m_Vel) * ramp, vgety(c->m_Vel)};
   out->aim = (ft_vec2){(float)c->m_Input.m_TargetX / PX_PER_TILE, (float)c->m_Input.m_TargetY / PX_PER_TILE};
   out->flags = FT_PLAYER_ALIVE;
   if (c->m_FreezeTime > 0 || c->m_DeepFrozen) out->flags |= FT_PLAYER_DISABLED;

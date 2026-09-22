@@ -26,8 +26,6 @@ typedef enum prediction_rule_comparison_t {
 
 typedef enum prediction_change_mode_t {
   PREDICTION_CHANGE_ANY = 0,
-  PREDICTION_CHANGE_POSITIVE,
-  PREDICTION_CHANGE_NEGATIVE,
   PREDICTION_CHANGE_INCREASING,
   PREDICTION_CHANGE_DECREASING,
 } prediction_change_mode_t;

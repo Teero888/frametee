@@ -229,10 +229,6 @@ static bool color_rule_changed(const resolved_color_rule_t *resolved, double val
   switch (resolved->rule->change_mode) {
   case PREDICTION_CHANGE_ANY:
     return true;
-  case PREDICTION_CHANGE_POSITIVE:
-    return value > previous;
-  case PREDICTION_CHANGE_NEGATIVE:
-    return value < previous;
   case PREDICTION_CHANGE_INCREASING:
     return fabs(value) > fabs(previous);
   case PREDICTION_CHANGE_DECREASING:
@@ -298,10 +294,10 @@ static void update_player_color(game_host_t *host, const ft_world *world, int pl
 
     bool triggered = false;
     if (rule->rule->comparison == PREDICTION_COMPARE_CHANGED) {
-	  triggered = state->have_previous && color_rule_changed(rule, value, state->previous);
-	} else {
-	  triggered = color_rule_condition(rule, value);
-	}
+      triggered = state->have_previous && color_rule_changed(rule, value, state->previous);
+    } else {
+      triggered = color_rule_condition(rule, value);
+    }
     state->previous = value;
     state->have_previous = true;
     if (triggered) memcpy(color, rule->rule->color, sizeof(rule->rule->color));
@@ -373,7 +369,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
       const int track = model_group_track_index(timeline, group_index, player);
       if (track < 0 || !timeline->player_tracks[track].prediction_enabled) continue;
       update_player_color(host, world, player, line, resolved_rules,
-                              rule_runtime + (size_t)player * MAX_PREDICTION_COLOR_RULES, active_colors[player]);
+                          rule_runtime + (size_t)player * MAX_PREDICTION_COLOR_RULES, active_colors[player]);
       if (is_3d) {
         vec3 current_pos, previous_pos;
         if (!player_position3(host, current, player, current_pos)) continue;
@@ -653,8 +649,6 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
 static bool render_rule_change_mode(prediction_color_rule_t *rule) {
   static const char *names[] = {
       "Any",
-      "Positive delta",
-      "Negative delta",
       "Increasing",
       "Decreasing",
   };
@@ -701,12 +695,12 @@ static bool render_color_rules(prediction_line_t *line, int line_index, const ft
     if (player_class) changed |= render_rule_property(rule, player_class);
     const ft_prop_desc *property = player_class ? color_rule_property(player_class, rule, NULL) : NULL;
     if (property) {
-	  changed |= render_rule_component(rule, property->kind);
-	  changed |= render_rule_comparison(rule, property->kind);
+      changed |= render_rule_component(rule, property->kind);
+      changed |= render_rule_comparison(rule, property->kind);
 
-	  if (rule->comparison == PREDICTION_COMPARE_CHANGED && color_rule_is_velocity(rule))
-		changed |= render_rule_change_mode(rule);
-	} else {
+      if (rule->comparison == PREDICTION_COMPARE_CHANGED && color_rule_is_velocity(rule))
+        changed |= render_rule_change_mode(rule);
+    } else {
       igTextDisabled("This property is not exposed by the active game.");
     }
     changed |= igColorEdit4("Colour", rule->color,

@@ -220,12 +220,10 @@ static void load_prediction_config(toml_datum_t table, prediction_settings_t *se
       if (config_int(table, key, &integer) && integer >= PREDICTION_COMPARE_EQUAL &&
           integer <= PREDICTION_COMPARE_CHANGED)
         rule->comparison = (prediction_rule_comparison_t)integer;
-	  prediction_config_key(key, sizeof(key), line_index, rule_index, "change_mode");
-	  if (config_number(table, key, &number)) {
-	  const int mode = (int)number;
-	  if (mode >= PREDICTION_CHANGE_ANY && mode <= PREDICTION_CHANGE_DECREASING)
-		rule->change_mode = (prediction_change_mode_t)mode;
-}
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "change_mode");
+      if (config_int(table, key, &integer) && integer >= PREDICTION_CHANGE_ANY &&
+          integer <= PREDICTION_CHANGE_DECREASING)
+        rule->change_mode = (prediction_change_mode_t)integer;
     }
   }
 }
@@ -283,9 +281,9 @@ static void write_prediction_config(FILE *fp, const prediction_settings_t *setti
       prediction_config_key(key, sizeof(key), line_index, rule_index, "comparison");
       write_toml_key(fp, key);
       fprintf(fp, " = %d\n", (int)rule->comparison);
-	  prediction_config_key(key, sizeof(key), line_index, rule_index, "change_mode");
-	  fprintf(fp, "%s", key);
-	  fprintf(fp, " = %d\n", (int)rule->change_mode);
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "change_mode");
+      write_toml_key(fp, key);
+      fprintf(fp, " = %d\n", (int)rule->change_mode);
     }
   }
 }
