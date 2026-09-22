@@ -857,9 +857,25 @@ uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, f
   const float vel_x = vgetx(c->m_Vel);
   const float vel_y = vgety(c->m_Vel);
 
+  const float vel_scaled_x = roundf(vel_x * 256.0f);
+  const float vel_scaled_y = roundf(vel_y * 256.0f);
+
+  float velspeed_x = vel_scaled_x / 256.0f * (50.0f / 32.0f);
+  if (vel_scaled_x >= -1.0f && vel_scaled_x <= 1.0f) {
+    velspeed_x = 0.0f;
+  }
+  float velspeed_y = vel_scaled_y / 256.0f * (50.0f / 32.0f);
+  if (vel_scaled_y >= -128.0f && vel_scaled_y <= 128.0f) {
+    velspeed_y = 0.0f;
+  }
+
+  const float ramp = c->m_VelRamp > 0.0f ? c->m_VelRamp : 1.0f;
+  const float speed_x = velspeed_x * ramp;
+  const float speed_y = velspeed_y;
+
   LINE("Character:");
   LINE("Pos: %d, %d; (%.4f, %.4f)", pos_x, pos_y, pos_x / 32.f, pos_y / 32.f);
-  LINE("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", vel_x * c->m_VelRamp, vel_y, vel_x * c->m_VelRamp * (50.f / 32.f), vel_y * (50.f / 32.f));
+  LINE("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", vel_x * ramp, vel_y, speed_x, speed_y);
   LINE("Freeze: %d", c->m_FreezeTime);
   LINE("Reload: %d", c->m_ReloadTimer);
   LINE("Weapon: %d", c->m_ActiveWeapon);
