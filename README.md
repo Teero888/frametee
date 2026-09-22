@@ -58,9 +58,9 @@ Prediction uses the same game simulation interface as normal playback, so it wor
 Groups represent independent simulation worlds.
 Tracks inside the same group share a world and interact normally. Separate groups maintain separate world states, which allows multiple independent runs to exist in the same project.
 
-<img height="250" alt="image" src="https://github.com/user-attachments/assets/9df14f5d-4da0-41fc-89d3-0ba8e4948e15" />
-<img height="250" alt="image" src="https://github.com/user-attachments/assets/fbcaeb56-9ba1-4c41-b0e7-9973e5449e07" />
-<img height="250" alt="image" src="https://github.com/user-attachments/assets/2a03a444-1a57-45c9-97c0-7d837286bea4" />
+<img height="230" alt="image" src="https://github.com/user-attachments/assets/9df14f5d-4da0-41fc-89d3-0ba8e4948e15" />
+<img height="230" alt="image" src="https://github.com/user-attachments/assets/fbcaeb56-9ba1-4c41-b0e7-9973e5449e07" />
+<img height="230" alt="image" src="https://github.com/user-attachments/assets/2a03a444-1a57-45c9-97c0-7d837286bea4" />
 
 ## Starting-State Overrides
 
