@@ -222,7 +222,7 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
 void interaction_handle_header(timeline_state_t *ts, ImRect header_bb) {
   if (igGetIO_Nil()->ConfigFlags & ImGuiConfigFlags_NoMouse) return;
   ImGuiIO *io = igGetIO_Nil();
-  bool is_header_hovered = igIsMouseHoveringRect(header_bb.Min, header_bb.Max, true);
+  bool is_header_hovered = igIsWindowHovered(0) && igIsMouseHoveringRect(header_bb.Min, header_bb.Max, true);
 
   if (is_header_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
     int mouse_tick = renderer_screen_x_to_tick(ts, io->MousePos.x, header_bb.Min.x);
@@ -290,7 +290,7 @@ void interaction_select_track(timeline_state_t *ts, int track_index) {
 
 static void handle_pan_and_zoom(timeline_state_t *ts, ImRect timeline_bb) {
   ImGuiIO *io = igGetIO_Nil();
-  bool is_timeline_hovered = igIsMouseHoveringRect(timeline_bb.Min, timeline_bb.Max, true);
+  bool is_timeline_hovered = igIsWindowHovered(0) && igIsMouseHoveringRect(timeline_bb.Min, timeline_bb.Max, true);
 
   if (!is_timeline_hovered) return;
 
@@ -618,7 +618,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
 
   // If the user clicked the empty track area (not on a snippet), select that track.
   // We check for a left mouse click inside the track rows and ensure no snippet item consumed the click.
-  if (igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
+  if (igIsWindowHovered(0) && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
     ImVec2 mouse = igGetIO_Nil()->MousePos;
     // Only consider clicks inside the timeline bounding box
     if (mouse.x >= timeline_bb.Min.x && mouse.x <= timeline_bb.Max.x && mouse.y >= timeline_bb.Min.y && mouse.y <= timeline_bb.Max.y) {
@@ -709,7 +709,7 @@ static void handle_snippet_drag_and_drop(timeline_state_t *ts, ImRect timeline_b
 
 static void handle_selection_box(timeline_state_t *ts, ImRect timeline_bb) {
   ImGuiIO *io = igGetIO_Nil();
-  bool is_timeline_hovered = igIsMouseHoveringRect(timeline_bb.Min, timeline_bb.Max, true);
+  bool is_timeline_hovered = igIsWindowHovered(0) && igIsMouseHoveringRect(timeline_bb.Min, timeline_bb.Max, true);
 
   if (is_timeline_hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) && !igIsAnyItemHovered()) {
     ts->selection_box_active = true;

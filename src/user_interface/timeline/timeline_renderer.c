@@ -338,7 +338,7 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
       ImDrawList_AddTriangleFilled(draw_list, p1, p2, p3, event_marker_col);
 
       // Optional: Hover tooltip for the event
-      if (igIsMouseHoveringRect((ImVec2){x - 4 * dpi_scale, header_bb.Max.y - 12 * dpi_scale}, (ImVec2){x + 4 * dpi_scale, header_bb.Max.y - 4 * dpi_scale}, true)) {
+      if (igIsWindowHovered(0) && igIsMouseHoveringRect((ImVec2){x - 4 * dpi_scale, header_bb.Max.y - 12 * dpi_scale}, (ImVec2){x + 4 * dpi_scale, header_bb.Max.y - 4 * dpi_scale}, true)) {
         igBeginTooltip();
         igText("Group: %s", group->name);
         timeline_event_tooltip_content(ev);

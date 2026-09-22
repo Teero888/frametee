@@ -68,7 +68,7 @@ void render_timeline(ui_handler_t *ui) {
     interaction_handle_timeline_area(ts, timeline_bb);
 
     // Handle context menu
-    if (igIsMouseClicked_Bool(ImGuiMouseButton_Right, false) && igIsWindowHovered(ImGuiHoveredFlags_ChildWindows) && igGetIO_Nil()->MousePos.x >= timeline_bb.Min.x) {
+    if (igIsMouseClicked_Bool(ImGuiMouseButton_Right, false) && igIsWindowHovered(0) && igGetIO_Nil()->MousePos.x >= timeline_bb.Min.x) {
       if (!igIsAnyItemHovered()) ts->context_menu_snippet_id = -1;
       igOpenPopup_Str("TimelineContextMenu", 0);
     }
