@@ -23,15 +23,11 @@ The following gamemodes are supported: DDRace, Race, FastCap, FastCap no weapons
 Exporting to .demo or ghost files is also supported. `ddnet_physics` is still incomplete so some features such as draggers or plasma turrets won't work but will be implemented in the future.
 To prevent cheating on official DDNet servers, the physics have been slightly altered and exporting input sequences to cheat clients is **NOT** supported and never will be. Don't even try.
 
-<!-- DDNet GIF -->
-
 ### TrackMania Nations Forever
 
 TrackMania support is built around my fork of [ForeverValidator](https://github.com/Skycrafter-dev/ForeverValidator).
 FrameTee can load TrackMania Forever challenges, simulate and render the car in the 3D editor, and export runs as native `.Replay.Gbx` files.
 TrackMania's proprietary assets are not distributed with FrameTee and must come from an existing TrackMania installation. See [installation guide](https://github.com/Teero888/frametee/blob/master/data/games/tmnf/README.txt).
-
-<!-- TMNF GIF -->
 
 ## Timeline
 
@@ -53,18 +49,18 @@ Prediction lines simulate future movement from the current state without modifyi
 The primary line follows the authored inputs. Additional lines can override selected inputs, allowing several possible continuations to be compared from the same simulation state.
 Prediction uses the same game simulation interface as normal playback, so it works across both 2D and 3D modules.
 
-<img align="top" height="400" alt="image" src="https://github.com/user-attachments/assets/570483fb-b86b-4dd3-82cc-499ae5bcf5d7" />
-<img height="400" alt="image" src="https://github.com/user-attachments/assets/17ed1ee7-6845-4a99-8e3f-8ecfde112941" />
-<img height="400" alt="image" src="https://github.com/user-attachments/assets/59a03977-95f2-48fe-a463-3f8f020711b8" />
+<img align="top" height="350" alt="image" src="https://github.com/user-attachments/assets/570483fb-b86b-4dd3-82cc-499ae5bcf5d7" />
+<img height="350" alt="image" src="https://github.com/user-attachments/assets/17ed1ee7-6845-4a99-8e3f-8ecfde112941" />
+<img height="350" alt="image" src="https://github.com/user-attachments/assets/59a03977-95f2-48fe-a463-3f8f020711b8" />
 
 ## Groups
 
 Groups represent independent simulation worlds.
 Tracks inside the same group share a world and interact normally. Separate groups maintain separate world states, which allows multiple independent runs to exist in the same project.
 
-<img height="300" alt="image" src="https://github.com/user-attachments/assets/9df14f5d-4da0-41fc-89d3-0ba8e4948e15" />
-<img height="300" alt="image" src="https://github.com/user-attachments/assets/fbcaeb56-9ba1-4c41-b0e7-9973e5449e07" />
-<img height="300" alt="image" src="https://github.com/user-attachments/assets/2a03a444-1a57-45c9-97c0-7d837286bea4" />
+<img height="250" alt="image" src="https://github.com/user-attachments/assets/9df14f5d-4da0-41fc-89d3-0ba8e4948e15" />
+<img height="250" alt="image" src="https://github.com/user-attachments/assets/fbcaeb56-9ba1-4c41-b0e7-9973e5449e07" />
+<img height="250" alt="image" src="https://github.com/user-attachments/assets/2a03a444-1a57-45c9-97c0-7d837286bea4" />
 
 ## Starting-State Overrides
 
