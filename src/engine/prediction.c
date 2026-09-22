@@ -219,6 +219,28 @@ static bool color_rule_equal(const resolved_color_rule_t *resolved, double a, do
   return fabs(a - b) <= scale * 1e-6;
 }
 
+static bool color_rule_is_velocity(const prediction_color_rule_t *rule) {
+  return rule && strcmp(rule->property_id, "velocity") == 0;
+}
+
+static bool color_rule_changed(const resolved_color_rule_t *resolved, double value, double previous) {
+  if (color_rule_equal(resolved, value, previous)) return false;
+  if (!color_rule_is_velocity(resolved->rule)) return true;
+  switch (resolved->rule->change_mode) {
+  case PREDICTION_CHANGE_ANY:
+    return true;
+  case PREDICTION_CHANGE_POSITIVE:
+    return value > previous;
+  case PREDICTION_CHANGE_NEGATIVE:
+    return value < previous;
+  case PREDICTION_CHANGE_INCREASING:
+    return fabs(value) > fabs(previous);
+  case PREDICTION_CHANGE_DECREASING:
+    return fabs(value) < fabs(previous);
+  }
+  return true;
+}
+
 static bool color_rule_condition(const resolved_color_rule_t *resolved, double value) {
   switch (resolved->rule->comparison) {
   case PREDICTION_COMPARE_EQUAL:
@@ -276,10 +298,10 @@ static void update_player_color(game_host_t *host, const ft_world *world, int pl
 
     bool triggered = false;
     if (rule->rule->comparison == PREDICTION_COMPARE_CHANGED) {
-      triggered = state->have_previous && !color_rule_equal(rule, value, state->previous);
-    } else {
-      triggered = color_rule_condition(rule, value);
-    }
+	  triggered = state->have_previous && color_rule_changed(rule, value, state->previous);
+	} else {
+	  triggered = color_rule_condition(rule, value);
+	}
     state->previous = value;
     state->have_previous = true;
     if (triggered) memcpy(color, rule->rule->color, sizeof(rule->rule->color));
@@ -487,6 +509,7 @@ static void color_rule_select_property(prediction_color_rule_t *rule, const ft_p
                         ? PREDICTION_COMPONENT_MAGNITUDE
                         : PREDICTION_COMPONENT_VALUE;
   rule->comparison = PREDICTION_COMPARE_EQUAL;
+  rule->change_mode = PREDICTION_CHANGE_ANY;
   rule->target = property->kind == FT_VALUE_BOOL ? 1.0 : 0.0;
 }
 
@@ -627,6 +650,38 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
   return changed;
 }
 
+static bool render_rule_change_mode(prediction_color_rule_t *rule) {
+  static const char *names[] = {
+      "Any",
+      "Positive delta",
+      "Negative delta",
+      "Increasing",
+      "Decreasing",
+  };
+
+  bool changed = false;
+  int mode = (int)rule->change_mode;
+
+  if (mode < PREDICTION_CHANGE_ANY || mode > PREDICTION_CHANGE_DECREASING) {
+    mode = PREDICTION_CHANGE_ANY;
+    rule->change_mode = PREDICTION_CHANGE_ANY;
+    changed = true;
+  }
+
+  if (igBeginCombo("Change type", names[mode], 0)) {
+    for (int i = PREDICTION_CHANGE_ANY; i <= PREDICTION_CHANGE_DECREASING; ++i) {
+      if (igSelectable_Bool(names[i], mode == i, 0, (ImVec2){0.f, 0.f})) {
+        rule->change_mode = (prediction_change_mode_t)i;
+        changed = true;
+      }
+    }
+
+    igEndCombo();
+  }
+
+  return changed;
+}
+
 static bool render_color_rules(prediction_line_t *line, int line_index, const ft_entity_class *player_class) {
   bool changed = false;
   if (!igTreeNode_Str("Color triggers")) return false;
@@ -646,9 +701,12 @@ static bool render_color_rules(prediction_line_t *line, int line_index, const ft
     if (player_class) changed |= render_rule_property(rule, player_class);
     const ft_prop_desc *property = player_class ? color_rule_property(player_class, rule, NULL) : NULL;
     if (property) {
-      changed |= render_rule_component(rule, property->kind);
-      changed |= render_rule_comparison(rule, property->kind);
-    } else {
+	  changed |= render_rule_component(rule, property->kind);
+	  changed |= render_rule_comparison(rule, property->kind);
+
+	  if (rule->comparison == PREDICTION_COMPARE_CHANGED && color_rule_is_velocity(rule))
+		changed |= render_rule_change_mode(rule);
+	} else {
       igTextDisabled("This property is not exposed by the active game.");
     }
     changed |= igColorEdit4("Colour", rule->color,
