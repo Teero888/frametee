@@ -743,7 +743,7 @@ void prediction_render_menu(timeline_state_t *timeline) {
   bool project_changed = false;
   config_changed |= igCheckbox("Show prediction", &settings->enabled);
   igSetNextItemWidth(180.f * dpi);
-  config_changed |= igSliderInt("Ticks ahead", &settings->length, 1, 2000, "%d", ImGuiSliderFlags_AlwaysClamp);
+  config_changed |= igDragInt("Ticks ahead", &settings->length, 1.0f, 1, 2000, "%d", ImGuiSliderFlags_AlwaysClamp);
   igSetNextItemWidth(180.f * dpi);
   config_changed |= igSliderFloat("Line width", &settings->thickness, 0.01f, 0.30f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
   igTextDisabled("Prediction settings and line definitions are saved per game.");
