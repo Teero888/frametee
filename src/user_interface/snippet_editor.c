@@ -14,6 +14,7 @@
 #include "user_interface.h"
 #include <engine/input_record.h>
 #include <float.h>
+#include <math.h>
 #include <renderer/graphics_backend.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +40,20 @@ static struct {
   long long bulk_value;
   float bulk_float_value;
   ft_vec2 bulk_vec2_value;
-} editor_state = {.snippet_id = -1, .last_clicked_row = -1, .bulk_field = 0};
+
+  bool picking_position;
+  int pick_snippet_id;
+
+} editor_state = {.snippet_id = -1, .last_clicked_row = -1, .bulk_field = 0, .pick_snippet_id = -1};
+
+bool snippet_editor_is_picking(void) {
+  return editor_state.picking_position;
+}
+
+static void snippet_editor_cancel_pick(void) {
+  editor_state.picking_position = false;
+  editor_state.pick_snippet_id = -1;
+}
 
 static void ensure_selection_capacity(int count) {
   if (count <= editor_state.selected_capacity) return;
@@ -61,6 +75,7 @@ static void reset_editor_state(void) {
   free(editor_state.action_before_states);
   editor_state.action_before_states = NULL;
   editor_state.action_before_count = 0;
+  snippet_editor_cancel_pick();
 }
 
 void snippet_editor_reset(void) {
@@ -138,6 +153,56 @@ static void end_action(ui_handler_t *ui, input_snippet_t *snippet) {
     model_recalc_snippet_physics(&ui->timeline, snippet, snippet->start_tick + first_changed);
     ui_mark_unsaved(ui);
   }
+}
+
+bool snippet_editor_take_world_click(ui_handler_t *ui, float world_x, float world_y) {
+  if (!editor_state.picking_position) return false;
+
+  int snippet_id = editor_state.pick_snippet_id;
+  snippet_editor_cancel_pick();
+
+  if (!ui) return true;
+
+  int track_index = -1;
+  input_snippet_t *snippet =
+      model_find_snippet_by_id(&ui->timeline, snippet_id, &track_index);
+
+  if (!snippet) return true;
+  timeline_state_t *ts = &ui->timeline;
+  game_host_t *host = &ui->gfx_handler->game_host;
+
+  int aim_field = engine_input_cursor_field();
+  if (aim_field < 0) return true;
+
+  int group_index = model_track_group_index(ts, track_index);
+  int local_index = model_group_local_track_index(ts, track_index);
+
+  if (group_index < 0 || local_index < 0) return true;
+  if (!begin_action(snippet)) return true;
+
+  for (int row = 0; row < snippet->input_count; ++row) {
+    if (row >= editor_state.selected_capacity || !editor_state.selected_rows[row]) continue;
+
+    int local_tick = snippet->start_tick + row;
+    int global_tick = local_tick + ts->groups[group_index]->start_offset;
+
+    const ft_world *world = model_group_world_at_tick(ts, group_index, global_tick);
+
+    if (!world) continue;
+
+    ft_player_view player;
+    if (!gh_world_player_view(host, world, local_index, &player)) continue;
+
+    ft_vec2 aim = {
+        roundf((world_x - player.position.x) * 32.f),
+        roundf((world_y - player.position.y) * 32.f),
+    };
+    if (aim.x == 0.f && aim.y == 0.f) aim.x = 1.f;
+    engine_input_set_vec2(host, &snippet_window(snippet)[row], aim_field, aim);
+  }
+
+  end_action(ui, snippet);
+  return true;
 }
 
 // One cell of the matrix, drawn according to what kind of field it is.
@@ -331,6 +396,19 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
     }
     igSameLine(0, 6.f);
     if (igButton("Select none", (ImVec2){0.f, 0.f})) clear_row_selection();
+    if (engine_input_cursor_field() >= 0) {
+      igSameLine(0, 6.f);
+      if (editor_state.picking_position) {
+        if (igButton("Cancel Pick", (ImVec2){0.f, 0.f})) {
+          snippet_editor_cancel_pick();
+        }
+      } else {
+        if (igButton("Pick Position", (ImVec2){0.f, 0.f})) {
+          editor_state.picking_position = true;
+          editor_state.pick_snippet_id = snippet->id;
+        }
+      }
+    }
 
     draw_bulk_edit(ui, host, schema, snippet);
     igSeparator();
