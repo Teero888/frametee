@@ -91,6 +91,7 @@ set(SRCS
 	src/user_interface/input_effects_editor.c
 	src/user_interface/player_profile.c
 	src/user_interface/starting_state.c
+	src/user_interface/input_lanes.c
 	src/user_interface/snippet_editor.c
 	src/user_interface/timeline_events.c
 	src/user_interface/undo_redo.c

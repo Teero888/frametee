@@ -69,6 +69,8 @@ struct ui_handler_t {
   bool show_timeline_events_window;
   bool show_snippet_editor_window;
   bool focus_snippet_editor_window;
+  // The snippet editor handles Delete and Ctrl+A itself while it has focus.
+  bool snippet_editor_focused;
   bool show_effects_window;
   bool focus_effects_window;
   int effects_snippet_id;

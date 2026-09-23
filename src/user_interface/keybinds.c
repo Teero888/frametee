@@ -507,7 +507,9 @@ void keybinds_process_inputs(ui_handler_t *ui) {
 
   if (ts->recording) return;
 
-  if (!camera_clock && keybinds_is_action_pressed(kb, ACTION_SELECT_ALL, false)) {
+  // The snippet editor reuses these keys for its own tick selection.
+  const bool snippet_editor_keys = ui->snippet_editor_focused;
+  if (!camera_clock && !snippet_editor_keys && keybinds_is_action_pressed(kb, ACTION_SELECT_ALL, false)) {
     interaction_clear_selection(ts);
     ts->active_snippet_id = -1;
     for (int i = 0; i < ts->player_track_count; i++) {
@@ -518,7 +520,7 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   }
   // Snippet edits act on a selection the Camera tab hides.
   if (!camera_clock) {
-    if (keybinds_is_action_pressed(kb, ACTION_DELETE_SNIPPET, false)) cmd = commands_create_delete_selected(ui);
+    if (!snippet_editor_keys && keybinds_is_action_pressed(kb, ACTION_DELETE_SNIPPET, false)) cmd = commands_create_delete_selected(ui);
     if (keybinds_is_action_pressed(kb, ACTION_SPLIT_SNIPPET, false)) cmd = commands_create_split_selected(ui);
     if (keybinds_is_action_pressed(kb, ACTION_MERGE_SNIPPETS, false)) cmd = commands_create_merge_selected(ui);
     if (keybinds_is_action_pressed(kb, ACTION_TOGGLE_SNIPPET_ACTIVE, false))

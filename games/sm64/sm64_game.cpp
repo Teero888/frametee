@@ -670,7 +670,7 @@ static void splash(const ft_engine_api *e,void **context,const ft_ui_frame *f){
 static void splash_destroy(void *context){delete static_cast<Setup *>(context);}
 static ft_game_module make_module(){
   ft_game_module m{};m.struct_size=sizeof(m);m.abi_version=FT_GAME_ABI_VERSION;m.abi_revision=FT_GAME_ABI_REVISION;
-  m.info={sizeof(ft_game_info),"sm64","Super Mario 64","0.2.0","FrameTee", "https://github.com/sm64pc/sm64ex","thumbnail.png"};
+  m.info={sizeof(ft_game_info),"sm64","Super Mario 64","0.2.0","Teero", "https://github.com/sm64pc/sm64ex","thumbnail.png"};
   m.constraints.struct_size=sizeof(ft_game_constraints);m.constraints.caps=FT_CAP_HEADLESS|FT_CAP_WORLD_SERIALIZE|FT_CAP_RENDERS_LEVEL|FT_CAP_EXPORTERS|FT_CAP_HOSTS_STARTING_STATE;
   m.constraints.dimensions=FT_DIMENSIONS_3D;m.constraints.min_players=m.constraints.max_players=1;m.constraints.ticks_per_second=30;m.constraints.units_per_tile=1;m.constraints.default_camera_height=2000;
   m.constraints.camera_modes=camera_modes;m.constraints.camera_mode_count=uint32_t(std::size(camera_modes));m.constraints.level_extension="sm64";m.constraints.level_filter_name="SM64 setup";
