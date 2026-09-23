@@ -3,6 +3,10 @@
 
 #include "keybinds.h"
 #include "undo_redo.h"
+#include "camera/camera_timeline.h"
+#include "camera/camera_window.h"
+#include "render/render_profile.h"
+#include <export/video_export.h>
 #include <engine/game_host.h>
 #include <engine/input_record.h>
 #include <plugins/plugin_manager.h>
@@ -26,6 +30,19 @@ struct ui_handler_t {
   ImFont *icon_font;
 
   timeline_state_t timeline;
+  camera_timeline_t camera_timeline;
+  camera_editor_t camera_editor;
+  bool timeline_window_visible;
+  bool timeline_window_focused;
+  bool select_timeline_tab;
+  render_state_t render;
+  // The viewport's whole panel; the picture is a part of it while previewing.
+  ImVec2 viewport_panel_pos, viewport_panel_size;
+  // Quitting while a background render runs asks first; this remembers the answer.
+  bool show_quit_render_prompt;
+  bool quit_confirmed;
+  video_export_options_t video_options;
+  video_export_job_t video_job;
   keybind_manager_t keybinds;
   undo_manager_t undo_manager;
   plugin_manager_t plugin_manager;

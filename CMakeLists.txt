@@ -85,6 +85,7 @@ set(SRCS
 	src/scripting/script_engine.c
 	src/renderer/graphics_backend.c
 	src/renderer/renderer.c
+	src/export/video_export.c
 	src/user_interface/keybinds.c
 	src/user_interface/input_effects.c
 	src/user_interface/input_effects_editor.c
@@ -94,6 +95,11 @@ set(SRCS
 	src/user_interface/timeline_events.c
 	src/user_interface/undo_redo.c
 	src/user_interface/user_interface.c
+	src/user_interface/camera/camera_timeline.c
+	src/user_interface/camera/camera_rig.c
+	src/user_interface/camera/camera_window.c
+	src/user_interface/render/render_profile.c
+	src/user_interface/render/render_window.c
 	src/user_interface/timeline/timeline.c
 	src/user_interface/timeline/timeline_commands.c
 	src/user_interface/timeline/timeline_interaction.c
@@ -242,6 +248,25 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${PLATFORM_LIBS}
     Vulkan::Vulkan
 )
+
+# MP4 export needs FFmpeg's libraries. Without them the editor still builds,
+# with rendering disabled; release builds ask for it so they cannot ship
+# without it by accident.
+option(FRAMETEE_REQUIRE_VIDEO_EXPORT "Fail to configure when FFmpeg is not found" OFF)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(FRAMETEE_VIDEO_FFMPEG QUIET IMPORTED_TARGET
+        libavformat libavcodec libavutil libswscale)
+endif()
+if(TARGET PkgConfig::FRAMETEE_VIDEO_FFMPEG)
+    target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FRAMETEE_VIDEO_FFMPEG)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE FT_HAS_FFMPEG=1)
+    message(STATUS "MP4 export: enabled (libavcodec ${FRAMETEE_VIDEO_FFMPEG_libavcodec_VERSION})")
+elseif(FRAMETEE_REQUIRE_VIDEO_EXPORT)
+    message(FATAL_ERROR "MP4 export needs FFmpeg (libavformat, libavcodec, libavutil, libswscale) through pkg-config")
+else()
+    message(STATUS "MP4 export: disabled (FFmpeg not found)")
+endif()
 
 target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>: -Wall -Wextra -pedantic>

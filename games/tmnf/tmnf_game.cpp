@@ -126,14 +126,14 @@ enum SettingIndex {
 
 const ft_setting_desc kSettings[SETTING_COUNT] = {
     {"draw_track", "Draw the track", "Draw the blocks the challenge is built from.", "Rendering", FT_VALUE_BOOL, 0.0,
-     0.0},
+     0.0, FT_SETTING_RENDER},
     {"draw_background", "Draw the stadium", "Draw the scenery shell behind the track.", "Rendering", FT_VALUE_BOOL, 0.0,
-     0.0},
+     0.0, FT_SETTING_RENDER},
     {"backface_cull", "Cull back faces", "Skip triangles facing away from the camera. Halves the work on solid "
                                          "geometry.",
-     "Rendering", FT_VALUE_BOOL, 0.0, 0.0},
+     "Rendering", FT_VALUE_BOOL, 0.0, 0.0, FT_SETTING_RENDER},
     {"draw_collision", "Show the collision shape",
-     "Draw the ellipsoids the simulation collides with, over the car.", "Rendering", FT_VALUE_BOOL, 0.0, 0.0},
+     "Draw the ellipsoids the simulation collides with, over the car.", "Rendering", FT_VALUE_BOOL, 0.0, 0.0, FT_SETTING_RENDER},
 };
 
 // --- lifecycle ---------------------------------------------------------------

@@ -52,6 +52,12 @@ void gfx_toggle_fullscreen(gfx_handler_t *handler);
 float gfx_get_ui_scale(void);
 void gfx_retire_imgui_texture(gfx_handler_t *handler, uint64_t texture_id);
 
+// Render one game frame at an output resolution independent of the editor
+// viewport. The callback records the same game passes used by the preview.
+// `pixels` receives tightly packed RGBA8 bytes and must hold width*height*4.
+bool gfx_render_export_frame(gfx_handler_t *handler, uint32_t width, uint32_t height,
+                             void (*draw)(gfx_handler_t *, float), float alpha, uint8_t *pixels);
+
 struct gfx_handler_t {
   // Backend Stuffs
   GLFWwindow *window;
@@ -131,6 +137,20 @@ struct gfx_handler_t {
   uint32_t offscreen_width;
   uint32_t offscreen_height;
   bool offscreen_initialized;
+
+  // Dedicated video target; its extent never follows the editor viewport.
+  VkImage export_image;
+  VkDeviceMemory export_memory;
+  VkImageView export_view;
+  VkImage export_depth_image;
+  VkDeviceMemory export_depth_memory;
+  VkImageView export_depth_view;
+  VkFramebuffer export_framebuffer;
+  VkBuffer export_readback;
+  VkDeviceMemory export_readback_memory;
+  VkCommandPool export_command_pool;
+  VkCommandBuffer export_command_buffer;
+  uint32_t export_width, export_height;
 };
 
 #endif // GRAPHICS_H

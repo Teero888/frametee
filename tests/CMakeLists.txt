@@ -1,3 +1,11 @@
+add_executable(camera_timeline_test camera_timeline.c ../src/user_interface/camera/camera_timeline.c)
+target_include_directories(camera_timeline_test PRIVATE ../src)
+if(UNIX)
+    target_link_libraries(camera_timeline_test PRIVATE m)
+    target_compile_options(camera_timeline_test PRIVATE -UNDEBUG -Wall -Wextra)
+endif()
+add_test(NAME camera_timeline COMMAND camera_timeline_test)
+
 add_executable(game_host_browse_test
     game_host_browse.c
     ../src/engine/game_host.c

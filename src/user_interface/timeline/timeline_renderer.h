@@ -16,6 +16,18 @@ int renderer_hit_test_playhead_handle(const timeline_state_t *ts, ImRect header_
 int renderer_find_nearest_playhead(const timeline_state_t *ts, ImRect header_bb, float position_x);
 
 // Main Rendering Functions
+typedef enum transport_action_t {
+  TRANSPORT_NONE,
+  TRANSPORT_START,
+  TRANSPORT_BACK,
+  TRANSPORT_PLAY,
+  TRANSPORT_FORWARD,
+  TRANSPORT_END,
+} transport_action_t;
+
+// The play controls both the Timeline and the Camera tab start with, so the
+// two read as one header over different clocks.
+transport_action_t renderer_draw_transport(ui_handler_t *ui, bool playing);
 void renderer_draw_controls(timeline_state_t *ts);
 void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect header_bb);
 void renderer_draw_playhead_line(timeline_state_t *ts, ImDrawList *draw_list, ImRect timeline_rect);

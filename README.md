@@ -53,6 +53,16 @@ Prediction uses the same game simulation interface as normal playback, so it wor
 <img height="350" alt="image" src="https://github.com/user-attachments/assets/17ed1ee7-6845-4a99-8e3f-8ecfde112941" />
 <img height="350" alt="image" src="https://github.com/user-attachments/assets/59a03977-95f2-48fe-a463-3f8f020711b8" />
 
+## Camera
+
+The Camera tab edits the camera like a video, with the game as its footage.
+Camera keys are interpolated along a spatial path with ease curves, similar to After Effects, and the camera can follow or aim at one or more characters. A separate game time curve remaps the game under the camera, so it can be slowed down, frozen or reversed while the camera keeps moving.
+
+## Rendering
+
+The Render tab decides what is drawn, separately for the editor viewport and for the video, and renders the camera to an MP4.
+While it is open, the viewport previews the video. Rendering runs in a separate process from a snapshot of the project, so editing can continue while it runs. FFmpeg development libraries are needed at build time to enable MP4 export.
+
 ## Groups
 
 Groups represent independent simulation worlds.
@@ -102,6 +112,17 @@ Headless mode runs the simulation without creating a window and can be combined 
 ```
 
 Additional arguments can be forwarded to active plugins.
+
+An MP4 can also be rendered from the command line (from a level or a saved project):
+
+```bash
+./frametee --game ddnet --project path/to/run.tasp \
+    --render-video path/to/render.mp4 --render-range 0:10 \
+    --render-size 1920x1080 --render-fps 60000/1001 \
+    --render-codec h264 --render-crf 18 --render-preset slow --render-depth 8
+```
+
+`--render-range` is in seconds of camera time and defaults to the project's export range. Use `--render-bitrate <kb/s>` instead of `--render-crf <value>` for target bitrate mode. The CLI render still needs a working Vulkan display.
 
 Use:
 

@@ -75,6 +75,7 @@ timeline_group_t *model_add_group(timeline_state_t *ts, const char *name) {
   snprintf(group->name, sizeof(group->name), "%s", name && name[0] ? name : "Group");
   memcpy(group->color, s_group_colors[index % (int)(sizeof(s_group_colors) / sizeof(s_group_colors[0]))], sizeof(group->color));
   group->visible = true;
+  group->video_visible = true;
   group->export_enabled = true;
   group->prediction_enabled = true;
   group_runtime_init(ts, group, index);
@@ -169,6 +170,7 @@ void model_reset_groups_for_level(timeline_state_t *ts) {
 
     group_runtime_cleanup(ts, group);
     group_runtime_init(ts, group, i);
+    ++group->physics_revision;
 
     // A fixed-cast game has already created its required players. Dynamic
     // games start lower and need only the difference represented by tracks.
@@ -589,6 +591,11 @@ static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, 
   ts->player_tracks = grown;
   memmove(&ts->player_tracks[insert_index + num], &ts->player_tracks[insert_index],
           sizeof(player_track_t) * (size_t)(ts->player_track_count - insert_index));
+  if (ts->ui && &ts->ui->timeline == ts) {
+    camera_timeline_t *camera = &ts->ui->camera_timeline;
+    for (int i = 0; i < camera->subject_count; ++i)
+      if (camera->subject_tracks[i] >= insert_index) camera->subject_tracks[i] += num;
+  }
 
   // Realloc/memmove changes the address of inline string storage.
   for (int i = 0; i < ts->player_track_count; ++i)
@@ -664,6 +671,17 @@ void model_sync_tracks_to_world(timeline_state_t *ts, int group_index) {
 
 void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   if (track_index < 0 || track_index >= ts->player_track_count) return;
+  if (ts->ui && &ts->ui->timeline == ts) {
+    // A removed character leaves the camera's set; the rest keep their places.
+    camera_timeline_t *camera = &ts->ui->camera_timeline;
+    int kept = 0;
+    for (int i = 0; i < camera->subject_count; ++i) {
+      const int track = camera->subject_tracks[i];
+      if (track == track_index) continue;
+      camera->subject_tracks[kept++] = track > track_index ? track - 1 : track;
+    }
+    camera->subject_count = kept;
+  }
 
   int group_index = model_track_group_index(ts, track_index);
   int local_index = model_group_local_track_index(ts, track_index);
@@ -816,6 +834,7 @@ void model_invalidate_group_physics(timeline_state_t *ts, int group_index, int t
   game_host_t *host = model_host(ts);
   if (!host) return;
   timeline_group_t *group = ts->groups[group_index];
+  ++group->physics_revision;
   tick = imax(0, tick);
   // Input at tick T first changes world T+1. Preserve the snapshot at T.
   const uint32_t keep = (uint32_t)(tick / 50) + 1;
@@ -1375,4 +1394,79 @@ int model_find_player_prop(game_host_t *host, const char *prop_id) {
     if (player_class->props[i].id && strcmp(player_class->props[i].id, prop_id) == 0) return (int)i;
   }
   return -1;
+}
+
+bool model_player_position(timeline_state_t *ts, const ft_world *world, int local_player, float out[3]) {
+  game_host_t *host = model_host(ts);
+  out[0] = out[1] = out[2] = 0.f;
+  if (!world) return false;
+  if (game_is_3d(host)) {
+    ft_value value;
+    if (!gh_entity_prop_get(host, world, FT_ENTITY_CLASS_PLAYER, local_player, 0, &value) || value.kind != FT_VALUE_VEC3)
+      return false;
+    out[0] = value.as.v3.x;
+    out[1] = value.as.v3.y;
+    out[2] = value.as.v3.z;
+    return true;
+  }
+  ft_player_view view = {.struct_size = sizeof(view)};
+  if (!gh_world_player_view(host, world, local_player, &view)) return false;
+  out[0] = view.position.x;
+  out[1] = view.position.y;
+  return true;
+}
+
+struct model_position_sampler_t {
+  int track_index, group_index, local_player;
+  int next_tick; // global
+  ft_world *world;
+};
+
+model_position_sampler_t *model_position_sampler_create(timeline_state_t *ts, int track_index, int first_tick) {
+  const int group_index = model_track_group_index(ts, track_index);
+  if (group_index < 0 || !ts->ui->gfx_handler->level) return NULL;
+  game_host_t *host = model_host(ts);
+  timeline_group_t *group = ts->groups[group_index];
+  model_position_sampler_t *sampler = calloc(1, sizeof(*sampler));
+  if (!sampler) return NULL;
+  sampler->track_index = track_index;
+  sampler->group_index = group_index;
+  sampler->local_player = model_group_local_track_index(ts, track_index);
+  sampler->next_tick = first_tick;
+  sampler->world = gh_world_create(host, ts->ui->gfx_handler->level, gh_world_player_count(host, group->initial_world), -1);
+  if (!sampler->world) {
+    free(sampler);
+    return NULL;
+  }
+  // Start from the nearest snapshot at or before the first tick.
+  int base = imax(0, first_tick - group->start_offset) / 50;
+  if (base > (int)group->vec.current_size - 1) base = (int)group->vec.current_size - 1;
+  gh_world_copy(host, sampler->world, group->vec.data[imax(0, base)]);
+  return sampler;
+}
+
+int model_position_sampler_step(timeline_state_t *ts, model_position_sampler_t *sampler, int count, float (*out)[3]) {
+  if (!sampler) return 0;
+  // As for any simulation: effects rebuild first, never from inside the steps.
+  if (!ts->recording && !ts->input_effects_rebuilding) input_effects_ensure(ts);
+  timeline_group_t *group = ts->groups[sampler->group_index];
+  const bool effects = engine_api_set_presentation_effects(false);
+  const int previous_group = ts->simulation_group_index;
+  ts->simulation_group_index = sampler->group_index;
+  int written = 0;
+  for (; written < count; ++written) {
+    const int local = imax(0, sampler->next_tick - group->start_offset);
+    simulate_to(ts, sampler->group_index, sampler->world, local);
+    if (!model_player_position(ts, sampler->world, sampler->local_player, out[written])) break;
+    ++sampler->next_tick;
+  }
+  ts->simulation_group_index = previous_group;
+  engine_api_set_presentation_effects(effects);
+  return written;
+}
+
+void model_position_sampler_destroy(timeline_state_t *ts, model_position_sampler_t *sampler) {
+  if (!sampler) return;
+  gh_world_destroy(model_host(ts), sampler->world);
+  free(sampler);
 }

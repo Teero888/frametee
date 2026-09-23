@@ -100,6 +100,16 @@ const ft_world *model_world_at_tick(timeline_state_t *ts, int tick);
 const ft_world *model_group_world_at_tick(timeline_state_t *ts, int group_index, int tick);
 // Both the tick and the one before it, for interpolated rendering.
 void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, const ft_world **out_prev, const ft_world **out_cur);
+// A player's position in a world: the first player property in 3D, the player
+// view in 2D.
+bool model_player_position(timeline_state_t *ts, const ft_world *world, int local_player, float out[3]);
+// Walks one track's positions tick by tick in a world of its own, so the
+// timeline's cached worlds stay where playback left them. step writes up to
+// `count` positions from the next tick on and returns how many it wrote.
+typedef struct model_position_sampler_t model_position_sampler_t;
+model_position_sampler_t *model_position_sampler_create(timeline_state_t *ts, int track_index, int first_tick);
+int model_position_sampler_step(timeline_state_t *ts, model_position_sampler_t *sampler, int count, float (*out)[3]);
+void model_position_sampler_destroy(timeline_state_t *ts, model_position_sampler_t *sampler);
 
 // Index of a player property by id in the active game's table, or -1.
 int model_find_player_prop(game_host_t *host, const char *prop_id);

@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 20u
+#define FT_GAME_ABI_VERSION 21u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -602,6 +602,11 @@ typedef struct ft_entity_class {
  * changes back. That way a module needs no UI toolkit of its own to be
  * configurable. */
 
+/* A setting that only changes how frames look. The editor lists these in its
+ * Render tab with one value for its own viewport and another for rendered
+ * video, and applies whichever set is being drawn. */
+#define FT_SETTING_RENDER (1u << 0)
+
 typedef struct ft_setting_desc {
   const char *id; /* stable; used as the config key */
   const char *display_name;
@@ -609,6 +614,7 @@ typedef struct ft_setting_desc {
   const char *group;       /* optional heading, e.g. "Rendering" */
   ft_value_kind kind;      /* BOOL, INT or FLOAT */
   double min_value, max_value;
+  uint32_t flags; /* FT_SETTING_* */
 } ft_setting_desc;
 
 /* -------------------------------------------------------------------------

@@ -60,6 +60,12 @@ typedef struct project_group_t {
 } project_group_t;
 
 typedef struct project_document_t {
+  camera_timeline_t camera_timeline;
+  render_profile_t video_profile;
+  video_export_options_t video_options;
+  bool has_video_options;
+  uint8_t *group_video_visible;
+  uint32_t group_video_count;
   char game_id[FT_ID_MAX];
   char game_version[FT_NAME_MAX];
   char variant_id[FT_ID_MAX];
@@ -87,6 +93,267 @@ typedef struct project_document_t {
   timeline_event_t *events;
   int event_count;
 } project_document_t;
+
+static bool buffer_u32(byte_buffer_t *buffer, uint32_t value);
+static bool buffer_i32(byte_buffer_t *buffer, int32_t value);
+static bool buffer_f32(byte_buffer_t *buffer, float value);
+static bool reader_u32(byte_reader_t *reader, uint32_t *out);
+static bool reader_i32(byte_reader_t *reader, int32_t *out);
+static bool reader_f32(byte_reader_t *reader, float *out);
+
+static bool buffer_f64(byte_buffer_t *buffer, double value);
+static bool reader_f64(byte_reader_t *reader, double *out);
+
+static bool write_camera_keys_header(byte_buffer_t *buffer, double time, int interp, const camera_ease_t *ease) {
+  return buffer_f64(buffer, time) && buffer_i32(buffer, interp) && buffer_i32(buffer, ease->mode) &&
+         buffer_f32(buffer, ease->in_slope) && buffer_f32(buffer, ease->out_slope) &&
+         buffer_f32(buffer, ease->in_influence) && buffer_f32(buffer, ease->out_influence);
+}
+
+static bool write_camera_timeline(byte_buffer_t *buffer, const camera_timeline_t *camera) {
+  if (!buffer_u32(buffer, camera->range_set ? 1u : 0u) || !buffer_f64(buffer, camera->range_start) ||
+      !buffer_f64(buffer, camera->range_end) || !buffer_u32(buffer, (uint32_t)camera->subject_count))
+    return false;
+  for (int i = 0; i < camera->subject_count; ++i)
+    if (!buffer_i32(buffer, camera->subject_tracks[i])) return false;
+  for (int v = 0; v < 3; ++v)
+    if (!buffer_f32(buffer, camera->subject_offset[v])) return false;
+  if (!buffer_u32(buffer, camera->fit_subjects ? 1u : 0u) || !buffer_f32(buffer, camera->fit_fill) ||
+      !buffer_i32(buffer, camera->follow_style))
+    return false;
+
+  if (!buffer_u32(buffer, (uint32_t)camera->time_count)) return false;
+  for (int i = 0; i < camera->time_count; ++i) {
+    const camera_time_key_t *key = &camera->time_keys[i];
+    if (!write_camera_keys_header(buffer, key->time, key->interp, &key->ease) || !buffer_f64(buffer, key->game_tick)) return false;
+  }
+  if (!buffer_u32(buffer, (uint32_t)camera->pose_count)) return false;
+  for (int i = 0; i < camera->pose_count; ++i) {
+    const camera_pose_key_t *key = &camera->pose_keys[i];
+    if (!write_camera_keys_header(buffer, key->time, key->interp, &key->ease)) return false;
+    for (int v = 0; v < 3; ++v)
+      if (!buffer_f32(buffer, key->pose.eye[v]) || !buffer_f32(buffer, key->pose.target[v])) return false;
+    if (!buffer_f32(buffer, key->pose.roll) || !buffer_f32(buffer, key->pose.fov_y) || !buffer_f32(buffer, key->pose.zoom) ||
+        !buffer_i32(buffer, key->spatial.mode))
+      return false;
+    const float *handles[4] = {key->spatial.eye_in, key->spatial.eye_out, key->spatial.target_in, key->spatial.target_out};
+    for (int h = 0; h < 4; ++h)
+      for (int v = 0; v < 3; ++v)
+        if (!buffer_f32(buffer, handles[h][v])) return false;
+  }
+  const camera_influence_key_t *influence[2] = {camera->follow_keys, camera->aim_keys};
+  const int counts[2] = {camera->follow_count, camera->aim_count};
+  for (int channel = 0; channel < 2; ++channel) {
+    if (!buffer_u32(buffer, (uint32_t)counts[channel])) return false;
+    for (int i = 0; i < counts[channel]; ++i) {
+      const camera_influence_key_t *key = &influence[channel][i];
+      if (!write_camera_keys_header(buffer, key->time, key->interp, &key->ease) || !buffer_f32(buffer, key->value)) return false;
+    }
+  }
+  return true;
+}
+
+// Keys come back sorted, finite and within the channel's capacity, or the
+// file is malformed. Handles arrived in version 21; older keys get automatic ones.
+static bool read_camera_key_header(byte_reader_t *reader, uint32_t version, double previous, int index, double *time,
+                                   int *interp, camera_ease_t *ease) {
+  if (!reader_f64(reader, time) || !isfinite(*time) || (index != 0 && *time <= previous) || !reader_i32(reader, interp) ||
+      *interp < 0 || *interp >= CAMERA_INTERP_COUNT)
+    return false;
+  memset(ease, 0, sizeof(*ease));
+  if (version < 21) return true;
+  return reader_i32(reader, &ease->mode) && ease->mode >= 0 && ease->mode < CAMERA_HANDLE_COUNT &&
+         reader_f32(reader, &ease->in_slope) && reader_f32(reader, &ease->out_slope) &&
+         reader_f32(reader, &ease->in_influence) && reader_f32(reader, &ease->out_influence) &&
+         isfinite(ease->in_slope) && isfinite(ease->out_slope) && isfinite(ease->in_influence) &&
+         isfinite(ease->out_influence);
+}
+
+static bool read_camera_timeline(byte_reader_t *reader, camera_timeline_t *camera, uint32_t version) {
+  camera_timeline_default(camera);
+  uint32_t range_set, count;
+  if (!reader_u32(reader, &range_set) || range_set > 1 || !reader_f64(reader, &camera->range_start) ||
+      !reader_f64(reader, &camera->range_end) || !isfinite(camera->range_start) || !isfinite(camera->range_end))
+    return false;
+  camera->range_set = range_set != 0;
+  // Version 22 tracks a set of characters; earlier files name one.
+  if (version >= 22) {
+    if (!reader_u32(reader, &count) || count > CAMERA_MAX_SUBJECTS) return false;
+    camera->subject_count = (int)count;
+    for (int i = 0; i < camera->subject_count; ++i)
+      if (!reader_i32(reader, &camera->subject_tracks[i])) return false;
+  } else {
+    camera->subject_count = 1;
+    if (!reader_i32(reader, &camera->subject_tracks[0])) return false;
+  }
+  for (int v = 0; v < 3; ++v)
+    if (!reader_f32(reader, &camera->subject_offset[v]) || !isfinite(camera->subject_offset[v])) return false;
+  if (version >= 22) {
+    uint32_t fit;
+    if (!reader_u32(reader, &fit) || fit > 1 || !reader_f32(reader, &camera->fit_fill) || !isfinite(camera->fit_fill))
+      return false;
+    camera->fit_subjects = fit != 0;
+  }
+  if (version >= 24 && (!reader_i32(reader, &camera->follow_style) || camera->follow_style < 0 ||
+                        camera->follow_style >= CAMERA_FOLLOW_COUNT))
+    return false;
+
+  if (!reader_u32(reader, &count) || count > CAMERA_MAX_TIME_KEYS) return false;
+  camera->time_count = (int)count;
+  for (int i = 0; i < camera->time_count; ++i) {
+    camera_time_key_t *key = &camera->time_keys[i];
+    if (!read_camera_key_header(reader, version, i ? camera->time_keys[i - 1].time : 0.0, i, &key->time, &key->interp,
+                                &key->ease) ||
+        !reader_f64(reader, &key->game_tick) || !isfinite(key->game_tick))
+      return false;
+  }
+  if (!reader_u32(reader, &count) || count > CAMERA_MAX_POSE_KEYS) return false;
+  camera->pose_count = (int)count;
+  for (int i = 0; i < camera->pose_count; ++i) {
+    camera_pose_key_t *key = &camera->pose_keys[i];
+    if (!read_camera_key_header(reader, version, i ? camera->pose_keys[i - 1].time : 0.0, i, &key->time, &key->interp,
+                                &key->ease))
+      return false;
+    for (int v = 0; v < 3; ++v)
+      if (!reader_f32(reader, &key->pose.eye[v]) || !reader_f32(reader, &key->pose.target[v]) ||
+          !isfinite(key->pose.eye[v]) || !isfinite(key->pose.target[v]))
+        return false;
+    if (!reader_f32(reader, &key->pose.roll) || !reader_f32(reader, &key->pose.fov_y) ||
+        !reader_f32(reader, &key->pose.zoom) || !isfinite(key->pose.roll) || !isfinite(key->pose.fov_y) ||
+        !isfinite(key->pose.zoom) || key->pose.zoom <= 0.f)
+      return false;
+    if (version >= 21) {
+      if (!reader_i32(reader, &key->spatial.mode) || key->spatial.mode < 0 || key->spatial.mode >= CAMERA_HANDLE_COUNT)
+        return false;
+      float *handles[4] = {key->spatial.eye_in, key->spatial.eye_out, key->spatial.target_in, key->spatial.target_out};
+      for (int h = 0; h < 4; ++h)
+        for (int v = 0; v < 3; ++v)
+          if (!reader_f32(reader, &handles[h][v]) || !isfinite(handles[h][v])) return false;
+    }
+  }
+  camera_influence_key_t *influence[2] = {camera->follow_keys, camera->aim_keys};
+  int *counts[2] = {&camera->follow_count, &camera->aim_count};
+  for (int channel = 0; channel < 2; ++channel) {
+    if (!reader_u32(reader, &count) || count > CAMERA_MAX_INFLUENCE_KEYS) return false;
+    *counts[channel] = (int)count;
+    for (int i = 0; i < *counts[channel]; ++i) {
+      camera_influence_key_t *key = &influence[channel][i];
+      if (!read_camera_key_header(reader, version, i ? influence[channel][i - 1].time : 0.0, i, &key->time, &key->interp,
+                                  &key->ease) ||
+          !reader_f32(reader, &key->value) || !(key->value >= 0.f && key->value <= 1.f))
+        return false;
+    }
+  }
+  if (version == 21) camera_pose_eases_from_absolute(camera);
+  return true;
+}
+
+static bool buffer_string(byte_buffer_t *buffer, const char *text);
+static bool reader_string(byte_reader_t *reader, char *out, size_t capacity);
+static bool buffer_i64(byte_buffer_t *buffer, int64_t value);
+static bool reader_i64(byte_reader_t *reader, int64_t *out);
+static bool buffer_u8(byte_buffer_t *buffer, uint8_t value);
+static bool reader_u8(byte_reader_t *reader, uint8_t *out);
+
+// How the project's video looks: the game's render settings, the editor's
+// overlays and which groups appear. Version 23 on.
+static bool write_render_video(byte_buffer_t *buffer, ui_handler_t *ui) {
+  const render_profile_t *profile = &ui->render.video;
+  if (!buffer_u8(buffer, profile->valid ? 1 : 0) || !buffer_u32(buffer, (uint32_t)profile->setting_count)) return false;
+  for (int i = 0; i < profile->setting_count; ++i) {
+    const render_setting_value_t *setting = &profile->settings[i];
+    if (!buffer_string(buffer, setting->id) || !buffer_u32(buffer, (uint32_t)setting->value.kind)) return false;
+    bool ok = true;
+    switch (setting->value.kind) {
+    case FT_VALUE_BOOL: ok = buffer_u8(buffer, setting->value.as.b ? 1 : 0); break;
+    case FT_VALUE_INT: ok = buffer_i64(buffer, setting->value.as.i); break;
+    case FT_VALUE_FLOAT: ok = buffer_f64(buffer, setting->value.as.f); break;
+    default: ok = false; break;
+    }
+    if (!ok) return false;
+  }
+  if (!buffer_u32(buffer, RENDER_LAYER_COUNT)) return false;
+  for (int layer = 0; layer < RENDER_LAYER_COUNT; ++layer)
+    if (!buffer_u8(buffer, profile->layers[layer] ? 1 : 0)) return false;
+  const timeline_state_t *ts = &ui->timeline;
+  if (!buffer_u32(buffer, (uint32_t)ts->group_count)) return false;
+  for (int g = 0; g < ts->group_count; ++g)
+    if (!buffer_u8(buffer, ts->groups[g]->video_visible ? 1 : 0)) return false;
+  // The output: size, rate and encoding. The range is the camera's.
+  const video_export_options_t *o = &ui->video_options;
+  const int32_t fields[] = {o->width, o->height, o->fps_num, o->fps_den, o->codec, o->quality_mode,
+                            o->quality, o->bitrate_kbps, o->preset, o->bit_depth};
+  if (!buffer_u32(buffer, (uint32_t)(sizeof(fields) / sizeof(fields[0])))) return false;
+  for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i)
+    if (!buffer_i32(buffer, fields[i])) return false;
+  return true;
+}
+
+static bool read_render_video(byte_reader_t *reader, project_document_t *document) {
+  render_profile_t *profile = &document->video_profile;
+  memset(profile, 0, sizeof(*profile));
+  uint8_t valid, flag;
+  uint32_t count;
+  if (!reader_u8(reader, &valid) || valid > 1 || !reader_u32(reader, &count) || count > RENDER_PROFILE_MAX_SETTINGS)
+    return false;
+  profile->valid = valid != 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    char id[RENDER_SETTING_ID_MAX];
+    uint32_t kind;
+    ft_value value = {0};
+    if (!reader_string(reader, id, sizeof(id)) || !reader_u32(reader, &kind)) return false;
+    value.kind = (ft_value_kind)kind;
+    switch (kind) {
+    case FT_VALUE_BOOL:
+      if (!reader_u8(reader, &flag) || flag > 1) return false;
+      value.as.b = flag != 0;
+      break;
+    case FT_VALUE_INT:
+      if (!reader_i64(reader, &value.as.i)) return false;
+      break;
+    case FT_VALUE_FLOAT:
+      if (!reader_f64(reader, &value.as.f) || !isfinite(value.as.f)) return false;
+      break;
+    default: return false;
+    }
+    render_profile_set(profile, id, &value);
+  }
+  // Layers the file does not know stay off; ones this build does not know are skipped.
+  if (!reader_u32(reader, &count) || count > 64) return false;
+  for (uint32_t layer = 0; layer < count; ++layer) {
+    if (!reader_u8(reader, &flag) || flag > 1) return false;
+    if (layer < RENDER_LAYER_COUNT) profile->layers[layer] = flag != 0;
+  }
+  if (!reader_u32(reader, &count) || count > PROJECT_MAX_GROUPS) return false;
+  document->group_video_visible = count ? malloc(count) : NULL;
+  if (count && !document->group_video_visible) return false;
+  document->group_video_count = count;
+  for (uint32_t g = 0; g < count; ++g)
+    if (!reader_u8(reader, &document->group_video_visible[g]) || document->group_video_visible[g] > 1) return false;
+  int32_t fields[10];
+  if (!reader_u32(reader, &count) || count != sizeof(fields) / sizeof(fields[0])) return false;
+  for (uint32_t i = 0; i < count; ++i)
+    if (!reader_i32(reader, &fields[i])) return false;
+  video_export_options_t *o = &document->video_options;
+  video_export_defaults(o);
+  o->width = fields[0];
+  o->height = fields[1];
+  o->fps_num = fields[2];
+  o->fps_den = fields[3];
+  o->codec = fields[4];
+  o->quality_mode = fields[5];
+  o->quality = fields[6];
+  o->bitrate_kbps = fields[7];
+  o->preset = fields[8];
+  o->bit_depth = fields[9];
+  // Anything out of range falls back to the defaults rather than failing the load.
+  if (o->width < 2 || o->height < 2 || o->width > 16384 || o->height > 16384 || o->fps_num <= 0 || o->fps_den <= 0 ||
+      o->codec < 0 || o->codec > 2 || o->quality_mode < 0 || o->quality_mode > 1 || o->quality < 0 || o->quality > 51 ||
+      o->bitrate_kbps <= 0 || o->preset < 0 || o->preset > 2 || (o->bit_depth != 8 && o->bit_depth != 10))
+    video_export_defaults(o);
+  document->has_video_options = true;
+  return true;
+}
 
 static bool checked_multiply(size_t a, size_t b, size_t *out) {
   if (a != 0 && b > SIZE_MAX / a) return false;
@@ -284,6 +551,7 @@ static void project_document_free(project_document_t *document) {
     for (int i = 0; i < document->group_count; ++i)
       free(document->groups[i].world_data);
   free(document->groups);
+  free(document->group_video_visible);
   free(document->tracks);
   free(document->events);
   free(document->level_data);
@@ -627,7 +895,8 @@ static bool write_project_file(ui_handler_t *ui, const char *path) {
     goto done;
 
   const size_t timeline_start = buffer.size;
-  if (!write_timeline(&buffer, ui) || !buffer_patch_u64(&buffer, timeline_size_offset, buffer.size - timeline_start)) goto done;
+  if (!write_timeline(&buffer, ui) || !buffer_patch_u64(&buffer, timeline_size_offset, buffer.size - timeline_start) ||
+      !write_camera_timeline(&buffer, &ui->camera_timeline) || !write_render_video(&buffer, ui)) goto done;
 
   char temporary_path[1200];
   if (snprintf(temporary_path, sizeof(temporary_path), "%s.tmp", path) >= (int)sizeof(temporary_path)) goto done;
@@ -676,6 +945,12 @@ bool save_project(ui_handler_t *ui, const char *path) {
   ui_add_recent_project(ui, stable_path);
   log_info(LOG_SOURCE, "Project saved successfully to '%s' (%.2f ms)", stable_path, (glfwGetTime() - start) * 1000.0);
   return true;
+}
+
+bool save_project_snapshot(ui_handler_t *ui, const char *path) {
+  if (!ui || !path || !*path || !ui->gfx_handler || !ui->gfx_handler->level ||
+      !game_host_ready(&ui->gfx_handler->game_host)) return false;
+  return write_project_file(ui, path);
 }
 
 static bool read_value(byte_reader_t *reader, starting_override_t *override) {
@@ -879,7 +1154,7 @@ static bool peek_project_game_id(const char *path, char *out_id, size_t out_size
     log_error(LOG_SOURCE, "Not a FrameTee project: '%s'", path);
     return false;
   }
-  if (version != TAS_PROJECT_FILE_VERSION) {
+  if (version < 17 || version > TAS_PROJECT_FILE_VERSION) {
     log_error(LOG_SOURCE, "Project '%s' is version %u; this build requires version %u.", path, version,
               TAS_PROJECT_FILE_VERSION);
     return false;
@@ -946,7 +1221,7 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
     log_error(LOG_SOURCE, "Not a FrameTee project: '%s'", path);
     goto done;
   }
-  if (version != TAS_PROJECT_FILE_VERSION) {
+  if (version < 17 || version > TAS_PROJECT_FILE_VERSION) {
     log_error(LOG_SOURCE, "Project '%s' is version %u; this build requires version %u.", path, version,
               TAS_PROJECT_FILE_VERSION);
     goto done;
@@ -998,8 +1273,17 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
 
   byte_reader_t timeline_reader = {.data = reader.data + reader.pos, .size = (size_t)timeline_size, .ok = true};
   reader.pos += (size_t)timeline_size;
-  if (!read_timeline(&timeline_reader, document, keep_session_data) || reader.pos != reader.size)
-    goto malformed;
+  if (!read_timeline(&timeline_reader, document, keep_session_data)) goto malformed;
+  if (version >= 20) {
+    if (!read_camera_timeline(&reader, &document->camera_timeline, version)) goto malformed;
+    if (version >= 23 && !read_render_video(&reader, document)) goto malformed;
+  } else {
+    // 18 and 19 carried an earlier camera format at the end of the file. It
+    // was never released; the camera starts empty and the rest loads.
+    camera_timeline_default(&document->camera_timeline);
+    if (version != 17) reader.pos = reader.size;
+  }
+  if (reader.pos != reader.size) goto malformed;
 
   if (document->active_group_index < 0 || document->active_group_index >= document->group_count ||
       document->selected_track_index < -1 || document->selected_track_index >= document->track_count)
@@ -1199,6 +1483,15 @@ bool load_project(ui_handler_t *ui, const char *path) {
 
   update_level_metadata(ui, &document);
   restore_camera(ui, &document);
+  ui->camera_timeline = document.camera_timeline;
+  camera_editor_reset(ui);
+  // The video's look travels with the project; groups the file does not list
+  // appear in it.
+  ui->render.video = document.video_profile;
+  if (document.has_video_options) ui->video_options = document.video_options;
+  for (int g = 0; g < ui->timeline.group_count; ++g)
+    ui->timeline.groups[g]->video_visible =
+        (uint32_t)g >= document.group_video_count || document.group_video_visible[g] != 0;
   snprintf(ui->current_project_path, sizeof(ui->current_project_path), "%s", path);
   ui->has_unsaved_changes = false;
   ui_add_recent_project(ui, path);

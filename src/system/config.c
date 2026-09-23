@@ -104,10 +104,26 @@ static bool action_identifier_is_active(const ui_handler_t *ui, const char *iden
   return false;
 }
 
+// A render worker runs from a project snapshot with the video's settings
+// applied; nothing it holds belongs in the user's config.
+extern bool g_is_render_worker;
+
+// Render snapshots are temporary files, gone once their render is done.
+static bool is_render_snapshot(const char *path) {
+  const char *name = strrchr(path, '/');
+#ifdef _WIN32
+  const char *back = strrchr(path, '\\');
+  if (back && (!name || back > name)) name = back;
+#endif
+  name = name ? name + 1 : path;
+  return strncmp(name, "frametee-render-", strlen("frametee-render-")) == 0;
+}
+
 static bool reserved_game_editor_key(const char *key) {
   return strcmp(key, "editor_camera_mode") == 0 || strcmp(key, "editor_top_down_view") == 0 ||
          strcmp(key, "editor_isometric_view") == 0 ||
          strcmp(key, "editor_linked_copy_input") == 0 ||
+         strncmp(key, "editor_show_", strlen("editor_show_")) == 0 ||
          strncmp(key, "editor_prediction_", strlen("editor_prediction_")) == 0;
 }
 
@@ -453,7 +469,7 @@ void config_load(ui_handler_t *ui) {
       ui->num_recent_projects = 0;
       for (int i = 0; i < recents.u.arr.size && ui->num_recent_projects < 10; ++i) {
         toml_datum_t val = recents.u.arr.elem[i];
-        if (val.type == TOML_STRING) {
+        if (val.type == TOML_STRING && !is_render_snapshot(val.u.str.ptr)) {
           strncpy(ui->recent_projects[ui->num_recent_projects], val.u.str.ptr, 1023);
           ui->recent_projects[ui->num_recent_projects][1023] = '\0';
           ui->num_recent_projects++;
@@ -515,6 +531,16 @@ void config_load(ui_handler_t *ui) {
     else if (config_bool(per_game, "editor_isometric_view", &legacy_top_down) && legacy_top_down)
       snprintf(ui->configured_camera_mode_id, sizeof(ui->configured_camera_mode_id), "%s", FT_CAMERA_MODE_TOP_DOWN_ID);
 
+    // The editor's own overlays in the viewport.
+    const struct {
+      const char *key;
+      render_layer_t layer;
+    } shown[] = {{"editor_show_selection", RENDER_LAYER_SELECTION},
+                 {"editor_show_start_markers", RENDER_LAYER_START_MARKERS},
+                 {"editor_show_camera_path", RENDER_LAYER_CAMERA_PATH}};
+    for (size_t k = 0; k < sizeof(shown) / sizeof(shown[0]); ++k)
+      config_bool(per_game, shown[k].key, &ui->render.viewport.layers[shown[k].layer]);
+
     toml_datum_t linked_copy = toml_get(per_game, "editor_linked_copy_input");
     if (linked_copy.type == TOML_BOOLEAN) ui->configured_linked_copy_input = linked_copy.u.boolean;
 
@@ -554,6 +580,7 @@ void config_apply_game_editor_state(ui_handler_t *ui) {
 }
 
 void config_save(ui_handler_t *ui) {
+  if (g_is_render_worker) return;
   char config_path[1024];
   get_config_path(config_path, sizeof(config_path));
 
@@ -708,6 +735,10 @@ void config_save(ui_handler_t *ui) {
         const ft_setting_desc *desc = gh_setting_desc(host, i);
         ft_value value;
         if (!desc || !desc->id || !gh_setting_get(host, i, &value)) continue;
+        // While the Render tab previews a video the game holds the video's
+        // values; the config keeps the viewport's.
+        if (render_setting_is_layer(desc) && ui->render.applied != RENDER_TARGET_VIEWPORT)
+          render_profile_get(&ui->render.viewport, desc->id, &value);
         if (value.kind != FT_VALUE_BOOL && value.kind != FT_VALUE_INT && value.kind != FT_VALUE_FLOAT) continue;
         write_toml_key(fp, desc->id);
         fputs(" = ", fp);
@@ -731,6 +762,10 @@ void config_save(ui_handler_t *ui) {
       write_toml_string(fp, mode && mode->id ? mode->id : "free");
       fputc('\n', fp);
       fprintf(fp, "editor_linked_copy_input = %s\n", ui->timeline.linked_copy_input ? "true" : "false");
+      fprintf(fp, "editor_show_selection = %s\n", ui->render.viewport.layers[RENDER_LAYER_SELECTION] ? "true" : "false");
+      fprintf(fp, "editor_show_start_markers = %s\n",
+              ui->render.viewport.layers[RENDER_LAYER_START_MARKERS] ? "true" : "false");
+      fprintf(fp, "editor_show_camera_path = %s\n", ui->render.viewport.layers[RENDER_LAYER_CAMERA_PATH] ? "true" : "false");
       write_prediction_config(fp, &ui->configured_prediction);
     }
   }

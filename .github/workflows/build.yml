@@ -34,6 +34,10 @@ jobs:
           libglfw3-dev \
           libcurl4-openssl-dev \
           libfreetype6-dev \
+          libavformat-dev \
+          libavcodec-dev \
+          libavutil-dev \
+          libswscale-dev \
           pkg-config
 
     - name: Setup Vulkan SDK
@@ -53,6 +57,7 @@ jobs:
         -DFRAMETEE_BUILD_CUBE_EXAMPLE=OFF
         -DFRAMETEE_BUILD_PLATFORMER_EXAMPLE=OFF
         -DFRAMETEE_BUILD_RUST_EXAMPLE=OFF
+        -DFRAMETEE_REQUIRE_VIDEO_EXPORT=ON
 
     - name: Build
       run: cmake --build build --config Release --parallel
@@ -159,6 +164,7 @@ jobs:
           vulkan-headers:p
           vulkan-loader:p
           glslang:p
+          ffmpeg:p
           rust:p
 
     - name: Configure CMake
@@ -173,6 +179,7 @@ jobs:
         -DFRAMETEE_BUILD_CUBE_EXAMPLE=OFF
         -DFRAMETEE_BUILD_PLATFORMER_EXAMPLE=OFF
         -DFRAMETEE_BUILD_RUST_EXAMPLE=OFF
+        -DFRAMETEE_REQUIRE_VIDEO_EXPORT=ON
 
     - name: Build
       shell: msys2 {0}
@@ -257,6 +264,11 @@ jobs:
           require_file data/games/tmnf/thumbnail.png
           require_file data/games/tmnf/README.txt
           require_file vulkan-1.dll
+          # MP4 export: FFmpeg's DLLs come along with the rest of the closure.
+          if ! compgen -G "avcodec-*.dll" > /dev/null || ! compgen -G "avformat-*.dll" > /dev/null; then
+            echo "::error::The release is missing FFmpeg's DLLs, so MP4 export would not load"
+            exit 1
+          fi
           # See the Linux job: one directory per plugin, named after it.
           require_file plugins/example_c/example_c.dll
           require_file plugins/example_cpp/example_cpp.dll

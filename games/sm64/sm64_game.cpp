@@ -276,7 +276,7 @@ static void render(ft_game *g,const ft_render_frame *f){
   g->rendered_groups=std::move(group_revisions);
   if(g->texture)g->engine->draw_mesh(g->pipeline,0,g->quad,&g->texture,1,nullptr,0);
 }
-static const ft_setting_desc settings[]={{"collision","Collision surfaces","Show physical surfaces instead of level visuals","SM64",FT_VALUE_BOOL,0,1}};
+static const ft_setting_desc settings[]={{"collision","Collision surfaces","Show physical surfaces instead of level visuals","SM64",FT_VALUE_BOOL,0,1,FT_SETTING_RENDER}};
 static uint32_t setting_count(ft_game *){return 1;}
 static const ft_setting_desc *setting_desc(ft_game *,uint32_t i){return i==0?settings:nullptr;}
 static bool setting_get(ft_game *g,uint32_t i,ft_value *v){if(i)return false;v->kind=FT_VALUE_BOOL;v->as.b=g->collision;return true;}

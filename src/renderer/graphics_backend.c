@@ -1,4 +1,5 @@
 #include "graphics_backend.h"
+#include <user_interface/render/render_window.h>
 #include "renderer.h"
 #include <engine/engine_api.h>
 #include <logger/logger.h>
@@ -12,6 +13,8 @@
 #include <user_interface/user_interface.h>
 
 extern bool g_is_headless;
+extern bool g_is_render_worker;
+extern bool g_hide_render_window;
 
 #include <GLFW/glfw3.h>
 // prototypes for the cached monitor wrappers defined below; NO_REDIRECT keeps the
@@ -53,6 +56,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(VkDebugUtilsMessageSe
 static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint32_t height);
 static void destroy_offscreen_resources(gfx_handler_t *handler);
 static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, uint32_t height);
+static void destroy_export_resources(gfx_handler_t *handler);
 
 // vulkan initialization helpers
 static VkResult create_instance(gfx_handler_t *handler, const char **extensions, uint32_t extensions_count);
@@ -364,6 +368,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->renderer.lod_bias = handler->user_interface.lod_bias;
 
   if (init_imgui(handler) != 0) {
+    destroy_export_resources(handler);
     renderer_cleanup(handler);
     cleanup_vulkan(handler);
     glfwDestroyWindow(handler->window);
@@ -413,7 +418,11 @@ int init_gfx_handler(gfx_handler_t *handler) {
 }
 
 int gfx_begin_frame(gfx_handler_t *handler) {
-  if (glfwWindowShouldClose(handler->window)) return FRAME_EXIT;
+  if (glfwWindowShouldClose(handler->window)) {
+    // A background render outlives the editor; the user is asked first.
+    if (render_allow_quit(&handler->user_interface)) return FRAME_EXIT;
+    glfwSetWindowShouldClose(handler->window, GLFW_FALSE);
+  }
 
   glfwPollEvents();
   input_new_frame();
@@ -870,6 +879,7 @@ static int init_window(gfx_handler_t *handler) {
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
+  if (g_is_render_worker || g_hide_render_window) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
   // A capture is only comparable against another one at the same size, and the
   // window manager does not have to honour the size asked for here -- so
@@ -1420,6 +1430,161 @@ static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, 
     return init_offscreen_resources(handler, width, height);
   }
   return 0;
+}
+
+static uint32_t export_memory_type(gfx_handler_t *h, uint32_t bits, VkMemoryPropertyFlags flags) {
+  VkPhysicalDeviceMemoryProperties properties;
+  vkGetPhysicalDeviceMemoryProperties(h->g_physical_device, &properties);
+  for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
+    if ((bits & (1u << i)) && (properties.memoryTypes[i].propertyFlags & flags) == flags) return i;
+  return UINT32_MAX;
+}
+
+static void destroy_export_resources(gfx_handler_t *h) {
+  if (!h || h->g_device == VK_NULL_HANDLE) return;
+  if (h->export_framebuffer) vkDestroyFramebuffer(h->g_device, h->export_framebuffer, h->g_allocator);
+  if (h->export_view) vkDestroyImageView(h->g_device, h->export_view, h->g_allocator);
+  if (h->export_depth_view) vkDestroyImageView(h->g_device, h->export_depth_view, h->g_allocator);
+  if (h->export_image) vkDestroyImage(h->g_device, h->export_image, h->g_allocator);
+  if (h->export_depth_image) vkDestroyImage(h->g_device, h->export_depth_image, h->g_allocator);
+  if (h->export_memory) vkFreeMemory(h->g_device, h->export_memory, h->g_allocator);
+  if (h->export_depth_memory) vkFreeMemory(h->g_device, h->export_depth_memory, h->g_allocator);
+  if (h->export_readback) vkDestroyBuffer(h->g_device, h->export_readback, h->g_allocator);
+  if (h->export_readback_memory) vkFreeMemory(h->g_device, h->export_readback_memory, h->g_allocator);
+  if (h->export_command_pool) vkDestroyCommandPool(h->g_device, h->export_command_pool, h->g_allocator);
+  h->export_framebuffer = VK_NULL_HANDLE;
+  h->export_view = h->export_depth_view = VK_NULL_HANDLE;
+  h->export_image = h->export_depth_image = VK_NULL_HANDLE;
+  h->export_memory = h->export_depth_memory = VK_NULL_HANDLE;
+  h->export_readback = VK_NULL_HANDLE;
+  h->export_readback_memory = VK_NULL_HANDLE;
+  h->export_command_pool = VK_NULL_HANDLE;
+  h->export_command_buffer = VK_NULL_HANDLE;
+  h->export_width = h->export_height = 0;
+}
+
+static bool init_export_resources(gfx_handler_t *h, uint32_t width, uint32_t height) {
+  if (h->export_width == width && h->export_height == height && h->export_framebuffer) return true;
+  vkQueueWaitIdle(h->g_queue);
+  destroy_export_resources(h);
+  VkPhysicalDeviceProperties device;
+  vkGetPhysicalDeviceProperties(h->g_physical_device, &device);
+  if (!width || !height || width > device.limits.maxImageDimension2D || height > device.limits.maxImageDimension2D ||
+      (uint64_t)width * height > SIZE_MAX / 4u) return false;
+
+  const VkFormat format = h->g_main_window_data.SurfaceFormat.format;
+  if (format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R8G8B8A8_SRGB &&
+      format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_B8G8R8A8_SRGB) return false;
+  create_image(h, width, height, 1, 1, format, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &h->export_image, &h->export_memory);
+  h->export_view = create_image_view(h, h->export_image, format, VK_IMAGE_VIEW_TYPE_2D, 1, 1);
+  create_image(h, width, height, 1, 1, h->offscreen_depth_format, VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+               &h->export_depth_image, &h->export_depth_memory);
+  h->export_depth_view = create_image_view_aspect(h, h->export_depth_image, h->offscreen_depth_format,
+                                                   VK_IMAGE_VIEW_TYPE_2D, 1, 1, VK_IMAGE_ASPECT_DEPTH_BIT);
+  VkImageView attachments[2] = {h->export_view, h->export_depth_view};
+  VkFramebufferCreateInfo fb = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                                 .renderPass = h->offscreen_render_pass, .attachmentCount = 2,
+                                 .pAttachments = attachments, .width = width, .height = height, .layers = 1};
+  if (vkCreateFramebuffer(h->g_device, &fb, h->g_allocator, &h->export_framebuffer) != VK_SUCCESS) goto failed;
+
+  VkBufferCreateInfo buffer = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                                .size = (VkDeviceSize)width * height * 4u,
+                                .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+  if (vkCreateBuffer(h->g_device, &buffer, h->g_allocator, &h->export_readback) != VK_SUCCESS) goto failed;
+  VkMemoryRequirements requirements;
+  vkGetBufferMemoryRequirements(h->g_device, h->export_readback, &requirements);
+  uint32_t memory_type = export_memory_type(h, requirements.memoryTypeBits,
+                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  if (memory_type == UINT32_MAX) goto failed;
+  VkMemoryAllocateInfo allocation = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                      .allocationSize = requirements.size, .memoryTypeIndex = memory_type};
+  if (vkAllocateMemory(h->g_device, &allocation, h->g_allocator, &h->export_readback_memory) != VK_SUCCESS ||
+      vkBindBufferMemory(h->g_device, h->export_readback, h->export_readback_memory, 0) != VK_SUCCESS) goto failed;
+
+  VkCommandPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+                                  .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+                                  .queueFamilyIndex = h->g_queue_family};
+  if (vkCreateCommandPool(h->g_device, &pool, h->g_allocator, &h->export_command_pool) != VK_SUCCESS) goto failed;
+  VkCommandBufferAllocateInfo command = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                                          .commandPool = h->export_command_pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                                          .commandBufferCount = 1};
+  if (vkAllocateCommandBuffers(h->g_device, &command, &h->export_command_buffer) != VK_SUCCESS) goto failed;
+  h->export_width = width;
+  h->export_height = height;
+  return true;
+failed:
+  destroy_export_resources(h);
+  return false;
+}
+
+bool gfx_render_export_frame(gfx_handler_t *h, uint32_t width, uint32_t height,
+                             void (*draw)(gfx_handler_t *, float), float alpha, uint8_t *pixels) {
+  if (!h || !draw || !pixels || !h->offscreen_render_pass || !init_export_resources(h, width, height)) return false;
+  // The preview submitted immediately before this call may still use shared
+  // dynamic buffers and descriptor pools. Complete it before resetting them.
+  if (vkQueueWaitIdle(h->g_queue) != VK_SUCCESS ||
+      vkResetCommandPool(h->g_device, h->export_command_pool, 0) != VK_SUCCESS) return false;
+  renderer_frame_completed(h);
+  const VkCommandBuffer cmd = h->export_command_buffer;
+  VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+  if (vkBeginCommandBuffer(cmd, &begin) != VK_SUCCESS) return false;
+  vec2 old_viewport = {h->viewport[0], h->viewport[1]};
+  h->viewport[0] = (float)width;
+  h->viewport[1] = (float)height;
+  h->current_frame_command_buffer = cmd;
+  renderer_sync_external_textures(h, cmd, true);
+  renderer_begin_frame(h, cmd);
+  VkClearValue clear[2] = {{.color = {.float32 = {h->user_interface.bg_color[0], h->user_interface.bg_color[1],
+                                                   h->user_interface.bg_color[2], 1.f}}},
+                            {.depthStencil = {.depth = 0.f, .stencil = 0}}};
+  VkRenderPassBeginInfo pass = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                .renderPass = h->offscreen_render_pass, .framebuffer = h->export_framebuffer,
+                                .renderArea = {{0, 0}, {width, height}}, .clearValueCount = 2, .pClearValues = clear};
+  vkCmdBeginRenderPass(cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
+  draw(h, alpha);
+  renderer_flush_queue(h, cmd);
+  renderer_end_frame(h, cmd);
+  vkCmdEndRenderPass(cmd);
+  renderer_sync_external_textures(h, cmd, false);
+  VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                   .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                   .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                                   .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                   .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                   .image = h->export_image,
+                                   .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       0, 0, NULL, 0, NULL, 1, &barrier);
+  VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                            .imageExtent = {width, height, 1}};
+  vkCmdCopyImageToBuffer(cmd, h->export_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, h->export_readback, 1, &copy);
+  h->current_frame_command_buffer = VK_NULL_HANDLE;
+  h->viewport[0] = old_viewport[0];
+  h->viewport[1] = old_viewport[1];
+  if (vkEndCommandBuffer(cmd) != VK_SUCCESS) return false;
+  VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
+  if (vkQueueSubmit(h->g_queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS || vkQueueWaitIdle(h->g_queue) != VK_SUCCESS)
+    return false;
+  void *mapped = NULL;
+  if (vkMapMemory(h->g_device, h->export_readback_memory, 0, (VkDeviceSize)width * height * 4u, 0, &mapped) != VK_SUCCESS)
+    return false;
+  memcpy(pixels, mapped, (size_t)width * height * 4u);
+  vkUnmapMemory(h->g_device, h->export_readback_memory);
+  const VkFormat format = h->g_main_window_data.SurfaceFormat.format;
+  if (format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB)
+    for (size_t i = 0, count = (size_t)width * height; i < count; ++i) {
+      uint8_t blue = pixels[4 * i];
+      pixels[4 * i] = pixels[4 * i + 2];
+      pixels[4 * i + 2] = blue;
+    }
+  h->frame_serial++;
+  return true;
 }
 
 // vulkan setup helpers

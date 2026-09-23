@@ -26,6 +26,8 @@
 
 bool g_is_headless = false;
 bool g_list_games = false;
+bool g_is_render_worker = false;
+bool g_hide_render_window = false;
 
 // Set from --game, consumed by the game layer during startup. A command line
 // choice outranks the config so a project can be opened under a specific game
@@ -48,7 +50,7 @@ static void free_cli_args(const char **argv, char **copies, int count) {
 // Walks the game through one frame of rendering: every visible world, in every
 // pass, with the interpolation the playhead is currently between. The engine
 // supplies the schedule and the draw services; the game supplies the picture.
-static void render_game_passes(struct gfx_handler_t *handler, float intra) {
+static void render_game_passes(struct gfx_handler_t *handler, float intra, bool export_frame) {
   ui_handler_t *ui = &handler->user_interface;
   timeline_state_t *ts = &ui->timeline;
 
@@ -84,14 +86,14 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
     int first_visible_group = -1;
     int last_visible_group = -1;
     for (int g = 0; g < world_count; ++g) {
-      if (!per_world || ts->groups[g]->visible) {
+      if (!per_world || render_group_visible(ui, g)) {
         if (first_visible_group < 0) first_visible_group = g;
         last_visible_group = g;
       }
     }
 
     for (int group_index = 0; group_index < world_count; ++group_index) {
-      if (per_world && !ts->groups[group_index]->visible) continue;
+      if (per_world && !render_group_visible(ui, group_index)) continue;
 
       const ft_world *previous = NULL;
       const ft_world *current = NULL;
@@ -128,7 +130,9 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
       frame.active = !per_world || group_index == ts->active_group_index;
       frame.first_world = (group_index == first_visible_group);
       frame.last_world = (group_index == last_visible_group);
-      frame.selected_player = (per_world && group_index == selected_group) ? selected_local : -1;
+      frame.selected_player = (per_world && group_index == selected_group && render_layer_enabled(ui, RENDER_LAYER_SELECTION))
+                                  ? selected_local
+                                  : -1;
       if (per_world) {
         const float *color = ts->groups[group_index]->color;
         frame.accent = (ft_color){color[0], color[1], color[2], color[3]};
@@ -140,14 +144,26 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra) {
 
       gh_render(&handler->game_host, &frame);
 
-      if (per_world && passes[pass_index] == FT_PASS_ENTITIES && ui->timeline.prediction.enabled)
+      if (per_world && passes[pass_index] == FT_PASS_ENTITIES && render_layer_enabled(ui, RENDER_LAYER_PREDICTION))
         prediction_render_group(ui, group_index, previous, current, intra);
     }
   }
 
   // A marker for every start the user has taken over, so an override reads in
-  // the level and not only in the panel that set it.
-  starting_state_render_markers(ui, handler);
+  // the level and not only in the panel that set it. The viewport and a video
+  // each decide whether to show them; the camera's own path is editor-only.
+  if (render_layer_enabled(ui, RENDER_LAYER_START_MARKERS)) starting_state_render_markers(ui, handler);
+  if (!export_frame) camera_editor_render_gizmos(handler);
+}
+
+static void render_export_passes(struct gfx_handler_t *handler, float intra) {
+  ui_handler_t *ui = &handler->user_interface;
+  bool old_focus = ui->viewport_focused;
+  ui->viewport_focused = false;
+  on_camera_update(handler, false, intra);
+  ui->viewport_focused = old_focus;
+  camera_editor_apply_for_export(handler, ui->video_job.sample_time);
+  render_game_passes(handler, intra, true);
 }
 
 static void setup_benchmark_groups(ui_handler_t *ui, int target_groups) {
@@ -207,6 +223,11 @@ int main(int argc, char **argv) {
   const char *level_path = NULL;
   const char *project_path = NULL;
   const char *variant_id = NULL;
+  const char *video_path = NULL;
+  const char *video_progress_path = NULL;
+  bool video_range_given = false;
+  video_export_options_t video_cli;
+  video_export_defaults(&video_cli);
 
 #define MAX_CLI_PLUGINS 64
   const char *forced_plugins[MAX_CLI_PLUGINS];
@@ -263,6 +284,34 @@ int main(int argc, char **argv) {
       }
     } else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
       screenshot_path = argv[++i];
+    } else if (strcmp(argv[i], "--render-video") == 0 && i + 1 < argc) {
+      video_path = argv[++i];
+    } else if (strcmp(argv[i], "--render-worker") == 0) {
+      g_is_render_worker = true;
+    } else if (strcmp(argv[i], "--render-progress") == 0 && i + 1 < argc) {
+      video_progress_path = argv[++i];
+    } else if (strcmp(argv[i], "--render-range") == 0 && i + 1 < argc) {
+      video_range_given = sscanf(argv[++i], "%lf:%lf", &video_cli.start_time, &video_cli.end_time) == 2;
+    } else if (strcmp(argv[i], "--render-size") == 0 && i + 1 < argc) {
+      sscanf(argv[++i], "%dx%d", &video_cli.width, &video_cli.height);
+    } else if (strcmp(argv[i], "--render-fps") == 0 && i + 1 < argc) {
+      const char *rate = argv[++i];
+      if (sscanf(rate, "%d/%d", &video_cli.fps_num, &video_cli.fps_den) != 2) {
+        video_cli.fps_num = atoi(rate); video_cli.fps_den = 1;
+      }
+    } else if (strcmp(argv[i], "--render-codec") == 0 && i + 1 < argc) {
+      const char *codec = argv[++i];
+      video_cli.codec = strcmp(codec, "hevc") == 0 ? 1 : strcmp(codec, "av1") == 0 ? 2 : 0;
+    } else if (strcmp(argv[i], "--render-crf") == 0 && i + 1 < argc) {
+      video_cli.quality_mode = 0; video_cli.quality = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--render-bitrate") == 0 && i + 1 < argc) {
+      video_cli.quality_mode = 1; video_cli.bitrate_kbps = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--render-depth") == 0 && i + 1 < argc) {
+      video_cli.bit_depth = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--render-preset") == 0 && i + 1 < argc) {
+      const char *preset = argv[++i];
+      video_cli.preset = strcmp(preset, "fast") == 0 ? 0 : strcmp(preset, "slow") == 0 ? 2 :
+                         strcmp(preset, "medium") == 0 ? 1 : -1;
     } else if (strcmp(argv[i], "--view") == 0 && i + 1 < argc) {
       capture_view = argv[++i];
     } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
@@ -291,6 +340,11 @@ int main(int argc, char **argv) {
       plugin_argv[plugin_argc++] = argv[i];
     }
   }
+
+  // CLI export has no editor to show. It still uses a GLFW Vulkan surface on
+  // platforms without headless-surface support, but the window stays hidden.
+  g_hide_render_window = video_path != NULL;
+  if (video_path) g_is_headless = false;
 
   logger_init();
   if (show_help) {
@@ -333,6 +387,16 @@ int main(int argc, char **argv) {
            "  --size <width>x<height> Set capture dimensions\n"
            "  --view <x,y,width>      Pin the 2D world view for capture\n"
            "  --frames <count>        Frames before capture (default: 60)\n\n"
+           "Video export options (video only):\n"
+           "  --render-video <path>   Render an MP4 and exit\n"
+           "  --render-range <a:b>    Inclusive camera time range in seconds\n"
+           "  --render-size <WxH>     Output dimensions (even numbers)\n"
+           "  --render-fps <N[/D]>    Output frame rate\n"
+           "  --render-codec <name>   h264, hevc, or av1\n"
+           "  --render-crf <value>    Constant quality, 0..51\n"
+           "  --render-bitrate <kbps> Target bitrate\n"
+           "  --render-preset <name>  fast, medium, or slow compression\n"
+           "  --render-depth <8|10>   Color depth\n\n"
            "Headless options:\n"
            "  --headless              Run without window or graphics\n"
            "  --game <id>             Game module to use (e.g. tmnf, ddnet)\n"
@@ -467,6 +531,32 @@ int main(int argc, char **argv) {
       log_error("Main", "Could not open level '%s'", level_path);
   }
 
+  if (video_path) {
+    if (!video_range_given)
+      camera_editor_export_range(&handler.user_interface, &video_cli.start_time, &video_cli.end_time);
+    video_export_job_t *job = &handler.user_interface.video_job;
+    // This process draws only video: it holds the project's video settings.
+    render_apply(&handler.user_interface, RENDER_TARGET_VIDEO);
+    if (!video_export_start_inline(&handler, job, &video_cli, video_path, video_progress_path)) {
+      log_error("Main", "Cannot start video export: %s", job->status);
+      free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
+      gfx_cleanup(&handler);
+      return 1;
+    }
+    while (job->active && !glfwWindowShouldClose(handler.window))
+      video_export_step(&handler, job, render_export_passes);
+    const bool succeeded = job->finished;
+    if (!succeeded && job->active) video_export_cancel(&handler, job);
+    log_info("Main", "%s", job->status);
+    free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
+    gfx_cleanup(&handler);
+    if (g_is_render_worker) {
+      if (project_path) fs_remove(project_path);
+      if (video_progress_path) fs_remove(video_progress_path);
+    }
+    return succeeded ? 0 : 1;
+  }
+
   double last_time = glfwGetTime();
 
   while (1) {
@@ -511,7 +601,15 @@ int main(int argc, char **argv) {
       if (timeline->is_reversing) intra = 1.f - intra;
     }
 
+    // The Camera tab shows the game at a fractional tick of its own, taken from
+    // the playhead as it is now: scrubbing moved it after the last update.
+    if (camera_editor_owns_clock(&handler.user_interface)) {
+      camera_editor_sync_game(&handler.user_interface);
+      intra = handler.user_interface.camera_editor.game_intra;
+    }
+
     on_camera_update(&handler, handler.user_interface.viewport_hovered, intra);
+    camera_editor_viewport_update(&handler);
     // Pin a 2D capture to a repeatable world view, independently of window
     // layout and mouse events. Width is in the game's world units.
     if (screenshot_path && capture_view && handler.level && !game_is_3d(&handler.game_host)) {
@@ -534,7 +632,7 @@ int main(int argc, char **argv) {
     // above.
     double t_render_start = glfwGetTime();
     if (handler.level != NULL) {
-      render_game_passes(&handler, intra);
+      render_game_passes(&handler, intra, false);
     }
     double t_render_done = glfwGetTime();
     renderer_flush_queue(&handler, handler.current_frame_command_buffer);
@@ -570,6 +668,9 @@ int main(int argc, char **argv) {
     }
 
     gfx_end_frame(&handler);
+
+    if (handler.user_interface.video_job.active)
+      video_export_step(&handler, &handler.user_interface.video_job, NULL);
 
     if (screenshot_path != NULL && --screenshot_frames <= 0) {
       // A few frames in, so the level has settled and the viewport has been

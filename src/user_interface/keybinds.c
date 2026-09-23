@@ -237,6 +237,12 @@ void keybinds_init(keybind_manager_t *manager) {
   set_action_info(manager, ACTION_FREECAM_UP, "freecam_up", "Freecam up", "Camera");
   set_action_info(manager, ACTION_FREECAM_DOWN, "freecam_down", "Freecam down", "Camera");
   set_action_info(manager, ACTION_FREECAM_FAST, "freecam_fast", "Freecam sprint", "Camera");
+  set_action_info(manager, ACTION_CAMERA_INSERT_KEY, "camera_insert_key", "Key current view", "Camera Timeline");
+  set_action_info(manager, ACTION_CAMERA_DELETE_KEY, "camera_delete_key", "Delete key at playhead", "Camera Timeline");
+  set_action_info(manager, ACTION_CAMERA_LOOK_THROUGH, "camera_look_through", "Look through camera", "Camera Timeline");
+  set_action_info(manager, ACTION_CAMERA_PREV_KEY, "camera_prev_key", "Previous camera key", "Camera Timeline");
+  set_action_info(manager, ACTION_CAMERA_NEXT_KEY, "camera_next_key", "Next camera key", "Camera Timeline");
+  set_action_info(manager, ACTION_CAMERA_EASY_EASE, "camera_easy_ease", "Easy ease selected key", "Camera Timeline");
 
   set_action_info(manager, ACTION_SWITCH_TRACK_1, "switch_track_1", "Switch to Track 1", "Tracks");
   set_action_info(manager, ACTION_SWITCH_TRACK_2, "switch_track_2", "Switch to Track 2", "Tracks");
@@ -288,6 +294,12 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_FREECAM_UP, (key_combo_t){ImGuiKey_Space, false, false, false});
   keybinds_add(manager, ACTION_FREECAM_DOWN, (key_combo_t){ImGuiKey_LeftShift, false, false, false});
   keybinds_add(manager, ACTION_FREECAM_FAST, (key_combo_t){ImGuiKey_LeftCtrl, false, false, false});
+  keybinds_add(manager, ACTION_CAMERA_INSERT_KEY, (key_combo_t){ImGuiKey_I, false, false, false});
+  keybinds_add(manager, ACTION_CAMERA_DELETE_KEY, (key_combo_t){ImGuiKey_I, false, true, false});
+  keybinds_add(manager, ACTION_CAMERA_LOOK_THROUGH, (key_combo_t){ImGuiKey_Keypad0, false, false, false});
+  keybinds_add(manager, ACTION_CAMERA_PREV_KEY, (key_combo_t){ImGuiKey_LeftArrow, false, false, true});
+  keybinds_add(manager, ACTION_CAMERA_NEXT_KEY, (key_combo_t){ImGuiKey_RightArrow, false, false, true});
+  keybinds_add(manager, ACTION_CAMERA_EASY_EASE, (key_combo_t){ImGuiKey_F9, false, false, false});
 
   for (int i = 0; i < 9; ++i) {
     keybinds_add(manager, ACTION_SWITCH_TRACK_1 + i, (key_combo_t){ImGuiKey_1 + i, false, true, false});
@@ -415,7 +427,10 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   keybind_manager_t *kb = &ui->keybinds;
   undo_command_t *cmd = NULL;
 
-  if (keybinds_is_action_pressed(kb, ACTION_PLAY_PAUSE, false)) {
+  // While the Camera tab owns the clock, the transport keys drive it instead.
+  const bool camera_clock = camera_editor_process_keys(ui);
+
+  if (!camera_clock && keybinds_is_action_pressed(kb, ACTION_PLAY_PAUSE, false)) {
     ts->is_playing ^= 1;
     if (ts->is_playing) {
       ts->last_update_time = igGetTime() - (1.f / ts->playback_speed);
@@ -462,12 +477,12 @@ void keybinds_process_inputs(ui_handler_t *ui) {
     }
   }
 
-  if (keybinds_is_action_pressed(kb, ACTION_PREV_FRAME, true)) {
+  if (!camera_clock && keybinds_is_action_pressed(kb, ACTION_PREV_FRAME, true)) {
     ts->is_playing = false;
     interaction_update_mouse(ts);
     model_advance_tick(ts, -1);
   }
-  if (keybinds_is_action_pressed(kb, ACTION_NEXT_FRAME, true)) {
+  if (!camera_clock && keybinds_is_action_pressed(kb, ACTION_NEXT_FRAME, true)) {
     ts->is_playing = false;
     interaction_apply_linked_inputs(ui);
     interaction_update_mouse(ts);
@@ -492,7 +507,7 @@ void keybinds_process_inputs(ui_handler_t *ui) {
 
   if (ts->recording) return;
 
-  if (keybinds_is_action_pressed(kb, ACTION_SELECT_ALL, false)) {
+  if (!camera_clock && keybinds_is_action_pressed(kb, ACTION_SELECT_ALL, false)) {
     interaction_clear_selection(ts);
     ts->active_snippet_id = -1;
     for (int i = 0; i < ts->player_track_count; i++) {
@@ -501,12 +516,13 @@ void keybinds_process_inputs(ui_handler_t *ui) {
       }
     }
   }
-  if (keybinds_is_action_pressed(kb, ACTION_DELETE_SNIPPET, false)) cmd = commands_create_delete_selected(ui);
-  if (keybinds_is_action_pressed(kb, ACTION_SPLIT_SNIPPET, false)) cmd = commands_create_split_selected(ui);
-  if (keybinds_is_action_pressed(kb, ACTION_MERGE_SNIPPETS, false)) cmd = commands_create_merge_selected(ui);
-
-  if (keybinds_is_action_pressed(kb, ACTION_TOGGLE_SNIPPET_ACTIVE, false)) {
-    cmd = commands_create_toggle_selected_snippets_active(ui);
+  // Snippet edits act on a selection the Camera tab hides.
+  if (!camera_clock) {
+    if (keybinds_is_action_pressed(kb, ACTION_DELETE_SNIPPET, false)) cmd = commands_create_delete_selected(ui);
+    if (keybinds_is_action_pressed(kb, ACTION_SPLIT_SNIPPET, false)) cmd = commands_create_split_selected(ui);
+    if (keybinds_is_action_pressed(kb, ACTION_MERGE_SNIPPETS, false)) cmd = commands_create_merge_selected(ui);
+    if (keybinds_is_action_pressed(kb, ACTION_TOGGLE_SNIPPET_ACTIVE, false))
+      cmd = commands_create_toggle_selected_snippets_active(ui);
   }
 
   if (keybinds_is_action_pressed(kb, ACTION_TOGGLE_FULLSCREEN, false)) {

@@ -186,11 +186,15 @@ struct timeline_group_t {
   char name[MAX_TIMELINE_GROUP_NAME];
   float color[4];
   bool visible;
+  bool video_visible; // drawn in rendered video; `visible` is the viewport
   bool export_enabled;
   bool prediction_enabled;
   int start_offset;
   bool input_effects_dirty;
   uint64_t input_effect_context_revision;
+  // Bumped whenever this group's simulated worlds may have changed, so caches
+  // built from them (the camera's character paths) know to rebuild.
+  uint64_t physics_revision;
 
   physics_v_t vec;
   ft_world *initial_world;

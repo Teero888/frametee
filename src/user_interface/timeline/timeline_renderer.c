@@ -174,6 +174,23 @@ int renderer_find_nearest_playhead(const timeline_state_t *ts, ImRect header_bb,
 
 // Main Rendering Functions
 
+transport_action_t renderer_draw_transport(ui_handler_t *ui, bool playing) {
+  float dpi_scale = gfx_get_ui_scale();
+  float btn_gap = 6.0f * dpi_scale;
+  transport_action_t action = TRANSPORT_NONE;
+  igSameLine(0, 10 * dpi_scale);
+  if (ui_icon_button(ui, ICON_FA_BACKWARD_STEP, (ImVec2){30 * dpi_scale, 0})) action = TRANSPORT_START;
+  igSameLine(0, btn_gap);
+  if (ui_icon_button(ui, ICON_FA_BACKWARD, (ImVec2){30 * dpi_scale, 0})) action = TRANSPORT_BACK;
+  igSameLine(0, btn_gap);
+  if (ui_icon_button(ui, playing ? ICON_FA_PAUSE : ICON_FA_PLAY, (ImVec2){45 * dpi_scale, 0})) action = TRANSPORT_PLAY;
+  igSameLine(0, btn_gap);
+  if (ui_icon_button(ui, ICON_FA_FORWARD, (ImVec2){30 * dpi_scale, 0})) action = TRANSPORT_FORWARD;
+  igSameLine(0, btn_gap);
+  if (ui_icon_button(ui, ICON_FA_FORWARD_STEP, (ImVec2){30 * dpi_scale, 0})) action = TRANSPORT_END;
+  return action;
+}
+
 void renderer_draw_controls(timeline_state_t *ts) {
   float dpi_scale = gfx_get_ui_scale();
   float btn_gap = 6.0f * dpi_scale;
@@ -182,15 +199,10 @@ void renderer_draw_controls(timeline_state_t *ts) {
   igDragInt("##CurrentTick", &ts->current_tick, 1, model_get_min_global_tick(ts), 100000000, "Tick %d", ImGuiSliderFlags_AlwaysClamp);
   igPopItemWidth();
 
-  igSameLine(0, 10 * dpi_scale);
-  if (ui_icon_button(ts->ui, ICON_FA_BACKWARD_STEP, (ImVec2){30 * dpi_scale, 0}))
-    ts->current_tick = model_get_min_global_tick(ts);
-
-  igSameLine(0, btn_gap);
-  if (ui_icon_button(ts->ui, ICON_FA_BACKWARD, (ImVec2){30 * dpi_scale, 0})) model_advance_tick(ts, -ts->playback_speed);
-
-  igSameLine(0, btn_gap);
-  if (ui_icon_button(ts->ui, ts->is_playing ? ICON_FA_PAUSE : ICON_FA_PLAY, (ImVec2){45 * dpi_scale, 0})) {
+  switch (renderer_draw_transport(ts->ui, ts->is_playing)) {
+  case TRANSPORT_START: ts->current_tick = model_get_min_global_tick(ts); break;
+  case TRANSPORT_BACK: model_advance_tick(ts, -ts->playback_speed); break;
+  case TRANSPORT_PLAY:
     ts->is_playing = !ts->is_playing;
     if (ts->is_playing) {
       if (ts->recording && ts->recording_snippets.count > 0) {
@@ -200,14 +212,10 @@ void renderer_draw_controls(timeline_state_t *ts) {
       }
       ts->last_update_time = igGetTime();
     }
-  }
-
-  igSameLine(0, btn_gap);
-  if (ui_icon_button(ts->ui, ICON_FA_FORWARD, (ImVec2){30 * dpi_scale, 0})) model_advance_tick(ts, ts->playback_speed);
-
-  igSameLine(0, btn_gap);
-  if (ui_icon_button(ts->ui, ICON_FA_FORWARD_STEP, (ImVec2){30 * dpi_scale, 0})) {
-    ts->current_tick = model_get_max_timeline_tick(ts);
+    break;
+  case TRANSPORT_FORWARD: model_advance_tick(ts, ts->playback_speed); break;
+  case TRANSPORT_END: ts->current_tick = model_get_max_timeline_tick(ts); break;
+  case TRANSPORT_NONE: break;
   }
 
   igSameLine(0, 12 * dpi_scale);
@@ -295,7 +303,8 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
     if (tick < 0) continue;
     float x = renderer_tick_to_screen_x(ts, tick, header_bb.Min.x);
 
-    bool is_sec_marker = (tick % 50) == 0;
+    const int tps = game_ticks_per_second(&ts->ui->gfx_handler->game_host);
+    bool is_sec_marker = tps > 0 && (tick % tps) == 0;
     ImU32 col = is_sec_marker ? tick_major_col : tick_col;
     float line_height = is_sec_marker ? header_height * 0.5f : header_height * 0.3f;
 
@@ -303,7 +312,6 @@ void renderer_draw_header(timeline_state_t *ts, ImDrawList *draw_list, ImRect he
 
     // Format labels based on the time scale. Seconds come from the active game's
     // tick rate, so a 60 Hz game reads correctly on the same ruler as a 50 Hz one.
-    const int tps = game_ticks_per_second(&ts->ui->gfx_handler->game_host);
     char label[64];
     if (tick < tps) {
       snprintf(label, sizeof(label), "%d", tick);

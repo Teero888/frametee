@@ -23,7 +23,14 @@ void render_timeline(ui_handler_t *ui) {
   igSetNextWindowClass(&((ImGuiWindowClass){.DockingAllowUnclassed = false}));
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8, 8});
 
-  if (igBegin("Timeline", NULL, ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar)) {
+  // The Camera tab shares this dock node; the Timeline is the one to open on.
+  if (ui->select_timeline_tab) {
+    igSetNextWindowFocus();
+    ui->select_timeline_tab = false;
+  }
+  ui->timeline_window_visible = igBegin("Timeline", NULL, ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar);
+  ui->timeline_window_focused = ui->timeline_window_visible && igIsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+  if (ui->timeline_window_visible) {
     igPopStyleVar(1);
     ImDrawList *draw_list = igGetWindowDrawList();
     ImDrawList *overlay_draw_list = igGetForegroundDrawList_WindowPtr(igGetCurrentWindow());

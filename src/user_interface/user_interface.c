@@ -2,6 +2,7 @@
 #include "cglm/vec2.h"
 #include <include_cimgui.h>
 #include "input_effects_editor.h"
+#include "render/render_window.h"
 #include "player_profile.h"
 #include "snippet_editor.h"
 #include "starting_state.h"
@@ -138,7 +139,8 @@ static int collect_setting_groups(game_host_t *host, const char *out[], int max)
   int found = 0;
   for (unsigned i = 0; i < count && found < max; ++i) {
     const ft_setting_desc *desc = gh_setting_desc(host, i);
-    if (!desc) continue;
+    // Render settings live in the Render tab, with a value for video too.
+    if (!desc || render_setting_is_layer(desc)) continue;
     const char *group = setting_group_name(desc);
     bool seen = false;
     for (int g = 0; g < found; ++g)
@@ -157,7 +159,7 @@ static void render_game_setting_group(ui_handler_t *ui, const char *group) {
   for (unsigned i = 0; i < count; ++i) {
     const ft_setting_desc *desc = gh_setting_desc(host, i);
     ft_value value;
-    if (!desc || !gh_setting_get(host, i, &value)) continue;
+    if (!desc || render_setting_is_layer(desc) || !gh_setting_get(host, i, &value)) continue;
     if (strcmp(setting_group_name(desc), group) != 0) continue;
 
     const char *label = desc->display_name ? desc->display_name : desc->id;
@@ -483,6 +485,9 @@ void setup_docking(ui_handler_t *ui) {
     igDockBuilderDockWindow("Undo History", dock_id_center);
 
     igDockBuilderDockWindow("Timeline", dock_id_bottom);
+    igDockBuilderDockWindow("Camera", dock_id_bottom);
+    igDockBuilderDockWindow("Render", dock_id_bottom);
+    ui->select_timeline_tab = true;
 
     igDockBuilderDockWindow("Players", dock_id_left);
     igDockBuilderDockWindow("Snippet Editor", dock_id_right);
@@ -1239,6 +1244,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->auto_save_interval_sec = 60;
   ui->last_auto_save_time = 0.0;
   prediction_settings_default(&ui->configured_prediction);
+  render_state_defaults(ui);
   keybinds_init(&ui->keybinds);
   config_load(ui);
 }
@@ -1324,6 +1330,9 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   ui_apply_theme();
 
   ui->gfx_handler = gfx_handler;
+  camera_timeline_default(&ui->camera_timeline);
+  camera_editor_reset(ui);
+  video_export_defaults(&ui->video_options);
   strncpy(ui->loaded_level_name, "unnamed_level", sizeof(ui->loaded_level_name) - 1);
   ui->loaded_level_path[0] = '\0';
   ui->current_project_path[0] = '\0';
@@ -1359,6 +1368,9 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
 }
 
 void ui_add_recent_project(ui_handler_t *ui, const char *path) {
+  // A render worker opens a snapshot of the project, not the user's project.
+  extern bool g_is_render_worker;
+  if (g_is_render_worker) return;
   char path_copy[1024];
   strncpy(path_copy, path, sizeof(path_copy) - 1);
   path_copy[sizeof(path_copy) - 1] = '\0';
@@ -1866,6 +1878,8 @@ void ui_render(ui_handler_t *ui) {
 
   keybinds_process_inputs(ui);
   interaction_handle_playback_and_shortcuts(&ui->timeline);
+  // After the timeline's playback, so a camera that owns the clock has the last word on the tick.
+  camera_editor_update(ui);
   // Read by plugins for the same reason the panels below are gated: see
   // tas_context_t::ui_visible. Set before the update that reads it.
   ui->plugin_context.ui_visible = ui->show_ui;
@@ -1894,6 +1908,8 @@ void ui_render(ui_handler_t *ui) {
   if (ui->show_ui) {
     if (!ui->timeline.ui) ui->timeline.ui = ui;
     render_timeline(ui);
+    camera_window_render(ui);
+    render_window_render(ui);
     render_player_manager(ui);
     render_snippet_editor_panel(ui);
     input_effects_editor_render(ui);
@@ -1916,6 +1932,7 @@ void ui_render(ui_handler_t *ui) {
   // A settings dialog rather than a workspace panel, so Tab does not drop it:
   // the menu that opens it is still there with the interface down.
   keybinds_render_settings_window(ui);
+  render_quit_prompt(ui);
 
   // Not a panel: the prompt answers the File menu, which is still there with
   // the interface down.
@@ -2049,7 +2066,15 @@ void ui_begin_frame(ui_handler_t *ui) {
       }
     }
   }
-  const ImVec2 end = {ui->viewport_window_pos.x + avail.x, ui->viewport_window_pos.y + avail.y};
+  // Previewing a video, the picture takes the video's shape inside the panel.
+  ui->viewport_panel_pos = ui->viewport_window_pos;
+  ui->viewport_panel_size = avail;
+  float x = ui->viewport_window_pos.x, y = ui->viewport_window_pos.y;
+  render_fit_viewport(ui, &x, &y, &ui->gfx_handler->viewport[0], &ui->gfx_handler->viewport[1]);
+  ui->viewport_window_pos.x = x;
+  ui->viewport_window_pos.y = y;
+  const ImVec2 end = {ui->viewport_window_pos.x + ui->gfx_handler->viewport[0],
+                      ui->viewport_window_pos.y + ui->gfx_handler->viewport[1]};
   ui->viewport_hovered = igIsWindowHovered(0) && igIsMouseHoveringRect(ui->viewport_window_pos, end, true);
   ui->viewport_focused = igIsWindowFocused(0);
   igEnd();
@@ -2065,6 +2090,11 @@ bool ui_render_late(ui_handler_t *ui) {
   begin_viewport_window();
   ImVec2 start = ui->viewport_window_pos;
   const ImVec2 viewport_content_pos = start;
+  if (ui->render.preview)
+    ImDrawList_AddRectFilled(igGetWindowDrawList(), ui->viewport_panel_pos,
+                             (ImVec2){ui->viewport_panel_pos.x + ui->viewport_panel_size.x,
+                                      ui->viewport_panel_pos.y + ui->viewport_panel_size.y},
+                             IM_COL32(0, 0, 0, 255), 0.f, 0);
   igSetCursorScreenPos(start);
 
   ImVec2 img_size = {ui->gfx_handler->viewport[0], ui->gfx_handler->viewport[1]};
@@ -2078,8 +2108,12 @@ bool ui_render_late(ui_handler_t *ui) {
   start.x += 10.0f;
   start.y += 10.0f;
 
+  // Camera path handles are drawn over the image and take a click before it
+  // can pick a player.
+  const bool camera_took_mouse = camera_editor_viewport_overlay(ui, viewport_content_pos.x, viewport_content_pos.y, hovered);
+
   // handle raycast/click interaction
-  if (hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
+  if (!camera_took_mouse && hovered && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
     ImGuiIO *io = igGetIO_Nil();
     float mx = io->MousePos.x - viewport_content_pos.x;
     float my = io->MousePos.y - viewport_content_pos.y;
@@ -2139,7 +2173,8 @@ bool ui_render_late(ui_handler_t *ui) {
     ui->show_ui = !ui->show_ui;
   }
 
-  if (ui->timeline.selected_player_track_index >= 0) {
+  // The readout is for editing inputs; the Camera and Render tabs frame the video instead.
+  if (ui->timeline.selected_player_track_index >= 0 && !camera_editor_owns_clock(ui)) {
     draw_character_inspector(ui, start);
   }
 
@@ -2152,10 +2187,13 @@ void ui_post_level_load(ui_handler_t *ui) {
   // editor only resets what it owns.
   ui->timeline.current_tick = 0;
   ui->timeline.event_count = 0;
+  camera_timeline_default(&ui->camera_timeline);
+  camera_editor_reset(ui);
+  render_state_new_project(ui);
 }
 
 void ui_cleanup(ui_handler_t *ui) {
-  config_save(ui);
+  config_save(ui); // a render worker's is a no-op
   plugin_manager_shutdown(&ui->plugin_manager);
   snippet_editor_cleanup();
   undo_manager_cleanup(&ui->undo_manager);

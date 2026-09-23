@@ -308,7 +308,9 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
   if (!ui || !current) return;
   timeline_state_t *timeline = &ui->timeline;
   prediction_settings_t *settings = &timeline->prediction;
-  if (!settings->enabled || settings->length <= 0 || group_index < 0 || group_index >= timeline->group_count) return;
+  // Whether prediction is drawn at all is the caller's: the viewport and a
+  // video each decide for themselves.
+  if (settings->length <= 0 || group_index < 0 || group_index >= timeline->group_count) return;
   timeline_group_t *group = timeline->groups[group_index];
   if (!group->prediction_enabled) return;
 

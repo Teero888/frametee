@@ -137,8 +137,8 @@ enum Setting { kSettingGrid = 0,
                kSettingCount };
 
 const ft_setting_desc kSettings[kSettingCount] = {
-    {"show_grid", "Tile grid", "Draw a line on every tile boundary", "Platformer", FT_VALUE_BOOL, 0.0, 0.0},
-    {"camera_lead", "Camera lead", "How far the camera looks ahead of the runner, in tiles", "Platformer", FT_VALUE_FLOAT, 0.0, 8.0},
+    {"show_grid", "Tile grid", "Draw a line on every tile boundary", "Platformer", FT_VALUE_BOOL, 0.0, 0.0, FT_SETTING_RENDER},
+    {"camera_lead", "Camera lead", "How far the camera looks ahead of the runner, in tiles", "Platformer", FT_VALUE_FLOAT, 0.0, 8.0, 0},
 };
 
 // --- camera ------------------------------------------------------------------
