@@ -793,29 +793,51 @@ static double game_speed(ui_handler_t *ui, double seconds, double dt) {
   return (camera_game_tick(camera, seconds + dt, tps) - camera_game_tick(camera, seconds - dt, tps)) / (2.0 * dt * tps);
 }
 
-static ImU32 speed_color(double speed) {
-  if (!isfinite(speed) || fabs(speed) > 100.0) return IM_COL32(235, 235, 235, 255); // a jump
-  if (fabs(speed) < 0.01) return IM_COL32(74, 124, 214, 255);                     // freeze
-  if (speed < 0.0) return IM_COL32(206, 82, 82, 255);                              // reverse
-  if (fabs(speed - 1.0) < 0.01) return IM_COL32(66, 104, 80, 255);                 // 1x
-  if (speed < 1.0) {                                                                // slow motion
-    const float t = (float)speed;
-    return IM_COL32((int)(74 + (66 - 74) * t), (int)(124 + (104 - 124) * t), (int)(214 + (80 - 214) * t), 255);
-  }
-  return IM_COL32(222, 150, 62, 255); // fast forward
+// Game speed as a colour that changes continuously with it: blue when the
+// game stands still, the lane's green at 1x, orange speeding up (twice as fast
+// is half way, four times is all the way) and red running backwards.
+typedef struct rgb_t {
+  float r, g, b;
+} rgb_t;
+
+static rgb_t mix(rgb_t a, rgb_t b, float t) {
+  t = fminf(1.f, fmaxf(0.f, t));
+  return (rgb_t){a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t};
 }
+
+static ImU32 speed_color(double speed) {
+  static const rgb_t frozen = {74, 124, 214}, normal = {66, 104, 80}, fast = {222, 150, 62}, reverse = {206, 82, 82};
+  rgb_t c;
+  if (speed < 0.0) c = mix(frozen, reverse, (float)-speed);
+  else if (speed <= 1.0) c = mix(frozen, normal, (float)speed);
+  else c = mix(normal, fast, (float)(log2(speed) * 0.5));
+  return IM_COL32((int)c.r, (int)c.g, (int)c.b, 255);
+}
+
+// A hold key jumps the game: at that instant it has no speed to show.
+static bool is_jump(double speed) { return !isfinite(speed) || fabs(speed) > 100.0; }
 
 static void draw_time_lane(ui_handler_t *ui, ImDrawList *draw, const layout_t *l, const lane_t *lane) {
   const camera_editor_t *ed = &ui->camera_editor;
   const camera_timeline_t *camera = &ui->camera_timeline;
   const float scale = gfx_get_ui_scale();
-  const float step = 3.f;
+  const float step = 2.f;
   const float top = lane->top + 8.f * scale, bottom = lane->bottom - 8.f * scale;
-  for (float x = l->x0; x < l->x1; x += step) {
-    const double t = time_of(ed, l, x + step * 0.5f);
-    if (t < 0.0) continue;
-    ImDrawList_AddRectFilled(draw, (ImVec2){x, top}, (ImVec2){fminf(x + step, l->x1), bottom},
-                             speed_color(game_speed(ui, t, 0.5 / ed->pixels_per_second)), 0.f, 0);
+  const double dt = 0.5 / ed->pixels_per_second;
+  // Each sample's colour at its own x, blended to the next across the gap.
+  const float first = fmaxf(l->x0, x_of(ed, l, 0.0));
+  ImU32 previous = speed_color(game_speed(ui, time_of(ed, l, first), dt));
+  for (float x = first; x < l->x1; x += step) {
+    const float next_x = fminf(x + step, l->x1);
+    const double speed = game_speed(ui, time_of(ed, l, next_x), dt);
+    if (is_jump(speed)) {
+      ImDrawList_AddRectFilled(draw, (ImVec2){x, top}, (ImVec2){next_x, bottom}, previous, 0.f, 0);
+      ImDrawList_AddLine(draw, (ImVec2){next_x, top}, (ImVec2){next_x, bottom}, IM_COL32(240, 240, 240, 255), 2.f * scale);
+      continue;
+    }
+    const ImU32 color = speed_color(speed);
+    ImDrawList_AddRectFilledMultiColor(draw, (ImVec2){x, top}, (ImVec2){next_x, bottom}, previous, color, color, previous);
+    previous = color;
   }
   for (int i = 0; i < camera->time_count; ++i)
     draw_key(draw, lane_key_position(ui, l, lane, i), camera->time_keys[i].interp, camera->time_keys[i].ease.mode,
@@ -1457,7 +1479,7 @@ static void inspect_pose(ui_handler_t *ui, int index) {
   } else {
     if (igDragFloat2("Center", pose->target, 0.05f, 0.f, 0.f, "%.2f", 0)) memcpy(pose->eye, pose->target, sizeof(float) * 2);
     track_item(ui, "Edit camera center");
-    igDragFloat("Zoom", &pose->zoom, 0.01f, 0.005f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
+    igDragFloat("Zoom", &pose->zoom, 0.01f, 0.1f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
     track_item(ui, "Edit camera zoom");
   }
   if (igButton("Set from view", (ImVec2){0, 0})) {
