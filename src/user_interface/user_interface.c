@@ -2199,11 +2199,12 @@ bool ui_render_late(ui_handler_t *ui) {
 
     game_host_t *host = &ui->gfx_handler->game_host;
 
-    // A start being placed by hand takes the click before anything can read it
-    // as a track selection.
-    const bool placed_start = starting_state_take_world_click(ui, wx, wy);
+    bool click_used = snippet_editor_take_world_click(ui, wx, wy);
 
-    if (!placed_start) {
+    if (!click_used)
+      click_used = starting_state_take_world_click(ui, wx, wy);
+
+    if (!click_used) {
       int best_match = -1;
       float best_dist = 1.5f;
 
@@ -2235,6 +2236,9 @@ bool ui_render_late(ui_handler_t *ui) {
       }
     }
   }
+
+  if (hovered && snippet_editor_is_picking())
+    igSetTooltip("Click to choose the aim position");
 
   if (hovered && starting_state_is_picking()) igSetTooltip("Click to place the start");
 
