@@ -57,6 +57,8 @@ Prediction uses the same game simulation interface as normal playback, so it wor
 
 The Camera tab edits the camera like a video, with the game as its footage.
 Camera keys are interpolated along a spatial path with ease curves, similar to After Effects, and the camera can follow or aim at one or more characters. A separate game time curve remaps the game under the camera, so it can be slowed down, frozen or reversed while the camera keeps moving.
+<img width="2225" height="257" alt="image" src="https://github.com/user-attachments/assets/5b00cf97-3036-4314-b5f2-34a8a31cbb6c" />
+<img width="2227" height="259" alt="image" src="https://github.com/user-attachments/assets/5390d2a9-66c7-4d41-854f-eebd8b82aeaf" />
 
 ## Rendering
 
