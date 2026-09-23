@@ -43,6 +43,13 @@ Effects are processed in order and can be reordered, disabled or removed without
 
 <img height="300" alt="DDNet snippet effects image" src="https://github.com/user-attachments/assets/20427b2c-f38c-49be-846d-ee4e592edec6" />
 
+### Snippet Editor
+
+The Snippet Editor allows you to manually edit individual inputs or bulk edit edit inputs after they have been recorded/created. It's pretty easy to use and works with all games.
+
+<img height="300" alt="image" src="https://github.com/user-attachments/assets/4640ccfa-fcac-4cab-8f67-b38793299a2e" />
+<img height="300" alt="image" src="https://github.com/user-attachments/assets/aa564dca-f946-4913-af89-b2fe3a3ee12e" />
+
 ## Prediction
 
 Prediction lines simulate future movement from the current state without modifying the timeline.
