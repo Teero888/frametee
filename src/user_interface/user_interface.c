@@ -294,6 +294,8 @@ void render_menu_bar(ui_handler_t *ui) {
       // An overlay, not a graphics setting: it changes what is drawn over the
       // level and nothing about how the level is drawn.
       if (igMenuItem_BoolPtr("Show FPS", NULL, &ui->show_fps, true)) config_save(ui);
+      igSeparator();
+      if (igMenuItem_Bool("Reset Layout", NULL, false, true)) ui_reset_layout();
       igEndMenu();
     }
 
@@ -375,6 +377,14 @@ void render_menu_bar(ui_handler_t *ui) {
 // The editor's own nodes, kept so a game's windows can be given a home. Indexed
 // by ft_dock_slot; FT_DOCK_FLOATING stays zero and means "leave it alone".
 static ImGuiID g_dock_nodes[FT_DOCK_CENTER + 1];
+// True when this session laid the dockspace out itself rather than restoring
+// the user's layout from imgui.ini, so every panel goes to its default node.
+static bool g_layout_built;
+static bool g_reset_layout_requested;
+// Bumped each time the default layout is built, so game panels are placed again.
+static int g_layout_generation;
+
+void ui_reset_layout(void) { g_reset_layout_requested = true; }
 
 // A game's own player panel shares the left dock with the editor's track list,
 // and the window added to a dock node last is the one holding the tab. The
@@ -393,6 +403,11 @@ static void place_game_panels(ui_handler_t *ui) {
   static char placed[MAX_PLACED][64];
   static int placed_count = 0;
   static char placed_game[FT_NAME_MAX] = {0};
+  static int placed_generation = 0;
+  if (placed_generation != g_layout_generation) {
+    placed_generation = g_layout_generation;
+    placed_count = 0;
+  }
 
   game_host_t *host = &ui->gfx_handler->game_host;
   if (!game_host_ready(host)) return;
@@ -418,6 +433,9 @@ static void place_game_panels(ui_handler_t *ui) {
     for (int j = 0; j < placed_count; ++j)
       if (strcmp(placed[j], panel->window_title) == 0) already_placed = true;
     if (already_placed) continue;
+    // A layout restored from disk already knows where the user put this panel;
+    // only one it has never seen is given the default home.
+    if (!g_layout_built && igFindWindowSettingsByID(igImHashStr(panel->window_title, 0, 0))) continue;
 
     snprintf(placed[placed_count++], sizeof(placed[0]), "%s", panel->window_title);
     igDockBuilderDockWindow(panel->window_title, node);
@@ -434,6 +452,93 @@ static void place_game_panels(ui_handler_t *ui) {
   }
   if (existing > g_left_panel_window_count) g_focus_players_tab = true;
   g_left_panel_window_count = existing;
+}
+
+// Where each editor window lives in the default layout. Plugins go right.
+typedef struct {
+  const char *title;
+  ft_dock_slot slot;
+} default_dock_t;
+
+static const default_dock_t g_default_docks[] = {
+    {"Viewport", FT_DOCK_CENTER},      {"Controls", FT_DOCK_CENTER},       {"Undo History", FT_DOCK_CENTER},
+    {"Timeline", FT_DOCK_BOTTOM},      {"Camera", FT_DOCK_BOTTOM},         {"Render", FT_DOCK_BOTTOM},
+    {"Players", FT_DOCK_LEFT},         {"Snippet Editor", FT_DOCK_RIGHT}, {"Effects", FT_DOCK_RIGHT},
+};
+
+static void build_default_layout(ui_handler_t *ui, ImGuiID dockspace_id, ImVec2 size) {
+  igDockBuilderRemoveNode(dockspace_id); // Clear existing layout
+  igDockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+  igDockBuilderSetNodeSize(dockspace_id, size);
+
+  // split root into bottom + top remainder
+  ImGuiID dock_id_top, dock_id_center;
+  const ImGuiID dock_id_bottom = igDockBuilderSplitNode(dockspace_id, ImGuiDir_Down, 0.20f, NULL, &dock_id_top);
+
+  // split top remainder into left + remainder
+  const ImGuiID dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.25f, NULL, &dock_id_center);
+  const ImGuiID dock_id_left = igDockBuilderSplitNode(dock_id_center, ImGuiDir_Left, 0.40f, NULL, &dock_id_center);
+
+  g_dock_nodes[FT_DOCK_LEFT] = dock_id_left;
+  g_dock_nodes[FT_DOCK_RIGHT] = dock_id_right;
+  g_dock_nodes[FT_DOCK_BOTTOM] = dock_id_bottom;
+  g_dock_nodes[FT_DOCK_CENTER] = dock_id_center;
+
+  for (size_t i = 0; i < sizeof(g_default_docks) / sizeof(g_default_docks[0]); ++i)
+    igDockBuilderDockWindow(g_default_docks[i].title, g_dock_nodes[g_default_docks[i].slot]);
+  ui->select_timeline_tab = true;
+
+  for (int i = 0; i < ui->plugin_manager.count; ++i) {
+    loaded_plugin_t *p = &ui->plugin_manager.plugins[i];
+    if (p->info_name[0]) igDockBuilderDockWindow(p->info_name, dock_id_right);
+  }
+
+  igDockBuilderFinish(dockspace_id);
+}
+
+// The node a window is docked into, whether or not it has been drawn yet this
+// session. Zero when it floats or the node is gone.
+static ImGuiID window_dock_node(const char *title) {
+  ImGuiID dock_id = 0;
+  ImGuiWindow *window = igFindWindowByName(title);
+  if (window) {
+    dock_id = window->DockId;
+  } else {
+    ImGuiWindowSettings *settings = igFindWindowSettingsByID(igImHashStr(title, 0, 0));
+    if (settings) dock_id = settings->DockId;
+  }
+  return dock_id && igDockBuilderGetNode(dock_id) ? dock_id : 0;
+}
+
+// A restored layout has node IDs of its own, so each slot is found again
+// through the window that lives in it by default. Once the user moves that
+// window elsewhere, the slot follows it; a floating one falls back to center.
+static void resolve_dock_nodes(ImGuiID dockspace_id) {
+  ImGuiDockNode *central = igDockBuilderGetCentralNode(dockspace_id);
+  const ImGuiID fallback = central ? central->ID : dockspace_id;
+  for (int slot = FT_DOCK_LEFT; slot <= FT_DOCK_CENTER; ++slot) g_dock_nodes[slot] = 0;
+  for (size_t i = 0; i < sizeof(g_default_docks) / sizeof(g_default_docks[0]); ++i) {
+    const ft_dock_slot slot = g_default_docks[i].slot;
+    if (!g_dock_nodes[slot]) g_dock_nodes[slot] = window_dock_node(g_default_docks[i].title);
+  }
+  for (int slot = FT_DOCK_LEFT; slot <= FT_DOCK_CENTER; ++slot)
+    if (!g_dock_nodes[slot]) g_dock_nodes[slot] = fallback;
+}
+
+// Windows added since the layout was saved (a new editor panel, a newly
+// installed plugin) have no entry in it and would come up floating.
+static void restore_default_panels(ui_handler_t *ui, ImGuiID dockspace_id) {
+  resolve_dock_nodes(dockspace_id);
+  for (size_t i = 0; i < sizeof(g_default_docks) / sizeof(g_default_docks[0]); ++i) {
+    const char *title = g_default_docks[i].title;
+    if (!igFindWindowSettingsByID(igImHashStr(title, 0, 0))) igDockBuilderDockWindow(title, g_dock_nodes[g_default_docks[i].slot]);
+  }
+  for (int i = 0; i < ui->plugin_manager.count; ++i) {
+    loaded_plugin_t *p = &ui->plugin_manager.plugins[i];
+    if (p->info_name[0] && !igFindWindowSettingsByID(igImHashStr(p->info_name, 0, 0)))
+      igDockBuilderDockWindow(p->info_name, g_dock_nodes[FT_DOCK_RIGHT]);
+  }
+  ui->select_timeline_tab = true;
 }
 
 // docking setup
@@ -462,51 +567,23 @@ void setup_docking(ui_handler_t *ui) {
               ImGuiDockNodeFlags_PassthruCentralNode | ImGuiDockNodeFlags_NoWindowMenuButton, NULL);
   igEnd();
 
-  // build the initial layout programmatically
   static bool first_time = true;
-  static ImGuiID dock_id_left, dock_id_right, dock_id_center, dock_id_bottom;
-  if (first_time) {
-    first_time = false;
-
-    igDockBuilderRemoveNode(main_dockspace_id); // Clear existing layout
-    igDockBuilderAddNode(main_dockspace_id, ImGuiDockNodeFlags_DockSpace);
-    igDockBuilderSetNodeSize(main_dockspace_id, viewport->WorkSize);
-
-    // split root into bottom + top remainder
-    ImGuiID dock_id_top;
-    dock_id_bottom = igDockBuilderSplitNode(main_dockspace_id, ImGuiDir_Down, 0.20f, NULL, &dock_id_top);
-
-    // split top remainder into left + remainder
-    dock_id_right = igDockBuilderSplitNode(dock_id_top, ImGuiDir_Right, 0.25f, NULL, &dock_id_center);
-    dock_id_left = igDockBuilderSplitNode(dock_id_center, ImGuiDir_Left, 0.40f, NULL, &dock_id_center);
-
-    igDockBuilderDockWindow("Viewport", dock_id_center);
-    igDockBuilderDockWindow("Controls", dock_id_center);
-    igDockBuilderDockWindow("Undo History", dock_id_center);
-
-    igDockBuilderDockWindow("Timeline", dock_id_bottom);
-    igDockBuilderDockWindow("Camera", dock_id_bottom);
-    igDockBuilderDockWindow("Render", dock_id_bottom);
-    ui->select_timeline_tab = true;
-
-    igDockBuilderDockWindow("Players", dock_id_left);
-    igDockBuilderDockWindow("Snippet Editor", dock_id_right);
-    igDockBuilderDockWindow("Effects", dock_id_right);
-
-    for (int i = 0; i < ui->plugin_manager.count; ++i) {
-      loaded_plugin_t *p = &ui->plugin_manager.plugins[i];
-      if (p->info_name[0]) {
-        igDockBuilderDockWindow(p->info_name, dock_id_right);
-      }
+  if (first_time || g_reset_layout_requested) {
+    ImGuiDockNode *root = igDockBuilderGetNode(main_dockspace_id);
+    // imgui.ini is loaded by the first NewFrame, so a saved layout is already
+    // in place here. Only an empty dockspace, or a reset, gets the default one.
+    if (first_time && root && ImGuiDockNode_IsSplitNode(root)) {
+      restore_default_panels(ui, main_dockspace_id);
+    } else {
+      build_default_layout(ui, main_dockspace_id, viewport->WorkSize);
+      g_layout_built = true;
+      ++g_layout_generation;
     }
-
-    igDockBuilderFinish(main_dockspace_id);
+    first_time = false;
+    g_reset_layout_requested = false;
   }
 
-  g_dock_nodes[FT_DOCK_LEFT] = dock_id_left;
-  g_dock_nodes[FT_DOCK_RIGHT] = dock_id_right;
-  g_dock_nodes[FT_DOCK_BOTTOM] = dock_id_bottom;
-  g_dock_nodes[FT_DOCK_CENTER] = dock_id_center;
+  if (!g_layout_built) resolve_dock_nodes(main_dockspace_id);
   place_game_panels(ui);
 }
 

@@ -152,6 +152,8 @@ void ui_init_config(ui_handler_t *ui);
 void camera_init(camera_t *camera);
 void ui_init(ui_handler_t *ui, struct gfx_handler_t *gfx_handler);
 void ui_begin_frame(ui_handler_t *ui);
+// Rebuilds the default dock layout on the next frame.
+void ui_reset_layout(void);
 void ui_render(ui_handler_t *ui);
 bool ui_render_late(ui_handler_t *ui);
 void ui_post_level_load(ui_handler_t *ui);

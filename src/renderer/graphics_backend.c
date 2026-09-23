@@ -37,6 +37,7 @@ static const char *LOG_SOURCE = "GfxBackend";
 // forward declarations of static functions
 static void glfw_error_callback(int error, const char *description);
 static int init_window(gfx_handler_t *handler);
+static void save_window_geometry(GLFWwindow *window);
 static int init_vulkan(gfx_handler_t *handler);
 static int init_imgui(gfx_handler_t *handler);
 static void cleanup_vulkan(gfx_handler_t *handler);
@@ -309,6 +310,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
 
   if (g_is_headless) {
     igCreateContext(NULL);
+    igGetIO_Nil()->IniFilename = NULL;
     handler->user_interface.gfx_handler = handler;
     ui_init_config(&handler->user_interface);
     init_game_layer(handler);
@@ -706,6 +708,7 @@ void gfx_cleanup(gfx_handler_t *handler) {
       vkDestroySampler(handler->g_device, handler->offscreen_sampler, handler->g_allocator);
       handler->offscreen_sampler = VK_NULL_HANDLE;
     }
+    save_window_geometry(handler->window);
     clear_glfw_callbacks(handler->window);
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -872,6 +875,105 @@ void on_level_load_memory(struct gfx_handler_t *handler, const unsigned char *le
   ui_post_level_load(ui);
 }
 
+// The main window's size, position and maximized state, kept across runs in
+// window.ini beside the config. Only the interactive editor reads or writes it:
+// a render worker, a hidden capture and --size all want the size they ask for.
+typedef struct {
+  bool valid;
+  int x, y, width, height;
+  bool has_pos;
+  bool maximized;
+} window_geometry_t;
+
+static window_geometry_t g_saved_geometry;
+
+static bool window_geometry_enabled(void) {
+  return !g_is_headless && !g_is_render_worker && !g_hide_render_window && getenv("FRAMETEE_WINDOW_SIZE") == NULL;
+}
+
+static bool window_geometry_path(char *out, size_t size) {
+  char dir[1024];
+  if (!fs_get_config_dir(dir, sizeof(dir))) return false;
+  const int needed = snprintf(out, size, "%s/window.ini", dir);
+  return needed >= 0 && (size_t)needed < size;
+}
+
+static void load_window_geometry(void) {
+  char path[1100];
+  if (!window_geometry_path(path, sizeof(path))) return;
+  FILE *fp = fs_open(path, "r");
+  if (!fp) return;
+  window_geometry_t g = {0};
+  char line[128];
+  int value;
+  while (fgets(line, sizeof(line), fp)) {
+    if (sscanf(line, "x=%d", &value) == 1) g.x = value, g.has_pos = true;
+    else if (sscanf(line, "y=%d", &value) == 1) g.y = value;
+    else if (sscanf(line, "width=%d", &value) == 1) g.width = value;
+    else if (sscanf(line, "height=%d", &value) == 1) g.height = value;
+    else if (sscanf(line, "maximized=%d", &value) == 1) g.maximized = value != 0;
+  }
+  fclose(fp);
+  g.valid = g.width >= 200 && g.height >= 150;
+  if (g.valid) g_saved_geometry = g;
+}
+
+// A position is only used while some monitor still shows the top of the
+// window, so a display unplugged since the last run cannot hide it.
+static bool window_position_visible(int x, int y) {
+  int count = 0;
+  GLFWmonitor **monitors = glfwGetMonitors(&count);
+  for (int i = 0; i < count; ++i) {
+    int mx, my, mw, mh;
+    glfwGetMonitorWorkarea(monitors[i], &mx, &my, &mw, &mh);
+    if (x + 100 > mx && x < mx + mw - 100 && y >= my - 10 && y < my + mh - 50) return true;
+  }
+  return false;
+}
+
+static bool window_position_supported(void) {
+#ifdef GLFW_PLATFORM_WAYLAND
+  // Wayland does not let a client place its own window.
+  return glfwGetPlatform() != GLFW_PLATFORM_WAYLAND;
+#else
+  return true;
+#endif
+}
+
+static void apply_window_geometry(GLFWwindow *window) {
+  const window_geometry_t *g = &g_saved_geometry;
+  // Set after creation rather than passed to glfwCreateWindow: with
+  // GLFW_SCALE_TO_MONITOR the size asked for there is scaled again, and the
+  // window would grow on every run on a scaled display.
+  glfwSetWindowSize(window, g->width, g->height);
+  if (g->has_pos && window_position_supported() && window_position_visible(g->x, g->y))
+    glfwSetWindowPos(window, g->x, g->y);
+  if (g->maximized) glfwMaximizeWindow(window);
+}
+
+static void save_window_geometry(GLFWwindow *window) {
+  if (!window || !window_geometry_enabled()) return;
+  window_geometry_t g = g_saved_geometry;
+  g.maximized = glfwGetWindowAttrib(window, GLFW_MAXIMIZED) != 0;
+  // A maximized or minimized window's size is not the one to come back to, so
+  // the last normal size is kept for when it is restored.
+  if (!g.maximized && !glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
+    glfwGetWindowSize(window, &g.width, &g.height);
+    g.has_pos = window_position_supported();
+    if (g.has_pos) glfwGetWindowPos(window, &g.x, &g.y);
+  }
+  if (g.width < 200 || g.height < 150) return;
+
+  char dir[1024], path[1100];
+  if (!fs_get_config_dir(dir, sizeof(dir)) || !window_geometry_path(path, sizeof(path))) return;
+  fs_mkdir(dir);
+  FILE *fp = fs_open(path, "w");
+  if (!fp) return;
+  if (g.has_pos) fprintf(fp, "x=%d\ny=%d\n", g.x, g.y);
+  fprintf(fp, "width=%d\nheight=%d\nmaximized=%d\n", g.width, g.height, g.maximized ? 1 : 0);
+  fclose(fp);
+}
+
 // initialization and cleanup
 static int init_window(gfx_handler_t *handler) {
   glfwSetErrorCallback(glfw_error_callback);
@@ -879,7 +981,9 @@ static int init_window(gfx_handler_t *handler) {
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
-  if (g_is_render_worker || g_hide_render_window) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+  if (window_geometry_enabled()) load_window_geometry();
+  // Kept hidden until the saved geometry is applied, so it does not jump.
+  if (g_is_render_worker || g_hide_render_window || g_saved_geometry.valid) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
   // A capture is only comparable against another one at the same size, and the
   // window manager does not have to honour the size asked for here -- so
@@ -898,6 +1002,10 @@ static int init_window(gfx_handler_t *handler) {
   if (!handler->window) {
     glfwTerminate();
     return 1;
+  }
+  if (g_saved_geometry.valid) {
+    apply_window_geometry(handler->window);
+    glfwShowWindow(handler->window);
   }
   if (!glfwVulkanSupported()) {
     log_error("GLFW", "Vulkan is not supported on this system.");
@@ -1163,6 +1271,19 @@ float gfx_get_ui_scale(void) {
 static int init_imgui(gfx_handler_t *handler) {
   ImGuiIO *io = igGetIO_Nil();
   io->ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // The layout lives with the config rather than wherever the editor was
+  // started from. ImGui keeps the pointer, so the path must outlive the context.
+  // A render worker or a hidden capture keeps no layout, so it neither picks up
+  // the user's nor writes over it.
+  static char ini_path[1100];
+  char config_dir[1024];
+  if (g_is_render_worker || g_hide_render_window) {
+    io->IniFilename = NULL;
+  } else if (fs_get_config_dir(config_dir, sizeof(config_dir))) {
+    fs_mkdir(config_dir);
+    snprintf(ini_path, sizeof(ini_path), "%s/imgui.ini", config_dir);
+    io->IniFilename = ini_path;
+  }
   // io->ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   io->ConfigDpiScaleFonts = true;
   io->ConfigDpiScaleViewports = true;
