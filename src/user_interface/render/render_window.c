@@ -350,11 +350,28 @@ static void size_controls(ui_handler_t *ui, video_export_options_t *o) {
   }
 }
 
+// The file name the save dialog suggests: the project's name, else the map's, as `<name>.mp4`.
+static void default_video_name(const ui_handler_t *ui, char *out, size_t size) {
+  const bool project = ui->current_project_path[0] != '\0';
+  const char *name = project ? ui->current_project_path : ui->loaded_level_name;
+  for (const char *c = name; *c; ++c)
+    if (*c == '/' || *c == '\\') name = c + 1;
+  size_t length = strlen(name);
+  // A project file loses its extension; a map name only a trailing ".map", as it may hold dots of its own.
+  const char *dot = strrchr(name, '.');
+  if (project && dot && dot != name) length = (size_t)(dot - name);
+  else if (!project && length > 4 && strcasecmp(name + length - 4, ".map") == 0) length -= 4;
+  if (length == 0) snprintf(out, size, "render.mp4");
+  else snprintf(out, size, "%.*s.mp4", (int)length, name);
+}
+
 static void start_render(ui_handler_t *ui) {
   video_export_job_t *job = &ui->video_job;
   nfdu8char_t *path = NULL;
   nfdu8filteritem_t filter[] = {{"MP4 Video", "mp4"}};
-  if (NFD_SaveDialogU8(&path, filter, 1, NULL, "render.mp4") != NFD_OKAY || !path) return;
+  char suggested[256];
+  default_video_name(ui, suggested, sizeof(suggested));
+  if (NFD_SaveDialogU8(&path, filter, 1, NULL, suggested) != NFD_OKAY || !path) return;
   char output[1024];
   snprintf(output, sizeof(output), "%s", path);
   NFD_FreePathU8(path);
