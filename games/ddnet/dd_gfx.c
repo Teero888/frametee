@@ -812,6 +812,8 @@ void dd_draw_triangle(ft_game *game, float z, vec2 a, vec2 b, vec2 c, vec4 color
 // --- tee batching ------------------------------------------------------------
 
 void dd_skins_begin(ft_game *game) {
+  // The first thing a frame draws: glyph pages replaced during the last one can go now.
+  dd_text_frame_begin(game);
   game->gfx.skin_batch_count = 0;
   game->gfx.hand_batch_count = 0;
   game->gfx.hook_hand_batch_count = 0;

@@ -468,18 +468,46 @@ typedef struct {
   float offset_y;
   float advance_x;
   bool visible;
+  uint8_t face; // index into dd_text_renderer_t.faces: kerning only applies within one font
+  uint8_t page; // index into dd_text_renderer_t.pages
 } dd_text_glyph_t;
+
+// One sheet of baked glyphs and the atlas drawn from it. The first holds the
+// common repertoire, baked up front; the others fill as text needs more.
+typedef struct {
+  ft_texture *texture;
+  ft_atlas *atlas;
+  uint8_t *sheet; // kept for pages that still grow: an atlas cannot, so it is rebuilt from this
+  uint32_t sheet_size;
+  ft_sprite_rect *rects;
+  uint32_t sprite_count, sprite_capacity;
+  uint32_t uploaded_sprites; // how many of them the atlas has: glyphs past it draw as the replacement
+  uint32_t glyph_count, glyph_capacity;
+  uint32_t pack_x, pack_y, row_height;
+  bool full;
+} dd_text_page_t;
+
+enum { DD_TEXT_MAX_FACES = 16, DD_TEXT_MAX_PAGES = 4, DD_TEXT_MAX_RETIRED = 8 };
 
 typedef struct {
   void *library;
-  void *face;
-  void *font_data;
-  ft_texture *source_texture;
-  ft_atlas *atlas;
+  // The font stack, as DDNet's: DejaVu Sans, then every fallback font found.
+  void *faces[DD_TEXT_MAX_FACES];
+  int face_count;
+  void *font_data[DD_TEXT_MAX_FACES];
+  int font_data_count;
+  void *face; // faces[0], which also bakes the entity numbers
+  dd_text_page_t pages[DD_TEXT_MAX_PAGES];
+  int page_count;
+  // Atlases replaced this frame: draws may still be queued on them, so they go at the next frame.
+  ft_atlas *retired_atlases[DD_TEXT_MAX_RETIRED];
+  ft_texture *retired_textures[DD_TEXT_MAX_RETIRED];
+  int retired_count;
   ft_texture *entity_source_textures[3];
   ft_atlas *entity_atlases[3];
+  // Every glyph looked up so far, by codepoint; one no font has points at the replacement's sprites.
   dd_text_glyph_t *glyphs;
-  uint32_t glyph_count;
+  uint32_t glyph_count, glyph_capacity;
   float baked_size;
   // cl_text_entities_size, as a percentage. The entity number sheets bake it
   // in, so changing it re-uploads them exactly as CMapImages does.
@@ -722,6 +750,8 @@ bool dd_gfx_create(ft_game *game);
 void dd_gfx_destroy(ft_game *game);
 bool dd_text_create(ft_game *game);
 void dd_text_destroy(ft_game *game);
+// Once per frame before any text: releases glyph atlases replaced during the last one.
+void dd_text_frame_begin(ft_game *game);
 float dd_text_width(ft_game *game, float size, const char *text);
 void dd_text_draw(ft_game *game, float z, ft_vec2 position, float size, ft_color color, const char *text);
 // The full form: an outline colour of its own, and the on-screen pixel size the
