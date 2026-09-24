@@ -320,11 +320,31 @@ static void render_layers(ui_handler_t *ui, float width, float height) {
 typedef struct size_preset_t {
   const char *name;
   int width, height;
+  const char *group; // starts a new section in the list, or NULL to continue the last
 } size_preset_t;
 
 static const size_preset_t SIZE_PRESETS[] = {
-    {"720p (1280 x 720)", 1280, 720},    {"1080p (1920 x 1080)", 1920, 1080}, {"1440p (2560 x 1440)", 2560, 1440},
-    {"4K (3840 x 2160)", 3840, 2160},    {"Vertical 1080 x 1920", 1080, 1920}, {"Square 1080 x 1080", 1080, 1080},
+    {"480p (854 x 480)", 854, 480, "Widescreen 16:9"},
+    {"720p (1280 x 720)", 1280, 720, NULL},
+    {"900p (1600 x 900)", 1600, 900, NULL},
+    {"1080p (1920 x 1080)", 1920, 1080, NULL},
+    {"1440p (2560 x 1440)", 2560, 1440, NULL},
+    {"4K (3840 x 2160)", 3840, 2160, NULL},
+    {"5K (5120 x 2880)", 5120, 2880, NULL},
+    {"8K (7680 x 4320)", 7680, 4320, NULL},
+    {"UW 1080p (2560 x 1080)", 2560, 1080, "Ultrawide 21:9"},
+    {"UW 1440p (3440 x 1440)", 3440, 1440, NULL},
+    {"UW 4K (5120 x 2160)", 5120, 2160, NULL},
+    {"Vertical 720 x 1280", 720, 1280, "Vertical 9:16"},
+    {"Vertical 1080 x 1920", 1080, 1920, NULL},
+    {"Vertical 1440 x 2560", 1440, 2560, NULL},
+    {"Vertical 2160 x 3840", 2160, 3840, NULL},
+    {"Square 720 x 720", 720, 720, "Square and portrait"},
+    {"Square 1080 x 1080", 1080, 1080, NULL},
+    {"Square 1440 x 1440", 1440, 1440, NULL},
+    {"Portrait 4:5 (1080 x 1350)", 1080, 1350, NULL},
+    {"4:3 (1440 x 1080)", 1440, 1080, "Classic 4:3"},
+    {"4:3 (1920 x 1440)", 1920, 1440, NULL},
 };
 
 static void size_controls(ui_handler_t *ui, video_export_options_t *o) {
@@ -332,13 +352,15 @@ static void size_controls(ui_handler_t *ui, video_export_options_t *o) {
   const char *preview = "Custom";
   for (int i = 0; i < preset_count; ++i)
     if (SIZE_PRESETS[i].width == o->width && SIZE_PRESETS[i].height == o->height) preview = SIZE_PRESETS[i].name;
-  if (igBeginCombo("Size", preview, 0)) {
-    for (int i = 0; i < preset_count; ++i)
+  if (igBeginCombo("Size", preview, ImGuiComboFlags_HeightLarge)) {
+    for (int i = 0; i < preset_count; ++i) {
+      if (SIZE_PRESETS[i].group) igSeparatorText(SIZE_PRESETS[i].group);
       if (igSelectable_Bool(SIZE_PRESETS[i].name, preview == SIZE_PRESETS[i].name, 0, (ImVec2){0, 0})) {
         o->width = SIZE_PRESETS[i].width;
         o->height = SIZE_PRESETS[i].height;
         ui_mark_unsaved(ui);
       }
+    }
     igEndCombo();
   }
   int size[2] = {o->width, o->height};
