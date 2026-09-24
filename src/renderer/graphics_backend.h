@@ -57,9 +57,11 @@ void gfx_retire_imgui_texture(gfx_handler_t *handler, uint64_t texture_id);
 
 // Render one game frame at an output resolution independent of the editor
 // viewport. The callback records the same game passes used by the preview.
-// `pixels` receives tightly packed RGBA8 bytes and must hold width*height*4.
+// `pixels` receives tightly packed 8-bit RGBA bytes, or BGRA when
+// gfx_export_is_bgra(), and must hold width*height*4.
 bool gfx_render_export_frame(gfx_handler_t *handler, uint32_t width, uint32_t height,
                              void (*draw)(gfx_handler_t *, float), float alpha, uint8_t *pixels);
+bool gfx_export_is_bgra(const gfx_handler_t *handler);
 
 struct gfx_handler_t {
   // Backend Stuffs
@@ -151,6 +153,8 @@ struct gfx_handler_t {
   VkFramebuffer export_framebuffer;
   VkBuffer export_readback;
   VkDeviceMemory export_readback_memory;
+  void *export_readback_mapped;
+  bool export_readback_coherent;
   VkCommandPool export_command_pool;
   VkCommandBuffer export_command_buffer;
   uint32_t export_width, export_height;

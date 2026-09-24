@@ -2,6 +2,7 @@
 #define FRAMETEE_VIDEO_EXPORT_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 struct gfx_handler_t;
@@ -18,6 +19,7 @@ typedef struct video_export_options_t {
   int bitrate_kbps;
   int preset;        // fast, medium, slow
   int bit_depth;     // 8 or 10
+  int hardware;      // 1: the GPU's encoder (NVENC, AMF, Quick Sync or VAAPI)
 } video_export_options_t;
 
 typedef struct video_export_job_t {
@@ -28,9 +30,10 @@ typedef struct video_export_job_t {
   char progress_path[1056];
   char status[256];
   void *encoder;
-  uint8_t *pixels;
   int64_t frame_index, frame_count;
   double sample_time; // camera seconds of the frame being drawn
+  double started_at;  // glfwGetTime() when the render began
+  double elapsed;     // wall-clock seconds the render took, once it ends
   int old_tick;
   intptr_t worker_handle;
   bool worker_process;
@@ -48,6 +51,12 @@ bool video_export_start_inline(struct gfx_handler_t *handler, video_export_job_t
                                const char *progress_path);
 void video_export_step(struct gfx_handler_t *handler, video_export_job_t *job,
                        void (*draw)(struct gfx_handler_t *, float));
+// Wall-clock seconds since the render began, or its total once it has ended.
+double video_export_elapsed(const video_export_job_t *job);
+// Seconds of video per second of rendering so far (2 = twice real time).
+double video_export_speed(const video_export_job_t *job);
+// "12.3s", "4:05" or "1:02:03".
+void video_export_format_duration(double seconds, char *out, size_t size);
 void video_export_cancel(struct gfx_handler_t *handler, video_export_job_t *job);
 
 #endif

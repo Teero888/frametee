@@ -335,6 +335,8 @@ int main(int argc, char **argv) {
       video_cli.quality_mode = 1; video_cli.bitrate_kbps = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--render-depth") == 0 && i + 1 < argc) {
       video_cli.bit_depth = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--render-hardware") == 0) {
+      video_cli.hardware = 1;
     } else if (strcmp(argv[i], "--render-preset") == 0 && i + 1 < argc) {
       const char *preset = argv[++i];
       video_cli.preset = strcmp(preset, "fast") == 0 ? 0 : strcmp(preset, "slow") == 0 ? 2 :
@@ -425,7 +427,8 @@ int main(int argc, char **argv) {
            "  --render-crf <value>    Constant quality, 0..51\n"
            "  --render-bitrate <kbps> Target bitrate\n"
            "  --render-preset <name>  fast, medium, or slow compression\n"
-           "  --render-depth <8|10>   Color depth\n\n"
+           "  --render-depth <8|10>   Color depth\n"
+           "  --render-hardware       Encode on the GPU (NVENC, AMF, Quick Sync or VAAPI)\n\n"
            "Headless options:\n"
            "  --headless              Run without window or graphics\n"
            "  --game <id>             Game module to use (e.g. tmnf, ddnet)\n"

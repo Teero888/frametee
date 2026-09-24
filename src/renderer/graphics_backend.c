@@ -1600,6 +1600,7 @@ static void destroy_export_resources(gfx_handler_t *h) {
   if (h->export_memory) vkFreeMemory(h->g_device, h->export_memory, h->g_allocator);
   if (h->export_depth_memory) vkFreeMemory(h->g_device, h->export_depth_memory, h->g_allocator);
   if (h->export_readback) vkDestroyBuffer(h->g_device, h->export_readback, h->g_allocator);
+  if (h->export_readback_mapped) vkUnmapMemory(h->g_device, h->export_readback_memory);
   if (h->export_readback_memory) vkFreeMemory(h->g_device, h->export_readback_memory, h->g_allocator);
   if (h->export_command_pool) vkDestroyCommandPool(h->g_device, h->export_command_pool, h->g_allocator);
   h->export_framebuffer = VK_NULL_HANDLE;
@@ -1608,6 +1609,7 @@ static void destroy_export_resources(gfx_handler_t *h) {
   h->export_memory = h->export_depth_memory = VK_NULL_HANDLE;
   h->export_readback = VK_NULL_HANDLE;
   h->export_readback_memory = VK_NULL_HANDLE;
+  h->export_readback_mapped = NULL;
   h->export_command_pool = VK_NULL_HANDLE;
   h->export_command_buffer = VK_NULL_HANDLE;
   h->export_width = h->export_height = 0;
@@ -1646,13 +1648,24 @@ static bool init_export_resources(gfx_handler_t *h, uint32_t width, uint32_t hei
   if (vkCreateBuffer(h->g_device, &buffer, h->g_allocator, &h->export_readback) != VK_SUCCESS) goto failed;
   VkMemoryRequirements requirements;
   vkGetBufferMemoryRequirements(h->g_device, h->export_readback, &requirements);
+  // The CPU reads every frame back: uncached (write-combined) memory makes
+  // that copy many times slower, so prefer a cached type.
   uint32_t memory_type = export_memory_type(h, requirements.memoryTypeBits,
-                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+  if (memory_type == UINT32_MAX)
+    memory_type = export_memory_type(h, requirements.memoryTypeBits,
+                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
   if (memory_type == UINT32_MAX) goto failed;
+  VkPhysicalDeviceMemoryProperties memory_properties;
+  vkGetPhysicalDeviceMemoryProperties(h->g_physical_device, &memory_properties);
+  h->export_readback_coherent =
+      memory_properties.memoryTypes[memory_type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   VkMemoryAllocateInfo allocation = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
                                       .allocationSize = requirements.size, .memoryTypeIndex = memory_type};
   if (vkAllocateMemory(h->g_device, &allocation, h->g_allocator, &h->export_readback_memory) != VK_SUCCESS ||
-      vkBindBufferMemory(h->g_device, h->export_readback, h->export_readback_memory, 0) != VK_SUCCESS) goto failed;
+      vkBindBufferMemory(h->g_device, h->export_readback, h->export_readback_memory, 0) != VK_SUCCESS ||
+      vkMapMemory(h->g_device, h->export_readback_memory, 0, VK_WHOLE_SIZE, 0, &h->export_readback_mapped) !=
+          VK_SUCCESS) goto failed;
 
   VkCommandPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
                                   .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
@@ -1721,20 +1734,19 @@ bool gfx_render_export_frame(gfx_handler_t *h, uint32_t width, uint32_t height,
   VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
   if (vkQueueSubmit(h->g_queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS || vkQueueWaitIdle(h->g_queue) != VK_SUCCESS)
     return false;
-  void *mapped = NULL;
-  if (vkMapMemory(h->g_device, h->export_readback_memory, 0, (VkDeviceSize)width * height * 4u, 0, &mapped) != VK_SUCCESS)
-    return false;
-  memcpy(pixels, mapped, (size_t)width * height * 4u);
-  vkUnmapMemory(h->g_device, h->export_readback_memory);
-  const VkFormat format = h->g_main_window_data.SurfaceFormat.format;
-  if (format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB)
-    for (size_t i = 0, count = (size_t)width * height; i < count; ++i) {
-      uint8_t blue = pixels[4 * i];
-      pixels[4 * i] = pixels[4 * i + 2];
-      pixels[4 * i + 2] = blue;
-    }
+  if (!h->export_readback_coherent) {
+    VkMappedMemoryRange range = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+                                 .memory = h->export_readback_memory, .size = VK_WHOLE_SIZE};
+    if (vkInvalidateMappedMemoryRanges(h->g_device, 1, &range) != VK_SUCCESS) return false;
+  }
+  memcpy(pixels, h->export_readback_mapped, (size_t)width * height * 4u);
   h->frame_serial++;
   return true;
+}
+
+bool gfx_export_is_bgra(const gfx_handler_t *h) {
+  const VkFormat format = h->g_main_window_data.SurfaceFormat.format;
+  return format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
 }
 
 // vulkan setup helpers

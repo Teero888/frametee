@@ -427,15 +427,21 @@ static void format_column(ui_handler_t *ui, video_export_options_t *o) {
 }
 
 static void encoding_column(ui_handler_t *ui, video_export_options_t *o) {
-  static const char *labels[] = {"Codec", "Rate control", "Quality", "Bitrate", "Speed", "Color"};
-  push_field_width(labels, 6);
+  static const char *labels[] = {"Encoder", "Codec", "Rate control", "Quality", "Bitrate", "Speed", "Color"};
+  push_field_width(labels, 7);
   igSeparatorText("Encoding");
+  static const char *encoders[] = {"Software (CPU)", "Hardware (GPU)"};
+  if (igCombo_Str_arr("Encoder", &o->hardware, encoders, 2, -1)) ui_mark_unsaved(ui);
+  if (igIsItemHovered(0))
+    igSetTooltip("Hardware encoding (NVENC, AMF, Quick Sync or VAAPI) is much faster,\n"
+                 "but makes larger files at the same quality. Not every GPU supports every codec.");
   static const char *codecs[] = {"H.264", "HEVC", "AV1"};
   if (igCombo_Str_arr("Codec", &o->codec, codecs, 3, -1)) ui_mark_unsaved(ui);
   static const char *modes[] = {"Constant quality", "Target bitrate"};
   if (igCombo_Str_arr("Rate control", &o->quality_mode, modes, 2, -1)) ui_mark_unsaved(ui);
   if (o->quality_mode == 0) {
-    if (igDragInt("Quality", &o->quality, 0.2f, 0, 51, "CRF %d", ImGuiSliderFlags_AlwaysClamp)) ui_mark_unsaved(ui);
+    if (igDragInt("Quality", &o->quality, 0.2f, 0, 51, o->hardware ? "QP %d" : "CRF %d", ImGuiSliderFlags_AlwaysClamp))
+      ui_mark_unsaved(ui);
     if (igIsItemHovered(0)) igSetTooltip("Lower is better quality and larger files");
   } else if (igDragInt("Bitrate", &o->bitrate_kbps, 100.f, 100, 1000000, "%d kb/s", ImGuiSliderFlags_AlwaysClamp)) {
     ui_mark_unsaved(ui);
@@ -467,7 +473,19 @@ static void output_column(ui_handler_t *ui, video_export_options_t *o) {
   igTextDisabled("%lld frames", (long long)video_export_frame_count(o));
 
   if (job->active) {
-    igProgressBar(job->frame_count ? (float)job->frame_index / (float)job->frame_count : 0.f, (ImVec2){-1.f, 0.f}, NULL);
+    const float progress = job->frame_count ? (float)job->frame_index / (float)job->frame_count : 0.f;
+    const double elapsed = video_export_elapsed(job);
+    char spent[32], left[32], overlay[128];
+    video_export_format_duration(elapsed, spent, sizeof(spent));
+    if (progress > 0.f) {
+      video_export_format_duration(elapsed * (1.0 - progress) / progress, left, sizeof(left));
+      snprintf(overlay, sizeof(overlay), "%lld / %lld  -  %s, ~%s left", (long long)job->frame_index,
+               (long long)job->frame_count, spent, left);
+    } else {
+      snprintf(overlay, sizeof(overlay), "Starting  -  %s", spent);
+    }
+    igProgressBar(progress, (ImVec2){-1.f, 0.f}, overlay);
+    if (progress > 0.f) igTextDisabled("%.2fx real time", video_export_speed(job));
     if (!job->cancelled && igButton(ICON_FA_XMARK " Cancel", (ImVec2){-1.f, 0.f})) video_export_cancel(ui->gfx_handler, job);
     if (job->worker_process) {
       igTextDisabled("Keeps going if you close Frametee.");

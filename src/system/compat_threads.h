@@ -89,6 +89,29 @@ static inline int pthread_mutex_unlock(pthread_mutex_t *mutex) {
   return 0;
 }
 
+typedef CONDITION_VARIABLE pthread_cond_t;
+typedef void *pthread_condattr_t;
+
+static inline int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) {
+  (void)attr;
+  InitializeConditionVariable(cond);
+  return 0;
+}
+
+static inline int pthread_cond_destroy(pthread_cond_t *cond) {
+  (void)cond;
+  return 0;
+}
+
+static inline int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
+  return SleepConditionVariableCS(cond, mutex, INFINITE) ? 0 : -1;
+}
+
+static inline int pthread_cond_broadcast(pthread_cond_t *cond) {
+  WakeAllConditionVariable(cond);
+  return 0;
+}
+
 // Dummy functions for attribute configuration since CRITICAL_SECTION is always recursive on Windows
 #define PTHREAD_MUTEX_RECURSIVE 0
 static inline int pthread_mutexattr_init(pthread_mutexattr_t *attr) {

@@ -296,7 +296,7 @@ static bool write_render_video(byte_buffer_t *buffer, ui_handler_t *ui) {
   // The output: size, rate and encoding. The range is the camera's.
   const video_export_options_t *o = &ui->video_options;
   const int32_t fields[] = {o->width, o->height, o->fps_num, o->fps_den, o->codec, o->quality_mode,
-                            o->quality, o->bitrate_kbps, o->preset, o->bit_depth};
+                            o->quality, o->bitrate_kbps, o->preset, o->bit_depth, o->hardware};
   if (!buffer_u32(buffer, (uint32_t)(sizeof(fields) / sizeof(fields[0])))) return false;
   for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i)
     if (!buffer_i32(buffer, fields[i])) return false;
@@ -349,8 +349,9 @@ static bool read_render_video(byte_reader_t *reader, project_document_t *documen
   document->group_video_count = count;
   for (uint32_t g = 0; g < count; ++g)
     if (!reader_u8(reader, &document->group_video_visible[g]) || document->group_video_visible[g] > 1) return false;
-  int32_t fields[10];
-  if (!reader_u32(reader, &count) || count != sizeof(fields) / sizeof(fields[0])) return false;
+  // Version 27 adds the hardware encoder switch.
+  int32_t fields[11] = {0};
+  if (!reader_u32(reader, &count) || count != (version >= 27 ? 11u : 10u)) return false;
   for (uint32_t i = 0; i < count; ++i)
     if (!reader_i32(reader, &fields[i])) return false;
   video_export_options_t *o = &document->video_options;
@@ -365,10 +366,12 @@ static bool read_render_video(byte_reader_t *reader, project_document_t *documen
   o->bitrate_kbps = fields[7];
   o->preset = fields[8];
   o->bit_depth = fields[9];
+  o->hardware = fields[10];
   // Anything out of range falls back to the defaults rather than failing the load.
   if (o->width < 2 || o->height < 2 || o->width > 16384 || o->height > 16384 || o->fps_num <= 0 || o->fps_den <= 0 ||
       o->codec < 0 || o->codec > 2 || o->quality_mode < 0 || o->quality_mode > 1 || o->quality < 0 || o->quality > 51 ||
-      o->bitrate_kbps <= 0 || o->preset < 0 || o->preset > 2 || (o->bit_depth != 8 && o->bit_depth != 10))
+      o->bitrate_kbps <= 0 || o->preset < 0 || o->preset > 2 || (o->bit_depth != 8 && o->bit_depth != 10) ||
+      o->hardware < 0 || o->hardware > 1)
     video_export_defaults(o);
   document->has_video_options = true;
   profile->focus = RENDER_FOCUS_SELECTED;
