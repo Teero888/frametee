@@ -1352,7 +1352,7 @@ static void draw_demo_banner(ui_handler_t *ui, const input_snippet_t *snippet) {
   igSameLine(0, 6.f);
   igText("%s", recording ? recording->name : "Missing demo");
   igSameLine(0, 10.f);
-  igTextDisabled("read-only: shows the input the demo's player most likely held. Ctrl+C copies ticks.");
+  igTextDisabled("read-only: shows the inputs reconstructed from the demo");
   igSameLine(0, 10.f);
   igTextColored((ImVec4){1.f, 0.67f, 0.16f, 1.f}, "amber");
   igSetItemTooltip("Ticks the demo does not show exactly; they were rebuilt by guessing.");

@@ -885,21 +885,6 @@ static void render_playback_snippet(timeline_state_t *ts, player_track_t *track,
                        : is_selected               ? scaled_color(group->color, 1.f, 0.55f, 1.f)
                                                    : scaled_color(group->color, 1.f, 0.1f, 0.85f);
   ImDrawList_AddRect(draw_list, min, max, border, rounding, ImDrawFlags_RoundCornersAll, (is_selected ? 2.f : 1.f) * dpi);
-
-  if (igIsMouseHoveringRect(min, max, true) && igIsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && !igIsMouseDragging(0, -1.f)) {
-    igBeginTooltip();
-    igText(ICON_FA_FILM "  %s", recording ? recording->name : "Missing demo");
-    igTextDisabled("%s, ticks %d to %d", track->name[0] ? track->name : "player", snippet->start_tick, snippet->end_tick - 1);
-    if (status == RECORDING_LOADING) igTextDisabled("Loading, %.0f%%", progress * 100.f);
-    else if (status == RECORDING_FAILED) igTextColored((ImVec4){1.f, 0.5f, 0.45f, 1.f}, "The demo could not be opened.");
-    else {
-      igTextColored((ImVec4){1.f, 0.67f, 0.16f, 1.f}, "Amber");
-      igSameLine(0, -1.f);
-      igTextDisabled("ticks were guessed, the demo does not show them exactly.");
-    }
-    igTextDisabled("Replays as recorded; its content cannot be edited.");
-    igEndTooltip();
-  }
 }
 
 static void render_input_snippet(timeline_state_t *ts, player_track_t *track, input_snippet_t *snippet, ImDrawList *draw_list, ImRect timeline_bb,
