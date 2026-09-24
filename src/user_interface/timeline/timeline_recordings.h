@@ -20,6 +20,9 @@ recording_status_t recordings_status(timeline_recording_t *recording, float *out
 void recordings_update(timeline_state_t *ts);
 // Blocks until `recording` finished opening, one way or the other. True when it is ready.
 bool recordings_wait(timeline_state_t *ts, timeline_recording_t *recording);
+// Blocks until every recording finished opening, for work that cannot wait frame by frame (a video
+// render: frames drawn before a demo is open would show its players standing still).
+void recordings_wait_all(timeline_state_t *ts);
 // Cancels loaders, waits for them and destroys every recording. Must run while the game that opened
 // them is still active.
 void recordings_clear(timeline_state_t *ts);

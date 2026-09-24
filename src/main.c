@@ -16,6 +16,7 @@
 #include <user_interface/starting_state.h>
 #include <user_interface/timeline/timeline_commands.h>
 #include <user_interface/timeline/timeline_model.h>
+#include <user_interface/timeline/timeline_recordings.h>
 
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
@@ -549,6 +550,8 @@ int main(int argc, char **argv) {
     if (!video_range_given)
       camera_editor_export_range(&handler.user_interface, &video_cli.start_time, &video_cli.end_time);
     video_export_job_t *job = &handler.user_interface.video_job;
+    // Demos open in the background; every frame has to replay them.
+    recordings_wait_all(&handler.user_interface.timeline);
     // This process draws only video: it holds the project's video settings.
     render_apply(&handler.user_interface, RENDER_TARGET_VIDEO);
     if (!video_export_start_inline(&handler, job, &video_cli, video_path, video_progress_path)) {

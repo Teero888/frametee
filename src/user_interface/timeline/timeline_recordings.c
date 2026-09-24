@@ -156,6 +156,11 @@ bool recordings_wait(timeline_state_t *ts, timeline_recording_t *recording) {
   return recording->handle != NULL;
 }
 
+void recordings_wait_all(timeline_state_t *ts) {
+  if (!ts) return;
+  for (int i = 0; i < ts->recording_count; ++i) recordings_wait(ts, ts->recordings[i]);
+}
+
 static void destroy_recording(timeline_state_t *ts, timeline_recording_t *recording) {
   pthread_mutex_lock(&recording->lock);
   recording->cancel = true;
