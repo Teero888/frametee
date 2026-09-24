@@ -610,9 +610,11 @@ static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, 
   memmove(&ts->player_tracks[insert_index + num], &ts->player_tracks[insert_index],
           sizeof(player_track_t) * (size_t)(ts->player_track_count - insert_index));
   if (ts->ui && &ts->ui->timeline == ts) {
+    // Only subjects that are tracks move along. One past the tracks (a new camera follows track 0
+    // before there are any) is a placeholder: it stays, and becomes the first track made.
     camera_timeline_t *camera = &ts->ui->camera_timeline;
     for (int i = 0; i < camera->subject_count; ++i)
-      if (camera->subject_tracks[i] >= insert_index) camera->subject_tracks[i] += num;
+      if (camera->subject_tracks[i] >= insert_index && camera->subject_tracks[i] < ts->player_track_count) camera->subject_tracks[i] += num;
   }
 
   // Realloc/memmove changes the address of inline string storage.

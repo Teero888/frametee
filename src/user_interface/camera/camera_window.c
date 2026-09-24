@@ -1523,11 +1523,18 @@ static void inspect_target(ui_handler_t *ui) {
   camera_timeline_t *camera = &ui->camera_timeline;
   timeline_state_t *ts = &ui->timeline;
   const bool is_3d = game_is_3d(&ui->gfx_handler->game_host);
+  // Only subjects that are tracks count: an older project can hold one past them, which the list
+  // cannot show. Editing the list drops such leftovers.
+  int shown = 0, first_shown = -1;
+  for (int s = 0; s < camera->subject_count; ++s)
+    if (camera->subject_tracks[s] >= 0 && camera->subject_tracks[s] < ts->player_track_count) {
+      if (first_shown < 0) first_shown = camera->subject_tracks[s];
+      ++shown;
+    }
   char preview[96];
-  if (camera->subject_count == 0) snprintf(preview, sizeof(preview), "None");
-  else if (camera->subject_count == 1 && camera->subject_tracks[0] < ts->player_track_count)
-    snprintf(preview, sizeof(preview), "%s", ts->player_tracks[camera->subject_tracks[0]].name);
-  else snprintf(preview, sizeof(preview), "%d characters", camera->subject_count);
+  if (shown == 0) snprintf(preview, sizeof(preview), "None");
+  else if (shown == 1) snprintf(preview, sizeof(preview), "%s", ts->player_tracks[first_shown].name);
+  else snprintf(preview, sizeof(preview), "%d characters", shown);
   if (igBeginCombo("Characters", preview, 0)) {
     for (int i = 0; i < ts->player_track_count; ++i) {
       igPushID_Int(i);
@@ -1536,6 +1543,11 @@ static void inspect_target(ui_handler_t *ui) {
       if (full) igBeginDisabled(true);
       if (igCheckbox(ts->player_tracks[i].name, &tracked)) {
         const bool opened = edit_begin(ui, "Change camera characters");
+        int valid = 0;
+        for (int s = 0; s < camera->subject_count; ++s)
+          if (camera->subject_tracks[s] >= 0 && camera->subject_tracks[s] < ts->player_track_count)
+            camera->subject_tracks[valid++] = camera->subject_tracks[s];
+        camera->subject_count = valid;
         if (tracked) {
           camera->subject_tracks[camera->subject_count++] = i;
         } else {
