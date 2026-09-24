@@ -859,14 +859,22 @@ void on_level_load_path(gfx_handler_t *handler, const char *level_path) {
   ui_post_level_load(ui);
 }
 
-void on_level_load_memory(struct gfx_handler_t *handler, const unsigned char *level_buffer, size_t size) {
+void on_level_load_memory(struct gfx_handler_t *handler, const unsigned char *level_buffer, size_t size,
+                          const char *name) {
   if (!ensure_active_game(handler)) return;
+  ui_handler_t *ui = &handler->user_interface;
+  // The game names in-memory levels after whatever the editor currently calls
+  // its level, so the new name has to be in place before loading: otherwise the
+  // level is named after the map that was open before.
+  char previous_name[sizeof(ui->loaded_level_name)];
+  snprintf(previous_name, sizeof(previous_name), "%s", ui->loaded_level_name);
+  snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", name && *name ? name : "unnamed_level");
   ft_level *level = gh_level_load_memory(&handler->game_host, level_buffer, size);
   if (!level) {
+    snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", previous_name);
     log_error(LOG_SOURCE, "The active game could not load the level from memory");
     return;
   }
-  ui_handler_t *ui = &handler->user_interface;
   begin_untitled_project(ui);
   timeline_cleanup(&ui->timeline);
   gh_level_destroy(&handler->game_host, handler->level);
@@ -881,9 +889,10 @@ bool gfx_replace_level(gfx_handler_t *handler, const unsigned char *level_buffer
   if (!handler || !level_buffer || !size || !game_host_ready(&handler->game_host)) return false;
   ui_handler_t *ui = &handler->user_interface;
   // The game names in-memory levels after whatever the editor currently calls its level.
+  // Without a name the level must not inherit the one it replaces.
   char previous_name[sizeof(ui->loaded_level_name)];
   snprintf(previous_name, sizeof(previous_name), "%s", ui->loaded_level_name);
-  if (name && *name) snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", name);
+  snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", name && *name ? name : "unnamed_level");
   ft_level *level = gh_level_load_memory(&handler->game_host, level_buffer, size);
   if (!level) {
     snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", previous_name);

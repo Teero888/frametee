@@ -39,7 +39,8 @@ enum { FRAME_OK = 0,
        FRAME_EXIT };
 
 // public api
-void on_level_load_memory(gfx_handler_t *handler, const unsigned char *level_buffer, size_t size);
+// `name` is what the level is called; NULL or empty leaves it unnamed.
+void on_level_load_memory(gfx_handler_t *handler, const unsigned char *level_buffer, size_t size, const char *name);
 // Swaps the project's level for another one while keeping its timeline: every group is rebuilt on
 // the new level with the tracks and snippets it had. `name` becomes the level's name.
 bool gfx_replace_level(gfx_handler_t *handler, const unsigned char *level_buffer, size_t size, const char *name);

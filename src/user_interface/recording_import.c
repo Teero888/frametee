@@ -298,8 +298,7 @@ static void import_as_new_project(ui_handler_t *ui, timeline_recording_t *record
   timeline_recording_t *kept = recordings_detach(&ui->timeline, recording->id);
   if (!kept) return;
   const ft_recording_info info = kept->info;
-  on_level_load_memory(ui->gfx_handler, info.level_data, info.level_size);
-  if (info.level_name) snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", info.level_name);
+  on_level_load_memory(ui->gfx_handler, info.level_data, info.level_size, info.level_name);
   recordings_attach(&ui->timeline, kept);
   add_recording_group(ui, kept, true);
   ui_mark_unsaved(ui);
