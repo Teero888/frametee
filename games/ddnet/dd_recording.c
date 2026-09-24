@@ -315,6 +315,20 @@ static uint8_t eyes_for_emote(int emote) {
 }
 
 // What the player most likely held, as far as the state shows it.
+// Beside DDNet's player flags in a recorded character, never sent by a server: the player is AFK
+// or paused (/pause), which DDNet's client shows as a tee sitting with its eyes closed.
+#define RECORDED_INACTIVE (1 << 30)
+
+// A recorded character at `tick`, with RECORDED_INACTIVE from its player. Callers hold the lock.
+static dd_state_character recorded_at(ft_recording *recording, int cid, int tick) {
+  dd_state_character c = characters_at(recording, tick)[cid];
+  dd_state_player player;
+  if (c.quality != DD_QUALITY_NONE && dd_demo_state_player(recording->state, tick, cid, &player) &&
+      (player.ddnet_flags & (DD_EXPLAYERFLAG_AFK | DD_EXPLAYERFLAG_PAUSED)))
+    c.player_flags |= RECORDED_INACTIVE;
+  return c;
+}
+
 static void recorded_input(const dd_state_character *c, int tick, SPlayerInput *out) {
   memset(out, 0, sizeof(*out));
   int target_x, target_y;
@@ -327,7 +341,8 @@ static void recorded_input(const dd_state_character *c, int tick, SPlayerInput *
   out->m_Fire = c->attack_tick == tick || c->attack_tick == tick - 1;
   out->m_WantedWeapon = (uint8_t)(c->weapon >= 0 && c->weapon < NUM_WEAPONS ? c->weapon : WEAPON_GUN);
   set_flag_eye_state(out, eyes_for_emote(c->emote));
-  set_flag_sit(out, (c->player_flags & DD_PLAYERFLAG_IN_MENU) != 0);
+  // DDNet's client sits a tee whose player is AFK or paused, not one that is only in a menu.
+  set_flag_sit(out, (c->player_flags & RECORDED_INACTIVE) != 0);
   set_flag_chatbubble(out, (c->player_flags & DD_PLAYERFLAG_CHATTING) != 0);
   set_flag_hookline(out, (c->player_flags & DD_PLAYERFLAG_AIM) != 0);
 }
@@ -337,7 +352,7 @@ bool dd_recording_input(ft_game *game, const ft_recording *recording, int32_t pl
   if (player < 0 || player >= recording->player_count) return false;
   ft_recording *mutable_recording = (ft_recording *)recording;
   pthread_mutex_lock(&mutable_recording->lock);
-  const dd_state_character c = characters_at(mutable_recording, tick)[recording->players[player].cid];
+  const dd_state_character c = recorded_at(mutable_recording, recording->players[player].cid, tick);
   pthread_mutex_unlock(&mutable_recording->lock);
   if (c.quality == DD_QUALITY_NONE) return false;
   recorded_input(&c, tick, ddnet_input_mut(out_record));
@@ -452,7 +467,7 @@ static const ft_player_playback *playback_of(const ft_player_playback *playback,
 static dd_state_character recorded_character(const ft_player_playback *pb) {
   ft_recording *recording = (ft_recording *)pb->recording;
   pthread_mutex_lock(&recording->lock);
-  const dd_state_character c = characters_at(recording, pb->tick)[recording->players[pb->player].cid];
+  const dd_state_character c = recorded_at(recording, recording->players[pb->player].cid, pb->tick);
   pthread_mutex_unlock(&recording->lock);
   return c;
 }

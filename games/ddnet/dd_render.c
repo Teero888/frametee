@@ -213,6 +213,8 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
 }
 
 static int tee_eye_state(const SWorldCore *world, const SCharacterCore *core) {
+  // An inactive tee sleeps: its eyes are closed over any others, frozen or not.
+  if (get_flag_sit(&core->m_Input)) return EYE_BLINK;
   int eye = get_flag_eye_state(&core->m_Input);
   if (core->m_FreezeTime > 0 && eye == 0) eye = EYE_BLINK;
   const int damage_age = world->m_GameTick - core->m_DamageTick;
@@ -243,10 +245,12 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
     if (tee->dir[0] < 0.0f) weapon_pos[0] -= spec->offsetx;
     if (is_sit) weapon_pos[1] += 3.0f;
 
-    if (!tee->inactive) {
+    // An inactive tee rests its hammer once a swing is over. DDNet's rotations are clockwise and
+    // this renderer's the other way round, so its resting angles are negated too.
+    if (!tee->inactive || tee->attack_ticks_passed / (float)GAME_TICK_SPEED * 5.f < 1.f) {
       weapon_angle = M_PI / 2.0f - flip_factor * anim_attach_angle_rad;
     } else {
-      weapon_angle = tee->dir[0] < 0.0 ? 100.f : 500.f;
+      weapon_angle = tee->dir[0] < 0.0 ? -100.f : -500.f;
     }
   } else if (core->m_ActiveWeapon == WEAPON_NINJA) {
     weapon_sprite_id = GAMESKIN_NINJA_BODY;
