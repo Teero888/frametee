@@ -585,16 +585,18 @@ static void remember_flags(struct dd_replay_slot *slot, const SCharacterCore *co
 static void projectile_pos(const dd_state_projectile *p, const float *tuning, float time, float *out_x, float *out_y);
 
 // Effects of the recording's own events at this tick, through the same callbacks the physics
-// raises them with, so they land in this world's particles and sounds.
+// raises them with, so they land in this world's particles and sounds, and in what a demo export
+// writes (which steps without drawing: the replayed tees' own physics effects are dropped, so
+// these are all it gets). `drawn`: the world's particles are drawn, so trails are worth puffing.
 static void emit_events(ft_world *world, ft_recording *recording, int recording_tick, const ft_player_playback *playback,
-                        uint32_t count) {
+                        uint32_t count, bool drawn) {
   SWorldCore *core = &world->core;
   if (!core->particle && !core->damage_indicator && !core->sound) return;
   dd_state_tick *tick = malloc(sizeof(*tick));
   if (!tick) return;
   float tuning[64];
   pthread_mutex_lock(&recording->lock);
-  const bool ok = dd_demo_state_get(recording->state, recording_tick, tick);
+  const bool ok = dd_demo_state_entities(recording->state, recording_tick, tick);
   // The pointers in `tick` are only valid until the next call, which the lock keeps away.
   for (int i = 0; ok && i < tick->num_events; ++i) {
     const dd_state_event *event = &tick->events[i];
@@ -635,7 +637,7 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
   }
   // Grenades trail smoke every tick, where the physics would have puffed it for its own; other
   // shots leave bullet trails, as for the world's own (emit_bullet_trails).
-  for (int i = 0; ok && core->particle && i < tick->num_projectiles; ++i) {
+  for (int i = 0; ok && drawn && core->particle && i < tick->num_projectiles; ++i) {
     const dd_state_projectile *p = &tick->projectiles[i];
     if (recording_tick - 1 < p->start_tick || !owner_shown(world, p->owner, true)) continue;
     if (!dd_demo_state_tuning(recording->state, recording_tick, p->tune_zone > 0 ? p->tune_zone : 0, tuning)) continue;
@@ -761,8 +763,8 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
   }
   if (world->replay_recording && replayed_players >= ((const ft_recording *)world->replay_recording)->player_count)
     world->replay_clients = UINT64_MAX;
-  if (world->replay_recording && effects_bound)
-    emit_events(world, (ft_recording *)world->replay_recording, world->replay_tick, playback, player_count);
+  if (world->replay_recording)
+    emit_events(world, (ft_recording *)world->replay_recording, world->replay_tick, playback, player_count, effects_bound);
   dd_particles_finish(game, world, tick_before, effects_bound);
 }
 
@@ -800,7 +802,7 @@ void dd_recording_render_entities(ft_game *game, const ft_world *world, float in
   if (!state) return;
   float tuning[64];
   pthread_mutex_lock(&recording->lock);
-  if (dd_demo_state_get(recording->state, tick, state) && dd_state_tuning_count() <= 64) {
+  if (dd_demo_state_entities(recording->state, tick, state) && dd_state_tuning_count() <= 64) {
     for (int i = 0; i < state->num_projectiles; ++i) {
       const dd_state_projectile *p = &state->projectiles[i];
       if (!owner_shown(world, p->owner, true)) continue; // fired by a player that was not imported
