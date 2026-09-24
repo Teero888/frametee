@@ -4,7 +4,7 @@ FrameTee is a game-agnostic **Tool-Assisted Speedrun (TAS) editor and simulation
 The core engine is written in **C99** using **Dear ImGui** and **Vulkan**. Game-specific physics, inputs, rendering, level loading and exporting are provided through separate game modules.
 Currently supported games are [Teeworlds](https://teeworlds.com/) / [DDNet](https://ddnet.org/) and [TrackMania Nations Forever](https://store.steampowered.com/app/11020/TrackMania_Nations_Forever/). Super Mario 64 support is currently in development.
 
-> FrameTee is a **Work In Progress**. Expect bugs, crashes and breaking changes. Physics integrations, APIs and project file formats may change between versions. macOS is currently not supported.
+> FrameTee is a **Work In Progress**. Expect bugs, crashes and breaking changes. Physics integrations, APIs and project file formats are subject to change. macOS is currently not supported.
 
 <p align="center">
 <img width="45%" height="350" alt="ddnet_gif" src="https://github.com/user-attachments/assets/40258457-b4ea-45a1-8a4b-d95f2fdd2f36" />
