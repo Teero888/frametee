@@ -4,11 +4,13 @@
 #include "input_effects_editor.h"
 #include "render/render_window.h"
 #include "player_profile.h"
+#include "recording_import.h"
 #include "snippet_editor.h"
 #include "starting_state.h"
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
+#include "timeline/timeline_recordings.h"
 #include "timeline_events.h"
 #include "undo_redo.h"
 #include "widgets/imcol.h"
@@ -657,6 +659,16 @@ void render_player_manager(ui_handler_t *ui) {
         else commands_free_timeline_data_snapshot(before);
         NFD_FreePathU8(path);
       }
+    }
+    // Recordings come in as a group of their own, beside imported projects. Starting a project from
+    // one is the start screen's.
+    if (recording_import_available(ui)) {
+      igSameLine(0, 5.0f * dpi_scale);
+      igBeginDisabled(!ui->gfx_handler->level);
+      if (igButton(ICON_FA_FILE_IMPORT " Demo", (ImVec2){0, 0})) recording_import_begin(ui, false);
+      igEndDisabled();
+      const char *kind = host->module->constraints.recording_filter_name;
+      if (igIsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) igSetTooltip("Import a %s as a new group", kind ? kind : "recording");
     }
     if (ts->group_count > 1) {
       igSameLine(0, 5.0f * dpi_scale);
@@ -1519,6 +1531,15 @@ void ui_run_pending_project_switch(ui_handler_t *ui) {
       on_level_load_path(ui->gfx_handler, path);
     }
     break;
+  case UI_PENDING_OPEN_RECORDING:
+    if (path[0]) {
+      if (game_index >= 0) {
+        if (!gfx_activate_game(ui->gfx_handler, game_index)) break;
+        game_host_set_variant(&ui->gfx_handler->game_host, variant);
+      }
+      recording_import_open(ui, path, true);
+    }
+    break;
   case UI_PENDING_NONE:
     break;
   }
@@ -1531,6 +1552,8 @@ static const char *pending_action_phrase(ui_handler_t *ui) {
     return "opening another project";
   case UI_PENDING_LOAD_LEVEL:
     return "loading another level";
+  case UI_PENDING_OPEN_RECORDING:
+    return "starting a project from a demo";
   default:
     return "starting a new project";
   }
@@ -1760,7 +1783,7 @@ static void splash_dismiss(ui_handler_t *ui) {
 void ui_splash_open(ui_handler_t *ui, ui_pending_action_t action, const char *path) {
   if (!ui || !path || !*path) return;
   ui_request_project_switch(ui, action, path);
-  if (action == UI_PENDING_LOAD_LEVEL) {
+  if (action == UI_PENDING_LOAD_LEVEL || action == UI_PENDING_OPEN_RECORDING) {
     game_host_t *host = &ui->gfx_handler->game_host;
     ui->pending_game_index = game_host_browsed_index(host);
     snprintf(ui->pending_variant_id, sizeof(ui->pending_variant_id), "%s", game_host_browsed_variant(host));
@@ -1836,6 +1859,25 @@ static void render_splash_screen(ui_handler_t *ui) {
           nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
           if (result == NFD_OKAY) {
             ui_splash_open(ui, UI_PENDING_LOAD_LEVEL, out_path);
+            NFD_FreePathU8(out_path);
+          }
+        }
+      }
+
+      if (ui->splash_stage == SPLASH_STAGE_START && level_game && (level_game->constraints.caps & FT_CAP_RECORDINGS)) {
+        const char *kind = level_game->constraints.recording_filter_name ? level_game->constraints.recording_filter_name : "Recording";
+        char recording_label[64];
+        snprintf(recording_label, sizeof(recording_label), ICON_FA_FILM "  Load %s", kind);
+        if (igButton(recording_label, (ImVec2){btn_w, 42})) {
+          // Like a level: opened next frame, after any unsaved-work prompt, as a new project.
+          nfdu8char_t *out_path;
+          nfdu8filteritem_t filters[] = {
+              {kind, level_game->constraints.recording_extension ? level_game->constraints.recording_extension : "*"}};
+          nfdopendialogu8args_t args = {0};
+          args.filterList = filters;
+          args.filterCount = 1;
+          if (NFD_OpenDialogU8_With(&out_path, &args) == NFD_OKAY) {
+            ui_splash_open(ui, UI_PENDING_OPEN_RECORDING, out_path);
             NFD_FreePathU8(out_path);
           }
         }
@@ -1951,6 +1993,9 @@ static void render_splash_screen(ui_handler_t *ui) {
 }
 
 void ui_render(ui_handler_t *ui) {
+  // Before anything simulates this frame, so a recording that just finished opening is replayed
+  // by every world at once.
+  recordings_update(&ui->timeline);
   interaction_update_recording_input(ui);
 
   keybinds_process_inputs(ui);
@@ -2014,10 +2059,12 @@ void ui_render(ui_handler_t *ui) {
   // Not a panel: the prompt answers the File menu, which is still there with
   // the interface down.
   render_unsaved_prompt(ui);
+  recording_import_render(ui);
 
   // with nothing loaded the splash is the only thing to show, otherwise it is up because
-  // "New Project" raised it and the user can still dismiss it
-  if (ui->gfx_handler->level == NULL || ui->show_splash) {
+  // "New Project" raised it and the user can still dismiss it. A demo being imported from it is
+  // the exception: it brings its level once it is imported.
+  if ((ui->gfx_handler->level == NULL && !recording_import_active()) || ui->show_splash) {
     render_splash_screen(ui);
   }
 }
@@ -2071,8 +2118,8 @@ static void draw_character_inspector(ui_handler_t *ui, ImVec2 start) {
   input_record_t Input = ui->timeline.player_tracks[ui->timeline.selected_player_track_index].current_input;
   if (!ui->timeline.recording) {
     int group_index = model_track_group_index(&ui->timeline, ui->timeline.selected_player_track_index);
-    Input = model_get_input_at_tick(&ui->timeline, ui->timeline.selected_player_track_index,
-                                    model_group_playhead_tick(&ui->timeline, group_index));
+    Input = recordings_display_input(&ui->timeline, ui->timeline.selected_player_track_index,
+                                     model_group_playhead_tick(&ui->timeline, group_index));
   }
 
   igText("");

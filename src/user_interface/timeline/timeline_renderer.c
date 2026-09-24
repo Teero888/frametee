@@ -4,6 +4,8 @@
 #include "timeline_commands.h"
 #include "timeline_interaction.h"
 #include "timeline_model.h"
+#include "timeline_recordings.h"
+#include <engine/game_host.h>
 #include <engine/int_math.h>
 #include <engine/prediction.h>
 #include <frametee/icons.h>
@@ -771,6 +773,135 @@ static void render_player_track(timeline_state_t *ts, int track_index, ImDrawLis
   }
 }
 
+static ImU32 scaled_color(const float *rgb, float scale, float lift, float alpha) {
+  ImVec4 c = {rgb[0] * scale + (1.f - rgb[0] * scale) * lift, rgb[1] * scale + (1.f - rgb[1] * scale) * lift,
+              rgb[2] * scale + (1.f - rgb[2] * scale) * lift, alpha};
+  return igGetColorU32_Vec4(c);
+}
+
+// Runs of ticks in [first, first + count) of a playback snippet whose flags match `mask` == `want`,
+// drawn as rects between y0 and y1.
+static void draw_flag_runs(const timeline_state_t *ts, ImDrawList *draw_list, const uint8_t *flags, int first, int count, uint8_t mask,
+                           uint8_t want, float timeline_x, float clip_min_x, float clip_max_x, float y0, float y1, ImU32 color) {
+  int run_start = -1;
+  for (int i = 0; i <= count; ++i) {
+    const bool in_run = i < count && (flags[i] & mask) == want;
+    if (in_run && run_start < 0) run_start = i;
+    if (!in_run && run_start >= 0) {
+      float x0 = renderer_tick_to_screen_x(ts, first + run_start, timeline_x);
+      float x1 = renderer_tick_to_screen_x(ts, first + i, timeline_x);
+      if (x1 - x0 < 1.f) x1 = x0 + 1.f; // a single tick stays visible when zoomed out
+      x0 = fmaxf(x0, clip_min_x);
+      x1 = fminf(x1, clip_max_x);
+      if (x1 > x0) ImDrawList_AddRectFilled(draw_list, (ImVec2){x0, y0}, (ImVec2){x1, y1}, color, 0.f, 0);
+      run_start = -1;
+    }
+  }
+}
+
+// A playback snippet replays a demo instead of holding inputs, so it looks like a strip of film:
+// a darker body with sprocket holes along both edges and the demo's name. Ticks the player is not
+// in the demo are dimmed, ticks the demo had to be guessed at are tinted amber.
+static void render_playback_snippet(timeline_state_t *ts, player_track_t *track, input_snippet_t *snippet, ImDrawList *draw_list, ImVec2 min,
+                                    ImVec2 max, float snippet_x, bool is_selected) {
+  const float dpi = gfx_get_ui_scale();
+  const float rounding = 3.f * dpi;
+  const timeline_group_t *group = ts->groups[track->group_index];
+  timeline_recording_t *recording = recordings_find(ts, snippet->recording_id);
+  float progress = 0.f;
+  const recording_status_t status = recording ? recordings_status(recording, &progress, NULL, 0) : RECORDING_FAILED;
+  const float timeline_x = snippet_x - (snippet->start_tick - ts->view_start_tick) * ts->zoom;
+
+  const float body_scale = snippet->is_active ? 0.42f : 0.2f;
+  ImDrawList_AddRectFilled(draw_list, min, max, scaled_color(group->color, body_scale, is_selected ? 0.12f : 0.f, 0.96f), rounding,
+                           ImDrawFlags_RoundCornersAll);
+
+  // Sprocket holes, when the strip is tall enough to carry them.
+  const float height = max.y - min.y;
+  const bool sprockets = height >= 20.f * dpi;
+  const float hole_h = 2.5f * dpi, hole_w = 3.5f * dpi, margin = 2.5f * dpi;
+  if (sprockets) {
+    const float pitch = 9.f * dpi;
+    // Holes stay fixed to the film, not to the screen, so they slide with the snippet.
+    float x = snippet_x + 4.f * dpi;
+    if (x < min.x + 3.f * dpi) x += ceilf((min.x + 3.f * dpi - x) / pitch) * pitch;
+    const ImU32 hole = IM_COL32(8, 8, 10, 170);
+    for (; x + hole_w < max.x - 2.f * dpi; x += pitch) {
+      ImDrawList_AddRectFilled(draw_list, (ImVec2){x, min.y + margin}, (ImVec2){x + hole_w, min.y + margin + hole_h}, hole, 0.8f * dpi, 0);
+      ImDrawList_AddRectFilled(draw_list, (ImVec2){x, max.y - margin - hole_h}, (ImVec2){x + hole_w, max.y - margin}, hole, 0.8f * dpi, 0);
+    }
+  }
+  const float band_top = sprockets ? min.y + margin * 2.f + hole_h : min.y + 1.f * dpi;
+  const float band_bottom = sprockets ? max.y - margin * 2.f - hole_h : max.y - 1.f * dpi;
+
+  // Per-tick trust, for the visible part of the snippet only.
+  if (status == RECORDING_READY && recording->announced && recording->handle && ts->zoom > 0.f) {
+    const int visible_first = imax(snippet->start_tick, renderer_screen_x_to_tick(ts, min.x, timeline_x) - 1);
+    const int visible_end = imin(snippet->end_tick, renderer_screen_x_to_tick(ts, max.x, timeline_x) + 2);
+    const int count = visible_end - visible_first;
+    int recording_tick = 0;
+    if (count > 0 && recordings_snippet_tick(ts, snippet, visible_first, &recording_tick)) {
+      uint8_t stack_flags[2048];
+      uint8_t *flags = count <= (int)sizeof(stack_flags) ? stack_flags : malloc((size_t)count);
+      if (flags) {
+        gh_recording_tick_flags(&ts->ui->gfx_handler->game_host, recording->handle, snippet->recording_player, recording_tick,
+                                (unsigned)count, flags);
+        draw_flag_runs(ts, draw_list, flags, visible_first, count, FT_RECORDING_TICK_PRESENT, 0, timeline_x, min.x, max.x, band_top,
+                       band_bottom, IM_COL32(0, 0, 0, 120));
+        draw_flag_runs(ts, draw_list, flags, visible_first, count, FT_RECORDING_TICK_PRESENT | FT_RECORDING_TICK_APPROXIMATED,
+                       FT_RECORDING_TICK_PRESENT | FT_RECORDING_TICK_APPROXIMATED, timeline_x, min.x, max.x, band_top, band_bottom,
+                       IM_COL32(255, 170, 40, 95));
+        draw_flag_runs(ts, draw_list, flags, visible_first, count, FT_RECORDING_TICK_PRESENT | FT_RECORDING_TICK_APPROXIMATED,
+                       FT_RECORDING_TICK_PRESENT | FT_RECORDING_TICK_APPROXIMATED, timeline_x, min.x, max.x, band_bottom - 2.f * dpi,
+                       band_bottom, IM_COL32(255, 170, 40, 230));
+        if (flags != stack_flags) free(flags);
+      }
+    }
+  } else if (status == RECORDING_LOADING) {
+    const float bar_top = band_bottom - 3.f * dpi;
+    ImDrawList_AddRectFilled(draw_list, (ImVec2){min.x, bar_top}, (ImVec2){max.x, band_bottom}, IM_COL32(0, 0, 0, 90), 0.f, 0);
+    ImDrawList_AddRectFilled(draw_list, (ImVec2){min.x, bar_top}, (ImVec2){min.x + (max.x - min.x) * progress, band_bottom},
+                             scaled_color(group->color, 1.f, 0.35f, 0.9f), 0.f, 0);
+  }
+
+  // The label rides along the visible part of the strip.
+  char label[192];
+  const char *name = recording ? recording->name : "missing demo";
+  if (status == RECORDING_LOADING)
+    snprintf(label, sizeof(label), ICON_FA_FILM " %s  %.0f%%", name, progress * 100.f);
+  else if (status == RECORDING_FAILED)
+    snprintf(label, sizeof(label), ICON_FA_TRIANGLE_EXCLAMATION " %s", name);
+  else
+    snprintf(label, sizeof(label), ICON_FA_FILM " %s", name);
+  const ImVec2 text = igCalcTextSize(label, NULL, false, 0.f);
+  if (band_bottom - band_top >= text.y * 0.8f && max.x - min.x > 16.f * dpi) {
+    ImDrawList_PushClipRect(draw_list, (ImVec2){min.x + 3.f * dpi, band_top}, (ImVec2){max.x - 3.f * dpi, band_bottom}, true);
+    const ImU32 text_color = status == RECORDING_FAILED ? IM_COL32(255, 130, 120, 255) : IM_COL32(235, 235, 240, snippet->is_active ? 235 : 140);
+    ImDrawList_AddText_Vec2(draw_list, (ImVec2){min.x + 6.f * dpi, band_top + (band_bottom - band_top - text.y) * 0.5f}, text_color, label, NULL);
+    ImDrawList_PopClipRect(draw_list);
+  }
+
+  const ImU32 border = status == RECORDING_FAILED ? IM_COL32(230, 80, 70, 255)
+                       : is_selected               ? scaled_color(group->color, 1.f, 0.55f, 1.f)
+                                                   : scaled_color(group->color, 1.f, 0.1f, 0.85f);
+  ImDrawList_AddRect(draw_list, min, max, border, rounding, ImDrawFlags_RoundCornersAll, (is_selected ? 2.f : 1.f) * dpi);
+
+  if (igIsMouseHoveringRect(min, max, true) && igIsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && !igIsMouseDragging(0, -1.f)) {
+    igBeginTooltip();
+    igText(ICON_FA_FILM "  %s", recording ? recording->name : "Missing demo");
+    igTextDisabled("%s, ticks %d to %d", track->name[0] ? track->name : "player", snippet->start_tick, snippet->end_tick - 1);
+    if (status == RECORDING_LOADING) igTextDisabled("Loading, %.0f%%", progress * 100.f);
+    else if (status == RECORDING_FAILED) igTextColored((ImVec4){1.f, 0.5f, 0.45f, 1.f}, "The demo could not be opened.");
+    else {
+      igTextColored((ImVec4){1.f, 0.67f, 0.16f, 1.f}, "Amber");
+      igSameLine(0, -1.f);
+      igTextDisabled("ticks were guessed, the demo does not show them exactly.");
+    }
+    igTextDisabled("Replays as recorded; its content cannot be edited.");
+    igEndTooltip();
+  }
+}
+
 static void render_input_snippet(timeline_state_t *ts, player_track_t *track, input_snippet_t *snippet, ImDrawList *draw_list, ImRect timeline_bb,
                                  float track_top, bool is_recording_snippet) {
   float dpi_scale = gfx_get_ui_scale();
@@ -799,6 +930,11 @@ static void render_input_snippet(timeline_state_t *ts, player_track_t *track, in
       group->color[2] + (1.0f - group->color[2]) * 0.52f,
       1.0f,
   };
+  if (!is_recording_snippet && snippet_is_playback(snippet)) {
+    render_playback_snippet(ts, track, snippet, draw_list, min, max, start_x, is_selected);
+    return;
+  }
+
   ImU32 color;
   if (is_recording_snippet) {
     color = IM_COL32(255, 30, 0, 100);

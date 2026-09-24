@@ -1046,6 +1046,16 @@ undo_command_t *commands_create_split_selected(ui_handler_t *ui) {
   return &cmd->base;
 }
 
+// Snippets of different kinds never merge. Two playback snippets merge only when the second one
+// continues the first in the same recording, since there is nothing to fuse them with otherwise.
+static bool snippets_mergeable(const input_snippet_t *a, const input_snippet_t *b) {
+  if (a->end_tick != b->start_tick || a->kind != b->kind) return false;
+  if (snippet_is_playback(a))
+    return a->recording_id == b->recording_id && a->recording_player == b->recording_player &&
+           b->source_offset == a->source_offset + a->input_count;
+  return input_effect_stack_mergeable(a->effects, a->effect_count, b->effects, b->effect_count);
+}
+
 static int compare_snippets_by_start_tick(const void *p1, const void *p2) {
   const input_snippet_t *a = *(const input_snippet_t **)p1;
   const input_snippet_t *b = *(const input_snippet_t **)p2;
@@ -1093,8 +1103,7 @@ undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
       input_snippet_t *a = candidates[i];
       input_snippet_t *b = candidates[i + 1];
 
-      if (a->end_tick == b->start_tick &&
-          input_effect_stack_mergeable(a->effects, a->effect_count, b->effects, b->effect_count)) { // Adjacent and representable
+      if (snippets_mergeable(a, b)) { // Adjacent and representable
         if (!merged_something) {                                                                    // First merge operation
           cmd->track_index = ti;
           cmd->target_snippet_id = a->id;
@@ -1112,11 +1121,16 @@ undo_command_t *commands_create_merge_selected(ui_handler_t *ui) {
         // Perform the merge on snippet 'a's data. This does not reallocate the track's snippets array.
         int old_a_duration = a->input_count;
         int b_duration = b->input_count;
-        // Merging fuses the two windows into one buffer; whatever either side had trimmed away is
-        // dropped here, the same way consolidating clips in an editor discards their handles.
-        input_record_t *b_window = snippet_window(b);
-        model_resize_snippet_inputs(ts, a, old_a_duration + b_duration);
-        memcpy(&a->inputs[old_a_duration], b_window, sizeof(input_record_t) * b_duration);
+        if (snippet_is_playback(a)) {
+          // b continues a in the recording, so widening a's window covers it.
+          model_trim_snippet(ts, a, a->start_tick, a->end_tick + b_duration);
+        } else {
+          // Merging fuses the two windows into one buffer; whatever either side had trimmed away is
+          // dropped here, the same way consolidating clips in an editor discards their handles.
+          input_record_t *b_window = snippet_window(b);
+          model_resize_snippet_inputs(ts, a, old_a_duration + b_duration);
+          memcpy(&a->inputs[old_a_duration], b_window, sizeof(input_record_t) * b_duration);
+        }
 
         // A snippet without effects inherits the other side's stack; equal stacks make this a no-op.
         if (a->effect_count == 0 && b->effect_count > 0)
@@ -1562,6 +1576,11 @@ static void redo_merge_snippets(void *cmd, void *ts_void) {
     int old_duration = target->input_count;
     int new_duration = old_duration + info->snippet_copy.input_count;
 
+    if (snippet_is_playback(target)) {
+      model_trim_snippet(ts, target, target->start_tick, target->start_tick + new_duration);
+      model_remove_snippet_from_track(ts, track, info->snippet_copy.id);
+      continue;
+    }
     model_snippet_flatten(target);
     target->inputs = realloc(target->inputs, sizeof(input_record_t) * new_duration);
     memcpy(&target->inputs[old_duration], snippet_window(&info->snippet_copy), sizeof(input_record_t) * info->snippet_copy.input_count);
@@ -1806,7 +1825,7 @@ undo_command_t *timeline_api_create_snippet(ui_handler_t *ui, int track_index, i
 
 static void apply_input_states(timeline_state_t *ts, int snippet_id, int count, const int *indices, const input_record_t *states) {
   input_snippet_t *snippet = model_find_snippet_by_id(ts, snippet_id, NULL);
-  if (!snippet) return;
+  if (!snippet || snippet_is_playback(snippet)) return;
   int first = snippet->input_count;
   for (int i = 0; i < count; i++) {
     int idx = indices[i];
@@ -1840,7 +1859,8 @@ static void cleanup_edit_inputs_cmd(void *cmd) {
 undo_command_t *timeline_api_set_snippet_inputs(ui_handler_t *ui, int snippet_id, int tick_offset, int count, const input_record_t *new_inputs) {
   timeline_state_t *ts = &ui->timeline;
   input_snippet_t *snippet = model_find_snippet_by_id(ts, snippet_id, NULL);
-  if (!snippet || !new_inputs || count <= 0 || tick_offset < 0 || tick_offset >= snippet->input_count) return NULL;
+  if (!snippet || snippet_is_playback(snippet) || !new_inputs || count <= 0 || tick_offset < 0 || tick_offset >= snippet->input_count)
+    return NULL;
 
   int max_write = imin(count, snippet->input_count - tick_offset);
   if (max_write <= 0) return NULL;

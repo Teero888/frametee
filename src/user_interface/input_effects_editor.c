@@ -192,6 +192,11 @@ void input_effects_editor_render(ui_handler_t *ui) {
       igEnd();
       return;
     }
+    if (snippet_is_playback(snippet)) {
+      igTextDisabled("Demo snippets replay a recording as it happened; effects do not apply to them.");
+      igEnd();
+      return;
+    }
     igText("Track %d, ticks %d..%d", track_index, snippet->start_tick, snippet->end_tick);
     igTextDisabled("Effects run from top to bottom and never change the authored input.");
     igSeparator();

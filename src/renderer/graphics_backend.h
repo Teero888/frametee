@@ -40,6 +40,9 @@ enum { FRAME_OK = 0,
 
 // public api
 void on_level_load_memory(gfx_handler_t *handler, const unsigned char *level_buffer, size_t size);
+// Swaps the project's level for another one while keeping its timeline: every group is rebuilt on
+// the new level with the tracks and snippets it had. `name` becomes the level's name.
+bool gfx_replace_level(gfx_handler_t *handler, const unsigned char *level_buffer, size_t size, const char *name);
 void on_level_load_path(gfx_handler_t *handler, const char *level_path);
 // Starts a clean project under another game. All objects owned by the old
 // module are destroyed before it is deactivated.

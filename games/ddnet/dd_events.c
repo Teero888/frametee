@@ -91,8 +91,8 @@ static ft_color event_color(dd_event_type_t type) {
   }
 }
 
-static void make_event(int world_index, int tick, const dd_event_payload_t *payload, ft_timeline_event *out, char *summary,
-                       size_t summary_size) {
+void dd_event_make(int world_index, int tick, const dd_event_payload_t *payload, ft_timeline_event *out, char *summary,
+                   size_t summary_size) {
   event_summary(payload, summary, summary_size);
   int player = -1;
   if (payload->type == DD_EVENT_CHAT || payload->type == DD_EVENT_EMOTICON) player = payload->client_id;
@@ -111,14 +111,14 @@ static void make_event(int world_index, int tick, const dd_event_payload_t *payl
 static bool add_event(ft_game *game, int world_index, int tick, const dd_event_payload_t *payload) {
   char summary[256];
   ft_timeline_event event;
-  make_event(world_index, tick, payload, &event, summary, sizeof(summary));
+  dd_event_make(world_index, tick, payload, &event, summary, sizeof(summary));
   return game->engine->timeline_event_add(&event);
 }
 
 static bool update_event(ft_game *game, uint32_t index, int world_index, int tick, const dd_event_payload_t *payload) {
   char summary[256];
   ft_timeline_event event;
-  make_event(world_index, tick, payload, &event, summary, sizeof(summary));
+  dd_event_make(world_index, tick, payload, &event, summary, sizeof(summary));
   return game->engine->timeline_event_update(index, &event);
 }
 

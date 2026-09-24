@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 21u
+#define FT_GAME_ABI_VERSION 22u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -191,6 +191,10 @@ enum ft_game_caps {
    * window for it; a game that leaves this off gets that window instead, so the
    * editor exists either way. */
   FT_CAP_HOSTS_STARTING_STATE = 1u << 9,
+  /* The game can open recordings (see "Recordings" below): files of something
+   * that already happened, such as a DDNet demo, which the timeline replays as
+   * playback snippets instead of simulating from inputs. */
+  FT_CAP_RECORDINGS = 1u << 10,
 };
 
 /* How the viewport may be pointed at the world. A racing game might offer
@@ -279,6 +283,11 @@ typedef struct ft_game_constraints {
    * when the game does not load levels from disk at all. */
   const char *level_extension;
   const char *level_filter_name;
+
+  /* File-picker hints for recordings, e.g. "demo" / "DDNet demo". Only read
+   * with FT_CAP_RECORDINGS. */
+  const char *recording_extension;
+  const char *recording_filter_name;
 } ft_game_constraints;
 
 /* -------------------------------------------------------------------------
@@ -559,6 +568,71 @@ typedef struct ft_player_setup {
  * per-track profiles fixed-size and trivially copyable for undo snapshots. A
  * game needing more than this wants module project data instead. */
 #define FT_PLAYER_PROFILE_MAX 512u
+
+/* -------------------------------------------------------------------------
+ * Recordings
+ * -------------------------------------------------------------------------
+ *
+ * A recording is a file of a run that already happened, e.g. a DDNet demo. It
+ * is the source of truth for the players it holds: the timeline replays them
+ * as playback snippets rather than simulating them from inputs. Each playback
+ * snippet is a window onto one recorded player's ticks, the way an input
+ * snippet is a window onto its inputs.
+ *
+ * The engine keeps the recording's bytes in the project and asks the game to
+ * open them. What a recording contains and how a world shows a recorded
+ * player is entirely the game's business. Players simulated from inputs share
+ * the world with recorded ones and may interact with them; recorded players
+ * never react, they are where the recording says they are. */
+
+typedef struct ft_recording ft_recording; /* opened by the game, owned by it */
+
+typedef struct ft_recording_info {
+  uint32_t struct_size;
+  const char *name;
+  /* Ticks the recording covers, inclusive, in the recording's own numbering. */
+  int32_t first_tick, last_tick;
+  uint32_t player_count;
+  /* The level it was recorded on, as bytes level_load_memory accepts, or NULL
+   * when it does not carry its level. */
+  const void *level_data;
+  size_t level_size;
+  const char *level_name;
+} ft_recording_info;
+
+typedef struct ft_recording_player {
+  uint32_t struct_size;
+  const char *name;
+  /* Ticks this player is in the recording, inclusive; a player may be absent
+   * for stretches in between (dead, spectating). first_tick > last_tick when
+   * the player never appears. */
+  int32_t first_tick, last_tick;
+  /* Worth importing by default, e.g. the player who recorded it. */
+  bool suggested;
+  /* The track profile (see ft_player_setup) this player should get. */
+  const void *profile;
+  uint32_t profile_size;
+  /* A colour to show the player by in lists, 0xRRGGBB; has_color false when
+   * the game has none. */
+  bool has_color;
+  uint32_t color;
+} ft_recording_player;
+
+/* Per-tick marks a game may report for a recorded player, for the editor to
+ * show how trustworthy each tick is. */
+enum ft_recording_tick_flags {
+  FT_RECORDING_TICK_PRESENT = 1u << 0,      /* the player exists at this tick */
+  FT_RECORDING_TICK_APPROXIMATED = 1u << 1, /* rebuilt by guessing, not exactly */
+};
+
+/* What a player follows during one world step. */
+typedef struct ft_player_playback {
+  /* The recording this player replays, or NULL when it follows its input. */
+  const ft_recording *recording;
+  int32_t player; /* player index within the recording */
+  /* Recording tick the world should show for this player after the step. */
+  int32_t tick;
+} ft_player_playback;
 
 /* -------------------------------------------------------------------------
  * Property reflection
@@ -1465,6 +1539,50 @@ typedef struct ft_game_module {
    * Stateless screens may leave *context NULL and omit splash_destroy. */
   void (*splash)(const ft_engine_api *engine, void **context, const ft_ui_frame *frame);
   void (*splash_destroy)(void *context);
+
+  /* ---- recordings (all required with FT_CAP_RECORDINGS) ----
+   * recording_open reads a whole recording from `data` (the file's bytes,
+   * which are only valid during the call) and returns NULL with a message in
+   * `error` when it cannot. It may take a long time and is called from a
+   * worker thread: it must not touch rendering or UI state, and may run while
+   * the main thread renders and steps worlds. It reports progress in [0,1]
+   * through `progress`, which returns false when the user cancelled; the game
+   * should then stop and return NULL.
+   *
+   * Everything else about an opened recording is called from the frame thread
+   * or from simulation workers, possibly concurrently, so queries must be
+   * thread safe. Strings and pointers in the info structs stay valid until the
+   * recording is destroyed. */
+  ft_recording *(*recording_open)(ft_game *game, const void *data, size_t size, const char *name,
+                                  bool (*progress)(void *user, float fraction), void *progress_user, char *error,
+                                  size_t error_size);
+  void (*recording_destroy)(ft_game *game, ft_recording *recording);
+  bool (*recording_info)(ft_game *game, const ft_recording *recording, ft_recording_info *out);
+  bool (*recording_player)(ft_game *game, const ft_recording *recording, uint32_t index, ft_recording_player *out);
+  /* True when `level` is the level the recording was made on. */
+  bool (*recording_level_matches)(ft_game *game, const ft_recording *recording, const ft_level *level);
+  /* ft_recording_tick_flags for `count` ticks of a player from `first_tick`
+   * on, one byte each. */
+  void (*recording_tick_flags)(ft_game *game, const ft_recording *recording, int32_t player, int32_t first_tick,
+                               uint32_t count, uint8_t *out);
+  /* The input a recorded player most likely held at a tick, in the game's own
+   * record format, so the editor can show a playback snippet with the usual
+   * input lanes. Only for display: playback never runs these through physics.
+   * Returns false when the player is absent at that tick. */
+  bool (*recording_input)(ft_game *game, const ft_recording *recording, int32_t player, int32_t tick, void *out_record);
+  /* world_step, where `playback` (player_count entries) says which players
+   * replay a recording this step. Players whose entry has no recording follow
+   * their input as in world_step. */
+  void (*world_step_playback)(ft_game *game, ft_world *world, const void *inputs, const ft_player_playback *playback,
+                              uint32_t player_count);
+  /* Optional: the timeline events a recording carries (chat, broadcasts, ...),
+   * reported once when players of it are imported. They become authored
+   * events: kept with the project, editable and exported like any other.
+   * `world_players` holds, per recording player, the world player it became,
+   * or -1 when it was not imported; events of players left out are skipped.
+   * Ticks are the recording's own; world_index is left at -1. */
+  void (*recording_events)(ft_game *game, const ft_recording *recording, const int32_t *world_players, uint32_t player_count,
+                           void (*emit)(void *user, const ft_timeline_event *event), void *user);
 } ft_game_module;
 
 /* The one symbol a module must export.

@@ -68,5 +68,6 @@ typedef struct timeline_group_t timeline_group_t;
 typedef struct input_snippet_t input_snippet_t;
 typedef struct player_track_t player_track_t;
 typedef struct timeline_event_t timeline_event_t;
+typedef struct timeline_recording_t timeline_recording_t;
 
 #endif // TYPES_H

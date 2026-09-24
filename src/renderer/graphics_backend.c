@@ -457,6 +457,25 @@ int gfx_begin_frame(gfx_handler_t *handler) {
     handler->g_swap_chain_rebuild = false;
   }
 
+  // Acquire the image before the ImGui frame begins. A frame skipped after igNewFrame would submit
+  // no windows, and ImGui then moves focus off the window that had it, which closes any open modal:
+  // switching to fullscreen made dialogs vanish.
+  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
+  VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
+  // Ensure the previous use of this frame's fence is completed, so reuse of semaphores is safe
+  ImGui_ImplVulkanH_Frame *acquire_fd = &wd->Frames.Data[wd->FrameIndex];
+  VkResult err = vkWaitForFences(handler->g_device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
+  check_vk_result(err);
+  renderer_frame_completed(handler);
+
+  err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
+  if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
+    handler->g_swap_chain_rebuild = true;
+    // Skip this frame if the swapchain is invalid
+    return FRAME_SKIP;
+  }
+  check_vk_result(err);
+
   // Layout first: the viewport excludes the actual menu/tab bars and panels,
   // whose sizes depend on docking and UI scale, not a fixed pixel allowance.
   ImGui_ImplVulkan_NewFrame();
@@ -476,24 +495,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
     recreate_offscreen_if_needed(handler, target_w, target_h);
   }
 
-  // Acquire Image and Begin Command Buffer
-  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
-  VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-  // Ensure the previous use of this frame's fence is completed, so reuse of semaphores is safe
-  ImGui_ImplVulkanH_Frame *acquire_fd = &wd->Frames.Data[wd->FrameIndex];
-  VkResult err = vkWaitForFences(handler->g_device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
-  check_vk_result(err);
-  renderer_frame_completed(handler);
-
-  err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
-  if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
-    handler->g_swap_chain_rebuild = true;
-    // Skip this frame if the swapchain is invalid
-    igEndFrame();
-    return FRAME_SKIP;
-  }
-  check_vk_result(err);
-
+  // Begin Command Buffer
   ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
   err = vkWaitForFences(handler->g_device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
   check_vk_result(err);
@@ -873,6 +875,33 @@ void on_level_load_memory(struct gfx_handler_t *handler, const unsigned char *le
   ui->loaded_level_path[0] = '\0';
   on_level_loaded(handler);
   ui_post_level_load(ui);
+}
+
+bool gfx_replace_level(gfx_handler_t *handler, const unsigned char *level_buffer, size_t size, const char *name) {
+  if (!handler || !level_buffer || !size || !game_host_ready(&handler->game_host)) return false;
+  ui_handler_t *ui = &handler->user_interface;
+  // The game names in-memory levels after whatever the editor currently calls its level.
+  char previous_name[sizeof(ui->loaded_level_name)];
+  snprintf(previous_name, sizeof(previous_name), "%s", ui->loaded_level_name);
+  if (name && *name) snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", name);
+  ft_level *level = gh_level_load_memory(&handler->game_host, level_buffer, size);
+  if (!level) {
+    snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", previous_name);
+    log_error(LOG_SOURCE, "The active game could not load the level from memory");
+    return false;
+  }
+  const float camera_x = handler->renderer.camera.pos[0], camera_y = handler->renderer.camera.pos[1];
+  gh_level_destroy(&handler->game_host, handler->level);
+  handler->level = level;
+  ui->loaded_level_path[0] = '\0';
+  on_level_loaded(handler);
+  if (name && *name) snprintf(ui->loaded_level_name, sizeof(ui->loaded_level_name), "%s", name);
+  // Every group keeps its tracks and snippets; only the worlds they run in are rebuilt.
+  for (int group = 0; group < ui->timeline.group_count; ++group)
+    model_rebuild_group_start(&ui->timeline, group);
+  handler->renderer.camera.pos[0] = camera_x;
+  handler->renderer.camera.pos[1] = camera_y;
+  return true;
 }
 
 // The main window's size, position and maximized state, kept across runs in

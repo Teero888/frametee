@@ -778,6 +778,7 @@ static dd_physics_sound_event_t *append_physics_sound_event(ft_world *world) {
 static void on_particle(mvec2 pos, int type, int cid, void *user_data) {
   ft_world *world = user_data;
   if (!world || !world->game) return;
+  if (dd_replay_muted(world, cid)) return;
 
   switch (type) {
   case PARTICLE_TYPE_PLAYER_SPAWN:
@@ -846,6 +847,7 @@ static void on_particle(mvec2 pos, int type, int cid, void *user_data) {
 static void on_damage_indicator(mvec2 pos, float angle, int amount, int cid, void *user_data) {
   ft_world *world = user_data;
   if (!world || !world->game) return;
+  if (dd_replay_muted(world, cid)) return;
   {
     dd_physics_damage_event_t *event = append_physics_damage_event(world);
     if (event)
@@ -871,6 +873,7 @@ static void on_damage_indicator(mvec2 pos, float angle, int amount, int cid, voi
 static void on_sound(mvec2 pos, int sound_id, int cid, void *user_data) {
   ft_world *world = user_data;
   if (!world || !world->game) return;
+  if (dd_replay_muted(world, cid)) return;
   dd_physics_sound_event_t *event = append_physics_sound_event(world);
   if (event)
     *event = (dd_physics_sound_event_t){.x = vgetx(pos), .y = vgety(pos), .sound_id = sound_id, .client_id = cid};

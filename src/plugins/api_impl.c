@@ -236,7 +236,7 @@ static bool api_find_snippet_at(int track_index, int tick, int *out_snippet_id, 
   player_track_t *track = &ts->player_tracks[track_index];
   for (int i = 0; i < track->snippet_count; ++i) {
     input_snippet_t *snippet = &track->snippets[i];
-    if (!snippet->is_active) continue;
+    if (!snippet->is_active || snippet_is_playback(snippet)) continue; // replays a recording, no inputs to write
     if (tick < snippet->start_tick || tick >= snippet->end_tick) continue;
     const int offset = tick - snippet->start_tick;
     if (out_snippet_id) *out_snippet_id = snippet->id;

@@ -12,8 +12,10 @@
 #include "timeline/timeline_commands.h"
 #include "timeline/timeline_interaction.h"
 #include "timeline/timeline_model.h"
+#include "timeline/timeline_recordings.h"
 #include "user_interface.h"
 #include "widgets/imcol.h"
+#include <engine/game_host.h>
 #include <engine/input_record.h>
 #include <float.h>
 #include <frametee/icons.h>
@@ -84,7 +86,20 @@ static struct {
   bool picking_position;
   int pick_snippet_id;
   int pick_first, pick_last;
+
+  // A demo snippet is shown read-only, through a stand-in holding the input its player most likely
+  // held (see draw_playback_view). tick_flags are its ft_recording_tick_flags, one per tick.
+  bool read_only;
+  const uint8_t *tick_flags;
 } ed = {.snippet_id = -1, .follow_playhead = true, .dirty_from = INT_MAX, .pick_snippet_id = -1};
+
+// The stand-in for the demo snippet in view, see demo_stand_in.
+static struct {
+  int snippet_id, recording_tick, count;
+  input_record_t *records;
+  uint8_t *flags;
+  input_snippet_t stand_in;
+} demo = {.snippet_id = -1};
 
 #define PLAYHEAD_COLOR IM_COL32(255, 90, 90, 255)
 
@@ -121,6 +136,11 @@ void snippet_editor_reset(void) {
 
 void snippet_editor_cleanup(void) {
   snippet_editor_reset();
+  free(demo.records);
+  free(demo.flags);
+  demo.records = NULL;
+  demo.flags = NULL;
+  demo.snippet_id = -1;
   free(ed.clipboard);
   ed.clipboard = NULL;
   ed.clipboard_count = 0;
@@ -141,6 +161,7 @@ void snippet_editor_open(ui_handler_t *ui, int snippet_id) {
 // Undo
 
 static bool begin_action(const input_snippet_t *snippet) {
+  if (ed.read_only) return false; // a demo's lanes only show what happened
   if (ed.action_in_progress) return ed.action_before_states != NULL;
   ed.action_in_progress = true;
   ed.action_before_count = snippet->input_count;
@@ -1134,6 +1155,26 @@ static void draw_lanes(ui_handler_t *ui, game_host_t *host, const ft_input_schem
         ImDrawList_AddLine(ldl, (ImVec2){x, content_top}, (ImVec2){x, overlay_bottom}, igGetColorU32_Col(ImGuiCol_Separator, 0.18f), 1.f);
       }
     }
+    if (ed.tick_flags) {
+      // Ticks the demo had to guess are tinted amber, ticks its player is not in are dimmed.
+      int first, last;
+      input_lane_visible_range(view, &first, &last);
+      last = last < count - 1 ? last : count - 1;
+      for (int t = first < 0 ? 0 : first; t <= last;) {
+        const uint8_t kind = ed.tick_flags[t] & (FT_RECORDING_TICK_PRESENT | FT_RECORDING_TICK_APPROXIMATED);
+        int end = t + 1;
+        while (end <= last && (ed.tick_flags[end] & (FT_RECORDING_TICK_PRESENT | FT_RECORDING_TICK_APPROXIMATED)) == kind) ++end;
+        const ImU32 tint = !(kind & FT_RECORDING_TICK_PRESENT)       ? IM_COL32(0, 0, 0, 110)
+                           : (kind & FT_RECORDING_TICK_APPROXIMATED) ? IM_COL32(255, 170, 40, 45)
+                                                                     : 0;
+        if (tint) {
+          const float x0 = input_lane_tick_x(view, t);
+          const float x1 = fmaxf(input_lane_tick_x(view, end), x0 + 1.f);
+          ImDrawList_AddRectFilled(ldl, (ImVec2){x0, child_min.y}, (ImVec2){x1, child_max.y}, tint, 0.f, 0);
+        }
+        t = end;
+      }
+    }
     if (ed.has_selection) {
       int first, last;
       selection_bounds(&first, &last);
@@ -1156,7 +1197,7 @@ static void draw_lanes(ui_handler_t *ui, game_host_t *host, const ft_input_schem
     ImDrawList_PopClipRect(ldl);
 
     // Opened out here: inside the lane loop it would be keyed to that lane's ID.
-    if (open_menu) igOpenPopup_Str("##lane_menu", 0);
+    if (open_menu && !ed.read_only) igOpenPopup_Str("##lane_menu", 0);
     // A click on empty space, below the lanes or on their names, drops the selection.
     if (igIsWindowHovered(0) && igIsMouseClicked_Bool(ImGuiMouseButton_Left, false) && !igIsAnyItemHovered() && !io->KeyCtrl &&
         !io->KeyShift)
@@ -1251,6 +1292,7 @@ static void handle_keys(game_host_t *host, const ft_input_schema *schema, input_
   }
   if (igIsKeyPressed_Bool(ImGuiKey_Escape, false)) ed.has_selection = false;
   if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_C, false)) copy_selection(snippet);
+  if (ed.read_only) return; // copying out of a demo is all there is
   if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_X, false) && ed.has_selection) {
     copy_selection(snippet);
     begin_action(snippet);
@@ -1267,6 +1309,54 @@ static void handle_keys(game_host_t *host, const ft_input_schema *schema, input_
 }
 
 // ---------------------------------------------------------------------------
+
+// A demo snippet holds no inputs, but its lanes show the input its player most likely held, read
+// from the recording, so it can be looked at and copied from. Building that walks every tick of the
+// demo, so it is kept until the snippet or its window onto the recording changes.
+static input_snippet_t *demo_stand_in(ui_handler_t *ui, const input_snippet_t *snippet) {
+  timeline_state_t *ts = &ui->timeline;
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const timeline_recording_t *recording = recordings_find(ts, snippet->recording_id);
+  int recording_tick;
+  if (!recording || !recording->handle || !recordings_snippet_tick(ts, snippet, snippet->start_tick, &recording_tick)) return NULL;
+  const int count = snippet->input_count;
+  if (demo.snippet_id != snippet->id || demo.recording_tick != recording_tick || demo.count != count || !demo.records) {
+    free(demo.records);
+    free(demo.flags);
+    demo.records = calloc((size_t)count, sizeof(*demo.records));
+    demo.flags = calloc((size_t)count, 1);
+    demo.snippet_id = -1;
+    if (!demo.records || !demo.flags) return NULL;
+    for (int i = 0; i < count; ++i) {
+      engine_input_default(host, &demo.records[i]);
+      gh_recording_input(host, recording->handle, snippet->recording_player, recording_tick + i, demo.records[i].bytes);
+    }
+    gh_recording_tick_flags(host, recording->handle, snippet->recording_player, recording_tick, (unsigned)count, demo.flags);
+    demo.snippet_id = snippet->id;
+    demo.recording_tick = recording_tick;
+    demo.count = count;
+  }
+  demo.stand_in = *snippet;
+  demo.stand_in.kind = SNIPPET_INPUT;
+  demo.stand_in.inputs = demo.records;
+  demo.stand_in.source_offset = 0;
+  demo.stand_in.source_count = count;
+  demo.stand_in.effect_count = 0;
+  demo.stand_in.effect_cache_valid = false;
+  return &demo.stand_in;
+}
+
+static void draw_demo_banner(ui_handler_t *ui, const input_snippet_t *snippet) {
+  const timeline_recording_t *recording = recordings_find(&ui->timeline, snippet->recording_id);
+  igTextColored((ImVec4){0.45f, 0.65f, 1.f, 1.f}, ICON_FA_FILM);
+  igSameLine(0, 6.f);
+  igText("%s", recording ? recording->name : "Missing demo");
+  igSameLine(0, 10.f);
+  igTextDisabled("read-only: shows the input the demo's player most likely held. Ctrl+C copies ticks.");
+  igSameLine(0, 10.f);
+  igTextColored((ImVec4){1.f, 0.67f, 0.16f, 1.f}, "amber");
+  igSetItemTooltip("Ticks the demo does not show exactly; they were rebuilt by guessing.");
+}
 
 void render_snippet_editor_panel(ui_handler_t *ui) {
   ui->snippet_editor_focused = false;
@@ -1317,6 +1407,24 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
     igEnd();
     return;
   }
+  ed.read_only = snippet_is_playback(snippet);
+  ed.tick_flags = NULL;
+  if (ed.read_only) {
+    input_snippet_t *stand_in = demo_stand_in(ui, snippet);
+    if (!stand_in) {
+      const timeline_recording_t *recording = recordings_find(ts, snippet->recording_id);
+      float progress = 0.f;
+      if (recording && recordings_status((timeline_recording_t *)recording, &progress, NULL, 0) == RECORDING_LOADING)
+        igTextDisabled(ICON_FA_FILM "  Loading '%s', %.0f%%", recording->name, progress * 100.f);
+      else
+        igTextDisabled(ICON_FA_FILM "  The demo this snippet replays could not be opened.");
+      igEnd();
+      return;
+    }
+    draw_demo_banner(ui, snippet);
+    snippet = stand_in;
+    ed.tick_flags = demo.flags;
+  }
 
   if (ed.snippet_id != snippet->id) {
     ed.snippet_id = snippet->id;
@@ -1342,7 +1450,11 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
   draw_lanes(ui, host, schema, snippet, group, playhead_index, lanes_h);
 
   igSeparator();
-  if (igBeginChild_Str("##inspector", (ImVec2){0, inspector_h}, 0, 0)) draw_inspector(host, schema, snippet, playhead_index);
+  if (igBeginChild_Str("##inspector", (ImVec2){0, inspector_h}, 0, 0)) {
+    igBeginDisabled(ed.read_only);
+    draw_inspector(host, schema, snippet, playhead_index);
+    igEndDisabled();
+  }
   igEndChild();
 
   // The same for the window's own blank areas, around the toolbar and ruler.
@@ -1352,6 +1464,7 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
 
   // Recompute from the first changed tick right away, so the viewport shows
   // the effect of a stroke while it is still being drawn.
+  if (ed.read_only) ed.dirty_from = INT_MAX; // only the stand-in could have changed
   if (ed.dirty_from != INT_MAX) {
     model_recalc_snippet_physics(ts, snippet, snippet->start_tick + ed.dirty_from);
     ui_mark_unsaved(ui);

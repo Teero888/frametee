@@ -99,6 +99,8 @@ add_library(ddnet_game MODULE
     dd_export.c
     dd_demo.c
     dd_ghost.c
+    dd_recording.c
+    dd_recording_impl.c
 )
 
 set_target_properties(ddnet_game PROPERTIES
@@ -133,6 +135,11 @@ target_compile_definitions(ddnet_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
 find_package(CURL REQUIRED)
 find_package(Freetype REQUIRED)
 target_link_libraries(ddnet_game PRIVATE ddnet_physics ddnet_ghost cglm CURL::libcurl Freetype::Freetype)
+# The demo library is header-only; its reconstruction replays DDNet's physics bit for bit, so its
+# file must never be built with anything that changes float results.
+if(NOT MSVC)
+    set_source_files_properties(dd_recording_impl.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-fast-math")
+endif()
 
 # cJSON is compiled straight in; it is one file and the editor's copy is not a
 # library a module can link against.

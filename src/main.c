@@ -2,6 +2,7 @@
 #include "renderer/graphics_backend.h"
 #include "renderer/renderer.h"
 #include "scripting/script_engine.h"
+#include "user_interface/recording_import.h"
 #include "user_interface/user_interface.h"
 #include <engine/engine_api.h>
 #include <engine/prediction.h>
@@ -221,6 +222,7 @@ int main(int argc, char **argv) {
   // decides what the string means, exactly as it does for the level a start
   // screen requests.
   const char *level_path = NULL;
+  const char *demo_path = NULL;
   const char *project_path = NULL;
   const char *variant_id = NULL;
   const char *video_path = NULL;
@@ -252,6 +254,10 @@ int main(int argc, char **argv) {
       level_path = argv[++i];
     } else if (strncmp(argv[i], "--level=", 8) == 0) {
       level_path = argv[i] + 8;
+    } else if (strcmp(argv[i], "--demo") == 0 && i + 1 < argc) {
+      demo_path = argv[++i];
+    } else if (strncmp(argv[i], "--demo=", 7) == 0) {
+      demo_path = argv[i] + 7;
     } else if (strcmp(argv[i], "--variant") == 0 && i + 1 < argc) {
       variant_id = argv[++i];
     } else if (strncmp(argv[i], "--variant=", 10) == 0) {
@@ -380,6 +386,8 @@ int main(int argc, char **argv) {
            "Interactive options:\n"
            "  --game <id>             Select game on startup (e.g. tmnf, ddnet)\n"
            "  --level <path>          Open level immediately\n"
+           "  --demo <path>           Import a recording (e.g. a DDNet demo); starts a\n"
+           "                          project on its level unless one is open\n"
            "  --list-games            List discovered game modules and exit\n"
            "  --plugin <name...>      Activate one or more plugins for this session\n\n"
            "Capture options:\n"
@@ -529,6 +537,12 @@ int main(int argc, char **argv) {
       }
     } else
       log_error("Main", "Could not open level '%s'", level_path);
+  }
+  if (demo_path) {
+    if (recording_import_available(&handler.user_interface))
+      recording_import_open(&handler.user_interface, demo_path, handler.level == NULL);
+    else
+      log_error("Main", "The active game cannot open '%s'; pick one with --game", demo_path);
   }
 
   if (video_path) {

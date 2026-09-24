@@ -22,6 +22,8 @@ typedef enum {
   UI_PENDING_NEW_PROJECT,
   UI_PENDING_OPEN_PROJECT,
   UI_PENDING_LOAD_LEVEL,
+  // A recording (a DDNet demo) to start a new project from.
+  UI_PENDING_OPEN_RECORDING,
 } ui_pending_action_t;
 
 struct ui_handler_t {

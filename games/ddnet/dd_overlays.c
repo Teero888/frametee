@@ -87,6 +87,7 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
   const float clan_size = nameplate_font_size(game->settings.nameplate_clan_size);
 
   for (int player = 0; player < world->m_NumCharacters; ++player) {
+    if (dd_replay_absent(frame->world, player)) continue; // not in its demo at this tick
     ft_vec2 pos = character_position(&world->m_pCharacters[player], frame->alpha);
     // DDNet assumes the plate fits an 800x800 box above the tee, so a tee that
     // far below the view can still have a visible one.
@@ -96,7 +97,8 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
 
     char fallback[32];
     const char *name = profile_name(frame, player, fallback, sizeof(fallback));
-    const ft_color color = {1.f, 1.f, 1.f, frame->opacity};
+    // DDNet fades the plate of a tee paused with /spec.
+    const ft_color color = {1.f, 1.f, 1.f, frame->opacity * (dd_replay_paused(frame->world, player) ? 0.4f : 1.f)};
 
     float bottom = pos.y - (float)game->settings.nameplate_offset / PX_PER_TILE;
     bottom = draw_nameplate_line(game, pos.x, bottom, name_size, color, name);
@@ -187,6 +189,7 @@ static void render_freeze_bars(ft_game *game, const ft_render_frame *frame) {
 
   for (int player = 0; player < world->m_NumCharacters; ++player) {
     const SCharacterCore *character = &world->m_pCharacters[player];
+    if (dd_replay_absent(frame->world, player) || dd_replay_paused(frame->world, player)) continue;
     if (character->m_DeepFrozen || character->m_IsInFreeze || character->m_FreezeTime <= 0 || character->m_FreezeStart <= 0)
       continue;
 

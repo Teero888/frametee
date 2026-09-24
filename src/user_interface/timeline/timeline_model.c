@@ -1,3 +1,4 @@
+#include "timeline_recordings.h"
 #include "timeline_model.h"
 #include <engine/engine_api.h>
 #include <engine/game_host.h>
@@ -222,6 +223,7 @@ void model_init(timeline_state_t *ts, ui_handler_t *ui) {
 }
 
 void model_cleanup(timeline_state_t *ts) {
+  recordings_clear(ts);
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
     for (int j = 0; j < track->snippet_count; ++j) {
@@ -444,6 +446,10 @@ bool model_remove_snippet_from_track(timeline_state_t *ts, player_track_t *track
 }
 
 void model_resize_snippet_inputs(timeline_state_t *ts, input_snippet_t *snippet, int new_duration) {
+  if (snippet_is_playback(snippet)) {
+    if (new_duration > 0) model_trim_snippet(ts, snippet, snippet->start_tick, snippet->start_tick + new_duration);
+    return;
+  }
   if (new_duration <= 0) {
     model_free_snippet_inputs(snippet);
     snippet->start_tick = snippet->end_tick;
@@ -477,6 +483,7 @@ void model_free_snippet_inputs(input_snippet_t *snippet) {
   free(snippet->inputs);
   input_effects_snippet_cleanup(snippet);
   snippet->inputs = NULL;
+  if (snippet_is_playback(snippet)) return; // the window stays: it is onto the recording
   snippet->input_count = 0;
   snippet->source_offset = 0;
   snippet->source_count = 0;
@@ -487,7 +494,9 @@ void model_snippet_clone(input_snippet_t *dest, const input_snippet_t *src) {
   input_effects_snippet_clone(dest, src);
   // The whole source travels with the copy, not just the visible window, so a cloned snippet can be
   // widened back out to everything the original held.
-  if (src->inputs && src->source_count > 0) {
+  if (snippet_is_playback(src)) {
+    dest->inputs = NULL; // shares the recording, which the timeline owns
+  } else if (src->inputs && src->source_count > 0) {
     dest->inputs = malloc(src->source_count * sizeof(input_record_t));
     memcpy(dest->inputs, src->inputs, src->source_count * sizeof(input_record_t));
   } else {
@@ -507,7 +516,7 @@ void model_snippet_normalize(input_snippet_t *snippet) {
 }
 
 void model_snippet_flatten(input_snippet_t *snippet) {
-  if (!snippet) return;
+  if (!snippet || snippet_is_playback(snippet)) return; // its source is the recording
   model_snippet_normalize(snippet);
   if (!snippet->inputs) return;
   if (snippet->source_offset == 0 && snippet->source_count == snippet->input_count) return;
@@ -534,6 +543,15 @@ bool model_trim_snippet(timeline_state_t *ts, input_snippet_t *snippet, int new_
   if (new_start_tick < 0) new_start_tick = 0;
   if (new_end_tick <= new_start_tick) return false;
   if (new_start_tick == snippet->start_tick && new_end_tick == snippet->end_tick) return false;
+
+  if (snippet_is_playback(snippet)) {
+    // Nothing exists past the recording's ends to pad with.
+    const int source_start = snippet->start_tick - snippet->source_offset;
+    new_start_tick = imax(new_start_tick, source_start);
+    new_end_tick = imin(new_end_tick, source_start + snippet->source_count);
+    if (new_end_tick <= new_start_tick) return false;
+    if (new_start_tick == snippet->start_tick && new_end_tick == snippet->end_tick) return false;
+  }
 
   int new_count = new_end_tick - new_start_tick;
   int new_offset = snippet->source_offset - (snippet->start_tick - new_start_tick);
@@ -758,8 +776,10 @@ void model_insert_snippet_into_recording_track(player_track_t *track, const inpu
 }
 
 void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *track, int tick, const input_record_t *input) {
+  // Recorded input never goes into a playback snippet, which holds no inputs.
   input_snippet_t *overlapping_snippet = NULL;
   for (int j = 0; j < track->snippet_count; ++j) {
+    if (snippet_is_playback(&track->snippets[j])) continue;
     if (track->snippets[j].is_active && tick >= track->snippets[j].start_tick && tick < track->snippets[j].end_tick) {
       overlapping_snippet = &track->snippets[j];
       break;
@@ -773,6 +793,7 @@ void model_apply_input_to_main_buffer(timeline_state_t *ts, player_track_t *trac
   input_snippet_t *before = NULL;
   input_snippet_t *after = NULL;
   for (int j = 0; j < track->snippet_count; ++j) {
+    if (snippet_is_playback(&track->snippets[j])) continue;
     if (track->snippets[j].is_active && track->snippets[j].end_tick == tick) before = &track->snippets[j];
     if (track->snippets[j].is_active && track->snippets[j].start_tick == tick + 1) after = &track->snippets[j];
   }
@@ -906,6 +927,15 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
 
   for (int i = 0; i < track->snippet_count; ++i) {
     const input_snippet_t *snippet = &track->snippets[i];
+    if (snippet->is_active && snippet_is_playback(snippet)) {
+      // A replayed player holds no inputs; after the replay it starts from rest. Inside the replay
+      // an overlapping input snippet still answers, since input takes over from a demo.
+      if (snippet->end_tick <= tick && snippet->end_tick - 1 > last_input_tick) {
+        last_input_tick = snippet->end_tick - 1;
+        last_valid_input = blank;
+      }
+      continue;
+    }
     if (snippet->is_active) {
       const input_record_t *inputs = input_effects_snippet_window(snippet);
       if (tick >= snippet->start_tick && tick < snippet->end_tick) return inputs[tick - snippet->start_tick];
@@ -985,6 +1015,28 @@ void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_i
 // Advances `world` to `target_tick`, feeding each player the input the timeline
 // holds for it. This is the whole of the engine's simulation: pick a starting
 // point, step, cache. What a step does is entirely the game's business.
+bool model_gather_step(timeline_state_t *ts, int group_index, int tick, int player_count, uint8_t *inputs,
+                       ft_player_playback *playback) {
+  game_host_t *host = model_host(ts);
+  const size_t input_size = game_input_size(host);
+  bool any_playback = false;
+  for (int p = 0; p < player_count; ++p) {
+    const int track_index = model_group_track_index(ts, group_index, p);
+    input_record_t record;
+    if (track_index >= 0) record = model_get_input_at_tick(ts, track_index, tick);
+    else engine_input_default(host, &record);
+    // The ABI promises the game a tightly packed array using its own record
+    // size, not the editor's larger per-tick storage wrapper.
+    memcpy(inputs + (size_t)p * input_size, record.bytes, input_size);
+    if (playback) {
+      memset(&playback[p], 0, sizeof(playback[p]));
+      if (track_index >= 0 && recordings_playback_at_tick(ts, &ts->player_tracks[track_index], tick, &playback[p]))
+        any_playback = true;
+    }
+  }
+  return any_playback;
+}
+
 static void simulate_to(timeline_state_t *ts, int group_index, ft_world *world, int target_tick) {
   game_host_t *host = model_host(ts);
   timeline_group_t *group = ts->groups[group_index];
@@ -993,21 +1045,12 @@ static void simulate_to(timeline_state_t *ts, int group_index, ft_world *world, 
   const int player_count = gh_world_player_count(host, world);
   const size_t input_size = game_input_size(host);
   uint8_t *inputs = player_count > 0 ? calloc((size_t)player_count, input_size) : NULL;
+  ft_player_playback *playback = player_count > 0 ? calloc((size_t)player_count, sizeof(*playback)) : NULL;
 
   while (gh_world_tick(host, world) < target_tick) {
     const int current_sim_tick = gh_world_tick(host, world);
-
-    for (int p = 0; p < player_count; ++p) {
-      const int track_index = model_group_track_index(ts, group_index, p);
-      input_record_t record;
-      if (track_index >= 0) record = model_get_input_at_tick(ts, track_index, current_sim_tick);
-      else engine_input_default(host, &record);
-      memcpy(inputs + (size_t)p * input_size, record.bytes, input_size);
-    }
-
-    // The ABI promises the game a tightly packed array using its own record
-    // size, not the editor's larger per-tick storage wrapper.
-    gh_world_step(host, world, inputs, (unsigned)player_count);
+    const bool replaying = model_gather_step(ts, group_index, current_sim_tick, player_count, inputs, playback);
+    gh_world_step_playback(host, world, inputs, replaying ? playback : NULL, (unsigned)player_count);
 
     if (gh_world_tick(host, world) % step == 0) {
       const int cache_index = gh_world_tick(host, world) / step;
@@ -1016,6 +1059,7 @@ static void simulate_to(timeline_state_t *ts, int group_index, ft_world *world, 
     }
   }
 
+  free(playback);
   free(inputs);
 }
 
@@ -1293,6 +1337,7 @@ static int model_find_group_race_start(timeline_state_t *ts, int group_index) {
   const int players = gh_world_player_count(host, world);
   const size_t input_size = game_input_size(host);
   uint8_t *inputs = players > 0 ? calloc((size_t)players, input_size) : NULL;
+  ft_player_playback *playback = players > 0 ? calloc((size_t)players, sizeof(*playback)) : NULL;
   int race_start = -1;
 
   while (gh_world_tick(host, world) <= max_local_tick) {
@@ -1305,16 +1350,11 @@ static int model_find_group_race_start(timeline_state_t *ts, int group_index) {
     if (gh_world_tick(host, world) == max_local_tick) break;
 
     const int input_tick = gh_world_tick(host, world);
-    for (int local_index = 0; local_index < players; ++local_index) {
-      const int track_index = model_group_track_index(ts, group_index, local_index);
-      input_record_t record;
-      if (track_index >= 0) record = model_get_input_at_tick(ts, track_index, input_tick);
-      else engine_input_default(host, &record);
-      memcpy(inputs + (size_t)local_index * input_size, record.bytes, input_size);
-    }
-    gh_world_step(host, world, inputs, (unsigned)players);
+    const bool replaying = model_gather_step(ts, group_index, input_tick, players, inputs, playback);
+    gh_world_step_playback(host, world, inputs, replaying ? playback : NULL, (unsigned)players);
   }
 
+  free(playback);
   free(inputs);
   gh_world_destroy(host, world);
   return race_start;

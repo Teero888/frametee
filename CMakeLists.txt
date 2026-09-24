@@ -105,6 +105,8 @@ set(SRCS
 	src/user_interface/timeline/timeline_commands.c
 	src/user_interface/timeline/timeline_interaction.c
 	src/user_interface/timeline/timeline_model.c
+	src/user_interface/timeline/timeline_recordings.c
+	src/user_interface/recording_import.c
 	src/user_interface/timeline/timeline_renderer.c
 )
 

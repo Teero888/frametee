@@ -411,6 +411,9 @@ typedef struct {
 void dd_events_render(ft_game *game, const ft_ui_frame *frame);
 void dd_events_scan_recording(ft_game *game, const ft_ui_frame *frame);
 bool dd_event_decode(const ft_timeline_event *event, dd_event_payload_t *out);
+// An authored timeline event carrying `payload`; `summary` backs its text.
+void dd_event_make(int world_index, int tick, const dd_event_payload_t *payload, ft_timeline_event *out, char *summary,
+                   size_t summary_size);
 
 // --- graphics ---------------------------------------------------------------
 
@@ -516,6 +519,7 @@ typedef struct {
   dd_skin_slot_t skins[DD_MAX_SKINS];
   int default_skin;
   int ninja_skin;
+  int spec_skin;
 
   // Level rendering.
   ft_texture *entities;
@@ -661,9 +665,52 @@ struct ft_game {
   float ghost_export_detected_time;
   bool ghost_export_has_finish;
   char ghost_export_error[160];
+
+  // This game's cache directory with a trailing separator, resolved once on the
+  // main thread: recordings open on worker threads and keep their demo files
+  // and reconstructions here.
+  char cache_dir[1024];
 };
 
 void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...);
+
+// --- recordings (dd_recording.c): DDNet demos replayed on the timeline ------
+ft_recording *dd_recording_open(ft_game *game, const void *data, size_t size, const char *name,
+                                bool (*progress)(void *user, float fraction), void *progress_user, char *error,
+                                size_t error_size);
+void dd_recording_destroy(ft_game *game, ft_recording *recording);
+bool dd_recording_info(ft_game *game, const ft_recording *recording, ft_recording_info *out);
+bool dd_recording_player(ft_game *game, const ft_recording *recording, uint32_t index, ft_recording_player *out);
+bool dd_recording_level_matches(ft_game *game, const ft_recording *recording, const ft_level *level);
+void dd_recording_tick_flags(ft_game *game, const ft_recording *recording, int32_t player, int32_t first_tick, uint32_t count,
+                             uint8_t *out);
+bool dd_recording_input(ft_game *game, const ft_recording *recording, int32_t player, int32_t tick, void *out_record);
+void dd_recording_events(ft_game *game, const ft_recording *recording, const int32_t *world_players, uint32_t player_count,
+                         void (*emit)(void *user, const ft_timeline_event *event), void *user);
+// Steps a world; `playback` (NULL: nobody) names the players that replay a recording. Every world
+// step goes through here, so players whose replay ended carry on under the physics.
+void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs, const ft_player_playback *playback,
+                             uint32_t player_count);
+// A world's replay bookkeeping, kept in step with its characters.
+void dd_replay_copy(ft_world *dst, const ft_world *src);
+void dd_replay_free(ft_world *world);
+void dd_replay_insert_player(ft_world *world, int index);
+void dd_replay_remove_player(ft_world *world, int index);
+// The player replays a recording that does not have it at this tick: not drawn.
+bool dd_replay_absent(const ft_world *world, int player);
+// The player replays a recording that has it paused with /spec at this tick: out of the game,
+// drawn where it waits with the x_spec skin, like DDNet does.
+bool dd_replay_paused(const ft_world *world, int player);
+// An effect the physics raised for this player is to be dropped (see ft_world::replay_muted).
+bool dd_replay_muted(const ft_world *world, int player);
+// The shared drawing of one projectile (interpolated between two positions in
+// tiles) and one laser.
+void dd_render_projectile(ft_game *game, const vec2 from, const vec2 to, float intra, int type, int tick, int id);
+void dd_render_laser(ft_game *game, const vec2 from, const vec2 to, bool rifle, float age_ticks, float bounce_delay_ms, int tick,
+                     float intra);
+// Draws the replayed recording's projectiles and lasers, as the recording has
+// them at the world's replay tick.
+void dd_recording_render_entities(ft_game *game, const ft_world *world, float intra);
 
 bool dd_gfx_create(ft_game *game);
 void dd_gfx_destroy(ft_game *game);

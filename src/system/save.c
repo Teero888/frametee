@@ -1,3 +1,4 @@
+#include <user_interface/timeline/timeline_recordings.h>
 #include "save.h"
 
 #include "fs.h"
@@ -33,6 +34,7 @@ enum {
 
 #define PROJECT_MAX_FILE_SIZE ((size_t)1024 * 1024 * 1024)
 #define PROJECT_MAX_BLOB_SIZE ((size_t)512 * 1024 * 1024)
+#define PROJECT_MAX_RECORDINGS 256
 
 typedef struct byte_buffer_t {
   uint8_t *data;
@@ -58,6 +60,14 @@ typedef struct project_group_t {
   uint8_t *world_data;
   size_t world_size;
 } project_group_t;
+
+// A recording file the project carries, e.g. an imported demo (version 25).
+typedef struct project_recording_t {
+  int id;
+  char name[128];
+  uint8_t *data;
+  size_t size;
+} project_recording_t;
 
 typedef struct project_document_t {
   camera_timeline_t camera_timeline;
@@ -92,6 +102,8 @@ typedef struct project_document_t {
   int track_count;
   timeline_event_t *events;
   int event_count;
+  project_recording_t *recordings;
+  int recording_count;
 } project_document_t;
 
 static bool buffer_u32(byte_buffer_t *buffer, uint32_t value);
@@ -554,6 +566,9 @@ static void project_document_free(project_document_t *document) {
   free(document->group_video_visible);
   free(document->tracks);
   free(document->events);
+  for (int i = 0; i < document->recording_count; ++i)
+    free(document->recordings[i].data);
+  free(document->recordings);
   free(document->level_data);
   free(document->project_data);
   memset(document, 0, sizeof(*document));
@@ -753,6 +768,15 @@ static bool write_value(byte_buffer_t *buffer, const starting_override_t *overri
   }
 }
 
+static bool recording_is_referenced(const timeline_state_t *timeline, int id) {
+  for (int t = 0; t < timeline->player_track_count; ++t)
+    for (int s = 0; s < timeline->player_tracks[t].snippet_count; ++s) {
+      const input_snippet_t *snippet = &timeline->player_tracks[t].snippets[s];
+      if (snippet_is_playback(snippet) && snippet->recording_id == id) return true;
+    }
+  return false;
+}
+
 static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
   timeline_state_t *timeline = &ui->timeline;
   game_host_t *host = &ui->gfx_handler->game_host;
@@ -808,10 +832,15 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
       if (!buffer_i32(buffer, snippet->id) || !buffer_i32(buffer, snippet->start_tick) ||
           !buffer_u8(buffer, snippet->is_active ? 1 : 0) || !buffer_i32(buffer, snippet->layer) ||
           !buffer_i32(buffer, snippet->input_count) || !buffer_i32(buffer, snippet->source_offset) ||
-          !buffer_i32(buffer, snippet->source_count))
+          !buffer_i32(buffer, snippet->source_count) || !buffer_u8(buffer, (uint8_t)snippet->kind))
         return false;
-      for (int tick = 0; tick < snippet->source_count; ++tick)
-        if (!buffer_write(buffer, snippet->inputs[tick].bytes, input_size)) return false;
+      if (snippet_is_playback(snippet)) {
+        // Its source is the recording, stored once below.
+        if (!buffer_i32(buffer, snippet->recording_id) || !buffer_i32(buffer, snippet->recording_player)) return false;
+      } else {
+        for (int tick = 0; tick < snippet->source_count; ++tick)
+          if (!buffer_write(buffer, snippet->inputs[tick].bytes, input_size)) return false;
+      }
       if (snippet->effect_count < 0 || snippet->effect_count > MAX_SNIPPET_INPUT_EFFECTS ||
           !buffer_u32(buffer, (uint32_t)snippet->effect_count))
         return false;
@@ -837,6 +866,20 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
       if (!buffer_f32(buffer, event->color[c])) return false;
     if (event->data_size > FT_TIMELINE_EVENT_DATA_MAX || !buffer_u32(buffer, event->data_size) ||
         !buffer_write(buffer, event->data, event->data_size))
+      return false;
+  }
+
+  // Recordings some snippet replays. The others only stay open so undo can bring their snippets
+  // back; a saved project has no undo history.
+  uint32_t recording_count = 0;
+  for (int i = 0; i < timeline->recording_count; ++i)
+    if (recording_is_referenced(timeline, timeline->recordings[i]->id)) ++recording_count;
+  if (!buffer_u32(buffer, recording_count)) return false;
+  for (int i = 0; i < timeline->recording_count; ++i) {
+    const timeline_recording_t *recording = timeline->recordings[i];
+    if (!recording_is_referenced(timeline, recording->id)) continue;
+    if (!buffer_i32(buffer, recording->id) || !buffer_string(buffer, recording->name) || !buffer_u64(buffer, recording->size) ||
+        !buffer_write(buffer, recording->data, recording->size))
       return false;
   }
   return buffer->ok;
@@ -981,7 +1024,7 @@ static bool read_value(byte_reader_t *reader, starting_override_t *override) {
   return false;
 }
 
-static bool read_timeline(byte_reader_t *reader, project_document_t *document, bool keep_world_data) {
+static bool read_timeline(byte_reader_t *reader, project_document_t *document, bool keep_world_data, uint32_t version) {
   uint8_t boolean;
   uint32_t count;
   if (!reader_i32(reader, &document->current_tick) || !reader_i32(reader, &document->active_group_index) ||
@@ -1057,12 +1100,21 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document, b
           snippet->source_offset > snippet->source_count ||
           snippet->input_count > snippet->source_count - snippet->source_offset)
         return false;
-      size_t allocation_size;
-      if (!checked_multiply((size_t)snippet->source_count, sizeof(*snippet->inputs), &allocation_size)) return false;
-      snippet->inputs = snippet->source_count ? calloc(1, allocation_size) : NULL;
-      if (snippet->source_count && !snippet->inputs) return false;
-      for (int tick = 0; tick < snippet->source_count; ++tick)
-        if (!reader_bytes(reader, snippet->inputs[tick].bytes, document->input_record_size)) return false;
+      uint8_t kind = SNIPPET_INPUT;
+      if (version >= 25 && (!reader_u8(reader, &kind) || kind > SNIPPET_PLAYBACK)) return false;
+      snippet->kind = (snippet_kind_t)kind;
+      if (snippet_is_playback(snippet)) {
+        if (!reader_i32(reader, &snippet->recording_id) || !reader_i32(reader, &snippet->recording_player) ||
+            snippet->recording_id < 0 || snippet->recording_player < 0)
+          return false;
+      } else {
+        size_t allocation_size;
+        if (!checked_multiply((size_t)snippet->source_count, sizeof(*snippet->inputs), &allocation_size)) return false;
+        snippet->inputs = snippet->source_count ? calloc(1, allocation_size) : NULL;
+        if (snippet->source_count && !snippet->inputs) return false;
+        for (int tick = 0; tick < snippet->source_count; ++tick)
+          if (!reader_bytes(reader, snippet->inputs[tick].bytes, document->input_record_size)) return false;
+      }
       uint32_t effect_count;
       if (!reader_u32(reader, &effect_count) || effect_count > MAX_SNIPPET_INPUT_EFFECTS) return false;
       snippet->effect_count = (int)effect_count;
@@ -1105,6 +1157,34 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document, b
         !reader_bytes(reader, event->data, event->data_size))
       return false;
   }
+
+  // Recordings are read even when world data is not kept: an imported group's playback snippets
+  // need them.
+  if (version >= 25) {
+    if (!reader_u32(reader, &count) || count > PROJECT_MAX_RECORDINGS) return false;
+    document->recording_count = (int)count;
+    document->recordings = count ? calloc(count, sizeof(*document->recordings)) : NULL;
+    if (count && !document->recordings) return false;
+    for (uint32_t i = 0; i < count; ++i) {
+      project_recording_t *recording = &document->recordings[i];
+      uint64_t size;
+      if (!reader_i32(reader, &recording->id) || recording->id < 0 ||
+          !reader_string(reader, recording->name, sizeof(recording->name)) || !reader_u64(reader, &size) || size == 0 ||
+          !reader_blob(reader, size, &recording->data, &recording->size))
+        return false;
+      for (uint32_t j = 0; j < i; ++j)
+        if (document->recordings[j].id == recording->id) return false;
+    }
+  }
+  // Every playback snippet must name a recording the file carries.
+  for (int t = 0; t < document->track_count; ++t)
+    for (int s = 0; s < document->tracks[t].snippet_count; ++s) {
+      const input_snippet_t *snippet = &document->tracks[t].snippets[s];
+      if (!snippet_is_playback(snippet)) continue;
+      bool found = false;
+      for (int r = 0; r < document->recording_count && !found; ++r) found = document->recordings[r].id == snippet->recording_id;
+      if (!found) return false;
+    }
   return reader->ok && reader->pos == reader->size;
 }
 
@@ -1273,7 +1353,7 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
 
   byte_reader_t timeline_reader = {.data = reader.data + reader.pos, .size = (size_t)timeline_size, .ok = true};
   reader.pos += (size_t)timeline_size;
-  if (!read_timeline(&timeline_reader, document, keep_session_data)) goto malformed;
+  if (!read_timeline(&timeline_reader, document, keep_session_data, version)) goto malformed;
   if (version >= 20) {
     if (!read_camera_timeline(&reader, &document->camera_timeline, version)) goto malformed;
     if (version >= 23 && !read_render_video(&reader, document)) goto malformed;
@@ -1375,6 +1455,11 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
   if (document->event_count && !timeline->events) return false;
   if (document->event_count)
     memcpy(timeline->events, document->events, sizeof(*timeline->events) * (size_t)document->event_count);
+
+  for (int i = 0; i < document->recording_count; ++i) {
+    const project_recording_t *recording = &document->recordings[i];
+    if (!recordings_add(timeline, recording->id, recording->name, recording->data, recording->size)) return false;
+  }
 
   timeline->next_snippet_id = max_snippet_id + 1;
   timeline->current_tick = document->current_tick;
@@ -1600,6 +1685,17 @@ bool import_project_as_group(ui_handler_t *ui, const char *path) {
 
   int next_snippet_id = original_next_snippet_id;
 
+  // The imported project's recordings come along under new ids. Should the import fail, they stay
+  // unreferenced and are simply not saved.
+  int *recording_ids = document.recording_count ? malloc(sizeof(int) * (size_t)document.recording_count) : NULL;
+  if (document.recording_count && !recording_ids) goto done;
+  for (int i = 0; i < document.recording_count; ++i) {
+    const project_recording_t *recording = &document.recordings[i];
+    timeline_recording_t *added = recordings_add(timeline, -1, recording->name, recording->data, recording->size);
+    if (!added) goto done;
+    recording_ids[i] = added->id;
+  }
+
   for (int source_group = 0; source_group < document.group_count; ++source_group) {
     project_group_t *source_group_data = &document.groups[source_group];
     timeline_group_t *group = model_add_group(timeline, source_group_data->name[0] ? source_group_data->name : stem);
@@ -1627,8 +1723,16 @@ bool import_project_as_group(ui_handler_t *ui, const char *path) {
       to->recording_snippet_count = 0;
       to->recording_snippet_capacity = 0;
       model_rebind_starting_strings(&to->starting_config);
-      for (int snippet = 0; snippet < to->snippet_count; ++snippet)
-        to->snippets[snippet].id = next_snippet_id++;
+      for (int snippet = 0; snippet < to->snippet_count; ++snippet) {
+        input_snippet_t *moved = &to->snippets[snippet];
+        moved->id = next_snippet_id++;
+        if (!snippet_is_playback(moved)) continue;
+        for (int r = 0; r < document.recording_count; ++r)
+          if (document.recordings[r].id == moved->recording_id) {
+            moved->recording_id = recording_ids[r];
+            break;
+          }
+      }
       from->snippets = NULL;
       from->snippet_count = 0;
       from->snippet_capacity = 0;
@@ -1662,6 +1766,7 @@ done:
     model_recalc_physics(timeline, 0);
     log_error(LOG_SOURCE, "Could not import all project groups from '%s'.", path);
   }
+  free(recording_ids);
   free(merged_events);
   project_document_free(&document);
   return ok;

@@ -41,6 +41,21 @@ struct ft_world {
   struct dd_physics_sound_event *physics_sound_events;
   int physics_sound_event_count;
   int physics_sound_event_capacity;
+  // The recording whose world (projectiles, lasers, chat) this world shows, and
+  // the recording tick it shows; NULL when no player replays one.
+  const struct ft_recording *replay_recording;
+  int replay_tick;
+  // The recording's clients this world replays, one bit each: what belongs to
+  // anyone else (their shots, their events) is left out. All bits when every
+  // player of the recording is imported.
+  uint64_t replay_clients;
+  // Per player, how replaying a recording left it (see dd_recording.c); NULL
+  // until a player of this world first replays one.
+  struct dd_replay_slot *replay_slots;
+  int replay_slot_count;
+  // While the physics steps: effects raised by replayed players are dropped,
+  // the recording brings its own.
+  bool replay_muted;
 };
 
 // Reads a world handed over by the engine, e.g. from tas_api_t::get_world_state_at.

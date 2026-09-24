@@ -89,6 +89,11 @@ void model_recalc_snippet_physics(timeline_state_t *ts, const input_snippet_t *s
 // Conservative fallback for changes whose affected groups are unknown.
 void model_recalc_physics(timeline_state_t *ts, int tick);
 input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
+// One step's inputs for every player of a group's world at `tick`, packed at the game's record
+// size, and in `playback` (may be NULL) which players replay a recording instead. Returns true when
+// anyone does, i.e. when the step must go through gh_world_step_playback.
+bool model_gather_step(timeline_state_t *ts, int group_index, int tick, int player_count, uint8_t *inputs,
+                       ft_player_playback *playback);
 void model_advance_tick(timeline_state_t *ts, int steps);
 // Upper end of the playback/recording tick rate, shared by the speed widget and its keybinds.
 int model_max_playback_speed(const timeline_state_t *ts);

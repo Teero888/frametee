@@ -130,6 +130,9 @@ ft_world *gh_world_create(game_host_t *host, const ft_level *level, int player_c
 void gh_world_destroy(game_host_t *host, ft_world *world);
 void gh_world_copy(game_host_t *host, ft_world *dst, const ft_world *src);
 void gh_world_step(game_host_t *host, ft_world *world, const void *inputs, unsigned player_count);
+// world_step with recorded players; `playback` NULL is a plain world_step.
+void gh_world_step_playback(game_host_t *host, ft_world *world, const void *inputs, const ft_player_playback *playback,
+                            unsigned player_count);
 int gh_world_tick(game_host_t *host, const ft_world *world);
 int gh_world_player_count(game_host_t *host, const ft_world *world);
 bool gh_world_player_view(game_host_t *host, const ft_world *world, int player, ft_player_view *out);
@@ -137,6 +140,21 @@ int gh_world_add_player(game_host_t *host, ft_world *world, int at_index, const 
 bool gh_world_remove_player(game_host_t *host, ft_world *world, int player);
 size_t gh_world_serialize(game_host_t *host, const ft_world *world, void *out, size_t out_size);
 bool gh_world_deserialize(game_host_t *host, ft_world *world, const void *data, size_t size);
+
+// Recordings. gh_recording_open may be called from a worker thread; the host
+// must keep the game active until it returns.
+bool game_has_recordings(const game_host_t *host);
+ft_recording *gh_recording_open(game_host_t *host, const void *data, size_t size, const char *name,
+                                bool (*progress)(void *user, float fraction), void *progress_user, char *error, size_t error_size);
+void gh_recording_destroy(game_host_t *host, ft_recording *recording);
+bool gh_recording_info(game_host_t *host, const ft_recording *recording, ft_recording_info *out);
+bool gh_recording_player(game_host_t *host, const ft_recording *recording, unsigned index, ft_recording_player *out);
+bool gh_recording_level_matches(game_host_t *host, const ft_recording *recording, const ft_level *level);
+void gh_recording_tick_flags(game_host_t *host, const ft_recording *recording, int player, int first_tick, unsigned count,
+                             uint8_t *out);
+bool gh_recording_input(game_host_t *host, const ft_recording *recording, int player, int tick, void *out_record);
+void gh_recording_events(game_host_t *host, const ft_recording *recording, const int32_t *world_players, unsigned player_count,
+                         void (*emit)(void *user, const ft_timeline_event *event), void *user);
 
 void gh_input_default(game_host_t *host, void *record);
 long long gh_input_get(game_host_t *host, const void *record, unsigned field);

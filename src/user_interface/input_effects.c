@@ -80,6 +80,7 @@ void input_effects_refresh(timeline_state_t *timeline, int group_index) {
 }
 
 const input_record_t *input_effects_snippet_window(const input_snippet_t *snippet) {
+  if (snippet_is_playback(snippet)) return NULL; // replays a recording, holds no inputs
   if (snippet && snippet->effect_cache_valid && snippet->effect_inputs &&
       snippet->effect_input_count == snippet->input_count)
     return snippet->effect_inputs;
@@ -238,7 +239,8 @@ void input_effects_snippet_clone(input_snippet_t *destination, const input_snipp
 
 static bool initialize_snippet_cache(input_snippet_t *snippet) {
   snippet->effect_cache_valid = false;
-  if (input_effects_enabled_count(snippet) == 0 || snippet->input_count <= 0) return true;
+  // A playback snippet holds no inputs to run effects over.
+  if (snippet_is_playback(snippet) || input_effects_enabled_count(snippet) == 0 || snippet->input_count <= 0) return true;
   if (snippet->effect_input_count != snippet->input_count) {
     input_record_t *grown = realloc(snippet->effect_inputs, sizeof(*grown) * (size_t)snippet->input_count);
     if (!grown) {

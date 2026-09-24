@@ -14,6 +14,7 @@
 #include <system/include_cimgui.h>
 #include <user_interface/timeline/timeline_interaction.h>
 #include <user_interface/timeline/timeline_model.h>
+#include <user_interface/timeline/timeline_recordings.h>
 #include <user_interface/timeline/timeline_types.h>
 #include <user_interface/user_interface.h>
 
@@ -343,8 +344,9 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
   color_rule_runtime_t *rule_runtime =
       calloc((size_t)players * MAX_PREDICTION_COLOR_RULES, sizeof(*rule_runtime));
   line_segment_t *segments = malloc(sizeof(*segments) * (size_t)length * (size_t)selected);
+  ft_player_playback *playback = calloc((size_t)players, sizeof(*playback));
   if (!packed_inputs || !held_inputs || !positions || !positions3 || !have_position || !active_colors ||
-      !rule_runtime || !segments)
+      !rule_runtime || !segments || !playback)
     goto cleanup;
 
   alpha = fmaxf(0.f, fminf(alpha, 1.f));
@@ -393,6 +395,16 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
 
     uint32_t segment_count = 0;
     for (int step = 0; step < length; ++step) {
+      // Recorded players replay their recording here too, so predicted paths meet them where they
+      // really are.
+      const int step_tick = gh_world_tick(host, world);
+      bool replaying = false;
+      for (int player = 0; player < players; ++player) {
+        const int track = model_group_track_index(timeline, group_index, player);
+        memset(&playback[player], 0, sizeof(playback[player]));
+        if (track >= 0 && recordings_playback_at_tick(timeline, &timeline->player_tracks[track], step_tick, &playback[player]))
+          replaying = true;
+      }
       for (int player = 0; player < players; ++player) {
         const int track = model_group_track_index(timeline, group_index, player);
         input_record_t input;
@@ -408,7 +420,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
         }
         memcpy(packed_inputs + (size_t)player * input_size, input.bytes, input_size);
       }
-      gh_world_step(host, world, packed_inputs, (unsigned)players);
+      gh_world_step_playback(host, world, packed_inputs, replaying ? playback : NULL, (unsigned)players);
 
       for (int player = 0; player < players; ++player) {
         const int track = model_group_track_index(timeline, group_index, player);
@@ -459,6 +471,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
   }
 
 cleanup:
+  free(playback);
   free(segments);
   free(rule_runtime);
   free(active_colors);

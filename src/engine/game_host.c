@@ -222,7 +222,7 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
   }
   const uint32_t known_caps = FT_CAP_DYNAMIC_PLAYERS | FT_CAP_LINKED_INPUTS | FT_CAP_WORLD_SERIALIZE | FT_CAP_LEVEL_FROM_MEMORY |
                               FT_CAP_TIMELINE_EVENTS | FT_CAP_EXPORTERS | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS |
-                              FT_CAP_HOSTS_STARTING_STATE;
+                              FT_CAP_HOSTS_STARTING_STATE | FT_CAP_RECORDINGS;
   if (m->constraints.caps & ~known_caps) FAIL("declares unknown capability bits 0x%x", m->constraints.caps & ~known_caps);
   if ((m->constraints.caps & FT_CAP_DYNAMIC_PLAYERS) && (!m->world_add_player || !m->world_remove_player))
     FAIL("advertises dynamic players without add/remove entry points");
@@ -246,6 +246,10 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
     FAIL("advertises timeline events without collect_events");
   if ((m->constraints.caps & FT_CAP_EXPORTERS) && (!m->exporter_count || !m->exporter_desc || !m->export_run))
     FAIL("advertises exporters without the exporter entry points");
+  if ((m->constraints.caps & FT_CAP_RECORDINGS) &&
+      (!m->recording_open || !m->recording_destroy || !m->recording_info || !m->recording_player || !m->recording_level_matches ||
+       !m->recording_tick_flags || !m->recording_input || !m->world_step_playback))
+    FAIL("advertises recordings without the recording entry points");
   const bool has_settings = m->setting_count || m->setting_desc || m->setting_get || m->setting_set;
   if (has_settings && (!m->setting_count || !m->setting_desc || !m->setting_get || !m->setting_set))
     FAIL("game settings require count/descriptor/get/set entry points together");
@@ -767,6 +771,76 @@ void gh_world_copy(game_host_t *host, ft_world *dst, const ft_world *src) {
 void gh_world_step(game_host_t *host, ft_world *world, const void *inputs, unsigned player_count) {
   REQUIRE_GAME();
   if (world) m->world_step(host->instance, world, inputs, player_count);
+}
+
+void gh_world_step_playback(game_host_t *host, ft_world *world, const void *inputs, const ft_player_playback *playback,
+                            unsigned player_count) {
+  REQUIRE_GAME();
+  if (!world) return;
+  if (playback && m->world_step_playback) m->world_step_playback(host->instance, world, inputs, playback, player_count);
+  else m->world_step(host->instance, world, inputs, player_count);
+}
+
+// Recordings ------------------------------------------------------------------
+
+bool game_has_recordings(const game_host_t *host) { return game_has_cap(host, FT_CAP_RECORDINGS); }
+
+ft_recording *gh_recording_open(game_host_t *host, const void *data, size_t size, const char *name,
+                                bool (*progress)(void *user, float fraction), void *progress_user, char *error, size_t error_size) {
+  if (error && error_size) error[0] = '\0';
+  if (!game_host_ready(host) || !game_has_recordings(host)) {
+    if (error && error_size) snprintf(error, error_size, "the active game cannot open recordings");
+    return NULL;
+  }
+  return host->module->recording_open(host->instance, data, size, name, progress, progress_user, error, error_size);
+}
+
+void gh_recording_destroy(game_host_t *host, ft_recording *recording) {
+  REQUIRE_GAME();
+  if (recording && m->recording_destroy) m->recording_destroy(host->instance, recording);
+}
+
+bool gh_recording_info(game_host_t *host, const ft_recording *recording, ft_recording_info *out) {
+  REQUIRE_GAME(false);
+  if (!recording || !out || !m->recording_info) return false;
+  memset(out, 0, sizeof(*out));
+  out->struct_size = sizeof(*out);
+  return m->recording_info(host->instance, recording, out);
+}
+
+bool gh_recording_player(game_host_t *host, const ft_recording *recording, unsigned index, ft_recording_player *out) {
+  REQUIRE_GAME(false);
+  if (!recording || !out || !m->recording_player) return false;
+  memset(out, 0, sizeof(*out));
+  out->struct_size = sizeof(*out);
+  return m->recording_player(host->instance, recording, index, out);
+}
+
+bool gh_recording_level_matches(game_host_t *host, const ft_recording *recording, const ft_level *level) {
+  REQUIRE_GAME(false);
+  if (!recording || !level || !m->recording_level_matches) return false;
+  return m->recording_level_matches(host->instance, recording, level);
+}
+
+void gh_recording_tick_flags(game_host_t *host, const ft_recording *recording, int player, int first_tick, unsigned count,
+                             uint8_t *out) {
+  if (out && count) memset(out, 0, count);
+  REQUIRE_GAME();
+  if (!recording || !out || !m->recording_tick_flags) return;
+  m->recording_tick_flags(host->instance, recording, player, first_tick, count, out);
+}
+
+void gh_recording_events(game_host_t *host, const ft_recording *recording, const int32_t *world_players, unsigned player_count,
+                         void (*emit)(void *user, const ft_timeline_event *event), void *user) {
+  REQUIRE_GAME();
+  if (!recording || !emit || !m->recording_events) return;
+  m->recording_events(host->instance, recording, world_players, player_count, emit, user);
+}
+
+bool gh_recording_input(game_host_t *host, const ft_recording *recording, int player, int tick, void *out_record) {
+  REQUIRE_GAME(false);
+  if (!recording || !out_record || !m->recording_input) return false;
+  return m->recording_input(host->instance, recording, player, tick, out_record);
 }
 
 int gh_world_tick(game_host_t *host, const ft_world *world) {

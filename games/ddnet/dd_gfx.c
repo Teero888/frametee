@@ -363,6 +363,7 @@ bool dd_gfx_create(ft_game *game) {
   gfx->skin_batch = calloc(gfx->skin_batch_capacity, sizeof(dd_skin_instance_t));
   gfx->default_skin = dd_gfx_skin_index(game, "default");
   gfx->ninja_skin = dd_gfx_skin_index(game, "x_ninja");
+  gfx->spec_skin = dd_gfx_skin_index(game, "x_spec");
   if (!dd_text_create(game)) {
     dd_log(game, FT_LOG_ERROR, "Could not create the DDNet text renderer.");
     dd_gfx_destroy(game);

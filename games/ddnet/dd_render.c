@@ -435,6 +435,66 @@ static void render_hook(ft_game *game, const SWorldCore *world, const SCharacter
 
 // --- entities ----------------------------------------------------------------
 
+void dd_render_projectile(ft_game *game, const vec2 from, const vec2 to, float intra, int type, int tick, int id) {
+  vec2 p;
+  lerp2(from, to, intra, p);
+  uint32_t sprite = GAMESKIN_GRENADE_PROJ;
+  if (type == WEAPON_GUN) sprite = GAMESKIN_GUN_PROJ;
+  else if (type == WEAPON_SHOTGUN) sprite = GAMESKIN_SHOTGUN_PROJ;
+  float rotation;
+  if (type == WEAPON_GRENADE)
+    rotation = -(((float)tick + intra) / 50.f) * 4.f * M_PI + id;
+  else
+    rotation = atan2f(-(to[1] - from[1]), to[0] - from[0]);
+  dd_draw_sprite(game, game->gfx.gameskin, DD_Z_PROJECTILES, p, (vec2){1.f, 1.f}, rotation, sprite, (vec4){1.f, 1.f, 1.f, 1.f});
+}
+
+void dd_render_laser(ft_game *game, const vec2 from, const vec2 to, bool rifle, float age_ticks, float bounce_delay_ms, int tick,
+                     float intra) {
+  // cl_laser_rifle_* and cl_laser_sg_*, converted from the packed HSL those
+  // defaults are stored as. DDNet draws a laser fully opaque; only another
+  // team's shots are faded, which a recording has no notion of.
+  vec4 laser_outer = {0.074402f, 0.074402f, 0.247166f, 1.f};
+  vec4 laser_inner = {0.498039f, 0.498039f, 1.000000f, 1.f};
+  vec4 shotgun_outer = {0.122399f, 0.095073f, 0.042307f, 1.f};
+  vec4 shotgun_inner = {0.571626f, 0.417407f, 0.251903f, 1.f};
+  float *outer = rifle ? laser_outer : shotgun_outer;
+  float *inner = rifle ? laser_inner : shotgun_inner;
+
+  // DDNet collapses both parts of a laser over its bounce delay. The two
+  // coloured bodies and animated splat head are what distinguish rifle and
+  // shotgun shots; a single opaque debug line loses both cues.
+  const float delay_ms = bounce_delay_ms > 0 ? bounce_delay_ms : 150.f;
+  float fade = 1.f - age_ticks * (1000.f / GAME_TICK_SPEED) / delay_ms;
+  if (fade < 0.f) fade = 0.f;
+  if (fade > 1.f) fade = 1.f;
+  if (fade > 0.f) {
+    // DDNet's 7 and 5 are offsets on each side of the beam; FrameTee's line
+    // primitive takes the full width.
+    dd_draw_line(game, DD_Z_LASERS, (float *)from, (float *)to, outer, 14.f * fade / PX_PER_TILE);
+    // RenderLaser's ExtraOutline: the inner body stops one pixel short at
+    // both tips so the outline caps the beam instead of being buried by it.
+    vec2 dir;
+    glm_vec2_sub((float *)to, (float *)from, dir);
+    if (glm_vec2_norm(dir) > 2.f / PX_PER_TILE) {
+      glm_vec2_normalize(dir);
+      glm_vec2_scale(dir, 1.f / PX_PER_TILE, dir);
+      vec2 inner_from = {from[0] + dir[0], from[1] + dir[1]};
+      vec2 inner_to = {to[0] - dir[0], to[1] - dir[1]};
+      dd_draw_line(game, DD_Z_LASERS + 0.01f, inner_from, inner_to, inner, 10.f * fade / PX_PER_TILE);
+    }
+  }
+
+  // One of the three splat particles, picked and spun by the tick itself.
+  // DDNet's rotation is that tick count read as radians, and the engine
+  // turns sprites the opposite way around its y-down world.
+  const int ticks_head = (int)((float)tick + intra);
+  const uint32_t head = PARTICLE_SPLAT01 + (uint32_t)(((ticks_head % 3) + 3) % 3);
+  const float rotation = -(float)ticks_head;
+  dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.02f, (float *)to, (vec2){0.75f, 0.75f}, rotation, head, outer);
+  dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.03f, (float *)to, (vec2){0.625f, 0.625f}, rotation, head, inner);
+}
+
 static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world, float intra) {
   if (!world->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE] &&
       !world->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]) return;
@@ -443,21 +503,10 @@ static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world
        ent = (SProjectile *)ent->m_Base.m_pNextTypeEntity) {
     const float pt = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick - 1) / (float)GAME_TICK_SPEED;
     const float ct = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick) / (float)GAME_TICK_SPEED;
-    vec2 from, to, p;
+    vec2 from, to;
     tile_pos(prj_get_pos(ent, pt), from);
     tile_pos(prj_get_pos(ent, ct), to);
-    lerp2(from, to, intra, p);
-
-    uint32_t sprite = GAMESKIN_GRENADE_PROJ;
-    if (ent->m_Type == WEAPON_GUN) sprite = GAMESKIN_GUN_PROJ;
-    else if (ent->m_Type == WEAPON_SHOTGUN) sprite = GAMESKIN_SHOTGUN_PROJ;
-    float rotation;
-    if (ent->m_Type == WEAPON_GRENADE)
-      rotation = -((world->m_GameTick + intra) / 50.f) * 4.f * M_PI + id;
-    else
-      rotation = atan2f(-(to[1] - from[1]), to[0] - from[0]);
-    dd_draw_sprite(game, game->gfx.gameskin, DD_Z_PROJECTILES, p, (vec2){1.f, 1.f}, rotation, sprite,
-                   (vec4){1.f, 1.f, 1.f, 1.f});
+    dd_render_projectile(game, from, to, intra, ent->m_Type, world->m_GameTick, id);
     ++id;
   }
 
@@ -465,52 +514,9 @@ static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world
     vec2 p1, p0;
     tile_pos(ent->m_Base.m_Pos, p1);
     tile_pos(ent->m_From, p0);
-
-    // cl_laser_rifle_* and cl_laser_sg_*, converted from the packed HSL those
-    // defaults are stored as. DDNet draws a laser fully opaque; only another
-    // team's shots are faded, which a recording has no notion of.
-    vec4 laser_outer = {0.074402f, 0.074402f, 0.247166f, 1.f};
-    vec4 laser_inner = {0.498039f, 0.498039f, 1.000000f, 1.f};
-    vec4 shotgun_outer = {0.122399f, 0.095073f, 0.042307f, 1.f};
-    vec4 shotgun_inner = {0.571626f, 0.417407f, 0.251903f, 1.f};
-    float *outer = ent->m_Type == WEAPON_LASER ? laser_outer : shotgun_outer;
-    float *inner = ent->m_Type == WEAPON_LASER ? laser_inner : shotgun_inner;
-
-    // DDNet collapses both parts of a laser over its bounce delay. The two
-    // coloured bodies and animated splat head are what distinguish rifle and
-    // shotgun shots; a single opaque debug line loses both cues.
     const float age_ticks = (float)(world->m_GameTick - ent->m_EvalTick) + intra;
-    const float delay_ms = ent->m_pTuning && ent->m_pTuning->m_LaserBounceDelay > 0
-                               ? ent->m_pTuning->m_LaserBounceDelay
-                               : 150.f;
-    float fade = 1.f - age_ticks * (1000.f / GAME_TICK_SPEED) / delay_ms;
-    if (fade < 0.f) fade = 0.f;
-    if (fade > 1.f) fade = 1.f;
-    if (fade > 0.f) {
-      // DDNet's 7 and 5 are offsets on each side of the beam; FrameTee's line
-      // primitive takes the full width.
-      dd_draw_line(game, DD_Z_LASERS, p0, p1, outer, 14.f * fade / PX_PER_TILE);
-      // RenderLaser's ExtraOutline: the inner body stops one pixel short at
-      // both tips so the outline caps the beam instead of being buried by it.
-      vec2 dir;
-      glm_vec2_sub(p1, p0, dir);
-      if (glm_vec2_norm(dir) > 2.f / PX_PER_TILE) {
-        glm_vec2_normalize(dir);
-        glm_vec2_scale(dir, 1.f / PX_PER_TILE, dir);
-        vec2 inner_from = {p0[0] + dir[0], p0[1] + dir[1]};
-        vec2 inner_to = {p1[0] - dir[0], p1[1] - dir[1]};
-        dd_draw_line(game, DD_Z_LASERS + 0.01f, inner_from, inner_to, inner, 10.f * fade / PX_PER_TILE);
-      }
-    }
-
-    // One of the three splat particles, picked and spun by the tick itself.
-    // DDNet's rotation is that tick count read as radians, and the engine
-    // turns sprites the opposite way around its y-down world.
-    const int ticks_head = (int)((float)world->m_GameTick + intra);
-    const uint32_t head = PARTICLE_SPLAT01 + (uint32_t)(((ticks_head % 3) + 3) % 3);
-    const float rotation = -(float)ticks_head;
-    dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.02f, p1, (vec2){0.75f, 0.75f}, rotation, head, outer);
-    dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.03f, p1, (vec2){0.625f, 0.625f}, rotation, head, inner);
+    const float delay_ms = ent->m_pTuning && ent->m_pTuning->m_LaserBounceDelay > 0 ? ent->m_pTuning->m_LaserBounceDelay : 150.f;
+    dd_render_laser(game, p0, p1, ent->m_Type == WEAPON_LASER, age_ticks, delay_ms, world->m_GameTick, intra);
   }
 }
 
@@ -632,6 +638,8 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
     for (int i = 0; i < world->m_NumCharacters; ++i) {
       const SCharacterCore *core = &world->m_pCharacters[i];
       const SCharacterCore *prev_core = &prev_world->m_pCharacters[i];
+      // Not in its recording at this tick: dead, or not joined yet.
+      if (dd_replay_absent(world_handle, i)) continue;
 
       vec2 from, to, p;
       tile_pos(core->m_PrevPos, from);
@@ -640,6 +648,16 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
 
       if (p[0] < min_x || p[0] > max_x || p[1] < min_y || p[1] > max_y) {
         if (!(frame->state.recording && i == selected)) continue;
+      }
+
+      if (dd_replay_paused(world_handle, i)) {
+        // DDNet's spectating tee: idle, blinking, facing right, in the x_spec skin.
+        dd_anim_state_t idle;
+        dd_anim_state_set(&idle, &anim_base, 0.0f);
+        dd_anim_state_add(&idle, &anim_idle, 0.0f, 1.0f);
+        dd_skin_push(game, p, 1.0f, game->gfx.spec_skin, EYE_BLINK, (vec2){1.f, 0.f}, &idle, (vec3){0.f, 0.f, 0.f}, (vec3){1.f, 1.f, 1.f},
+                     false);
+        continue;
       }
 
       tee_visual_t tee;
@@ -677,6 +695,7 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
   }
 
   render_projectiles_and_lasers(game, world, intra);
+  dd_recording_render_entities(game, world_handle, intra);
   render_fastcap_flags(game, world, intra);
 }
 
@@ -757,11 +776,19 @@ static void render_cursor(ft_game *game, const ft_render_frame *frame) {
 
   const SCharacterCore *core = &frame->world->core.m_pCharacters[selected];
 
-  // Aim interpolated between the two ticks, exactly like the tee it belongs to.
-  // While recording, get_player_input hands back the live input for the tick
-  // under the playhead, so the crosshair tracks the mouse directly.
+  // Aim interpolated between the two ticks, exactly like the tee it belongs to:
+  // from the input each world was stepped with, which is the timeline's input
+  // of the tick before it. Asking the timeline for this tick and the one before
+  // put the crosshair a tick ahead of the weapon.
   ft_vec2 aim = {(float)core->m_Input.m_TargetX, (float)core->m_Input.m_TargetY};
-  {
+  if (!frame->state.recording) {
+    const SWorldCore *previous = frame->previous_world ? &frame->previous_world->core : NULL;
+    const SPlayerInput *prev = previous && selected < previous->m_NumCharacters ? &previous->m_pCharacters[selected].m_Input : &core->m_Input;
+    aim.x = lint2((float)prev->m_TargetX, (float)core->m_Input.m_TargetX, frame->alpha);
+    aim.y = lint2((float)prev->m_TargetY, (float)core->m_Input.m_TargetY, frame->alpha);
+  } else {
+    // While recording, get_player_input hands back the live input for the tick
+    // under the playhead, so the crosshair tracks the mouse directly.
     input_record_bytes_t previous, current;
     const bool have_prev = game->engine->get_player_input(frame->state.selected_player, frame->tick - 1, &previous);
     const bool have_cur = game->engine->get_player_input(frame->state.selected_player, frame->tick, &current);

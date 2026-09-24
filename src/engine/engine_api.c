@@ -21,6 +21,7 @@
 #include <system/fs.h>
 #include <user_interface/starting_state.h>
 #include <user_interface/timeline/timeline_model.h>
+#include <user_interface/timeline/timeline_recordings.h>
 #include <user_interface/timeline_events.h>
 #include <user_interface/user_interface.h>
 
@@ -661,7 +662,8 @@ static bool api_get_player_input(int32_t player, int32_t tick, void *out_record)
   }
   // The record is the game's own layout; the engine just hands back the bytes
   // it stored, trimmed to the size the game declared.
-  const input_record_t record = model_get_input_at_tick(ts, player, tick);
+  // Inside a demo snippet that is what the demo's player held, not the snippet's (absent) inputs.
+  const input_record_t record = recordings_display_input(ts, player, tick);
   memcpy(out_record, record.bytes, game_input_size(&g_engine->game_host));
   return true;
 }

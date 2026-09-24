@@ -5,6 +5,7 @@
 #include <engine/input_record.h>
 #include <engine/prediction.h>
 #include <stdbool.h>
+#include <system/compat_threads.h>
 #include <system/include_cimgui.h>
 #include <types.h>
 #include <user_interface/player_profile.h>
@@ -43,6 +44,15 @@ typedef struct input_effect_stage_cache_t {
   bool valid;
 } input_effect_stage_cache_t;
 
+typedef enum snippet_kind_t {
+  SNIPPET_INPUT = 0,
+  // Replays one player of a recording (see timeline_recording_t) instead of simulating inputs. It
+  // holds no input buffer: its source is the whole recording, source index 0 being the recording's
+  // first tick, so every player of one recording lines up. It can be moved, split, trimmed within the recording and
+  // merged with a continuation of itself, but its content cannot be edited.
+  SNIPPET_PLAYBACK = 1,
+} snippet_kind_t;
+
 // A snippet is a window onto a source buffer, the way a clip is a window onto its media. Trimming
 // an edge or splitting a snippet only moves the window: `inputs` keeps holding every tick that was
 // ever recorded for it, so widening the window again brings the original inputs back.
@@ -67,6 +77,44 @@ struct input_snippet_t {
   bool effect_cache_valid;
   input_effect_stage_cache_t *effect_stage_caches;
   int effect_stage_capacity;
+
+  snippet_kind_t kind;
+  // SNIPPET_PLAYBACK only: timeline_recording_t.id, and the player within that recording.
+  int recording_id;
+  int recording_player;
+};
+
+static inline bool snippet_is_playback(const input_snippet_t *snippet) { return snippet && snippet->kind == SNIPPET_PLAYBACK; }
+
+typedef enum recording_status_t {
+  RECORDING_LOADING = 0,
+  RECORDING_READY = 1,
+  RECORDING_FAILED = 2,
+} recording_status_t;
+
+// A recording the project holds, e.g. an imported demo. The file's bytes are stored in the project;
+// the active game opens them on a worker thread into `handle`, which playback snippets replay.
+// Recordings are never removed while the project is open, so undo can always bring a playback
+// snippet back; unreferenced ones are left out of the saved file.
+struct timeline_recording_t {
+  int id;
+  char name[128];
+  unsigned char *data;
+  size_t size;
+
+  // Written by the loader thread under `lock`; `handle` is only read once status is READY.
+  pthread_mutex_t lock;
+  pthread_t thread;
+  bool thread_running;
+  recording_status_t status;
+  float progress;
+  bool cancel;
+  char error[256];
+  ft_recording *handle;
+  // Main thread only: readiness has been acted on (simulation invalidated, info cached).
+  bool announced;
+  ft_recording_info info;
+  int first_tick, last_tick;
 };
 
 // An override the user pinned on a track's starting state. The engine stores it
@@ -243,6 +291,11 @@ struct timeline_state {
   bool input_effects_rebuilding;
 
   prediction_settings_t prediction;
+
+  // Recordings the project holds (imported demos), owned by the timeline.
+  timeline_recording_t **recordings;
+  int recording_count;
+  int next_recording_id;
 
   // Timeline events reported by the active game.
   timeline_event_t *events;

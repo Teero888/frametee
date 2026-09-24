@@ -923,6 +923,7 @@ static void ddnet_world_destroy(ft_game *game, ft_world *world) {
   (void)game;
   if (!world) return;
   wc_free(&world->core);
+  dd_replay_free(world);
   free(world->physics_particle_events);
   free(world->physics_damage_events);
   free(world->physics_sound_events);
@@ -952,6 +953,10 @@ static void ddnet_world_copy(ft_game *game, ft_world *dst, const ft_world *src) 
   // wc_copy_world reuses whatever dst already allocated, which is what keeps
   // the engine's constant snapshotting affordable.
   wc_copy_world(&dst->core, (SWorldCore *)&src->core);
+  dst->replay_recording = src->replay_recording;
+  dst->replay_tick = src->replay_tick;
+  dst->replay_clients = src->replay_clients;
+  dd_replay_copy(dst, src);
   dst->physics_particle_event_count =
       copy_effect_events((void **)&dst->physics_particle_events, &dst->physics_particle_event_capacity,
                          src->physics_particle_events, src->physics_particle_event_count,
@@ -975,23 +980,11 @@ static void ddnet_world_copy(ft_game *game, ft_world *dst, const ft_world *src) 
   dst->core.sound = NULL;
 }
 
+// Players the engine has no input for keep holding their last one, which is how a track that ran
+// out of snippets behaves in DDNet. A plain step is a replay step without recordings, so players
+// whose replay just ended are handed back to the physics.
 static void ddnet_world_step(ft_game *game, ft_world *world, const void *inputs, uint32_t player_count) {
-  if (!world) return;
-  // Effects raised during the tick land in this world's particle system.
-  const int tick_before = world->core.m_GameTick;
-  const bool effects_bound = dd_particles_bind(game, world);
-  const SPlayerInput *records = inputs;
-  const int count = world->core.m_NumCharacters;
-  for (int i = 0; i < count; ++i) {
-    // Players the engine has no input for keep holding their last one, which is
-    // how a track that ran out of snippets behaves in DDNet.
-    if (records && (uint32_t)i < player_count)
-      cc_on_input(&world->core.m_pCharacters[i], &records[i]);
-    else
-      cc_on_input(&world->core.m_pCharacters[i], &world->core.m_pCharacters[i].m_Input);
-  }
-  wc_tick(&world->core);
-  dd_particles_finish(game, world, tick_before, effects_bound);
+  dd_recording_world_step(game, world, inputs, NULL, player_count);
 }
 
 static int32_t ddnet_world_tick(ft_game *game, const ft_world *world) {
@@ -1077,7 +1070,11 @@ static int32_t ddnet_world_add_player(ft_game *game, ft_world *world, int32_t at
   }
 
   const int last = world->core.m_NumCharacters - 1;
-  if (at_index < 0 || at_index >= last) return last;
+  if (at_index < 0 || at_index >= last) {
+    dd_replay_insert_player(world, last);
+    return last;
+  }
+  dd_replay_insert_player(world, at_index);
 
   // Track order is the user's, so a character inserted in the middle has to be
   // rotated into place and every id below it renumbered.
@@ -1095,6 +1092,7 @@ static bool ddnet_world_remove_player(ft_game *game, ft_world *world, int32_t pl
   (void)game;
   if (!world || player < 0 || player >= world->core.m_NumCharacters) return false;
   wc_remove_character(&world->core, player);
+  dd_replay_remove_player(world, player);
   for (int i = 0; i < world->core.m_NumCharacters; ++i)
     world->core.m_pCharacters[i].m_Id = i;
   return true;
@@ -1148,6 +1146,10 @@ static bool ddnet_world_deserialize(ft_game *game, ft_world *world, const void *
   if (header.character_count < 0) return false;
   if ((size_t)header.character_count > (size - sizeof(header)) / sizeof(dd_character_state_v1)) return false;
 
+  // A deserialized world is a fresh starting point: nobody in it replays anything yet.
+  dd_replay_free(world);
+  world->replay_recording = NULL;
+  world->replay_clients = 0;
   while (world->core.m_NumCharacters > header.character_count)
     wc_remove_character(&world->core, world->core.m_NumCharacters - 1);
   if (header.character_count > world->core.m_NumCharacters)
@@ -1212,6 +1214,8 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
   ft_game *game = calloc(1, sizeof(ft_game));
   if (!game) return NULL;
   game->engine = engine;
+  // Recordings open on worker threads, which must not ask the engine for paths.
+  if (engine->resolve_cache_path) engine->resolve_cache_path("", game->cache_dir, sizeof(game->cache_dir));
 
   // Presentation defaults. These are the game's, not the editor's, which is why
   // they no longer sit in the engine's ui_handler_t.
@@ -1397,7 +1401,7 @@ static const ft_game_module module = {
     .constraints = {.struct_size = sizeof(ft_game_constraints),
                     .caps = FT_CAP_DYNAMIC_PLAYERS | FT_CAP_LINKED_INPUTS | FT_CAP_WORLD_SERIALIZE | FT_CAP_EXPORTERS |
                             FT_CAP_LEVEL_FROM_MEMORY | FT_CAP_TIMELINE_EVENTS | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS |
-                            FT_CAP_HOSTS_STARTING_STATE,
+                            FT_CAP_HOSTS_STARTING_STATE | FT_CAP_RECORDINGS,
                     .min_players = 0,
                     .max_players = 1024,
                     .ticks_per_second = 50,
@@ -1408,7 +1412,9 @@ static const ft_game_module module = {
                     .camera_modes = dd_camera_modes,
                     .camera_mode_count = DD_CAMERA_MODE_COUNT,
                     .level_extension = "map",
-                    .level_filter_name = "DDNet map"},
+                    .level_filter_name = "DDNet map",
+                    .recording_extension = "demo",
+                    .recording_filter_name = "DDNet demo"},
 
     .input_schema = &input_schema,
     .entity_classes = entity_classes,
@@ -1416,6 +1422,16 @@ static const ft_game_module module = {
 
     .splash = ddnet_splash,
     .splash_destroy = ddnet_splash_destroy,
+
+    .recording_open = dd_recording_open,
+    .recording_destroy = dd_recording_destroy,
+    .recording_info = dd_recording_info,
+    .recording_player = dd_recording_player,
+    .recording_level_matches = dd_recording_level_matches,
+    .recording_tick_flags = dd_recording_tick_flags,
+    .recording_input = dd_recording_input,
+    .world_step_playback = dd_recording_world_step,
+    .recording_events = dd_recording_events,
     .create = ddnet_create,
     .destroy = ddnet_destroy,
 
