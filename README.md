@@ -174,7 +174,7 @@ Windows and Linux are currently supported. (not msvc since it's garbage. use min
 
 ## Contributing
 
-Bug reports, fixes, game integrations, plugins and editor improvements are welcome.
+Bug reports are welcome. Pull requests are currently disabled.
 
 For simulation issues, include the game, level, FrameTee revision and a minimal project or input sequence that reproduces the problem where possible.
 
