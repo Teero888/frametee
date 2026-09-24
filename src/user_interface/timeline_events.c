@@ -220,7 +220,13 @@ void render_timeline_events_window(ui_handler_t *ui) {
 
 void timeline_event_tooltip_content(const timeline_event_t *ev) {
   igTextColored((ImVec4){ev->color[0], ev->color[1], ev->color[2], ev->color[3] > 0.f ? ev->color[3] : 1.f}, "%s", ev->category);
-  if (ev->message[0]) igTextWrapped("%s", ev->message);
+  // An explicit wrap width: a tooltip has none on its first frame, and wrapping to that stacks the
+  // text into a column so tall the tooltip is pushed to the top of the screen for a frame.
+  if (ev->message[0]) {
+    igPushTextWrapPos(igGetFontSize() * 30.f);
+    igTextUnformatted(ev->message, NULL);
+    igPopTextWrapPos();
+  }
   igTextDisabled("tick %d", ev->tick);
 }
 

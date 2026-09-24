@@ -1910,7 +1910,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 5.0f);
         igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.12f, 0.14f, 0.18f, 0.60f});
         igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.22f, 0.28f, 0.38f, 0.85f});
-        igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.05f, 0.5f});
+        igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.0f, 0.5f});
 
         igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0.0f, 0.0f});
         igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){0.0f, 6.0f});
@@ -1925,7 +1925,11 @@ static void render_splash_screen(ui_handler_t *ui) {
             char item_lbl[1050];
             snprintf(item_lbl, sizeof(item_lbl), "%s  %s", ICON_FA_FILE, filename);
 
-            if (igButton(item_lbl, (ImVec2){-1.0f, 32.0f})) ui_splash_open(ui, UI_PENDING_OPEN_PROJECT, path);
+            // Projects in different folders can share a file name, so the label alone is no ID.
+            igPushID_Int(i);
+            const bool clicked = igButton(item_lbl, (ImVec2){-1.0f, 32.0f});
+            igPopID();
+            if (clicked) ui_splash_open(ui, UI_PENDING_OPEN_PROJECT, path);
             if (igIsItemHovered(ImGuiHoveredFlags_None)) {
               igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8.0f, 6.0f});
               if (igBeginTooltip()) {

@@ -421,8 +421,6 @@ void render_window_render(ui_handler_t *ui) {
   }
   const float scale = gfx_get_ui_scale();
   camera_editor_transport(ui);
-  igSameLine(0.f, 16.f * scale);
-  igTextDisabled("The viewport shows the video: its look, its framing and the camera.");
   igSpacing();
 
   const ImVec2 avail = igGetContentRegionAvail();

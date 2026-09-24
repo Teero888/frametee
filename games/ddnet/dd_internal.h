@@ -41,6 +41,8 @@
 #define DD_Z_MAP_SPEEDUP_TEXT 7.3f
 #define DD_Z_MAP_SWITCH_TEXT 7.4f
 #define DD_Z_PARTICLES_FRONT 8.0f
+// Behind the nameplates, as in DDNet, where emoticons are drawn first.
+#define DD_Z_EMOTICONS 8.5f
 // The editor's own markers, which belong on top of the game whatever it drew.
 #define DD_Z_LINES 9.0f
 #define DD_Z_OVERLAYS 10.0f

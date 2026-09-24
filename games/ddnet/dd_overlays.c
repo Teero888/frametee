@@ -534,16 +534,16 @@ static void render_emoticons(ft_game *game, const ft_render_frame *frame) {
     ft_vec2 base = character_position(&world->m_pCharacters[event->client_id], frame->alpha);
     vec2 pos = {base.x, base.y - (23.f + 32.f * height) / PX_PER_TILE};
     vec2 size = {2.f, 2.f * height};
-    dd_draw_sprite(game, game->gfx.emoticons, DD_Z_OVERLAYS, pos, size,
+    dd_draw_sprite(game, game->gfx.emoticons, DD_Z_EMOTICONS, pos, size,
                    (float)(M_PI / 6.0) * sinf(5.f * wiggle), (uint32_t)event->emoticon,
                    (vec4){1.f, 1.f, 1.f, alpha * frame->opacity});
   }
 }
 
 void dd_render_world_overlays(ft_game *game, const ft_render_frame *frame) {
+  render_emoticons(game, frame);
   render_nameplates(game, frame);
   render_freeze_bars(game, frame);
-  render_emoticons(game, frame);
   render_chat(game, frame);
   if (frame->last_world || frame->active) dd_skins_flush_overlay(game);
 }
