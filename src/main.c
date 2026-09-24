@@ -17,6 +17,8 @@
 #include <user_interface/timeline/timeline_commands.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <user_interface/timeline/timeline_recordings.h>
+#include <user_interface/camera/camera_rig.h>
+#include <user_interface/camera/camera_window.h>
 
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
@@ -52,6 +54,20 @@ static void free_cli_args(const char **argv, char **copies, int count) {
 // Walks the game through one frame of rendering: every visible world, in every
 // pass, with the interpolation the playhead is currently between. The engine
 // supplies the schedule and the draw services; the game supplies the picture.
+// Players of a group the camera's animation follows, bit per player, while it directs what is drawn.
+static uint64_t followed_players(ui_handler_t *ui, int group_index, bool export_frame) {
+  const camera_timeline_t *camera = &ui->camera_timeline;
+  if ((!export_frame && !camera_editor_drives_view(ui)) || !camera_rig_constrained(camera)) return 0;
+  uint64_t players = 0;
+  for (int s = 0; s < camera->subject_count && s < CAMERA_MAX_SUBJECTS; ++s) {
+    const int track = camera->subject_tracks[s];
+    if (track < 0 || track >= ui->timeline.player_track_count || model_track_group_index(&ui->timeline, track) != group_index) continue;
+    const int local = model_group_local_track_index(&ui->timeline, track);
+    if (local >= 0 && local < 64) players |= UINT64_C(1) << local;
+  }
+  return players;
+}
+
 static void render_game_passes(struct gfx_handler_t *handler, float intra, bool export_frame) {
   ui_handler_t *ui = &handler->user_interface;
   timeline_state_t *ts = &ui->timeline;
@@ -59,6 +75,8 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra, bool 
   ui_player_setups_prepare(ui);
 
   static const ft_render_pass passes[] = {FT_PASS_LEVEL_BACKGROUND, FT_PASS_ENTITIES, FT_PASS_LEVEL_FOREGROUND, FT_PASS_OVERLAY};
+  bool merged_events = false;
+  const int focus_group = render_focus_group(ui, &merged_events);
   const int selected_track = ts->selected_player_track_index;
   const int selected_group = model_track_group_index(ts, selected_track);
   const int selected_local = selected_group >= 0 ? model_group_local_track_index(ts, selected_track) : -1;
@@ -126,10 +144,12 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra, bool 
       // short-lived per-world effects (notably DDNet explosions) by every
       // other group's offset before they are rendered.
       frame.tick = current ? gh_world_tick(&handler->game_host, current) : ts->current_tick;
-      frame.opacity = 1.f;
+      frame.opacity = per_world ? render_group_opacity(ui, group_index) : 1.f;
       frame.world_index = per_world ? group_index : -1;
       frame.world_count = ts->group_count;
-      frame.active = !per_world || group_index == ts->active_group_index;
+      frame.active = !per_world || group_index == focus_group;
+      frame.merge_world_events = merged_events;
+      frame.followed_players = per_world ? followed_players(ui, group_index, export_frame) : 0;
       frame.first_world = (group_index == first_visible_group);
       frame.last_world = (group_index == last_visible_group);
       frame.selected_player = (per_world && group_index == selected_group && render_layer_enabled(ui, RENDER_LAYER_SELECTION))

@@ -7,6 +7,8 @@
 // handed without knowing any of it.
 
 #include "dd_internal.h"
+
+#include <stddef.h>
 #include "dd_profile.h"
 
 #include <math.h>
@@ -724,12 +726,16 @@ void dd_render(ft_game *game, const ft_render_frame *frame) {
     // Entity passes are per world. The old port tried to draw particles from a
     // shared level pass, whose world_index is deliberately -1, so none could
     // ever be selected or rendered.
+    // The world's own drawing fades with its opacity; doors fade by themselves, and the batches
+    // flushed below already carry each world's.
+    game->gfx.world_alpha = frame->world_index >= 0 && frame->opacity < 1.f ? (frame->opacity > 0.f ? frame->opacity : 0.f) : 1.f;
     if (game->settings.render_particles && frame->world_index >= 0) {
       dd_particles_advance(game, frame->world_index, frame->level, frame->tick, frame->alpha);
       dd_particle_system_t *particles = dd_particles_for(game, frame->world_index);
       if (particles) dd_particles_render(particles, game, -1);
     }
     render_entities(game, frame);
+    game->gfx.world_alpha = 1.f;
     dd_render_doors(game, frame);
     if (frame->last_world || frame->world_index < 0 || frame->world_index >= frame->world_count - 1) {
       dd_skins_flush(game);
@@ -738,7 +744,7 @@ void dd_render(ft_game *game, const ft_render_frame *frame) {
   }
   case FT_PASS_OVERLAY:
     dd_render_world_overlays(game, frame);
-    if (frame->active) render_cursor(game, frame);
+    render_cursor(game, frame);
     break;
   default:
     break;
@@ -767,43 +773,8 @@ static float tiles_to_pixels(const ft_camera *camera) {
   return camera->viewport.x / width;
 }
 
-static void render_cursor(ft_game *game, const ft_render_frame *frame) {
-  if (!game->gfx.cursor) return;
-  const int selected = frame->selected_player;
-  if (selected < 0 || !frame->world) return;
-  if (selected >= frame->world->core.m_NumCharacters) return;
-
-  // Only while recording, or when the camera is locked to the tee. In free view
-  // the crosshair has nothing to sit against and just floats.
-  const bool locked = frame->state.camera.mode == DD_CAMERA_FOLLOW && game->settings.render_cursor_follow;
-  if (!frame->state.recording && !locked) return;
-
-  const SCharacterCore *core = &frame->world->core.m_pCharacters[selected];
-
-  // Aim interpolated between the two ticks, exactly like the tee it belongs to:
-  // from the input each world was stepped with, which is the timeline's input
-  // of the tick before it. Asking the timeline for this tick and the one before
-  // put the crosshair a tick ahead of the weapon.
-  ft_vec2 aim = {(float)core->m_Input.m_TargetX, (float)core->m_Input.m_TargetY};
-  if (!frame->state.recording) {
-    const SWorldCore *previous = frame->previous_world ? &frame->previous_world->core : NULL;
-    const SPlayerInput *prev = previous && selected < previous->m_NumCharacters ? &previous->m_pCharacters[selected].m_Input : &core->m_Input;
-    aim.x = lint2((float)prev->m_TargetX, (float)core->m_Input.m_TargetX, frame->alpha);
-    aim.y = lint2((float)prev->m_TargetY, (float)core->m_Input.m_TargetY, frame->alpha);
-  } else {
-    // While recording, get_player_input hands back the live input for the tick
-    // under the playhead, so the crosshair tracks the mouse directly.
-    input_record_bytes_t previous, current;
-    const bool have_prev = game->engine->get_player_input(frame->state.selected_player, frame->tick - 1, &previous);
-    const bool have_cur = game->engine->get_player_input(frame->state.selected_player, frame->tick, &current);
-    if (have_cur) {
-      const SPlayerInput *cur = (const SPlayerInput *)&current;
-      const SPlayerInput *prev = have_prev ? (const SPlayerInput *)&previous : cur;
-      aim.x = lint2((float)prev->m_TargetX, (float)cur->m_TargetX, frame->alpha);
-      aim.y = lint2((float)prev->m_TargetY, (float)cur->m_TargetY, frame->alpha);
-    }
-  }
-
+// One player's crosshair: `aim` relative to the tee, in DDNet's aim units.
+static void draw_crosshair(ft_game *game, const ft_render_frame *frame, const SCharacterCore *core, ft_vec2 aim) {
   const uint32_t weapon = core->m_ActiveWeapon < CURSOR_SPRITE_COUNT ? core->m_ActiveWeapon : 0;
   const ft_sprite_rect *rect = dd_sprite_rect(game, game->gfx.cursor, weapon);
   if (!rect) return;
@@ -825,7 +796,57 @@ static void render_cursor(ft_game *game, const ft_render_frame *frame) {
   lerp2(from, to, frame->alpha, tee_pos);
 
   vec2 pos = {tee_pos[0] + aim.x / PX_PER_TILE * zoom1_tiles, tee_pos[1] + aim.y / PX_PER_TILE * zoom1_tiles};
-  dd_draw_sprite(game, game->gfx.cursor, DD_Z_CURSOR, pos, size, 0.f, weapon, (vec4){1.f, 1.f, 1.f, 1.f});
+  const float opacity = frame->opacity < 1.f ? (frame->opacity > 0.f ? frame->opacity : 0.f) : 1.f;
+  dd_draw_sprite(game, game->gfx.cursor, DD_Z_CURSOR, pos, size, 0.f, weapon, (vec4){1.f, 1.f, 1.f, opacity});
+}
+
+static uint64_t frame_followed_players(const ft_render_frame *frame) {
+  return frame->struct_size >= offsetof(ft_render_frame, followed_players) + sizeof(frame->followed_players) ? frame->followed_players : 0;
+}
+
+// Crosshairs on the players a camera follows: the selected one while recording or while the game's
+// follow camera is locked to it (only in the focused world), the camera animation's characters,
+// or, if asked, everyone.
+static void render_cursor(ft_game *game, const ft_render_frame *frame) {
+  if (!game->gfx.cursor || !frame->world) return;
+  const SWorldCore *world = &frame->world->core;
+  const SWorldCore *previous = frame->previous_world ? &frame->previous_world->core : NULL;
+  const int selected = frame->active ? frame->selected_player : -1;
+  // In free view the crosshair has nothing to sit against and just floats.
+  const bool locked = frame->state.camera.mode == DD_CAMERA_FOLLOW && game->settings.render_cursor_follow;
+  const bool selected_shown = selected >= 0 && selected < world->m_NumCharacters && (frame->state.recording || locked);
+  const uint64_t followed = frame_followed_players(frame);
+
+  for (int player = 0; player < world->m_NumCharacters; ++player) {
+    const bool is_selected = selected_shown && player == selected;
+    if (!is_selected && !game->settings.render_cursor_all && !(player < 64 && ((followed >> player) & 1u))) continue;
+    if (dd_replay_absent(frame->world, player) || dd_replay_paused(frame->world, player)) continue;
+    const SCharacterCore *core = &world->m_pCharacters[player];
+
+    // Aim interpolated between the two ticks, exactly like the tee it belongs to:
+    // from the input each world was stepped with, which is the timeline's input
+    // of the tick before it. Asking the timeline for this tick and the one before
+    // put the crosshair a tick ahead of the weapon.
+    ft_vec2 aim = {(float)core->m_Input.m_TargetX, (float)core->m_Input.m_TargetY};
+    if (!(is_selected && frame->state.recording)) {
+      const SPlayerInput *prev = previous && player < previous->m_NumCharacters ? &previous->m_pCharacters[player].m_Input : &core->m_Input;
+      aim.x = lint2((float)prev->m_TargetX, (float)core->m_Input.m_TargetX, frame->alpha);
+      aim.y = lint2((float)prev->m_TargetY, (float)core->m_Input.m_TargetY, frame->alpha);
+    } else {
+      // While recording, get_player_input hands back the live input for the tick
+      // under the playhead, so the crosshair tracks the mouse directly.
+      input_record_bytes_t previous_input, current;
+      const bool have_prev = game->engine->get_player_input(frame->state.selected_player, frame->tick - 1, &previous_input);
+      const bool have_cur = game->engine->get_player_input(frame->state.selected_player, frame->tick, &current);
+      if (have_cur) {
+        const SPlayerInput *cur = (const SPlayerInput *)&current;
+        const SPlayerInput *prev = have_prev ? (const SPlayerInput *)&previous_input : cur;
+        aim.x = lint2((float)prev->m_TargetX, (float)cur->m_TargetX, frame->alpha);
+        aim.y = lint2((float)prev->m_TargetY, (float)cur->m_TargetY, frame->alpha);
+      }
+    }
+    draw_crosshair(game, frame, core, aim);
+  }
 }
 
 // --- camera ------------------------------------------------------------------

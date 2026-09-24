@@ -218,6 +218,7 @@ static void set_range(ui_handler_t *ui, double start, double end) {
 static bool owns_clock(const ui_handler_t *ui) { return ui->camera_editor.drives_game || ui->render.preview; }
 bool camera_editor_owns_clock(const ui_handler_t *ui) { return owns_clock(ui); }
 static bool looking_through(const ui_handler_t *ui) { return ui->camera_editor.look_through || ui->render.preview; }
+bool camera_editor_drives_view(const ui_handler_t *ui) { return owns_clock(ui) && looking_through(ui); }
 
 // Frame loop
 

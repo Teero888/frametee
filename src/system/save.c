@@ -75,6 +75,8 @@ typedef struct project_document_t {
   video_export_options_t video_options;
   bool has_video_options;
   uint8_t *group_video_visible;
+  float *group_opacities; // viewport and video opacity per group, in pairs (version 26)
+  uint32_t group_opacity_count;
   uint32_t group_video_count;
   char game_id[FT_ID_MAX];
   char game_version[FT_NAME_MAX];
@@ -298,10 +300,15 @@ static bool write_render_video(byte_buffer_t *buffer, ui_handler_t *ui) {
   if (!buffer_u32(buffer, (uint32_t)(sizeof(fields) / sizeof(fields[0])))) return false;
   for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i)
     if (!buffer_i32(buffer, fields[i])) return false;
+  // Version 26: the group the video is about, and how opaque each group is drawn.
+  if (!buffer_i32(buffer, profile->valid ? profile->focus : RENDER_FOCUS_SELECTED) || !buffer_u32(buffer, (uint32_t)ts->group_count))
+    return false;
+  for (int g = 0; g < ts->group_count; ++g)
+    if (!buffer_f32(buffer, ts->groups[g]->opacity) || !buffer_f32(buffer, ts->groups[g]->video_opacity)) return false;
   return true;
 }
 
-static bool read_render_video(byte_reader_t *reader, project_document_t *document) {
+static bool read_render_video(byte_reader_t *reader, project_document_t *document, uint32_t version) {
   render_profile_t *profile = &document->video_profile;
   memset(profile, 0, sizeof(*profile));
   uint8_t valid, flag;
@@ -364,6 +371,19 @@ static bool read_render_video(byte_reader_t *reader, project_document_t *documen
       o->bitrate_kbps <= 0 || o->preset < 0 || o->preset > 2 || (o->bit_depth != 8 && o->bit_depth != 10))
     video_export_defaults(o);
   document->has_video_options = true;
+  profile->focus = RENDER_FOCUS_SELECTED;
+  if (version < 26) return true;
+  int32_t focus;
+  if (!reader_i32(reader, &focus) || !reader_u32(reader, &count) || count > PROJECT_MAX_GROUPS) return false;
+  if (focus >= RENDER_FOCUS_MERGED) profile->focus = focus;
+  document->group_opacities = count ? malloc(sizeof(float) * 2 * count) : NULL;
+  if (count && !document->group_opacities) return false;
+  document->group_opacity_count = count;
+  for (uint32_t i = 0; i < count * 2; ++i) {
+    float value;
+    if (!reader_f32(reader, &value)) return false;
+    document->group_opacities[i] = isfinite(value) ? (value < 0.f ? 0.f : value > 1.f ? 1.f : value) : 1.f;
+  }
   return true;
 }
 
@@ -564,6 +584,7 @@ static void project_document_free(project_document_t *document) {
       free(document->groups[i].world_data);
   free(document->groups);
   free(document->group_video_visible);
+  free(document->group_opacities);
   free(document->tracks);
   free(document->events);
   for (int i = 0; i < document->recording_count; ++i)
@@ -1356,7 +1377,7 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
   if (!read_timeline(&timeline_reader, document, keep_session_data, version)) goto malformed;
   if (version >= 20) {
     if (!read_camera_timeline(&reader, &document->camera_timeline, version)) goto malformed;
-    if (version >= 23 && !read_render_video(&reader, document)) goto malformed;
+    if (version >= 23 && !read_render_video(&reader, document, version)) goto malformed;
   } else {
     // 18 and 19 carried an earlier camera format at the end of the file. It
     // was never released; the camera starts empty and the rest loads.
@@ -1575,8 +1596,13 @@ bool load_project(ui_handler_t *ui, const char *path) {
   ui->render.video = document.video_profile;
   if (document.has_video_options) ui->video_options = document.video_options;
   for (int g = 0; g < ui->timeline.group_count; ++g)
+  {
     ui->timeline.groups[g]->video_visible =
         (uint32_t)g >= document.group_video_count || document.group_video_visible[g] != 0;
+    const bool listed = (uint32_t)g < document.group_opacity_count;
+    ui->timeline.groups[g]->opacity = listed ? document.group_opacities[2 * g] : 1.f;
+    ui->timeline.groups[g]->video_opacity = listed ? document.group_opacities[2 * g + 1] : 1.f;
+  }
   snprintf(ui->current_project_path, sizeof(ui->current_project_path), "%s", path);
   ui->has_unsaved_changes = false;
   ui_add_recent_project(ui, path);

@@ -235,6 +235,7 @@ struct timeline_group_t {
   float color[4];
   bool visible;
   bool video_visible; // drawn in rendered video; `visible` is the viewport
+  float opacity, video_opacity; // how opaque it is drawn, 0..1, in the viewport and in video
   bool export_enabled;
   bool prediction_enabled;
   int start_offset;

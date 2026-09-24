@@ -5,6 +5,7 @@
 #include "dd_profile.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -205,20 +206,45 @@ static void render_freeze_bars(ft_game *game, const ft_render_frame *frame) {
 }
 
 typedef struct visible_event {
-  int tick;
+  int tick;  // on the frame's world's clock
+  int world; // the world it happened in, whose players its client ids name
   dd_event_payload_t payload;
 } visible_event;
 
-static int recent_events(ft_game *game, const ft_render_frame *frame, dd_event_type_t type, int lifetime,
+// Whether the engine asks for every world's timeline events together (a merged chat).
+static bool merged_events(const ft_render_frame *frame) {
+  return frame->struct_size >= offsetof(ft_render_frame, merge_world_events) + sizeof(frame->merge_world_events) &&
+         frame->merge_world_events;
+}
+
+static int world_start_offset(ft_game *game, int world) {
+  ft_timeline_world_info info = {.struct_size = sizeof(info)};
+  return world >= 0 && game->engine->timeline_world_info && game->engine->timeline_world_info((uint32_t)world, &info)
+             ? info.start_offset
+             : 0;
+}
+
+// The frame's world's events of `type` from the last `lifetime` ticks, oldest first; with
+// `all_worlds`, every world's, their ticks moved onto the frame's world's clock.
+static int recent_events(ft_game *game, const ft_render_frame *frame, dd_event_type_t type, int lifetime, bool all_worlds,
                          visible_event *out, int capacity) {
   if (!game->engine->timeline_event_count || !game->engine->timeline_event_get || capacity <= 0) return 0;
   int count = 0;
+  const int own_offset = all_worlds ? world_start_offset(game, frame->world_index) : 0;
+  int offset_world = -1, offset = 0; // the last world looked up, as events come grouped
   const uint32_t event_count = game->engine->timeline_event_count();
   for (uint32_t index = 0; index < event_count; ++index) {
     ft_timeline_event event = {.struct_size = sizeof(event)};
     dd_event_payload_t payload;
-    if (!game->engine->timeline_event_get(index, &event) || event.world_index != frame->world_index ||
-        event.tick > frame->tick || event.tick <= frame->tick - lifetime || !dd_event_decode(&event, &payload) ||
+    if (!game->engine->timeline_event_get(index, &event) || (!all_worlds && event.world_index != frame->world_index)) continue;
+    if (all_worlds && event.world_index != frame->world_index) {
+      if (event.world_index != offset_world) {
+        offset_world = event.world_index;
+        offset = world_start_offset(game, offset_world);
+      }
+      event.tick += offset - own_offset;
+    }
+    if (event.tick > frame->tick || event.tick <= frame->tick - lifetime || !dd_event_decode(&event, &payload) ||
         payload.type != (int)type)
       continue;
 
@@ -236,7 +262,7 @@ static int recent_events(ft_game *game, const ft_render_frame *frame, dd_event_t
       if (insert < capacity) out[insert] = out[insert - 1];
       --insert;
     }
-    out[insert] = (visible_event){.tick = event.tick, .payload = payload};
+    out[insert] = (visible_event){.tick = event.tick, .world = event.world_index, .payload = payload};
   }
   return count;
 }
@@ -385,12 +411,34 @@ static void chat_fill_rect(ft_game *game, float x, float y, float w, float h, fl
 // The avatar CChat puts left of a player's name: an idle tee looking slightly
 // down and to the right. It is centred in the first row -- RowHeight in
 // CChat is one row, not the whole message -- so it always sits beside the name.
-static void chat_draw_tee(ft_game *game, const ft_render_frame *frame, const chat_metrics_t *m, int client_id, float row_y,
-                          float scale, float blend) {
-  if (client_id < 0 || (uint32_t)client_id >= frame->player_setup_count) return;
+// The look of player `client_id` of `world`: from the frame's own setups for its world, from the
+// player's track for another's (a merged chat). False when there is no such player.
+static bool sender_profile(ft_game *game, const ft_render_frame *frame, int world, int client_id, dd_player_profile_t *out) {
+  if (client_id < 0) return false;
+  if (world == frame->world_index) {
+    if ((uint32_t)client_id >= frame->player_setup_count) return false;
+    dd_profile_from_setup(&frame->player_setups[client_id], out);
+    return true;
+  }
+  const int32_t track = game->engine->timeline_player_track ? game->engine->timeline_player_track((uint32_t)world, (uint32_t)client_id) : -1;
+  if (track < 0) return false;
+  dd_profile_for_track(game, track, out);
+  return true;
+}
 
+static const char *sender_name(ft_game *game, const ft_render_frame *frame, int world, int client_id, char *fallback,
+                               size_t fallback_size) {
+  if (world == frame->world_index) return profile_name(frame, client_id, fallback, fallback_size);
   dd_player_profile_t profile;
-  dd_profile_from_setup(&frame->player_setups[client_id], &profile);
+  if (sender_profile(game, frame, world, client_id, &profile) && profile.name[0]) snprintf(fallback, fallback_size, "%s", profile.name);
+  else snprintf(fallback, fallback_size, "player %d", client_id + 1);
+  return fallback;
+}
+
+static void chat_draw_tee(ft_game *game, const ft_render_frame *frame, const chat_metrics_t *m, int sender_world, int client_id,
+                          float row_y, float scale, float blend) {
+  dd_player_profile_t profile;
+  if (!sender_profile(game, frame, sender_world, client_id, &profile)) return;
 
   dd_anim_state_t anim;
   dd_anim_state_set(&anim, &anim_base, 0.f);
@@ -417,7 +465,7 @@ static void chat_draw_tee(ft_game *game, const ft_render_frame *frame, const cha
 static void render_chat(ft_game *game, const ft_render_frame *frame) {
   if (!game->settings.render_chat || !frame->active) return;
   visible_event messages[8];
-  const int count = recent_events(game, frame, DD_EVENT_CHAT, DD_CHAT_LIFETIME, messages, 8);
+  const int count = recent_events(game, frame, DD_EVENT_CHAT, DD_CHAT_LIFETIME, merged_events(frame), messages, 8);
   if (count <= 0) return;
 
   ft_camera camera;
@@ -454,7 +502,7 @@ static void render_chat(ft_game *game, const ft_render_frame *frame) {
       name_color = text_color = (ft_color){1.000000f, 0.994095f, 0.498039f, blend};
     } else {
       char fallback[32];
-      snprintf(prefix, sizeof(prefix), "%s: ", profile_name(frame, chat->client_id, fallback, sizeof(fallback)));
+      snprintf(prefix, sizeof(prefix), "%s: ", sender_name(game, frame, messages[i].world, chat->client_id, fallback, sizeof(fallback)));
       if (chat->team > 0) {
         name_color = (ft_color){0.440659f, 0.893459f, 0.440659f, blend};
         text_color = (ft_color){0.647059f, 1.000000f, 0.647059f, blend};
@@ -495,7 +543,7 @@ static void render_chat(ft_game *game, const ft_render_frame *frame) {
                    (m.padding_x * 1.5f + tee_gap + prefix_width + widest) * scale, height * scale, m.rounding * scale,
                    (ft_color){0.f, 0.f, 0.f, 0.047059f * blend});
 
-    if (from_player) chat_draw_tee(game, frame, &m, chat->client_id, y, scale, blend);
+    if (from_player) chat_draw_tee(game, frame, &m, messages[i].world, chat->client_id, y, scale, blend);
 
     const float text_y = y + m.padding_y / 2.f;
     draw_text_screen(game, (text_left + tee_gap) * scale, text_y * scale, m.font_size * scale, name_color, prefix);
@@ -514,7 +562,7 @@ static void render_emoticons(ft_game *game, const ft_render_frame *frame) {
   if (!game->settings.render_emoticons || !game->gfx.emoticons || !frame->world) return;
   if (!game->engine->timeline_event_count || game->engine->timeline_event_count() == 0) return;
   visible_event emotes[64];
-  const int count = recent_events(game, frame, DD_EVENT_EMOTICON, 2 * GAME_TICK_SPEED, emotes, 64);
+  const int count = recent_events(game, frame, DD_EVENT_EMOTICON, 2 * GAME_TICK_SPEED, false, emotes, 64);
   const SWorldCore *world = &frame->world->core;
   for (int i = 0; i < count; ++i) {
     const dd_event_payload_t *event = &emotes[i].payload;

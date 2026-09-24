@@ -1260,7 +1260,8 @@ typedef struct ft_render_frame {
   const ft_player_setup *player_setups;
   uint32_t player_setup_count;
   ft_engine_state state;
-  /* Opacity the engine wants applied, used for prediction ghosts. */
+  /* Opacity the engine wants the world drawn with, 0..1: a group set to show
+   * faded, or a prediction ghost. */
   float opacity;
   /* Colour the engine associates with this world, so a game's own markers and
    * trajectory lines match the timeline group they belong to. */
@@ -1282,6 +1283,15 @@ typedef struct ft_render_frame {
   bool first_world;
   /* True for the final world rendered in a multi-world pass. */
   bool last_world;
+  /* True when the active world's HUD shows the timeline events of every world
+   * together (a merged chat), not only its own. Read only when struct_size
+   * covers it. */
+  bool merge_world_events;
+  /* Players of this world the camera's animation follows while it directs the
+   * view (a video, or looking through it), bit n for player n: a game shows
+   * what it would show for a player its own camera follows, such as the
+   * crosshair. Read only when struct_size covers it. */
+  uint64_t followed_players;
 } ft_render_frame;
 
 /* Everything a game needs to place the camera for a frame. */

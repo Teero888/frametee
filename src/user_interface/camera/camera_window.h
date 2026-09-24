@@ -37,6 +37,8 @@ void camera_editor_update(struct ui_handler_t *ui);
 void camera_editor_sync_game(struct ui_handler_t *ui);
 // Whether the camera's clock drives the game: the Camera tab, or the Render tab's preview.
 bool camera_editor_owns_clock(const struct ui_handler_t *ui);
+// Whether the camera's animation is what the viewport shows (Look through, or the Render tab's preview).
+bool camera_editor_drives_view(const struct ui_handler_t *ui);
 // Camera shortcuts while the Camera tab owns the clock. Returns true when the
 // Camera tab owns the clock, so timeline transport shortcuts should be skipped.
 bool camera_editor_process_keys(struct ui_handler_t *ui);

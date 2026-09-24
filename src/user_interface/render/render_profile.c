@@ -87,6 +87,7 @@ render_profile_t *render_video_profile(ui_handler_t *ui) {
     // A first video looks like the viewport, without the editor's overlays.
     state->video = state->viewport;
     for (int layer = 0; layer < RENDER_LAYER_COUNT; ++layer) state->video.layers[layer] = false;
+    state->video.focus = RENDER_FOCUS_SELECTED;
     state->video.valid = true;
   }
   return &state->video;
@@ -151,5 +152,24 @@ bool render_layer_enabled(ui_handler_t *ui, render_layer_t layer) {
 bool render_group_visible(ui_handler_t *ui, int group_index) {
   timeline_state_t *ts = &ui->timeline;
   if (group_index < 0 || group_index >= ts->group_count) return false;
-  return ui->render.applied == RENDER_TARGET_VIDEO ? ts->groups[group_index]->video_visible : ts->groups[group_index]->visible;
+  const timeline_group_t *group = ts->groups[group_index];
+  const bool video = ui->render.applied == RENDER_TARGET_VIDEO;
+  // A group drawn fully transparent is not drawn at all.
+  return video ? group->video_visible && group->video_opacity > 0.f : group->visible && group->opacity > 0.f;
+}
+
+float render_group_opacity(ui_handler_t *ui, int group_index) {
+  timeline_state_t *ts = &ui->timeline;
+  if (group_index < 0 || group_index >= ts->group_count) return 1.f;
+  const timeline_group_t *group = ts->groups[group_index];
+  const float opacity = ui->render.applied == RENDER_TARGET_VIDEO ? group->video_opacity : group->opacity;
+  return opacity < 0.f ? 0.f : opacity > 1.f ? 1.f : opacity;
+}
+
+int render_focus_group(ui_handler_t *ui, bool *out_merged) {
+  const timeline_state_t *ts = &ui->timeline;
+  const int focus = ui->render.applied == RENDER_TARGET_VIDEO ? render_video_profile(ui)->focus : RENDER_FOCUS_SELECTED;
+  if (out_merged) *out_merged = focus == RENDER_FOCUS_MERGED;
+  // A group removed since it was chosen falls back to the editor's.
+  return focus >= 0 && focus < ts->group_count ? focus : ts->active_group_index;
 }

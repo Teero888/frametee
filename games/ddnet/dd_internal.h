@@ -521,6 +521,9 @@ typedef struct {
   dd_skin_slot_t skins[DD_MAX_SKINS];
   int default_skin;
   int ninja_skin;
+  // How opaque the world being drawn is (ft_render_frame.opacity): every tee, weapon, hook,
+  // particle and shape drawn is faded by it. 1 outside a world's entities.
+  float world_alpha;
   int spec_skin;
 
   // Level rendering.
@@ -598,6 +601,7 @@ typedef struct {
   bool render_particles;
   bool render_pickups;
   bool render_cursor_follow;
+  bool render_cursor_all; // a crosshair on every player, not only the followed one
   bool render_chat;
   // cl_chat_size and cl_chat_width. DDNet keeps width/size at or above
   // CHAT_FONTSIZE_WIDTH_RATIO so the two never fight each other.

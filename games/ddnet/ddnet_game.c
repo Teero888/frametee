@@ -1539,6 +1539,7 @@ enum ddnet_setting {
   SET_AUTO_FINISH_EVENTS,
   SET_ENTITIES_VIEW,
   SET_MAP_DETAIL,
+  SET_CURSOR_ALL,
   SET_COUNT
 };
 
@@ -1556,6 +1557,9 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_RENDER_PICKUPS] = {"render_pickups", "Pickups", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CURSOR_SCALE] = {"cursor_scale", "Crosshair scale", NULL, "Crosshair", FT_VALUE_FLOAT, 0.1, 2.0, FT_SETTING_RENDER},
     [SET_CURSOR_FOLLOW] = {"cursor_follow", "Crosshair in follow camera", NULL, "Crosshair", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_CURSOR_ALL] = {"cursor_all", "Crosshairs of every player",
+                        "Not only on the player the camera follows (the game's follow camera, or the camera animation's characters)",
+                        "Crosshair", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CENTER_DOT] = {"center_dot", "Show center dot", "Marks the tee's exact position", "Crosshair", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_CHAT] = {"render_chat", "Show chat", NULL, "Chat", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CHAT_FONT_SIZE] = {"chat_font_size", "Chat font size", NULL, "Chat", FT_VALUE_INT, 10, 100, FT_SETTING_RENDER},
@@ -1613,6 +1617,9 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
     return true;
   case SET_CURSOR_FOLLOW:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_cursor_follow};
+    return true;
+  case SET_CURSOR_ALL:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_cursor_all};
     return true;
   case SET_CENTER_DOT:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->center_dot};
@@ -1702,6 +1709,9 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
     return true;
   case SET_CURSOR_FOLLOW:
     s->render_cursor_follow = value->as.b;
+    return true;
+  case SET_CURSOR_ALL:
+    s->render_cursor_all = value->as.b;
     return true;
   case SET_CENTER_DOT:
     s->center_dot = value->as.b;

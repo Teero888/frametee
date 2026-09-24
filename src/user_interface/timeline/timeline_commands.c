@@ -120,7 +120,8 @@ typedef struct {
 typedef struct {
   char name[MAX_TIMELINE_GROUP_NAME];
   float color[4];
-  bool visible;
+  bool visible, video_visible;
+  float opacity, video_opacity;
   bool export_enabled;
   bool prediction_enabled;
   int start_offset;
@@ -273,6 +274,9 @@ timeline_data_snapshot_t *commands_capture_timeline_data(const timeline_state_t 
     memcpy(destination->name, source->name, sizeof(destination->name));
     memcpy(destination->color, source->color, sizeof(destination->color));
     destination->visible = source->visible;
+    destination->video_visible = source->video_visible;
+    destination->opacity = source->opacity;
+    destination->video_opacity = source->video_opacity;
     destination->export_enabled = source->export_enabled;
     destination->prediction_enabled = source->prediction_enabled;
     destination->start_offset = source->start_offset;
@@ -354,6 +358,9 @@ static void apply_timeline_data_snapshot(timeline_state_t *ts, const timeline_da
     memcpy(destination->name, source->name, sizeof(destination->name));
     memcpy(destination->color, source->color, sizeof(destination->color));
     destination->visible = source->visible;
+    destination->video_visible = source->video_visible;
+    destination->opacity = source->opacity;
+    destination->video_opacity = source->video_opacity;
     destination->export_enabled = source->export_enabled;
     destination->prediction_enabled = source->prediction_enabled;
     destination->start_offset = i == 0 ? 0 : source->start_offset;

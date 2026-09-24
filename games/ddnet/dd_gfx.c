@@ -129,7 +129,8 @@ void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...) {
   game->engine->log(level, "DDNet", message);
 }
 
-static ft_color to_color(const vec4 c) { return (ft_color){c[0], c[1], c[2], c[3]}; }
+// A colour as the world being drawn shows it: faded by its opacity.
+static ft_color world_color(const ft_game *game, const vec4 c) { return (ft_color){c[0], c[1], c[2], c[3] * game->gfx.world_alpha}; }
 
 unsigned char *dd_decode_png(const void *data, size_t size, int *out_w, int *out_h, int *out_channels) {
   return stbi_load_from_memory(data, (int)size, out_w, out_h, out_channels, STBI_rgb_alpha);
@@ -363,6 +364,7 @@ bool dd_gfx_create(ft_game *game) {
   gfx->skin_batch = calloc(gfx->skin_batch_capacity, sizeof(dd_skin_instance_t));
   gfx->default_skin = dd_gfx_skin_index(game, "default");
   gfx->ninja_skin = dd_gfx_skin_index(game, "x_ninja");
+  gfx->world_alpha = 1.f;
   gfx->spec_skin = dd_gfx_skin_index(game, "x_spec");
   if (!dd_text_create(game)) {
     dd_log(game, FT_LOG_ERROR, "Could not create the DDNet text renderer.");
@@ -771,26 +773,40 @@ void dd_draw_sprite(ft_game *game, ft_atlas *atlas, float z, vec2 pos, vec2 size
                                .size = {size[0], size[1]},
                                .rotation = rotation,
                                .sprite_index = sprite,
-                               .color = to_color(color),
+                               .color = world_color(game, color),
                                .tiling = {1.f, 1.f}};
   game->engine->draw_sprites(atlas, z, &draw, 1);
 }
 
 void dd_draw_sprites(ft_game *game, ft_atlas *atlas, float z, const ft_sprite_draw *draws, uint32_t count) {
   if (!atlas || count == 0) return;
-  game->engine->draw_sprites(atlas, z, draws, count);
+  const float alpha = game->gfx.world_alpha;
+  if (alpha >= 1.f) {
+    game->engine->draw_sprites(atlas, z, draws, count);
+    return;
+  }
+  // Faded copies, in chunks so no draw count needs a heap buffer.
+  ft_sprite_draw faded[256];
+  for (uint32_t first = 0; first < count; first += 256) {
+    const uint32_t n = count - first < 256 ? count - first : 256;
+    for (uint32_t i = 0; i < n; ++i) {
+      faded[i] = draws[first + i];
+      faded[i].color.a *= alpha;
+    }
+    game->engine->draw_sprites(atlas, z, faded, n);
+  }
 }
 
 void dd_draw_line(ft_game *game, float z, vec2 a, vec2 b, vec4 color, float thickness) {
-  game->engine->draw_line(z, (ft_vec2){a[0], a[1]}, (ft_vec2){b[0], b[1]}, to_color(color), thickness);
+  game->engine->draw_line(z, (ft_vec2){a[0], a[1]}, (ft_vec2){b[0], b[1]}, world_color(game, color), thickness);
 }
 
 void dd_draw_circle(ft_game *game, float z, vec2 center, float radius, vec4 color, uint32_t segments) {
-  game->engine->draw_circle(z, (ft_vec2){center[0], center[1]}, radius, to_color(color), segments);
+  game->engine->draw_circle(z, (ft_vec2){center[0], center[1]}, radius, world_color(game, color), segments);
 }
 
 void dd_draw_triangle(ft_game *game, float z, vec2 a, vec2 b, vec2 c, vec4 color) {
-  game->engine->draw_triangle(z, (ft_vec2){a[0], a[1]}, (ft_vec2){b[0], b[1]}, (ft_vec2){c[0], c[1]}, to_color(color));
+  game->engine->draw_triangle(z, (ft_vec2){a[0], a[1]}, (ft_vec2){b[0], b[1]}, (ft_vec2){c[0], c[1]}, world_color(game, color));
 }
 
 // --- tee batching ------------------------------------------------------------
@@ -840,7 +856,7 @@ void dd_skin_push(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 
 
   inst->pos[0] = pos[0];
   inst->pos[1] = pos[1];
-  inst->alpha = 1.f;
+  inst->alpha = game->gfx.world_alpha;
   // The shader maps uvs as in_pos * 0.625 + 0.5, i.e. it expects a quad 1.25x
   // oversized so the animation has room to move within it.
   inst->scale = scale * 1.25f;
@@ -877,7 +893,7 @@ void dd_hand_push(ft_game *game, vec2 pos, float scale, int skin, float angle, v
 
   inst->pos[0] = pos[0];
   inst->pos[1] = pos[1];
-  inst->alpha = 1.f;
+  inst->alpha = game->gfx.world_alpha;
   inst->scale = scale;
   inst->skin_index = skin;
   inst->eye_state = 6;
@@ -911,7 +927,7 @@ void dd_weapon_push(ft_game *game, vec2 pos, vec2 size, float rotation, uint32_t
   d->size.y = size[1];
   d->rotation = rotation;
   d->sprite_index = sprite;
-  d->color = (ft_color){1.f, 1.f, 1.f, 1.f};
+  d->color = (ft_color){1.f, 1.f, 1.f, gfx->world_alpha};
   d->tiling.x = 1.f;
   d->tiling.y = 1.f;
 }
@@ -926,7 +942,9 @@ void dd_hook_push(ft_game *game, const ft_sprite_draw *draw) {
     gfx->hook_batch = grown;
     gfx->hook_batch_capacity = capacity;
   }
-  gfx->hook_batch[gfx->hook_batch_count++] = *draw;
+  ft_sprite_draw *d = &gfx->hook_batch[gfx->hook_batch_count++];
+  *d = *draw;
+  d->color.a *= gfx->world_alpha;
 }
 
 void dd_particle_push(ft_game *game, int atlas_type, int layer, vec2 pos, vec2 size, float rotation, uint32_t sprite, vec4 color) {
@@ -964,7 +982,7 @@ void dd_particle_push(ft_game *game, int atlas_type, int layer, vec2 pos, vec2 s
   d->size.y = size[1];
   d->rotation = rotation;
   d->sprite_index = sprite;
-  d->color = to_color(color);
+  d->color = world_color(game, color);
   d->tiling.x = 1.f;
   d->tiling.y = 1.f;
 }

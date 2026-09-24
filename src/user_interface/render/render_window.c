@@ -211,12 +211,62 @@ static void editor_layers(ui_handler_t *ui, const layer_list_t *list) {
   }
 }
 
+// What the video is about: the Focus row, a picker as wide as both columns.
+static void focus_row(ui_handler_t *ui, const layer_list_t *list) {
+  timeline_state_t *ts = &ui->timeline;
+  render_profile_t *video = render_video_profile(ui);
+  const float top = igGetCursorScreenPos().y;
+  row_begin(list, "Focus", "Whose chat, HUD and pickups the video shows. The viewport follows the group selected in the editor.",
+            NULL);
+  row_column(list, RENDER_TARGET_VIEWPORT, top);
+  char preview[160];
+  if (video->focus == RENDER_FOCUS_MERGED) snprintf(preview, sizeof(preview), "All groups (merged chat)");
+  else if (video->focus >= 0 && video->focus < ts->group_count) snprintf(preview, sizeof(preview), "%s", ts->groups[video->focus]->name);
+  else snprintf(preview, sizeof(preview), "Selected group");
+  igSetNextItemWidth(column_x(list, RENDER_TARGET_VIDEO) + list->column_width - column_x(list, RENDER_TARGET_VIEWPORT));
+  if (igBeginCombo("##focus", preview, 0)) {
+    int chosen = video->focus;
+    if (igSelectable_Bool("Selected group", video->focus == RENDER_FOCUS_SELECTED, 0, (ImVec2){0, 0})) chosen = RENDER_FOCUS_SELECTED;
+    igSetItemTooltip("Follows the group selected in the editor");
+    for (int g = 0; g < ts->group_count; ++g) {
+      igPushID_Int(g);
+      const float *color = ts->groups[g]->color;
+      igTextColored((ImVec4){color[0], color[1], color[2], 1.f}, ICON_FA_CIRCLE);
+      igSameLine(0.f, 6.f * gfx_get_ui_scale());
+      if (igSelectable_Bool(ts->groups[g]->name, video->focus == g, 0, (ImVec2){0, 0})) chosen = g;
+      igPopID();
+    }
+    if (igSelectable_Bool("All groups (merged chat)", video->focus == RENDER_FOCUS_MERGED, 0, (ImVec2){0, 0}))
+      chosen = RENDER_FOCUS_MERGED;
+    igSetItemTooltip("The selected group's HUD, with every group's chat together");
+    if (chosen != video->focus) {
+      video->focus = chosen;
+      ui_mark_unsaved(ui);
+    }
+    igEndCombo();
+  }
+  row_end(list, top);
+}
+
+// An opacity in percent, the width of a column; greyed out while the group is hidden there.
+static bool opacity_drag(const char *id, float *opacity, bool shown, float width) {
+  if (!shown) igBeginDisabled(true);
+  float percent = *opacity * 100.f;
+  igSetNextItemWidth(width);
+  const bool changed = igDragFloat(id, &percent, 0.5f, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp);
+  if (changed) *opacity = percent / 100.f;
+  if (!shown) igEndDisabled();
+  return changed;
+}
+
 static void group_layers(ui_handler_t *ui, const layer_list_t *list) {
   timeline_state_t *ts = &ui->timeline;
   if (!section("Groups")) return;
+  focus_row(ui, list);
+  const float scale = gfx_get_ui_scale();
   for (int g = 0; g < ts->group_count; ++g) {
     timeline_group_t *group = ts->groups[g];
-    const float top = igGetCursorScreenPos().y;
+    float top = igGetCursorScreenPos().y;
     const ImVec4 color = {group->color[0], group->color[1], group->color[2], 1.f};
     row_begin(list, group->name, NULL, &color);
     char id[32];
@@ -230,6 +280,19 @@ static void group_layers(ui_handler_t *ui, const layer_list_t *list) {
       group->video_visible = !group->video_visible;
       ui_mark_unsaved(ui);
     }
+    row_end(list, top);
+
+    // Its opacity, a lighter row under it.
+    top = igGetCursorScreenPos().y;
+    const float text_y = top + 0.5f * (list->row_height - igGetTextLineHeight());
+    ImDrawList_AddText_Vec2(igGetWindowDrawList(), (ImVec2){list->left + 42.f * scale, text_y},
+                            igGetColorU32_Col(ImGuiCol_TextDisabled, 1.f), "Opacity", NULL);
+    snprintf(id, sizeof(id), "##go%d", g);
+    row_column(list, RENDER_TARGET_VIEWPORT, top);
+    opacity_drag(id, &group->opacity, group->visible, list->column_width);
+    snprintf(id, sizeof(id), "##gdo%d", g);
+    row_column(list, RENDER_TARGET_VIDEO, top);
+    if (opacity_drag(id, &group->video_opacity, group->video_visible, list->column_width)) ui_mark_unsaved(ui);
     row_end(list, top);
   }
 }

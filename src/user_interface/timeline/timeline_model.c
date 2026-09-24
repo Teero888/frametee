@@ -77,6 +77,7 @@ timeline_group_t *model_add_group(timeline_state_t *ts, const char *name) {
   memcpy(group->color, s_group_colors[index % (int)(sizeof(s_group_colors) / sizeof(s_group_colors[0]))], sizeof(group->color));
   group->visible = true;
   group->video_visible = true;
+  group->opacity = group->video_opacity = 1.f;
   group->export_enabled = true;
   group->prediction_enabled = true;
   group_runtime_init(ts, group, index);
