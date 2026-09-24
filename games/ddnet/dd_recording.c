@@ -618,17 +618,39 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
       break;
     }
   }
-  // Grenades trail smoke every tick, where the physics would have puffed it for its own.
+  // Grenades trail smoke every tick, where the physics would have puffed it for its own; other
+  // shots leave bullet trails, as for the world's own (emit_bullet_trails).
   for (int i = 0; ok && core->particle && i < tick->num_projectiles; ++i) {
     const dd_state_projectile *p = &tick->projectiles[i];
-    if (p->type != WEAPON_GRENADE || recording_tick - 1 < p->start_tick || !owner_shown(world, p->owner, true)) continue;
+    if (recording_tick - 1 < p->start_tick || !owner_shown(world, p->owner, true)) continue;
     if (!dd_demo_state_tuning(recording->state, recording_tick, p->tune_zone > 0 ? p->tune_zone : 0, tuning)) continue;
+    const float time = (float)(recording_tick - 1 - p->start_tick) / (float)GAME_TICK_SPEED;
     float x, y;
-    projectile_pos(p, tuning, (float)(recording_tick - 1 - p->start_tick) / (float)GAME_TICK_SPEED, &x, &y);
-    core->particle(world_pos(x, y), PARTICLE_TYPE_SMOKE, -1, core->user_data);
+    projectile_pos(p, tuning, time, &x, &y);
+    if (p->type == WEAPON_GRENADE) {
+      core->particle(world_pos(x, y), PARTICLE_TYPE_SMOKE, -1, core->user_data);
+      continue;
+    }
+    core->particle(world_pos(x, y), PARTICLE_TYPE_BULLET_TRAIL, -1, core->user_data);
+    projectile_pos(p, tuning, time + 0.5f / (float)GAME_TICK_SPEED, &x, &y);
+    core->particle(world_pos(x, y), PARTICLE_TYPE_BULLET_TRAIL, -1, core->user_data);
   }
   pthread_mutex_unlock(&recording->lock);
   free(tick);
+}
+
+// DDNet's client leaves a bullet trail behind every shot but a grenade, at 100 Hz: two per tick,
+// from where the shot is at the start of the tick the world is about to step. The physics only
+// puffs grenade smoke, from the same place.
+static void emit_bullet_trails(SWorldCore *core) {
+  if (!core->particle) return;
+  for (SProjectile *p = (SProjectile *)core->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; p;
+       p = (SProjectile *)p->m_Base.m_pNextTypeEntity) {
+    if (p->m_Type == WEAPON_GRENADE) continue;
+    const float time = (float)(core->m_GameTick - p->m_StartTick) / (float)GAME_TICK_SPEED;
+    core->particle(prj_get_pos(p, time), PARTICLE_TYPE_BULLET_TRAIL, p->m_Owner, core->user_data);
+    core->particle(prj_get_pos(p, time + 0.5f / (float)GAME_TICK_SPEED), PARTICLE_TYPE_BULLET_TRAIL, p->m_Owner, core->user_data);
+  }
 }
 
 void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs, const ft_player_playback *playback,
@@ -671,6 +693,7 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
   }
 
   world->replay_muted = any_replayed;
+  emit_bullet_trails(&world->core);
   wc_tick(&world->core);
   world->replay_muted = false;
 
