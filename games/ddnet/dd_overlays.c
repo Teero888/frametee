@@ -521,6 +521,10 @@ static void render_emoticons(ft_game *game, const ft_render_frame *frame) {
     if (event->client_id < 0 || event->client_id >= world->m_NumCharacters || event->emoticon < 0 ||
         event->emoticon >= DD_EMOTICON_COUNT)
       continue;
+    // DDNet keeps one emoticon per player: a newer one replaces it and starts over.
+    bool replaced = false;
+    for (int j = i + 1; j < count && !replaced; ++j) replaced = emotes[j].payload.client_id == event->client_id;
+    if (replaced) continue;
     const float since = (float)(frame->tick - emotes[i].tick) + frame->alpha;
     const float until_end = 2.f * GAME_TICK_SPEED - since;
     float alpha = until_end < GAME_TICK_SPEED / 5.f ? until_end / (GAME_TICK_SPEED / 5.f) : 1.f;
