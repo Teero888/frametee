@@ -1,62 +1,121 @@
-cmake_minimum_required(VERSION 3.22)
-# Do not build this module by default, as it is still in development and not fully functional yet. It is also not a part of the official Frametee release.
+# Super Mario 64 game modules.
+#
+# Shared libraries built against the ABI header around libsm64_physics, the
+# whole game (libs/sm64_physics). One module per game version, each with the
+# library of its version: "sm64" (US), "sm64_jp" and "sm64_eu". Off by
+# default: the game needs the user's ROM.
+cmake_minimum_required(VERSION 3.14)
+
 option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" OFF)
 if(NOT FRAMETEE_BUILD_SM64)
     return()
 endif()
 
-add_library(sm64_game MODULE
-    sm64_game.cpp
-    sm64_backend.cpp
-    sm64_vulkan.cpp
-    fast3d/gfx_pc.c
-)
-
-set(SM64_SHADER_HEADERS "")
-foreach(SM64_SHADER_STAGE vert frag)
-    if(SM64_SHADER_STAGE STREQUAL "vert")
-        set(SM64_SHADER_SYMBOL kFast3dVertSpv)
-    else()
-        set(SM64_SHADER_SYMBOL kFast3dFragSpv)
-    endif()
-    set(SM64_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/fast3d_${SM64_SHADER_STAGE}_spv.h")
-    list(APPEND SM64_SHADER_HEADERS "${SM64_SHADER_HEADER}")
-    add_custom_command(OUTPUT "${SM64_SHADER_HEADER}"
-        COMMAND "${GLSLANG_VALIDATOR}" -V --vn "${SM64_SHADER_SYMBOL}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fast3d.${SM64_SHADER_STAGE}" -o "${SM64_SHADER_HEADER}"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fast3d.${SM64_SHADER_STAGE}"
-        VERBATIM)
-endforeach()
-
-add_custom_target(sm64_fast3d_shaders DEPENDS ${SM64_SHADER_HEADERS})
-add_dependencies(sm64_game sm64_fast3d_shaders)
-
-set_target_properties(sm64_game PROPERTIES PREFIX "" OUTPUT_NAME "sm64" CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_VISIBILITY_PRESET hidden)
-target_include_directories(sm64_game PRIVATE
-    "${CMAKE_CURRENT_BINARY_DIR}"
-    "${FRAMETEE_ABI_INCLUDE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/fast3d"
-    "${CMAKE_SOURCE_DIR}/libs/cimgui"
-    "${CMAKE_SOURCE_DIR}/libs/cimgui/imgui"
-    "${CMAKE_SOURCE_DIR}/libs/sm64_physics/include"
-    "${CMAKE_SOURCE_DIR}/libs/sm64_physics/upstream/include"
-)
-target_include_directories(sm64_game PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_compile_definitions(sm64_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS _LANGUAGE_C)
-
-find_package(Threads REQUIRED)
-find_package(Vulkan REQUIRED)
-target_link_libraries(sm64_game PRIVATE sm64_physics_core Threads::Threads Vulkan::Vulkan ${CMAKE_DL_LIBS})
-
-if(WIN32)
-    target_link_libraries(sm64_game PRIVATE frametee ws2_32 userenv bcrypt ntdll opengl32 gdi32 setupapi cfgmgr32)
-elseif(APPLE)
-    target_link_libraries(sm64_game PRIVATE "-framework Metal" "-framework QuartzCore" "-framework Foundation")
-else()
-    target_link_libraries(sm64_game PRIVATE m)
-    target_compile_options(sm64_game PRIVATE -Wall -Wextra -Wno-unused-parameter)
+# One copy of the game at runtime for a module and every plugin written for
+# it: a world holds addresses of the library's code, so a world the engine
+# hands a plugin only works with the same copy. The top level adds the
+# libraries (with SM64_PHYSICS_SHARED) before the games.
+if(NOT TARGET sm64_physics_us OR NOT TARGET sm64_physics_jp OR NOT TARGET sm64_physics_eu)
+    message(FATAL_ERROR "games/sm64 needs libs/sm64_physics (FRAMETEE_BUILD_SM64 at the top level)")
 endif()
 
-install(TARGETS sm64_game RUNTIME DESTINATION games COMPONENT Runtime LIBRARY DESTINATION games COMPONENT Runtime)
+# The shaders of the Fast3D backend, as SPIR-V in headers.
+find_package(Vulkan REQUIRED)
+set(SM64_SHADER_HEADERS "")
+foreach(stage vert frag)
+    string(SUBSTRING "${stage}" 0 1 first)
+    string(TOUPPER "${first}" first)
+    string(SUBSTRING "${stage}" 1 -1 rest)
+    set(header "${CMAKE_CURRENT_BINARY_DIR}/fast3d_${stage}_spv.h")
+    list(APPEND SM64_SHADER_HEADERS "${header}")
+    add_custom_command(OUTPUT "${header}"
+        COMMAND "${GLSLANG_VALIDATOR}" -V --vn "kFast3d${first}${rest}Spv"
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fast3d.${stage}" -o "${header}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fast3d.${stage}"
+        VERBATIM)
+endforeach()
+add_custom_target(sm64_shaders DEPENDS ${SM64_SHADER_HEADERS})
+
+foreach(version us jp eu)
+    if(version STREQUAL "us")
+        set(game_id "sm64")
+    else()
+        set(game_id "sm64_${version}")
+    endif()
+    # A game frame is two vertical interrupts: NTSC at 60, PAL (EU) at 50.
+    if(version STREQUAL "eu")
+        set(ticks_per_second 25)
+    else()
+        set(ticks_per_second 30)
+    endif()
+    string(TOUPPER "${version}" upper)
+    set(game_name "Super Mario 64 (${upper})")
+
+    # Drawing: the Fast3D interpreter (sm64-port's, fast3d/) and its Vulkan
+    # backend, which draws a frame's display list on a device the caller
+    # hands over. A library of its own so the module and tests/sm64_render
+    # share it.
+    add_library(sm64_render_${version} STATIC fast3d/gfx_pc.c fast3d/gfx_cc.c sm64_vulkan.c)
+    add_dependencies(sm64_render_${version} sm64_shaders)
+    set_target_properties(sm64_render_${version} PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON
+                          C_VISIBILITY_PRESET hidden)
+    target_include_directories(sm64_render_${version} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(sm64_render_${version} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(sm64_render_${version} PUBLIC sm64_physics_${version} sm64_physics_gbi_${version} Vulkan::Vulkan m)
+    if(NOT MSVC)
+        target_compile_options(sm64_render_${version} PRIVATE -Wall -Wno-unused-parameter -Wno-unused-variable
+                               -Wno-missing-braces)
+    endif()
+
+    add_library(sm64_game_${version} MODULE sm64_game.c)
+    set_target_properties(sm64_game_${version} PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "${game_id}"
+        C_STANDARD 11
+        C_VISIBILITY_PRESET hidden
+    )
+    target_include_directories(sm64_game_${version} PRIVATE
+        "${FRAMETEE_ABI_INCLUDE_DIR}"
+        "${CMAKE_SOURCE_DIR}/libs/cimgui"
+        "${CMAKE_SOURCE_DIR}/libs/cimgui/imgui"
+    )
+    # The public header for SM64 plugins: the layout of a world.
+    target_include_directories(sm64_game_${version} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_compile_definitions(sm64_game_${version} PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+                               SM64_GAME_ID="${game_id}" SM64_GAME_NAME="${game_name}"
+                               SM64_TICKS_PER_SECOND=${ticks_per_second})
+    target_link_libraries(sm64_game_${version} PRIVATE sm64_render_${version} sm64_physics_${version} m)
+
+    if(UNIX AND NOT APPLE)
+        # The libraries are installed in libs/.
+        set_target_properties(sm64_game_${version} PROPERTIES INSTALL_RPATH "$ORIGIN/../libs")
+    endif()
+    if(WIN32 AND TARGET frametee)
+        target_link_libraries(sm64_game_${version} PRIVATE frametee)
+    endif()
+    if(NOT MSVC)
+        target_compile_options(sm64_game_${version} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    endif()
+    install(TARGETS sm64_game_${version}
+        RUNTIME DESTINATION games COMPONENT Runtime
+        LIBRARY DESTINATION games COMPONENT Runtime)
+    # Windows finds a module's DLLs beside it (the engine loads modules with
+    # LOAD_WITH_ALTERED_SEARCH_PATH); ELF through the module's run path.
+    install(TARGETS sm64_physics_${version}
+        RUNTIME DESTINATION games COMPONENT Runtime
+        LIBRARY DESTINATION libs COMPONENT Runtime)
+    if(WIN32)
+        set_target_properties(sm64_physics_${version} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/games")
+    endif()
+endforeach()
+
+# Every module reads its assets from data/games/<id>/: the other versions get
+# a copy of the US one's (the compiled shaders, the thumbnail).
+add_custom_target(sm64_version_data ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/data/games/sm64"
+            "${CMAKE_BINARY_DIR}/data/games/sm64_jp"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/data/games/sm64"
+            "${CMAKE_BINARY_DIR}/data/games/sm64_eu"
+    VERBATIM)
+
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/" DESTINATION "include" COMPONENT Development)

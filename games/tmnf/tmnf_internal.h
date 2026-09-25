@@ -105,6 +105,10 @@ struct Triangle {
   // it is wound. Fences, banners and the sky are all sheets with nothing behind
   // them, and culling a sheet is the same as deleting it half the time.
   bool two_sided = false;
+  ft_vec3 normals[3]{};
+  ft_vec2 uv1[3]{};
+  std::uint32_t colors[3]{0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+  std::uint32_t material = kNoTextureLayer;
 };
 
 // Triangles are bucketed by centroid into columns of a flat grid; each bucket
@@ -139,6 +143,7 @@ struct GbxReference {
   std::string path;
   std::string name;
   bool by_name = true;
+  std::uint32_t node_index = 0u;
 };
 
 struct GbxFile {
@@ -210,8 +215,9 @@ struct MaterialTextureSlot {
 };
 
 // Every texture a material names. See tmnf_material.cpp.
+struct MaterialStyle;
 bool ReadMaterialTextures(const PackSet &packs, const std::string &material_path,
-                          std::vector<MaterialTextureSlot> *out);
+                          std::vector<MaterialTextureSlot> *out, MaterialStyle *style = nullptr);
 // The one of them that is the surface's own picture, by the sampler it is bound
 // to rather than by what it is called.
 std::optional<std::string> DiffuseTextureOf(const std::vector<MaterialTextureSlot> &slots);
@@ -250,15 +256,27 @@ struct MaterialStyle {
   bool world_uv = false;
   // Adds its light to what is behind it: glows, lit signs, spot flares.
   bool additive = false;
-  // An additive pass authored for the Night mood. The daytime diffuse face is
-  // still present underneath; drawing this pass in Day/Sunrise/Sunset is what
-  // turns the Stadium start arch's individual lamps into broad white smears.
+  // A lamp pass disabled in Day. Stadium also lights its lamps at sunrise
+  // and sunset, as the original mood's locally-lit flag specifies.
   bool night_only = false;
   bool water = false;
+  bool alpha_test = false;
+  bool sky = false;
+};
+
+struct RenderMaterial {
+  MaterialStyle style;
+  bool packed_normal = false;
+  std::uint32_t diffuse = kNoTextureLayer;
+  std::uint32_t normal = kNoTextureLayer;
+  std::uint32_t specular = kNoTextureLayer;
+  std::uint32_t occlusion = kNoTextureLayer;
+  std::uint32_t emission = kNoTextureLayer;
+  TextureAnimation animation;
 };
 
 // World-space texturing divides the coordinate by this, so one tile of the
-// picture covers sixteen metres of ground. It is the game's own constant.
+// picture covers sixteen metres of ground in the terrain fallback.
 inline constexpr float kWorldUvScale = 1.f / 16.f;
 
 struct TrackMaterial {
@@ -278,6 +296,7 @@ struct TrackVertex {
   ft_vec3 position{};
   ft_vec3 normal{0.f, 1.f, 0.f};
   ft_vec2 uv{};
+  ft_vec2 uv1{};
   ft_color color{1.f, 1.f, 1.f, 1.f};
 };
 
@@ -287,6 +306,7 @@ struct TrackMesh {
   bool has_normal = false;
   bool has_uv = false;
   bool has_color = false;
+  bool has_uv1 = false;
 };
 
 // A tile's placement: the basis of its rotation and scale, and where it sits.
@@ -343,6 +363,9 @@ std::string EnvironmentPackName(fv::MapEnvironment environment);
 
 // --- textures ----------------------------------------------------------------
 
+bool DecodeDds(const std::vector<unsigned char> &bytes, std::uint32_t *width, std::uint32_t *height,
+               std::vector<std::uint8_t> *rgba);
+
 // Every layer of a texture array is the same size, and the game's textures run
 // from 32 to 2048 pixels, so one size has to be chosen for all of them. It is
 // picked at upload time from what the track actually decoded rather than fixed
@@ -390,7 +413,7 @@ public:
   // use that channel for gloss instead, so it is enabled from the material's
   // shader rather than guessed from the pixels.
   TextureAnimation Animation(std::uint32_t layer) const;
-  std::optional<std::uint32_t> DirectionSignLayer(const PackSet &packs);
+  std::optional<std::uint32_t> DirectionSignLayer(const PackSet &packs, bool left);
   // How the material is meant to be drawn, read from the shader it is built
   // from. Cached alongside the layer, because both come from the same file.
   MaterialStyle Style(const PackSet &packs, const std::string &material_path);
@@ -403,6 +426,8 @@ public:
   // a ceiling over the whole sky and a panorama that fades in towards the
   // horizon, which is why this composes rather than just loads.
   std::optional<std::uint32_t> SkyLayer(const PackSet &packs, const std::string &environment, const std::string &mood);
+  ft_color MoodColor(const PackSet &packs, const std::string &name, ft_color fallback);
+  float MoodTime(const PackSet &packs);
   // A car's livery, read from one of the skin archives the game ships beside
   // its packs rather than out of a pack. `key` names the archive; the picture
   // inside it is always Diffuse.dds. Nothing is decoded until a driver asks
@@ -418,6 +443,16 @@ public:
 
   ft_texture *Texture() const { return texture_; }
   std::size_t LayerCount() const { return layers_.size(); }
+  RenderMaterial Material(const PackSet &packs, const std::string &path);
+  void SetMood(std::string environment, std::string mood) {
+    if (environment_ != environment || mood_ != mood) {
+      by_material_.clear();
+      render_by_material_.clear();
+      mood_time_.reset();
+    }
+    environment_ = std::move(environment);
+    mood_ = std::move(mood);
+  }
 
 private:
   static std::optional<std::string> DiffuseImagePath(const PackSet &packs, const std::string &material_path);
@@ -428,6 +463,7 @@ private:
   // is left until upload, when what the whole track needs is known: deciding it
   // one texture at a time is what forced every page to a guess made before any
   // of them had been read.
+public:
   struct Page {
     std::vector<std::uint8_t> rgba;
     std::uint32_t width = 0u;
@@ -441,12 +477,19 @@ private:
     TextureAnimation animation{};
   };
 
+  const std::vector<Page> &Pages() const { return layers_; }
+
+private:
+  std::string environment_, mood_;
+  std::optional<float> mood_time_;
+
   std::vector<Page> layers_;
   // Both are keyed by the name plus how the asker uses alpha, so an opaque
   // surface and a cut-out one painting the same picture get a page each.
   std::unordered_map<std::string, std::optional<std::uint32_t>> by_material_;
   std::unordered_map<std::string, std::optional<std::uint32_t>> by_image_;
   std::unordered_map<std::string, MaterialStyle> style_by_material_;
+  std::unordered_map<std::string, RenderMaterial> render_by_material_;
   ft_texture *texture_ = nullptr;
   std::size_t uploaded_ = 0u;
   std::uint32_t page_size_ = 0u;
@@ -515,12 +558,11 @@ inline bool IsWheelPart(std::uint8_t part) { return part <= VEHICLE_PART_WHEEL_R
 
 struct VehicleFace {
   ft_vec3 a, b, c;
-  // The plane the face lies in, corrected against the authored normals at
-  // decode so a mirrored part is still wound outwards.
-  ft_vec3 normal;
+  ft_vec3 normals[3]{};
   ft_color color{1.f, 1.f, 1.f, 1.f};
   ft_vec2 uv[3]{};
   std::uint32_t layer = kNoTextureLayer;
+  std::uint32_t material = kNoTextureLayer;
   std::uint8_t part = VEHICLE_PART_BODY;
 };
 
@@ -528,6 +570,7 @@ struct VehicleFace {
 // their own hub so the front pair can be turned with the steering.
 struct VehicleModel {
   std::vector<VehicleFace> faces;
+  std::vector<RenderMaterial> materials;
   ft_vec3 hub[VEHICLE_PART_COUNT]{};
   // Where a hinged link is mounted to the chassis, and how far along its own
   // axis the wheel end sits. Together they turn a wheel's travel into the angle
@@ -640,6 +683,10 @@ struct ft_level {
   // so they can go last, once everything solid is already resolved.
   std::vector<tmnf::Triangle> translucent;
   std::vector<tmnf::Triangle> backdrop;
+  std::vector<tmnf::RenderMaterial> materials;
+  std::string mood;
+  ft_color sunlight{.85f,.81f,.73f,1};
+  ft_color ambient{.48f,.5f,.54f,1};
   tmnf::TriangleGrid track_grid;
   tmnf::TriangleGrid translucent_grid;
   tmnf::TriangleGrid backdrop_grid;
@@ -653,6 +700,13 @@ struct ft_level {
 // ft_world is defined by <tmnf/tmnf_game.h>, included above.
 
 namespace tmnf {
+struct GpuRenderer;
+bool GpuRender(ft_game *game, const ft_render_frame *frame);
+bool GpuUploadTextures(ft_game *game);
+bool GpuCaptureVehicle(std::uint32_t material, std::uint32_t layer, const ft_vec3 *positions,
+                       const ft_vec3 *normals, const ft_vec2 *uv, ft_color color);
+void GpuDestroy(ft_game *game);
+void GpuResetLevel(ft_game *game, bool clear_textures = false);
 struct TrackBrowser {
   const ft_engine_api *engine = nullptr;
   std::string tracks_root;
@@ -692,6 +746,7 @@ struct ft_game {
   // use it, so both outlive one.
   tmnf::PackSet packs_open;
   tmnf::TextureLibrary textures;
+  tmnf::GpuRenderer *renderer = nullptr;
 
   // The replay export window: the inclusive tick range to sample and which
   // timeline worlds and tracks become ghosts. Kept on the game so a run of
@@ -746,6 +801,7 @@ bool SegmentHit(const ft_level *level, ft_vec3 start, ft_vec3 end, float *out_fr
 // --- tmnf_render.cpp ---------------------------------------------------------
 
 void Render(ft_game *game, const ft_render_frame *frame);
+void RenderCar(ft_game *game, const ft_render_frame *frame);
 
 // --- tmnf_car.cpp ------------------------------------------------------------
 

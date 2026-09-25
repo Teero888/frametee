@@ -7,11 +7,8 @@
 // TAS tool: judging a jump or a wall ride against a hand-rolled camera means
 // judging it against something the game never showed.
 //
-// Two things the engine cannot carry are dropped on the way out. Its view
-// matrix is built with a fixed world up, so camera roll is discarded, and it
-// derives its own field of view, so the lens is ignored. Everything else (the
-// position, the heading, the way the view swings out under acceleration and
-// settles again) comes through.
+// The directed-camera ABI carries the complete view and projection, including
+// the original roll and lens. Supplying only eye/target loses both of them.
 
 #include "tmnf_internal.h"
 
@@ -22,9 +19,7 @@
 namespace tmnf {
 namespace {
 
-enum CameraModeIndex { CAMERA_RACE = 0,
-                       CAMERA_ORBIT,
-                       CAMERA_MODE_COUNT };
+enum CameraModeIndex { CAMERA_RACE = 0, CAMERA_ORBIT, CAMERA_MODE_COUNT };
 
 // How far behind and above the car the view sits when the game's own camera
 // could not be decoded. Rough, but it keeps a track drivable rather than
@@ -58,8 +53,7 @@ fv::camera::RaceCameraVehicleState VehicleState(const ft_world *world, const Car
   vehicle.isVehicleCar = true;
   vehicle.wheelContact = car.wheelContact;
   vehicle.wheelHasSurface = car.wheelHasSurface;
-  vehicle.cameraSupportUp =
-      fv::camera::Vector3{car.cameraSupportUp.x, car.cameraSupportUp.y, car.cameraSupportUp.z};
+  vehicle.cameraSupportUp = fv::camera::Vector3{car.cameraSupportUp.x, car.cameraSupportUp.y, car.cameraSupportUp.z};
   return vehicle;
 }
 
@@ -73,15 +67,18 @@ ft_vec3 ForwardOf(const fv::camera::Quaternion &q) {
 
 bool EnsureSession(ft_game *game) {
   if (!game->race_cameras) return false;
-  constexpr fv::camera::RaceCameraProfile kProfile = fv::camera::RaceCameraProfile::Race;
-  if (!game->race_cameras->HasProfile(kProfile)) return false;
+  auto profile = fv::camera::RaceCameraProfile::Race;
+  // Stadium declares Race2 and Race3, but no classic Race controller. Asking
+  // only for Race silently selected the generic fallback on every TMNF track.
+  if (!game->race_cameras->HasProfile(profile)) profile = fv::camera::RaceCameraProfile::Race2;
+  if (!game->race_cameras->HasProfile(profile)) profile = fv::camera::RaceCameraProfile::Race3;
+  if (!game->race_cameras->HasProfile(profile)) return false;
 
   if (game->race_session) return true;
   try {
-    game->race_session = std::make_unique<fv::camera::RaceCameraSession>(*game->race_cameras, kProfile);
+    game->race_session = std::make_unique<fv::camera::RaceCameraSession>(*game->race_cameras, profile);
   } catch (const std::exception &error) {
-    Log(game, FT_LOG_WARN, "Could not start the %s camera: %s", kCameraModes[CAMERA_RACE].display_name,
-        error.what());
+    Log(game, FT_LOG_WARN, "Could not start the %s camera: %s", kCameraModes[CAMERA_RACE].display_name, error.what());
     game->race_session.reset();
     return false;
   }
@@ -145,7 +142,11 @@ bool CameraUpdate(ft_game *game, const ft_camera_frame *frame, ft_camera *inout)
   // Scrubbing the timeline does neither, and a seek is answered by restarting
   // the camera where the car now is rather than by sweeping it across the map.
   const float alpha = std::clamp(frame->alpha, 0.f, 1.f);
-  std::uint64_t time_ms = frame->world->view.timeMs + static_cast<std::uint64_t>(alpha * kTickMs);
+  std::uint64_t time_ms = frame->world->view.timeMs;
+  if (frame->previous_world) {
+    const double before = frame->previous_world->view.timeMs;
+    time_ms = static_cast<std::uint64_t>(before + (double(time_ms) - before) * alpha);
+  }
   if (game->race_session_started && time_ms < game->race_session_time_ms) {
     game->race_session_started = false;
   } else if (game->race_session_started && time_ms - game->race_session_time_ms > 200u) {
@@ -168,8 +169,7 @@ bool CameraUpdate(ft_game *game, const ft_camera_frame *frame, ft_camera *inout)
   // does, and it needs the track to do it.
   const ft_level *level = game->level;
   if (level) {
-    query.segmentCollision =
-        [level](const fv::camera::SegmentQuery &segment) -> std::optional<fv::camera::SegmentHit> {
+    query.segmentCollision = [level](const fv::camera::SegmentQuery &segment) -> std::optional<fv::camera::SegmentHit> {
       float fraction = 1.f;
       if (!SegmentHit(level, ft_vec3{segment.start.x, segment.start.y, segment.start.z},
                       ft_vec3{segment.end.x, segment.end.y, segment.end.z}, &fraction)) {
@@ -184,10 +184,45 @@ bool CameraUpdate(ft_game *game, const ft_camera_frame *frame, ft_camera *inout)
   const ft_vec3 forward = ForwardOf(output.transform.rotation);
 
   inout->eye = eye;
-  // The engine only reads an eye and a target and rebuilds the rest, so the
-  // heading is handed over as a point far enough along it that the direction
-  // survives being turned back into yaw and pitch.
   inout->target = Add(eye, Scale(forward, 20.f));
+  const auto &q = output.transform.rotation;
+  const Quat rotation = Conjugate(Quat{q.x, q.y, q.z, q.w});
+  inout->forward = forward;
+  inout->up = Rotate(rotation, ft_vec3{0, 1, 0});
+  inout->orthographic = false;
+  inout->fov_y = std::clamp(output.lens.fieldOfViewDegrees, 1.f, 175.f) * kPi / 180.f;
+  inout->near_z = output.lens.nearClipDistance > 0 ? output.lens.nearClipDistance : .1f;
+  inout->far_z = output.lens.farClipDistance > inout->near_z ? output.lens.farClipDistance : 100000.f;
+  const float aspect = inout->viewport.y > 0 ? inout->viewport.x / inout->viewport.y : 1.f;
+  inout->aspect = aspect;
+  const auto z = Scale(forward, -1.f), x = Normalize(Cross(inout->up, z)), y = Cross(z, x);
+  const float view[16] = {x.x, y.x, z.x, 0, x.y,          y.y,          z.y,          0,
+                          x.z, y.z, z.z, 0, -Dot(x, eye), -Dot(y, eye), -Dot(z, eye), 1};
+  const float focal = 1.f / std::tan(inout->fov_y * .5f);
+  const float depth = inout->far_z - inout->near_z;
+  const float projection[16] = {focal / aspect,
+                                0,
+                                0,
+                                0,
+                                0,
+                                -focal,
+                                0,
+                                0,
+                                0,
+                                0,
+                                inout->near_z / depth,
+                                -1,
+                                0,
+                                0,
+                                inout->near_z * inout->far_z / depth,
+                                0};
+  for (int c = 0; c < 4; ++c)
+    for (int r = 0; r < 4; ++r) {
+      inout->view_proj[c * 4 + r] = 0;
+      for (int k = 0; k < 4; ++k)
+        inout->view_proj[c * 4 + r] += projection[k * 4 + r] * view[c * 4 + k];
+    }
+  inout->use_view_proj = true;
   return true;
 }
 

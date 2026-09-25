@@ -129,3 +129,14 @@ endif()
 if(TARGET ddnet_physics)
     target_link_libraries(${PROJECT_NAME} PRIVATE ddnet_physics)
 endif()
+# SM64 plugins share the game module's copy of the library: a world holds
+# addresses of its code. The benchmark is for the US game ("sm64"); without
+# it, the SM64 benchmark is left out.
+if(TARGET sm64_physics_us)
+    target_link_libraries(${PROJECT_NAME} PRIVATE sm64_physics_us)
+    if(UNIX AND NOT APPLE)
+        set_property(TARGET ${PROJECT_NAME} APPEND_STRING PROPERTY INSTALL_RPATH ":$ORIGIN/../../libs")
+    endif()
+else()
+    target_compile_definitions(${PROJECT_NAME} PRIVATE PHYSICS_PROFILER_NO_SM64)
+endif()

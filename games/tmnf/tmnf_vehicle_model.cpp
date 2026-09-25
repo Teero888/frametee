@@ -170,12 +170,7 @@ ft_vec3 TransformDirection(const GmIso4 &iso, const GmVec3 &d) {
 
 // What a face is painted with before lighting.
 //
-// The car's real appearance is in its textures, and the module has no textured
-// path to put them through, so there is nothing to sample. The materials do not
-// help either: the validator only attaches them when a pack-wide material
-// repository is installed on the load session, which it does for the map and
-// not for a solid decoded on its own, so every node here comes back with a
-// null material, and asking it for a surface id would be asking nothing.
+// Fallback colors for parts whose material or texture could not be resolved.
 //
 // So the tyres are black, and the rest is left white for the caller to paint
 // with the editor's colour for the world. A flat body reads better than a flat
@@ -199,24 +194,13 @@ ft_color BaseColorFor(const CPlugMaterial *material, std::uint8_t part) {
 // tree comes back with no material at all. That is why the car had no picture on
 // it while the track around it did.
 //
-// The two halves of the answer are both kept. The solid's reference table names
-// the materials it uses, in order; the tree links record which material node
-// each part of the car draws with, in the same order. Pairing them off is what
-// the validator's own linker does with the transient node graph, and the counts
-// are required to agree first: an off-by-one here would not fail, it would paint
-// the windscreen with the tyre.
+// Match reference-table node indices to the nodes actually used by each tree.
+// Traversal order is not reference-table order, especially with shared parts.
 void NameVehicleMaterials(InstalledPackAssetRepository &assets, const PackSet &packs,
                           const std::string &solid_path, StaticSolidArchiveLoadSession &archive,
                           StaticSolidArchiveId payload) {
   GbxFile solid;
   if (!packs.References(solid_path, &solid)) return;
-
-  std::vector<std::string> material_paths;
-  for (const GbxReference &reference : solid.references) {
-    if (reference.name.find(".Material.") == std::string::npos) continue;
-    material_paths.push_back(reference.path);
-  }
-  if (material_paths.empty()) return;
 
   // The nodes the trees actually draw with, first seen first. A vehicle names
   // its materials through its shaders rather than directly, which is the
@@ -231,14 +215,15 @@ void NameVehicleMaterials(InstalledPackAssetRepository &assets, const PackSet &p
         material_nodes.push_back(node);
         return 1;
       });
-  if (material_nodes.size() != material_paths.size()) return;
-
   CGameCtnReplayStaticSolidArchiveGraphWriter writer(&archive.MutableArchiveGraph(), payload);
   CGameCtnReplayStaticSolidArchiveSurfaceGraph &graph = archive.MutableArchiveGraph().SurfaceGraph();
   for (std::size_t i = 0; i < material_nodes.size(); ++i) {
-    std::optional<ResolvedMaterialDefinition> resolved = assets.ResolveMaterialPath(material_paths[i]);
+    const auto reference = std::find_if(solid.references.begin(), solid.references.end(),
+        [&](const GbxReference &ref) { return ref.node_index == material_nodes[i].ArchiveNode().Index(); });
+    if (reference == solid.references.end()) continue;
+    std::optional<ResolvedMaterialDefinition> resolved = assets.ResolveMaterialPath(reference->path);
     if (!resolved) continue;
-    resolved->material.render.SetMaterialPaths(material_paths[i], std::string());
+    resolved->material.render.SetMaterialPaths(reference->path, std::string());
     // The node has to be declared a material as well as defined as one: the
     // assembler counts material nodes before it allocates any.
     if (!writer.AppendNode(material_nodes[i].ArchiveNode(), TMNF_CLASS_CPlugMaterial)) continue;
@@ -252,6 +237,7 @@ struct Walker {
   VehicleModel *out = nullptr;
   const PackSet *packs = nullptr;
   TextureLibrary *textures = nullptr;
+  std::unordered_map<std::string, std::uint32_t> material_ids;
   // Visuals with no usable vertex or index stream. Reported so a silently
   // half-decoded car is distinguishable from a car that simply has few parts.
   std::uint32_t skipped = 0;
@@ -306,14 +292,21 @@ private:
     GxTexCoordSet uv;
     const bool has_uv = visual.VStreamOrClassic_GetTexCoordSet(uv, 0u, nullptr) != 0 && uv.Count() == vertex_count;
     std::uint32_t layer = kNoTextureLayer;
+    std::uint32_t material_id = kNoTextureLayer;
     if (has_uv && material != nullptr && packs != nullptr && textures != nullptr) {
       const std::string &path = material->ReplayRenderDefinition().MaterialPlainPath();
       if (!path.empty()) {
-        // The car reads no opacity from its pictures: their fourth channel is
-        // specular strength, and taking it as alpha is what made the body and
-        // its wheels see-through.
-        if (const std::optional<std::uint32_t> found = textures->Layer(*packs, path, false)) {
-          layer = *found;
+        auto found = material_ids.find(path);
+        if (found == material_ids.end()) {
+          const auto id = static_cast<std::uint32_t>(out->materials.size());
+          out->materials.push_back(textures->Material(*packs, path));
+          found = material_ids.emplace(path, id).first;
+        }
+        material_id = found->second;
+        const auto &render = out->materials[material_id];
+        if (render.style.invisible) return;
+        layer = render.diffuse;
+        if (layer != kNoTextureLayer) {
           // The bodywork's own livery, which a chosen skin replaces. The
           // material is named for it: every car in the game has a "<Car>Skin"
           // material and it is the only one a livery archive supplies.
@@ -331,6 +324,7 @@ private:
       face.b = TransformPoint(iso, vertices[i1].position);
       face.c = TransformPoint(iso, vertices[i2].position);
       face.layer = layer;
+      face.material = material_id;
       if (layer != kNoTextureLayer) {
         const unsigned short corner[3] = {i0, i1, i2};
         for (int k = 0; k < 3; ++k) {
@@ -346,18 +340,18 @@ private:
 
       // Authored normals decide which way a face points, and the winding is
       // corrected against them so back faces can be culled.
-      face.normal = Normalize(geometric);
+      for (auto &normal : face.normals) normal = Normalize(geometric);
       if (has_normal) {
-        const ft_vec3 authored = Add(Add(TransformDirection(iso, vertices[i0].normal),
-                                         TransformDirection(iso, vertices[i1].normal)),
-                                     TransformDirection(iso, vertices[i2].normal));
+        const unsigned short corner[3] = {i0, i1, i2};
+        for (int k = 0; k < 3; ++k)
+          face.normals[k] = Normalize(TransformDirection(iso, vertices[corner[k]].normal), face.normals[k]);
+        const ft_vec3 authored = Add(Add(face.normals[0], face.normals[1]), face.normals[2]);
         if (LengthSq(authored) > 1e-12f) {
           if (Dot(geometric, authored) < 0.f) {
             std::swap(face.b, face.c);
             std::swap(face.uv[1], face.uv[2]);
-            face.normal = Scale(face.normal, -1.f);
+            std::swap(face.normals[1], face.normals[2]);
           }
-          face.normal = Normalize(authored, face.normal);
         }
       }
 
@@ -515,6 +509,7 @@ bool LoadVehicleModel(ft_game *game, PackSet &packs, TextureLibrary &textures, c
   std::uint32_t skipped = 0;
   for (; chosen < std::max<std::size_t>(levels.size(), 1u); ++chosen) {
     out->faces.clear();
+    out->materials.clear();
     Walker walker;
     walker.out = out;
     walker.packs = &packs;

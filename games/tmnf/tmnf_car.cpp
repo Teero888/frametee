@@ -294,11 +294,20 @@ void DrawAuthored(const ft_engine_api *api, const VehicleModel &model, const ft_
       color = replace[face.part] ? state : MixColor(color, state, 0.35f);
     }
     color.a *= opacity;
+    const ft_vec3 positions[] = {place(face.a), place(face.b), place(face.c)};
+    ft_vec3 normals[3];
+    for (int k = 0; k < 3; ++k) {
+      ft_vec3 n = face.normals[k];
+      if (wheel) n = Rotate(local, n);
+      else if (link) n = {n.x * cos_swing - n.y * sin_swing, n.x * sin_swing + n.y * cos_swing, n.z};
+      normals[k] = Rotate(pose.rotation, n);
+    }
+    if (GpuCaptureVehicle(face.material, face_layer, positions, normals, face.uv, color)) continue;
     if (painted && api->draw_triangle3_textured) {
-      api->draw_triangle3_textured(place(face.a), place(face.b), place(face.c), face.uv[0], face.uv[1], face.uv[2],
+      api->draw_triangle3_textured(positions[0], positions[1], positions[2], face.uv[0], face.uv[1], face.uv[2],
                                    face_layer, color);
     } else {
-      api->draw_triangle3(place(face.a), place(face.b), place(face.c), color);
+      api->draw_triangle3(positions[0], positions[1], positions[2], color);
     }
   }
 }

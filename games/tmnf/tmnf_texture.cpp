@@ -1,17 +1,12 @@
 // Turning the game's textures into something the engine can sample.
 //
-// TrackMania ships its images as DXT-compressed DDS inside the packs. The
-// engine's 3D path samples one texture array, so every texture a track needs
-// becomes one layer of it: same size, same format, uncompressed RGBA. That
-// costs more memory than keeping them compressed and is worth it here, because
-// it means the whole world goes out in a single draw and a triangle picks its
-// texture with an integer.
-//
-// The decoder below handles DXT1, DXT3 and DXT5, which is everything the
-// stadium, island, bay, coast, alpine, speed and rally packs use for surfaces.
-// Anything else is skipped and the surface falls back to a flat colour.
+// The pack descriptors reference DDS, TGA and video assets in GameData. Keep
+// decoded pages at their authored size for the native Vulkan renderer, which
+// uploads separate mipmapped images. The generic host renderer retains its
+// array-texture fallback for hosts without the native GPU interface.
 
 #include "tmnf_internal.h"
+#include "format/archive/tmnf_gbx_body_reader.h"
 
 #include <zlib.h>
 
@@ -24,6 +19,21 @@
 #include <cerrno>
 #include <cmath>
 #include <cstring>
+
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_TGA
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#define STBI_NO_STDIO
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+#include <stb_image.h>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #ifdef TMNF_HAS_FFMPEG
 extern "C" {
@@ -52,21 +62,28 @@ struct DdsInfo {
   std::uint32_t height = 0u;
   std::uint32_t fourcc = 0u;
   std::uint32_t rgb_bit_count = 0u;
+  std::uint32_t masks[4]{};
+  std::uint32_t pitch = 0u;
+  bool luminance = false;
   bool has_alpha_channel = false;
   const unsigned char *data = nullptr;
   std::size_t data_size = 0u;
 };
 
 bool ParseDds(const std::vector<unsigned char> &bytes, DdsInfo *out) {
-  if (bytes.size() < kDdsHeaderSize || ReadU32(bytes.data()) != kDdsMagic) return false;
+  if (bytes.size() < kDdsHeaderSize || ReadU32(bytes.data()) != kDdsMagic || ReadU32(bytes.data()+4)!=124) return false;
   const unsigned char *h = bytes.data() + 4;
   out->height = ReadU32(h + 8);
   out->width = ReadU32(h + 12);
+  out->pitch = (ReadU32(h+4)&8u) ? ReadU32(h+16) : 0;
   const unsigned char *pf = h + 72; // DDS_PIXELFORMAT
   const std::uint32_t flags = ReadU32(pf + 4);
+  if(ReadU32(pf)!=32) return false;
   out->fourcc = ReadU32(pf + 8);
   out->rgb_bit_count = ReadU32(pf + 12);
   out->has_alpha_channel = (flags & 0x1u) != 0u; // DDPF_ALPHAPIXELS
+  out->luminance = (flags & 0x20000u) != 0u;
+  for(unsigned i=0;i<4;++i) out->masks[i]=ReadU32(pf+16+i*4);
   if ((flags & 0x4u) == 0u) out->fourcc = 0u;    // DDPF_FOURCC clear: uncompressed
   out->data = bytes.data() + kDdsHeaderSize;
   out->data_size = bytes.size() - kDdsHeaderSize;
@@ -136,15 +153,15 @@ void DecodeDxt5Alpha(const unsigned char *block, std::uint8_t out[16][4]) {
 
 // The top mip of a DDS, as RGBA8. Only the top level is read: the engine builds
 // its own mip chain when the layer is uploaded.
+} // namespace
+
 bool DecodeDds(const std::vector<unsigned char> &bytes, std::uint32_t *width, std::uint32_t *height,
                std::vector<std::uint8_t> *rgba) {
+  if (!width || !height || !rgba) return false;
   DdsInfo dds;
   if (!ParseDds(bytes, &dds)) return false;
-  // Something the size of a whole level is not a surface texture; it is a
-  // lightmap atlas or a cube map face strip, and unpacking one costs more than
-  // it can possibly be worth on screen. Stadium's advertising hoardings are
-  // genuinely 2048, so that is the line rather than anything below it.
-  if (dds.width > 2048u || dds.height > 2048u) return false;
+  // Bound allocations before trusting dimensions from the DDS header.
+  if (dds.width > 8192u || dds.height > 8192u || std::uint64_t(dds.width)*dds.height > 16777216u) return false;
 
   *width = dds.width;
   *height = dds.height;
@@ -178,23 +195,31 @@ bool DecodeDds(const std::vector<unsigned char> &bytes, std::uint32_t *width, st
     return true;
   }
 
-  // Uncompressed. TrackMania stores these as BGRA or BGR.
-  if (dds.rgb_bit_count == 32u || dds.rgb_bit_count == 24u) {
+  // DDS channel masks also cover RGB565, luminance, and RGBA byte order.
+  if (dds.fourcc == 0 && (dds.rgb_bit_count == 32u || dds.rgb_bit_count == 24u || dds.rgb_bit_count == 16u || dds.rgb_bit_count == 8u)) {
     const std::size_t stride = dds.rgb_bit_count / 8u;
-    if (dds.data_size < static_cast<std::size_t>(dds.width) * dds.height * stride) return false;
-    for (std::size_t i = 0; i < static_cast<std::size_t>(dds.width) * dds.height; ++i) {
-      const unsigned char *src = dds.data + i * stride;
-      std::uint8_t *dst = &(*rgba)[i * 4u];
-      dst[0] = src[2];
-      dst[1] = src[1];
-      dst[2] = src[0];
-      dst[3] = stride == 4u && dds.has_alpha_channel ? src[3] : 255u;
+    const std::size_t pitch=dds.pitch?dds.pitch:dds.width*stride;
+    if(pitch<dds.width*stride || dds.data_size < pitch*dds.height) return false;
+    const auto channel=[](std::uint32_t value,std::uint32_t mask,std::uint8_t fallback) {
+      if(!mask) return fallback;
+      while(!(mask&1)) {mask>>=1;value>>=1;}
+      return static_cast<std::uint8_t>((std::uint64_t(value&mask)*255+mask/2)/mask);
+    };
+    for(std::uint32_t y=0;y<dds.height;++y) for(std::uint32_t x=0;x<dds.width;++x) {
+      const auto *src=dds.data+y*pitch+x*stride;
+      std::uint32_t value=0;for(std::size_t b=0;b<stride;++b)value|=std::uint32_t(src[b])<<(b*8);
+      auto *dst=&(*rgba)[(std::size_t(y)*dds.width+x)*4];
+      dst[0]=channel(value,dds.masks[0],0);
+      dst[1]=dds.luminance?dst[0]:channel(value,dds.masks[1],0);
+      dst[2]=dds.luminance?dst[0]:channel(value,dds.masks[2],0);
+      dst[3]=dds.has_alpha_channel?channel(value,dds.masks[3],255):255;
     }
     return true;
   }
   return false;
 }
 
+namespace {
 // --- Bink --------------------------------------------------------------------
 
 // Animated signs are tiny Bink videos. They are decoded once here and packed
@@ -235,7 +260,8 @@ std::int64_t SeekVideo(void *opaque, std::int64_t offset, int whence) {
 bool DecodeBink(const std::vector<unsigned char> &bytes, std::uint32_t *width, std::uint32_t *height,
                 std::vector<std::uint8_t> *rgba, TextureAnimation *animation) {
   constexpr std::size_t kIoBufferSize = 32768u;
-  constexpr std::size_t kMaximumFrames = 256u;
+  constexpr std::size_t kMaximumFrames = 2048u;
+  constexpr std::size_t kMaximumVideoBytes = 128u * 1024u * 1024u;
   if (bytes.empty() || width == nullptr || height == nullptr || rgba == nullptr || animation == nullptr)
     return false;
 
@@ -286,10 +312,13 @@ bool DecodeBink(const std::vector<unsigned char> &bytes, std::uint32_t *width, s
 
   {
     const auto receive = [&]() {
-      while (frames.size() < kMaximumFrames) {
+      for (;;) {
         const int result = avcodec_receive_frame(codec, frame);
         if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) return true;
         if (result < 0) return false;
+        // Reject oversized videos instead of silently looping a truncated
+        // prefix. Official animated track signs fit comfortably in this limit.
+        if (frames.size() >= kMaximumFrames || (frames.size()+1)*std::size_t(frame_width)*frame_height*4 > kMaximumVideoBytes) return false;
         std::vector<std::uint8_t> pixels(static_cast<std::size_t>(frame_width) * frame_height * 4u);
         std::uint8_t *destination[] = {pixels.data()};
         int destination_stride[] = {frame_width * 4};
@@ -299,7 +328,7 @@ bool DecodeBink(const std::vector<unsigned char> &bytes, std::uint32_t *width, s
       return true;
     };
 
-    while (frames.size() < kMaximumFrames && av_read_frame(format, packet) >= 0) {
+    while (av_read_frame(format, packet) >= 0) {
       if (packet->stream_index == stream_index &&
           (avcodec_send_packet(codec, packet) < 0 || !receive())) {
         av_packet_unref(packet);
@@ -341,6 +370,8 @@ cleanup:
   avcodec_free_context(&codec);
   if (opened) avformat_close_input(&format);
   else avformat_free_context(format);
+  if (io) av_freep(&io->buffer);
+  else av_free(io_buffer);
   avio_context_free(&io);
   return ok;
 }
@@ -739,7 +770,9 @@ std::optional<std::string> ImageOfTexture(const PackSet &packs, const std::strin
   if (!packs.References(texture_path, &texture)) return std::nullopt;
   for (const GbxReference &image : texture.references) {
     const std::string lower = Lower(image.name);
-    if (lower.find(".dds") != std::string::npos || lower.find(".tga") != std::string::npos) return image.path;
+    if (lower.find(".dds") != std::string::npos || lower.find(".tga") != std::string::npos ||
+        lower.find(".bik") != std::string::npos || lower.find(".png") != std::string::npos ||
+        lower.find(".jpg") != std::string::npos) return image.path;
   }
   return std::nullopt;
 }
@@ -826,6 +859,9 @@ MaterialStyle TextureLibrary::Style(const PackSet &packs, const std::string &mat
   }
   if (const MaterialStyle *found = StyleForKey(ShaderKey(material_path))) style = *found;
 
+  std::vector<MaterialTextureSlot> slots;
+  ReadMaterialTextures(packs, material_path, &slots, &style);
+
   style_by_material_.emplace(material_path, style);
   return style;
 }
@@ -855,74 +891,63 @@ std::optional<std::uint32_t> TextureLibrary::Layer(const PackSet &packs, const s
 
 std::optional<std::uint32_t> TextureLibrary::ImageLayer(const PackSet &packs, const std::string &image_path,
                                                         bool keep_alpha) {
+  std::string selected_path = image_path;
+  std::vector<unsigned char> bytes;
+  const auto slash = image_path.find_last_of("\\/");
+  if (!environment_.empty() && !mood_.empty() && slash != std::string::npos &&
+      Lower(image_path).find(Lower(environment_) + "\\media\\texture\\") == 0) {
+    const std::string remapped = environment_ + "\\Media\\Moods\\" + mood_ + "\\" + image_path.substr(slash + 1);
+    if (packs.Read(remapped, &bytes)) selected_path = remapped;
+  }
   // Two materials very often paint the same picture, so layers are keyed on the
   // image rather than on the material that asked for it -- but only among the
   // materials that read its alpha the same way, because the channel is opacity
   // for one surface and specular strength for the next.
-  const std::string shared_key = AlphaKey(image_path, keep_alpha);
+  const std::string shared_key = AlphaKey(selected_path, keep_alpha);
   const auto shared = by_image_.find(shared_key);
   if (shared != by_image_.end()) return shared->second;
 
-  std::vector<unsigned char> bytes;
   std::uint32_t width = 0u, height = 0u;
   std::vector<std::uint8_t> rgba;
   TextureAnimation animation;
-  const std::string lower = Lower(image_path);
-  const bool decoded = packs.Read(image_path, &bytes) &&
+  const std::string lower = Lower(selected_path);
+  bool decoded = (!bytes.empty() || packs.Read(selected_path, &bytes)) &&
                        (lower.find(".bik") != std::string::npos
                             ? DecodeBink(bytes, &width, &height, &rgba, &animation)
                             : DecodeDds(bytes, &width, &height, &rgba));
+  if (!decoded && !bytes.empty() && bytes.size() <= INT_MAX) {
+    int w = 0, h = 0, channels = 0;
+    if (unsigned char *pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &channels, 4)) {
+      width = static_cast<unsigned>(w); height = static_cast<unsigned>(h);
+      rgba.assign(pixels, pixels + std::size_t(w) * h * 4);
+      stbi_image_free(pixels);
+      decoded = true;
+    }
+  }
   if (!decoded) {
     by_image_.emplace(shared_key, std::nullopt);
     return std::nullopt;
   }
 
   if (lower.find("stadiumstartsignglow") != std::string::npos) {
-    // The archive only places the additive glow visual; the opaque traffic
-    // light face used beneath it is not a separate scene placement. Recover
-    // that authored face here so the lamps retain their round lenses and
-    // housing detail instead of stretching the tiny glow dots themselves.
-    std::vector<unsigned char> face_bytes;
-    std::uint32_t face_width = 0u, face_height = 0u;
-    std::vector<std::uint8_t> face;
-    if (!packs.Read("Stadium\\Media\\Texture\\Image\\StadiumStartSignD.dds", &face_bytes) ||
-        !DecodeDds(face_bytes, &face_width, &face_height, &face)) {
-      by_image_.emplace(shared_key, std::nullopt);
-      return std::nullopt;
-    }
-
     animation.kind = TextureAnimationKind::StartLights;
-    animation.frame_count = 3u;
+    animation.frame_count = 3;
     animation.first_layer = static_cast<std::uint32_t>(layers_.size());
-
-    if (layers_.size() + animation.frame_count > kMaxTextureLayers) {
-      by_image_.emplace(shared_key, std::nullopt);
-      return std::nullopt;
-    }
-
-    // StartSignD is vertical while the glow visual maps U along the long axis.
-    // Rotate it once into that authored orientation. One page per phase varies
-    // only lens intensity, so playback remains an array-layer selection.
-    constexpr float kInactiveLight = 0.55f;
-    constexpr float kActiveLight = 2.4f;
-    const std::uint32_t output_width = face_height;
-    const std::uint32_t output_height = face_width;
-    for (std::uint32_t active = 0u; active < animation.frame_count; ++active) {
-      std::vector<std::uint8_t> frame(static_cast<std::size_t>(output_width) * output_height * 4u, 0u);
-      for (std::uint32_t y = 0u; y < output_height; ++y) {
-        for (std::uint32_t x = 0u; x < output_width; ++x) {
-          const std::uint32_t source_x = y * face_width / output_height;
-          const std::uint32_t source_y = x * face_height / output_width;
-          const std::uint32_t lens = std::min(2u, source_y * 3u / face_height);
-          std::uint8_t *pixel = &frame[(static_cast<std::size_t>(y) * output_width + x) * 4u];
-          const std::uint8_t *source = &face[(static_cast<std::size_t>(source_y) * face_width + source_x) * 4u];
-          const float intensity = lens == active ? kActiveLight : kInactiveLight;
-          for (int channel = 0; channel < 3; ++channel)
-            pixel[channel] = static_cast<std::uint8_t>(std::min(255.f, source[channel] * intensity));
-          pixel[3] = source[3];
-        }
+    if (layers_.size() + 3 > kMaxTextureLayers) return std::nullopt;
+    // Each row is one countdown state. U runs along the three lenses, while
+    // the selected third of V spans the entire width of the housing. Merely
+    // masking the other colours leaves the lamp narrow and off centre.
+    for (unsigned active = 0; active < 3; ++active) {
+      auto frame = rgba;
+      for (unsigned y = 0; y < height; ++y) {
+        const float source_y = std::clamp((y + .5f + active * height) / 3.f - .5f, 0.f, float(height - 1));
+        const unsigned y0 = unsigned(source_y), y1 = std::min(y0 + 1, height - 1);
+        const float blend = source_y - y0;
+        for (unsigned x = 0; x < width * 4; ++x)
+          frame[std::size_t(y) * width * 4 + x] = static_cast<std::uint8_t>(
+              rgba[std::size_t(y0) * width * 4 + x] * (1 - blend) + rgba[std::size_t(y1) * width * 4 + x] * blend);
       }
-      layers_.push_back(Page{std::move(frame), output_width, output_height, keep_alpha, animation});
+      layers_.push_back(Page{std::move(frame), width, height, keep_alpha, animation});
     }
     by_image_.emplace(shared_key, animation.first_layer);
     return animation.first_layer;
@@ -945,14 +970,118 @@ TextureAnimation TextureLibrary::Animation(std::uint32_t layer) const {
   return layer < layers_.size() ? layers_[layer].animation : TextureAnimation{};
 }
 
-std::optional<std::uint32_t> TextureLibrary::DirectionSignLayer(const PackSet &packs) {
+RenderMaterial TextureLibrary::Material(const PackSet &packs, const std::string &path) {
+  if (auto found = render_by_material_.find(path); found != render_by_material_.end()) return found->second;
+  RenderMaterial result;
+  result.style = Style(packs, path);
+  result.diffuse = Layer(packs, path, result.style.transparent || result.style.alpha_test).value_or(kNoTextureLayer);
+  result.animation = Animation(result.diffuse);
+  std::vector<MaterialTextureSlot> slots;
+  ReadMaterialTextures(packs, path, &slots);
+  const auto slot_layer = [&](std::initializer_list<const char *> names) {
+    for (const char *name : names) {
+      for (const auto &slot : slots) {
+        if (slot.sampler != name) continue;
+        if (auto image = ImageOfTexture(packs, slot.path))
+          if (auto layer = ImageLayer(packs, *image, true)) return *layer;
+      }
+    }
+    return kNoTextureLayer;
+  };
+  result.normal = slot_layer({"Normal"});
+  if(result.normal < layers_.size()) {
+    const auto &source=layers_[result.normal];
+    bool height_field=!source.rgba.empty();
+    for(std::size_t i=0;i<source.rgba.size();i+=4)
+      height_field &= source.rgba[i]==source.rgba[i+1] && source.rgba[i]==source.rgba[i+2];
+    if(height_field) {
+      const std::string key="@height-normal/"+std::to_string(result.normal);
+      const auto known=by_image_.find(key);
+      if(known!=by_image_.end()) result.normal=known->second.value_or(kNoTextureLayer);
+      else {
+        Page normal=source;
+        const auto sample=[&](int x,int y) {
+          const unsigned sx=(x+int(source.width))%source.width,sy=(y+int(source.height))%source.height;
+          return source.rgba[(std::size_t(sy)*source.width+sx)*4]/255.f;
+        };
+        for(unsigned y=0;y<source.height;++y) for(unsigned x=0;x<source.width;++x) {
+          const ft_vec3 n=Normalize(ft_vec3{4*(sample(x-1,y)-sample(x+1,y)),4*(sample(x,y-1)-sample(x,y+1)),1});
+          auto *pixel=&normal.rgba[(std::size_t(y)*source.width+x)*4];
+          pixel[0]=static_cast<std::uint8_t>((n.x*.5f+.5f)*255);
+          pixel[1]=static_cast<std::uint8_t>((n.y*.5f+.5f)*255);
+          pixel[2]=static_cast<std::uint8_t>((n.z*.5f+.5f)*255);pixel[3]=255;
+        }
+        result.normal=static_cast<std::uint32_t>(layers_.size());
+        layers_.push_back(std::move(normal));by_image_.emplace(key,result.normal);
+      }
+    }
+  }
+  if (result.normal < layers_.size()) {
+    const auto &pixels = layers_[result.normal].rgba;
+    bool red_is_zero = !pixels.empty(), alpha_varies = false;
+    for (std::size_t i = 0; i < pixels.size(); i += 4) {
+      red_is_zero &= pixels[i] == 0;
+      alpha_varies |= pixels[i + 3] != 255;
+    }
+    // TMNF's DXT5 normal maps store X in alpha, Y in green, Z in blue.
+    result.packed_normal = red_is_zero && alpha_varies;
+  }
+  result.specular = slot_layer({"Specular"});
+  result.occlusion = slot_layer({"Occlusion"});
+  result.emission = slot_layer({"SelfIllum"});
+  render_by_material_.emplace(path, result);
+  return result;
+}
+
+std::optional<std::uint32_t> TextureLibrary::DirectionSignLayer(const PackSet &packs, bool left) {
   // The screen is an opaque panel; its alpha is not opacity.
+  if (auto layer = ImageLayer(packs, left ? "Skins\\Any\\Advertisement\\SignLeft.bik"
+                                        : "Skins\\Any\\Advertisement\\SignRight.bik", false)) return layer;
+  if (left) return std::nullopt;
   return ImageLayer(packs, "Stadium\\Media\\Texture\\Image\\SignRight.bik", false);
+}
+
+float TextureLibrary::MoodTime(const PackSet &packs) {
+  if (mood_time_) return *mood_time_;
+  // CGameCtnDecorationMood, chunks 000 (geography) and 001 (remapped
+  // day time, external skin, remapping folder). The entries are hashed, so
+  // identify them by their declared folder rather than by their pack name.
+  const std::string folder = environment_ + "\\Media\\Moods\\" + mood_ + "\\";
+  for (const auto &path : packs.PathsOfClass(0x0303a000u)) {
+    std::vector<unsigned char> bytes;
+    if (!packs.Read(path, &bytes) || bytes.size() > UINT32_MAX) continue;
+    std::uint32_t class_id = 0, offset = 0;
+    if (!GbxBodyOffsetReader::TryParse(bytes.data(), static_cast<u32>(bytes.size()), &class_id, &offset)) continue;
+    if (offset + 24u <= bytes.size() && ReadU32(bytes.data() + offset) == 0x0303a000u) offset += 24u;
+    if (offset + 16u > bytes.size() || ReadU32(bytes.data() + offset) != 0x0303a001u) continue;
+    const auto length = ReadU32(bytes.data() + offset + 12u);
+    if (length > bytes.size() - offset - 16u ||
+        std::string_view(reinterpret_cast<const char *>(bytes.data() + offset + 16u), length) != folder) continue;
+    float time;
+    std::memcpy(&time, bytes.data() + offset + 4u, sizeof(time));
+    if (std::isfinite(time) && time >= 0 && time <= 1) return *(mood_time_ = time);
+  }
+  // Missing/custom decorations still get a useful fixed-mood fallback.
+  return *(mood_time_ = mood_ == "Night" ? .15f : mood_ == "Sunrise" ? .53f : mood_ == "Sunset" ? .75f : .65f);
+}
+
+ft_color TextureLibrary::MoodColor(const PackSet &packs, const std::string &name, ft_color fallback) {
+  const float time = MoodTime(packs);
+  const auto layer = ImageLayer(packs, environment_ + "\\Media\\Moods\\" + mood_ + "\\" + name + ".tga", false);
+  if (!layer) return fallback;
+  const auto &page=layers_[*layer];
+  const auto x = std::min(page.width - 1, static_cast<std::uint32_t>(time * page.width));
+  const auto offset=(std::size_t(page.height/2)*page.width+x)*4;
+  return {page.rgba[offset]/255.f,page.rgba[offset+1]/255.f,page.rgba[offset+2]/255.f,1};
 }
 
 std::optional<std::uint32_t> TextureLibrary::SkyLayer(const PackSet &packs, const std::string &environment,
                                                       const std::string &mood) {
   if (environment.empty() || mood.empty()) return std::nullopt;
+  // The high quality Stadium sky is the mood's colour gradient. The older
+  // ceiling/panorama pair is a fallback for environments without that asset.
+  if (auto gradient = ImageLayer(packs, environment + "\\Media\\Moods\\" + mood + "\\SkyColor.tga", false))
+    return gradient;
   // Not a file, so it cannot collide with one: the pack paths this is keyed
   // beside all start with an environment name.
   const std::string key = "@sky\\" + environment + "\\" + mood;
@@ -1024,10 +1153,12 @@ std::optional<std::uint32_t> TextureLibrary::SkyLayer(const PackSet &packs, cons
 }
 
 void TextureLibrary::Clear() {
+  mood_time_.reset();
   layers_.clear();
   by_material_.clear();
   by_image_.clear();
   style_by_material_.clear();
+  render_by_material_.clear();
   uploaded_ = 0u;
   page_size_ = 0u;
 }
@@ -1064,6 +1195,10 @@ std::uint32_t TextureLibrary::ChoosePageSize() const {
 bool TextureLibrary::Upload(ft_game *game) {
   const ft_engine_api *api = game->engine;
   if (game->headless || layers_.empty() || !api->texture_create || !api->texture_update_layer) return false;
+  if (GpuUploadTextures(game)) {
+    uploaded_ = layers_.size();
+    return true;
+  }
   if (texture_ != nullptr && uploaded_ >= layers_.size()) return true;
 
   // The array has to be created at its final size, so any layer discovered
@@ -1142,7 +1277,7 @@ bool TextureLibrary::Upload(ft_game *game) {
 }
 
 std::optional<std::uint32_t> TextureLibrary::SkinLayer(const std::string &archive_path, const std::string &key) {
-  const std::string cache_key = "skin\x01" + key;
+  const std::string cache_key = "skin\x01" + archive_path;
   if (const auto cached = by_image_.find(cache_key); cached != by_image_.end()) return cached->second;
 
   std::vector<unsigned char> dds;

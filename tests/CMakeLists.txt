@@ -27,59 +27,42 @@ else()
 endif()
 add_test(NAME game_host_browse COMMAND game_host_browse_test)
 
-if(TARGET sm64_game)
-    add_library(simulation_probe MODULE plugin_simulation.c)
-    target_include_directories(simulation_probe PRIVATE ../src/plugins ../include ../libs/cglm/include ../games/sm64/include)
-    set_target_properties(simulation_probe PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/simulation_probe"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/simulation_probe")
-    configure_file(plugin_simulation.toml "${CMAKE_BINARY_DIR}/plugins/simulation_probe/plugin.toml" COPYONLY)
-    add_executable(sm64_simulation_test sm64_simulation.cpp
-        ../games/sm64/sm64_backend.cpp ../games/sm64/sm64_vulkan.cpp ../games/sm64/fast3d/gfx_pc.c)
-    set_target_properties(sm64_simulation_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    target_include_directories(sm64_simulation_test PRIVATE ../games/sm64 ../games/sm64/include ../games/sm64/fast3d ../include ../libs/cglm/include ../libs/sm64_physics/include ../libs/sm64_physics/upstream/include)
-    target_include_directories(sm64_simulation_test PRIVATE "${CMAKE_BINARY_DIR}/games/sm64")
-    target_compile_definitions(sm64_simulation_test PRIVATE _LANGUAGE_C)
-    target_compile_options(sm64_simulation_test PRIVATE -Wno-unused-parameter)
-    add_dependencies(sm64_simulation_test sm64_fast3d_shaders)
-    target_link_libraries(sm64_simulation_test PRIVATE sm64_physics_core Vulkan::Vulkan Threads::Threads ${CMAKE_DL_LIBS})
-    if(UNIX AND NOT APPLE)
-        add_executable(sm64_render_cache_test sm64_render_cache.cpp)
-        set_target_properties(sm64_render_cache_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-        target_include_directories(sm64_render_cache_test PRIVATE ../include ../games/sm64/include)
-        target_link_libraries(sm64_render_cache_test PRIVATE ${CMAKE_DL_LIBS})
-        add_dependencies(sm64_render_cache_test sm64_game)
-    endif()
-    add_executable(sm64_physics_test sm64_physics.cpp
-        ../games/sm64/sm64_backend.cpp ../games/sm64/sm64_vulkan.cpp ../games/sm64/fast3d/gfx_pc.c)
-    set_target_properties(sm64_physics_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    target_include_directories(sm64_physics_test PRIVATE ../games/sm64 ../games/sm64/include ../games/sm64/fast3d ../include "${CMAKE_BINARY_DIR}/games/sm64" ../libs/sm64_physics/include ../libs/sm64_physics/upstream/include)
-    target_compile_definitions(sm64_physics_test PRIVATE _LANGUAGE_C)
-    target_compile_options(sm64_physics_test PRIVATE -Wno-unused-parameter)
-    add_dependencies(sm64_physics_test sm64_fast3d_shaders)
-    target_link_libraries(sm64_physics_test PRIVATE sm64_physics_core Vulkan::Vulkan Threads::Threads ${CMAKE_DL_LIBS})
-    if(ENABLE_SANITIZERS AND NOT MSVC)
-        target_compile_options(sm64_simulation_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-        target_link_options(sm64_simulation_test PRIVATE -fsanitize=address,undefined)
-    endif()
-    set(FRAMETEE_SM64_TEST_SETUP "" CACHE FILEPATH "Local SM64 setup with ROM/runtime for integration tests")
-    option(FRAMETEE_SM64_GPU_TESTS "Run SM64 desktop GPU presentation regression (requires a display)" OFF)
-    if(FRAMETEE_SM64_TEST_SETUP)
-        add_test(NAME sm64_physics COMMAND sm64_physics_test "${FRAMETEE_SM64_TEST_SETUP}")
-        add_test(NAME sm64_simulation COMMAND sm64_simulation_test "${FRAMETEE_SM64_TEST_SETUP}")
-        if(TARGET sm64_render_cache_test)
-            add_test(NAME sm64_render_cache COMMAND sm64_render_cache_test "$<TARGET_FILE:sm64_game>" "${FRAMETEE_SM64_TEST_SETUP}")
+if(TARGET sm64_game_us)
+    # Per version of the game: a headless SM64 plugin (the generic simulation
+    # API and libsm64_physics called directly, as SM64 plugins do), and frames
+    # drawn offscreen as the module draws them, into PNG files.
+    foreach(version us jp eu)
+        if(version STREQUAL "us")
+            set(game_id "sm64")
+        else()
+            set(game_id "sm64_${version}")
         endif()
-        add_test(NAME sm64_plugin_simulation COMMAND frametee --headless --game sm64
-            --level "${FRAMETEE_SM64_TEST_SETUP}" --plugin simulation_probe)
-        set_tests_properties(sm64_plugin_simulation PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-            ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config;APPDATA=${CMAKE_BINARY_DIR}/test-config")
-        if(FRAMETEE_SM64_GPU_TESTS)
-            find_package(Python3 REQUIRED COMPONENTS Interpreter)
-            add_test(NAME sm64_render COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/sm64_render.py"
-                --exe "$<TARGET_FILE:frametee>" --setup "${FRAMETEE_SM64_TEST_SETUP}")
+        set(plugin simulation_probe_${version})
+        add_library(${plugin} MODULE plugin_simulation.c)
+        target_include_directories(${plugin} PRIVATE ../src/plugins ../include ../libs/cglm/include ../games/sm64/include)
+        target_compile_definitions(${plugin} PRIVATE SM64_GAME_ID="${game_id}")
+        target_link_libraries(${plugin} PRIVATE sm64_physics_${version})
+        set_target_properties(${plugin} PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/${plugin}"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/${plugin}"
+            BUILD_RPATH_USE_ORIGIN ON)
+        set(SM64_PLUGIN_GAME_ID "${game_id}")
+        configure_file(plugin_simulation.toml "${CMAKE_BINARY_DIR}/plugins/${plugin}/plugin.toml" @ONLY)
+
+        add_executable(sm64_render_frames_${version} sm64_render.c)
+        target_include_directories(sm64_render_frames_${version} PRIVATE ../libs/stb)
+        target_link_libraries(sm64_render_frames_${version} PRIVATE sm64_render_${version})
+
+        # The user's ROM of this version.
+        string(TOUPPER "${version}" upper)
+        set(FRAMETEE_SM64_TEST_ROM_${upper} "" CACHE FILEPATH "Super Mario 64 (${upper}) ROM for the SM64 integration tests")
+        if(FRAMETEE_SM64_TEST_ROM_${upper})
+            add_test(NAME sm64_plugin_simulation_${version} COMMAND frametee --headless --game ${game_id}
+                --level "${FRAMETEE_SM64_TEST_ROM_${upper}}" --plugin ${plugin})
+            set_tests_properties(sm64_plugin_simulation_${version} PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+                ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config;APPDATA=${CMAKE_BINARY_DIR}/test-config")
         endif()
-    endif()
+    endforeach()
 endif()
 
 if(TARGET ddnet_game)

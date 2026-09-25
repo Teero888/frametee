@@ -106,6 +106,8 @@ PackSet::PackSet() = default;
 PackSet::~PackSet() = default;
 
 bool PackSet::Open(const std::string &packs_dir, const std::vector<std::string> &pack_names) {
+  Close();
+  directories_.clear();
   root_ = packs_dir;
   data_root_ = FindGameData(packs_dir);
   const std::vector<std::byte> packlist = ReadFile(packs_dir + "/packlist.dat");
@@ -231,21 +233,25 @@ bool PackSet::ReadFromGameData(const std::string &plain_path, std::vector<unsign
   {
     std::error_code error;
     if (!std::filesystem::is_regular_file(full, error)) {
-      const std::size_t slash = full.find_last_of('/');
-      if (slash == std::string::npos) return false;
-      const std::string directory = full.substr(0u, slash);
-      const std::string wanted = Lowered(full.substr(slash + 1u));
-
-      auto listing = directories_.find(directory);
-      if (listing == directories_.end()) {
-        std::unordered_map<std::string, std::string> entries;
-        for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end; it.increment(error))
-          entries.emplace(Lowered(it->path().filename().string()), it->path().string());
-        listing = directories_.emplace(directory, std::move(entries)).first;
+      std::filesystem::path current(data_root_);
+      for (const auto &component : std::filesystem::path(relative)) {
+        const auto candidate = current / component;
+        error.clear();
+        if (std::filesystem::exists(candidate, error)) { current = candidate; continue; }
+        const std::string directory = current.string();
+        auto listing = directories_.find(directory);
+        if (listing == directories_.end()) {
+          std::unordered_map<std::string, std::string> entries;
+          error.clear();
+          for (std::filesystem::directory_iterator it(current, error), end; !error && it != end; it.increment(error))
+            entries.emplace(Lowered(it->path().filename().string()), it->path().string());
+          listing = directories_.emplace(directory, std::move(entries)).first;
+        }
+        const auto found = listing->second.find(Lowered(component.string()));
+        if (found == listing->second.end()) return false;
+        current = found->second;
       }
-      const auto found = listing->second.find(wanted);
-      if (found == listing->second.end()) return false;
-      full = found->second;
+      full = current.string();
     }
   }
 
@@ -275,10 +281,13 @@ bool PackSet::References(std::string_view plain_path, GbxFile *out) const {
   const std::string source(plain_path);
   for (const GbxBodyExternalReference &reference : table.externalReferences) {
     std::string resolved;
-    if (!table.ResolvePlainPathForReference(source, reference, &resolved)) continue;
+    // Hashed solid paths do not preserve the directory depth of the original
+    // file. Keep the reference identity even when its relative path cannot be
+    // expanded; callers can still resolve its name in the material repository.
+    if (!table.ResolvePlainPathForReference(source, reference, &resolved)) resolved = reference.name;
     // A reference with useFile clear is the file naming itself; that is how a
     // hashed pack entry says what it really is.
-    out->references.push_back(GbxReference{std::move(resolved), reference.name, reference.useFile});
+    out->references.push_back(GbxReference{std::move(resolved), reference.name, reference.useFile, reference.nodeIndex});
   }
   return true;
 }

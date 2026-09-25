@@ -304,7 +304,25 @@ add_library(tmnf_game MODULE
     tmnf_material.cpp
     tmnf_texture.cpp
     tmnf_scene.cpp
+    tmnf_gpu.cpp
 )
+
+foreach(TMNF_SHADER material.vert material.frag shadow.frag present.vert present.frag)
+    string(REPLACE "." "_" TMNF_SHADER_ID "${TMNF_SHADER}")
+    set(TMNF_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/${TMNF_SHADER_ID}_spv.h")
+    add_custom_command(OUTPUT "${TMNF_SHADER_HEADER}"
+        COMMAND "${GLSLANG_VALIDATOR}" -V --vn "tmnf_${TMNF_SHADER_ID}_spv"
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${TMNF_SHADER}" -o "${TMNF_SHADER_HEADER}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${TMNF_SHADER}" VERBATIM)
+    target_sources(tmnf_game PRIVATE "${TMNF_SHADER_HEADER}")
+endforeach()
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/reflection_frag_spv.h"
+    COMMAND "${GLSLANG_VALIDATOR}" -V -DREFLECTION_PASS=1 --vn tmnf_reflection_frag_spv
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.frag" -o "${CMAKE_CURRENT_BINARY_DIR}/reflection_frag_spv.h"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material.frag" VERBATIM)
+target_sources(tmnf_game PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/reflection_frag_spv.h")
+target_include_directories(tmnf_game PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(tmnf_game PRIVATE Vulkan::Vulkan)
 
 set_target_properties(tmnf_game PROPERTIES
     PREFIX ""
@@ -373,4 +391,25 @@ endif()
 # On Windows the ig* calls must resolve at link time against the host.
 if(WIN32 AND TARGET frametee)
     target_link_libraries(tmnf_game PRIVATE frametee)
+endif()
+
+option(FRAMETEE_TMNF_RENDER_TESTS "Build the independent TMNF Vulkan render probe" OFF)
+if(FRAMETEE_TMNF_RENDER_TESTS AND UNIX)
+    add_executable(tmnf_render_assets tests/render_assets.cpp tmnf_texture.cpp tmnf_material.cpp tmnf_pack.cpp)
+    target_compile_features(tmnf_render_assets PRIVATE cxx_std_17)
+    target_include_directories(tmnf_render_assets PRIVATE
+        ${FRAMETEE_ABI_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/libs/ForeverValidator/src ${CMAKE_SOURCE_DIR}/libs/stb)
+    target_link_libraries(tmnf_render_assets PRIVATE ${TMNF_VALIDATOR_LIBS} ZLIB::ZLIB)
+    if(TARGET PkgConfig::TMNF_FFMPEG)
+        target_link_libraries(tmnf_render_assets PRIVATE PkgConfig::TMNF_FFMPEG)
+        target_compile_definitions(tmnf_render_assets PRIVATE TMNF_HAS_FFMPEG=1)
+    endif()
+    add_executable(tmnf_render_probe tests/render_probe.cpp)
+    target_compile_features(tmnf_render_probe PRIVATE cxx_std_17)
+    target_include_directories(tmnf_render_probe PRIVATE
+        ${FRAMETEE_ABI_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/libs/ForeverValidator/include)
+    target_link_libraries(tmnf_render_probe PRIVATE Vulkan::Vulkan ${CMAKE_DL_LIBS})
+    add_dependencies(tmnf_render_probe tmnf_game)
 endif()

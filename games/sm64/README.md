@@ -1,24 +1,42 @@
-# Native Super Mario 64
+# Super Mario 64
 
-FrameTee runs original SM64 game logic and levels natively in-tree.
-It parses vanilla SM64 ROMs directly, provides accurate physics simulation and level geometry
-via `libs/sm64_physics`, snapshots mutable game state for timeline branching, and rasterizes Fast3D display lists
-using an integrated Fast3D renderer with software and Vulkan backends.
-No external unlock tools, encrypted binaries, emulators, or `sm64ex` builds are required.
+The whole game, frame for frame as on the console from power-on, around
+`libs/sm64_physics` (the game itself, verified in lockstep with an emulator).
+One module per version, each with the library of its version:
+
+| Module | ROM | Ticks per second |
+|---|---|---|
+| `sm64` | Super Mario 64 (USA) | 30 |
+| `sm64_jp` | Super Mario 64 (Japan) | 30 |
+| `sm64_eu` | Super Mario 64 (Europe) (En,Fr,De) | 25 |
+
+Build with `-DFRAMETEE_BUILD_SM64=ON`.
 
 ## Player setup
 
-1. Place a legally obtained, unmodified **US, JP, or EU** Super Mario 64 ROM (`.z64`, `.n64`, or `.v64`)
-   in `data/games/sm64` (or select it when prompted in FrameTee).
-2. Start the SM64 module in FrameTee.
+Put your ROM (`.z64`, `.n64` or `.v64`) into `data/games/sm64/`, where every
+version's start screen lists it, or open it from anywhere. The library carries
+the game's code and data but nothing of the ROM: textures come from the ROM
+when drawing.
 
-FrameTee automatically inspects the ROM header and country code, decompresses the required segments (such as level geometry, behavior scripts, and textures), initializes the in-tree simulation engine, and renders directly.
+## What the module does
 
-## Features
+- **Worlds** are consoles of the library (`sm64_world`), stepped one frame per
+  tick with one controller read. Plugins look inside them through
+  `include/sm64/sm64_game.h` and call the library directly.
+- **Drawing**: tick N is drawn by stepping a copy of tick N - 1 again with the
+  game drawing (`sm64_step_draw`); its display list goes through `fast3d/`, the
+  Fast3D interpreter of [sm64-port](https://github.com/sm64-port/sm64-port)
+  (see `fast3d/LICENSE.txt`), and `sm64_vulkan.c`, which draws on the engine's
+  Vulkan device into a texture shown over the viewport. The 3D takes the
+  viewport's aspect ratio, the HUD stays 4:3 in the middle.
+- **Cameras**: the game camera shows the frame as the console draws it; the
+  engine's freecam and top-down views draw the game's 3D scene from where they
+  are (the game still decides what is drawn, from Lakitu's view).
+- **Movies**: `.m64` files open as recordings and export from power-on, for
+  Mupen64-rr.
 
-- **Direct ROM Execution:** Runs vanilla SM64 ROM assets and physics directly without external processes or locked binaries.
-- **Fast3D Renderer:** Native Fast3D command execution supporting textured triangles, lighting, fog, and combiner modes with both software rasterization and Vulkan GPU execution.
-- **Camera Modes:**
-  - **Native Game Camera (Mode 0):** Accurate in-game camera following Mario.
-  - **Free/Orbit Cameras (Modes 1 & 2):** Editor cameras with 3D perspective and orthographic projections.
-- **State Serialization & Replay:** Checkpointing, timeline branching, property editing (position, velocity, health), and M64 movie export.
+No sound yet: the engine has no audio output.
+
+`tests/sm64_render.c` draws frames of a movie offscreen into PNG files, as the
+module does (`sm64_render_frames_<version>`).

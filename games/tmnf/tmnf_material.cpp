@@ -124,8 +124,11 @@ public:
   bool ReadMaterialCustom();
 
   std::vector<MaterialTextureSlot> slots;
+  std::optional<std::uint64_t> requirements;
   // A material that is only a shader wrapper names the shader it defers to.
   std::vector<const GbxBodyExternalReference *> shader_files;
+  std::vector<const GbxBodyExternalReference *> model_files;
+  std::vector<std::string> skipped_samplers;
 
 private:
   const unsigned char *bytes_ = nullptr;
@@ -253,7 +256,7 @@ bool Cursor::ReadShaderApply() {
       for (u32 i = 0; i < count; ++i) {
         const GbxBodyExternalReference *texture = nullptr;
         if (!ReadNodeReference(&texture)) return false;
-        if (texture != nullptr) slots.push_back(MaterialTextureSlot{std::string(), texture->name, texture->nodeIndex});
+        if (texture != nullptr) slots.push_back(MaterialTextureSlot{std::string(), texture->name, texture->nodeIndex, {}});
       }
       break;
     }
@@ -298,8 +301,7 @@ bool Cursor::ReadMaterialCustom() {
     case kChunkIntArray: {
       u32 count = 0u;
       if (!ReadWord(count) || count > kMaxArrayCount || count > Remaining() / 4u) return false;
-      for (u32 i = 0; i < count; ++i)
-        if (!ids.Read(*this, nullptr) || !SkipWord()) return false;
+      if (!SkipBytes(count * 4u)) return false;
       break;
     }
     case kChunkBitmaps: {
@@ -312,11 +314,15 @@ bool Cursor::ReadMaterialCustom() {
         const GbxBodyExternalReference *texture = nullptr;
         if (!ReadNodeReference(&texture)) return false;
         if (texture != nullptr)
-          slots.push_back(MaterialTextureSlot{std::move(sampler), texture->name, texture->nodeIndex});
+          slots.push_back(MaterialTextureSlot{std::move(sampler), texture->name, texture->nodeIndex, {}});
       }
       break;
     }
     case kChunkGpuFx: {
+      // Vertex and pixel constants are two consecutive arrays. Skipping only
+      // the first made the second count look like a chunk and lost the render
+      // flags that follow it on virtually every Stadium material.
+      for (int stage = 0; stage < 2; ++stage) {
       u32 count = 0u;
       if (!ReadWord(count) || count > kMaxArrayCount) return false;
       for (u32 i = 0; i < count; ++i) {
@@ -327,6 +333,7 @@ bool Cursor::ReadMaterialCustom() {
             !SkipBytes(components * registers * 4u))
           return false;
       }
+      }
       break;
     }
     case kChunkBitmapEnable: {
@@ -334,13 +341,17 @@ bool Cursor::ReadMaterialCustom() {
       if (!ReadWord(count) || count > kMaxArrayCount) return false;
       for (u32 i = 0; i < count; ++i) {
         u32 enabled = 0u;
-        if (!ids.Read(*this, nullptr) || !ReadWord(enabled) || enabled > 1u) return false;
+        std::string sampler;
+        if (!ids.Read(*this, &sampler) || !ReadWord(enabled) || enabled > 1u) return false;
+        if (enabled) skipped_samplers.push_back(std::move(sampler));
       }
       break;
     }
     case kChunkFlags: {
-      u32 flags = 0u;
-      if (!ReadWord(flags) || !SkipBytes(12u) || ((flags & 1u) != 0u && !SkipBytes(4u))) return false;
+      u32 flags = 0u, mask = 0u, low = 0u, high = 0u;
+      if (!ReadWord(flags) || !ReadWord(mask) || !ReadWord(low) || !ReadWord(high) ||
+          ((flags & 1u) != 0u && !SkipBytes(4u))) return false;
+      requirements = std::uint64_t(low) | (std::uint64_t(high) << 32u);
       break;
     }
     case kChunkFloats:
@@ -385,10 +396,8 @@ bool Cursor::SkipDeviceSets(u32 chunk) {
 // samplers and any of them may be missing, so this is a preference rather than
 // a lookup: the first one present wins.
 //
-// "Grass" is deliberately not in here. It is not a ground picture; it is the
-// close-up blade sheet a terrain material binds beside its diffuse, and because
-// it sorted ahead of GDiffuse/PxzDiffuse/BaseColor it was winning on stadium
-// terrain and tiling blades across the whole field instead of the ground.
+// Prefer ground diffuse samplers to Grass. Some materials bind Grass beside
+// their ground picture, while older terrain materials expose only Grass.
 const char *const kDiffuseSamplers[] = {
     "Diffuse",
     "Blend1",
@@ -396,21 +405,28 @@ const char *const kDiffuseSamplers[] = {
     "Advert",
     "Glow",
     "Soil",
-    "Grass",
     "Foam 1",
     "GDiffuse",
     "PxzDiffuse",
     "PyDiffuse",
     "BaseColor",
     "PxzBaseColor",
+    "Grass",
+    "FenceA",
 };
 
 } // namespace
 
 bool ReadMaterialTextures(const PackSet &packs, const std::string &material_path,
-                          std::vector<MaterialTextureSlot> *out) {
+                          std::vector<MaterialTextureSlot> *out, MaterialStyle *style) {
   if (out == nullptr) return false;
   out->clear();
+  static thread_local std::vector<std::string> resolving;
+  std::string normalized = material_path;
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {return std::tolower(c);});
+  if (resolving.size() >= 32 || std::find(resolving.begin(), resolving.end(), normalized) != resolving.end()) return false;
+  resolving.push_back(std::move(normalized));
+  struct Pop { std::vector<std::string> &stack; ~Pop() {stack.pop_back();} } pop{resolving};
 
   std::vector<unsigned char> bytes;
   if (!packs.Read(material_path, &bytes) || bytes.empty() || bytes.size() > 0xFFFFFFFFu) return false;
@@ -438,7 +454,9 @@ bool ReadMaterialTextures(const PackSet &packs, const std::string &material_path
     }
     if (IsMaterialDeviceSetChunk(chunk)) {
       bool model_is_null = false;
-      if (!cursor.ReadNodeReference(nullptr, &model_is_null)) break;
+      const GbxBodyExternalReference *model = nullptr;
+      if (!cursor.ReadNodeReference(&model, &model_is_null)) break;
+      if (model) cursor.model_files.push_back(model);
       if (model_is_null && !cursor.SkipDeviceSets(chunk)) break;
       continue;
     }
@@ -472,6 +490,21 @@ bool ReadMaterialTextures(const PackSet &packs, const std::string &material_path
                                     [](const MaterialTextureSlot &slot) { return slot.path.empty(); }),
                      cursor.slots.end());
 
+  // Inherited bindings are defaults; a custom material overrides them by
+  // sampler name. Reading only the local list loses normal/specular maps.
+  for (const auto *model : cursor.model_files) {
+    std::string path;
+    if (!references.ResolvePlainPathForReference(material_path, *model, &path)) continue;
+    std::vector<MaterialTextureSlot> inherited;
+    if (!ReadMaterialTextures(packs, path, &inherited, style)) continue;
+    for (auto &slot : inherited) {
+      if (std::none_of(cursor.slots.begin(), cursor.slots.end(), [&](const auto &local) {return local.sampler == slot.sampler;}))
+        cursor.slots.push_back(std::move(slot));
+    }
+  }
+  for (const auto &sampler : cursor.skipped_samplers)
+    cursor.slots.erase(std::remove_if(cursor.slots.begin(), cursor.slots.end(), [&](const auto &slot) {return slot.sampler == sampler;}), cursor.slots.end());
+
   // A material that only wraps a shader has its pictures over there. The car's
   // do exactly this.
   if (cursor.slots.empty()) {
@@ -487,6 +520,15 @@ bool ReadMaterialTextures(const PackSet &packs, const std::string &material_path
     }
   }
 
+  if (style != nullptr && cursor.requirements) {
+    // CPlugShader::SRequirement, also stored by SParamShaderFlags in a custom
+    // material: bit 7 is cutout coverage, bit 8 is blending, bit 10 is two-sided.
+    // Diffuse alpha on a material with neither alpha flag is gloss data.
+    const std::uint64_t flags = *cursor.requirements;
+    style->transparent = (flags & 0x100u) != 0u;
+    style->alpha_test = (flags & 0x80u) != 0u && !style->transparent;
+    style->double_sided = (flags & 0x400u) != 0u;
+  }
   *out = std::move(cursor.slots);
   return complete || !out->empty();
 }

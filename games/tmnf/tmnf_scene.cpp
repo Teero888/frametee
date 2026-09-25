@@ -85,8 +85,7 @@ std::optional<std::pair<ResolvedMaterialDefinition, std::string>> ResolveMateria
     return std::make_pair(std::move(*resolved), reference);
 
   const std::size_t slash = reference.find_last_of('\\');
-  if (slash == std::string::npos) return std::nullopt;
-  const std::string name = reference.substr(slash + 1u);
+  const std::string name = slash == std::string::npos ? reference : reference.substr(slash + 1u);
   if (std::optional<ResolvedMaterialDefinition> resolved = assets.ResolveMaterial(name)) {
     std::string under_pack;
     under_pack.reserve(pack_name.size() + name.size() + 17u);
@@ -132,8 +131,24 @@ std::unordered_map<std::uint32_t, std::string> ResolveMaterialVocabulary(Install
 // surface, the remaps and the identity are carried across untouched, and the
 // only addition is a string the validator had no use for.
 void NameMaterials(const std::unordered_map<std::uint32_t, std::string> &by_index,
-                   StaticSolidArchiveLoadSession &session) {
-  if (by_index.empty()) return;
+                   InstalledPackAssetRepository &assets, const PackSet &packs,
+                   const std::string &pack_name, StaticSolidArchiveLoadSession &session) {
+  std::unordered_map<std::uint64_t, std::string> external_paths;
+  session.ForEachPayload([&](StaticSolidArchiveId id, const StaticSolidArchivePayload &payload) {
+    const char *path = payload.PlainPackPath();
+    GbxFile file;
+    if (path && packs.References(path, &file)) {
+      for (const auto &ref : file.references) {
+        std::string name = ref.name;
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (name.find(".material.gbx") != std::string::npos) {
+          if (auto resolved = ResolveMaterialReference(assets, pack_name, ref.path))
+            external_paths.emplace((std::uint64_t(id.Index()) << 32u) | ref.node_index, resolved->second);
+        }
+      }
+    }
+    return 1;
+  });
 
   std::vector<CGameCtnReplayStaticSolidArchiveMaterialDefinition> definitions;
   session.ArchiveGraph().SurfaceGraph().ForEachMaterialDefinition(
@@ -151,7 +166,11 @@ void NameMaterials(const std::unordered_map<std::uint32_t, std::string> &by_inde
     resolved.material.surface = source.Surface();
     resolved.material.render = source.Render();
     resolved.remaps = source.Remaps();
-    if (source.Asset().IsValid()) {
+    const auto direct = external_paths.find((std::uint64_t(source.Material().ArchiveId()) << 32u) |
+                                            source.Material().ArchiveIndex());
+    if (direct != external_paths.end()) {
+      resolved.material.render.SetMaterialPaths(direct->second, std::string());
+    } else if (resolved.material.render.MaterialPlainPath().empty() && source.Asset().IsValid()) {
       const auto found = by_index.find(source.Asset().RepositoryIndex());
       // The selected path is the pack's own routing and this module never wants
       // it; writing a wrong one would be worse than writing none.
@@ -187,10 +206,6 @@ std::string LowerAscii(std::string value) {
   return value;
 }
 
-std::string BaseName(const std::string &path) {
-  const std::size_t slash = path.find_last_of("\\/");
-  return slash == std::string::npos ? path : path.substr(slash + 1);
-}
 } // namespace
 
 void NameMaterialsFromSolids(InstalledPackAssetRepository &assets, const PackSet &packs,
@@ -220,13 +235,6 @@ void NameMaterialsFromSolids(InstalledPackAssetRepository &assets, const PackSet
     GbxFile solid;
     if (!packs.References(solid_path, &solid)) continue;
 
-    std::vector<std::string> material_paths;
-    for (const GbxReference &reference : solid.references) {
-      if (reference.name.find(".Material.") == std::string::npos) continue;
-      material_paths.push_back(reference.path);
-    }
-    if (material_paths.empty()) continue;
-
     // A tile names its materials through its shaders as often as directly, and
     // the tree assembler takes either, so either counts here too.
     std::vector<CGameCtnReplayStaticSolidArchiveNodeIdentity> nodes;
@@ -240,34 +248,18 @@ void NameMaterialsFromSolids(InstalledPackAssetRepository &assets, const PackSet
           nodes.push_back(node);
           return 1;
         });
-    // A solid's reference table lists every material the tile can use, but most
-    // of them are already spoken for by nodes the assembler named on its own.
-    // Strike those off and what remains lines up one-for-one, in file order,
-    // with the nodes it could not name -- which is the pairing we want.
-    std::vector<std::string> claimed;
-    session.ArchiveGraph().SurfaceGraph().ForEachMaterialDefinition(
-        [&](const CGameCtnReplayStaticSolidArchiveMaterialDefinition &definition) {
-          if (definition.MatchesPayload(id))
-            claimed.push_back(LowerAscii(BaseName(definition.Render().MaterialPlainPath())));
-          return 1;
-        });
-    std::vector<std::string> unclaimed;
-    for (const std::string &path : material_paths) {
-      const std::string name = LowerAscii(BaseName(path));
-      const auto taken = std::find(claimed.begin(), claimed.end(), name);
-      if (taken != claimed.end())
-        claimed.erase(taken);
-      else
-        unclaimed.push_back(path);
-    }
-    // Anything else would be a guess, and a wrong texture reads worse than none.
-    if (nodes.size() != unclaimed.size()) continue;
-    material_paths = std::move(unclaimed);
-
+    // External references carry their archive node index. Traversal order is
+    // unrelated to reference-table order (and shared materials may occur more
+    // than once), so pairing the two lists swaps whole block materials.
     CGameCtnReplayStaticSolidArchiveGraphWriter writer(&session.MutableArchiveGraph(), id);
     CGameCtnReplayStaticSolidArchiveSurfaceGraph &graph = session.MutableArchiveGraph().SurfaceGraph();
     for (std::size_t i = 0; i < nodes.size(); ++i) {
-      auto resolved = ResolveMaterialReference(assets, pack_name, material_paths[i]);
+      const auto reference = std::find_if(solid.references.begin(), solid.references.end(),
+          [&](const GbxReference &ref) { return ref.node_index == nodes[i].ArchiveNode().Index(); });
+      if (reference == solid.references.end()) continue;
+      const std::string name = LowerAscii(reference->name);
+      if (name.find(".material.gbx") == std::string::npos && name.find(".shader.gbx") == std::string::npos) continue;
+      auto resolved = ResolveMaterialReference(assets, pack_name, reference->path);
       if (!resolved) continue;
       resolved->first.material.render.SetMaterialPaths(resolved->second, std::string());
       // The node has to be declared a material as well as defined as one: the
@@ -472,6 +464,8 @@ private:
     // one, is the lightmap, which this module has no lightmap to sample.
     GxTexCoordSet uv;
     mesh.has_uv = visual.VStreamOrClassic_GetTexCoordSet(uv, 0u, nullptr) != 0 && uv.Count() == vertex_count;
+    GxTexCoordSet uv1;
+    mesh.has_uv1 = visual.VStreamOrClassic_GetTexCoordSet(uv1, 1u, nullptr) != 0 && uv1.Count() == vertex_count;
 
     mesh.vertices.resize(vertex_count);
     for (unsigned long i = 0; i < vertex_count; ++i) {
@@ -487,7 +481,11 @@ private:
         // texture arrives upside down unless v is turned over here. Under
         // repeat wrapping 1-v and -v are the same sample, and this spelling
         // survives coordinates that tile past one.
-        out.uv = ft_vec2{coord.u, 1.0f - coord.v};
+        out.uv = ft_vec2{coord.u, 1.f - coord.v};
+      }
+      if (mesh.has_uv1) {
+        const GxTexCoord4 coord = uv1.Coordinate4At(i);
+        out.uv1 = ft_vec2{coord.u, 1.f - coord.v};
       }
     }
 
@@ -597,7 +595,7 @@ bool BuildTrackScene(ft_game *game, const PackSet &packs, const void *challenge_
     return false;
   }
 
-  NameMaterials(material_paths, session);
+  NameMaterials(material_paths, assets, packs, pack_name, session);
   NameMaterialsFromSolids(assets, packs, pack_name, session);
 
   StaticSceneModelCollection models;

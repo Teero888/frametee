@@ -235,6 +235,8 @@ void DrawCollisionShape(const ft_engine_api *api, const ft_level *level, const C
   }
 }
 
+} // namespace
+
 void RenderCar(ft_game *game, const ft_render_frame *frame) {
   const ft_engine_api *api = game->engine;
   if (!frame->world || !api->draw_triangle3) return;
@@ -250,10 +252,9 @@ void RenderCar(ft_game *game, const ft_render_frame *frame) {
   }
 }
 
-} // namespace
-
 void Render(ft_game *game, const ft_render_frame *frame) {
   if (!game || !frame || !game->engine || game->headless) return;
+  if (GpuRender(game, frame)) return;
 
   switch (frame->pass) {
   case FT_PASS_LEVEL_BACKGROUND:

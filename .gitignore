@@ -1,4 +1,5 @@
 build
+build-sm64
 release
 build-bench
 .cache

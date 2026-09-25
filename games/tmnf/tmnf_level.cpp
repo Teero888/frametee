@@ -137,14 +137,21 @@ MaterialLook ClassifyMaterial(const TrackMaterial &material, std::uint32_t index
 
 // --- geometry ----------------------------------------------------------------
 
-ft_vec3 TransformNormal(const TrackTransform &t, ft_vec3 n) {
+ft_vec3 TransformVector(const TrackTransform &t, ft_vec3 n) {
   return Add(Add(Scale(t.basis_x, n.x), Scale(t.basis_y, n.y)), Scale(t.basis_z, n.z));
 }
 
-ft_vec3 TransformPoint(const TrackTransform &t, ft_vec3 p) { return Add(TransformNormal(t, p), t.translation); }
+ft_vec3 TransformPoint(const TrackTransform &t, ft_vec3 p) { return Add(TransformVector(t, p), t.translation); }
 
 float BasisDeterminant(const TrackTransform &t) {
   return Dot(t.basis_x, Cross(t.basis_y, t.basis_z));
+}
+
+ft_vec3 TransformNormal(const TrackTransform &t, ft_vec3 n) {
+  const float determinant=BasisDeterminant(t);
+  if(std::fabs(determinant)<1e-12f) return {};
+  return Scale(Add(Add(Scale(Cross(t.basis_y,t.basis_z),n.x),Scale(Cross(t.basis_z,t.basis_x),n.y)),
+                   Scale(Cross(t.basis_x,t.basis_y),n.z)),1.f/determinant);
 }
 
 // Möller-Trumbore, used only by the camera's line of sight.
@@ -443,7 +450,7 @@ struct BuildStats {
 
 void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std::uint32_t layer,
                     TextureAnimation animation, const MaterialStyle &style,
-                    std::vector<Triangle> &out, Aabb &bounds) {
+                    std::vector<Triangle> &out, Aabb &bounds, std::uint32_t render_material = kNoTextureLayer) {
   if (instance.mesh >= scene.meshes.size() || instance.material >= scene.materials.size()) return;
   // Collision proxies, fence depth stand-ins and fake shadow skirts sit in the
   // same geometry as the surfaces they belong to. Drawing them puts a layer of
@@ -482,6 +489,13 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
     tri.c = TransformPoint(instance.transform, v2.position);
     tri.two_sided = look.style.double_sided;
     tri.animation = triangle_animation;
+    tri.material = render_material;
+    const TrackVertex *vertices[] = {&v0, &v1, &v2};
+    for (unsigned v = 0; v < 3; ++v) {
+      tri.normals[v] = Normalize(TransformNormal(instance.transform, vertices[v]->normal));
+      tri.uv1[v] = vertices[v]->uv1;
+      tri.colors[v] = PackColor(mesh.has_color ? vertices[v]->color : ft_color{1, 1, 1, 1});
+    }
     if (triangle_layer != kNoTextureLayer && (mesh.has_uv || look.style.world_uv)) {
       tri.layer = triangle_layer;
       if (look.style.world_uv) {
@@ -497,6 +511,7 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
         tri.uv[1] = v1.uv;
         tri.uv[2] = v2.uv;
       }
+      if (look.style.sky) for (auto &uv : tri.uv) uv.y = std::clamp(uv.y * .8f, 0.f, .999f);
     }
 
     const ft_vec3 face = Cross(Sub(tri.b, tri.a), Sub(tri.c, tri.a));
@@ -511,6 +526,9 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
       if (Dot(face, authored) < 0.f) {
         std::swap(tri.b, tri.c);
         std::swap(tri.uv[1], tri.uv[2]);
+        std::swap(tri.uv1[1], tri.uv1[2]);
+        std::swap(tri.normals[1], tri.normals[2]);
+        std::swap(tri.colors[1], tri.colors[2]);
       }
     }
 
@@ -531,7 +549,7 @@ void AppendInstance(const TrackScene &scene, const TrackInstance &instance, std:
     // The start-light archive only places its glow face, so that layer also
     // carries the recovered opaque lens/housing texture. Other glow materials
     // retain the zero-alpha additive convention.
-    if (look.style.additive && animation.kind != TextureAnimationKind::StartLights) base.a = 0.f;
+    if (look.style.additive) base.a = 0.f;
 
     tri.color = PackColor(base);
     out.push_back(tri);
@@ -583,12 +601,23 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   std::lock_guard<std::mutex> lock(game->mutex);
   if (!OpenSandbox(game, bytes.data(), bytes.size(), path)) return nullptr;
 
+  // Layer ids belong to one loaded level. Keeping every previous environment,
+  // mood and livery eventually exhausted the texture limit and reused stale ids.
+  GpuResetLevel(game, true);
+  game->textures.Destroy(game);
+  game->textures.Clear();
+  game->vehicle = VehicleModel{};
+
   auto *level = new ft_level();
   level->path = path;
   level->source = bytes;
   level->initial = game->world->Start();
   level->start = level->initial.View();
   level->name = game->world->MapName().empty() ? "TrackMania track" : game->world->MapName();
+  const std::string environment = EnvironmentPackName(level->start.mapEnvironment);
+  const std::string mood = MoodOf(bytes.data(), bytes.size());
+  level->mood = mood;
+  game->textures.SetMood(environment, mood);
 
   // The car's own collision ellipsoids, so what is drawn is the shape the
   // simulation actually pushes around rather than a guess at one.
@@ -628,10 +657,12 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   // The sky, which belongs to the time of day the map was saved with rather
   // than to anything in its geometry. Loaded before the materials so that its
   // page is in the array whether or not the track textured anything.
-  const std::string environment = EnvironmentPackName(level->start.mapEnvironment);
-  const std::string mood = MoodOf(bytes.data(), bytes.size());
   const std::optional<std::uint32_t> sky_layer =
       game->packs_open.IsOpen() ? game->textures.SkyLayer(game->packs_open, environment, mood) : std::nullopt;
+  level->sunlight=game->textures.MoodColor(game->packs_open,"LightSun",level->sunlight);
+  level->ambient=game->textures.MoodColor(game->packs_open,"LightAmbient",level->ambient);
+  if (mood == "Night")
+    level->sunlight = game->textures.MoodColor(game->packs_open, "LightMoonSunny", level->sunlight);
   if (!sky_layer && !mood.empty()) {
     Log(game, FT_LOG_WARN, "No %s sky for the %s mood; the dome will be drawn flat.", environment.c_str(),
         mood.c_str());
@@ -644,20 +675,21 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   std::vector<std::uint32_t> material_dirt_layers;
   std::vector<TextureAnimation> material_animations;
   std::vector<MaterialStyle> material_styles;
+  std::vector<RenderMaterial> render_materials;
   if (decoded) {
     material_layers.assign(scene.materials.size(), kNoTextureLayer);
     material_dirt_layers.assign(scene.materials.size(), kNoTextureLayer);
     material_animations.assign(scene.materials.size(), TextureAnimation{});
     material_styles.assign(scene.materials.size(), MaterialStyle{});
+    render_materials.resize(scene.materials.size());
     std::size_t textured = 0;
-    std::optional<std::uint32_t> direction_sign_layer;
     for (std::size_t i = 0; i < scene.materials.size(); ++i) {
       if (scene.materials[i].path.empty()) continue;
       material_styles[i] = game->textures.Style(game->packs_open, scene.materials[i].path);
       // Whether this surface reads the picture's alpha as opacity decides which
       // page it gets, because the same picture is a cut-out for one material
       // and carries specular strength for the next.
-      const bool keep_alpha = material_styles[i].transparent && !material_styles[i].additive;
+      const bool keep_alpha = (material_styles[i].transparent || material_styles[i].alpha_test) && !material_styles[i].additive;
       if (const std::optional<std::uint32_t> layer =
               game->textures.Layer(game->packs_open, scene.materials[i].path, keep_alpha)) {
         material_layers[i] = *layer;
@@ -673,11 +705,13 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
           lower.find("stadiumscreen2x1west.material.gbx") != std::string::npos ||
           lower.find("stadiumwarpscreen2x1east.material.gbx") != std::string::npos ||
           lower.find("stadiumwarpscreen2x1west.material.gbx") != std::string::npos) {
-        if (!direction_sign_layer) direction_sign_layer = game->textures.DirectionSignLayer(game->packs_open);
+        const bool left = lower.find("west.material.gbx") != std::string::npos;
+        const auto direction_sign_layer = game->textures.DirectionSignLayer(game->packs_open, left);
         if (direction_sign_layer) material_layers[i] = *direction_sign_layer;
       }
       if (material_layers[i] != kNoTextureLayer)
         material_animations[i] = game->textures.Animation(material_layers[i]);
+      render_materials[i] = game->textures.Material(game->packs_open, scene.materials[i].path);
     }
 
     std::size_t named = 0;
@@ -715,6 +749,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
   // The blocks the track is actually built from, as opposed to the hills and
   // scenery around them. This is what the editor should frame its camera on.
   Aabb played_bounds;
+  std::unordered_map<std::uint64_t, std::uint32_t> render_material_ids;
   for (const TrackInstance &instance : scene.instances) {
     if (!instance.visible || instance.purpose == TRACK_PURPOSE_HIDDEN) {
       ++stats.instances_skipped;
@@ -727,7 +762,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
       ++stats.lod_skipped;
       continue;
     }
-    if (instance.mesh >= scene.meshes.size()) continue;
+    if (instance.mesh >= scene.meshes.size() || instance.material >= scene.materials.size()) continue;
     // Decided once per mesh: one shell is stood up on every grass tile of the
     // track, so walking its triangles again for each placement would cost more
     // than dropping them saves.
@@ -759,7 +794,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     // Start lights are stateful race presentation rather than mood lighting;
     // keep their recovered face even if an archive happens to inherit a
     // night-only additive shader.
-    if (style.night_only && Lowered(mood) != "night" &&
+    if (style.night_only && Lowered(mood) == "day" &&
         animation.kind != TextureAnimationKind::StartLights)
       style.invisible = true;
 
@@ -772,8 +807,21 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
       style = MaterialStyle{};
       style.unlit = true;
       style.double_sided = true;
+      style.sky = true;
       ++stats.sky_instances;
     }
+
+    const std::uint64_t render_key = (std::uint64_t(instance.material) << 32u) | layer;
+    auto inserted = render_material_ids.emplace(render_key, static_cast<std::uint32_t>(level->materials.size()));
+    if (inserted.second) {
+      RenderMaterial material = instance.material < render_materials.size() ? render_materials[instance.material] : RenderMaterial{};
+      material.style = style;
+      material.style.water |= scene.materials[instance.material].water;
+      material.diffuse = layer;
+      material.animation = animation;
+      level->materials.push_back(material);
+    }
+    const std::uint32_t render_material = inserted.first->second;
 
     // A stadium scene ends in a few kilometre-wide sky and ground planes. They
     // belong on screen, but not in the level's bounds: the engine frames its
@@ -790,14 +838,14 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
     // backdrop.
     if ((style.unlit && !style.additive) || IsDistantScenery(scene.meshes[instance.mesh], instance)) {
       AppendInstance(scene, instance, layer, animation, style,
-                     level->backdrop, backdrop_bounds);
+                     level->backdrop, backdrop_bounds, render_material);
     } else if (style.transparent || style.additive) {
       AppendInstance(scene, instance, layer, animation, style,
-                     level->translucent, level->world_bounds);
+                     level->translucent, level->world_bounds, render_material);
     } else {
       const std::size_t before = level->track.size();
       AppendInstance(scene, instance, layer, animation, style,
-                     level->track, level->world_bounds);
+                     level->track, level->world_bounds, render_material);
       if (instance.purpose == TRACK_PURPOSE_BLOCK) {
         for (std::size_t i = before; i < level->track.size(); ++i) {
           played_bounds.Add(level->track[i].a);
@@ -852,6 +900,7 @@ ft_level *LevelLoad(ft_game *game, const char *path) {
 void LevelDestroy(ft_game *game, ft_level *level) {
   if (!level) return;
   if (game && game->level == level) {
+    GpuResetLevel(game);
     game->level = nullptr;
     CloseSandbox(game);
   }

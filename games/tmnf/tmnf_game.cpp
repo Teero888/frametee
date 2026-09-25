@@ -157,6 +157,8 @@ ft_game *GameCreate(const ft_engine_api *engine) {
 
 void GameDestroy(ft_game *game) {
   if (!game) return;
+  GpuDestroy(game);
+  game->textures.Destroy(game);
   game->race_session.reset();
   game->race_cameras.reset();
   CloseSandbox(game);

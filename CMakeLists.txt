@@ -239,7 +239,22 @@ set(CGLM_SHARED OFF CACHE BOOL "Do not build cglm as a shared library" FORCE)
 add_subdirectory(libs/cglm)
 set_target_properties(cglm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_subdirectory(libs/nfd)
-add_subdirectory(libs/sm64_physics)
+# The native SM64 library needs a built n64decomp/sm64 checkout; only the
+# SM64 module (off by default) uses it.
+option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" OFF)
+if(FRAMETEE_BUILD_SM64)
+    # Shared: each version's module and its plugins use one copy of the game.
+    # One library per version (sm64_physics_us, _jp, _eu), each a game
+    # module of its own (games/sm64).
+    set(SM64_PHYSICS_SHARED ON CACHE BOOL "Build sm64_physics as a shared library" FORCE)
+    set(FRAMETEE_SM64_VERSIONS us jp eu)
+    foreach(SM64_VERSION ${FRAMETEE_SM64_VERSIONS})
+        set(SM64_TARGET_SUFFIX "_${SM64_VERSION}")
+        add_subdirectory(libs/sm64_physics "${CMAKE_BINARY_DIR}/libs/sm64_physics_${SM64_VERSION}")
+    endforeach()
+    unset(SM64_VERSION)
+    unset(SM64_TARGET_SUFFIX)
+endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nfd
@@ -548,6 +563,9 @@ foreach(ASSET ${GAME_ASSET_SOURCES})
 endforeach()
 add_custom_target(copy_game_assets ALL DEPENDS ${GAME_ASSET_OUTPUTS})
 add_dependencies(${PROJECT_NAME} copy_game_assets)
+if(TARGET sm64_version_data)
+    add_dependencies(sm64_version_data compile_game_shaders copy_game_assets)
+endif()
 
 # =================================================================================================
 # PLUGINS INTEGRATION
@@ -701,16 +719,19 @@ if(TARGET ddnet_game)
     endforeach()
 endif()
 
-if(TARGET sm64_game)
+if(TARGET sm64_game_us)
     # The source GLSL stays in the checkout; the compiled shaders are the
-    # runtime assets that accompany the module and native SM64 library.
-    install(DIRECTORY "${CMAKE_BINARY_DIR}/data/games/sm64/"
-        DESTINATION "data/games/sm64"
-        COMPONENT Runtime
-        FILES_MATCHING
-        PATTERN "*.spv"
-        PATTERN "thumbnail.png"
-    )
+    # runtime assets that accompany the modules and native SM64 libraries.
+    # Every version's module reads them from its own data directory.
+    foreach(SM64_GAME_DATA sm64 sm64_jp sm64_eu)
+        install(DIRECTORY "${CMAKE_BINARY_DIR}/data/games/sm64/"
+            DESTINATION "data/games/${SM64_GAME_DATA}"
+            COMPONENT Runtime
+            FILES_MATCHING
+            PATTERN "*.spv"
+            PATTERN "thumbnail.png"
+        )
+    endforeach()
 endif()
 
 if(TARGET tmnf_game)
