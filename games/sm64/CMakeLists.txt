@@ -49,10 +49,24 @@ foreach(version us jp eu sh)
     else()
         set(ticks_per_second 30)
     endif()
-    string(TOUPPER "${version}" upper)
-    set(game_name "Super Mario 64 (${upper})")
-    if(version STREQUAL "sh")
+    # As the start screen names them (kVersions in sm64_game.c). The versions
+    # are one family: one card in the game picker, in this order.
+    if(version STREQUAL "us")
+        set(game_name "Super Mario 64 (USA)")
+        set(family_member "USA")
+        set(family_order 0)
+    elseif(version STREQUAL "jp")
+        set(game_name "Super Mario 64 (Japan)")
+        set(family_member "Japan")
+        set(family_order 1)
+    elseif(version STREQUAL "eu")
+        set(game_name "Super Mario 64 (Europe)")
+        set(family_member "Europe")
+        set(family_order 2)
+    else()
         set(game_name "Super Mario 64 Shindou Edition")
+        set(family_member "Shindou Edition")
+        set(family_order 3)
     endif()
 
     # Drawing: the Fast3D interpreter (f3d/) and its Vulkan backend, which
@@ -88,7 +102,9 @@ foreach(version us jp eu sh)
     target_include_directories(${game_id}_game PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
     target_compile_definitions(${game_id}_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS
                                SM64_GAME_ID="${game_id}" SM64_GAME_NAME="${game_name}"
-                               SM64_TICKS_PER_SECOND=${ticks_per_second})
+                               SM64_TICKS_PER_SECOND=${ticks_per_second}
+                               SM64_THUMBNAIL="thumbnail_${version}.png"
+                               SM64_FAMILY_MEMBER="${family_member}" SM64_FAMILY_ORDER=${family_order})
     target_link_libraries(${game_id}_game PRIVATE sm64_render_${version} sm64_physics_${version} m)
 
     if(UNIX AND NOT APPLE)
@@ -97,6 +113,10 @@ foreach(version us jp eu sh)
     endif()
     if(WIN32 AND TARGET frametee)
         target_link_libraries(${game_id}_game PRIVATE frametee)
+    endif()
+    if(WIN32)
+        # ShellExecuteW: the start screen's "Open folder".
+        target_link_libraries(${game_id}_game PRIVATE shell32)
     endif()
     if(NOT MSVC)
         target_compile_options(${game_id}_game PRIVATE -Wall -Wextra -Wno-unused-parameter)
@@ -115,14 +135,20 @@ foreach(version us jp eu sh)
 endforeach()
 
 # Every module reads its assets from data/games/<id>/: the other versions get
-# a copy of the US one's (the compiled shaders, the thumbnail).
-add_custom_target(sm64_version_data ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/data/games/sm64"
-            "${CMAKE_BINARY_DIR}/data/games/sm64_jp"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/data/games/sm64"
-            "${CMAKE_BINARY_DIR}/data/games/sm64_eu"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/data/games/sm64"
-            "${CMAKE_BINARY_DIR}/data/games/sm64_sh"
-    VERBATIM)
+# the US one's compiled shaders and the thumbnails (the game's card and every
+# version's). Only those: the
+# ROMs the user keeps in data/games/sm64 stay there.
+set(SM64_VERSION_DATA_COMMANDS)
+foreach(data_id sm64_jp sm64_eu sm64_sh)
+    list(APPEND SM64_VERSION_DATA_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/data/games/sm64/shaders"
+                "${CMAKE_BINARY_DIR}/data/games/${data_id}/shaders")
+    foreach(thumbnail thumbnail thumbnail_us thumbnail_jp thumbnail_eu thumbnail_sh)
+        list(APPEND SM64_VERSION_DATA_COMMANDS
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_BINARY_DIR}/data/games/sm64/${thumbnail}.png"
+                    "${CMAKE_BINARY_DIR}/data/games/${data_id}/${thumbnail}.png")
+    endforeach()
+endforeach()
+add_custom_target(sm64_version_data ALL ${SM64_VERSION_DATA_COMMANDS} VERBATIM)
 
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/" DESTINATION "include" COMPONENT Development)

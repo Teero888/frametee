@@ -73,6 +73,14 @@ void ui_save_project_as(ui_handler_t *ui) {
   NFD_FreePathU8(save_path);
 }
 
+// A game's level extension may be a list ("z64,n64,v64"): labels name the first.
+static void level_extension_label(const char *extensions, char *out, size_t out_size) {
+  size_t length = strcspn(extensions, ",");
+  if (length >= out_size) length = out_size - 1;
+  memcpy(out, extensions, length);
+  out[length] = '\0';
+}
+
 // The level filter the active game declares, or NULL when it takes no bare
 // levels. The File menu hides the item entirely in that case.
 static const ft_game_constraints *active_level_constraints(ui_handler_t *ui) {
@@ -251,8 +259,9 @@ void render_menu_bar(ui_handler_t *ui) {
 
       const ft_game_constraints *level = active_level_constraints(ui);
       if (level) {
-        char label[96];
-        snprintf(label, sizeof(label), "Load Local %s...", level->level_extension);
+        char extension[32], label[96];
+        level_extension_label(level->level_extension, extension, sizeof(extension));
+        snprintf(label, sizeof(label), "Load Local %s...", extension);
         if (igMenuItem_Bool(label, NULL, false, true)) level_open_dialog(ui, level);
       }
 
@@ -1621,14 +1630,16 @@ typedef struct {
 } game_thumbnail_t;
 
 static game_thumbnail_t g_game_thumbnails[32];
+// A family's card image, by the slot of the member that provides it.
+static game_thumbnail_t g_family_thumbnails[32];
+#define THUMBNAIL_SLOTS ((int)(sizeof(g_game_thumbnails) / sizeof(g_game_thumbnails[0])))
 
-static struct ImTextureRef_c *splash_game_thumbnail(gfx_handler_t *gfx, const game_module_slot_t *slot, int index) {
-  if (index < 0 || index >= (int)(sizeof(g_game_thumbnails) / sizeof(g_game_thumbnails[0]))) return NULL;
-  game_thumbnail_t *entry = &g_game_thumbnails[index];
+static struct ImTextureRef_c *splash_thumbnail(game_thumbnail_t *cache, gfx_handler_t *gfx,
+                                               const game_module_slot_t *slot, int index, const char *relative) {
+  if (index < 0 || index >= THUMBNAIL_SLOTS) return NULL;
+  game_thumbnail_t *entry = &cache[index];
   if (entry->attempted) return entry->ref;
   entry->attempted = true;
-
-  const char *relative = slot->module ? slot->module->info.thumbnail : NULL;
   if (!relative || !*relative) return NULL;
 
   char path[GAME_HOST_MAX_PATH];
@@ -1643,6 +1654,73 @@ static struct ImTextureRef_c *splash_game_thumbnail(gfx_handler_t *gfx, const ga
         entry->texture->sampler, entry->texture->image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
   }
   return entry->ref;
+}
+
+static struct ImTextureRef_c *splash_game_thumbnail(gfx_handler_t *gfx, const game_module_slot_t *slot, int index) {
+  return splash_thumbnail(g_game_thumbnails, gfx, slot, index, slot->module ? slot->module->info.thumbnail : NULL);
+}
+
+static struct ImTextureRef_c *splash_family_thumbnail(gfx_handler_t *gfx, const game_module_slot_t *slot, int index) {
+  const ft_game_info *info = slot->module ? &slot->module->info : NULL;
+  if (!info) return NULL;
+  return splash_thumbnail(g_family_thumbnails, gfx, slot, index,
+                          info->family_thumbnail ? info->family_thumbnail : info->thumbnail);
+}
+
+// Height over width of a loaded thumbnail, 9:16 when there is none.
+static float thumbnail_aspect(const game_thumbnail_t *cache, int index) {
+  if (index >= 0 && index < THUMBNAIL_SLOTS) {
+    const texture_t *texture = cache[index].texture;
+    if (texture && texture->width > 0) return (float)texture->height / (float)texture->width;
+  }
+  return 9.0f / 16.0f;
+}
+
+// --- families: one card for a game in several modules -------------------------
+
+static const char *slot_family(const game_module_slot_t *slot) {
+  return slot->usable && slot->module ? slot->module->info.family : NULL;
+}
+
+static bool slot_in_family(const game_module_slot_t *slot, const char *family) {
+  const char *own = slot_family(slot);
+  return own && family && strcmp(own, family) == 0;
+}
+
+// The member each family's card opened last, for the session.
+typedef struct {
+  char family[64];
+  int index;
+} family_choice_t;
+static family_choice_t g_family_choices[8];
+
+static void family_remember(const char *family, int index) {
+  for (int i = 0; i < (int)(sizeof(g_family_choices) / sizeof(g_family_choices[0])); ++i) {
+    family_choice_t *choice = &g_family_choices[i];
+    if (!choice->family[0] || strcmp(choice->family, family) == 0) {
+      snprintf(choice->family, sizeof(choice->family), "%s", family);
+      choice->index = index;
+      return;
+    }
+  }
+}
+
+// The member a family's card opens: the one in use, else the one chosen last,
+// else the first in the family's order.
+static int family_representative(const game_host_t *host, const char *family) {
+  if (host->active >= 0 && slot_in_family(&host->slots[host->active], family)) return host->active;
+  for (int i = 0; i < (int)(sizeof(g_family_choices) / sizeof(g_family_choices[0])); ++i) {
+    const family_choice_t *choice = &g_family_choices[i];
+    if (choice->family[0] && strcmp(choice->family, family) == 0 && choice->index < host->count &&
+        slot_in_family(&host->slots[choice->index], family))
+      return choice->index;
+  }
+  int first = -1;
+  for (int i = 0; i < host->count; ++i)
+    if (slot_in_family(&host->slots[i], family) &&
+        (first < 0 || host->slots[i].module->info.family_order < host->slots[first].module->info.family_order))
+      first = i;
+  return first;
 }
 
 // Returns true when a game was chosen. Choosing one here costs nothing: the
@@ -1668,24 +1746,33 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
 
   igPushStyleVar_Vec2(ImGuiStyleVar_CellPadding, (ImVec2){card_margin, card_margin});
   if (igBeginTable("SplashGameGrid", columns, ImGuiTableFlags_SizingStretchSame, (ImVec2){0, 0}, 0)) {
+    const int browsed = game_host_browsed_index(host) >= 0 ? game_host_browsed_index(host) : host->active;
     for (int i = 0; i < host->count; ++i) {
       const game_module_slot_t *slot = &host->slots[i];
       if (!slot->usable) continue;
 
+      // A family is one card, at its first member's place, opening the member
+      // family_representative picks.
+      const char *family = slot_family(slot);
+      int opens = i;
+      if (family) {
+        bool seen = false;
+        for (int j = 0; j < i && !seen; ++j) seen = slot_in_family(&host->slots[j], family);
+        if (seen) continue;
+        opens = family_representative(host, family);
+      }
+
       igTableNextColumn();
       igPushID_Int(i);
 
-      struct ImTextureRef_c *thumbnail = splash_game_thumbnail(ui->gfx_handler, slot, i);
-      float thumbnail_aspect = 9.0f / 16.0f;
-      if (i >= 0 && i < (int)(sizeof(g_game_thumbnails) / sizeof(g_game_thumbnails[0]))) {
-        const texture_t *texture = g_game_thumbnails[i].texture;
-        if (texture && texture->width > 0) thumbnail_aspect = (float)texture->height / (float)texture->width;
-      }
+      struct ImTextureRef_c *thumbnail = family ? splash_family_thumbnail(ui->gfx_handler, &host->slots[opens], opens)
+                                                : splash_game_thumbnail(ui->gfx_handler, slot, i);
+      const float aspect = family ? thumbnail_aspect(g_family_thumbnails, opens) : thumbnail_aspect(g_game_thumbnails, i);
 
       const ImVec2 cursor_pos = igGetCursorScreenPos();
       float actual_card_w = igGetColumnWidth(-1) - 4.0f;
       if (actual_card_w < 110.0f) actual_card_w = card_width;
-      const float actual_thumb_h = actual_card_w * thumbnail_aspect;
+      const float actual_thumb_h = actual_card_w * aspect;
       const float total_item_h = actual_thumb_h;
 
       const ImVec2 card_min = cursor_pos;
@@ -1704,23 +1791,23 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
         ImDrawList_AddImageRounded(draw_list, *thumbnail, thumb_min, thumb_max, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xFFFFFFFF, 8.0f,
                                    ImDrawFlags_RoundCornersAll);
       } else {
+        // Without an image the card still says what it is.
         ImDrawList_AddRectFilled(draw_list, thumb_min, thumb_max, IM_COL32(18, 22, 30, 240), 8.0f, ImDrawFlags_RoundCornersAll);
-        const char *status_txt = "No Image";
-        const ImVec2 txt_sz = igCalcTextSize(status_txt, NULL, false, -1.0f);
+        const char *name = family ? family : slot->module->info.display_name;
+        const ImVec2 txt_sz = igCalcTextSize(name, NULL, false, -1.0f);
         const ImVec2 txt_pos = {thumb_min.x + actual_card_w * 0.5f - txt_sz.x * 0.5f,
                                 thumb_min.y + actual_thumb_h * 0.5f - txt_sz.y * 0.5f};
-        ImDrawList_AddText_Vec2(draw_list, txt_pos, IM_COL32(140, 150, 170, 255), status_txt, NULL);
+        ImDrawList_AddText_Vec2(draw_list, txt_pos, IM_COL32(200, 210, 225, 255), name, NULL);
       }
 
-      const int browsed = game_host_browsed_index(host) >= 0 ? game_host_browsed_index(host) : host->active;
-      const bool current = i == browsed;
+      const bool current = family ? browsed >= 0 && slot_in_family(&host->slots[browsed], family) : i == browsed;
       const ImU32 border_color = current   ? IM_COL32(120, 200, 255, 255)
                                  : hovered ? IM_COL32(90, 175, 255, 255)
                                            : IM_COL32(48, 56, 75, 140);
       ImDrawList_AddRect(draw_list, card_min, card_max, border_color, 8.0f, ImDrawFlags_None,
                          (hovered || current) ? 1.8f : 1.0f);
 
-      if (clicked) chosen = game_host_browse(host, i);
+      if (clicked) chosen = game_host_browse(host, opens);
       igPopID();
     }
     igEndTable();
@@ -1740,6 +1827,66 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
   if (!any_usable) igTextDisabled("No game modules found in games/.");
 
   return chosen;
+}
+
+// The start screen of a family's member: its members side by side, the one
+// shown highlighted, each switching the start screen to itself.
+static void render_splash_family_switcher(ui_handler_t *ui) {
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const int browsed = game_host_browsed_index(host);
+  if (browsed < 0) return;
+  const char *family = slot_family(&host->slots[browsed]);
+  if (!family) return;
+
+  int members[16];
+  int count = 0;
+  for (int i = 0; i < host->count && count < 16; ++i)
+    if (slot_in_family(&host->slots[i], family)) members[count++] = i;
+  if (count < 2) return;
+  for (int i = 1; i < count; ++i) // by family_order, then discovery
+    for (int j = i; j > 0 && host->slots[members[j]].module->info.family_order <
+                                 host->slots[members[j - 1]].module->info.family_order;
+         --j) {
+      const int t = members[j];
+      members[j] = members[j - 1];
+      members[j - 1] = t;
+    }
+
+  const float gap = 10.0f;
+  float card_w = (igGetContentRegionAvail().x - gap * (float)(count - 1)) / (float)count;
+  if (card_w > 240.0f) card_w = 240.0f;
+  ImDrawList *draw_list = igGetWindowDrawList();
+  for (int m = 0; m < count; ++m) {
+    const int i = members[m];
+    const game_module_slot_t *slot = &host->slots[i];
+    struct ImTextureRef_c *thumbnail = splash_game_thumbnail(ui->gfx_handler, slot, i);
+    const float card_h = card_w * thumbnail_aspect(g_game_thumbnails, i);
+
+    if (m > 0) igSameLine(0.0f, gap);
+    igPushID_Int(i);
+    const ImVec2 min = igGetCursorScreenPos();
+    const ImVec2 max = {min.x + card_w, min.y + card_h};
+    const bool clicked = igInvisibleButton("##family_member", (ImVec2){card_w, card_h}, 0);
+    const bool hovered = igIsItemHovered(0);
+    const bool current = i == browsed;
+    if (thumbnail) {
+      const ImU32 tint = current || hovered ? 0xFFFFFFFF : IM_COL32(255, 255, 255, 150);
+      ImDrawList_AddImageRounded(draw_list, *thumbnail, min, max, (ImVec2){0, 0}, (ImVec2){1, 1}, tint, 6.0f,
+                                 ImDrawFlags_RoundCornersAll);
+    } else {
+      ImDrawList_AddRectFilled(draw_list, min, max, IM_COL32(18, 22, 30, 240), 6.0f, ImDrawFlags_RoundCornersAll);
+      const char *name = slot->module->info.family_member ? slot->module->info.family_member
+                                                          : slot->module->info.display_name;
+      const ImVec2 size = igCalcTextSize(name, NULL, false, -1.0f);
+      ImDrawList_AddText_Vec2(draw_list, (ImVec2){min.x + (card_w - size.x) * 0.5f, min.y + (card_h - size.y) * 0.5f},
+                              IM_COL32(200, 210, 225, 255), name, NULL);
+    }
+    const ImU32 border = current ? IM_COL32(120, 200, 255, 255) : hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140);
+    ImDrawList_AddRect(draw_list, min, max, border, 6.0f, ImDrawFlags_None, current ? 2.5f : hovered ? 1.8f : 1.0f);
+    if (hovered) igSetTooltip("%s", slot->module->info.display_name);
+    if (clicked && !current && game_host_browse(host, i)) family_remember(family, i);
+    igPopID();
+  }
 }
 
 static void render_splash_variant_selector(game_host_t *host) {
@@ -1846,9 +1993,9 @@ static void render_splash_screen(ui_handler_t *ui) {
       const ft_game_module *level_game = game_host_browsed_module(&ui->gfx_handler->game_host);
       const char *level_ext = level_game ? level_game->constraints.level_extension : NULL;
       if (ui->splash_stage == SPLASH_STAGE_START && level_ext) {
-        char level_label[64];
-        snprintf(level_label, sizeof(level_label), ICON_FA_MAP "  Load Local %s",
-                 level_game->constraints.level_extension ? level_game->constraints.level_extension : "Level");
+        char extension[32], level_label[64];
+        level_extension_label(level_ext, extension, sizeof(extension));
+        snprintf(level_label, sizeof(level_label), ICON_FA_MAP "  Load Local %s", extension);
         if (igButton(level_label, (ImVec2){btn_w, 42})) {
           // The open is deferred until the next frame, after any unsaved-work prompt.
           nfdu8char_t *out_path;
@@ -1962,6 +2109,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         if (render_splash_game_picker(ui, avail.x)) ui->splash_stage = SPLASH_STAGE_START;
       } else {
         const ft_game_module *shown = game_host_browsed_module(&ui->gfx_handler->game_host);
+        render_splash_family_switcher(ui);
         render_splash_variant_selector(&ui->gfx_handler->game_host);
 
         ft_ui_frame frame = {0};

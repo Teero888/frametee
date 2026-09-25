@@ -187,7 +187,10 @@ typedef struct line_segment_t {
   vec2 p1;
   vec2 p2;
   vec4 color;
-  float thickness;
+  float thickness; // in world units
+  // When above zero, the width on screen in pixels instead: the same in every
+  // game and at every zoom.
+  float width_px;
 } line_segment_t;
 
 struct map_buffer_object_t {
@@ -557,6 +560,9 @@ bool renderer_update_texture_layer(gfx_handler_t *h, texture_t *tex, uint32_t la
 // 3D primitives. World-space, depth-tested, no z argument: submit order does
 // not matter because the depth buffer decides what is in front.
 void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float thickness);
+// As renderer_submit_line3, but width_px wide on screen wherever it is: the
+// world width is worked out at each end from the camera.
+void renderer_submit_line3_px(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float width_px);
 void renderer_submit_triangle3(gfx_handler_t *h, vec3 a, vec3 b, vec3 c, vec4 color);
 // The same triangle with a texture on it. `layer` indexes the array set by
 // renderer_set_texture3(); the coordinates are taken as authored and wrap.

@@ -729,7 +729,7 @@ if(TARGET sm64_game)
             COMPONENT Runtime
             FILES_MATCHING
             PATTERN "*.spv"
-            PATTERN "thumbnail.png"
+            PATTERN "thumbnail*.png"
         )
     endforeach()
 endif()

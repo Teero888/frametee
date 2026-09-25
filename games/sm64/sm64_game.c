@@ -5,12 +5,20 @@
 // controller read. The user's ROM is the level; .m64 movies open as recordings
 // and export as movies.
 #include <frametee/game_abi.h>
+#include <frametee/icons.h>
 #include <sm64/sm64_game.h>
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <windows.h>
+#include <shellapi.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #include <cimgui.h>
 
@@ -35,6 +43,19 @@ struct ft_game {
   float drawn_camera[4][4];
   bool drawn;
   bool draw_failed;
+  // Other groups' Marios over the active one's frame, each drawn alone on a
+  // transparent frame of its own (ghosts), by world index.
+  sm64_vulkan *vk_ghost;
+  ft_pipeline *ghost_present;
+  sm64_world *ghost_world;
+  struct ghost {
+    ft_texture *frame;
+    uint32_t width, height;
+    const ft_world *world;
+    uint64_t revision, previous_revision;
+    float camera[4][4];
+    bool drawn;
+  } ghosts[16];
 };
 
 struct ft_level {
@@ -54,6 +75,7 @@ static ft_game *game_create(const ft_engine_api *engine) {
 static void game_destroy(ft_game *game) {
   if (!game) return;
   sm64_world_destroy(game->draw_world);
+  sm64_world_destroy(game->ghost_world);
   free(game);
 }
 
@@ -64,52 +86,90 @@ struct version {
   const char *id;      // sm64_version()
   const char *code;    // the ROM's game code
   uint8_t revision;    // and its revision
+  uint32_t crc;        // the header's first checksum: this dump, unmodified
   char country;        // its country code, also in .m64 headers
-  const char *region;  // as ROM files are named
-  const char *adjective;
-  // TASVideos movies (Mupen64-rr) against the console the library follows
-  // (mupen64plus); see movie_offset. EU has no movie that fixed it yet.
-  int32_t movie_offset;
+  const char *rom;     // the ROM's name as ROM sets name it
+  const char *game;    // the module's name (SM64_GAME_NAME of that version)
+  const char *release; // what sets it apart, for the start screen
   uint8_t vi_rate;     // vertical interrupts per second: NTSC or PAL
 };
 
 static const struct version kVersions[] = {
-    {"jp", "NSMJ", 0, 'J', "Japan", "Japanese", -16, 60},
-    {"us", "NSME", 0, 'E', "USA", "American", -55, 60},
-    {"eu", "NSMP", 0, 'P', "Europe", "European", 0, 50},
-    {"sh", "NSMJ", 3, 'J', "Japan (Rev A) (Shindou Edition)", "Shindou Edition", 0, 60},
+    {"jp", "NSMJ", 0, 0x4eaa3d0e, 'J', "Super Mario 64 (Japan)", "Super Mario 64 (Japan)", "The original Japanese release, 1996.",
+     60},
+    {"us", "NSME", 0, 0x635a2bff, 'E', "Super Mario 64 (USA)", "Super Mario 64 (USA)", "The North American release, 1996.", 60},
+    {"eu", "NSMP", 0, 0xa03cf036, 'P', "Super Mario 64 (Europe) (En,Fr,De)", "Super Mario 64 (Europe)",
+     "The European release in English, French and German, 1997. PAL: 25 frames a second.", 50},
+    {"sh", "NSMJ", 3, 0xd6fba4a8, 'J', "Super Mario 64 (Japan) (Rev A) (Shindou Edition)", "Super Mario 64 Shindou Edition",
+     "The Japanese re-release with Rumble Pak support, 1997.", 60},
 };
+#define VERSION_COUNT (sizeof(kVersions) / sizeof(kVersions[0]))
 
 static const struct version *version(void) {
-  for (size_t i = 0; i < sizeof(kVersions) / sizeof(kVersions[0]); ++i)
+  for (size_t i = 0; i < VERSION_COUNT; ++i)
     if (strcmp(kVersions[i].id, sm64_version()) == 0) return &kVersions[i];
   return &kVersions[1];
 }
 
 // --- The ROM: the level ----------------------------------------------------------
 
-// The ROM's header, big-endian: its internal name, its game code (NSMJ, NSME
-// or NSMP) and its revision (the Shindou Edition is JP's 3).
-static bool rom_header(const uint8_t *rom, size_t size, char name[21], char code[5], uint8_t *revision) {
+// What a ROM's header says it is.
+struct rom_id {
+  char code[5];      // its game code: NSMJ, NSME or NSMP
+  uint8_t revision;  // the Shindou Edition is JP's 3
+  uint32_t crc;      // its first checksum
+};
+
+// The header, big-endian in .z64; .v64 swaps each 16-bit word, .n64 each
+// 32-bit one.
+static bool rom_header(const uint8_t *rom, size_t size, struct rom_id *out) {
   if (size < 0x40) return false;
   uint8_t header[0x40];
-  // .z64 is big-endian, .v64 swaps each 16-bit word, .n64 each 32-bit one.
   int swap = rom[0] == 0x80 && rom[1] == 0x37 ? 0 : rom[0] == 0x37 && rom[1] == 0x80 ? 1 : rom[3] == 0x80 ? 3 : -1;
   if (swap < 0) return false;
   for (size_t i = 0; i < sizeof(header); ++i) header[i] = rom[swap == 1 ? i ^ 1 : swap == 3 ? i ^ 3 : i];
-  memcpy(name, header + 0x20, 20);
-  name[20] = '\0';
-  for (int i = 19; i >= 0 && name[i] == ' '; --i) name[i] = '\0';
-  memcpy(code, header + 0x3B, 4);
-  code[4] = '\0';
-  *revision = header[0x3F];
+  memcpy(out->code, header + 0x3B, 4);
+  out->code[4] = '\0';
+  out->revision = header[0x3F];
+  out->crc = (uint32_t)header[0x10] << 24 | header[0x11] << 16 | header[0x12] << 8 | header[0x13];
   return true;
 }
 
-// The ROM this library is built for.
-static bool wanted_rom(const char code[5], uint8_t revision) {
-  return strcmp(code, version()->code) == 0 && revision == version()->revision;
+// The version whose ROM this is, or NULL for any other game. With exact,
+// only its unmodified dump; without, anything claiming to be it, such as a
+// hack.
+static const struct version *version_of(const struct rom_id *id, bool exact) {
+  for (size_t i = 0; i < VERSION_COUNT; ++i)
+    if (strcmp(id->code, kVersions[i].code) == 0 && id->revision == kVersions[i].revision &&
+        (!exact || id->crc == kVersions[i].crc))
+      return &kVersions[i];
+  return NULL;
 }
+
+// The folder every version's ROMs go into: the US module's data directory,
+// data/games/sm64.
+static void rom_folder(const ft_engine_api *engine, char *out, size_t size) {
+  engine->resolve_data_path("", out, size);
+  size_t length = strlen(out);
+  while (length > 0 && (out[length - 1] == '/' || out[length - 1] == '\\')) out[--length] = '\0';
+  char *own = strrchr(out, '/');
+  if (!own) own = strrchr(out, '\\');
+  if (own && (size_t)(own - out) + 6 < size) strcpy(own + 1, "sm64");
+}
+
+// Whether the file at path is this version's ROM.
+static bool is_our_rom(const ft_engine_api *engine, const char *path) {
+  void *data = NULL;
+  size_t size = 0;
+  if (!engine->read_file(path, &data, &size)) return false;
+  struct rom_id id;
+  const bool ours = rom_header(data, size, &id) && version_of(&id, true) == version();
+  engine->free_file_data(data);
+  return ours;
+}
+
+// The ROM the last level was loaded from: a movie opened later plays on it.
+static char sLoadedRom[1024];
 
 static ft_level *level_load_path(ft_game *game, const char *path, const char *variant_id) {
   (void)variant_id;
@@ -120,16 +180,25 @@ static ft_level *level_load_path(ft_game *game, const char *path, const char *va
     return NULL;
   }
   ft_level *level = NULL;
-  char name[21], code[5];
-  uint8_t revision = 0;
-  if (!rom_header(data, size, name, code, &revision) || !wanted_rom(code, revision)) {
-    char message[256];
-    snprintf(message, sizeof(message), "%s is not a Super Mario 64 (%s) ROM", path, version()->region);
+  struct rom_id id;
+  const struct version *is = rom_header(data, size, &id) ? version_of(&id, true) : NULL;
+  if (is != version()) {
+    // Another version's ROM says which game opens it.
+    const struct version *claims = rom_header(data, size, &id) ? version_of(&id, false) : NULL;
+    char message[512];
+    if (is)
+      snprintf(message, sizeof(message), "%s is the ROM of %s: switch to that version to open it", path, is->game);
+    else if (claims)
+      snprintf(message, sizeof(message), "%s is a modified %s ROM (a hack or a bad dump): only the original runs",
+               path, claims->game);
+    else
+      snprintf(message, sizeof(message), "%s is not a %s ROM", path, version()->rom);
     log_error(game->engine, message);
   } else if (!sm64_load_rom(data, size)) {
     log_error(game->engine, "the ROM is not the version this build of the game is for");
   } else if ((level = calloc(1, sizeof(*level)))) {
     snprintf(level->name, sizeof(level->name), "%s", SM64_GAME_NAME);
+    snprintf(sLoadedRom, sizeof(sLoadedRom), "%s", path);
   }
   game->engine->free_file_data(data);
   return level;
@@ -458,6 +527,17 @@ static bool resources_create(ft_game *game) {
                              .fragment_spirv_size = frag_size,
                              .texture_count = 1};
     game->present = api->pipeline_create(&desc);
+    // Ghosts: the same quad, blended, with their tint and opacity.
+    void *ghost = NULL;
+    size_t ghost_size = 0;
+    api->resolve_data_path("shaders/ghost.frag.spv", path, sizeof(path));
+    if (api->read_file(path, &ghost, &ghost_size)) {
+      desc.fragment_spirv = ghost;
+      desc.fragment_spirv_size = ghost_size;
+      desc.alpha_blend = true;
+      game->ghost_present = api->pipeline_create(&desc);
+      api->free_file_data(ghost);
+    }
   }
   if (have_vert) api->free_file_data(vert);
   if (have_frag) api->free_file_data(frag);
@@ -474,6 +554,9 @@ static bool resources_create(ft_game *game) {
     char message[320];
     snprintf(message, sizeof(message), "cannot draw the game: %s", error);
     log_error(api, message);
+  } else if ((game->vk_ghost = sm64_vulkan_create((VkPhysicalDevice)gpu->physical_device, (VkDevice)gpu->device,
+                                                  (VkQueue)gpu->queue, gpu->queue_family_index, error, sizeof(error)))) {
+    sm64_vulkan_set_transparent(game->vk_ghost, true);
   }
   if (!game->present || !game->quad) log_error(api, "cannot show the game's frames");
   return true;
@@ -484,6 +567,14 @@ static void resources_destroy(ft_game *game) {
   release_frame(game);
   sm64_vulkan_destroy(game->vk);
   game->vk = NULL;
+  for (size_t i = 0; i < sizeof(game->ghosts) / sizeof(game->ghosts[0]); ++i) {
+    if (game->ghosts[i].frame) api->texture_destroy(game->ghosts[i].frame);
+    memset(&game->ghosts[i], 0, sizeof(game->ghosts[i]));
+  }
+  sm64_vulkan_destroy(game->vk_ghost);
+  game->vk_ghost = NULL;
+  if (game->ghost_present) api->pipeline_destroy(game->ghost_present);
+  game->ghost_present = NULL;
   if (game->present) api->pipeline_destroy(game->present);
   if (game->quad) api->mesh_destroy(game->quad);
   game->present = NULL;
@@ -549,8 +640,76 @@ static bool draw_frame(ft_game *game, const ft_world *world, const ft_world *pre
   return true;
 }
 
+// Another group's Mario over the active group's frame: its world's frame drawn
+// with Mario alone, through the view the active frame is drawn from, on a
+// transparent frame shown tinted and at the group's opacity. Only where the
+// active group is: the same level and area.
+static void draw_ghost(ft_game *game, const ft_render_frame *frame) {
+  const ft_engine_api *api = game->engine;
+  const int32_t index = frame->world_index;
+  if (index < 0 || index >= (int32_t)(sizeof(game->ghosts) / sizeof(game->ghosts[0])) || !game->vk_ghost ||
+      !game->ghost_present || !game->quad || !game->drawn || !game->drawn_world || frame->opacity <= 0.f)
+    return;
+  const ft_world *previous = frame->previous_world;
+  if (!previous || previous->tick != frame->world->tick - 1) return;
+  struct sm64_mario_info mario, active;
+  if (!sm64_mario(frame->world->sim, &mario) || !sm64_mario(game->drawn_world->sim, &active) ||
+      mario.level != active.level || mario.area != active.area)
+    return;
+
+  ft_camera camera = {0};
+  api->camera_get(&camera);
+  const uint32_t width = camera.viewport.x < 1.f ? 1u : camera.viewport.x > 4096.f ? 4096u : (uint32_t)camera.viewport.x;
+  const uint32_t height = camera.viewport.y < 1.f ? 1u : camera.viewport.y > 4096.f ? 4096u : (uint32_t)camera.viewport.y;
+  // The engine's camera is the active frame's: Lakitu's in the game camera
+  // mode, or the engine's own.
+  float view[4][4];
+  game_camera_from_engine(&camera, view);
+
+  struct ghost *ghost = &game->ghosts[index];
+  if (!ghost->frame || ghost->width != width || ghost->height != height) {
+    if (ghost->frame) api->texture_destroy(ghost->frame);
+    memset(ghost, 0, sizeof(*ghost));
+    ft_texture_desc desc = {.struct_size = sizeof(desc), .width = width, .height = height, .layers = 1,
+                            .format = FT_TEXTURE_RGBA8, .linear_filter = true};
+    if (!(ghost->frame = api->texture_create(&desc))) return;
+    ghost->width = width;
+    ghost->height = height;
+  }
+  if (!ghost->drawn || ghost->world != frame->world || ghost->revision != frame->world->revision ||
+      ghost->previous_revision != previous->revision || memcmp(ghost->camera, view, sizeof(view)) != 0) {
+    if (!game->ghost_world && !(game->ghost_world = sm64_world_create())) return;
+    sm64_world_copy(game->ghost_world, previous->sim);
+    sm64_set_draw_mario_only(true);
+    const void *list = sm64_step_draw(game->ghost_world, frame->world->input);
+    sm64_set_draw_mario_only(false);
+    ft_gpu_image image = {.struct_size = sizeof(image)};
+    char error[256];
+    if (!list || !api->texture_gpu_image || !api->texture_gpu_image(ghost->frame, &image) ||
+        !sm64_vulkan_draw(game->vk_ghost, list, (const float (*)[4])view, (VkImage)image.image, (VkFormat)image.format,
+                          image.width, image.height, (VkImageLayout)image.layout, error, sizeof(error)))
+      return;
+    ghost->drawn = true;
+    ghost->world = frame->world;
+    ghost->revision = frame->world->revision;
+    ghost->previous_revision = previous->revision;
+    memcpy(ghost->camera, view, sizeof(view));
+  }
+  const struct {
+    float tint[4];
+    float opacity;
+    float pad[3];
+  } uniforms = {{frame->accent.r, frame->accent.g, frame->accent.b, 1.f}, frame->opacity * 0.7f, {0.f, 0.f, 0.f}};
+  api->draw_mesh(game->ghost_present, 0.f, game->quad, &ghost->frame, 1, &uniforms, sizeof(uniforms));
+}
+
 static void render(ft_game *game, const ft_render_frame *frame) {
   const ft_engine_api *api = game->engine;
+  // The other groups: each one's Mario over the active group's frame.
+  if (frame->pass == FT_PASS_ENTITIES && !frame->active && frame->world) {
+    draw_ghost(game, frame);
+    return;
+  }
   if (frame->pass != FT_PASS_LEVEL_BACKGROUND || !frame->active || !frame->world || !game->vk || !game->present ||
       !game->quad)
     return;
@@ -572,14 +731,15 @@ static void render(ft_game *game, const ft_render_frame *frame) {
 
 // --- .m64 movies ---------------------------------------------------------------------
 // An .m64 holds one controller read per poll, from power-on: the console's
-// reads while it boots (sm64_boot_polls), then one per game frame. The movies
-// on TASVideos were made on Mupen64-rr, whose boot polls the controller a
-// different number of times than the console this library follows
-// (mupen64plus): tick t reads sample t + sm64_boot_polls() + movie_offset.
-// (The Shindou Edition also reads the controller to look for a Rumble Pak
-// every 60 vertical interrupts without one; those samples are not skipped.)
+// reads while it boots (sm64_boot_polls), then one per game frame. Mupen64-rr,
+// which SM64 TASes are made on, gives the first read after power-on no sample:
+// sample N is read N + 1, so tick t reads sample t + sm64_boot_polls() - 1.
+// (Found against Mupen64-rr itself; with it the TASVideos 16, 70 and 120-star
+// movies play to their end, see the library's oracle/README.md. The Shindou
+// Edition also reads the controller to look for a Rumble Pak every 60 vertical
+// interrupts without one; those samples are not skipped.)
 
-static int32_t movie_offset(void) { return version()->movie_offset; }
+static int32_t movie_offset(void) { return -1; }
 
 static int32_t movie_tick(int32_t sample) { return sample - sm64_boot_polls() - movie_offset(); }
 
@@ -587,10 +747,68 @@ struct ft_recording {
   uint32_t *samples;
   uint32_t count;
   char name[256];
-  char code; // the ROM's country code: J, E or P
+  // The version it was recorded on, NULL when its header does not say which
+  // (a region code shared by two versions, or none).
+  const struct version *version;
+  // This version's ROM to play it on, "" when none was found.
+  char rom[1024];
+  char rom_name[256];
 };
 
 static uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+
+static void recording_destroy(ft_game *game, ft_recording *recording);
+
+// The ROM a movie names: its first checksum, in the ROM's byte order, and
+// its country code. Movies made without a ROM leave either or both zero.
+static uint32_t movie_checksum(const uint8_t *movie) {
+  return (uint32_t)movie[0xE4] << 24 | movie[0xE5] << 16 | movie[0xE6] << 8 | movie[0xE7];
+}
+
+static const struct version *movie_version(const uint8_t *movie) {
+  const uint32_t crc = movie_checksum(movie);
+  for (size_t i = 0; i < VERSION_COUNT; ++i)
+    if (crc != 0 && crc == kVersions[i].crc) return &kVersions[i];
+  // Without a checksum the country code tells the version, but for Japan's
+  // two versions.
+  if (crc == 0 && movie[0xE8] && movie[0xE8] != 'J')
+    for (size_t i = 0; i < VERSION_COUNT; ++i)
+      if (movie[0xE8] == kVersions[i].country) return &kVersions[i];
+  return NULL;
+}
+
+static bool movie_region_allows(char code) { return code == version()->country; }
+
+// This version's ROM for a movie: the one loaded last, else the first in the
+// ROM folder.
+static bool visit_movie_rom(void *user, const ft_directory_entry *entry);
+struct rom_search {
+  const ft_engine_api *engine;
+  const char *folder;
+  ft_recording *recording;
+};
+
+static void find_movie_rom(const ft_engine_api *engine, ft_recording *recording) {
+  if (sLoadedRom[0] && is_our_rom(engine, sLoadedRom)) {
+    snprintf(recording->rom, sizeof(recording->rom), "%s", sLoadedRom);
+  } else {
+    char folder[1024];
+    rom_folder(engine, folder, sizeof(folder));
+    struct rom_search search = {engine, folder, recording};
+    engine->visit_directory(folder, visit_movie_rom, &search);
+  }
+  if (!recording->rom[0]) {
+    char folder[1024], message[1400];
+    rom_folder(engine, folder, sizeof(folder));
+    snprintf(message, sizeof(message), "%s needs the %s ROM: put it into %s", recording->name, version()->rom, folder);
+    engine->log(FT_LOG_WARN, "sm64", message);
+    return;
+  }
+  const char *base = strrchr(recording->rom, '/');
+  const char *back = strrchr(recording->rom, '\\');
+  if (back && (!base || back > base)) base = back;
+  snprintf(recording->rom_name, sizeof(recording->rom_name), "%s", base ? base + 1 : recording->rom);
+}
 
 static ft_recording *recording_open(ft_game *game, const void *data, size_t size, const char *name,
                                     bool (*progress)(void *user, float fraction), void *progress_user, char *error,
@@ -618,8 +836,26 @@ static ft_recording *recording_open(ft_game *game, const void *data, size_t size
   }
   for (uint32_t i = 0; i < samples; ++i) recording->samples[i] = le32(bytes + 0x400 + 4 * i);
   recording->count = samples;
-  recording->code = (char)bytes[0xE8];
   snprintf(recording->name, sizeof(recording->name), "%s", name ? name : "movie");
+  recording->version = movie_version(bytes);
+  if (!recording->version && movie_checksum(bytes) == 0 && bytes[0xE8] && !movie_region_allows(bytes[0xE8])) {
+    snprintf(error, error_size, "the movie is for another region's Super Mario 64 (%c)", bytes[0xE8]);
+    recording_destroy(game, recording);
+    return NULL;
+  }
+  if (recording->version && recording->version != version()) {
+    snprintf(error, error_size, "the movie was recorded on %s: switch to that version to open it",
+             recording->version->game);
+    recording_destroy(game, recording);
+    return NULL;
+  }
+  if (!recording->version && movie_checksum(bytes) != 0) {
+    snprintf(error, error_size, "the movie was recorded on a ROM this does not know (checksum %08X), such as a hack",
+             movie_checksum(bytes));
+    recording_destroy(game, recording);
+    return NULL;
+  }
+  find_movie_rom(game->engine, recording);
   return recording;
 }
 
@@ -637,6 +873,11 @@ static bool recording_info(ft_game *game, const ft_recording *recording, ft_reco
   out->first_tick = movie_tick(0) < 0 ? 0 : movie_tick(0);
   out->last_tick = movie_tick((int32_t)recording->count - 1);
   out->player_count = 1;
+  // The ROM is the level: named by path, not carried.
+  if (recording->rom[0]) {
+    out->level_path = recording->rom;
+    out->level_name = recording->rom_name;
+  }
   return true;
 }
 
@@ -652,9 +893,11 @@ static bool recording_player(ft_game *game, const ft_recording *recording, uint3
   return true;
 }
 
+// A module plays only its own version's movies (recording_open refuses the
+// others), on its own ROM.
 static bool recording_level_matches(ft_game *game, const ft_recording *recording, const ft_level *level) {
-  (void)game, (void)level;
-  return recording->code == version()->country;
+  (void)game, (void)recording;
+  return level != NULL;
 }
 
 // The input the movie holds for a tick: nothing before its first sample.
@@ -667,7 +910,7 @@ static void recording_tick_flags(ft_game *game, const ft_recording *recording, i
                                  uint32_t count, uint8_t *out) {
   (void)game, (void)player;
   for (uint32_t i = 0; i < count; ++i) {
-    const int64_t sample = (int64_t)first_tick + i + 1 + movie_offset();
+    const int64_t sample = (int64_t)first_tick + i + sm64_boot_polls() + movie_offset();
     out[i] = sample < (int64_t)recording->count ? FT_RECORDING_TICK_PRESENT : 0;
   }
 }
@@ -734,6 +977,11 @@ static bool export_run(ft_game *game, uint32_t index, const ft_export_request *r
   file[0x1C] = 2; // from power-on
   put32(file + 0x20, 1); // controller 1 present
   memcpy(file + 0xC4, "SUPER MARIO 64", 14);
+  // The ROM: its first checksum in the ROM's byte order, and its country.
+  file[0xE4] = (uint8_t)(version()->crc >> 24);
+  file[0xE5] = (uint8_t)(version()->crc >> 16);
+  file[0xE6] = (uint8_t)(version()->crc >> 8);
+  file[0xE7] = (uint8_t)version()->crc;
   file[0xE8] = version()->country;
   memcpy(file + 0x222, "FrameTee", 8);
   for (uint32_t i = 0; i < samples; ++i) {
@@ -751,33 +999,140 @@ static bool export_run(ft_game *game, uint32_t index, const ft_export_request *r
 }
 
 // --- The start screen: pick a ROM -----------------------------------------------------
+// Every version's ROMs go into one folder, the US module's data/games/sm64:
+// each version's start screen lists its own and points to the game for the
+// others. The folder is looked at again every second, so a ROM put there
+// while the screen is open shows up.
+
+#define MAX_ROMS 32
+
+struct rom {
+  char name[256];
+  char path[1024];
+  const struct version *version;  // NULL: not the original ROM of any version
+  const struct version *modified; // or a hack or bad dump claiming to be this one
+  bool seen;                      // in the folder at the last look
+};
 
 struct rom_list {
   const ft_engine_api *engine;
   char directory[1024];
-  char paths[16][1024];
-  char names[16][64];
+  struct rom roms[MAX_ROMS];
   int count;
+  double last_scan;
+  bool copied; // "Copy path" was just used
+  double copied_at;
 };
 
+static bool rom_file(const char *name) {
+  const char *dot = strrchr(name, '.');
+  if (!dot) return false;
+  static const char *const kExtensions[] = {".z64", ".n64", ".v64", ".Z64", ".N64", ".V64"};
+  for (size_t i = 0; i < sizeof(kExtensions) / sizeof(kExtensions[0]); ++i)
+    if (strcmp(dot, kExtensions[i]) == 0) return true;
+  return false;
+}
+
+static bool visit_movie_rom(void *user, const ft_directory_entry *entry) {
+  struct rom_search *search = user;
+  if (entry->is_directory || !rom_file(entry->name)) return true;
+  char path[1024];
+  snprintf(path, sizeof(path), "%s/%s", search->folder, entry->name);
+  if (!is_our_rom(search->engine, path)) return true;
+  snprintf(search->recording->rom, sizeof(search->recording->rom), "%s", path);
+  return false;
+}
+
+// A file's header is read once, when it first appears.
 static bool visit_rom(void *user, const ft_directory_entry *entry) {
   struct rom_list *list = user;
-  const char *dot = strrchr(entry->name, '.');
-  if (entry->is_directory || !dot || (strcmp(dot, ".z64") && strcmp(dot, ".n64") && strcmp(dot, ".v64"))) return true;
-  char path[1024];
-  snprintf(path, sizeof(path), "%s/%s", list->directory, entry->name);
+  if (entry->is_directory || !rom_file(entry->name)) return true;
+  for (int i = 0; i < list->count; ++i) {
+    if (strcmp(list->roms[i].name, entry->name) == 0) {
+      list->roms[i].seen = true;
+      return true;
+    }
+  }
+  if (list->count >= MAX_ROMS) return false;
+  struct rom *rom = &list->roms[list->count];
+  memset(rom, 0, sizeof(*rom));
+  snprintf(rom->name, sizeof(rom->name), "%s", entry->name);
+  snprintf(rom->path, sizeof(rom->path), "%s/%s", list->directory, entry->name);
   void *data = NULL;
   size_t size = 0;
-  if (!list->engine->read_file(path, &data, &size)) return true;
-  char name[21], code[5];
-  uint8_t revision = 0;
-  if (rom_header(data, size, name, code, &revision) && wanted_rom(code, revision) && list->count < 16) {
-    snprintf(list->paths[list->count], sizeof(list->paths[0]), "%s", path);
-    snprintf(list->names[list->count], sizeof(list->names[0]), "%s", entry->name);
-    ++list->count;
+  if (list->engine->read_file(rom->path, &data, &size)) {
+    struct rom_id id;
+    if (rom_header(data, size, &id)) {
+      rom->version = version_of(&id, true);
+      if (!rom->version) rom->modified = version_of(&id, false);
+    }
+    list->engine->free_file_data(data);
   }
-  list->engine->free_file_data(data);
-  return list->count < 16;
+  rom->seen = true;
+  ++list->count;
+  return true;
+}
+
+static int compare_roms(const void *a, const void *b) {
+  return strcmp(((const struct rom *)a)->name, ((const struct rom *)b)->name);
+}
+
+static void scan_roms(struct rom_list *list) {
+  for (int i = 0; i < list->count; ++i) list->roms[i].seen = false;
+  list->engine->visit_directory(list->directory, visit_rom, list);
+  // Files that went away leave the list; the rest are in name order.
+  int kept = 0;
+  for (int i = 0; i < list->count; ++i)
+    if (list->roms[i].seen) list->roms[kept++] = list->roms[i];
+  list->count = kept;
+  qsort(list->roms, (size_t)list->count, sizeof(list->roms[0]), compare_roms);
+}
+
+// Opens a folder in the system's file manager.
+static void open_folder(const char *path) {
+#if defined(_WIN32)
+  wchar_t wide[1024];
+  if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, 1024) > 0)
+    ShellExecuteW(NULL, L"open", wide, NULL, NULL, SW_SHOWNORMAL);
+#else
+#if defined(__APPLE__)
+  const char *opener = "open";
+#else
+  const char *opener = "xdg-open";
+#endif
+  // Without a shell, so the path needs no quoting; the child is reaped by a
+  // grandchild doing the work.
+  const pid_t child = fork();
+  if (child == 0) {
+    if (fork() == 0) {
+      execlp(opener, opener, path, (char *)NULL);
+      _exit(127);
+    }
+    _exit(0);
+  }
+  if (child > 0) waitpid(child, NULL, 0);
+#endif
+}
+
+static const ImVec4 kHeading = {0.85f, 0.90f, 1.00f, 1.00f};
+static const ImVec4 kWarning = {1.00f, 0.78f, 0.35f, 1.00f};
+
+// The folder, its path selectable, with buttons to open it or copy the path.
+static void folder_row(struct rom_list *list) {
+  igSetNextItemWidth(-1.f);
+  igInputText("##rom_folder", list->directory, sizeof(list->directory), ImGuiInputTextFlags_ReadOnly, NULL, NULL);
+  if (igButton(ICON_FA_FOLDER_OPEN "  Open folder", (ImVec2){0.f, 32.f})) open_folder(list->directory);
+  igSameLine(0.f, 8.f);
+  if (igButton(ICON_FA_COPY "  Copy path", (ImVec2){0.f, 32.f})) {
+    igSetClipboardText(list->directory);
+    list->copied = true;
+    list->copied_at = igGetTime();
+  }
+  if (list->copied && igGetTime() - list->copied_at < 2.0) {
+    igSameLine(0.f, 10.f);
+    igAlignTextToFramePadding();
+    igTextDisabled("Copied");
+  }
 }
 
 static void splash(const ft_engine_api *engine, void **context, const ft_ui_frame *frame) {
@@ -786,29 +1141,88 @@ static void splash(const ft_engine_api *engine, void **context, const ft_ui_fram
   if (!list && (list = calloc(1, sizeof(*list)))) {
     *context = list;
     list->engine = engine;
-    // Every version's ROMs are in the US module's directory, data/games/sm64.
-    engine->resolve_data_path("", list->directory, sizeof(list->directory));
-    size_t length = strlen(list->directory);
-    while (length > 0 && (list->directory[length - 1] == '/' || list->directory[length - 1] == '\\'))
-      list->directory[--length] = '\0';
-    char *own = strrchr(list->directory, '/');
-    if (!own) own = strrchr(list->directory, '\\');
-    if (own && (size_t)(own - list->directory) + 6 < sizeof(list->directory)) strcpy(own + 1, "sm64");
-    engine->visit_directory(list->directory, visit_rom, list);
+    rom_folder(engine, list->directory, sizeof(list->directory));
+    list->last_scan = -1e9;
   }
   if (!list) return;
-  igTextUnformatted("Super Mario 64", NULL);
-  igSpacing();
-  igText("The whole game from power-on, frame for frame as on the console (%s version).", version()->adjective);
+  if (igGetTime() - list->last_scan >= 1.0) {
+    scan_roms(list);
+    list->last_scan = igGetTime();
+  }
+
+  // What this is.
+  igPushFont(NULL, 30.f);
+  igTextUnformatted(SM64_GAME_NAME, NULL);
+  igPopFont();
+  igPushStyleColor_Vec4(ImGuiCol_Text, *igGetStyleColorVec4(ImGuiCol_TextDisabled));
+  igTextWrapped("%s The whole game from power-on, frame for frame as on the console.", version()->release);
+  igPopStyleColor(1);
   igSpacing();
   igSeparator();
   igSpacing();
-  if (list->count == 0) {
-    igTextWrapped("Put your Super Mario 64 ROM (%s) into %s.", version()->region, list->directory);
-    return;
+
+  // Its ROMs, to start from.
+  int own = 0, others = 0;
+  for (int i = 0; i < list->count; ++i) {
+    if (list->roms[i].version == version()) ++own;
+    else ++others;
   }
-  for (int i = 0; i < list->count; ++i)
-    if (igButton(list->names[i], (ImVec2){0.f, 40.f}) && engine->request_level) engine->request_level(list->paths[i]);
+  igTextColored(kHeading, "%s", own > 1 ? "Your ROMs" : "Your ROM");
+  if (own > 0) {
+    igTextDisabled("Start a new project from power-on:");
+    igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.03f, 0.5f});
+    igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.f);
+    for (int i = 0; i < list->count; ++i) {
+      const struct rom *rom = &list->roms[i];
+      if (rom->version != version()) continue;
+      char label[300];
+      snprintf(label, sizeof(label), ICON_FA_PLAY "   %s", rom->name);
+      igPushID_Int(i);
+      if (igButton(label, (ImVec2){-1.f, 44.f}) && engine->request_level) engine->request_level(rom->path);
+      igPopID();
+      if (igIsItemHovered(ImGuiHoveredFlags_DelayShort)) igSetTooltip("%s", rom->path);
+    }
+    igPopStyleVar(2);
+  } else {
+    igTextColored(kWarning, ICON_FA_TRIANGLE_EXCLAMATION "  No %s ROM in the ROM folder.", version()->rom);
+    igPushStyleColor_Vec4(ImGuiCol_Text, *igGetStyleColorVec4(ImGuiCol_TextDisabled));
+    igTextWrapped("Put it there (.z64, .n64 or .v64) and it shows up here, or open one from anywhere with "
+                  "Load Local on the left.");
+    igPopStyleColor(1);
+  }
+
+  // ROMs in the folder this version cannot open, and what can.
+  if (others > 0) {
+    igSpacing();
+    igTextColored(kHeading, "%s", "Other ROMs in the folder");
+    igTextDisabled("%s", "Switch to their version at the top to open them.");
+    igPushStyleVar_Vec2(ImGuiStyleVar_CellPadding, (ImVec2){8.f, 4.f});
+    if (igBeginTable("##other_roms", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg,
+                     (ImVec2){0.f, 0.f}, 0.f)) {
+      igTableSetupColumn("ROM", ImGuiTableColumnFlags_WidthStretch, 0.6f, 0);
+      igTableSetupColumn("Version", ImGuiTableColumnFlags_WidthStretch, 0.4f, 0);
+      igTableHeadersRow();
+      for (int i = 0; i < list->count; ++i) {
+        const struct rom *rom = &list->roms[i];
+        if (rom->version == version()) continue;
+        igTableNextRow(0, 0.f);
+        igTableNextColumn();
+        igTextUnformatted(rom->name, NULL);
+        igTableNextColumn();
+        if (rom->version) igTextUnformatted(rom->version->game, NULL);
+        else if (rom->modified) igTextColored(kWarning, "Modified %s (hack or bad dump)", rom->modified->game);
+        else igTextColored(kWarning, "%s", "None: not a Super Mario 64 ROM");
+      }
+      igEndTable();
+    }
+    igPopStyleVar(1);
+  }
+
+  igSpacing();
+  igSeparator();
+  igSpacing();
+  igTextColored(kHeading, "%s", "ROM folder");
+  folder_row(list);
 }
 
 static void splash_destroy(void *context) { free(context); }
@@ -824,7 +1238,11 @@ static const ft_game_module kModule = {
              .display_name = SM64_GAME_NAME,
              .version = "0.2.0",
              .author = "Teero",
-             .thumbnail = "thumbnail.png"},
+             .thumbnail = SM64_THUMBNAIL,
+             .family = "Super Mario 64",
+             .family_thumbnail = "thumbnail.png",
+             .family_member = SM64_FAMILY_MEMBER,
+             .family_order = SM64_FAMILY_ORDER},
     .constraints = {.struct_size = sizeof(ft_game_constraints),
                     .caps = FT_CAP_HEADLESS | FT_CAP_EXPORTERS | FT_CAP_RECORDINGS | FT_CAP_RENDERS_LEVEL,
                     .dimensions = FT_DIMENSIONS_3D,
@@ -835,7 +1253,7 @@ static const ft_game_module kModule = {
                     .default_camera_height = 20.f,
                     .camera_modes = kCameraModes,
                     .camera_mode_count = sizeof(kCameraModes) / sizeof(kCameraModes[0]),
-                    .level_extension = "z64",
+                    .level_extension = "z64,n64,v64",
                     .level_filter_name = "Super Mario 64 ROM",
                     .recording_extension = "m64",
                     .recording_filter_name = "Mupen64 movie"},

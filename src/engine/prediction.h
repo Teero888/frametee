@@ -59,7 +59,7 @@ typedef struct prediction_line_t {
 typedef struct prediction_settings_t {
   bool enabled;
   int length;
-  float thickness;
+  float width_px; // on screen, the same in every game and at every zoom
   prediction_line_t lines[MAX_PREDICTION_LINES];
   int line_count;
 } prediction_settings_t;

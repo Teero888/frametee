@@ -2122,7 +2122,15 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
   renderer->primitive_index_count += segments * 3;
 }
 // TODO: ensuring the width of the thing is atleast 1px is kinda expensive. think of another way to do this
+static void draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness, float width_px);
+
 void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness) {
+  draw_line(handler, p1, p2, color, thickness, 0.f);
+}
+
+// A line of `thickness` world units, at least a pixel, or with width_px above
+// zero exactly that many pixels wide.
+static void draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness, float width_px) {
   // Calculate perpendicular direction
   vec2 dir;
   glm_vec2_sub(p2, p1, dir);
@@ -2165,6 +2173,10 @@ void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, fl
 
   float half_t1 = fmaxf(thickness * 0.5f, min_world_thickness_p1 * 0.5f);
   float half_t2 = fmaxf(thickness * 0.5f, min_world_thickness_p2 * 0.5f);
+  if (width_px > 0.f) {
+    half_t1 = width_px * 0.5f / pix_per_unit_p1;
+    half_t2 = width_px * 0.5f / pix_per_unit_p2;
+  }
 
   // Create quad vertices
   vtx[0].pos[0] = p1[0] - normal[0] * half_t1;
@@ -2746,7 +2758,31 @@ void renderer_submit_triangle3_textured(gfx_handler_t *h, vec3 a, vec3 b, vec3 c
 
 void renderer_set_texture3(gfx_handler_t *h, texture_t *texture) { h->renderer.primitive3d_texture = texture; }
 
+static void submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float width_a, float width_b);
+
 void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float thickness) {
+  submit_line3(h, a, b, color, thickness, thickness);
+}
+
+// World units one pixel of the viewport covers at a point: its depth times the
+// field of view's slope, or the plan view's extent.
+static float world_per_pixel3(gfx_handler_t *h, vec3 point) {
+  const camera3_t *c = &h->renderer.camera3;
+  const float height = h->viewport[1] > 1.f ? h->viewport[1] : 1.f;
+  if (c->mode == CAMERA3_TOP_DOWN) return 2.f * fmaxf(c->top_down_extent, CAMERA3_MIN_EXTENT) / height;
+  vec3 eye, forward, offset;
+  renderer_camera3_eye(h, eye);
+  renderer_camera3_forward(h, forward);
+  glm_vec3_sub(point, eye, offset);
+  const float depth = fmaxf(glm_vec3_dot(offset, forward), c->near_z);
+  return 2.f * depth * tanf(c->fov_y * 0.5f) / height;
+}
+
+void renderer_submit_line3_px(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float width_px) {
+  submit_line3(h, a, b, color, width_px * world_per_pixel3(h, a), width_px * world_per_pixel3(h, b));
+}
+
+static void submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float width_a, float width_b) {
   // A line with width is a quad turned to face the viewer: there is no line
   // width to rely on without the wideLines feature, and a camera-facing quad
   // reads the same from every angle.
@@ -2766,13 +2802,15 @@ void renderer_submit_line3(gfx_handler_t *h, vec3 a, vec3 b, vec4 color, float t
   glm_vec3_cross(dir, to_eye, side);
   if (glm_vec3_norm(side) <= 1e-6f) glm_vec3_cross(dir, (vec3){0.f, 1.f, 0.f}, side);
   glm_vec3_normalize(side);
-  glm_vec3_scale(side, thickness * 0.5f, side);
+  vec3 side_a, side_b;
+  glm_vec3_scale(side, width_a * 0.5f, side_a);
+  glm_vec3_scale(side, width_b * 0.5f, side_b);
 
   vec3 a0, a1, b0, b1;
-  glm_vec3_add(a, side, a0);
-  glm_vec3_sub(a, side, a1);
-  glm_vec3_add(b, side, b0);
-  glm_vec3_sub(b, side, b1);
+  glm_vec3_add(a, side_a, a0);
+  glm_vec3_sub(a, side_a, a1);
+  glm_vec3_add(b, side_b, b0);
+  glm_vec3_sub(b, side_b, b1);
 
   if (!ensure_primitive3d_space(h, 6)) return;
   renderer_state_t *renderer = &h->renderer;
@@ -3286,7 +3324,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     case RENDER_CMD_LINE_BATCH:
       for (uint32_t segment = 0; segment < q->data.line_batch.count; ++segment) {
         line_segment_t *line = &q->data.line_batch.segments[segment];
-        renderer_draw_line(h, line->p1, line->p2, line->color, line->thickness);
+        draw_line(h, line->p1, line->p2, line->color, line->thickness, line->width_px);
       }
       break;
 

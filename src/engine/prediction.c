@@ -63,7 +63,7 @@ void prediction_settings_default(prediction_settings_t *settings) {
   memset(settings, 0, sizeof(*settings));
   settings->enabled = true;
   settings->length = 100;
-  settings->thickness = 0.05f;
+  settings->width_px = 3.f;
   settings->line_count = 1;
   prediction_line_default(&settings->lines[0], 0);
 }
@@ -329,11 +329,9 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
 
   // A 3D game's prediction is a line through the world, not a stripe on a map.
   const bool is_3d = game_is_3d(host);
-  // The 2D thickness is a fraction of a normalised playfield; in a volume it is
-  // scaled to world coordinates using the game's camera distance scale so it
-  // remains clearly visible across games with different world units (e.g. TMNF metres vs SM64 units).
-  const float scale3 = game_default_camera_height(host) / 20.0f;
-  const float thickness3 = fmaxf(settings->thickness * 4.f, 0.12f) * (scale3 > 0.f ? scale3 : 1.f);
+  // The width is in pixels, in 2D and 3D alike: world units differ from game to
+  // game by orders of magnitude, so any width in them looks different in each.
+  const float width_px = settings->width_px > 0.f ? settings->width_px : 3.f;
 
   uint8_t *packed_inputs = calloc((size_t)players, input_size);
   input_record_t *held_inputs = calloc((size_t)players, sizeof(*held_inputs));
@@ -441,7 +439,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
           if (have_position[player]) {
             vec4 color = {active_colors[player][0], active_colors[player][1], active_colors[player][2],
                           active_colors[player][3]};
-            renderer_submit_line3(ui->gfx_handler, positions3[player], next, color, thickness3);
+            renderer_submit_line3_px(ui->gfx_handler, positions3[player], next, color, width_px);
           }
           glm_vec3_copy(next, positions3[player]);
           have_position[player] = true;
@@ -460,7 +458,8 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
           segment->p2[0] = view.position.x;
           segment->p2[1] = view.position.y;
           memcpy(segment->color, active_colors[player], sizeof(segment->color));
-          segment->thickness = settings->thickness;
+          segment->thickness = 0.f;
+          segment->width_px = width_px;
         }
         positions[player] = view.position;
         have_position[player] = true;
@@ -760,7 +759,7 @@ void prediction_render_menu(timeline_state_t *timeline) {
   igSetNextItemWidth(180.f * dpi);
   config_changed |= igDragInt("Ticks ahead", &settings->length, 1.0f, 1, 2000, "%d", ImGuiSliderFlags_AlwaysClamp);
   igSetNextItemWidth(180.f * dpi);
-  config_changed |= igSliderFloat("Line width", &settings->thickness, 0.01f, 0.30f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+  config_changed |= igSliderFloat("Line width", &settings->width_px, 1.f, 12.f, "%.1f px", ImGuiSliderFlags_AlwaysClamp);
   igTextDisabled("Prediction settings and line definitions are saved per game.");
 
   igSeparatorText("Lines");

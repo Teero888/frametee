@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 22u
+#define FT_GAME_ABI_VERSION 23u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -153,6 +153,18 @@ typedef struct ft_game_info {
    * game's data directory (data/games/<id>/). Roughly 16:9 looks best. The
    * editor falls back to a plain card when it is missing. */
   const char *thumbnail;
+  /* Optional: one game in several modules, such as its regional versions.
+   * Modules naming the same `family` are one card in the game picker, whose
+   * start screen switches between them. `family` is that card's name, the
+   * same in every member ("Super Mario 64"); `family_thumbnail` its image, as
+   * `thumbnail` but for the card (each member's own `thumbnail` shows in the
+   * switcher). `family_member` names this module among them ("USA"), and
+   * members are ordered by `family_order`, lowest first: the card opens that
+   * one unless another was chosen before. NULL `family`: a card of its own. */
+  const char *family;
+  const char *family_thumbnail;
+  const char *family_member;
+  int32_t family_order;
 } ft_game_info;
 
 /* Capability bits. Anything not advertised here is assumed unsupported, and
@@ -280,7 +292,8 @@ typedef struct ft_game_constraints {
   uint32_t camera_mode_count;
 
   /* File-picker hints for levels, e.g. "map" / "DDNet map". Both may be NULL
-   * when the game does not load levels from disk at all. */
+   * when the game does not load levels from disk at all. The extension may be
+   * a comma-separated list ("z64,n64,v64"); labels name the first. */
   const char *level_extension;
   const char *level_filter_name;
 
@@ -598,6 +611,10 @@ typedef struct ft_recording_info {
   const void *level_data;
   size_t level_size;
   const char *level_name;
+  /* Or a file level_load_path opens, when the recording names its level
+   * rather than carrying it (the game found it, say). Used when level_data is
+   * NULL. */
+  const char *level_path;
 } ft_recording_info;
 
 typedef struct ft_recording_player {

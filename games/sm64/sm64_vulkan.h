@@ -25,6 +25,10 @@ void sm64_vulkan_destroy(sm64_vulkan *vk);
 // the queue and waits for it: the image is ready when this returns. With a
 // camera (row vectors, OpenGL's clip space), the game's 3D scenes are drawn
 // through it instead of the game's camera (f3d_run).
+// Draws start from a transparent target and keep what is drawn's alpha, for a
+// frame shown over another (a ghost). Set before the first draw.
+void sm64_vulkan_set_transparent(sm64_vulkan *vk, bool transparent);
+
 bool sm64_vulkan_draw(sm64_vulkan *vk, const void *display_list, const float (*camera)[4], VkImage image,
                       VkFormat format, uint32_t width, uint32_t height, VkImageLayout final_layout, char *error,
                       size_t error_size);

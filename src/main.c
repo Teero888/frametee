@@ -406,11 +406,14 @@ int main(int argc, char **argv) {
 
   if (show_help) {
     printf("Usage: frametee [options] [plugin-options]\n\n"
-           "Interactive options:\n"
-           "  --game <id>             Select game on startup (e.g. tmnf, ddnet)\n"
-           "  --level <path>          Open level immediately\n"
-           "  --demo <path>           Import a recording (e.g. a DDNet demo); starts a\n"
-           "                          project on its level unless one is open\n"
+           "Opening something:\n"
+           "  --game <id>             The game to use (see --list-games, e.g. ddnet, sm64);\n"
+           "                          alone it opens that game's start screen\n"
+           "  --variant <id>          Its ruleset or start (DDNet: ddrace, race, fastcap)\n"
+           "  --level <path>          Open a level (for Super Mario 64: its ROM)\n"
+           "  --project <path>        Open a TAS project\n"
+           "  --demo <path>           Import a recording (a DDNet demo, a Mupen64 movie);\n"
+           "                          starts a project on its level unless one is open\n"
            "  --list-games            List discovered game modules and exit\n"
            "  --plugin <name...>      Activate one or more plugins for this session\n\n"
            "Capture options:\n"
@@ -429,14 +432,9 @@ int main(int argc, char **argv) {
            "  --render-preset <name>  fast, medium, or slow compression\n"
            "  --render-depth <8|10>   Color depth\n"
            "  --render-hardware       Encode on the GPU (NVENC, AMF, Quick Sync or VAAPI)\n\n"
-           "Headless options:\n"
+           "Headless options (with --level or --project):\n"
            "  --headless              Run without window or graphics\n"
-           "  --game <id>             Game module to use (e.g. tmnf, ddnet)\n"
-           "  --level <path>          Level file to load\n"
-           "  --project <path>        TAS project file to load\n"
            "  --check-finish          Check if the run finishes (exit 0 on finish, 1 otherwise)\n"
-           "  --variant <id>          Ruleset variant (DDNet: ddrace, race, fastcap)\n"
-           "  --plugin <name...>      Activate one or more plugins for this session\n"
            "  --help, -h              Show this help message\n");
 
     if (num_forced_plugins > 0) {
@@ -488,7 +486,7 @@ int main(int argc, char **argv) {
 
       model_add_new_track(&handler.user_interface.timeline, 1);
     } else {
-      log_error("Main", "--headless requires --level <path> or --project <path>");
+      log_error("Main", "--headless requires --level <path> or --project <path> (--demo needs a window)");
       free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
       gfx_cleanup(&handler);
       return 1;
@@ -543,6 +541,22 @@ int main(int argc, char **argv) {
     plugin_manager_activate(&handler.user_interface.plugin_manager, forced_plugins[p]);
   }
 
+  // Plugins read the options nothing else did only headless: with a window,
+  // what is left is a typo or an option missing its value.
+  for (int a = 0; a < plugin_argc; ++a)
+    log_error("Main", "Unknown option or missing value: '%s' (see --help)", plugin_argv[a]);
+
+  int forced_game = -1;
+  if (g_forced_game_id) {
+    forced_game = game_host_find_id(&handler.game_host, g_forced_game_id);
+    if (forced_game < 0) log_error("Main", "Game module '%s' not found (see --list-games).", g_forced_game_id);
+  }
+  // --game alone: that game's start screen.
+  if (forced_game >= 0 && !project_path && !level_path && !demo_path && game_host_browse(&handler.game_host, forced_game)) {
+    if (variant_id) game_host_browsed_set_variant(&handler.game_host, variant_id);
+    handler.user_interface.splash_stage = SPLASH_STAGE_START;
+  }
+
   if (project_path) {
     if (load_project(&handler.user_interface, project_path)) {
       handler.user_interface.show_splash = false;
@@ -553,6 +567,8 @@ int main(int argc, char **argv) {
       log_error("Main", "Could not load project '%s'", project_path);
     }
   } else if (level_path) {
+    if (forced_game >= 0) gfx_activate_game(&handler, forced_game);
+    if (variant_id) game_host_set_variant(&handler.game_host, variant_id);
     on_level_load_path(&handler, level_path);
     if (handler.level) {
       handler.user_interface.show_splash = false;
@@ -563,6 +579,11 @@ int main(int argc, char **argv) {
       log_error("Main", "Could not open level '%s'", level_path);
   }
   if (demo_path) {
+    // A demo on its own starts a project under the game --game names.
+    if (!handler.level && forced_game >= 0) {
+      gfx_activate_game(&handler, forced_game);
+      if (variant_id) game_host_set_variant(&handler.game_host, variant_id);
+    }
     if (recording_import_available(&handler.user_interface))
       recording_import_open(&handler.user_interface, demo_path, handler.level == NULL);
     else

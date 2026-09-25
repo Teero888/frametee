@@ -298,7 +298,11 @@ static void import_as_new_project(ui_handler_t *ui, timeline_recording_t *record
   timeline_recording_t *kept = recordings_detach(&ui->timeline, recording->id);
   if (!kept) return;
   const ft_recording_info info = kept->info;
-  on_level_load_memory(ui->gfx_handler, info.level_data, info.level_size, info.level_name);
+  // A recording that names its level rather than carrying it opens it by path.
+  if (info.level_data)
+    on_level_load_memory(ui->gfx_handler, info.level_data, info.level_size, info.level_name);
+  else
+    on_level_load_path(ui->gfx_handler, info.level_path);
   recordings_attach(&ui->timeline, kept);
   add_recording_group(ui, kept, true);
   ui_mark_unsaved(ui);
@@ -609,22 +613,29 @@ static void render_level_notice(ui_handler_t *ui, timeline_recording_t *recordin
   const ft_recording_info *info = &recording->info;
   const char *level = info->level_name ? info->level_name : "?";
   if (imp.new_project) {
+    if (!info->level_data && !info->level_path) {
+      begin_callout("##level", COLOR_ERROR, ICON_FA_TRIANGLE_EXCLAMATION);
+      igTextWrapped("Its level was not found, so there is nothing to start a project on. The game's log says what "
+                    "it looked for; open the level first and import the recording into it.");
+      end_callout();
+      return;
+    }
     begin_callout("##level", COLOR_INFO, ICON_FA_CIRCLE_INFO);
-    igTextWrapped("Starts a new project on '%s', the demo's own map.", level);
+    igTextWrapped("Starts a new project on '%s', the recording's own level.", level);
     end_callout();
     return;
   }
   if (gh_recording_level_matches(&ui->gfx_handler->game_host, recording->handle, ui->gfx_handler->level)) {
     begin_callout("##level", COLOR_OK, ICON_FA_CIRCLE_CHECK);
-    igTextWrapped("Same map as this project. The demo becomes a new group starting at the playhead.");
+    igTextWrapped("Same level as this project. The recording becomes a new group starting at the playhead.");
     end_callout();
     return;
   }
   begin_callout("##level", COLOR_WARNING, ICON_FA_TRIANGLE_EXCLAMATION);
-  igTextWrapped("Recorded on '%s', but this project uses '%s'. On another map its players move through walls.", level, ui->loaded_level_name);
+  igTextWrapped("Recorded on '%s', but this project uses '%s'. On another level its players do not replay as recorded.", level, ui->loaded_level_name);
   if (info->level_data) {
     gap(2.f);
-    igCheckbox("Switch the project to the demo's map", &imp.switch_level);
+    igCheckbox("Switch the project to the recording's level", &imp.switch_level);
     if (imp.switch_level) igTextDisabled("Every group keeps its tracks and runs on the new map.");
   }
   end_callout();
@@ -643,7 +654,7 @@ static void cancel_import(ui_handler_t *ui) {
 }
 
 static void render_loading(ui_handler_t *ui, timeline_recording_t *recording, float progress) {
-  render_header(ui, recording->name, "Rebuilding every tick of the demo. The first time takes a while for long demos.", COLOR_INFO);
+  render_header(ui, recording->name, "Rebuilding every tick of the recording. The first time takes a while for long recordings.", COLOR_INFO);
   gap(SECTION_GAP);
   // The bar and its percentage on one line, the percentage right-aligned.
   char percent[16];
@@ -672,7 +683,7 @@ static void render_failed(ui_handler_t *ui, timeline_recording_t *recording, con
   render_header(ui, recording->name, NULL, COLOR_ERROR);
   gap(SECTION_GAP);
   begin_callout("##error", COLOR_ERROR, ICON_FA_TRIANGLE_EXCLAMATION);
-  igTextWrapped("The demo could not be opened: %s", error[0] ? error : "unknown error");
+  igTextWrapped("The recording could not be opened: %s", error[0] ? error : "unknown error");
   end_callout();
   gap(SECTION_GAP);
   begin_footer((float[]){button_width("Close")}, 1);
@@ -683,7 +694,7 @@ static void render_ready(ui_handler_t *ui, timeline_recording_t *recording) {
   const ft_recording_info *info = &recording->info;
   char length[32], details[192];
   format_duration(length, sizeof(length), recording->last_tick - recording->first_tick + 1, game_ticks_per_second(&ui->gfx_handler->game_host));
-  snprintf(details, sizeof(details), ICON_FA_MAP " %s    " ICON_FA_CLOCK " %s    " ICON_FA_USERS " %u", info->level_name ? info->level_name : "unknown map",
+  snprintf(details, sizeof(details), ICON_FA_MAP " %s    " ICON_FA_CLOCK " %s    " ICON_FA_USERS " %u", info->level_name ? info->level_name : "unknown level",
            length, info->player_count);
   render_header(ui, recording->name, details, COLOR_INFO);
   gap(SECTION_GAP);
@@ -691,7 +702,7 @@ static void render_ready(ui_handler_t *ui, timeline_recording_t *recording) {
   gap(SECTION_GAP);
   render_players(ui, recording);
   gap(6.f);
-  igTextDisabled("Demo players replay exactly as recorded.");
+  igTextDisabled("Its players replay exactly as recorded.");
   gap(SECTION_GAP - 6.f);
   igSeparator();
   gap(SECTION_GAP);
@@ -707,7 +718,9 @@ static void render_ready(ui_handler_t *ui, timeline_recording_t *recording) {
   begin_footer((float[]){button_width("Cancel"), import_w}, 2);
   const bool cancel = secondary_button("Cancel");
   igSameLine(0, -1.f);
-  const bool confirm = primary_button(import_label, import_w, chosen > 0);
+  // A new project needs the recording's level.
+  const bool has_level = !imp.new_project || info->level_data || info->level_path;
+  const bool confirm = primary_button(import_label, import_w, chosen > 0 && has_level);
   if (confirm) {
     if (imp.new_project) import_as_new_project(ui, recording);
     else import_into_project(ui, recording);

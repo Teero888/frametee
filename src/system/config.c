@@ -182,8 +182,10 @@ static void load_prediction_config(toml_datum_t table, prediction_settings_t *se
   if (config_int(table, "editor_prediction_length", &integer) && integer >= 1 && integer <= 2000)
     settings->length = integer;
   double number;
-  if (config_number(table, "editor_prediction_thickness", &number) && number >= 0.01 && number <= 0.30)
-    settings->thickness = (float)number;
+  // Pixels on screen; the world-unit editor_prediction_thickness it replaces is
+  // not carried over, its values meant something different in every game.
+  if (config_number(table, "editor_prediction_width_px", &number) && number >= 1.0 && number <= 12.0)
+    settings->width_px = (float)number;
   if (config_int(table, "editor_prediction_line_count", &integer) && integer >= 1 && integer <= MAX_PREDICTION_LINES)
     settings->line_count = integer;
 
@@ -247,7 +249,7 @@ static void load_prediction_config(toml_datum_t table, prediction_settings_t *se
 static void write_prediction_config(FILE *fp, const prediction_settings_t *settings) {
   fprintf(fp, "editor_prediction_enabled = %s\n", settings->enabled ? "true" : "false");
   fprintf(fp, "editor_prediction_length = %d\n", settings->length);
-  fprintf(fp, "editor_prediction_thickness = %.9g\n", settings->thickness);
+  fprintf(fp, "editor_prediction_width_px = %.9g\n", settings->width_px);
   fprintf(fp, "editor_prediction_line_count = %d\n", settings->line_count);
   for (int line_index = 0; line_index < settings->line_count && line_index < MAX_PREDICTION_LINES; ++line_index) {
     const prediction_line_t *line = &settings->lines[line_index];

@@ -19,6 +19,8 @@
 #define SETS_PER_POOL 1024u
 // Pipelines differ in blending, depth test, depth writes and decal offset.
 #define PIPELINE_COUNT 16
+// A flag f3d.frag reads beside f3d's own (f3d.h): the target is transparent.
+#define F3D_SHADER_TRANSPARENT_TARGET (1u << 30)
 
 struct texture {
     VkImage image;
@@ -67,6 +69,9 @@ struct sm64_vulkan {
     VkRenderPass render_pass;
     VkFramebuffer framebuffer;
     VkPipeline pipelines[PIPELINE_COUNT];
+    // The target starts transparent and keeps what is drawn's alpha
+    // (sm64_vulkan_set_transparent).
+    bool transparent;
     VkFormat depth_format;
     VkImage depth;
     VkDeviceMemory depth_memory;
@@ -371,10 +376,12 @@ static VkPipeline pipeline_create(sm64_vulkan *vk, int key) {
     attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     attachment.colorBlendOp = VK_BLEND_OP_ADD;
     attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    attachment.dstAlphaBlendFactor = vk->transparent ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ZERO;
     attachment.alphaBlendOp = VK_BLEND_OP_ADD;
-    // The frame stays opaque: alpha is the clear's.
-    attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
+    // The frame stays opaque: alpha is the clear's. A transparent one keeps
+    // what is drawn over it (f3d.frag makes an unblended surface's alpha 1).
+    attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT
+                                | (vk->transparent ? VK_COLOR_COMPONENT_A_BIT : 0);
     VkPipelineColorBlendStateCreateInfo color = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
     color.attachmentCount = 1;
     color.pAttachments = &attachment;
@@ -647,7 +654,7 @@ static void backend_draw(void *user, const struct f3d_state *state, const struct
     memcpy(push.fog, state->fog, sizeof(push.fog));
     push.combine[0] = state->combine[0];
     push.combine[1] = state->combine[1];
-    push.flags = f;
+    push.flags = f | (vk->transparent ? F3D_SHADER_TRANSPARENT_TARGET : 0);
     push.alpha_threshold = state->alpha_threshold;
     push.prim_lod_frac = state->prim_lod_frac;
     push.noise_seed = (float) (vk->frame % 1024);
@@ -679,7 +686,7 @@ static bool frame_begin(sm64_vulkan *vk) {
         return false;
     }
     VkClearValue clear[2];
-    clear[0].color = (VkClearColorValue) { { 0.0f, 0.0f, 0.0f, 1.0f } };
+    clear[0].color = (VkClearColorValue) { { 0.0f, 0.0f, 0.0f, vk->transparent ? 0.0f : 1.0f } };
     clear[1].depthStencil = (VkClearDepthStencilValue) { 1.0f, 0 };
     VkRenderPassBeginInfo pass = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
     pass.renderPass = vk->render_pass;
@@ -891,6 +898,10 @@ void sm64_vulkan_destroy(sm64_vulkan *vk) {
         vkDestroyCommandPool(vk->device, vk->command_pool, NULL);
     }
     free(vk);
+}
+
+void sm64_vulkan_set_transparent(sm64_vulkan *vk, bool transparent) {
+    vk->transparent = transparent;
 }
 
 bool sm64_vulkan_draw(sm64_vulkan *vk, const void *display_list, const float (*camera)[4], VkImage image,

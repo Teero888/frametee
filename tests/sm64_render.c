@@ -1,6 +1,6 @@
 // Draws frames of SM64 offscreen, as the game module does, into PNG files.
 //
-//   sm64_render_frames ROM POLLS OUT_PREFIX [--size WxH] [--from DX,DY,DZ] FRAME...
+//   sm64_render_frames ROM POLLS OUT_PREFIX [--size WxH] [--from DX,DY,DZ] [--ghost-back N] FRAME...
 //
 // POLLS is one u32 controller read per poll in the oracle's order (the first
 // ones are read during boot; game frame N reads poll N + sm64_boot_polls() -
@@ -8,7 +8,11 @@
 // draws it: the world after N - 1 frames, copied, stepped once more with
 // drawing. Writes OUT_PREFIX<N>.png for every FRAME. --from draws the 3D scene from a camera
 // of its own, DX,DY,DZ from Mario and looking at him, as the module does for
-// the editor's cameras.
+// the editor's cameras. --ghost-back also draws Mario alone from N frames
+// before (sm64_set_draw_mario_only) through the same camera on a transparent
+// frame, as the module draws another group's Mario: OUT_PREFIX<N>_ghost.png,
+// and OUT_PREFIX<N>_with_ghost.png over the frame (tinted, at 70%, as
+// data/games/sm64/shaders/ghost.frag does).
 #include <stdbool.h>
 #include <stdio.h>
 #include <math.h>
@@ -231,6 +235,7 @@ int main(int argc, char **argv) {
     uint32_t width = 640, height = 480;
     float from[3];
     bool have_from = false;
+    long ghost_back = 0;
     long frames[256];
     int frame_count = 0;
     for (int i = 4; i < argc; ++i) {
@@ -238,6 +243,8 @@ int main(int argc, char **argv) {
             sscanf(argv[++i], "%ux%u", &width, &height);
         } else if (strcmp(argv[i], "--from") == 0 && i + 1 < argc) {
             have_from = sscanf(argv[++i], "%f,%f,%f", &from[0], &from[1], &from[2]) == 3;
+        } else if (strcmp(argv[i], "--ghost-back") == 0 && i + 1 < argc) {
+            ghost_back = atol(argv[++i]);
         } else if (frame_count < 256) {
             frames[frame_count++] = atol(argv[i]);
         }
@@ -267,9 +274,20 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sm64_render: %s\n", error);
         return 1;
     }
+    sm64_vulkan *vk_ghost = NULL;
+    if (ghost_back > 0) {
+        if (!have_from || !(vk_ghost = sm64_vulkan_create(gpu.physical_device, gpu.device, gpu.queue, gpu.family, error,
+                                                          sizeof(error)))) {
+            fprintf(stderr, "sm64_render: --ghost-back needs --from and Vulkan\n");
+            return 1;
+        }
+        sm64_vulkan_set_transparent(vk_ghost, true);
+    }
     unsigned char *pixels = malloc((size_t) width * height * 4);
+    unsigned char *ghost_pixels = malloc((size_t) width * height * 4);
     sm64_world *world = sm64_world_create(), *draw = sm64_world_create();
-    long stepped = 0;
+    sm64_world *ghost = sm64_world_create();
+    long stepped = 0, ghost_stepped = 0;
     int result = 0;
     for (int f = 0; f < frame_count; ++f) {
         const long frame = frames[f];
@@ -309,7 +327,45 @@ int main(int argc, char **argv) {
         } else {
             printf("%s\n", path);
         }
+        if (vk_ghost && frame - ghost_back >= 1) {
+            // Mario alone, N frames earlier, from where this frame is seen.
+            const long earlier = frame - ghost_back;
+            while (ghost_stepped < earlier - 1) {
+                sm64_step(ghost, polls[ghost_stepped + boot]);
+                ++ghost_stepped;
+            }
+            sm64_world_copy(draw, ghost);
+            sm64_set_draw_mario_only(true);
+            const void *ghost_list = sm64_step_draw(draw, polls[earlier - 1 + boot]);
+            sm64_set_draw_mario_only(false);
+            if (!ghost_list
+                || !sm64_vulkan_draw(vk_ghost, ghost_list, (const float (*)[4]) camera, target.image, VK_FORMAT_R8G8B8A8_UNORM,
+                                     width, height, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, error, sizeof(error))
+                || !target_read(&gpu, &target, width, height, ghost_pixels)) {
+                fprintf(stderr, "sm64_render: ghost of frame %ld: %s\n", frame, error);
+                result = 1;
+                continue;
+            }
+            snprintf(path, sizeof(path), "%s%ld_ghost.png", argv[3], frame);
+            stbi_write_png(path, (int) width, (int) height, 4, ghost_pixels, (int) width * 4);
+            printf("%s\n", path);
+            // Over the frame: tinted 35% toward orange, at 70% of its alpha.
+            const float tint[3] = { 255.f, 150.f, 40.f };
+            for (size_t p = 0; p < (size_t) width * height; ++p) {
+                const float a = ghost_pixels[p * 4 + 3] / 255.f * 0.7f;
+                for (int c = 0; c < 3; ++c) {
+                    const float g = ghost_pixels[p * 4 + c] * 0.65f + tint[c] * 0.35f;
+                    pixels[p * 4 + c] = (unsigned char) (pixels[p * 4 + c] * (1.f - a) + g * a + 0.5f);
+                }
+            }
+            snprintf(path, sizeof(path), "%s%ld_with_ghost.png", argv[3], frame);
+            stbi_write_png(path, (int) width, (int) height, 4, pixels, (int) width * 4);
+            printf("%s\n", path);
+        }
     }
+    sm64_vulkan_destroy(vk_ghost);
+    sm64_world_destroy(ghost);
+    free(ghost_pixels);
     sm64_vulkan_destroy(vk);
     sm64_world_destroy(world);
     sm64_world_destroy(draw);

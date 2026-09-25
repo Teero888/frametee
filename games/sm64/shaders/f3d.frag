@@ -23,7 +23,8 @@ layout(location = 2) in float fog;
 
 layout(location = 0) out vec4 color;
 
-const uint TWO_CYCLE = 1u, FILL = 2u, COPY = 4u, FOG = 8u, ALPHA_TEST = 16u, COVERAGE_ALPHA = 32u;
+const uint TWO_CYCLE = 1u, FILL = 2u, COPY = 4u, FOG = 8u, ALPHA_TEST = 16u, COVERAGE_ALPHA = 32u, BLEND = 64u;
+const uint TRANSPARENT_TARGET = 1u << 30; // sm64_vulkan.c
 
 float noise() {
     return fract(sin(dot(gl_FragCoord.xy + s.noise_seed, vec2(12.9898, 78.233))) * 43758.5453);
@@ -145,6 +146,11 @@ void main() {
     }
     if ((s.flags & FOG) != 0u) {
         result.rgb = mix(result.rgb, s.fog_color.rgb, fog);
+    }
+    // On a transparent target an unblended surface is opaque, whatever alpha
+    // the combiner left (the blender ignores it there).
+    if ((s.flags & TRANSPARENT_TARGET) != 0u && (s.flags & BLEND) == 0u) {
+        result.a = 1.0;
     }
     color = result;
 }
