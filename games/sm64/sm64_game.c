@@ -63,6 +63,7 @@ static void game_destroy(ft_game *game) {
 struct version {
   const char *id;      // sm64_version()
   const char *code;    // the ROM's game code
+  uint8_t revision;    // and its revision
   char country;        // its country code, also in .m64 headers
   const char *region;  // as ROM files are named
   const char *adjective;
@@ -73,9 +74,10 @@ struct version {
 };
 
 static const struct version kVersions[] = {
-    {"jp", "NSMJ", 'J', "Japan", "Japanese", -16, 60},
-    {"us", "NSME", 'E', "USA", "American", -55, 60},
-    {"eu", "NSMP", 'P', "Europe", "European", 0, 50},
+    {"jp", "NSMJ", 0, 'J', "Japan", "Japanese", -16, 60},
+    {"us", "NSME", 0, 'E', "USA", "American", -55, 60},
+    {"eu", "NSMP", 0, 'P', "Europe", "European", 0, 50},
+    {"sh", "NSMJ", 3, 'J', "Japan (Rev A) (Shindou Edition)", "Shindou Edition", 0, 60},
 };
 
 static const struct version *version(void) {
@@ -86,9 +88,9 @@ static const struct version *version(void) {
 
 // --- The ROM: the level ----------------------------------------------------------
 
-// The ROM's header, big-endian: its internal name and its game code
-// (NSMJ, NSME or NSMP).
-static bool rom_header(const uint8_t *rom, size_t size, char name[21], char code[5]) {
+// The ROM's header, big-endian: its internal name, its game code (NSMJ, NSME
+// or NSMP) and its revision (the Shindou Edition is JP's 3).
+static bool rom_header(const uint8_t *rom, size_t size, char name[21], char code[5], uint8_t *revision) {
   if (size < 0x40) return false;
   uint8_t header[0x40];
   // .z64 is big-endian, .v64 swaps each 16-bit word, .n64 each 32-bit one.
@@ -100,11 +102,14 @@ static bool rom_header(const uint8_t *rom, size_t size, char name[21], char code
   for (int i = 19; i >= 0 && name[i] == ' '; --i) name[i] = '\0';
   memcpy(code, header + 0x3B, 4);
   code[4] = '\0';
+  *revision = header[0x3F];
   return true;
 }
 
 // The ROM this library is built for.
-static const char *wanted_code(void) { return version()->code; }
+static bool wanted_rom(const char code[5], uint8_t revision) {
+  return strcmp(code, version()->code) == 0 && revision == version()->revision;
+}
 
 static ft_level *level_load_path(ft_game *game, const char *path, const char *variant_id) {
   (void)variant_id;
@@ -116,7 +121,8 @@ static ft_level *level_load_path(ft_game *game, const char *path, const char *va
   }
   ft_level *level = NULL;
   char name[21], code[5];
-  if (!rom_header(data, size, name, code) || strcmp(code, wanted_code()) != 0) {
+  uint8_t revision = 0;
+  if (!rom_header(data, size, name, code, &revision) || !wanted_rom(code, revision)) {
     char message[256];
     snprintf(message, sizeof(message), "%s is not a Super Mario 64 (%s) ROM", path, version()->region);
     log_error(game->engine, message);
@@ -422,7 +428,7 @@ static bool camera_update(ft_game *game, const ft_camera_frame *frame, ft_camera
 // --- Drawing -------------------------------------------------------------------------
 // The game draws its own frames, as on the console: to show tick N, a copy of
 // the world at N - 1 steps again with drawing (sm64_step_draw), and the display
-// list it hands over is drawn by fast3d/ (sm64-port's Fast3D interpreter) with
+// list it hands over is drawn by f3d/ (our Fast3D interpreter) with
 // Vulkan on the engine's device, into a texture shown over the viewport. The
 // 3D takes the viewport's aspect ratio; the HUD stays 4:3 in the middle.
 
@@ -487,7 +493,7 @@ static void resources_destroy(ft_game *game) {
 // The engine's view-projection (column vectors, Vulkan's clip space with Y
 // down, reversed depth from 1 at the near plane to 0 at the far one) as the
 // game's projections are: row vectors, OpenGL's clip space. X is narrowed
-// back to 4:3, which gfx_pc.c widens to the viewport again.
+// back to 4:3, which f3d.c widens to the viewport again.
 static void game_camera_from_engine(const ft_camera *camera, float out[4][4]) {
   const float aspect = camera->viewport.y > 0.f ? camera->viewport.x / camera->viewport.y : 4.f / 3.f;
   const float *m = camera->view_proj; // row r, column c at m[c * 4 + r]
@@ -565,14 +571,17 @@ static void render(ft_game *game, const ft_render_frame *frame) {
 }
 
 // --- .m64 movies ---------------------------------------------------------------------
-// An .m64 holds one controller read per poll, from power-on. The movies on
-// TASVideos were made on Mupen64-rr, whose boot polls the controller a
+// An .m64 holds one controller read per poll, from power-on: the console's
+// reads while it boots (sm64_boot_polls), then one per game frame. The movies
+// on TASVideos were made on Mupen64-rr, whose boot polls the controller a
 // different number of times than the console this library follows
-// (mupen64plus): tick t reads sample t + 1 + kMovieOffset.
+// (mupen64plus): tick t reads sample t + sm64_boot_polls() + movie_offset.
+// (The Shindou Edition also reads the controller to look for a Rumble Pak
+// every 60 vertical interrupts without one; those samples are not skipped.)
 
 static int32_t movie_offset(void) { return version()->movie_offset; }
 
-static int32_t movie_tick(int32_t sample) { return sample - 1 - movie_offset(); }
+static int32_t movie_tick(int32_t sample) { return sample - sm64_boot_polls() - movie_offset(); }
 
 struct ft_recording {
   uint32_t *samples;
@@ -650,7 +659,7 @@ static bool recording_level_matches(ft_game *game, const ft_recording *recording
 
 // The input the movie holds for a tick: nothing before its first sample.
 static uint32_t movie_input(const ft_recording *recording, int32_t tick) {
-  const int64_t sample = (int64_t)tick + 1 + movie_offset();
+  const int64_t sample = (int64_t)tick + sm64_boot_polls() + movie_offset();
   return sample >= 0 && sample < recording->count ? recording->samples[sample] : 0;
 }
 
@@ -728,8 +737,8 @@ static bool export_run(ft_game *game, uint32_t index, const ft_export_request *r
   file[0xE8] = version()->country;
   memcpy(file + 0x222, "FrameTee", 8);
   for (uint32_t i = 0; i < samples; ++i) {
-    uint32_t input = 0;
-    api->get_player_input(0, first + (int32_t)i, &input);
+    uint32_t input = 0; // the boot's reads, before tick 0, see nothing pressed
+    if (first + (int32_t)i >= 0) api->get_player_input(0, first + (int32_t)i, &input);
     put32(file + 0x400 + 4 * i, input);
     if (request->progress && i % 4096 == 0) request->progress(request->progress_user, (float)i / samples, NULL);
   }
@@ -761,7 +770,8 @@ static bool visit_rom(void *user, const ft_directory_entry *entry) {
   size_t size = 0;
   if (!list->engine->read_file(path, &data, &size)) return true;
   char name[21], code[5];
-  if (rom_header(data, size, name, code) && strcmp(code, wanted_code()) == 0 && list->count < 16) {
+  uint8_t revision = 0;
+  if (rom_header(data, size, name, code, &revision) && wanted_rom(code, revision) && list->count < 16) {
     snprintf(list->paths[list->count], sizeof(list->paths[0]), "%s", path);
     snprintf(list->names[list->count], sizeof(list->names[0]), "%s", entry->name);
     ++list->count;

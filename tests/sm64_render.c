@@ -3,10 +3,10 @@
 //   sm64_render_frames ROM POLLS OUT_PREFIX [--size WxH] [--from DX,DY,DZ] FRAME...
 //
 // POLLS is one u32 controller read per poll in the oracle's order (the first
-// is read during boot; game frame N reads poll N + 1), as libs/sm64_physics'
-// sm64_run takes it. Frame N is drawn as the module draws it: the world after
-// N - 1 frames, copied, stepped once more with drawing. Writes
-// OUT_PREFIX<N>.png for every FRAME. --from draws the 3D scene from a camera
+// ones are read during boot; game frame N reads poll N + sm64_boot_polls() -
+// 1), as libs/sm64_physics' sm64_run takes it. Frame N is drawn as the module
+// draws it: the world after N - 1 frames, copied, stepped once more with
+// drawing. Writes OUT_PREFIX<N>.png for every FRAME. --from draws the 3D scene from a camera
 // of its own, DX,DY,DZ from Mario and looking at him, as the module does for
 // the editor's cameras.
 #include <stdbool.h>
@@ -190,7 +190,7 @@ static bool target_read(const struct gpu *gpu, struct target *t, uint32_t width,
 }
 
 // A camera at eye looking at target: 60 degrees vertically, OpenGL's clip
-// space, row vectors, X narrowed to 4:3 as fast3d widens it to the image.
+// space, row vectors, X narrowed to 4:3 as f3d.c widens it to the image.
 static void camera_at(const float eye[3], const float target[3], float aspect, float out[4][4]) {
     float f[3] = { target[0] - eye[0], target[1] - eye[1], target[2] - eye[2] };
     float l = sqrtf(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
@@ -273,16 +273,17 @@ int main(int argc, char **argv) {
     int result = 0;
     for (int f = 0; f < frame_count; ++f) {
         const long frame = frames[f];
-        if (frame < 1 || (size_t) frame + 1 > poll_count) {
+        const size_t boot = (size_t) sm64_boot_polls();
+        if (frame < 1 || (size_t) frame + boot > poll_count) {
             fprintf(stderr, "sm64_render: no frame %ld\n", frame);
             continue;
         }
         while (stepped < frame - 1) {
-            sm64_step(world, polls[stepped + 1]);
+            sm64_step(world, polls[stepped + boot]);
             ++stepped;
         }
         sm64_world_copy(draw, world);
-        const void *list = sm64_step_draw(draw, polls[frame]);
+        const void *list = sm64_step_draw(draw, polls[frame - 1 + boot]);
         if (!list) {
             fprintf(stderr, "sm64_render: frame %ld drew nothing\n", frame);
             continue;

@@ -27,11 +27,11 @@ else()
 endif()
 add_test(NAME game_host_browse COMMAND game_host_browse_test)
 
-if(TARGET sm64_game_us)
+if(TARGET sm64_game)
     # Per version of the game: a headless SM64 plugin (the generic simulation
     # API and libsm64_physics called directly, as SM64 plugins do), and frames
     # drawn offscreen as the module draws them, into PNG files.
-    foreach(version us jp eu)
+    foreach(version us jp eu sh)
         if(version STREQUAL "us")
             set(game_id "sm64")
         else()

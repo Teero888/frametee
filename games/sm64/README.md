@@ -9,6 +9,7 @@ One module per version, each with the library of its version:
 | `sm64` | Super Mario 64 (USA) | 30 |
 | `sm64_jp` | Super Mario 64 (Japan) | 30 |
 | `sm64_eu` | Super Mario 64 (Europe) (En,Fr,De) | 25 |
+| `sm64_sh` | Super Mario 64 (Japan) (Rev A) (Shindou Edition) | 30 |
 
 Build with `-DFRAMETEE_BUILD_SM64=ON`.
 
@@ -25,9 +26,9 @@ when drawing.
   tick with one controller read. Plugins look inside them through
   `include/sm64/sm64_game.h` and call the library directly.
 - **Drawing**: tick N is drawn by stepping a copy of tick N - 1 again with the
-  game drawing (`sm64_step_draw`); its display list goes through `fast3d/`, the
-  Fast3D interpreter of [sm64-port](https://github.com/sm64-port/sm64-port)
-  (see `fast3d/LICENSE.txt`), and `sm64_vulkan.c`, which draws on the engine's
+  game drawing (`sm64_step_draw`); its display list goes through `f3d/`, a
+  Fast3D interpreter written from the display list format (the SDK's
+  `gbi.h`), and `sm64_vulkan.c`, which draws on the engine's
   Vulkan device into a texture shown over the viewport. The 3D takes the
   viewport's aspect ratio, the HUD stays 4:3 in the middle.
 - **Cameras**: the game camera shows the frame as the console draws it; the

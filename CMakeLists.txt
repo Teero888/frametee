@@ -244,10 +244,10 @@ add_subdirectory(libs/nfd)
 option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" OFF)
 if(FRAMETEE_BUILD_SM64)
     # Shared: each version's module and its plugins use one copy of the game.
-    # One library per version (sm64_physics_us, _jp, _eu), each a game
+    # One library per version (sm64_physics_us, _jp, _eu, _sh), each a game
     # module of its own (games/sm64).
     set(SM64_PHYSICS_SHARED ON CACHE BOOL "Build sm64_physics as a shared library" FORCE)
-    set(FRAMETEE_SM64_VERSIONS us jp eu)
+    set(FRAMETEE_SM64_VERSIONS us jp eu sh)
     foreach(SM64_VERSION ${FRAMETEE_SM64_VERSIONS})
         set(SM64_TARGET_SUFFIX "_${SM64_VERSION}")
         add_subdirectory(libs/sm64_physics "${CMAKE_BINARY_DIR}/libs/sm64_physics_${SM64_VERSION}")
@@ -719,11 +719,11 @@ if(TARGET ddnet_game)
     endforeach()
 endif()
 
-if(TARGET sm64_game_us)
+if(TARGET sm64_game)
     # The source GLSL stays in the checkout; the compiled shaders are the
     # runtime assets that accompany the modules and native SM64 libraries.
     # Every version's module reads them from its own data directory.
-    foreach(SM64_GAME_DATA sm64 sm64_jp sm64_eu)
+    foreach(SM64_GAME_DATA sm64 sm64_jp sm64_eu sm64_sh)
         install(DIRECTORY "${CMAKE_BINARY_DIR}/data/games/sm64/"
             DESTINATION "data/games/${SM64_GAME_DATA}"
             COMPONENT Runtime

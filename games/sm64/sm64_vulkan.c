@@ -1,13 +1,10 @@
-// The Vulkan backend of the Fast3D interpreter (sm64_vulkan.h). What
-// fast3d/gfx_pc.c asks of a backend, as sm64-port's OpenGL one does it: a
-// black frame with a cleared depth buffer, depth test less-or-equal, source
-// alpha blending, a polygon offset for decals, viewports and scissors with the
-// origin at the bottom left. One shader (shaders/fast3d.*) does every color
-// combiner, which it gets as a push constant; every vertex has the same layout.
+// The Vulkan backend of the Fast3D interpreter (sm64_vulkan.h, f3d/f3d.h):
+// batches of triangles with the state they are drawn with, into a frame with
+// a cleared depth buffer. One shader (shaders/f3d.*) evaluates every color
+// combiner from the combine words it gets as push constants.
 //
-// A frame records two command buffers, uploads first, then the draws, and
-// submits both at its end. A texture uploaded again gets a new image, so draws
-// recorded earlier in the frame keep the one they named.
+// A frame records two command buffers, texture uploads first, then the
+// draws, and submits both at its end.
 #include "sm64_vulkan.h"
 
 #include <stdarg.h>
@@ -15,35 +12,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "fast3d/gfx_cc.h"
-#include "fast3d/gfx_pc.h"
-#include "fast3d/gfx_rendering_api.h"
-#include "fast3d_frag_spv.h"
-#include "fast3d_vert_spv.h"
-
-#define VERTEX_FLOATS 26
+#include "f3d/f3d.h"
+#include "f3d_frag_spv.h"
+#include "f3d_vert_spv.h"
 #define CHUNK_SIZE (4u << 20)
 #define SETS_PER_POOL 1024u
 // Pipelines differ in blending, depth test, depth writes and decal offset.
 #define PIPELINE_COUNT 16
 
-struct ShaderProgram {
-    uint32_t shader_id;
-    uint8_t num_inputs;
-    bool used_textures[2];
-};
-
-// What gfx_pc.c keeps pointers to (its color combiners): the same for every
-// renderer, as a shader is only its combiner's features.
-static struct ShaderProgram sShaders[256];
-static size_t sShaderCount;
-
 struct texture {
     VkImage image;
     VkDeviceMemory memory;
     VkImageView view;
-    bool linear;
-    uint32_t cms, cmt;
 };
 
 // Host-visible memory handed out front to back and taken back every frame.
@@ -74,12 +54,9 @@ struct sm64_vulkan {
     VkSampler samplers[18];
     VkDescriptorPool *pools;
     size_t pool_count, pool_used, sets_in_pool;
-    struct texture *textures;
-    uint32_t texture_count, texture_capacity;
     struct texture white;
     struct chunks vertices, staging;
-    struct texture *garbage;
-    size_t garbage_count, garbage_capacity;
+    f3d *f3d;
 
     // The image drawn into, and what depends on it.
     VkImage target;
@@ -97,24 +74,21 @@ struct sm64_vulkan {
     uint32_t depth_width, depth_height;
 
     // The frame being recorded.
-    bool failed;
+    bool failed, recording;
     char error[256];
-    int selected[2];
-    int current_texture;
-    struct ShaderProgram *shader;
-    bool blend, depth_test, depth_mask, decal;
-    VkViewport viewport;
-    VkRect2D scissor;
-    bool viewport_dirty, scissor_dirty;
     VkPipeline bound_pipeline;
     VkImageView bound_views[2];
     VkSampler bound_samplers[2];
-    uint32_t pushed_shader;
-    bool pushed;
+    uint32_t frame;
 };
 
-// gfx_pc.c's backend: the renderer drawing now.
-static sm64_vulkan *sVk;
+// The push constants of shaders/f3d.frag.
+struct push {
+    float prim[4], env[4], fog[4];
+    uint32_t combine[2];
+    uint32_t flags;
+    float alpha_threshold, prim_lod_frac, noise_seed;
+};
 
 static void fail(sm64_vulkan *vk, const char *format, ...) {
     if (vk->failed) {
@@ -338,7 +312,7 @@ static void target_release(sm64_vulkan *vk) {
 }
 
 static void depth_release(sm64_vulkan *vk) {
-    struct texture depth = { vk->depth, vk->depth_memory, vk->depth_view, false, 0, 0 };
+    struct texture depth = { vk->depth, vk->depth_memory, vk->depth_view };
     texture_destroy(vk, &depth);
     vk->depth = VK_NULL_HANDLE;
     vk->depth_memory = VK_NULL_HANDLE;
@@ -356,18 +330,18 @@ static VkPipeline pipeline_create(sm64_vulkan *vk, int key) {
     stages[1].module = vk->fragment_shader;
     stages[1].pName = "main";
 
-    // Position, texture coordinates, fog, four inputs (fast3d/gfx_pc.c).
-    VkVertexInputBindingDescription binding = { 0, VERTEX_FLOATS * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX };
-    VkVertexInputAttributeDescription attributes[7] = {
-        { 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 0 },       { 1, 0, VK_FORMAT_R32G32_SFLOAT, 16 },
-        { 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 24 },      { 3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 40 },
-        { 4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 56 },      { 5, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 72 },
-        { 6, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 88 },
+    // struct f3d_vertex: position, both textures' coordinates, shade, fog.
+    VkVertexInputBindingDescription binding = { 0, sizeof(struct f3d_vertex), VK_VERTEX_INPUT_RATE_VERTEX };
+    VkVertexInputAttributeDescription attributes[4] = {
+        { 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 0 },
+        { 1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 16 },
+        { 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 32 },
+        { 3, 0, VK_FORMAT_R32_SFLOAT, 48 },
     };
     VkPipelineVertexInputStateCreateInfo vertex_input = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     vertex_input.vertexBindingDescriptionCount = 1;
     vertex_input.pVertexBindingDescriptions = &binding;
-    vertex_input.vertexAttributeDescriptionCount = 7;
+    vertex_input.vertexAttributeDescriptionCount = 4;
     vertex_input.pVertexAttributeDescriptions = attributes;
 
     VkPipelineInputAssemblyStateCreateInfo assembly = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
@@ -379,7 +353,7 @@ static VkPipeline pipeline_create(sm64_vulkan *vk, int key) {
     const bool blend = key & 1, depth_test = key & 2, depth_mask = key & 4, decal = key & 8;
     VkPipelineRasterizationStateCreateInfo raster = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
     raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE; // gfx_pc.c culls itself
+    raster.cullMode = VK_CULL_MODE_NONE; // f3d.c culls as the RSP does
     raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     raster.lineWidth = 1.0f;
     raster.depthBiasEnable = decal;
@@ -540,156 +514,34 @@ static bool target_prepare(sm64_vulkan *vk, VkImage image, VkFormat format, uint
     return true;
 }
 
-// --- gfx_pc.c's backend ---------------------------------------------------------
+// --- f3d.c's backend ------------------------------------------------------------
 
-static bool api_z_is_from_0_to_1(void) {
-    return true;
-}
-
-static void api_unload_shader(struct ShaderProgram *old) {
-    (void) old;
-}
-
-static void api_load_shader(struct ShaderProgram *program) {
-    sVk->shader = program;
-}
-
-static struct ShaderProgram *api_lookup_shader(uint32_t shader_id) {
-    for (size_t i = 0; i < sShaderCount; ++i) {
-        if (sShaders[i].shader_id == shader_id) {
-            return &sShaders[i];
-        }
+static void *backend_texture_create(void *user, const uint8_t *rgba, uint32_t width, uint32_t height) {
+    sm64_vulkan *vk = user;
+    if (vk->failed || !vk->recording) {
+        return NULL;
     }
-    return NULL;
-}
-
-static struct ShaderProgram *api_create_and_load_new_shader(uint32_t shader_id) {
-    struct ShaderProgram *program = api_lookup_shader(shader_id);
-    if (!program) {
-        if (sShaderCount == sizeof(sShaders) / sizeof(sShaders[0])) {
-            program = &sShaders[0]; // never with SM64's few combiners
-        } else {
-            program = &sShaders[sShaderCount++];
-        }
-        struct CCFeatures features;
-        gfx_cc_get_features(shader_id, &features);
-        program->shader_id = shader_id;
-        program->num_inputs = (uint8_t) features.num_inputs;
-        program->used_textures[0] = features.used_textures[0];
-        program->used_textures[1] = features.used_textures[1];
+    struct texture *texture = calloc(1, sizeof(*texture));
+    if (!texture) {
+        fail(vk, "out of memory");
+        return NULL;
     }
-    api_load_shader(program);
-    return program;
-}
-
-static void api_shader_get_info(struct ShaderProgram *program, uint8_t *num_inputs, bool used_textures[2]) {
-    *num_inputs = program->num_inputs;
-    used_textures[0] = program->used_textures[0];
-    used_textures[1] = program->used_textures[1];
-}
-
-static uint32_t api_new_texture(void) {
-    sm64_vulkan *vk = sVk;
-    if (vk->texture_count == vk->texture_capacity) {
-        const uint32_t capacity = vk->texture_capacity ? vk->texture_capacity * 2 : 256;
-        struct texture *grown = realloc(vk->textures, capacity * sizeof(*grown));
-        if (!grown) {
-            fail(vk, "out of memory");
-            return 0;
-        }
-        vk->textures = grown;
-        vk->texture_capacity = capacity;
+    if (!texture_upload(vk, texture, rgba, width, height)) {
+        texture_destroy(vk, texture);
+        free(texture);
+        return NULL;
     }
-    memset(&vk->textures[vk->texture_count], 0, sizeof(vk->textures[0]));
-    return vk->texture_count++;
+    return texture;
 }
 
-static void api_select_texture(int tile, uint32_t id) {
-    sVk->selected[tile] = (int) id;
-    sVk->current_texture = (int) id;
+static void backend_texture_destroy(void *user, void *texture) {
+    texture_destroy(user, texture);
+    free(texture);
 }
 
-static void api_upload_texture(const uint8_t *rgba, int width, int height) {
-    sm64_vulkan *vk = sVk;
-    if (vk->failed || vk->current_texture < 0 || (uint32_t) vk->current_texture >= vk->texture_count || width <= 0
-        || height <= 0) {
-        return;
-    }
-    struct texture *texture = &vk->textures[vk->current_texture];
-    if (texture->image) {
-        // Draws recorded earlier this frame still name it.
-        if (vk->garbage_count == vk->garbage_capacity) {
-            const size_t capacity = vk->garbage_capacity ? vk->garbage_capacity * 2 : 64;
-            struct texture *grown = realloc(vk->garbage, capacity * sizeof(*grown));
-            if (!grown) {
-                fail(vk, "out of memory");
-                return;
-            }
-            vk->garbage = grown;
-            vk->garbage_capacity = capacity;
-        }
-        vk->garbage[vk->garbage_count++] = *texture;
-        texture->image = VK_NULL_HANDLE;
-        texture->memory = VK_NULL_HANDLE;
-        texture->view = VK_NULL_HANDLE;
-    }
-    texture_upload(vk, texture, rgba, (uint32_t) width, (uint32_t) height);
-}
-
-static void api_set_sampler_parameters(int tile, bool linear, uint32_t cms, uint32_t cmt) {
-    sm64_vulkan *vk = sVk;
-    const int id = vk->selected[tile];
-    if (id >= 0 && (uint32_t) id < vk->texture_count) {
-        vk->textures[id].linear = linear;
-        vk->textures[id].cms = cms;
-        vk->textures[id].cmt = cmt;
-    }
-}
-
-static void api_set_depth_test(bool depth_test) {
-    sVk->depth_test = depth_test;
-}
-
-static void api_set_depth_mask(bool depth_mask) {
-    sVk->depth_mask = depth_mask;
-}
-
-static void api_set_zmode_decal(bool decal) {
-    sVk->decal = decal;
-}
-
-// gfx_pc.c's rectangles have their origin at the bottom left, as in OpenGL.
-static void api_set_viewport(int x, int y, int width, int height) {
-    sm64_vulkan *vk = sVk;
-    vk->viewport = (VkViewport) { (float) x, (float) ((int) vk->height - y - height), (float) width, (float) height,
-                                  0.0f, 1.0f };
-    vk->viewport_dirty = true;
-}
-
-static void api_set_scissor(int x, int y, int width, int height) {
-    sm64_vulkan *vk = sVk;
-    int top = (int) vk->height - y - height;
-    int x1 = x + width, y1 = top + height;
-    x = x < 0 ? 0 : x;
-    top = top < 0 ? 0 : top;
-    x1 = x1 > (int) vk->width ? (int) vk->width : x1;
-    y1 = y1 > (int) vk->height ? (int) vk->height : y1;
-    vk->scissor.offset = (VkOffset2D) { x, top };
-    vk->scissor.extent = (VkExtent2D) { (uint32_t) (x1 > x ? x1 - x : 0), (uint32_t) (y1 > top ? y1 - top : 0) };
-    vk->scissor_dirty = true;
-}
-
-static void api_set_use_alpha(bool use_alpha) {
-    sVk->blend = use_alpha;
-}
-
-// G_TX_CLAMP clamps, G_TX_MIRROR mirrors, else repeat: sampler (linear, s, t).
-static int wrap_index(uint32_t cm) {
-    return (cm & 2) ? 0 : (cm & 1) ? 1 : 2;
-}
-
-static VkSampler sampler_for(sm64_vulkan *vk, const struct texture *texture) {
-    return vk->samplers[(texture->linear ? 9 : 0) + wrap_index(texture->cms) * 3 + wrap_index(texture->cmt)];
+// Repeat, mirror or clamp, as the samplers are made (create_objects).
+static int wrap_index(uint8_t wrap) {
+    return wrap == F3D_WRAP_CLAMP ? 0 : wrap == F3D_WRAP_MIRROR ? 1 : 2;
 }
 
 static VkDescriptorSet descriptor_set(sm64_vulkan *vk) {
@@ -730,35 +582,43 @@ static VkDescriptorSet descriptor_set(sm64_vulkan *vk) {
     }
 }
 
-static void api_draw_triangles(float vertices[], size_t length, size_t triangles) {
-    sm64_vulkan *vk = sVk;
-    if (vk->failed || !vk->shader || triangles == 0) {
+static void backend_draw(void *user, const struct f3d_state *state, const struct f3d_vertex *vertices, uint32_t count) {
+    sm64_vulkan *vk = user;
+    if (vk->failed || !vk->recording || count == 0) {
         return;
     }
     VkCommandBuffer cmd = vk->draw;
-    const int key = (vk->blend ? 1 : 0) | (vk->depth_test ? 2 : 0) | (vk->depth_mask ? 4 : 0) | (vk->decal ? 8 : 0);
+    const uint32_t f = state->flags;
+    const int key = ((f & F3D_BLEND) ? 1 : 0) | ((f & F3D_DEPTH_TEST) ? 2 : 0) | ((f & F3D_DEPTH_WRITE) ? 4 : 0)
+                    | ((f & F3D_DECAL) ? 8 : 0);
     if (vk->bound_pipeline != vk->pipelines[key]) {
         vk->bound_pipeline = vk->pipelines[key];
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vk->bound_pipeline);
     }
-    if (vk->viewport_dirty) {
-        vkCmdSetViewport(cmd, 0, 1, &vk->viewport);
-        vk->viewport_dirty = false;
+    const VkViewport viewport = { (float) state->viewport[0], (float) state->viewport[1], (float) state->viewport[2],
+                                  (float) state->viewport[3], 0.0f, 1.0f };
+    if (viewport.width <= 0.0f || viewport.height <= 0.0f) {
+        return;
     }
-    if (vk->scissor_dirty) {
-        vkCmdSetScissor(cmd, 0, 1, &vk->scissor);
-        vk->scissor_dirty = false;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    int32_t x0 = state->scissor[0], y0 = state->scissor[1];
+    int32_t x1 = x0 + state->scissor[2], y1 = y0 + state->scissor[3];
+    x0 = x0 < 0 ? 0 : x0, y0 = y0 < 0 ? 0 : y0;
+    x1 = x1 > (int32_t) vk->width ? (int32_t) vk->width : x1;
+    y1 = y1 > (int32_t) vk->height ? (int32_t) vk->height : y1;
+    if (x1 <= x0 || y1 <= y0) {
+        return;
     }
+    const VkRect2D scissor = { { x0, y0 }, { (uint32_t) (x1 - x0), (uint32_t) (y1 - y0) } };
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
     VkImageView views[2];
     VkSampler samplers[2];
     for (int i = 0; i < 2; ++i) {
-        const int id = vk->selected[i];
-        const struct texture *texture = &vk->white;
-        if (vk->shader->used_textures[i] && id >= 0 && (uint32_t) id < vk->texture_count && vk->textures[id].view) {
-            texture = &vk->textures[id];
-        }
+        const struct texture *texture = state->textures[i] ? state->textures[i] : &vk->white;
         views[i] = texture->view;
-        samplers[i] = sampler_for(vk, texture);
+        const struct f3d_sampler *sm = &state->samplers[i];
+        samplers[i] = vk->samplers[(sm->linear ? 9 : 0) + wrap_index(sm->wrap_s) * 3 + wrap_index(sm->wrap_t)];
     }
     if (memcmp(views, vk->bound_views, sizeof(views)) != 0 || memcmp(samplers, vk->bound_samplers, sizeof(samplers)) != 0) {
         VkDescriptorSet set = descriptor_set(vk);
@@ -781,31 +641,30 @@ static void api_draw_triangles(float vertices[], size_t length, size_t triangles
         memcpy(vk->bound_views, views, sizeof(views));
         memcpy(vk->bound_samplers, samplers, sizeof(samplers));
     }
-    if (!vk->pushed || vk->pushed_shader != vk->shader->shader_id) {
-        vk->pushed_shader = vk->shader->shader_id;
-        vk->pushed = true;
-        vkCmdPushConstants(cmd, vk->pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t),
-                           &vk->pushed_shader);
-    }
+    struct push push;
+    memcpy(push.prim, state->prim, sizeof(push.prim));
+    memcpy(push.env, state->env, sizeof(push.env));
+    memcpy(push.fog, state->fog, sizeof(push.fog));
+    push.combine[0] = state->combine[0];
+    push.combine[1] = state->combine[1];
+    push.flags = f;
+    push.alpha_threshold = state->alpha_threshold;
+    push.prim_lod_frac = state->prim_lod_frac;
+    push.noise_seed = (float) (vk->frame % 1024);
+    vkCmdPushConstants(cmd, vk->pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+
     VkBuffer buffer;
     VkDeviceSize offset;
-    unsigned char *data = chunks_take(vk, &vk->vertices, length * sizeof(float), &buffer, &offset);
+    unsigned char *data = chunks_take(vk, &vk->vertices, count * sizeof(*vertices), &buffer, &offset);
     if (!data) {
         return;
     }
-    memcpy(data, vertices, length * sizeof(float));
+    memcpy(data, vertices, count * sizeof(*vertices));
     vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &offset);
-    vkCmdDraw(cmd, (uint32_t) (3 * triangles), 1, 0, 0);
+    vkCmdDraw(cmd, count, 1, 0, 0);
 }
 
-static void api_init(void) {
-}
-
-static void api_on_resize(void) {
-}
-
-static void api_start_frame(void) {
-    sm64_vulkan *vk = sVk;
+static bool frame_begin(sm64_vulkan *vk) {
     chunks_reset(&vk->vertices);
     chunks_reset(&vk->staging);
     for (size_t i = 0; i < vk->pool_count; ++i) {
@@ -817,7 +676,7 @@ static void api_start_frame(void) {
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (!check(vk, vkBeginCommandBuffer(vk->upload, &begin), "vkBeginCommandBuffer")
         || !check(vk, vkBeginCommandBuffer(vk->draw, &begin), "vkBeginCommandBuffer")) {
-        return;
+        return false;
     }
     VkClearValue clear[2];
     clear[0].color = (VkClearColorValue) { { 0.0f, 0.0f, 0.0f, 1.0f } };
@@ -832,20 +691,16 @@ static void api_start_frame(void) {
     vk->bound_pipeline = VK_NULL_HANDLE;
     memset(vk->bound_views, 0, sizeof(vk->bound_views));
     memset(vk->bound_samplers, 0, sizeof(vk->bound_samplers));
-    vk->pushed = false;
-    vk->viewport = (VkViewport) { 0.0f, 0.0f, (float) vk->width, (float) vk->height, 0.0f, 1.0f };
-    vk->scissor = (VkRect2D) { { 0, 0 }, { vk->width, vk->height } };
-    vk->viewport_dirty = vk->scissor_dirty = true;
+    vk->recording = true;
+    ++vk->frame;
+    return true;
 }
 
-static void api_end_frame(void) {
-    sm64_vulkan *vk = sVk;
+static void frame_end(sm64_vulkan *vk) {
+    vk->recording = false;
     vkCmdEndRenderPass(vk->draw);
     if (!check(vk, vkEndCommandBuffer(vk->upload), "vkEndCommandBuffer")
-        || !check(vk, vkEndCommandBuffer(vk->draw), "vkEndCommandBuffer")) {
-        return;
-    }
-    if (vk->failed) {
+        || !check(vk, vkEndCommandBuffer(vk->draw), "vkEndCommandBuffer") || vk->failed) {
         return;
     }
     VkCommandBuffer buffers[2] = { vk->upload, vk->draw };
@@ -858,20 +713,6 @@ static void api_end_frame(void) {
     }
     check(vk, vkWaitForFences(vk->device, 1, &vk->fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 }
-
-static void api_finish_render(void) {
-}
-
-static struct GfxRenderingAPI sApi = {
-    api_z_is_from_0_to_1,   api_unload_shader,      api_load_shader,
-    api_create_and_load_new_shader, api_lookup_shader, api_shader_get_info,
-    api_new_texture,        api_select_texture,     api_upload_texture,
-    api_set_sampler_parameters, api_set_depth_test, api_set_depth_mask,
-    api_set_zmode_decal,    api_set_viewport,       api_set_scissor,
-    api_set_use_alpha,      api_draw_triangles,     api_init,
-    api_on_resize,          api_start_frame,        api_end_frame,
-    api_finish_render,
-};
 
 // --- The renderer ------------------------------------------------------------------
 
@@ -935,7 +776,7 @@ static bool create_objects(sm64_vulkan *vk, uint32_t queue_family) {
                "vkCreateDescriptorSetLayout")) {
         return false;
     }
-    VkPushConstantRange push = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t) };
+    VkPushConstantRange push = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(struct push) };
     VkPipelineLayoutCreateInfo layout = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     layout.setLayoutCount = 1;
     layout.pSetLayouts = &vk->set_layout;
@@ -945,8 +786,8 @@ static bool create_objects(sm64_vulkan *vk, uint32_t queue_family) {
                "vkCreatePipelineLayout")) {
         return false;
     }
-    vk->vertex_shader = shader_module(vk, kFast3dVertSpv, sizeof(kFast3dVertSpv));
-    vk->fragment_shader = shader_module(vk, kFast3dFragSpv, sizeof(kFast3dFragSpv));
+    vk->vertex_shader = shader_module(vk, kF3dVertSpv, sizeof(kF3dVertSpv));
+    vk->fragment_shader = shader_module(vk, kF3dFragSpv, sizeof(kF3dFragSpv));
     if (vk->failed) {
         return false;
     }
@@ -1000,16 +841,12 @@ sm64_vulkan *sm64_vulkan_create(VkPhysicalDevice physical_device, VkDevice devic
     vk->physical_device = physical_device;
     vk->device = device;
     vk->queue = queue;
-    vk->selected[0] = vk->selected[1] = vk->current_texture = -1;
-    if (!create_objects(vk, queue_family)) {
-        snprintf(error, error_size, "%s", vk->error);
+    const struct f3d_backend backend = { vk, backend_texture_create, backend_texture_destroy, backend_draw };
+    if (!create_objects(vk, queue_family) || !(vk->f3d = f3d_create(&backend))) {
+        snprintf(error, error_size, "%s", vk->failed ? vk->error : "out of memory");
         sm64_vulkan_destroy(vk);
         return NULL;
     }
-    // The interpreter's textures were the last renderer's.
-    sVk = vk;
-    gfx_reset_textures();
-    gfx_init(&sApi);
     return vk;
 }
 
@@ -1020,16 +857,9 @@ void sm64_vulkan_destroy(sm64_vulkan *vk) {
     if (vk->device) {
         vkDeviceWaitIdle(vk->device);
     }
+    f3d_destroy(vk->f3d);
     target_release(vk);
     depth_release(vk);
-    for (uint32_t i = 0; i < vk->texture_count; ++i) {
-        texture_destroy(vk, &vk->textures[i]);
-    }
-    free(vk->textures);
-    for (size_t i = 0; i < vk->garbage_count; ++i) {
-        texture_destroy(vk, &vk->garbage[i]);
-    }
-    free(vk->garbage);
     texture_destroy(vk, &vk->white);
     chunks_destroy(vk, &vk->vertices);
     chunks_destroy(vk, &vk->staging);
@@ -1060,36 +890,21 @@ void sm64_vulkan_destroy(sm64_vulkan *vk) {
     if (vk->command_pool) {
         vkDestroyCommandPool(vk->device, vk->command_pool, NULL);
     }
-    if (sVk == vk) {
-        sVk = NULL;
-    }
     free(vk);
 }
 
 bool sm64_vulkan_draw(sm64_vulkan *vk, const void *display_list, const float (*camera)[4], VkImage image,
                       VkFormat format, uint32_t width, uint32_t height, VkImageLayout final_layout, char *error,
                       size_t error_size) {
-    if (sVk != vk) {
-        // Another renderer drew last: its textures are not this one's.
-        sVk = vk;
-        gfx_reset_textures();
-        for (uint32_t i = 0; i < vk->texture_count; ++i) {
-            texture_destroy(vk, &vk->textures[i]);
-        }
-        vk->texture_count = 0;
-    }
     vk->failed = false;
     if (!target_prepare(vk, image, format, width, height, final_layout)) {
         snprintf(error, error_size, "%s", vk->error);
         return false;
     }
-    gfx_set_camera(camera);
-    gfx_run((Gfx *) display_list, width, height);
-    gfx_set_camera(NULL);
-    for (size_t i = 0; i < vk->garbage_count; ++i) {
-        texture_destroy(vk, &vk->garbage[i]);
+    if (frame_begin(vk)) {
+        f3d_run(vk->f3d, display_list, width, height, camera);
+        frame_end(vk);
     }
-    vk->garbage_count = 0;
     if (vk->failed) {
         snprintf(error, error_size, "%s", vk->error);
         // A frame that failed half way leaves its command buffers recording.
