@@ -11,7 +11,7 @@ One module per version, each with the library of its version:
 | `sm64_eu` | Super Mario 64 (Europe) (En,Fr,De) | 25 |
 | `sm64_sh` | Super Mario 64 (Japan) (Rev A) (Shindou Edition) | 30 |
 
-Build with `-DFRAMETEE_BUILD_SM64=ON`.
+Built by default; `-DFRAMETEE_BUILD_SM64=OFF` leaves it out.
 
 ## Player setup
 

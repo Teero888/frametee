@@ -1,6 +1,6 @@
 // Draws frames of SM64 offscreen, as the game module does, into PNG files.
 //
-//   sm64_render_frames ROM POLLS OUT_PREFIX [--size WxH] [--from DX,DY,DZ] [--ghost-back N] FRAME...
+//   sm64_render_frames ROM POLLS OUT_PREFIX [--size WxH] [--from DX,DY,DZ] [--ghost-back N] [--alpha A] FRAME...
 //
 // POLLS is one u32 controller read per poll in the oracle's order (the first
 // ones are read during boot; game frame N reads poll N + sm64_boot_polls() -
@@ -12,7 +12,9 @@
 // before (sm64_set_draw_mario_only) through the same camera on a transparent
 // frame, as the module draws another group's Mario: OUT_PREFIX<N>_ghost.png,
 // and OUT_PREFIX<N>_with_ghost.png over the frame (tinted, at 70%, as
-// data/games/sm64/shaders/ghost.frag does).
+// data/games/sm64/shaders/ghost.frag does). --alpha draws each frame A (0 to 1)
+// of the way from the frame before, as the module draws between ticks
+// (sm64_set_draw_interpolation).
 #include <stdbool.h>
 #include <stdio.h>
 #include <math.h>
@@ -236,6 +238,7 @@ int main(int argc, char **argv) {
     float from[3];
     bool have_from = false;
     long ghost_back = 0;
+    float alpha = 1.0f;
     long frames[256];
     int frame_count = 0;
     for (int i = 4; i < argc; ++i) {
@@ -245,6 +248,8 @@ int main(int argc, char **argv) {
             have_from = sscanf(argv[++i], "%f,%f,%f", &from[0], &from[1], &from[2]) == 3;
         } else if (strcmp(argv[i], "--ghost-back") == 0 && i + 1 < argc) {
             ghost_back = atol(argv[++i]);
+        } else if (strcmp(argv[i], "--alpha") == 0 && i + 1 < argc) {
+            alpha = (float) atof(argv[++i]);
         } else if (frame_count < 256) {
             frames[frame_count++] = atol(argv[i]);
         }
@@ -301,7 +306,10 @@ int main(int argc, char **argv) {
             ++stepped;
         }
         sm64_world_copy(draw, world);
+        sm64_set_draw_widescreen((uint64_t) width * 3 > (uint64_t) height * 4);
+        sm64_set_draw_interpolation(world, alpha);
         const void *list = sm64_step_draw(draw, polls[frame - 1 + boot]);
+        sm64_set_draw_interpolation(NULL, 1.0f);
         if (!list) {
             fprintf(stderr, "sm64_render: frame %ld drew nothing\n", frame);
             continue;

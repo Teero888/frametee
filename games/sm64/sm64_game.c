@@ -39,6 +39,7 @@ struct ft_game {
   // What the frame shows, to draw it again only when that changes.
   const ft_world *drawn_world;
   uint64_t drawn_revision, drawn_previous_revision;
+  float drawn_alpha;
   bool drawn_from_camera;
   float drawn_camera[4][4];
   bool drawn;
@@ -53,6 +54,7 @@ struct ft_game {
     uint32_t width, height;
     const ft_world *world;
     uint64_t revision, previous_revision;
+    float alpha;
     float camera[4][4];
     bool drawn;
   } ghosts[16];
@@ -467,11 +469,37 @@ static const ft_camera_mode kCameraModes[] = {
     {"game", "Game camera", "Lakitu, as the game places him", FT_CAMERA_MODE_DIRECTED},
 };
 
+// The game's camera `alpha` of the way from its place in `previous`, as the
+// frame is drawn (sm64_set_draw_interpolation): not across a change of level
+// or area, nor a cut of more than 1000 units.
+static void camera_between(const ft_world *world, const ft_world *previous, float alpha, struct sm64_camera_info *out) {
+  sm64_camera(world->sim, out);
+  if (!previous || previous->tick != world->tick - 1 || alpha >= 1.f) return;
+  struct sm64_mario_info mario, previous_mario;
+  if (!sm64_mario(world->sim, &mario) || !sm64_mario(previous->sim, &previous_mario) ||
+      mario.level != previous_mario.level || mario.area != previous_mario.area)
+    return;
+  struct sm64_camera_info from;
+  sm64_camera(previous->sim, &from);
+  float pos = 0.f, focus = 0.f;
+  for (int i = 0; i < 3; ++i) {
+    pos += (out->pos[i] - from.pos[i]) * (out->pos[i] - from.pos[i]);
+    focus += (out->focus[i] - from.focus[i]) * (out->focus[i] - from.focus[i]);
+  }
+  if (!(pos <= 1000.f * 1000.f && focus <= 1000.f * 1000.f)) return;
+  for (int i = 0; i < 3; ++i) {
+    out->pos[i] = from.pos[i] + (out->pos[i] - from.pos[i]) * alpha;
+    out->focus[i] = from.focus[i] + (out->focus[i] - from.focus[i]) * alpha;
+  }
+  out->roll = (int16_t)(from.roll + (int)((int16_t)(out->roll - from.roll) * alpha));
+  out->fov = from.fov + (out->fov - from.fov) * alpha;
+}
+
 static bool camera_update(ft_game *game, const ft_camera_frame *frame, ft_camera *inout) {
   (void)game;
   if (frame->mode != 0 || !frame->world) return false;
   struct sm64_camera_info c;
-  sm64_camera(frame->world->sim, &c);
+  camera_between(frame->world, frame->previous_world, frame->alpha, &c);
   inout->eye = (ft_vec3){c.pos[0], c.pos[1], c.pos[2]};
   inout->target = (ft_vec3){c.focus[0], c.focus[1], c.focus[2]};
   // Roll turns the up vector about the view direction.
@@ -596,10 +624,11 @@ static void game_camera_from_engine(const ft_camera *camera, float out[4][4]) {
   }
 }
 
-// Draws the frame of `world` into game->frame, if it changed. With a camera,
-// through it rather than the game's.
-static bool draw_frame(ft_game *game, const ft_world *world, const ft_world *previous, const float (*camera)[4],
-                       uint32_t width, uint32_t height) {
+// Draws the frame of `world` into game->frame, if it changed: `alpha` of the
+// way from the frame of `previous`, so that Mario and the rest move smoothly
+// between ticks. With a camera, through it rather than the game's.
+static bool draw_frame(ft_game *game, const ft_world *world, const ft_world *previous, float alpha,
+                       const float (*camera)[4], uint32_t width, uint32_t height) {
   const ft_engine_api *api = game->engine;
   if (!game->frame || game->frame_width != width || game->frame_height != height) {
     release_frame(game);
@@ -610,12 +639,17 @@ static bool draw_frame(ft_game *game, const ft_world *world, const ft_world *pre
     game->frame_height = height;
   }
   if (game->drawn && game->drawn_world == world && game->drawn_revision == world->revision &&
-      game->drawn_previous_revision == previous->revision && game->drawn_from_camera == (camera != NULL) &&
+      game->drawn_previous_revision == previous->revision && game->drawn_alpha == alpha &&
+      game->drawn_from_camera == (camera != NULL) &&
       (!camera || memcmp(game->drawn_camera, camera, sizeof(game->drawn_camera)) == 0))
     return true;
   if (!game->draw_world && !(game->draw_world = sm64_world_create())) return false;
   sm64_world_copy(game->draw_world, previous->sim);
+  // f3d.c widens the 3D to the viewport: the sky has to reach its edges.
+  sm64_set_draw_widescreen((uint64_t)width * 3 > (uint64_t)height * 4);
+  sm64_set_draw_interpolation(previous->sim, alpha);
   const void *list = sm64_step_draw(game->draw_world, world->input);
+  sm64_set_draw_interpolation(NULL, 1.f);
   if (!list) return game->drawn;
   ft_gpu_image image = {.struct_size = sizeof(image)};
   char error[256];
@@ -635,6 +669,7 @@ static bool draw_frame(ft_game *game, const ft_world *world, const ft_world *pre
   game->drawn_world = world;
   game->drawn_revision = world->revision;
   game->drawn_previous_revision = previous->revision;
+  game->drawn_alpha = alpha;
   game->drawn_from_camera = camera != NULL;
   if (camera) memcpy(game->drawn_camera, camera, sizeof(game->drawn_camera));
   return true;
@@ -677,11 +712,14 @@ static void draw_ghost(ft_game *game, const ft_render_frame *frame) {
     ghost->height = height;
   }
   if (!ghost->drawn || ghost->world != frame->world || ghost->revision != frame->world->revision ||
-      ghost->previous_revision != previous->revision || memcmp(ghost->camera, view, sizeof(view)) != 0) {
+      ghost->previous_revision != previous->revision || ghost->alpha != frame->alpha ||
+      memcmp(ghost->camera, view, sizeof(view)) != 0) {
     if (!game->ghost_world && !(game->ghost_world = sm64_world_create())) return;
     sm64_world_copy(game->ghost_world, previous->sim);
     sm64_set_draw_mario_only(true);
+    sm64_set_draw_interpolation(previous->sim, frame->alpha);
     const void *list = sm64_step_draw(game->ghost_world, frame->world->input);
+    sm64_set_draw_interpolation(NULL, 1.f);
     sm64_set_draw_mario_only(false);
     ft_gpu_image image = {.struct_size = sizeof(image)};
     char error[256];
@@ -693,6 +731,7 @@ static void draw_ghost(ft_game *game, const ft_render_frame *frame) {
     ghost->world = frame->world;
     ghost->revision = frame->world->revision;
     ghost->previous_revision = previous->revision;
+    ghost->alpha = frame->alpha;
     memcpy(ghost->camera, view, sizeof(view));
   }
   const struct {
@@ -725,7 +764,7 @@ static void render(ft_game *game, const ft_render_frame *frame) {
   float view[4][4];
   const bool own_camera = camera.mode >= sizeof(kCameraModes) / sizeof(kCameraModes[0]);
   if (own_camera) game_camera_from_engine(&camera, view);
-  if (draw_frame(game, frame->world, previous, own_camera ? (const float (*)[4])view : NULL, width, height))
+  if (draw_frame(game, frame->world, previous, frame->alpha, own_camera ? (const float (*)[4])view : NULL, width, height))
     api->draw_mesh(game->present, 0.f, game->quad, &game->frame, 1, NULL, 0);
 }
 
@@ -1242,7 +1281,9 @@ static const ft_game_module kModule = {
              .family = "Super Mario 64",
              .family_thumbnail = "thumbnail.png",
              .family_member = SM64_FAMILY_MEMBER,
-             .family_order = SM64_FAMILY_ORDER},
+             .family_order = SM64_FAMILY_ORDER,
+             // sm64_state_size(), which is about 5.2 MB in every version.
+             .world_size = 5u << 20},
     .constraints = {.struct_size = sizeof(ft_game_constraints),
                     .caps = FT_CAP_HEADLESS | FT_CAP_EXPORTERS | FT_CAP_RECORDINGS | FT_CAP_RENDERS_LEVEL,
                     .dimensions = FT_DIMENSIONS_3D,

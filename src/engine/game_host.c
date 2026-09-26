@@ -690,6 +690,10 @@ const ft_input_schema *game_input_schema(const game_host_t *host) {
   return (host && host->module) ? host->module->input_schema : NULL;
 }
 
+size_t game_world_size(const game_host_t *host) {
+  return (host && host->module) ? host->module->info.world_size : 0;
+}
+
 unsigned game_input_size(const game_host_t *host) {
   const ft_input_schema *schema = game_input_schema(host);
   return schema ? schema->record_size : 0;

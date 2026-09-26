@@ -3,10 +3,10 @@
 # Shared libraries built against the ABI header around libsm64_physics, the
 # whole game (libs/sm64_physics). One module per game version, each with the
 # library of its version: "sm64" (US), "sm64_jp", "sm64_eu" and "sm64_sh"
-# (the Shindou Edition). Off by default: the game needs the user's ROM.
+# (the Shindou Edition). They run with the user's ROM. FRAMETEE_BUILD_SM64 (the
+# top level's option, on by default) builds them.
 cmake_minimum_required(VERSION 3.14)
 
-option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" ON)
 if(NOT FRAMETEE_BUILD_SM64)
     return()
 endif()

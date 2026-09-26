@@ -20,6 +20,7 @@
 static void v_init(timeline_state_t *ts, physics_v_t *t, int world_index);
 static void v_destroy(timeline_state_t *ts, physics_v_t *t);
 static void v_push(timeline_state_t *ts, physics_v_t *t, const ft_world *world, int world_index);
+static void snapshots_reset(timeline_group_t *group);
 
 // The host the timeline simulates through. Every world in here belongs to the
 // active game; the engine only creates, copies and destroys them.
@@ -47,6 +48,7 @@ static void group_runtime_init(timeline_state_t *ts, timeline_group_t *group, in
   game_host_t *host = model_host(ts);
   const ft_level *level = ts->ui->gfx_handler->level;
   v_init(ts, &group->vec, world_index);
+  snapshots_reset(group);
   group->initial_world = gh_world_create(host, level, 0, world_index);
   group->previous_world = gh_world_create(host, level, 0, world_index);
   group->prev_world_cached = gh_world_create(host, level, 0, world_index);
@@ -181,7 +183,7 @@ void model_reset_groups_for_level(timeline_state_t *ts) {
       gh_world_add_player(host, group->initial_world, -1, NULL);
     gh_world_copy(host, group->previous_world, group->initial_world);
     if (group->vec.data && group->vec.data[0]) gh_world_copy(host, group->vec.data[0], group->initial_world);
-    group->vec.current_size = 1;
+    snapshots_reset(group);
     group->cached_tick = -1;
     group->presentation_tick = -1;
   }
@@ -748,7 +750,7 @@ void model_insert_track_physics(timeline_state_t *ts, int track_index) {
   // Inserting rather than appending is the game's problem: only it knows what
   // renumbering a player means for the rest of its world.
   gh_world_add_player(model_host(ts), ts->groups[group_index]->initial_world, local_index, NULL);
-  ts->groups[group_index]->vec.current_size = 1;
+  snapshots_reset(ts->groups[group_index]);
   model_recalc_physics(ts, 0);
 }
 
@@ -861,9 +863,10 @@ void model_invalidate_group_physics(timeline_state_t *ts, int group_index, int t
   ++group->physics_revision;
   tick = imax(0, tick);
   // Input at tick T first changes world T+1. Preserve the snapshot at T.
-  const uint32_t keep = (uint32_t)(tick / 50) + 1;
+  const uint32_t keep = (uint32_t)(tick / group->snapshot_step) + 1;
   if (group->vec.current_size > keep) group->vec.current_size = keep;
   if (tick == 0) {
+    snapshots_reset(group);
     group->cached_tick = -1;
     group->presentation_tick = -1;
     gh_world_copy(host, group->previous_world, group->initial_world);
@@ -1040,10 +1043,58 @@ bool model_gather_step(timeline_state_t *ts, int group_index, int tick, int play
   return any_playback;
 }
 
+// The snapshots fit a memory budget per group. When they fill it, the step
+// doubles and every other snapshot goes: a long timeline keeps sparser
+// snapshots rather than more of them, and seeking replays at most a step.
+#define SNAPSHOT_STEP 50
+#define SNAPSHOT_BUDGET ((size_t)1 << 30)
+#define SNAPSHOT_MIN 64u
+#define SNAPSHOT_MAX 4096u
+
+static void snapshots_reset(timeline_group_t *group) {
+  group->vec.current_size = 1;
+  group->snapshot_step = SNAPSHOT_STEP;
+}
+
+static uint32_t snapshot_capacity(timeline_state_t *ts) {
+  const size_t size = game_world_size(model_host(ts));
+  if (size == 0) return SNAPSHOT_MAX;
+  const size_t count = SNAPSHOT_BUDGET / size;
+  return count < SNAPSHOT_MIN ? SNAPSHOT_MIN : count > SNAPSHOT_MAX ? SNAPSHOT_MAX : (uint32_t)count;
+}
+
+// Keeps the even snapshots and doubles the step. The dropped worlds stay
+// allocated past current_size for the snapshots that follow.
+static void snapshots_thin(timeline_group_t *group) {
+  physics_v_t *v = &group->vec;
+  uint32_t kept = 0;
+  for (uint32_t i = 0; i < v->current_size; i += 2, ++kept) {
+    ft_world *dropped = v->data[kept];
+    v->data[kept] = v->data[i];
+    v->data[i] = dropped;
+  }
+  v->current_size = kept;
+  group->snapshot_step *= 2;
+}
+
+// Keeps a copy of `world` when its tick is one the snapshots are taken at.
+static void snapshots_store(timeline_state_t *ts, timeline_group_t *group, int group_index, const ft_world *world) {
+  game_host_t *host = model_host(ts);
+  const int tick = gh_world_tick(host, world);
+  if (tick % group->snapshot_step != 0) return;
+  uint32_t index = (uint32_t)(tick / group->snapshot_step);
+  if (index == group->vec.current_size && index >= snapshot_capacity(ts)) {
+    snapshots_thin(group);
+    if (tick % group->snapshot_step != 0) return;
+    index = (uint32_t)(tick / group->snapshot_step);
+  }
+  if (index < group->vec.current_size) gh_world_copy(host, group->vec.data[index], world);
+  else if (index == group->vec.current_size) v_push(ts, &group->vec, world, group_index);
+}
+
 static void simulate_to(timeline_state_t *ts, int group_index, ft_world *world, int target_tick) {
   game_host_t *host = model_host(ts);
   timeline_group_t *group = ts->groups[group_index];
-  const int step = 50;
 
   const int player_count = gh_world_player_count(host, world);
   const size_t input_size = game_input_size(host);
@@ -1054,12 +1105,7 @@ static void simulate_to(timeline_state_t *ts, int group_index, ft_world *world, 
     const int current_sim_tick = gh_world_tick(host, world);
     const bool replaying = model_gather_step(ts, group_index, current_sim_tick, player_count, inputs, playback);
     gh_world_step_playback(host, world, inputs, replaying ? playback : NULL, (unsigned)player_count);
-
-    if (gh_world_tick(host, world) % step == 0) {
-      const int cache_index = gh_world_tick(host, world) / step;
-      if ((uint32_t)cache_index >= group->vec.current_size) v_push(ts, &group->vec, world, group_index);
-      else gh_world_copy(host, group->vec.data[cache_index], world);
-    }
+    snapshots_store(ts, group, group_index, world);
   }
 
   free(playback);
@@ -1072,10 +1118,10 @@ static void simulate_to(timeline_state_t *ts, int group_index, ft_world *world, 
 static void seed_world(timeline_state_t *ts, int group_index, ft_world *out_world, int tick) {
   game_host_t *host = model_host(ts);
   timeline_group_t *group = ts->groups[group_index];
-  const int step = 50;
+  const int step = group->snapshot_step;
   const int previous_tick = gh_world_tick(host, group->previous_world);
 
-  if (tick < previous_tick || (tick - previous_tick) > 100) {
+  if (tick < previous_tick || (tick - previous_tick) > 2 * step) {
     int base_index = (tick - 1) / step;
     // Visible particles are not part of physics snapshots. Replaying one more
     // snapshot reconstructs the recent short-lived effects around a jump, as
@@ -1411,23 +1457,21 @@ static void v_destroy(timeline_state_t *ts, physics_v_t *t) {
 
 // Worlds are handles now, so growing the ring no longer has to repair any
 // interior pointers: nothing moves when the array of pointers is reallocated.
+// A slot gets its world when first used: a world can be several megabytes.
 static void v_push(timeline_state_t *ts, physics_v_t *t, const ft_world *world, int world_index) {
   game_host_t *host = model_host(ts);
-  ++t->current_size;
-  if (t->current_size > t->max_size) {
-    const uint32_t old_max = t->max_size;
-    t->max_size *= 2;
-    ft_world **new_data = realloc(t->data, t->max_size * sizeof(ft_world *));
-    if (!new_data) {
-      t->current_size = old_max;
-      t->max_size = old_max;
-      return;
-    }
+  if (t->current_size == t->max_size) {
+    const uint32_t max_size = t->max_size * 2;
+    ft_world **new_data = realloc(t->data, max_size * sizeof(ft_world *));
+    if (!new_data) return;
+    memset(new_data + t->max_size, 0, (max_size - t->max_size) * sizeof(ft_world *));
     t->data = new_data;
-    for (uint32_t i = old_max; i < t->max_size; ++i)
-      t->data[i] = gh_world_create(host, ts->ui->gfx_handler->level, 0, world_index);
+    t->max_size = max_size;
   }
-  gh_world_copy(host, t->data[t->current_size - 1], world);
+  ft_world **slot = &t->data[t->current_size];
+  if (!*slot && !(*slot = gh_world_create(host, ts->ui->gfx_handler->level, 0, world_index))) return;
+  gh_world_copy(host, *slot, world);
+  ++t->current_size;
 }
 
 int model_find_player_prop(game_host_t *host, const char *prop_id) {
@@ -1482,7 +1526,7 @@ model_position_sampler_t *model_position_sampler_create(timeline_state_t *ts, in
     return NULL;
   }
   // Start from the nearest snapshot at or before the first tick.
-  int base = imax(0, first_tick - group->start_offset) / 50;
+  int base = imax(0, first_tick - group->start_offset) / group->snapshot_step;
   if (base > (int)group->vec.current_size - 1) base = (int)group->vec.current_size - 1;
   gh_world_copy(host, sampler->world, group->vec.data[imax(0, base)]);
   return sampler;

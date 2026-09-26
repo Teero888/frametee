@@ -239,9 +239,9 @@ set(CGLM_SHARED OFF CACHE BOOL "Do not build cglm as a shared library" FORCE)
 add_subdirectory(libs/cglm)
 set_target_properties(cglm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_subdirectory(libs/nfd)
-# The native SM64 library needs a built n64decomp/sm64 checkout; only the
-# SM64 module (off by default) uses it.
-option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" OFF)
+# Super Mario 64: the game as a library (libs/sm64_physics, self-contained),
+# once per version, and its modules (games/sm64). They run with the user's ROM.
+option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" ON)
 if(FRAMETEE_BUILD_SM64)
     # Shared: each version's module and its plugins use one copy of the game.
     # One library per version (sm64_physics_us, _jp, _eu, _sh), each a game

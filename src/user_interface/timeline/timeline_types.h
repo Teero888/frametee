@@ -245,7 +245,10 @@ struct timeline_group_t {
   // built from them (the camera's character paths) know to rebuild.
   uint64_t physics_revision;
 
+  // Periodic snapshots: vec.data[i] is the world at local tick
+  // i * snapshot_step, for i below vec.current_size.
   physics_v_t vec;
+  int snapshot_step;
   ft_world *initial_world;
   ft_world *previous_world;
   ft_world *prev_world_cached;

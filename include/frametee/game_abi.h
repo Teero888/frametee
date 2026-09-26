@@ -165,6 +165,10 @@ typedef struct ft_game_info {
   const char *family_thumbnail;
   const char *family_member;
   int32_t family_order;
+  /* Optional: about how many bytes one world holds. The editor keeps past
+   * worlds to seek the timeline, and keeps them sparser for large worlds so
+   * that they fit its memory budget. 0: small, not worth counting. */
+  size_t world_size;
 } ft_game_info;
 
 /* Capability bits. Anything not advertised here is assumed unsupported, and
