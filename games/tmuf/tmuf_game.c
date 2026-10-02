@@ -260,6 +260,8 @@ enum {
   SETTING_SPEED,
   SETTING_CHALLENGE_INFO,
   SETTING_SPLITS,
+  SETTING_MUSIC,
+  SETTING_MUSIC_VOLUME,
   SETTING_COUNT
 };
 
@@ -295,6 +297,8 @@ static const ft_setting_desc setting_descs[SETTING_COUNT] = {
      "At each checkpoint its time and the difference to the fastest finished run of the timeline's other worlds (in "
      "the race camera)",
      "HUD", FT_VALUE_BOOL, 0, 1, FT_SETTING_RENDER},
+    {"music", "Music", NULL, "Sound", FT_VALUE_BOOL, 0, 1, 0},
+    {"music_volume", "Music volume", NULL, "Sound", FT_VALUE_INT, 0, 100, 0},
 };
 
 static bool *setting_bool(ft_game *game, uint32_t index) {
@@ -314,13 +318,15 @@ static bool *setting_bool(ft_game *game, uint32_t index) {
   case SETTING_SPEED: return &game->settings.speed;
   case SETTING_CHALLENGE_INFO: return &game->settings.challenge_info;
   case SETTING_SPLITS: return &game->settings.splits;
+  case SETTING_MUSIC: return &game->settings.music;
   default: return NULL;
   }
 }
 static int *setting_int(ft_game *game, uint32_t index) {
   return index == SETTING_ANTIALIASING ? &game->settings.antialiasing
-         : index == SETTING_ANISOTROPY  ? &game->settings.anisotropy
-                                        : NULL;
+         : index == SETTING_ANISOTROPY   ? &game->settings.anisotropy
+         : index == SETTING_MUSIC_VOLUME ? &game->settings.music_volume
+                                         : NULL;
 }
 
 static uint32_t setting_count(ft_game *game) { return SETTING_COUNT; }
@@ -374,7 +380,9 @@ static ft_game *game_create(const ft_engine_api *engine) {
                                  .race_time = true,
                                  .speed = true,
                                  .challenge_info = true,
-                                 .splits = true};
+                                 .splits = true,
+                                 .music = true,
+                                 .music_volume = 50};
   char packs[1024];
   engine->resolve_data_path("Packs", packs, sizeof packs);
   char err[512];
@@ -391,6 +399,7 @@ static ft_game *game_create(const ft_engine_api *engine) {
 
 static void game_destroy(ft_game *game) {
   if (!game) return;
+  tm_audio_free(game);
   tmuf_packs_close(game->packs);
   free(game);
 }
@@ -536,6 +545,7 @@ static ft_level *level_load_memory(ft_game *game, const void *data, size_t size,
   level->info = tmuf_challenge_info_read(level->map, level->map_size, NULL, 0);
   level_bounds(level);
   tm_light_of(game, level->track, &level->light);
+  tm_audio_level_load(game, level);
   game->level = level;
   tm_log(game, FT_LOG_INFO, "Loaded %s (%s, %s)", level->name, tmuf_track_environment(level->track),
            tmuf_track_vehicle(level->track));
@@ -564,6 +574,7 @@ static void level_destroy(ft_game *game, ft_level *level) {
     if (level->particles[g]) tm_particles_destroy(game, level->particles[g]);
   }
   if (game->level == level) game->level = NULL;
+  tm_audio_level_free(game, level);
   tmuf_track_free(level->track);
   tmuf_challenge_info_free(level->info);
   free(level->map);
@@ -598,11 +609,14 @@ static ft_world *world_create(ft_game *game, const ft_world_desc *desc) {
     free(world);
     return NULL;
   }
+  world->level = desc->level;
+  tm_audio_world_init(world);
   return world;
 }
 
 static void world_destroy(ft_game *game, ft_world *world) {
   if (!world) return;
+  tm_audio_world_free(world);
   tmuf_world_free(&world->w);
   free(world);
 }
@@ -610,14 +624,18 @@ static void world_destroy(ft_game *game, ft_world *world) {
 static void world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
   tmuf_world_copy(&dst->w, &src->w);
   dst->display = src->display;
+  tm_audio_copy(dst, src);
 }
 
 void tm_world_step(ft_game *game, ft_world *world, const void *inputs, uint32_t player_count) {
   const tm_input *in = player_count ? inputs : NULL;
   world->w.input = in ? (tmuf_input){in->accelerate, in->brake, in->respawn, in->input_event, in->steer}
                       : (tmuf_input){0, 0, 0, 0, 0};
+  tm_audio_frame before;
+  const bool sound = tm_audio_prepare(game, world, &before);
   tmuf_world_tick(&world->w);
   tm_race_display_step(world);
+  if (sound) tm_audio_step(game, world, &before);
 }
 
 static int32_t world_tick(ft_game *game, const ft_world *world) { return (int32_t)world->w.tick; }
@@ -900,6 +918,7 @@ static void render(ft_game *game, const ft_render_frame *frame) {
   // the engine's own view-projection, for its 3D drawing's depth (present.frag)
   float engine_view_proj[16];
   memcpy(engine_view_proj, moved.state.camera.view_proj, sizeof engine_view_proj);
+  tm_audio_listen(game, &moved.state.camera);
   tm_camera_lens(&moved.state.camera);
   frame = &moved;
   const ft_camera *camera = &frame->state.camera;
@@ -1136,6 +1155,10 @@ static const ft_game_module module = {
     .recording_tick_flags = tm_recording_tick_flags,
     .recording_input = tm_recording_input,
     .world_step_playback = tm_world_step_playback,
+    .world_audio = tm_world_audio,
+    .audio_spatialize = tm_audio_spatialize,
+    .event_audio = tm_event_audio,
+    .recording_events = tm_recording_events,
 
     .setting_count = setting_count,
     .setting_desc = setting_desc,

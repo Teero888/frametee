@@ -128,6 +128,29 @@ bool tm_recording_input(ft_game *game, const ft_recording *r, int32_t player, in
   return true;
 }
 
+// The replay's horn presses (not part of its inputs: the physics never
+// reads them), heard as the timeline's events from the step that reads each
+void tm_recording_events(ft_game *game, const ft_recording *r, const int32_t *world_players, uint32_t player_count,
+                         void (*emit)(void *user, const ft_timeline_event *event), void *user) {
+  (void)game;
+  if (player_count < 1 || world_players[0] < 0) return;
+  const uint32_t count = tmuf_replay_horns(r->replay, NULL, 0);
+  uint32_t *ticks = count ? malloc(count * sizeof *ticks) : NULL;
+  if (!ticks) return;
+  tmuf_replay_horns(r->replay, ticks, count);
+  for (uint32_t i = 0; i < count; i++) {
+    const ft_timeline_event event = {.struct_size = sizeof event,
+                                     .world_index = -1,
+                                     .tick = (int32_t)ticks[i] + 1,
+                                     .player = world_players[0],
+                                     .category = TM_EVENT_HORN,
+                                     .text = "Horn",
+                                     .color = {0.55f, 0.75f, 1.f, 1.f}};
+    emit(user, &event);
+  }
+  free(ticks);
+}
+
 void tm_world_step_playback(ft_game *game, ft_world *world, const void *inputs, const ft_player_playback *playback,
                                 uint32_t player_count) {
   // the engine names the recording's tick the step starts from (the world's
@@ -136,8 +159,11 @@ void tm_world_step_playback(ft_game *game, ft_world *world, const void *inputs, 
   // wherever it steered)
   if (player_count > 0 && playback[0].recording) {
     world->w.input = input_at(playback[0].recording, playback[0].tick);
+    tm_audio_frame before;
+    const bool sound = tm_audio_prepare(game, world, &before);
     tmuf_world_tick(&world->w);
     tm_race_display_step(world); // (the speed and distance shown, as a driven run's)
+    if (sound) tm_audio_step(game, world, &before);
     return;
   }
   tm_world_step(game, world, inputs, player_count);

@@ -59,6 +59,7 @@ struct ui_handler_t {
 
   int current_tick;
   int fps_limit;
+  float audio_volume;
 
   float mouse_sens;
   float mouse_max_distance;

@@ -6,6 +6,7 @@
 // Main Interaction Handlers
 void interaction_handle_playback_and_shortcuts(timeline_state_t *ts);
 void interaction_handle_header(timeline_state_t *ts, ImRect header_bb);
+void interaction_set_scrubbing(timeline_state_t *ts, bool scrubbing);
 void interaction_handle_timeline_area(timeline_state_t *ts, ImRect timeline_bb);
 void interaction_handle_context_menu(timeline_state_t *ts);
 

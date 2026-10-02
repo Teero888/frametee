@@ -138,6 +138,13 @@ void gh_world_step(game_host_t *host, ft_world *world, const void *inputs, unsig
 void gh_world_step_playback(game_host_t *host, ft_world *world, const void *inputs, const ft_player_playback *playback,
                             unsigned player_count);
 int gh_world_tick(game_host_t *host, const ft_world *world);
+// Sound: whether the game reports any, the sound of a world's last step, and
+// how loud a positioned sound is in each ear (false: the game does not say).
+bool game_has_audio(const game_host_t *host);
+bool gh_world_audio(game_host_t *host, const ft_world *world, ft_audio_step *out);
+bool gh_audio_spatialize(game_host_t *host, int world_index, const ft_audio_sound *sound, float gain[2]);
+// The sound an authored timeline event makes; false when none.
+bool gh_event_audio(game_host_t *host, const ft_timeline_event *event, ft_audio_sound *out);
 int gh_world_player_count(game_host_t *host, const ft_world *world);
 bool gh_world_player_view(game_host_t *host, const ft_world *world, int player, ft_player_view *out);
 int gh_world_add_player(game_host_t *host, ft_world *world, int at_index, const ft_player_setup *setup);

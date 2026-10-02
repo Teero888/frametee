@@ -261,6 +261,12 @@ struct timeline_group_t {
   // Reused scratch simulations, one for each prediction variant. These are
   // deliberately world handles rather than game data.
   ft_world *prediction_worlds[MAX_PREDICTION_LINES];
+  // What each step sounded like, and the world that runs ahead of the drawn
+  // one to hear the next few ticks before they are shown (audio_world_tick is
+  // -1 when it has to start over from a snapshot).
+  struct audio_track *audio;
+  ft_world *audio_world;
+  int audio_world_tick;
 };
 
 struct timeline_state {
@@ -304,6 +310,8 @@ struct timeline_state {
   // Timeline events reported by the active game.
   timeline_event_t *events;
   int event_count;
+  // Bumped whenever the events change, for what is derived from them (their sounds).
+  uint64_t event_revision;
   int event_capacity;
 
   // Interaction State
@@ -317,6 +325,11 @@ struct timeline_state {
   timeline_drag_state_t drag_state;
   timeline_trim_state_t trim_state;
   bool is_header_dragging;
+  // The tick field is being dragged or typed into (renderer_draw_controls).
+  bool tick_field_active;
+  // Playback is held while the playhead is moved by hand (a header drag, the
+  // tick field) and goes on afterwards if it was playing.
+  bool scrubbing, resume_after_scrub;
   // The playhead selected for a header drag. Overlapping handles use the renderer's back-to-front
   // order so hit testing selects the same handle the user sees in front.
   int header_drag_group_index;

@@ -923,18 +923,49 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
   return true;
 }
 
+bool dd_skidding(const ft_world *world, int player) {
+  if (!world->level || player < 0 || player >= world->core.m_NumCharacters) return false;
+  const SCharacterCore *core = &world->core.m_pCharacters[player];
+  const float vx = vgetx(core->m_Vel), vy = vgety(core->m_Vel);
+  const int direction = core->m_Input.m_Direction;
+  const bool against = (direction == -1 && vx > 0.f) || (direction == 1 && vx < 0.f);
+  // length(Vel * 50) > 500 in units a second
+  if (!against || vx * vx + vy * vy <= 100.f) return false;
+  return check_point((SCollision *)&world->level->collision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16.f));
+}
+
+// A skid sounds when it starts and then every tenth of a second, as DDNet's
+// client times it, and trails smoke at its hundred hertz.
+static void skids(ft_world *world, dd_particle_system_t *ps, const uint8_t *was_skidding) {
+  const int tick = world->core.m_GameTick;
+  for (int player = 0; player < world->core.m_NumCharacters; ++player) {
+    if (dd_replay_absent(world, player) || !dd_skidding(world, player)) continue;
+    const SCharacterCore *core = &world->core.m_pCharacters[player];
+    const float x = vgetx(core->m_Pos), y = vgety(core->m_Pos);
+    if (!was_skidding || !was_skidding[player] || tick % 5 == 0) {
+      dd_physics_sound_event_t *event = append_physics_sound_event(world);
+      if (event)
+        *event = (dd_physics_sound_event_t){
+            .x = x, .y = y, .sound_id = SOUND_TYPE_PLAYER_SKID, .client_id = player, .client_side = true};
+    }
+    if (!ps) continue;
+    vec2 pos = {x, y}, vel = {vgetx(core->m_Vel), vgety(core->m_Vel)};
+    for (int i = 0; i < 2; ++i)
+      dd_particles_create_skid_trail(ps, pos, vel, core->m_Input.m_Direction, 1.f);
+  }
+}
+
 // Closes out a tick's effects. The high-water mark only moves once the tick has
 // actually run: spawning refuses anything at or below it, so raising it first
 // silently rejected every particle the tick produced.
-void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool bound) {
+void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool bound, const uint8_t *was_skidding) {
   world->core.particle = NULL;
   world->core.damage_indicator = NULL;
   world->core.sound = NULL;
   world->core.user_data = NULL;
   world->render_physics_effects = false;
-  if (!bound) return;
-
-  dd_particle_system_t *ps = dd_particles_for(game, world->index);
+  dd_particle_system_t *ps = bound ? dd_particles_for(game, world->index) : NULL;
+  skids(world, ps, was_skidding);
   if (!ps) return;
 
   // DDNet's client adds these presentation-only effects after the physics

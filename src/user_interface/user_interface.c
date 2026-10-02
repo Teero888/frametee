@@ -361,6 +361,15 @@ void render_menu_bar(ui_handler_t *ui) {
         igEndMenu();
       }
 
+      if (igBeginMenu("Sound", true)) {
+        float percent = ui->audio_volume * 100.f;
+        if (igSliderFloat("Volume", &percent, 0.f, 100.f, "%.0f%%", 0)) {
+          ui->audio_volume = percent / 100.f;
+          config_save(ui);
+        }
+        igEndMenu();
+      }
+
       // The one setting a menu cannot hold: a rebindable action list is a
       // table, so it keeps the window it always had.
       if (igMenuItem_Bool("Controls...", menu_shortcut(ui, ACTION_OPEN_CONTROLS), false, true))
@@ -1334,6 +1343,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->mouse_max_distance = 400.f;
   ui->vsync = true;
   ui->fps_limit = 0;
+  ui->audio_volume = 1.f;
   ui->lod_bias = -0.5f;
   ui->bg_color[0] = 0.253f;
   ui->bg_color[1] = 0.253f;
@@ -2486,6 +2496,7 @@ void ui_post_level_load(ui_handler_t *ui) {
   // editor only resets what it owns.
   ui->timeline.current_tick = 0;
   ui->timeline.event_count = 0;
+  ++ui->timeline.event_revision;
   camera_timeline_default(&ui->camera_timeline);
   camera_editor_reset(ui);
   render_state_new_project(ui);

@@ -1475,6 +1475,7 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
 
   timeline->event_count = document->event_count;
   timeline->event_capacity = document->event_count;
+  ++timeline->event_revision;
   timeline->events = document->event_count ? malloc(sizeof(*timeline->events) * (size_t)document->event_count) : NULL;
   if (document->event_count && !timeline->events) return false;
   if (document->event_count)

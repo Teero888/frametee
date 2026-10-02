@@ -927,6 +927,7 @@ static void ddnet_world_destroy(ft_game *game, ft_world *world) {
   free(world->physics_particle_events);
   free(world->physics_damage_events);
   free(world->physics_sound_events);
+  free(world->audio_sounds);
   free(world);
 }
 
@@ -1249,6 +1250,7 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
   memset(&state, 0, sizeof(state));
   if (engine && engine->get_state) engine->get_state(&state);
   game->headless = state.headless;
+  if (!game->headless) dd_audio_load(game);
 
   dd_log(game, FT_LOG_INFO, "DDNet game module ready (ABI %u).", FT_GAME_ABI_VERSION);
   return game;
@@ -1262,6 +1264,7 @@ static void ddnet_destroy(ft_game *game) {
   for (int i = 0; i < game->particle_count; ++i)
     dd_particles_cleanup(&game->particles[i]);
   free(game->particles);
+  dd_audio_unload(game);
   free(game);
 }
 
@@ -1382,6 +1385,7 @@ static void ensure_particle_systems(ft_game *game, int count) {
 
 static void ddnet_render(ft_game *game, const ft_render_frame *frame) {
   if (frame && frame->world_index >= 0) ensure_particle_systems(game, frame->world_index + 1);
+  if (frame) dd_audio_listen(game, &frame->state.camera.visible);
   dd_render(game, frame);
 }
 
@@ -1498,6 +1502,9 @@ static const ft_game_module module = {
     .input_effect_default = dd_input_effect_default,
     .input_effect_apply = dd_input_effect_apply,
     .input_effect_ui = dd_input_effect_ui,
+    .world_audio = dd_world_audio,
+    .audio_spatialize = dd_audio_spatialize,
+    .event_audio = dd_event_audio,
 };
 
 FT_GAME_EXPORT const ft_game_module *ft_game_module_entry(uint32_t engine_abi_version) {

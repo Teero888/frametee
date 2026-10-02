@@ -567,6 +567,7 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
   }
   for (int i = 0; i < current_world->physics_sound_event_count; ++i) {
     const dd_physics_sound_event_t *event = &current_world->physics_sound_events[i];
+    if (event->client_side) continue;
     if (event->client_id >= 0 && remap_client_id(client_ids, client_count, event->client_id) < 0) continue;
     dd_netevent_sound_world *sound =
         demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(*sound));

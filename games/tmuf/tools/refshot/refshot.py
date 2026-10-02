@@ -94,6 +94,16 @@ def key(env, name, window_name="TrackMania"):
     return bool(ids)
 
 
+def click(env, x, y, window_name="TrackMania"):
+    """A left click at (x, y) of the game's window (its back buffer's pixels)."""
+    ids = subprocess.run(["xdotool", "search", "--name", window_name], env=env, capture_output=True,
+                         text=True).stdout.split()
+    for wid in ids:
+        subprocess.run(["xdotool", "mousemove", "--window", wid, str(x), str(y), "click", "1"], env=env,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return bool(ids)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--replay", required=True)
@@ -109,6 +119,8 @@ def main():
     ap.add_argument("--timeout", type=float, default=900)
     ap.add_argument("--profile", default="steamuser")
     ap.add_argument("--keep-avi", action="store_true")
+    ap.add_argument("--audio", action="store_true",
+                    help="switch the video's audio stream on (the game's own sound, in the AVI)")
     ap.add_argument("--dxvk", action="store_true", help="render through DXVK (needs a display with DRI3)")
     ap.add_argument("--every", type=int, default=0, help="also keep every Nth presented frame")
     ap.add_argument("--stable", type=int, default=7,
@@ -134,7 +146,9 @@ def main():
     env = dict(os.environ, DISPLAY=args.display, WINEPREFIX=args.prefix,
                # the game's own d3dx9_30 compiles its shaders (Wine's builtin one
                # miscompiles the SM1 HLSL: black surfaces)
-               WINEDLLOVERRIDES=("d3d9=n,b" if args.dxvk else "d3d9=b") + ";d3dx9_30=n",
+               WINEDLLOVERRIDES=("d3d9=n,b" if args.dxvk else "d3d9=b") + ";d3dx9_30=n" +
+               # e.g. "winepulse.drv=d" to keep the game's sound off the desktop
+               "".join(";" + o for o in [os.environ.get("REFSHOT_EXTRA_OVERRIDES")] if o),
                WINEDEBUG=os.environ.get("REFSHOT_WINEDEBUG", "-all"),
                TMUF_REFSHOT_FRAMES=winpath(frames), TMUF_REFSHOT_EVERY=str(args.every))
     if args.log:
@@ -175,6 +189,14 @@ def main():
                 key(env, "Escape")
                 answered.add(d)
             elif d == "video":
+                # the dialog at 640x480: the audio stream switch, then Ok
+                img = screen(frames)
+                sx, sy = img.shape[1] / 640.0, img.shape[0] / 480.0
+                if args.audio and "audio" not in answered:
+                    click(env, round(281 * sx), round(213 * sy))
+                    answered.add("audio")
+                    time.sleep(1)
+                click(env, round(230 * sx), round(304 * sy))
                 key(env, "Return")
                 answered.add(d)
             if key(env, "Return", "Video Compression"):

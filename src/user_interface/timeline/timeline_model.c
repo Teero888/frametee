@@ -1,5 +1,6 @@
 #include "timeline_recordings.h"
 #include "timeline_model.h"
+#include <audio/audio.h>
 #include <engine/engine_api.h>
 #include <engine/game_host.h>
 #include <engine/input_record.h>
@@ -53,6 +54,8 @@ static void group_runtime_init(timeline_state_t *ts, timeline_group_t *group, in
   group->previous_world = gh_world_create(host, level, 0, world_index);
   group->prev_world_cached = gh_world_create(host, level, 0, world_index);
   group->world_cached = gh_world_create(host, level, 0, world_index);
+  group->audio_world = gh_world_create(host, level, 0, world_index);
+  group->audio_world_tick = -1;
   group->cached_tick = -1;
   group->presentation_tick = 0;
 }
@@ -66,7 +69,11 @@ static void group_runtime_cleanup(timeline_state_t *ts, timeline_group_t *group)
   gh_world_destroy(host, group->previous_world);
   gh_world_destroy(host, group->prev_world_cached);
   gh_world_destroy(host, group->world_cached);
+  gh_world_destroy(host, group->audio_world);
+  audio_track_free(group->audio);
+  group->audio = NULL;
   group->initial_world = group->previous_world = group->prev_world_cached = group->world_cached = NULL;
+  group->audio_world = NULL;
 }
 
 timeline_group_t *model_add_group(timeline_state_t *ts, const char *name) {
@@ -218,6 +225,7 @@ void model_init(timeline_state_t *ts, ui_handler_t *ui) {
 
   ts->events = NULL;
   ts->event_count = 0;
+  ++ts->event_revision;
   ts->event_capacity = 0;
 
   snippet_id_vector_init(&ts->selected_snippets);
@@ -862,6 +870,8 @@ void model_invalidate_group_physics(timeline_state_t *ts, int group_index, int t
   timeline_group_t *group = ts->groups[group_index];
   ++group->physics_revision;
   tick = imax(0, tick);
+  audio_track_invalidate(group->audio, tick + 1);
+  if (group->audio_world_tick > tick) group->audio_world_tick = -1;
   // Input at tick T first changes world T+1. Preserve the snapshot at T.
   const uint32_t keep = (uint32_t)(tick / group->snapshot_step) + 1;
   if (group->vec.current_size > keep) group->vec.current_size = keep;
@@ -1101,11 +1111,21 @@ static void simulate_to(timeline_state_t *ts, int group_index, ft_world *world, 
   uint8_t *inputs = player_count > 0 ? calloc((size_t)player_count, input_size) : NULL;
   ft_player_playback *playback = player_count > 0 ? calloc((size_t)player_count, sizeof(*playback)) : NULL;
 
+  // Steps that are heard say what they sounded like; the rest only get
+  // somewhere (and a game may skip making their sound).
+  const bool capture_audio = audio_heard() && game_has_audio(host);
+  const double ticks_per_second = game_ticks_per_second(host);
+
   while (gh_world_tick(host, world) < target_tick) {
     const int current_sim_tick = gh_world_tick(host, world);
     const bool replaying = model_gather_step(ts, group_index, current_sim_tick, player_count, inputs, playback);
     gh_world_step_playback(host, world, inputs, replaying ? playback : NULL, (unsigned)player_count);
     snapshots_store(ts, group, group_index, world);
+    if (capture_audio) {
+      ft_audio_step step;
+      const bool sounded = gh_world_audio(host, world, &step);
+      audio_track_capture(&group->audio, current_sim_tick + 1, sounded ? &step : NULL, ticks_per_second);
+    }
   }
 
   free(playback);
@@ -1182,6 +1202,8 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
     return;
   }
 
+  // The world the viewport follows is heard as it steps.
+  const bool previous_heard = audio_set_heard(presentation_enabled && group_index == ts->active_group_index);
   if (group->cached_tick == local_tick - 1 &&
       (!presentation_enabled || group->presentation_tick == local_tick - 1)) {
     // Fast path for sequential forward playback: the current world becomes previous,
@@ -1206,9 +1228,38 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
     group->cached_tick = local_tick;
     if (presentation_enabled) group->presentation_tick = local_tick;
   }
+  audio_set_heard(previous_heard);
 
   if (out_prev) *out_prev = group->prev_world_cached;
   if (out_cur) *out_cur = group->world_cached;
+}
+
+void model_group_audio_cover(timeline_state_t *ts, int group_index, int first, int last) {
+  if (!ts || group_index < 0 || group_index >= ts->group_count || last < 1) return;
+  game_host_t *host = model_host(ts);
+  if (!audio_enabled() || !game_has_audio(host)) return;
+  timeline_group_t *group = ts->groups[group_index];
+  const int missing = audio_track_first_missing(group->audio, first < 1 ? 1 : first, last);
+  if (missing < 0) return;
+  if (!ts->recording && !ts->input_effects_rebuilding) input_effects_ensure(ts);
+
+  // The ahead world goes on from where it is when that is near; otherwise from
+  // the snapshot before the first tick missing.
+  const int from = missing - 1;
+  const int step = group->snapshot_step;
+  if (group->audio_world_tick < 0 || group->audio_world_tick > from || from - group->audio_world_tick > 2 * step) {
+    int index = from / step;
+    if (index > (int)group->vec.current_size - 1) index = (int)group->vec.current_size - 1;
+    if (index < 0) index = 0;
+    gh_world_copy(host, group->audio_world, group->vec.data[index]);
+  }
+  ts->simulation_group_index = group_index;
+  const bool previous_effects = engine_api_set_presentation_effects(false);
+  const bool previous_heard = audio_set_heard(true);
+  simulate_to(ts, group_index, group->audio_world, last);
+  audio_set_heard(previous_heard);
+  engine_api_set_presentation_effects(previous_effects);
+  group->audio_world_tick = gh_world_tick(host, group->audio_world);
 }
 
 const ft_world *model_world_at_tick(timeline_state_t *ts, int tick) {
@@ -1353,6 +1404,7 @@ bool model_remove_group(timeline_state_t *ts, int group_index) {
     if (ts->events[i].group_index > group_index) ts->events[i].group_index--;
     ++i;
   }
+  ++ts->event_revision;
 
   if (ts->active_group_index == group_index) ts->active_group_index = 0;
   else if (ts->active_group_index > group_index) ts->active_group_index--;

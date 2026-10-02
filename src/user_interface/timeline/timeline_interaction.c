@@ -253,6 +253,20 @@ void interaction_handle_header(timeline_state_t *ts, ImRect header_bb) {
   }
 }
 
+// While the playhead is moved by hand, playback holds (playing on would fight
+// the hand for it); a play pressed meanwhile waits for the release too.
+void interaction_set_scrubbing(timeline_state_t *ts, bool scrubbing) {
+  if (scrubbing) {
+    if (!ts->scrubbing) ts->resume_after_scrub = false;
+    if (ts->is_playing) ts->resume_after_scrub = true;
+    ts->is_playing = false;
+  } else if (ts->scrubbing && ts->resume_after_scrub) {
+    ts->is_playing = true;
+    ts->last_update_time = igGetTime();
+  }
+  ts->scrubbing = scrubbing;
+}
+
 void interaction_handle_timeline_area(timeline_state_t *ts, ImRect timeline_bb) {
   if (igGetIO_Nil()->ConfigFlags & ImGuiConfigFlags_NoMouse) return;
   handle_pan_and_zoom(ts, timeline_bb);

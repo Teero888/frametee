@@ -15,6 +15,10 @@ bool recording_import_available(ui_handler_t *ui);
 void recording_import_begin(ui_handler_t *ui, bool new_project);
 // The same for a file already chosen, e.g. from the start screen.
 void recording_import_open(ui_handler_t *ui, const char *path, bool new_project);
+// Finishes the import recording_import_open began as its dialog would by default, with no one
+// to ask (a video rendered from the command line): the suggested players, on the recording's own
+// level if the project's is another.
+bool recording_import_finish(ui_handler_t *ui);
 // The import dialog, once per frame.
 void recording_import_render(ui_handler_t *ui);
 // Whether an import dialog is up. The start screen stays away meanwhile, even with no level loaded:

@@ -57,6 +57,7 @@ void render_timeline(ui_handler_t *ui) {
 
     // Handle header interaction and render it
     interaction_handle_header(ts, header_bb);
+    interaction_set_scrubbing(ts, ts->tick_field_active || (ts->is_header_dragging && !ts->recording));
     renderer_draw_header(ts, draw_list, header_bb);
     igDummy((ImVec2){0, header_height}); // Advance cursor
 
@@ -113,6 +114,9 @@ void render_timeline(ui_handler_t *ui) {
 
   } else {
     igPopStyleVar(1);
+    // (hidden mid-drag: nothing holds the playhead any more)
+    ts->is_header_dragging = ts->tick_field_active = false;
+    interaction_set_scrubbing(ts, false);
   }
   igEnd();
 }

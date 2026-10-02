@@ -96,6 +96,7 @@ add_library(ddnet_game MODULE
     dd_player_panel.c
     dd_profile.c
     dd_events.c
+    dd_audio.c
     dd_export.c
     dd_demo.c
     dd_ghost.c

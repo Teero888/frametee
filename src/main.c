@@ -4,6 +4,8 @@
 #include "scripting/script_engine.h"
 #include "user_interface/recording_import.h"
 #include "user_interface/user_interface.h"
+#include <audio/audio.h>
+#include <audio/audio_timeline.h>
 #include <engine/engine_api.h>
 #include <engine/prediction.h>
 #include <math.h>
@@ -152,9 +154,9 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra, bool 
       frame.followed_players = per_world ? followed_players(ui, group_index, export_frame) : 0;
       frame.first_world = (group_index == first_visible_group);
       frame.last_world = (group_index == last_visible_group);
-      frame.selected_player = (per_world && group_index == selected_group && render_layer_enabled(ui, RENDER_LAYER_SELECTION))
-                                  ? selected_local
-                                  : -1;
+      frame.selected_player = per_world && group_index == selected_group ? selected_local : -1;
+      // Hiding the highlight leaves the selection: its crosshair still shows.
+      frame.highlight_selected = render_layer_enabled(ui, RENDER_LAYER_SELECTION);
       if (per_world) {
         const float *color = ts->groups[group_index]->color;
         frame.accent = (ft_color){color[0], color[1], color[2], color[3]};
@@ -186,6 +188,33 @@ static void render_export_passes(struct gfx_handler_t *handler, float intra) {
   ui->viewport_focused = old_focus;
   camera_editor_apply_for_export(handler, ui->video_job.sample_time);
   render_game_passes(handler, intra, true);
+}
+
+// A demo rendered from the command line is seen as its recording player saw it: the camera on the
+// imported group's first player, in the game's first directed mode, as wide as the game shows it.
+// Only when the camera is not animated, and only for this run.
+static void follow_imported_player(struct gfx_handler_t *handler) {
+  ui_handler_t *ui = &handler->user_interface;
+  timeline_state_t *ts = &ui->timeline;
+  if (ui->camera_timeline.pose_count > 0) return;
+  for (int t = 0; t < ts->player_track_count; ++t)
+    if (model_track_group_index(ts, t) == ts->active_group_index) {
+      ts->selected_player_track_index = t;
+      break;
+    }
+  camera_t *camera = &handler->renderer.camera;
+  camera->zoom = camera->zoom_wanted;
+  for (unsigned i = 0; i < game_camera_mode_count(&handler->game_host); ++i) {
+    const ft_camera_mode *mode = game_camera_mode(&handler->game_host, i);
+    if (!mode || !(mode->flags & FT_CAMERA_MODE_DIRECTED)) continue;
+    camera->mode = i;
+    // The width the game's own view shows (the same zoom as --view gives).
+    if (mode->view_width > 0.f && !game_is_3d(&handler->game_host))
+      camera->zoom = 2.f * handler->world_width /
+                     (mode->view_width * fmaxf(handler->world_width, handler->world_height) * 0.001f);
+    camera->zoom_wanted = camera->zoom;
+    break;
+  }
 }
 
 static void setup_benchmark_groups(ui_handler_t *ui, int target_groups) {
@@ -398,6 +427,11 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  // Sound is opened before the game, which asks whether it is heard while it
+  // simulates. A headless run hears nothing; a video render records it.
+  if (video_path) audio_set_recording(true);
+  else if (!g_is_headless) audio_init();
+
   static struct gfx_handler_t handler;
   if (init_gfx_handler(&handler) != 0) {
     free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
@@ -585,9 +619,11 @@ int main(int argc, char **argv) {
       gfx_activate_game(&handler, forced_game);
       if (variant_id) game_host_set_variant(&handler.game_host, variant_id);
     }
-    if (recording_import_available(&handler.user_interface))
+    if (recording_import_available(&handler.user_interface)) {
       recording_import_open(&handler.user_interface, demo_path, handler.level == NULL);
-    else
+      // A render has no one to answer the import dialog.
+      if (video_path && recording_import_finish(&handler.user_interface)) follow_imported_player(&handler);
+    } else
       log_error("Main", "The active game cannot open '%s'; pick one with --game", demo_path);
   }
 
@@ -718,6 +754,8 @@ int main(int argc, char **argv) {
     ui_check_auto_save(&handler.user_interface);
     ui_render(&handler.user_interface);
     double t_ui_done = glfwGetTime();
+    // The playhead has moved for this frame: sound follows it.
+    audio_timeline_update(&handler);
 
     if (benchmark_groups > 0 || project_path) {
       double total_ms = (t_ui_done - t_render_start) * 1000.0;
@@ -775,5 +813,6 @@ int main(int argc, char **argv) {
 
   free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
   gfx_cleanup(&handler);
+  audio_shutdown();
   return 0;
 }

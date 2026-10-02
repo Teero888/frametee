@@ -41,6 +41,9 @@ struct ft_world {
   struct dd_physics_sound_event *physics_sound_events;
   int physics_sound_event_count;
   int physics_sound_event_capacity;
+  // The sounds world_audio last reported from this world; never copied.
+  struct ft_audio_sound *audio_sounds;
+  int audio_sound_capacity;
   // The recording whose world (projectiles, lasers, chat) this world shows, and
   // the recording tick it shows; NULL when no player replays one.
   const struct ft_recording *replay_recording;

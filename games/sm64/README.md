@@ -36,8 +36,10 @@ when drawing.
   are (the game still decides what is drawn, from Lakitu's view).
 - **Movies**: `.m64` files open as recordings and export from power-on, for
   Mupen64-rr.
-
-No sound yet: the engine has no audio output.
+- **Sound**: the console's own, as the game hands it to the audio interface
+  each frame. The sound thread runs on every step so the music is right
+  wherever playing starts, but mixes only for the frames that are heard
+  (`sm64_set_audio_quiet` otherwise).
 
 `tests/sm64_render.c` draws frames of a movie offscreen into PNG files, as the
 module does (`sm64_render_frames_<version>`).

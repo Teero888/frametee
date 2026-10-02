@@ -76,11 +76,17 @@ typedef struct dd_physics_damage_event {
   int client_id;
 } dd_physics_damage_event_t;
 
+// DDNet's sound sets by protocol id (SOUND_GUN_FIRE ... SOUND_CTF_CAPTURE; the
+// menu music is left out), and the most takes one has.
+#define DD_SOUND_SETS 40
+#define DD_SOUND_TAKES 12
+
 typedef struct dd_physics_sound_event {
   float x;
   float y;
   int sound_id;
   int client_id;
+  bool client_side; // DDNet's client makes it (a skid): never one a server sends
 } dd_physics_sound_event_t;
 
 struct ft_level {
@@ -349,7 +355,10 @@ void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer);
 bool dd_particles_bind(ft_game *game, ft_world *world);
 // Call after the tick with the tick number from before it, and whatever
 // dd_particles_bind returned.
-void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool bound);
+// `was_skidding` (one byte per player, or NULL): who skidded before the step, from dd_skidding.
+void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool bound, const uint8_t *was_skidding);
+// DDNet's client skids a tee that is on the ground, fast, and steered against the way it moves.
+bool dd_skidding(const ft_world *world, int player);
 // Advances the visible particle simulation to `tick + alpha`.
 void dd_particles_advance(ft_game *game, int world_index, const ft_level *level, int tick, float alpha);
 dd_particle_system_t *dd_particles_for(ft_game *game, int world_index);
@@ -704,7 +713,22 @@ struct ft_game {
   // main thread: recordings open on worker threads and keep their demo files
   // and reconstructions here.
   char cache_dir[1024];
+
+  // Sound (dd_audio.c): every take of every sound set, and where the camera
+  // was last drawn from, which is where sounds are heard from.
+  ft_audio_sample sound_samples[DD_SOUND_SETS][DD_SOUND_TAKES];
+  int sound_take_count[DD_SOUND_SETS];
+  float listener[2];
+  bool listener_set;
 };
+
+// --- sound (dd_audio.c) ------------------------------------------------------
+void dd_audio_load(ft_game *game);
+void dd_audio_unload(ft_game *game);
+bool dd_world_audio(ft_game *game, const ft_world *world, ft_audio_step *out);
+void dd_audio_listen(ft_game *game, const ft_rect *visible);
+void dd_audio_spatialize(ft_game *game, int32_t world_index, const ft_audio_sound *sound, float gain[2]);
+bool dd_event_audio(ft_game *game, const ft_timeline_event *event, ft_audio_sound *out);
 
 void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...);
 

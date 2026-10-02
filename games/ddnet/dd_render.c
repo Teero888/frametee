@@ -526,6 +526,12 @@ static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world
   }
 }
 
+// Whether the selected player is marked; frames from before the flag always mark it.
+static bool frame_highlights_selected(const ft_render_frame *frame) {
+  return frame->struct_size < offsetof(ft_render_frame, highlight_selected) + sizeof(frame->highlight_selected) ||
+         frame->highlight_selected;
+}
+
 static void render_pickups(ft_game *game, const ft_render_frame *frame, const SWorldCore *world, float intra) {
   const ft_level *level = frame->level;
   if (!game->settings.render_pickups || !frame->active || !level || level->num_pickups <= 0) return;
@@ -672,7 +678,7 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
 
       dd_skin_push(game, p, 1.0f, tee.skin, eye, tee.dir, &tee.anim, tee.body_col, tee.feet_col, tee.custom);
 
-      if (!frame->state.recording && i == selected) {
+      if (!frame->state.recording && i == selected && frame_highlights_selected(frame)) {
         // Marker triangle floating above the selected tee, pointing down at it.
         const float width = 1.0f, height = 0.8f, gap = 0.35f;
         vec4 marker = {frame->accent.r, frame->accent.g, frame->accent.b, 0.5f};
@@ -854,8 +860,9 @@ static void render_cursor(ft_game *game, const ft_render_frame *frame) {
 // DDNet's camera modes. Which modes exist and where each one points is the
 // game's business; the engine only owns panning, zooming and the projection.
 const ft_camera_mode dd_camera_modes[DD_CAMERA_MODE_COUNT] = {
-    [DD_CAMERA_FREE] = {"free", "Free view", "Pan and zoom freely", FT_CAMERA_MODE_FREE},
-    [DD_CAMERA_FOLLOW] = {"follow", "Lock to tee", "Keeps the selected tee centred", FT_CAMERA_MODE_DIRECTED},
+    [DD_CAMERA_FREE] = {"free", "Free view", "Pan and zoom freely", FT_CAMERA_MODE_FREE, 0.f},
+    // DDNet's own view: about 1430 units wide on a 16:9 screen.
+    [DD_CAMERA_FOLLOW] = {"follow", "Lock to tee", "Keeps the selected tee centred", FT_CAMERA_MODE_DIRECTED, 1430.f / 32.f},
 };
 
 bool dd_camera_update(ft_game *game, const ft_camera_frame *frame, ft_camera *inout) {

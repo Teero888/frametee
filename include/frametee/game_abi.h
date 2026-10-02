@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 25u
+#define FT_GAME_ABI_VERSION 26u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -230,6 +230,10 @@ typedef struct ft_camera_mode {
   const char *display_name;
   const char *description;
   uint32_t flags;
+  /* 2D directed modes: how wide a view of the world (in its units) the game
+   * itself shows when following, for a video made with no one to frame it.
+   * 0 keeps the editor's zoom. */
+  float view_width;
 } ft_camera_mode;
 
 /* Reserved for the engine. A 3D game's mode list is presented with the engine's
@@ -1046,6 +1050,65 @@ typedef struct ft_engine_state {
   float lod_bias;
 } ft_engine_state;
 
+/* -------------------------------------------------------------------------
+ * Sound
+ *
+ * A game says what sound each step of a world made; the engine does the rest:
+ * mixing, playing it in time with the viewport at any speed and in either
+ * direction, scrubbing, and writing it into rendered video. Sound is a
+ * function of the worlds, never of wall time, so any moment can be heard again
+ * by asking the steps that led to it.
+ * ------------------------------------------------------------------------- */
+
+/* A decoded sound the engine keeps for a module (ft_engine_api.audio_sample_*).
+ * 0 is no sample. */
+typedef uint32_t ft_audio_sample;
+
+enum ft_audio_sound_flags {
+  /* `position` says where the sound is, and the module's audio_spatialize
+   * says how loud it is in each ear from where the world is seen. Otherwise
+   * it plays the same in both. */
+  FT_AUDIO_POSITIONED = 1u << 0,
+  /* A voice on the game's clock (music, an ambience): `offset` is where in
+   * its sample it is at the start of the step, in seconds (wrapped to the
+   * sample's length), rather than carrying on from the step before. So it is
+   * where it belongs wherever the playhead lands. */
+  FT_AUDIO_CLOCKED = 1u << 1,
+};
+
+typedef struct ft_audio_sound {
+  ft_audio_sample sample;
+  /* 0: a one-shot, which starts during this step and plays its sample once.
+   * Otherwise a continuous voice and the module's id for it, unique within
+   * the world: it sounds for as long as consecutive steps name it, looping its
+   * sample, with the volume and pitch each step gives. */
+  uint32_t voice;
+  uint32_t flags; /* ft_audio_sound_flags */
+  /* One-shots: when in the step it starts, from 0 (the start) to 1.
+   * FT_AUDIO_CLOCKED voices: where in the sample, in seconds. */
+  float offset;
+  float volume; /* linear, 1 = as recorded */
+  float pitch;  /* playback rate, 1 = as recorded */
+  float position[3];
+  /* How a positioned sound falls off, for the module's audio_spatialize: the
+   * distance it is heard at full volume within and the one it fades out by,
+   * in world units. The engine does not read them. */
+  float distance[2];
+} ft_audio_sound;
+
+/* The sound one step made. */
+typedef struct ft_audio_step {
+  uint32_t struct_size;
+  const ft_audio_sound *sounds;
+  uint32_t sound_count;
+  /* Sound the game mixes itself, as an emulated console does: pcm_frames
+   * stereo frames (left then right) at pcm_rate Hz, about a step long. The
+   * steps' blocks play back to back. */
+  const int16_t *pcm;
+  uint32_t pcm_frames;
+  uint32_t pcm_rate;
+} ft_audio_step;
+
 /* Services the engine exposes to a game module. Every pointer is non-NULL for
  * the lifetime of the module, except where noted for headless runs. */
 typedef struct ft_engine_api {
@@ -1268,6 +1331,26 @@ typedef struct ft_engine_api {
                           const void *uniforms, size_t uniform_size);
   /* Returns the name of the currently loaded level/map, or empty string. */
   const char *(*get_level_name)(void);
+
+  /* --- sound ---
+   * Samples are decoded once and kept until audio_sample_destroy, which a
+   * module calls for each of its samples when it is destroyed. They decode
+   * from a file or from its bytes in memory (WAV, FLAC, MP3 or Ogg Vorbis),
+   * or are made from float frames (channels 1 or 2, interleaved). 0 when that
+   * fails. */
+  ft_audio_sample (*audio_sample_load)(const char *path);
+  ft_audio_sample (*audio_sample_decode)(const void *data, size_t size);
+  ft_audio_sample (*audio_sample_create)(const float *frames, uint32_t frame_count, uint32_t channels,
+                                         uint32_t sample_rate);
+  void (*audio_sample_destroy)(ft_audio_sample sample);
+  /* Whether sound is heard or recorded at all, for the whole session. A game
+   * whose sound costs to make (an emulated console's) makes none without. */
+  bool (*audio_enabled)(void);
+  /* Whether the step being taken is heard: the world the viewport follows and
+   * the few ticks ahead of it. Scans, lookups and long seeks step worlds only
+   * to get somewhere; such a game then keeps its sound state going without
+   * making the sound. Asked from within world_step. */
+  bool (*audio_heard)(void);
 } ft_engine_api;
 
 /* The layer a 3D triangle names when it carries no texture. */
@@ -1332,6 +1415,10 @@ typedef struct ft_render_frame {
    * what it would show for a player its own camera follows, such as the
    * crosshair. Read only when struct_size covers it. */
   uint64_t followed_players;
+  /* Whether to mark the selected player (a highlight the user can hide). The
+   * selection itself counts either way: what follows it, such as a follow
+   * camera's crosshair, still shows. Read only when struct_size covers it. */
+  bool highlight_selected;
 } ft_render_frame;
 
 /* Everything a game needs to place the camera for a frame. */
@@ -1633,6 +1720,21 @@ typedef struct ft_game_module {
    * Ticks are the recording's own; world_index is left at -1. */
   void (*recording_events)(ft_game *game, const ft_recording *recording, const int32_t *world_players, uint32_t player_count,
                            void (*emit)(void *user, const ft_timeline_event *event), void *user);
+
+  /* --- Sound (optional) ---
+   * The sound of the step that made `world`, asked right after the step, on
+   * the thread that took it: the engine keeps what it needs. Pointers stay
+   * valid until the world changes. Returns false when the step made none. The
+   * engine asks for the editor's worlds only, never for scratch ones. */
+  bool (*world_audio)(ft_game *game, const ft_world *world, ft_audio_step *out);
+  /* The gains (left, right) of an FT_AUDIO_POSITIONED sound, heard from
+   * where world `world_index` was last seen from. Main thread. NULL plays
+   * positioned sounds the same in both ears. */
+  void (*audio_spatialize)(ft_game *game, int32_t world_index, const ft_audio_sound *sound, float gain[2]);
+  /* The sound an authored timeline event makes, if any (a protocol message
+   * that plays one, say), heard by its world from the start of the step that
+   * reaches its tick. Asked again whenever the events change. Main thread. */
+  bool (*event_audio)(ft_game *game, const ft_timeline_event *event, ft_audio_sound *out);
 } ft_game_module;
 
 /* The one symbol a module must export.

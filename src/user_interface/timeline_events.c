@@ -53,6 +53,7 @@ void timeline_event_to_abi(const timeline_event_t *event, ft_timeline_event *out
 }
 
 void timeline_events_sort(timeline_state_t *ts) {
+  ++ts->event_revision;
   if (ts->event_count > 1) {
     qsort(ts->events, ts->event_count, sizeof(timeline_event_t), compare_timeline_events);
   }
@@ -76,6 +77,7 @@ void timeline_events_remove(timeline_state_t *ts, int index) {
     memmove(&ts->events[index], &ts->events[index + 1], (ts->event_count - index - 1) * sizeof(timeline_event_t));
   }
   ts->event_count--;
+  ++ts->event_revision;
 }
 
 // A plain list of whatever the active game reported. Editing the payload of an

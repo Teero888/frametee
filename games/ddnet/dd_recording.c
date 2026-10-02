@@ -440,6 +440,13 @@ bool dd_replay_muted(const ft_world *world, int player) {
          world->replay_slots[player].mode != REPLAY_NONE;
 }
 
+// Sounds a tee's motion makes, which dd_demo_state_sounds works out.
+static bool motion_sound(int sound_id) {
+  return sound_id == SOUND_TYPE_PLAYER_JUMP || sound_id == SOUND_TYPE_PLAYER_AIRJUMP ||
+         sound_id == SOUND_TYPE_HOOK_ATTACH_GROUND || sound_id == SOUND_TYPE_HOOK_ATTACH_PLAYER ||
+         sound_id == SOUND_TYPE_HOOK_NOATTACH;
+}
+
 // Which world player replays the recording's client `cid` this step, or -1.
 static int world_player_of_cid(const ft_recording *recording, int cid, const ft_player_playback *playback, uint32_t count) {
   if (!playback || cid < 0 || cid >= DD_STATE_MAX_CLIENTS || recording->player_of_cid[cid] < 0) return -1;
@@ -629,7 +636,8 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
         core->damage_indicator(pos, (float)event->angle / 256.f - 3.f * (float)M_PI / 2.f, 1, player, core->user_data);
       break;
     case DD_STATE_EVENT_SOUND_WORLD:
-      if (core->sound) core->sound(pos, event->sound_id, player, core->user_data);
+      // The motion's own sounds come from the reconstruction below, on time.
+      if (core->sound && !motion_sound(event->sound_id)) core->sound(pos, event->sound_id, player, core->user_data);
       break;
     default:
       break;
@@ -651,6 +659,17 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
     core->particle(world_pos(x, y), PARTICLE_TYPE_BULLET_TRAIL, -1, core->user_data);
     projectile_pos(p, tuning, time + 0.5f / (float)GAME_TICK_SPEED, &x, &y);
     core->particle(world_pos(x, y), PARTICLE_TYPE_BULLET_TRAIL, -1, core->user_data);
+  }
+  // Jumps and hooks, as the reconstructed tees made them: the demo has its own late, and none for
+  // the recording player.
+  dd_state_sound sounds[DD_STATE_MAX_CLIENTS * 2];
+  const int sound_count = core->sound ? dd_demo_state_sounds(recording->state, recording_tick, sounds,
+                                                             (int)(sizeof(sounds) / sizeof(sounds[0])))
+                                      : 0;
+  for (int i = 0; i < sound_count; ++i) {
+    if (!owner_shown(world, sounds[i].client_id, false)) continue;
+    core->sound(world_pos(sounds[i].x, sounds[i].y), sounds[i].sound_id,
+                world_player_of_cid(recording, sounds[i].client_id, playback, count), core->user_data);
   }
   pthread_mutex_unlock(&recording->lock);
   free(tick);
@@ -675,6 +694,11 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
   if (!world) return;
   const int tick_before = world->core.m_GameTick;
   const bool effects_bound = dd_particles_bind(game, world);
+  // Who skids before the step, so a skid's first tick is heard.
+  uint8_t was_skidding_small[64];
+  uint8_t *was_skidding = world->core.m_NumCharacters <= 64 ? was_skidding_small : malloc((size_t)world->core.m_NumCharacters);
+  for (int i = 0; was_skidding && i < world->core.m_NumCharacters; ++i)
+    was_skidding[i] = dd_skidding(world, i);
   const SPlayerInput *records = inputs;
   const int count = world->core.m_NumCharacters;
   // Slots only come into being with the first replay; a world that never replays stays without.
@@ -765,7 +789,8 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
     world->replay_clients = UINT64_MAX;
   if (world->replay_recording)
     emit_events(world, (ft_recording *)world->replay_recording, world->replay_tick, playback, player_count, effects_bound);
-  dd_particles_finish(game, world, tick_before, effects_bound);
+  dd_particles_finish(game, world, tick_before, effects_bound, was_skidding);
+  if (was_skidding != was_skidding_small) free(was_skidding);
 }
 
 // --- drawing the recording's world ---------------------------------------------

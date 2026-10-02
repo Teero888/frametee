@@ -790,6 +790,27 @@ void gh_world_step_playback(game_host_t *host, ft_world *world, const void *inpu
   else m->world_step(host->instance, world, inputs, player_count);
 }
 
+bool game_has_audio(const game_host_t *host) { return host && host->instance && host->module->world_audio; }
+
+bool gh_world_audio(game_host_t *host, const ft_world *world, ft_audio_step *out) {
+  memset(out, 0, sizeof(*out));
+  out->struct_size = sizeof(*out);
+  REQUIRE_GAME(false);
+  return world && m->world_audio && m->world_audio(host->instance, world, out);
+}
+
+bool gh_event_audio(game_host_t *host, const ft_timeline_event *event, ft_audio_sound *out) {
+  REQUIRE_GAME(false);
+  return m->event_audio && m->event_audio(host->instance, event, out);
+}
+
+bool gh_audio_spatialize(game_host_t *host, int world_index, const ft_audio_sound *sound, float gain[2]) {
+  REQUIRE_GAME(false);
+  if (!m->audio_spatialize) return false;
+  m->audio_spatialize(host->instance, world_index, sound, gain);
+  return true;
+}
+
 // Recordings ------------------------------------------------------------------
 
 bool game_has_recordings(const game_host_t *host) { return game_has_cap(host, FT_CAP_RECORDINGS); }
@@ -1173,7 +1194,7 @@ bool gh_project_load(game_host_t *host, const void *data, size_t size) {
 
 // A game that declares no camera modes still gets one, so the engine never has
 // to special-case "no modes at all".
-static const ft_camera_mode g_default_camera_mode = {"free", "Free view", "Pan and zoom freely", FT_CAMERA_MODE_FREE};
+static const ft_camera_mode g_default_camera_mode = {"free", "Free view", "Pan and zoom freely", FT_CAMERA_MODE_FREE, 0.f};
 
 // Flying through a volume is the engine's camera, not a game's: it asks the
 // simulation for nothing and every 3D game wants it. So it is appended to
@@ -1183,14 +1204,14 @@ static const ft_camera_mode g_default_camera_mode = {"free", "Free view", "Pan a
 // engine flies the camera itself in this mode.
 static const ft_camera_mode g_freecam_mode = {FT_CAMERA_MODE_FREECAM_ID, "Freecam",
                                               "Fly the camera: WASD to move, space and shift for up and down",
-                                              FT_CAMERA_MODE_FREE};
+                                              FT_CAMERA_MODE_FREE, 0.f};
 
 // A plan view is useful for every 3D world and needs no game-specific camera
 // logic. Right-drag pans it across the ground plane and the wheel changes its
 // orthographic scale.
 static const ft_camera_mode g_top_down_mode = {FT_CAMERA_MODE_TOP_DOWN_ID, "Top-down",
                                                "Axis-aligned view from above: right-drag to pan, wheel to zoom",
-                                               FT_CAMERA_MODE_FREE};
+                                               FT_CAMERA_MODE_FREE, 0.f};
 
 // How many modes the game itself declares, counting the stand-in it gets when
 // it declares none.

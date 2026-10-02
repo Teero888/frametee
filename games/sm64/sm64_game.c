@@ -257,11 +257,27 @@ static void world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
 }
 
 static void world_step(ft_game *game, ft_world *world, const void *inputs, uint32_t player_count) {
-  (void)game;
+  // The sound thread runs whenever sound is on, so the music is where it should
+  // be wherever playing starts; it mixes only for steps that are heard.
+  sm64_set_audio(game->engine->audio_enabled());
+  sm64_set_audio_quiet(!game->engine->audio_heard());
   world->input = player_count > 0 && inputs ? sm64_game_input(inputs) : 0;
   sm64_step(world->sim, world->input);
   ++world->tick;
   world->revision = next_revision();
+}
+
+// The console's own sound, as the step handed it to the audio interface.
+static bool world_audio(ft_game *game, const ft_world *world, ft_audio_step *out) {
+  (void)game;
+  size_t count = 0;
+  int frequency = 0;
+  const int16_t *pcm = sm64_audio(world->sim, &count, &frequency);
+  if (!pcm || count == 0 || frequency <= 0) return false;
+  out->pcm = pcm;
+  out->pcm_frames = (uint32_t)count;
+  out->pcm_rate = (uint32_t)frequency;
+  return true;
 }
 
 static int32_t world_tick(ft_game *game, const ft_world *world) {
@@ -466,7 +482,7 @@ static uint32_t status_lines(ft_game *game, const ft_world *world, int32_t playe
 // --- The camera ----------------------------------------------------------------------
 
 static const ft_camera_mode kCameraModes[] = {
-    {"game", "Game camera", "Lakitu, as the game places him", FT_CAMERA_MODE_DIRECTED},
+    {"game", "Game camera", "Lakitu, as the game places him", FT_CAMERA_MODE_DIRECTED, 0.f},
 };
 
 // The game's camera `alpha` of the way from its place in `previous`, as the
@@ -645,6 +661,7 @@ static bool draw_frame(ft_game *game, const ft_world *world, const ft_world *pre
     return true;
   if (!game->draw_world && !(game->draw_world = sm64_world_create())) return false;
   sm64_world_copy(game->draw_world, previous->sim);
+  sm64_set_audio(false); // drawing a step already taken: its sound was had
   // f3d.c widens the 3D to the viewport: the sky has to reach its edges.
   sm64_set_draw_widescreen((uint64_t)width * 3 > (uint64_t)height * 4);
   sm64_set_draw_interpolation(previous->sim, alpha);
@@ -716,6 +733,7 @@ static void draw_ghost(ft_game *game, const ft_render_frame *frame) {
       memcmp(ghost->camera, view, sizeof(view)) != 0) {
     if (!game->ghost_world && !(game->ghost_world = sm64_world_create())) return;
     sm64_world_copy(game->ghost_world, previous->sim);
+    sm64_set_audio(false);
     sm64_set_draw_mario_only(true);
     sm64_set_draw_interpolation(previous->sim, frame->alpha);
     const void *list = sm64_step_draw(game->ghost_world, frame->world->input);
@@ -1338,6 +1356,7 @@ static const ft_game_module kModule = {
     .recording_tick_flags = recording_tick_flags,
     .recording_input = recording_input,
     .world_step_playback = world_step_playback,
+    .world_audio = world_audio,
 };
 
 FT_GAME_EXPORT const ft_game_module *ft_game_module_entry(uint32_t engine_abi_version) {

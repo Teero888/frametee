@@ -17,8 +17,8 @@
 enum { CAMERA_CHASE, CAMERA_ORBIT };
 
 const ft_camera_mode tm_camera_modes[] = {
-    {"chase", "Race", "The game's race camera, behind the car", FT_CAMERA_MODE_DIRECTED},
-    {"orbit", "Orbit", "Drag to turn around the car, scroll to pull back", FT_CAMERA_MODE_FREE},
+    {"chase", "Race", "The game's race camera, behind the car", FT_CAMERA_MODE_DIRECTED, 0.f},
+    {"orbit", "Orbit", "Drag to turn around the car, scroll to pull back", FT_CAMERA_MODE_FREE, 0.f},
 };
 const uint32_t tm_camera_mode_count = 2;
 

@@ -6,6 +6,15 @@ if(UNIX)
 endif()
 add_test(NAME camera_timeline COMMAND camera_timeline_test)
 
+add_executable(audio_test audio.c ../src/audio/audio.c ../src/logger/logger.c)
+target_include_directories(audio_test PRIVATE ../src ../include)
+target_compile_definitions(audio_test PRIVATE BUILDING_LOGGER)
+target_link_libraries(audio_test PRIVATE miniaudio)
+if(UNIX)
+    target_compile_options(audio_test PRIVATE -UNDEBUG -Wall -Wextra)
+endif()
+add_test(NAME audio COMMAND audio_test)
+
 add_executable(game_host_browse_test
     game_host_browse.c
     ../src/engine/game_host.c

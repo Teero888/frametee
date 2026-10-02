@@ -1,6 +1,7 @@
 #include "video_export.h"
 
 #include <GLFW/glfw3.h>
+#include <audio/audio_timeline.h>
 #include <logger/logger.h>
 #include <renderer/graphics_backend.h>
 #include <system/compat_threads.h>
@@ -51,6 +52,17 @@ typedef struct encoder_t {
   int64_t pts[2];
   bool filled[2];
   int fill_slot, drain_slot;
+  // Sound, encoded on the frame thread as each frame's stretch is rendered.
+  // Both threads write packets, one at a time.
+  AVCodecContext *audio_codec;
+  AVStream *audio_stream;
+  AVFrame *audio_frame;
+  AVPacket *audio_packet;
+  float *audio_pending; // interleaved stereo frames not encoded yet
+  int audio_pending_count, audio_pending_capacity;
+  int64_t audio_pts;
+  pthread_mutex_t mux;
+  bool mux_ready;
 } encoder_t;
 
 static const char *const software_encoders[] = {"libx264", "libx265", "libsvtav1"};
@@ -60,18 +72,22 @@ static const char *const codec_names[] = {"h264", "hevc", "av1"};
 typedef enum hardware_api_t { HARDWARE_NVENC, HARDWARE_AMF, HARDWARE_QSV, HARDWARE_VAAPI, HARDWARE_COUNT } hardware_api_t;
 static const char *const hardware_suffixes[] = {"nvenc", "amf", "qsv", "vaapi"};
 
-static bool encoder_drain(encoder_t *e) {
+static bool drain_stream(encoder_t *e, AVCodecContext *codec, AVStream *stream, AVPacket *packet) {
   for (;;) {
-    int result = avcodec_receive_packet(e->codec, e->packet);
+    int result = avcodec_receive_packet(codec, packet);
     if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) return true;
     if (result < 0) return false;
-    av_packet_rescale_ts(e->packet, e->codec->time_base, e->stream->time_base);
-    e->packet->stream_index = e->stream->index;
-    result = av_interleaved_write_frame(e->format, e->packet);
-    av_packet_unref(e->packet);
+    av_packet_rescale_ts(packet, codec->time_base, stream->time_base);
+    packet->stream_index = stream->index;
+    pthread_mutex_lock(&e->mux);
+    result = av_interleaved_write_frame(e->format, packet);
+    pthread_mutex_unlock(&e->mux);
+    av_packet_unref(packet);
     if (result < 0) return false;
   }
 }
+
+static bool encoder_drain(encoder_t *e) { return drain_stream(e, e->codec, e->stream, e->packet); }
 
 static void encoder_stop_thread(encoder_t *e) {
   if (!e->threaded) return;
@@ -90,6 +106,11 @@ static void encoder_close(encoder_t *e) {
   encoder_stop_thread(e);
   free(e->buffers[0]);
   free(e->buffers[1]);
+  free(e->audio_pending);
+  avcodec_free_context(&e->audio_codec);
+  av_frame_free(&e->audio_frame);
+  av_packet_free(&e->audio_packet);
+  if (e->mux_ready) pthread_mutex_destroy(&e->mux);
   if (e->format && e->format->pb) avio_closep(&e->format->pb);
   if (e->format) avformat_free_context(e->format);
   avcodec_free_context(&e->codec);
@@ -220,7 +241,72 @@ failed:
   return NULL;
 }
 
-static encoder_t *encoder_open(const video_export_options_t *o, bool bgra, const char *path, char *error,
+// AAC at the mixer's rate, beside the picture.
+static bool open_audio(encoder_t *e, bool global_header) {
+  const AVCodec *codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
+  if (!codec || !(e->audio_codec = avcodec_alloc_context3(codec))) return false;
+  AVCodecContext *c = e->audio_codec;
+  c->sample_fmt = AV_SAMPLE_FMT_FLTP;
+  c->sample_rate = AUDIO_RATE;
+  c->bit_rate = 192000;
+  c->time_base = (AVRational){1, AUDIO_RATE};
+  av_channel_layout_default(&c->ch_layout, 2);
+  if (global_header) c->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+  if (avcodec_open2(c, codec, NULL) < 0) return false;
+  e->audio_stream = avformat_new_stream(e->format, NULL);
+  e->audio_frame = av_frame_alloc();
+  e->audio_packet = av_packet_alloc();
+  if (!e->audio_stream || !e->audio_frame || !e->audio_packet) return false;
+  e->audio_stream->time_base = c->time_base;
+  if (avcodec_parameters_from_context(e->audio_stream->codecpar, c) < 0) return false;
+  e->audio_frame->format = c->sample_fmt;
+  e->audio_frame->sample_rate = c->sample_rate;
+  e->audio_frame->nb_samples = c->frame_size;
+  if (av_channel_layout_copy(&e->audio_frame->ch_layout, &c->ch_layout) < 0) return false;
+  return av_frame_get_buffer(e->audio_frame, 0) >= 0;
+}
+
+// Encodes the pending sound a frame of the codec at a time; `flush` encodes
+// what is left too, and ends the stream.
+static bool encode_audio(encoder_t *e, bool flush) {
+  if (!e->audio_codec) return true;
+  const int size = e->audio_codec->frame_size;
+  while (e->audio_pending_count >= size || (flush && e->audio_pending_count > 0)) {
+    const int count = e->audio_pending_count < size ? e->audio_pending_count : size;
+    if (av_frame_make_writable(e->audio_frame) < 0) return false;
+    e->audio_frame->nb_samples = count;
+    float *left = (float *)e->audio_frame->data[0];
+    float *right = (float *)e->audio_frame->data[1];
+    for (int i = 0; i < count; ++i) {
+      left[i] = e->audio_pending[2 * i];
+      right[i] = e->audio_pending[2 * i + 1];
+    }
+    e->audio_frame->pts = e->audio_pts;
+    e->audio_pts += count;
+    e->audio_pending_count -= count;
+    memmove(e->audio_pending, e->audio_pending + 2 * count, (size_t)e->audio_pending_count * 2 * sizeof(float));
+    if (avcodec_send_frame(e->audio_codec, e->audio_frame) < 0 ||
+        !drain_stream(e, e->audio_codec, e->audio_stream, e->audio_packet))
+      return false;
+  }
+  if (flush && (avcodec_send_frame(e->audio_codec, NULL) < 0 ||
+                !drain_stream(e, e->audio_codec, e->audio_stream, e->audio_packet)))
+    return false;
+  return true;
+}
+
+static float *audio_reserve(encoder_t *e, int frames) {
+  if (e->audio_pending_count + frames > e->audio_pending_capacity) {
+    const int capacity = (e->audio_pending_count + frames) * 2;
+    float *grown = realloc(e->audio_pending, (size_t)capacity * 2 * sizeof(float));
+    if (!grown) return NULL;
+    e->audio_pending = grown;
+    e->audio_pending_capacity = capacity;
+  }
+  return e->audio_pending + 2 * e->audio_pending_count;
+}
+
+static encoder_t *encoder_open(const video_export_options_t *o, bool bgra, bool audio, const char *path, char *error,
                                size_t error_size) {
   encoder_t *e = calloc(1, sizeof(*e));
   if (!e) return NULL;
@@ -254,6 +340,12 @@ static encoder_t *encoder_open(const video_export_options_t *o, bool bgra, const
   e->frame->width = o->width;
   e->frame->height = o->height;
   if (av_frame_get_buffer(e->frame, 32) < 0) goto failed;
+  if (pthread_mutex_init(&e->mux, NULL) != 0) goto failed;
+  e->mux_ready = true;
+  if (audio && !open_audio(e, global_header)) {
+    snprintf(error, error_size, "Could not initialize the AAC sound encoder");
+    goto failed;
+  }
   if (surfaces && !(e->hardware_frame = av_frame_alloc())) goto failed;
   // Same size in and out: the filter only matters for chroma subsampling.
   e->converter = sws_getContext(o->width, o->height, bgra ? AV_PIX_FMT_BGRA : AV_PIX_FMT_RGBA, o->width,
@@ -345,7 +437,7 @@ static void encoder_submit(encoder_t *e, int64_t pts) {
 
 static bool encoder_finish(encoder_t *e, int64_t frame_count) {
   encoder_stop_thread(e);
-  if (e->failed || avcodec_send_frame(e->codec, NULL) < 0 || !encoder_drain(e)) return false;
+  if (e->failed || avcodec_send_frame(e->codec, NULL) < 0 || !encoder_drain(e) || !encode_audio(e, true)) return false;
   e->stream->duration = av_rescale_q(frame_count, e->codec->time_base, e->stream->time_base);
   return av_write_trailer(e->format) >= 0;
 }
@@ -543,7 +635,9 @@ bool video_export_start_inline(gfx_handler_t *h, video_export_job_t *job, const 
   // does not pass the end. Its duration is the number of encoded frames.
   job->frame_count = video_export_frame_count(o);
   if (job->frame_count <= 0) return false;
-  job->encoder = encoder_open(o, gfx_export_is_bgra(h), job->temporary_path, job->status, sizeof(job->status));
+  // The game's sound goes with the picture when it has any.
+  job->encoder = encoder_open(o, gfx_export_is_bgra(h), game_has_audio(&h->game_host), job->temporary_path, job->status,
+                              sizeof(job->status));
   if (!job->encoder) {
     fs_remove(job->temporary_path);
     return false;
@@ -666,6 +760,28 @@ static void poll_render_worker(video_export_job_t *job) {
   else snprintf(job->status, sizeof(job->status), "Background render failed");
 }
 
+#ifdef FT_HAS_FFMPEG
+// The sound of the frame being written: the camera's time from this frame to
+// the next, as many samples as end where the next frame starts.
+static bool export_audio(gfx_handler_t *h, video_export_job_t *job, double from, double to) {
+  encoder_t *e = job->encoder;
+  if (!e->audio_codec) return true;
+  const video_export_options_t *o = &job->options;
+  const int64_t begin = (int64_t)llround((double)job->frame_index * o->fps_den / o->fps_num * AUDIO_RATE);
+  const int64_t end = (int64_t)llround((double)(job->frame_index + 1) * o->fps_den / o->fps_num * AUDIO_RATE);
+  const int frames = (int)(end - begin);
+  if (frames <= 0) return true;
+  float *out = audio_reserve(e, frames);
+  if (!out) return false;
+  audio_listener_t listener;
+  const audio_clock_t clock = audio_timeline_camera_clock(h);
+  if (audio_timeline_listener(h, &listener)) audio_render(&listener, &clock, from, to, out, (uint32_t)frames);
+  else memset(out, 0, (size_t)frames * 2 * sizeof(float));
+  e->audio_pending_count += frames;
+  return encode_audio(e, false);
+}
+#endif
+
 void video_export_step(gfx_handler_t *h, video_export_job_t *job, void (*draw)(gfx_handler_t *, float)) {
   if (!h || !job || !job->active) return;
   if (job->worker_process) { poll_render_worker(job); return; }
@@ -688,6 +804,10 @@ void video_export_step(gfx_handler_t *h, video_export_job_t *job, void (*draw)(g
     return;
   }
   encoder_submit(job->encoder, job->frame_index);
+  if (!export_audio(h, job, seconds, o->start_time + (double)(job->frame_index + 1) * o->fps_den / o->fps_num)) {
+    video_export_stop(h, job, false);
+    return;
+  }
   ++job->frame_index;
   // The editor polls this file; a few updates a second are plenty.
   if (job->frame_index % 16 == 0 || job->frame_index == job->frame_count) write_render_progress(job);

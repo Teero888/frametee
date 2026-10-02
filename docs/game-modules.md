@@ -300,6 +300,45 @@ rendering can interpolate between ticks instead of stuttering.
 `z` orders draws across the whole frame, so a game can interleave its layers with
 engine-drawn overlays.
 
+## Sound
+
+A game says what each step sounded like; the engine plays it. `world_audio`
+reports the sound of the step that made a world, as an `ft_audio_step`:
+
+- **One-shots**: a sample that starts somewhere in the step (`offset`, 0 to 1)
+  and plays once. DDNet's jumps and hooks are these.
+- **Voices** (`voice` non-zero): a looping sample that sounds for as long as
+  consecutive steps name it, with each step's volume and pitch. The engine
+  carries its phase from step to step. An engine's hum is one. A voice on the
+  game's clock (`FT_AUDIO_CLOCKED`: music, an ambience) says where in its
+  sample it is instead, so it is in the right place wherever the playhead
+  lands.
+- **A stream** (`pcm`): stereo frames the game mixed itself, about a step's
+  worth, played back to back. This is for an emulated console's own sound.
+
+Samples are decoded once through `audio_sample_load`, `audio_sample_decode` or
+`audio_sample_create`, and destroyed by the module with `audio_sample_destroy`.
+A positioned sound (`FT_AUDIO_POSITIONED`) is heard through `audio_spatialize`,
+which turns its position (and `distance`, the falloff the module gave it) into
+the gain of each ear from where the world was last drawn. Authored timeline events can sound too: `event_audio` says what an
+event plays (DDNet: a global sound message, a chat line), and is asked again
+whenever the events change, without simulating anything.
+
+A game whose sound carries state from step to step (a sound fading out, one
+that may not restart while it plays) should keep that state on every step
+while `audio_enabled` says there is sound, not only on heard ones: the same
+tick is often stepped by more than one world (the one shown, the one ahead
+of the playhead, one resumed from a snapshot), and a different report for it
+makes the engine render it again.
+
+The engine keeps every step's report per group and tick, forgets it from the
+tick an edit changes, and steps a world of its own a little ahead of the
+playhead to hear what has not been drawn yet. Sound is therefore a function of
+game time and never of the wall clock: playing at any speed, backwards,
+scrubbing (short grains where the playhead stops), the Camera tab's time remap
+and rendered video all hear the same thing. `audio_enabled` says whether any of
+it is heard at all, for a game whose sound costs to make.
+
 ## UI
 
 `ui` is called for `FT_UI_SPLASH`, `FT_UI_MAIN_MENU`, `FT_UI_PANELS`,

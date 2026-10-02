@@ -431,6 +431,12 @@ void config_load(ui_handler_t *ui) {
     }
   }
 
+  toml_datum_t audio_settings = toml_get(res.toptab, "audio");
+  if (audio_settings.type == TOML_TABLE) {
+    toml_datum_t volume = toml_get(audio_settings, "volume");
+    if (volume.type == TOML_FP64) ui->audio_volume = fminf(fmaxf((float)volume.u.fp64, 0.f), 1.f);
+  }
+
   toml_datum_t graphics_settings = toml_get(res.toptab, "graphics");
   if (graphics_settings.type == TOML_TABLE) {
     toml_datum_t vsync = toml_get(graphics_settings, "vsync");
@@ -689,6 +695,9 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "fps_limit = %d\n", ui->fps_limit);
   fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
   fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);
+
+  fprintf(fp, "\n[audio]\n");
+  fprintf(fp, "volume = %.2f\n", ui->audio_volume);
 
   fprintf(fp, "\n[projects]\n");
   fprintf(fp, "recent = [\n");

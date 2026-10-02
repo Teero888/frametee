@@ -96,6 +96,7 @@ struct ft_level {
   void *map; // the .Challenge.Gbx bytes, for exporting replays
   size_t map_size;
   tmuf_challenge_info *info; // what the map's header says (medal times, author), NULL if unread
+  struct tm_level_audio *audio; // its sounds' samples, NULL when nothing is heard (tmuf_audio.c)
   float bounds_min[3], bounds_max[3]; // of everything drawn
   tm_scene *scene;                  // built on first draw, NULL headless
   tm_car_model *car;                // likewise
@@ -115,9 +116,50 @@ typedef struct tm_race_display {
   uint32_t distance;   // Race.CarDistanceDisplay, m
 } tm_race_display;
 
+// What the car's sound needs of a step's state, before and after it
+// (tmuf_audio.c): the game reads the ticks around its frame
+typedef struct tm_audio_frame {
+  uint32_t tick;
+  float forward_speed, rpm, gas, brake, local_vz, speed;
+  int reverse, gear, engine_state, input_window_exceeded, free_wheeling, in_water, burnout;
+  uint32_t wheel_count;
+  uint8_t wheel_contact[TMUF_CAR_MAX_WHEELS], wheel_slipping[TMUF_CAR_MAX_WHEELS];
+  uint8_t wheel_material[TMUF_CAR_MAX_WHEELS], wheel_front[TMUF_CAR_MAX_WHEELS];
+  uint8_t last_wheel_material, last_body_material;
+  uint32_t turbo_start;
+  int splashes;
+  uint32_t checkpoints;
+  int completed;
+  uint32_t stunt_score;
+} tm_audio_frame;
+
+// The car's sound state, carried from step to step while the world is heard
+// (tmuf_world_set_sound), and the sound of the last step
+#define TM_AUDIO_SOUNDS 128
+typedef struct tm_audio {
+  uint32_t tick; // the world's tick it was made for; any other: stale
+  uint8_t wheel_material; // the last wheel material (Water while spraying, after a splash)
+  // the surface sounds' (rear, front, body) rolling and skid loops' gains,
+  // per distinct sample
+#define TM_SURFACE_LOOPS 32
+  float surface[3][TM_SURFACE_LOOPS];
+  // when the car's one-shots that do not restart while playing end, in ticks
+  uint32_t busy_until[TMUF_CAR_SOUND_COUNT];
+  ft_audio_sample busy_sample[TMUF_CAR_SOUND_COUNT];
+  // the woosh's volume, and what its last probe found
+  float woosh, woosh_target;
+  // the last heard step's sound (each world's own, made when it is first
+  // heard): the tick it is for
+  uint32_t heard_tick;
+  uint32_t count;
+  ft_audio_sound *sounds; // TM_AUDIO_SOUNDS
+} tm_audio;
+
 struct ft_world {
   tmuf_world w;
   tm_race_display display;
+  const ft_level *level;
+  tm_audio audio;
 };
 
 // --- the game --------------------------------------------------------------
@@ -140,6 +182,8 @@ typedef struct tm_settings {
   bool speed;       // the HUD's speed at the bottom right (the race camera only)
   bool challenge_info; // the HUD's card with the map's name and author, top right
   bool splits;         // the HUD's checkpoint time and its difference to the best run
+  bool music;          // the race music
+  int music_volume;    // its volume, percent
 } tm_settings;
 
 // A car's headlight projector as posed this frame (its night-only
@@ -216,11 +260,39 @@ struct ft_game {
   tg_texture united_pages[4]; // United_0<n>.dds: the interface's own letters (pages 0, 1, 3)
   tg_texture race_time_back; // UiBgBottomCenterRace.dds
   tg_texture speed_back;     // UiBgCard.dds
+  // sound (tmuf_audio.c): the samples loaded, by file, and where the
+  // active view hears from (the camera's eye and right axis)
+  struct tm_audio_bank *audio_bank;
+  struct {
+    bool valid;
+    float eye[3], right[3];
+  } listener;
   ft_texture *frame;
   uint32_t frame_width, frame_height;
   ft_pipeline *present;
   ft_mesh *quad;
 };
+
+// tmuf_audio.c: the car's, the race's and the ambience's sound
+void tm_audio_level_load(ft_game *game, ft_level *level);
+void tm_audio_level_free(ft_game *game, ft_level *level);
+void tm_audio_free(ft_game *game);
+// before a step: whether there is sound (switching the world's sound on or
+// off), and if so the state it starts from
+bool tm_audio_prepare(ft_game *game, ft_world *world, tm_audio_frame *before);
+// after it: the sound state goes on, and a heard step's sound is made
+void tm_audio_step(ft_game *game, ft_world *world, const tm_audio_frame *before);
+void tm_audio_copy(ft_world *dst, const ft_world *src);
+void tm_audio_world_init(ft_world *world);
+void tm_audio_world_free(ft_world *world);
+// the horn's presses of a replay, as timeline events
+#define TM_EVENT_HORN "horn"
+bool tm_event_audio(ft_game *game, const ft_timeline_event *event, ft_audio_sound *out);
+void tm_recording_events(ft_game *game, const ft_recording *recording, const int32_t *world_players,
+                         uint32_t player_count, void (*emit)(void *user, const ft_timeline_event *event), void *user);
+bool tm_world_audio(ft_game *game, const ft_world *world, ft_audio_step *out);
+void tm_audio_spatialize(ft_game *game, int32_t world_index, const ft_audio_sound *sound, float gain[2]);
+void tm_audio_listen(ft_game *game, const ft_camera *camera);
 
 void tm_log(const ft_game *game, ft_log_level level, const char *fmt, ...);
 // TM_PROFILE: a stage boundary named `name` (a string literal): the CPU time

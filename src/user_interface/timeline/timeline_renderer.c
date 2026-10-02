@@ -199,6 +199,7 @@ void renderer_draw_controls(timeline_state_t *ts) {
 
   igPushItemWidth(80 * dpi_scale);
   igDragInt("##CurrentTick", &ts->current_tick, 1, model_get_min_global_tick(ts), 100000000, "Tick %d", ImGuiSliderFlags_AlwaysClamp);
+  ts->tick_field_active = igIsItemActive();
   igPopItemWidth();
 
   switch (renderer_draw_transport(ts->ui, ts->is_playing)) {

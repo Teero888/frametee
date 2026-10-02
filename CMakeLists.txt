@@ -80,6 +80,8 @@ set(SRCS
 	src/engine/engine_api.c
 	src/engine/input_record.c
 	src/engine/prediction.c
+	src/audio/audio.c
+	src/audio/audio_timeline.c
 	src/plugins/api_impl.c
 	src/plugins/plugin_manager.c
 	src/scripting/script_engine.c
@@ -168,6 +170,22 @@ endif()
 # stb library
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE ${CMAKE_SOURCE_DIR}/libs/stb)
+
+# miniaudio: the output device and sample decoding (with stb_vorbis for Ogg).
+# The rest of it (its own engine, node graph, resource manager, encoders)
+# goes unused.
+find_package(Threads REQUIRED)
+add_library(miniaudio STATIC ${CMAKE_SOURCE_DIR}/src/audio/miniaudio_impl.c)
+target_include_directories(miniaudio PUBLIC ${CMAKE_SOURCE_DIR}/libs/miniaudio)
+target_include_directories(miniaudio PRIVATE ${CMAKE_SOURCE_DIR}/libs/stb)
+# Vendored code: its warnings are not ours to fix.
+target_compile_options(miniaudio PRIVATE $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-w>)
+target_compile_definitions(miniaudio PUBLIC MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_GENERATION
+                                            MA_NO_ENCODING)
+target_link_libraries(miniaudio PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+if(UNIX)
+    target_link_libraries(miniaudio PUBLIC m)
+endif()
 
 # toml library
 add_library(toml STATIC ${CMAKE_SOURCE_DIR}/libs/toml/src/tomlc17.c)
@@ -259,6 +277,7 @@ endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nfd
     stb
+    miniaudio
     toml
     cglm
     cimgui
@@ -697,6 +716,8 @@ if(TARGET ddnet_game)
         FILES_MATCHING
         PATTERN "*.png"
         PATTERN "*.spv"
+        PATTERN "*.flac"
+        PATTERN "LICENSE.txt"
     )
 
     # DDNet's physics libraries are shared on ELF and static on Windows. Only

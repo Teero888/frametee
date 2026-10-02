@@ -105,6 +105,9 @@ const ft_world *model_world_at_tick(timeline_state_t *ts, int tick);
 const ft_world *model_group_world_at_tick(timeline_state_t *ts, int group_index, int tick);
 // Both the tick and the one before it, for interpolated rendering.
 void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, const ft_world **out_prev, const ft_world **out_cur);
+// Makes the group's sound hold local ticks [first, last], simulating the ones
+// not heard yet with a world of its own, so playing never disturbs the drawn one.
+void model_group_audio_cover(timeline_state_t *ts, int group_index, int first, int last);
 // A player's position in a world: the first player property in 3D, the player
 // view in 2D.
 bool model_player_position(timeline_state_t *ts, const ft_world *world, int local_player, float out[3]);

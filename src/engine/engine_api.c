@@ -8,6 +8,8 @@
 
 #include "engine_api.h"
 
+#include <audio/audio.h>
+
 #include <frametee/game_abi.h>
 #include <logger/logger.h>
 #include <math.h>
@@ -930,6 +932,12 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .timeline_range = api_timeline_range,
       .presentation_effects_enabled = api_presentation_effects_enabled,
       .get_level_name = api_get_level_name,
+      .audio_sample_load = audio_sample_load,
+      .audio_sample_decode = audio_sample_decode,
+      .audio_sample_create = audio_sample_create,
+      .audio_sample_destroy = audio_sample_destroy,
+      .audio_enabled = audio_enabled,
+      .audio_heard = audio_heard,
   };
   return &api;
 }

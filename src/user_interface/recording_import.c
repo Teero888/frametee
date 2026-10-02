@@ -509,17 +509,23 @@ static void draw_presence(int player, float width, float height, ImU32 color) {
   igDummy((ImVec2){width, height});
 }
 
+// The players the game suggests, chosen until the user says otherwise.
+static void choose_suggested(game_host_t *host, timeline_recording_t *recording) {
+  const int count = (int)recording->info.player_count;
+  imp.selected = calloc((size_t)(count > 0 ? count : 1), sizeof(*imp.selected));
+  imp.selected_count = imp.selected ? count : 0;
+  for (int i = 0; i < imp.selected_count; ++i) {
+    ft_recording_player player;
+    imp.selected[i] = gh_recording_player(host, recording->handle, (unsigned)i, &player) && player.suggested;
+  }
+}
+
 static void render_players(ui_handler_t *ui, timeline_recording_t *recording) {
   game_host_t *host = &ui->gfx_handler->game_host;
   const int tps = game_ticks_per_second(host);
   const int count = (int)recording->info.player_count;
   if (!imp.selected) {
-    imp.selected = calloc((size_t)(count > 0 ? count : 1), sizeof(*imp.selected));
-    imp.selected_count = imp.selected ? count : 0;
-    for (int i = 0; i < imp.selected_count; ++i) {
-      ft_recording_player player;
-      imp.selected[i] = gh_recording_player(host, recording->handle, (unsigned)i, &player) && player.suggested;
-    }
+    choose_suggested(host, recording);
     build_presence(host, recording);
   }
 
@@ -751,6 +757,33 @@ static void render_ready(ui_handler_t *ui, timeline_recording_t *recording) {
   } else if (cancel || igIsKeyPressed_Bool(ImGuiKey_Escape, false)) {
     cancel_import(ui);
   }
+}
+
+bool recording_import_finish(ui_handler_t *ui) {
+  if (!imp.active) return false;
+  timeline_recording_t *recording = recordings_find(&ui->timeline, imp.recording_id);
+  if (!recording || !recordings_wait(&ui->timeline, recording)) {
+    log_error(LOG_SOURCE, "The recording could not be opened.");
+    close_dialog(ui, true);
+    return false;
+  }
+  game_host_t *host = &ui->gfx_handler->game_host;
+  if (!imp.selected) choose_suggested(host, recording);
+  int chosen = 0;
+  for (int i = 0; i < imp.selected_count; ++i) chosen += imp.selected[i];
+  const ft_recording_info *info = &recording->info;
+  if (chosen == 0 || (imp.new_project && !info->level_data && !info->level_path)) {
+    log_error(LOG_SOURCE, chosen == 0 ? "'%s' has no players to import." : "The level of '%s' was not found.", recording->name);
+    close_dialog(ui, true);
+    return false;
+  }
+  // On another level its players would not replay as recorded.
+  if (!imp.new_project && !gh_recording_level_matches(host, recording->handle, ui->gfx_handler->level))
+    imp.switch_level = info->level_data != NULL;
+  if (imp.new_project) import_as_new_project(ui, recording);
+  else import_into_project(ui, recording);
+  close_dialog(ui, false);
+  return true;
 }
 
 void recording_import_render(ui_handler_t *ui) {
