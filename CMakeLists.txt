@@ -26,8 +26,15 @@ set(CMAKE_C_STANDARD_REQUIRED TRUE)
 # Option to enable sanitizers
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 
+# The tests (tests/, and those of the libraries and plugins that check this),
+# off by default: a build makes the editor, its games and plugins.
+option(BUILD_TESTING "Build the tests" OFF)
+
 # source files
 project(frametee)
+if(BUILD_TESTING)
+    enable_testing()
+endif()
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 	message(STATUS "No build type selected, defaulting to Release")
@@ -775,7 +782,6 @@ if(TARGET tmuf_game)
     )
 endif()
 
-include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
