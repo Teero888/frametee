@@ -1,0 +1,7 @@
+refshot.dll
+idle_replay
+spawn
+.cfg/
+__pycache__/
+.thumbs/
+materials

@@ -108,6 +108,8 @@ bool game_is_3d(const game_host_t *host);
 // About how many bytes one world holds, or 0 when the game did not say.
 size_t game_world_size(const game_host_t *host);
 float game_units_per_tile(const game_host_t *host);
+// The near plane the game asks the engine's 3D views for, 0 for none.
+float game_camera_near_z(const game_host_t *host);
 float game_default_camera_height(const game_host_t *host);
 
 const ft_input_schema *game_input_schema(const game_host_t *host);

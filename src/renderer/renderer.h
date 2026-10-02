@@ -105,6 +105,7 @@ struct vertex_layout_t {
   VkVertexInputAttributeDescription attrs[MAX_CUSTOM_VERTEX_ATTRS];
   uint32_t attr_count;
   bool alpha_blend;
+  bool depth_test; /* a 3D mesh pipeline: depth-tested against the world pass */
 };
 
 struct shader_t {
@@ -354,7 +355,7 @@ typedef enum {
 
 // Uniform payload carried inline with a queued mesh draw. Small on purpose: a
 // mesh technique's per-draw constants, not a general buffer.
-#define MAX_QUEUED_UNIFORM_BYTES 128
+#define MAX_QUEUED_UNIFORM_BYTES 256
 
 struct render_command_t {
   render_cmd_type_t type;
@@ -508,6 +509,9 @@ texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsig
 
 void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex);
 mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count, uint32_t *indices, uint32_t index_count);
+// The same for vertices of any layout, `vertex_stride` bytes each.
+mesh_t *renderer_create_mesh_raw(gfx_handler_t *handler, const void *vertices, uint32_t vertex_count, uint32_t vertex_stride,
+                                 const uint32_t *indices, uint32_t index_count);
 
 void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, mesh_t *mesh, shader_t *shader, texture_t **textures, uint32_t texture_count, void **ubos, VkDeviceSize *ubo_sizes, uint32_t ubo_count, uint32_t first_index, uint32_t index_count);
@@ -611,7 +615,8 @@ shader_t *renderer_create_shader_spirv(gfx_handler_t *h, const void *vert_spirv,
 custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void *vert_spirv, size_t vert_size, const void *frag_spirv,
                                                    size_t frag_size, const uint32_t *attr_locations, const uint32_t *attr_offsets,
                                                    const int *attr_formats, uint32_t attr_count, uint32_t instance_stride,
-                                                   uint32_t max_instances, uint32_t texture_count, bool alpha_blend);
+                                                   uint32_t max_instances, uint32_t texture_count, bool alpha_blend,
+                                                   uint32_t vertex_stride, bool depth_test);
 void renderer_destroy_custom_pipeline(gfx_handler_t *h, custom_pipeline_t *pipe);
 void renderer_submit_instances(gfx_handler_t *h, custom_pipeline_t *pipe, float z, texture_t *const *textures, uint32_t texture_count,
                                const void *instances, uint32_t count);

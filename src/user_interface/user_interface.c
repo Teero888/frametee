@@ -2162,7 +2162,7 @@ void ui_render(ui_handler_t *ui) {
   // Pinned to the right edge, so it runs after everything that appends to the
   // menu bar: the editor's menus, the game's, and every plugin's. Anything
   // drawn after this would be pushed off past it.
-  if (ui->show_fps) {
+  if (ui->show_fps && ui->show_ui) {
     if (igBeginMainMenuBar()) {
       ImVec2 region_avail = igGetContentRegionAvail();
       ImGuiIO *io = igGetIO_Nil();
@@ -2306,23 +2306,43 @@ static void draw_character_inspector(ui_handler_t *ui, ImVec2 start) {
   igPopFont();
 }
 
-static void begin_viewport_window(void) {
+static void begin_viewport_window(const ui_handler_t *ui) {
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0, 0});
   // With zero padding, a window border clips the outer image pixels. The
   // viewport fills the content rectangle and must never acquire scroll offsets.
   igPushStyleVar_Float(ImGuiStyleVar_WindowBorderSize, 0.f);
   igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, 0.f);
   igSetNextWindowScroll((ImVec2){0, 0});
+  if (!ui->show_ui) {
+    // With the interface down (Tab) the viewport is all there is: a window of
+    // its own over the whole OS window, without the menu bar or the docks
+    // (the docked "Viewport" keeps its place for when the interface returns).
+    // Kept behind, so the prompts and dialogs still come over it.
+    ImGuiViewport *main = igGetMainViewport();
+    igSetNextWindowPos(main->Pos, ImGuiCond_Always, (ImVec2){0.0f, 0.0f});
+    igSetNextWindowSize(main->Size, ImGuiCond_Always);
+    igSetNextWindowViewport(main->ID);
+    igPushStyleVar_Float(ImGuiStyleVar_WindowRounding, 0.0f);
+    igBegin("##ViewportFullscreen", NULL,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollWithMouse |
+                ImGuiWindowFlags_NoBringToFrontOnFocus);
+    igPopStyleVar(1);
+    return;
+  }
   igBegin("Viewport", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 }
 
 void ui_begin_frame(ui_handler_t *ui) {
-  render_menu_bar(ui);
-  setup_docking(ui);
+  // Tab takes the menu bar and the docks away too: the viewport alone
+  if (ui->show_ui) {
+    render_menu_bar(ui);
+    setup_docking(ui);
+  }
   // Resolve the docked content rectangle before the camera and Vulkan render
   // target use it. The later Begin appends the image to this same window;
   // ImGui keeps its layout fixed for the remainder of the frame.
-  begin_viewport_window();
+  begin_viewport_window(ui);
   *(ImVec2_c *)&ui->viewport_window_pos = igGetCursorScreenPos();
   ImVec2 avail = igGetContentRegionAvail();
   ui->gfx_handler->viewport[0] = fmaxf(1.f, floorf(avail.x));
@@ -2363,7 +2383,7 @@ bool ui_render_late(ui_handler_t *ui) {
   if (!ui->gfx_handler->offscreen_initialized || ui->gfx_handler->offscreen_texture == NULL)
     return false;
 
-  begin_viewport_window();
+  begin_viewport_window(ui);
   ImVec2 start = ui->viewport_window_pos;
   const ImVec2 viewport_content_pos = start;
   if (ui->render.preview)
@@ -2439,7 +2459,6 @@ bool ui_render_late(ui_handler_t *ui) {
   if (hovered && snippet_editor_is_picking())
     igSetTooltip("Click to choose the aim position");
 
-  if (hovered && starting_state_is_picking()) igSetTooltip("Click to place the start");
 
   // draw overlays & menus
   if (ui->timeline.recording) {

@@ -479,8 +479,8 @@ endif()
 # the same way the engine's own are.
 #
 # This runs after the modules are added so that a game left out of the build
-# leaves its data out with it. data/games/tmnf alone is 1.7 GB of Packs and
-# GameData that no build without a tmnf module can use, and the glob is not free
+# leaves its data out with it. data/games/tmuf alone is 1.7 GB of Packs and
+# GameData that no build without a tmuf module can use, and the glob is not free
 # either: CONFIGURE_DEPENDS re-walks every directory it covers on each build. A
 # data directory with no games/<id> beside it belongs to a module built out of
 # tree, so it is always copied.
@@ -734,25 +734,18 @@ if(TARGET sm64_game)
     endforeach()
 endif()
 
-if(TARGET tmnf_game)
-    install(TARGETS tmnf_game
+if(TARGET tmuf_game)
+    install(TARGETS tmuf_game
         RUNTIME DESTINATION "games" COMPONENT Runtime
         LIBRARY DESTINATION "games" COMPONENT Runtime
     )
-    if(TARGET forevervalidator_shared)
-        install(TARGETS forevervalidator_shared
-            RUNTIME DESTINATION "games" COMPONENT Runtime
-            LIBRARY DESTINATION "games" COMPONENT Runtime
-        )
-    endif()
-
     # The proprietary Packs and GameData directories must come from the user's
-    # own TMNF installation. Never pick those ignored local files up in a
+    # own TMUF installation. Never pick those ignored local files up in a
     # release made from a developer checkout.
     install(FILES
-        "${CMAKE_SOURCE_DIR}/data/games/tmnf/README.txt"
-        "${CMAKE_SOURCE_DIR}/data/games/tmnf/thumbnail.png"
-        DESTINATION "data/games/tmnf"
+        "${CMAKE_SOURCE_DIR}/data/games/tmuf/README.txt"
+        "${CMAKE_SOURCE_DIR}/data/games/tmuf/thumbnail.png"
+        DESTINATION "data/games/tmuf"
         COMPONENT Runtime
     )
 endif()

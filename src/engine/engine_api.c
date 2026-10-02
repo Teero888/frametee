@@ -261,7 +261,8 @@ static ft_pipeline *api_pipeline_create(const ft_pipeline_desc *desc) {
 
   custom_pipeline_t *pipe = renderer_create_custom_pipeline(
       g_engine, desc->vertex_spirv, desc->vertex_spirv_size, desc->fragment_spirv, desc->fragment_spirv_size, locations, offsets, formats,
-      desc->instance_attr_count, desc->instance_stride, desc->max_instances_per_frame, desc->texture_count, desc->alpha_blend);
+      desc->instance_attr_count, desc->instance_stride, desc->max_instances_per_frame, desc->texture_count, desc->alpha_blend,
+      desc->vertex_stride, desc->depth_test);
   return (ft_pipeline *)pipe;
 }
 
@@ -275,8 +276,8 @@ static ft_mesh *api_mesh_create(const void *vertices, uint32_t vertex_count, uin
   // ft_vertex and the renderer's vertex_t are the same layout; the check keeps
   // a module that got its struct wrong from silently drawing garbage.
   if (!have_graphics() || !vertices) return NULL;
-  if (vertex_stride != sizeof(ft_vertex) || sizeof(ft_vertex) != sizeof(vertex_t)) return NULL;
-  return (ft_mesh *)renderer_create_mesh(g_engine, (vertex_t *)vertices, vertex_count, (uint32_t *)indices, index_count);
+  if (sizeof(ft_vertex) != sizeof(vertex_t) || vertex_stride == 0 || vertex_stride % 4 != 0) return NULL;
+  return (ft_mesh *)renderer_create_mesh_raw(g_engine, vertices, vertex_count, vertex_stride, indices, index_count);
 }
 
 static void api_mesh_destroy(ft_mesh *mesh) {

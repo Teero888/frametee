@@ -174,13 +174,30 @@ static void import_event(void *user, const ft_timeline_event *event) {
   if (placed.tick >= 0 && timeline_event_from_abi(&converted, &placed, target->group_index)) timeline_events_add(target->ts, converted);
 }
 
-// Adds a group with one replaying track per chosen player. Returns its index, or -1.
+// A project's only group as a level starts it: its tracks (the players its
+// world was made with) without inputs, and no events.
+static bool untouched_sole_group(const timeline_state_t *ts) {
+  if (ts->group_count != 1) return false;
+  for (int k = 0; k < model_group_track_count(ts, 0); ++k) {
+    const int t = model_group_track_index(ts, 0, k);
+    if (t < 0 || t >= ts->player_track_count) return false;
+    if (ts->player_tracks[t].snippet_count || ts->player_tracks[t].recording_snippet_count) return false;
+  }
+  for (int e = 0; e < ts->event_count; ++e)
+    if (ts->events[e].group_index == 0) return false;
+  return true;
+}
+
+// Adds a group with one replaying track per chosen player, or fills the
+// project's untouched only group (its empty tracks first). Returns its index, or -1.
 static int add_recording_group(ui_handler_t *ui, timeline_recording_t *recording, bool reuse_empty_first_group) {
   timeline_state_t *ts = &ui->timeline;
   game_host_t *host = &ui->gfx_handler->game_host;
   int group_index;
-  if (reuse_empty_first_group && ts->group_count > 0 && model_group_track_count(ts, 0) == 0) {
+  int reusable_tracks = 0, reused_tracks = 0;
+  if (reuse_empty_first_group && untouched_sole_group(ts)) {
     group_index = 0;
+    reusable_tracks = model_group_track_count(ts, 0);
     snprintf(ts->groups[0]->name, sizeof(ts->groups[0]->name), "%s", recording->name);
   } else {
     if (!model_add_group(ts, recording->name)) return -1;
@@ -198,7 +215,9 @@ static int add_recording_group(ui_handler_t *ui, timeline_recording_t *recording
     if (!imp.selected[i]) continue;
     ft_recording_player player;
     if (!gh_recording_player(host, recording->handle, (unsigned)i, &player) || player.first_tick > player.last_tick) continue;
-    player_track_t *track = model_add_new_track(ts, 1);
+    player_track_t *track = reused_tracks < reusable_tracks
+                                ? &ts->player_tracks[model_group_track_index(ts, group_index, reused_tracks++)]
+                                : model_add_new_track(ts, 1);
     if (!track) break;
     if (world_players) world_players[i] = model_group_local_track_index(ts, (int)(track - ts->player_tracks));
     snprintf(track->name, sizeof(track->name), "%s", player.name ? player.name : "Player");
@@ -251,7 +270,8 @@ static void import_into_project(ui_handler_t *ui, timeline_recording_t *recordin
   }
 
   timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
-  const int group = before ? add_recording_group(ui, recording, false) : -1;
+  // (a project as its level started it, nothing in it yet: its group is the recording's)
+  const int group = before ? add_recording_group(ui, recording, true) : -1;
   undo_command_t *change = group >= 0 ? commands_create_timeline_data_change(ui, before, "Import Demo") : NULL;
   if (group < 0) commands_free_timeline_data_snapshot(before);
   if (!change) {
@@ -721,7 +741,9 @@ static void render_ready(ui_handler_t *ui, timeline_recording_t *recording) {
   // A new project needs the recording's level.
   const bool has_level = !imp.new_project || info->level_data || info->level_path;
   const bool confirm = primary_button(import_label, import_w, chosen > 0 && has_level);
-  if (confirm) {
+  // (tests: FRAMETEE_TEST_IMPORT takes the dialog's choices as they are)
+  const bool automatic = getenv("FRAMETEE_TEST_IMPORT") && chosen > 0 && has_level;
+  if (confirm || automatic) {
     if (imp.new_project) import_as_new_project(ui, recording);
     else import_into_project(ui, recording);
     close_dialog(ui, false);

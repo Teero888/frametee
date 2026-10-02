@@ -1575,7 +1575,7 @@ static void inspect_target(ui_handler_t *ui) {
     if (igIsItemHovered(0))
       igSetTooltip("Fixed offset: the keyed offset stays put in the world, circling nothing.\n"
                    "Behind: the keyed offset turns with the way the characters head, like a chase camera.\n"
-                   "Game camera: follows the way the game's own camera does, e.g. TMNF's race camera.");
+                   "Game camera: follows the way the game's own camera does, e.g. TMUF's race camera.");
   }
   if (!is_3d) {
     bool fit = camera->fit_subjects;
@@ -1764,7 +1764,11 @@ void camera_window_render(ui_handler_t *ui) {
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8, 8});
   const bool visible = igBegin("Camera", NULL, ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar);
   igPopStyleVar(1);
-  update_clock_owner(ui, visible, visible && igIsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows));
+  // Not on the frame the window comes back (Tab brings the interface back):
+  // a docked tab reports itself shown then, whichever tab is in front, and
+  // would take the clock and move the tick to its own playhead.
+  if (!igIsWindowAppearing())
+    update_clock_owner(ui, visible, visible && igIsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows));
   if (!visible) {
     igEnd();
     return;

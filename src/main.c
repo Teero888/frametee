@@ -653,6 +653,21 @@ int main(int argc, char **argv) {
     if (frame_result == FRAME_SKIP) continue;
 
     timeline_state_t *timeline = &handler.user_interface.timeline;
+    // (tests: FRAMETEE_TEST_TICK shows that tick of the timeline in a screenshot;
+    // with FRAMETEE_TEST_IMPORT once the demo is in, which lands at the playhead)
+    if (screenshot_path && getenv("FRAMETEE_TEST_TICK") &&
+        (!getenv("FRAMETEE_TEST_IMPORT") || timeline->group_count > 1)) {
+      timeline->current_tick = atoi(getenv("FRAMETEE_TEST_TICK"));
+      if (getenv("FRAMETEE_TEST_IMPORT")) {
+        // the imported group, and its player for the camera to follow
+        timeline->active_group_index = timeline->group_count - 1;
+        for (int t = 0; t < timeline->player_track_count; ++t)
+          if (model_track_group_index(timeline, t) == timeline->active_group_index) {
+            timeline->selected_player_track_index = t;
+            break;
+          }
+      }
+    }
     float intra = 1.f;
     if ((timeline->is_playing || timeline->is_reversing) && timeline->playback_speed > 0) {
       const float speed_scale = timeline->is_reversing ? 2.0f : 1.0f;
@@ -715,7 +730,7 @@ int main(int argc, char **argv) {
     // Mouse locking logic for recording
     ImGuiIO *io = igGetIO_Nil();
     // Cursor-driven games such as DDNet record relative mouse motion and need
-    // the old capture behaviour. Keyboard-only games such as TMNF do not: a
+    // the old capture behaviour. Keyboard-only games such as TMUF do not: a
     // normal cursor lets their recording continue while the user works in the
     // rest of the editor.
     const bool capture_recording_cursor =

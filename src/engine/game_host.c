@@ -681,6 +681,11 @@ float game_units_per_tile(const game_host_t *host) {
   return (c && c->units_per_tile > 0.f) ? c->units_per_tile : 1.f;
 }
 
+float game_camera_near_z(const game_host_t *host) {
+  const ft_game_constraints *c = constraints_of(host);
+  return c && c->camera_near_z > 0.f ? c->camera_near_z : 0.f;
+}
+
 float game_default_camera_height(const game_host_t *host) {
   const ft_game_constraints *c = constraints_of(host);
   return (c && c->default_camera_height > 0.f) ? c->default_camera_height : 20.f;

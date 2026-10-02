@@ -268,6 +268,37 @@ static bool draw_prop_widget(const ft_prop_desc *prop, ft_value *value) {
   return changed;
 }
 
+// Nothing above has touched the run: the draft (the switch and the values) is
+// written to the track here, in one step, which is also the one undo step the
+// whole edit becomes.
+static void draw_apply_row(ui_handler_t *ui, int track_index, int group_index, starting_config_t *config, float dpi) {
+  timeline_state_t *ts = &ui->timeline;
+  const bool dirty = !configs_equal(&g_draft, config);
+  igSeparator();
+  if (!dirty) igBeginDisabled(true);
+  if (igButton(ICON_FA_CHECK " Apply", (ImVec2){-(110.f * dpi), 0.f})) {
+    starting_config_t before_apply;
+    copy_config(&before_apply, config);
+    const bool switched = config->enabled != g_draft.enabled;
+    copy_config(config, &g_draft);
+    if (config->enabled) model_apply_starting_config(ts, track_index);
+    else model_rebuild_group_start(ts, group_index);
+    commit_edit(ui, track_index, &before_apply,
+                !switched ? "Edit Starting State"
+                : config->enabled ? "Enable Starting Override"
+                                  : "Disable Starting Override");
+    ui_mark_unsaved(ui);
+    seed_draft(config, track_index);
+  }
+  igSameLine(0.f, 6.f * dpi);
+  if (igButton(ICON_FA_ROTATE_LEFT " Revert", (ImVec2){-1.f, 0.f})) {
+    seed_draft(config, track_index);
+    starting_state_cancel_pick();
+  }
+  if (!dirty) igEndDisabled();
+  if (dirty) igTextDisabled("Unapplied changes.");
+}
+
 bool starting_state_draw(ui_handler_t *ui, int track_index) {
   if (!ui) return false;
 
@@ -305,52 +336,43 @@ bool starting_state_draw(ui_handler_t *ui, int track_index) {
   if (g_draft_track != track_index || !configs_equal(config, &g_draft_baseline)) seed_draft(config, track_index);
   if (g_picking && igIsKeyPressed_Bool(ImGuiKey_Escape, false)) starting_state_cancel_pick();
 
-  if (igCheckbox("Override the start", &config->enabled)) {
-    // The checkbox has already flipped, so what to undo back to is this config
-    // with the flag the other way round.
-    starting_config_t before_toggle = *config;
-    before_toggle.enabled = !config->enabled;
-    model_rebind_starting_strings(&before_toggle);
+  // The switch is staged like the values: it changes the draft, and Apply
+  // (or Revert) decides, so ticking it never moves the start by itself.
+  bool enabled = g_draft.enabled;
+  if (igCheckbox("Override the start", &enabled)) {
+    g_draft.enabled = enabled;
     // Turning it on with nothing stored yet takes the values the player has at
     // the tick on screen, which is nearly always what was meant by turning it
     // on while looking at that tick.
-    if (config->enabled && config->override_count == 0) seize_from_current(ui, track_index, config);
-    if (config->enabled) model_apply_starting_config(ts, track_index);
-    else model_rebuild_group_start(ts, group_index);
-    commit_edit(ui, track_index, &before_toggle, config->enabled ? "Enable Starting Override" : "Disable Starting Override");
-    ui_mark_unsaved(ui);
-    // The switch is the one thing that still acts at once, so the draft starts
-    // again from what it produced.
-    seed_draft(config, track_index);
+    if (enabled && g_draft.override_count == 0) seize_from_current(ui, track_index, &g_draft);
+    // turned off again before it was ever applied: nothing left to apply
+    if (!enabled && !config->enabled) seed_draft(config, track_index);
     starting_state_cancel_pick();
   }
-  if (igIsItemHovered(0))
-    igSetTooltip("Start this player from the values below instead of wherever the level puts it.");
 
-  if (!config->enabled) {
-    igTextDisabled("This player starts where the level puts it.");
+  const float dpi = igGetFontSize() > 0.f ? igGetFontSize() / 19.f : 1.f;
+  if (!g_draft.enabled) {
+    igTextDisabled(config->enabled ? "Once applied, this player starts where the level puts it."
+                                   : "This player starts where the level puts it.");
     starting_state_cancel_pick();
+    if (config->enabled) draw_apply_row(ui, track_index, group_index, config, dpi);
     igPopID();
     return true;
   }
 
-  const float dpi = igGetFontSize() > 0.f ? igGetFontSize() / 19.f : 1.f;
   const ft_prop_desc *place_prop = position_prop(player_class);
   const float take_width = place_prop ? -(160.f * dpi) : -1.f;
   if (igButton("Take from current tick", (ImVec2){take_width, 0.f})) seize_from_current(ui, track_index, &g_draft);
-  if (igIsItemHovered(0)) igSetTooltip("Fills everything below from the player as it is right now.");
 
   if (place_prop) {
     igSameLine(0.f, 6.f * dpi);
     if (g_picking) {
       if (igButton(ICON_FA_XMARK " Cancel", (ImVec2){-1.f, 0.f})) starting_state_cancel_pick();
-      if (igIsItemHovered(0)) igSetTooltip("Escape does this too.");
     } else {
       if (igButton(ICON_FA_CROSSHAIRS " Pick position", (ImVec2){-1.f, 0.f})) {
         g_picking = true;
         g_pick_track = track_index;
       }
-      if (igIsItemHovered(0)) igSetTooltip("Then click in the viewport to put the start there.");
     }
   }
   if (g_picking) igTextDisabled("Click in the viewport to place the start.");
@@ -413,24 +435,7 @@ bool starting_state_draw(ui_handler_t *ui, int track_index) {
     }
   }
 
-  // Nothing above has touched the run: the draft is written to the track here,
-  // in one step, which is also the one undo step the whole edit becomes.
-  const bool dirty = !configs_equal(&g_draft, config);
-  igSeparator();
-  if (!dirty) igBeginDisabled(true);
-  if (igButton(ICON_FA_CHECK " Apply", (ImVec2){-(110.f * dpi), 0.f})) {
-    starting_config_t before_apply;
-    copy_config(&before_apply, config);
-    copy_config(config, &g_draft);
-    model_apply_starting_config(ts, track_index);
-    commit_edit(ui, track_index, &before_apply, "Edit Starting State");
-    ui_mark_unsaved(ui);
-    seed_draft(config, track_index);
-  }
-  igSameLine(0.f, 6.f * dpi);
-  if (igButton(ICON_FA_ROTATE_LEFT " Revert", (ImVec2){-1.f, 0.f})) seed_draft(config, track_index);
-  if (!dirty) igEndDisabled();
-  if (dirty) igTextDisabled("Unapplied changes.");
+  draw_apply_row(ui, track_index, group_index, config, dpi);
 
   igPopID();
   return true;

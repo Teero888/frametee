@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 23u
+#define FT_GAME_ABI_VERSION 25u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -285,6 +285,11 @@ typedef struct ft_game_constraints {
    * units_per_tile to 1. */
   float units_per_tile;
   float default_camera_height;
+  /* The near plane of the engine's own 3D views (freecam, orbit, the lines and
+   * markers it draws), in world units. 0 leaves it to the engine, which scales
+   * it with the level's size; a game whose levels are large but whose details
+   * are close (a car a metre from the camera) gives a small one here. */
+  float camera_near_z;
 
   /* Optional ruleset list. May be NULL/0 for a game with a single ruleset. */
   const ft_game_variant *variants;
@@ -922,6 +927,17 @@ typedef struct ft_pipeline_desc {
   uint32_t max_instances_per_frame;
   uint32_t texture_count; /* combined image samplers bound at draw time */
   bool alpha_blend;
+  /* Mesh pipelines only (instance_stride 0). Bytes per vertex of the meshes
+   * it draws, laid out as `instance_attrs` describes; 0 means ft_vertex. A 3D
+   * level brings its own vertex (a position in three dimensions, texture
+   * coordinates) rather than the 2D one. */
+  uint32_t vertex_stride;
+  /* Mesh pipelines only. Draw in the 3D world: depth-tested and depth-written
+   * against everything else drawn in 3D, the engine's own primitives included.
+   * The world pass uses a reversed depth range (near maps to 1, far to 0, and
+   * nearer wins), so a shader writes depth straight from the view_proj the
+   * engine hands over. */
+  bool depth_test;
 } ft_pipeline_desc;
 
 /* Describes a small, immediate offscreen instance draw. It uses the exact
@@ -1064,6 +1080,9 @@ typedef struct ft_engine_api {
   void (*atlas_destroy)(ft_atlas *atlas);
   ft_pipeline *(*pipeline_create)(const ft_pipeline_desc *desc);
   void (*pipeline_destroy)(ft_pipeline *pipeline);
+  /* `vertex_stride` is sizeof(ft_vertex), or the vertex_stride of the mesh
+   * pipeline that will draw it. A mesh lives on the GPU until destroyed, so a
+   * level uploads its geometry once and only draws it afterwards. */
   ft_mesh *(*mesh_create)(const void *vertices, uint32_t vertex_count, uint32_t vertex_stride, const uint32_t *indices,
                           uint32_t index_count);
   void (*mesh_destroy)(ft_mesh *mesh);

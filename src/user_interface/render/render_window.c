@@ -532,8 +532,11 @@ void render_window_render(ui_handler_t *ui) {
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8, 8});
   const bool visible = igBegin("Render", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   igPopStyleVar(1);
-  // The viewport previews the video while this tab is the one in use.
-  set_preview(ui, visible && ui->gfx_handler->level && !ui->timeline.recording);
+  // The viewport previews the video while this tab is the one in use. Not
+  // decided on the frame the window comes back (Tab brings the interface
+  // back): a docked tab reports itself shown then, whichever tab is in front,
+  // and the preview would take the clock and move the tick.
+  if (!igIsWindowAppearing()) set_preview(ui, visible && ui->gfx_handler->level && !ui->timeline.recording);
   if (!visible || !ui->gfx_handler->level) {
     if (visible) igTextDisabled("Open a level to render it.");
     igEnd();

@@ -12,7 +12,7 @@ NAME=***********
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT/build-pgo"
 TRAIN_SCRIPT="$ROOT/plugins/$NAME/scripts/A02-bench.ftee"
-TMNF_DATA_DIR="$ROOT/data/games/tmnf"
+TMUF_DATA_DIR="$ROOT/data/games/tmuf"
 TRAIN_CONFIG_TEMPLATE="$ROOT/scripts/pgo_training_config.toml"
 VERBOSE=false
 
@@ -58,12 +58,12 @@ if [ ! -f "$TRAIN_CONFIG_TEMPLATE" ]; then
   echo "ERROR: training config not found: $TRAIN_CONFIG_TEMPLATE" >&2
   exit 1
 fi
-if [ ! -f "$TMNF_DATA_DIR/Packs/packlist.dat" ]; then
-  echo "ERROR: TrackMania packs not found: $TMNF_DATA_DIR/Packs" >&2
+if [ ! -f "$TMUF_DATA_DIR/Packs/packlist.dat" ]; then
+  echo "ERROR: TrackMania packs not found: $TMUF_DATA_DIR/Packs" >&2
   exit 1
 fi
-if [ ! -d "$TMNF_DATA_DIR/GameData" ]; then
-  echo "ERROR: TrackMania GameData not found: $TMNF_DATA_DIR/GameData" >&2
+if [ ! -d "$TMUF_DATA_DIR/GameData" ]; then
+  echo "ERROR: TrackMania GameData not found: $TMUF_DATA_DIR/GameData" >&2
   exit 1
 fi
 
@@ -73,7 +73,7 @@ TRAIN_CONFIG_HOME="$PGO_DIR/config"
 
 echo "==> build dir:       $BUILD_DIR"
 echo "==> training script: $TRAIN_SCRIPT"
-echo "==> TMNF data:       $TMNF_DATA_DIR"
+echo "==> TMUF data:       $TMUF_DATA_DIR"
 
 # ---------------------------------------------------------------------------
 # Stage 1: instrumented build
@@ -106,7 +106,7 @@ echo "==> [2/4] running training workload"
 (
   cd "$BUILD_DIR"
   run env XDG_CONFIG_HOME="$TRAIN_CONFIG_HOME" \
-    ./frametee --game tmnf --auto "$TRAIN_SCRIPT"
+    ./frametee --game tmuf --auto "$TRAIN_SCRIPT"
 )
 
 shopt -s nullglob
@@ -140,4 +140,4 @@ echo ""
 echo "Done. Optimized binary: $BUILD_DIR/frametee"
 echo ""
 echo "Compare against your existing build, pinned, median of a few runs:"
-echo "  taskset -c 0 $BUILD_DIR/frametee --game tmnf --auto $TRAIN_SCRIPT"
+echo "  taskset -c 0 $BUILD_DIR/frametee --game tmuf --auto $TRAIN_SCRIPT"

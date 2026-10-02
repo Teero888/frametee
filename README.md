@@ -2,13 +2,13 @@
 
 FrameTee is a game-agnostic **Tool-Assisted Speedrun (TAS) editor and simulation engine** for games whose physics can be reproduced outside the original game.
 The core engine is written in **C99** using **Dear ImGui** and **Vulkan**. Game-specific physics, inputs, rendering, level loading and exporting are provided through separate game modules.
-Currently supported games are [Teeworlds](https://teeworlds.com/) / [DDNet](https://ddnet.org/) and [TrackMania Nations Forever](https://store.steampowered.com/app/11020/TrackMania_Nations_Forever/). Super Mario 64 support is currently in development.
+Currently supported games are [Teeworlds](https://teeworlds.com/) / [DDNet](https://ddnet.org/) and [TrackMania United Forever](https://store.steampowered.com/app/7200/TrackMania_United/). Super Mario 64 support is currently in development.
 
 > FrameTee is a **Work In Progress**. Expect bugs, crashes and breaking changes. Physics integrations, APIs and project file formats are subject to change. macOS is currently not supported.
 
 <p align="center">
 <img width="45%" height="350" alt="ddnet_gif" src="https://github.com/user-attachments/assets/40258457-b4ea-45a1-8a4b-d95f2fdd2f36" />
-<img align="top" width="48%" alt="tmnf_gif" src="https://github.com/user-attachments/assets/420f16f3-83ca-4129-9c5c-5cadec0f87c6" />
+<img align="top" width="48%" alt="tmuf_gif" src="https://github.com/user-attachments/assets/420f16f3-83ca-4129-9c5c-5cadec0f87c6" />
 <img height="530px" alt="ddnet_image" src="https://github.com/user-attachments/assets/91449a7d-6be8-4d88-b9ff-294106f90a28" />
 <p/>
   
@@ -23,11 +23,11 @@ The following gamemodes are supported: DDRace, Race, FastCap, FastCap no weapons
 Exporting to .demo or ghost files is also supported. `ddnet_physics` is still incomplete so some features such as draggers or plasma turrets won't work but will be implemented in the future.
 To prevent cheating on official DDNet servers, the physics have been slightly altered and exporting input sequences to cheat clients is **NOT** supported and never will be. Don't even try.
 
-### TrackMania Nations Forever
+### TrackMania United Forever
 
-TrackMania support is built around my fork of [ForeverValidator](https://github.com/Skycrafter-dev/ForeverValidator).
-FrameTee can load TrackMania Forever challenges, simulate and render the car in the 3D editor, and export runs as native `.Replay.Gbx` files.
-TrackMania's proprietary assets are not distributed with FrameTee and must come from an existing TrackMania installation. See [installation guide](https://github.com/Teero888/frametee/blob/master/data/games/tmnf/README.txt).
+The TrackMania module uses [`tmuf_physics`](https://github.com/Teero888/tmuf_physics), the game's physics in C, bit-exact with TrackMania United Forever 2.11.26 in all seven environments.
+FrameTee can load TrackMania Forever challenges, simulate and render them in the 3D editor with the game's own models, textures, skies and cars, import replays as recordings to continue from, and export runs as `.Replay.Gbx` files the game validates.
+TrackMania's proprietary assets are not distributed with FrameTee and must come from an existing TrackMania United Forever installation. See [installation guide](https://github.com/Teero888/frametee/blob/master/data/games/tmuf/README.txt).
 
 ## Timeline
 

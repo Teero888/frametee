@@ -1,5 +1,6 @@
 build
 build-sm64
+build-tmuf
 release
 build-bench
 .cache
@@ -19,8 +20,8 @@ discord*
 
 # Rust example game module build output
 games/*/target/
-data/games/tmnf/Packs
-data/games/tmnf/GameData
+data/games/tmuf/Packs
+data/games/tmuf/GameData
 
 # Untracked project checkouts
 *.auto

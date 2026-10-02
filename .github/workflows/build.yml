@@ -53,7 +53,7 @@ jobs:
         -DBUILD_GAMES=ON
         -DBUILD_PLUGINS=ON
         '-DFRAMETEE_PLUGIN_ALLOWLIST=example_c;example_cpp;physics_profiler;random_input_filler'
-        -DFRAMETEE_BUILD_TMNF=ON
+        -DFRAMETEE_BUILD_TMUF=ON
         -DFRAMETEE_BUILD_CUBE_EXAMPLE=OFF
         -DFRAMETEE_BUILD_PLATFORMER_EXAMPLE=OFF
         -DFRAMETEE_BUILD_RUST_EXAMPLE=OFF
@@ -77,8 +77,8 @@ jobs:
           test -f data/games/ddnet/textures/emoticons.png
           test -f data/fonts/DejaVuSans.ttf
           test -f data/fonts/DejaVuSans-LICENSE.txt
-          test -f data/games/tmnf/thumbnail.png
-          test -f data/games/tmnf/README.txt
+          test -f data/games/tmuf/thumbnail.png
+          test -f data/games/tmuf/README.txt
           # A plugin is a directory holding its library, its manifest and any
           # resources it ships. The directory names the plugin on every
           # platform, and the library inside carries that name.
@@ -126,7 +126,7 @@ jobs:
 
         ./frametee --list-games | tee "$RUNNER_TEMP/frametee-game-modules.txt"
         grep -Eq '^  ddnet[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
-        grep -Eq '^  tmnf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
+        grep -Eq '^  tmuf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
@@ -175,7 +175,7 @@ jobs:
         -DBUILD_GAMES=ON
         -DBUILD_PLUGINS=ON
         '-DFRAMETEE_PLUGIN_ALLOWLIST=example_c;example_cpp;physics_profiler;random_input_filler'
-        -DFRAMETEE_BUILD_TMNF=ON
+        -DFRAMETEE_BUILD_TMUF=ON
         -DFRAMETEE_BUILD_CUBE_EXAMPLE=OFF
         -DFRAMETEE_BUILD_PLATFORMER_EXAMPLE=OFF
         -DFRAMETEE_BUILD_RUST_EXAMPLE=OFF
@@ -261,8 +261,8 @@ jobs:
           require_file data/games/ddnet/textures/emoticons.png
           require_file data/fonts/DejaVuSans.ttf
           require_file data/fonts/DejaVuSans-LICENSE.txt
-          require_file data/games/tmnf/thumbnail.png
-          require_file data/games/tmnf/README.txt
+          require_file data/games/tmuf/thumbnail.png
+          require_file data/games/tmuf/README.txt
           require_file vulkan-1.dll
           # MP4 export: FFmpeg's DLLs come along with the rest of the closure.
           if ! compgen -G "avcodec-*.dll" > /dev/null || ! compgen -G "avformat-*.dll" > /dev/null; then
@@ -282,7 +282,7 @@ jobs:
           test -z "$(find . -type f \( -name '*.o' -o -name '*.a' -o -name '*.cmake' -o -name '*.pdb' -o -name '*.glsl' -o -name '*.ilk' -o -name '*.lib' -o -name '*.exp' \) -print -quit)"
           ./frametee.exe --list-games | tee "$RUNNER_TEMP/frametee-game-modules.txt"
           grep -Eq '^  ddnet[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
-          grep -Eq '^  tmnf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
+          grep -Eq '^  tmuf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
           find . -type f -print | sort
         )
 

@@ -358,16 +358,13 @@ worth pinning with `FT_PROP_STARTING` and implements `entity_prop_set` for them;
 the editor renders a control per property, stores the values as overrides on the
 track, saves them, and writes them into the group's starting world through the
 game's own property table. DDNet flags position, velocity, weapons, jumps,
-jetpack, the telekit and the collision/hook/hit switches; TrackMania flags where
-the car is, how fast it is going and whether its engine drives it at all. Both
-get an editor for all of it without drawing a single widget.
+jetpack, the telekit and the collision/hook/hit switches, and gets an editor for
+all of it without drawing a single widget.
 
 The setter is the interesting half. A game whose world is a plain struct writes
-the field. TrackMania's is a restorable snapshot of a simulation it does not
-own, so `tmnf::sim::World::WithEdit` copies the snapshot, writes position, speed
-or the powertrain's integration flag into the copy, restores that and captures
-the result, which is what makes "start this corner at 200 km/h, coasting"
-expressible at all.
+the field; one whose state has invariants (a rigid body's cached matrices, a
+simulation's derived values) writes it through whatever keeps them consistent,
+which is what makes "start this corner at 200 km/h" expressible at all.
 
 The editor puts that editor in a window of its own. A game that would rather
 have it beside its own controls declares `FT_CAP_HOSTS_STARTING_STATE` and calls

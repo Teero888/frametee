@@ -748,6 +748,9 @@ static void on_level_loaded(gfx_handler_t *handler) {
       // pivot above the surface without leaving the level.
       vec3 center = {info.bounds.x + info.bounds.w * 0.5f, span * 0.2f, info.bounds.y + info.bounds.h * 0.5f};
       renderer_camera3_frame_level(handler, center, span);
+      // (a near plane of the game's own, when it has one)
+      const float near_z = game_camera_near_z(&handler->game_host);
+      if (near_z > 0.f) handler->renderer.camera3.near_z = near_z;
     }
     snprintf(handler->user_interface.loaded_level_name, sizeof(handler->user_interface.loaded_level_name), "%s", info.name ? info.name : "level");
   } else {
@@ -1883,6 +1886,9 @@ static void create_logical_device(gfx_handler_t *handler) {
   vkGetPhysicalDeviceFeatures(handler->g_physical_device, &supported);
   VkPhysicalDeviceFeatures enabled = {0};
   enabled.samplerAnisotropy = supported.samplerAnisotropy;
+  // Block-compressed textures (BC1-3, Direct3D's DXT1-5), for game modules
+  // that upload their games' pictures as the games ship them.
+  enabled.textureCompressionBC = supported.textureCompressionBC;
 
   VkDeviceCreateInfo create_info = {
       .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,

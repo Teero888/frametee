@@ -900,7 +900,7 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
   // far plane at zero) which is what puts a float depth buffer's precision
   // where a perspective divide takes it away. Without it a track a kilometre
   // long z-fights with itself a few hundred metres out.
-  const bool depth_3d = shader == renderer->primitive3d_shader;
+  const bool depth_3d = shader == renderer->primitive3d_shader || (shader->layout && shader->layout->depth_test);
   VkPipelineDepthStencilStateCreateInfo depth_stencil = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
       .depthTestEnable = depth_3d ? VK_TRUE : VK_FALSE,
@@ -1282,6 +1282,11 @@ texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsig
 }
 
 mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_t vertex_count, uint32_t *indices, uint32_t index_count) {
+  return renderer_create_mesh_raw(handler, vertices, vertex_count, (uint32_t)sizeof(vertex_t), indices, index_count);
+}
+
+mesh_t *renderer_create_mesh_raw(gfx_handler_t *handler, const void *vertices, uint32_t vertex_count, uint32_t vertex_stride,
+                                 const uint32_t *indices, uint32_t index_count) {
   renderer_state_t *renderer = &handler->renderer;
   uint32_t slot = 0;
   while (slot < MAX_MESHES && renderer->meshes[slot].active)
@@ -1301,7 +1306,7 @@ mesh_t *renderer_create_mesh(gfx_handler_t *handler, vertex_t *vertices, uint32_
   mesh->index_buffer.buffer = VK_NULL_HANDLE;
   mesh->index_buffer.memory = VK_NULL_HANDLE;
 
-  VkDeviceSize vertex_buffer_size = sizeof(vertex_t) * vertex_count;
+  VkDeviceSize vertex_buffer_size = (VkDeviceSize)vertex_stride * vertex_count;
   VkDeviceSize index_buffer_size = sizeof(uint32_t) * index_count;
 
   buffer_t vertex_staging_buffer;
@@ -3668,7 +3673,8 @@ shader_t *renderer_create_shader_spirv(gfx_handler_t *h, const void *vert_spirv,
 custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void *vert_spirv, size_t vert_size, const void *frag_spirv,
                                                    size_t frag_size, const uint32_t *attr_locations, const uint32_t *attr_offsets,
                                                    const int *attr_formats, uint32_t attr_count, uint32_t instance_stride,
-                                                   uint32_t max_instances, uint32_t texture_count, bool alpha_blend) {
+                                                   uint32_t max_instances, uint32_t texture_count, bool alpha_blend,
+                                                   uint32_t vertex_stride, bool depth_test) {
   renderer_state_t *r = &h->renderer;
   if (r->custom_pipeline_count >= MAX_CUSTOM_PIPELINES) {
     log_error(LOG_SOURCE, "Custom pipeline limit (%d) reached.", MAX_CUSTOM_PIPELINES);
@@ -3693,6 +3699,8 @@ custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void 
 
   pipe->layout.bindings[0] = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
   if (mesh_mode) {
+    if (vertex_stride) pipe->layout.bindings[0].stride = vertex_stride;
+    pipe->layout.depth_test = depth_test;
     pipe->layout.binding_count = 1;
     pipe->layout.attr_count = 0;
     for (uint32_t i = 0; i < attr_count; ++i) {
