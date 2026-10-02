@@ -1131,6 +1131,8 @@ void interaction_handle_context_menu(timeline_state_t *ts) {
       snippet_editor_open(ts->ui, context_snippet->id);
     if (igMenuItem_Bool("Edit Effects", NULL, false, context_snippet != NULL))
       input_effects_editor_open(ts->ui, context_snippet->id);
+    // the game's own items for it
+    if (context_snippet) ui_render_game_snippet_menu(ts->ui, context_snippet->id);
     igSeparator();
     if (igMenuItem_Bool("Split Selected", "Ctrl+R", false, ts->selected_snippets.count > 0)) {
       undo_command_t *cmd = commands_create_split_selected(ts->ui);

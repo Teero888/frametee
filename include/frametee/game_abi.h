@@ -1109,6 +1109,14 @@ typedef struct ft_audio_step {
   uint32_t pcm_rate;
 } ft_audio_step;
 
+/* A snippet of the timeline (ft_engine_api.snippet_*). */
+typedef struct ft_snippet_info {
+  int32_t id;
+  int32_t player;                /* its track, in the editor's numbering (ft_engine_state.selected_player) */
+  int32_t start_tick, end_tick;  /* the ticks of its world it covers, end exclusive */
+  bool playback;                 /* a window onto a demo's player rather than inputs of its own */
+} ft_snippet_info;
+
 /* Services the engine exposes to a game module. Every pointer is non-NULL for
  * the lifetime of the module, except where noted for headless runs. */
 typedef struct ft_engine_api {
@@ -1351,6 +1359,19 @@ typedef struct ft_engine_api {
    * to get somewhere; such a game then keeps its sound state going without
    * making the sound. Asked from within world_step. */
   bool (*audio_heard)(void);
+
+  /* --- snippets ---
+   * A snippet is a stretch of one track's inputs on the timeline (the menu
+   * slot FT_UI_SNIPPET_MENU hands out its id). Main thread only. */
+  bool (*snippet_info)(int32_t snippet_id, ft_snippet_info *out);
+  /* The input a snippet plays at `tick` (its world's tick, inside the
+   * snippet; its effects applied), in the game's record format. */
+  bool (*snippet_input)(int32_t snippet_id, int32_t tick, void *out_record);
+  /* Replaces an input snippet's inputs with `count` records, from tick
+   * `start_tick` of its world on, as one step the user can undo, named
+   * `description`. False for a demo's playback snippet. */
+  bool (*snippet_set_inputs)(int32_t snippet_id, int32_t start_tick, const void *records, uint32_t count,
+                             const char *description);
 } ft_engine_api;
 
 /* The layer a 3D triangle names when it carries no texture. */
@@ -1456,7 +1477,11 @@ typedef enum ft_ui_slot {
    * The engine draws the general half (games, recent projects) and hands the
    * rest of the panel to the game. */
   FT_UI_SPLASH = 5,
+  /* Inside a snippet's right-click menu, after the editor's own items: menu
+   * items a game offers for that snippet (ft_ui_frame.snippet). */
+  FT_UI_SNIPPET_MENU = 6,
 } ft_ui_slot;
+
 
 typedef struct ft_ui_frame {
   uint32_t struct_size;
@@ -1469,6 +1494,9 @@ typedef struct ft_ui_frame {
    * numbering, which is what the player-profile calls take. */
   int32_t player;
   ft_engine_state state;
+  /* FT_UI_SNIPPET_MENU: the snippet the menu is for. Read only when
+   * struct_size covers it. */
+  ft_snippet_info snippet;
 } ft_ui_frame;
 
 /* Where a game's window wants to start out, the first time the editor ever sees

@@ -776,11 +776,71 @@ static void player_panel(ft_game *game, const ft_ui_frame *frame) {
   igEnd();
 }
 
+// A snippet's inputs as TMInterface's script: copied to the clipboard, or
+// replaced with a script's (from the clipboard or a file), which holds the
+// run from the race's start, so the snippet then starts at tick 0.
+static void replace_with_script(ft_game *game, const ft_ui_frame *frame, const char *data, size_t size,
+                                const char *what) {
+  const ft_engine_api *api = game->engine;
+  int32_t count = 0;
+  uint32_t skipped = 0;
+  tm_input *inputs = data ? tm_tmi_read(data, size, &count, &skipped) : NULL;
+  if (!inputs || count <= 0) {
+    tm_log(game, FT_LOG_ERROR, "%s: no TMInterface inputs found", what);
+    free(inputs);
+    return;
+  }
+  if (!api->snippet_set_inputs(frame->snippet.id, 0, inputs, (uint32_t)count, what))
+    tm_log(game, FT_LOG_ERROR, "%s: the snippet cannot take inputs", what);
+  else if (skipped)
+    tm_log(game, FT_LOG_WARN, "%s: %u commands that are not inputs were left out", what, skipped);
+  free(inputs);
+}
+
+void tm_snippet_menu(ft_game *game, const ft_ui_frame *frame) {
+  const ft_engine_api *api = game->engine;
+  if (frame->struct_size < offsetof(ft_ui_frame, snippet) + sizeof frame->snippet || !api->snippet_input ||
+      !api->snippet_set_inputs)
+    return;
+  const ft_snippet_info *s = &frame->snippet;
+  igSeparator();
+  if (igMenuItem_Bool("Copy as TMInterface Inputs", NULL, false, s->end_tick > s->start_tick)) {
+    const int32_t count = s->end_tick - s->start_tick;
+    tm_input *inputs = calloc((size_t)count, sizeof *inputs);
+    if (inputs) {
+      for (int32_t i = 0; i < count; i++)
+        if (!api->snippet_input(s->id, s->start_tick + i, &inputs[i])) inputs[i] = (tm_input){0};
+      char *script = tm_tmi_write(inputs, s->start_tick, count);
+      if (script) igSetClipboardText(script);
+      free(script);
+      free(inputs);
+    }
+  }
+  if (igMenuItem_Bool("Paste TMInterface Inputs", NULL, false, !s->playback)) {
+    const char *clip = igGetClipboardText();
+    replace_with_script(game, frame, clip, clip ? strlen(clip) : 0, "Paste TMInterface Inputs");
+  }
+  if (igMenuItem_Bool("Import TMInterface Inputs...", NULL, false, !s->playback) && api->open_file_dialog) {
+    char path[1024];
+    void *data = NULL;
+    size_t size = 0;
+    if (api->open_file_dialog("TMInterface input script", "txt", path, sizeof path)) {
+      if (api->read_file(path, &data, &size)) {
+        replace_with_script(game, frame, data, size, "Import TMInterface Inputs");
+        api->free_file_data(data);
+      } else {
+        tm_log(game, FT_LOG_ERROR, "Cannot read %s", path);
+      }
+    }
+  }
+}
+
 void tm_ui(ft_game *game, const ft_ui_frame *frame) {
   tm_imgui_attach(game->engine);
   if (!frame) return;
   switch (frame->slot) {
   case FT_UI_PANELS: player_panel(game, frame); break;
+  case FT_UI_SNIPPET_MENU: tm_snippet_menu(game, frame); break;
   case FT_UI_MAIN_MENU:
     if (igBeginMenu("TrackMania", true)) {
       // the selected track's run, to the finish or else the playhead

@@ -796,6 +796,16 @@ uint32_t tm_exporter_count(ft_game *game);
 const ft_exporter_desc *tm_exporter_desc(ft_game *game, uint32_t index);
 bool tm_export_run(ft_game *game, uint32_t index, const ft_export_request *request);
 enum { TM_EXPORT_REPLAY, TM_EXPORT_TMINTERFACE };
+
+// tmuf_tminterface.c: TMInterface input scripts. The script of `count`
+// inputs from world tick `first_tick` (malloc'd, NUL-terminated), NULL when
+// out of memory.
+char *tm_tmi_write(const tm_input *inputs, int32_t first_tick, int32_t count);
+// The inputs a script holds, from world tick 0 to its last command's
+// (malloc'd; *count of them); *skipped: the commands that are not inputs.
+tm_input *tm_tmi_read(const char *data, size_t size, int32_t *count, uint32_t *skipped);
+// TMUF's items in a snippet's right-click menu (tmuf_ui.c)
+void tm_snippet_menu(ft_game *game, const ft_ui_frame *frame);
 bool tm_export_track(ft_game *game, uint32_t format, const char *path, int32_t track);
 
 // tm_replay.c: replays as recordings (FT_CAP_RECORDINGS)

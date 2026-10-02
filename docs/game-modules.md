@@ -347,6 +347,13 @@ over its ImGui context through `engine->imgui_context()`; a module that wants
 panels links its own ImGui/cimgui and adopts that context, exactly the way
 plugins already do.
 
+`FT_UI_SNIPPET_MENU` is called inside a snippet's right-click menu, after the
+editor's own items, with the snippet in `frame->snippet`: the place for menu
+items that work on one snippet. `engine->snippet_input` reads what a snippet
+plays, and `engine->snippet_set_inputs` replaces its inputs as one step the user
+can undo. TMUF copies a snippet as a TMInterface script there, and pastes or
+imports one into it.
+
 A game's windows are opened by the game itself, in `FT_UI_PANELS`, with its own
 `igBegin`. The editor cannot place them when it builds its layout: it has not
 loaded a game yet. So a module lists them instead, and each is dropped into the

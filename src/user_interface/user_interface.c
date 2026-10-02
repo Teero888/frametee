@@ -63,6 +63,27 @@ void ui_render_game_ui_slot(ui_handler_t *ui, ft_ui_slot slot, int track_index) 
   gh_ui(&ui->gfx_handler->game_host, &frame);
 }
 
+// The game's items in a snippet's right-click menu.
+void ui_render_game_snippet_menu(ui_handler_t *ui, int snippet_id) {
+  if (!ui || !game_host_ready(&ui->gfx_handler->game_host)) return;
+  timeline_state_t *timeline = &ui->timeline;
+  int track = -1;
+  const input_snippet_t *snippet = model_find_snippet_by_id(timeline, snippet_id, &track);
+  if (!snippet || track < 0) return;
+  const int group_index = model_track_group_index(timeline, track);
+  ft_ui_frame frame = {0};
+  frame.struct_size = sizeof(frame);
+  frame.slot = FT_UI_SNIPPET_MENU;
+  frame.tick = timeline->current_tick;
+  frame.player = model_group_local_track_index(timeline, track);
+  if (ui->gfx_handler->level && group_index >= 0 && group_index < timeline->group_count)
+    frame.world = model_group_world_at_tick(timeline, group_index, timeline->current_tick);
+  engine_api_fill_state(&frame.state);
+  frame.snippet = (ft_snippet_info){.id = snippet->id, .player = track, .start_tick = snippet->start_tick,
+                                    .end_tick = snippet->end_tick, .playback = snippet_is_playback(snippet)};
+  gh_ui(&ui->gfx_handler->game_host, &frame);
+}
+
 void ui_save_project_as(ui_handler_t *ui) {
   nfdu8char_t *save_path = NULL;
   nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};

@@ -167,6 +167,7 @@ void ui_add_recent_project(ui_handler_t *ui, const char *path);
 // Hands the active game one of its UI slots to draw into, at the current
 // cursor. Public so the Preferences window can host FT_UI_SETTINGS.
 void ui_render_game_ui_slot(ui_handler_t *ui, ft_ui_slot slot, int track_index);
+void ui_render_game_snippet_menu(ui_handler_t *ui, int snippet_id);
 bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size);
 
 #endif

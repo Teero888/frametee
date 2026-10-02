@@ -22,6 +22,10 @@
 #include <string.h>
 #include <system/fs.h>
 #include <user_interface/starting_state.h>
+#include <stdint.h>
+#include <user_interface/undo_redo.h>
+#include <user_interface/timeline/timeline_commands.h>
+#include <user_interface/input_effects.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <user_interface/timeline/timeline_recordings.h>
 #include <user_interface/timeline_events.h>
@@ -671,6 +675,73 @@ static bool api_get_player_input(int32_t player, int32_t tick, void *out_record)
   return true;
 }
 
+// --- snippets ---
+
+static input_snippet_t *snippet_of(int32_t snippet_id, int *track) {
+  if (!g_engine) return NULL;
+  return model_find_snippet_by_id(&g_engine->user_interface.timeline, snippet_id, track);
+}
+
+static bool api_snippet_info(int32_t snippet_id, ft_snippet_info *out) {
+  int track = -1;
+  const input_snippet_t *snippet = snippet_of(snippet_id, &track);
+  if (!snippet || !out) return false;
+  *out = (ft_snippet_info){.id = snippet->id, .player = track, .start_tick = snippet->start_tick,
+                           .end_tick = snippet->end_tick, .playback = snippet_is_playback(snippet)};
+  return true;
+}
+
+static bool api_snippet_input(int32_t snippet_id, int32_t tick, void *out_record) {
+  int track = -1;
+  const input_snippet_t *snippet = snippet_of(snippet_id, &track);
+  if (!snippet || !out_record || tick < snippet->start_tick || tick >= snippet->end_tick) return false;
+  const size_t size = game_input_size(&g_engine->game_host);
+  // A demo's snippet plays what the demo's player held.
+  if (snippet_is_playback(snippet)) {
+    const input_record_t record = recordings_display_input(&g_engine->user_interface.timeline, track, tick);
+    memcpy(out_record, record.bytes, size);
+    return true;
+  }
+  const input_record_t *window = input_effects_snippet_window(snippet);
+  if (!window) return false;
+  memcpy(out_record, window[tick - snippet->start_tick].bytes, size);
+  return true;
+}
+
+static bool api_snippet_set_inputs(int32_t snippet_id, int32_t start_tick, const void *records, uint32_t count,
+                                   const char *description) {
+  int track = -1;
+  input_snippet_t *snippet = snippet_of(snippet_id, &track);
+  timeline_state_t *ts = g_engine ? &g_engine->user_interface.timeline : NULL;
+  if (!snippet || snippet_is_playback(snippet) || !records || count == 0 || count > INT32_MAX || start_tick < 0 ||
+      ts->recording)
+    return false;
+  const size_t size = game_input_size(&g_engine->game_host);
+  input_record_t *inputs = calloc(count, sizeof(*inputs));
+  if (!inputs) return false;
+  for (uint32_t i = 0; i < count; ++i) {
+    engine_input_default(&g_engine->game_host, &inputs[i]);
+    memcpy(inputs[i].bytes, (const uint8_t *)records + (size_t)i * size, size);
+  }
+  timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
+  const int first = snippet->start_tick < start_tick ? snippet->start_tick : start_tick;
+  free(snippet->inputs);
+  snippet->inputs = inputs;
+  snippet->start_tick = start_tick;
+  snippet->input_count = snippet->source_count = (int)count;
+  snippet->source_offset = 0;
+  snippet->end_tick = start_tick + (int)count;
+  input_effects_snippet_discard_cache(snippet);
+  model_recalc_group_physics(ts, model_track_group_index(ts, track), first);
+  if (before) {
+    undo_command_t *change = commands_create_timeline_data_change(&g_engine->user_interface, before,
+                                                                  description && description[0] ? description : "Set Inputs");
+    if (change) undo_manager_register_command(&g_engine->user_interface.undo_manager, change);
+  }
+  ui_mark_unsaved(&g_engine->user_interface);
+  return true;
+}
+
 static bool api_save_file_dialog(const char *filter_name, const char *filter_ext, const char *default_name, char *out_path, size_t out_size) {
   if (!out_path || out_size == 0) return false;
   out_path[0] = '\0';
@@ -938,6 +1009,9 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .audio_sample_destroy = audio_sample_destroy,
       .audio_enabled = audio_enabled,
       .audio_heard = audio_heard,
+      .snippet_info = api_snippet_info,
+      .snippet_input = api_snippet_input,
+      .snippet_set_inputs = api_snippet_set_inputs,
   };
   return &api;
 }

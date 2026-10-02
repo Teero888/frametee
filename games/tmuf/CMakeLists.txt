@@ -59,6 +59,7 @@ add_custom_target(tmuf_shaders DEPENDS ${TMUF_SHADER_HEADERS})
 add_library(tmuf_game MODULE
     tmuf_game.c
     tmuf_audio.c
+    tmuf_tminterface.c
     tmuf_gpu.c
     tmuf_hud.c
     tmuf_post.c
