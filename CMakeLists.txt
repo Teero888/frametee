@@ -575,6 +575,10 @@ foreach(ASSET ${GAME_ASSET_SOURCES})
         OUTPUT "${ASSET_OUTPUT}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${ASSET_OUT_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ASSET}" "${ASSET_OUTPUT}"
+        # An unchanged file is not copied, so the copy keeps its old time and
+        # would stay older than a source that was only touched (a checkout):
+        # mark it current, or it is copied again on every build.
+        COMMAND ${CMAKE_COMMAND} -E touch_nocreate "${ASSET_OUTPUT}"
         DEPENDS "${ASSET}"
         COMMENT "Copying game asset ${ASSET_REL}"
         VERBATIM

@@ -122,6 +122,7 @@ typedef struct {
   float color[4];
   bool visible, video_visible;
   float opacity, video_opacity;
+  float volume, video_volume;
   bool export_enabled;
   bool prediction_enabled;
   int start_offset;
@@ -277,6 +278,8 @@ timeline_data_snapshot_t *commands_capture_timeline_data(const timeline_state_t 
     destination->video_visible = source->video_visible;
     destination->opacity = source->opacity;
     destination->video_opacity = source->video_opacity;
+    destination->volume = source->volume;
+    destination->video_volume = source->video_volume;
     destination->export_enabled = source->export_enabled;
     destination->prediction_enabled = source->prediction_enabled;
     destination->start_offset = source->start_offset;
@@ -361,6 +364,8 @@ static void apply_timeline_data_snapshot(timeline_state_t *ts, const timeline_da
     destination->video_visible = source->video_visible;
     destination->opacity = source->opacity;
     destination->video_opacity = source->video_opacity;
+    destination->volume = source->volume;
+    destination->video_volume = source->video_volume;
     destination->export_enabled = source->export_enabled;
     destination->prediction_enabled = source->prediction_enabled;
     destination->start_offset = i == 0 ? 0 : source->start_offset;

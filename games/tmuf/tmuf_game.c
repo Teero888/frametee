@@ -262,6 +262,7 @@ enum {
   SETTING_SPLITS,
   SETTING_MUSIC,
   SETTING_MUSIC_VOLUME,
+  SETTING_SFX_VOLUME,
   SETTING_COUNT
 };
 
@@ -299,6 +300,8 @@ static const ft_setting_desc setting_descs[SETTING_COUNT] = {
      "HUD", FT_VALUE_BOOL, 0, 1, FT_SETTING_RENDER},
     {"music", "Music", NULL, "Sound", FT_VALUE_BOOL, 0, 1, 0},
     {"music_volume", "Music volume", NULL, "Sound", FT_VALUE_INT, 0, 100, 0},
+    {"sfx_volume", "Effects volume", NULL, "Sound",
+     FT_VALUE_INT, 0, 100, 0},
 };
 
 static bool *setting_bool(ft_game *game, uint32_t index) {
@@ -326,6 +329,7 @@ static int *setting_int(ft_game *game, uint32_t index) {
   return index == SETTING_ANTIALIASING ? &game->settings.antialiasing
          : index == SETTING_ANISOTROPY   ? &game->settings.anisotropy
          : index == SETTING_MUSIC_VOLUME ? &game->settings.music_volume
+         : index == SETTING_SFX_VOLUME   ? &game->settings.sfx_volume
                                          : NULL;
 }
 
@@ -382,7 +386,8 @@ static ft_game *game_create(const ft_engine_api *engine) {
                                  .challenge_info = true,
                                  .splits = true,
                                  .music = true,
-                                 .music_volume = 50};
+                                 .music_volume = 50,
+                                 .sfx_volume = 100};
   char packs[1024];
   engine->resolve_data_path("Packs", packs, sizeof packs);
   char err[512];

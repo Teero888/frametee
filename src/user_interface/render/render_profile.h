@@ -78,6 +78,8 @@ void render_layer_set(struct ui_handler_t *ui, render_target_t target, render_la
 // Whether a timeline group is drawn in what is being rendered now, and how opaque.
 bool render_group_visible(struct ui_handler_t *ui, int group_index);
 float render_group_opacity(struct ui_handler_t *ui, int group_index);
+// How loud a group is heard where it is drawn now: its volume, 0 while hidden.
+float render_group_volume(struct ui_handler_t *ui, int group_index);
 // The group what is being rendered now is about, and whether every group's chat shows together.
 // The viewport follows the editor's selection; video has its own choice.
 int render_focus_group(struct ui_handler_t *ui, bool *out_merged);

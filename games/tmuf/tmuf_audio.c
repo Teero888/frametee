@@ -467,11 +467,13 @@ static ft_audio_sound *add(const step_ctx *c, ft_audio_sample sample, uint32_t v
   tm_audio *st = c->st;
   if (!c->heard || !sample || volume <= 1e-4f || st->count == TM_AUDIO_SOUNDS) return NULL;
   ft_audio_sound *s = &st->sounds[st->count++];
-  *s = (ft_audio_sound){.sample = sample, .voice = voice, .offset = offset, .volume = volume, .pitch = pitch};
+  // Every sound goes through tm_audio_spatialize, which applies the Sound
+  // settings' volumes as it is mixed: a 2D one (distance 0) is not placed.
+  *s = (ft_audio_sound){
+      .sample = sample, .voice = voice, .flags = FT_AUDIO_POSITIONED, .offset = offset, .volume = volume, .pitch = pitch};
   if (position && def && def->mode >= TMUF_SOUND_3D) {
     // inverse distance from the reference distance, silent from 50 times it
     // (3D omni: clamped at its max distance, CAudioPort::Update)
-    s->flags = FT_AUDIO_POSITIONED;
     memcpy(s->position, position, sizeof s->position);
     const float ref = def->ref_distance > 0.f ? def->ref_distance : 1.f;
     s->distance[0] = ref;
@@ -858,7 +860,6 @@ static void ambient_sounds(const step_ctx *c) {
     const float t = (float)c->b->tick * TMUF_TICK_MS / 1000.f;
     ft_audio_sound *m = add(c, la->music.id, VOICE_MUSIC, 0.9f * fminf(t / 0.75f, 1.f), 1.f, 0.f, NULL, NULL);
     if (m) {
-      m->flags = FT_AUDIO_POSITIONED;
       m->distance[0] = m->distance[1] = -1.f;
       clocked(c, m, 0.f);
     }
@@ -907,7 +908,7 @@ bool tm_event_audio(ft_game *game, const ft_timeline_event *event, ft_audio_soun
   if (!la || !event->category || strcmp(event->category, TM_EVENT_HORN) != 0) return false;
   const tm_snd *horn = &la->car[TMUF_CAR_SOUND_HORN];
   if (!horn->def || !horn->sample.id) return false;
-  *out = (ft_audio_sound){.sample = horn->sample.id, .volume = horn->def->volume, .pitch = 1.f};
+  *out = (ft_audio_sound){.sample = horn->sample.id, .flags = FT_AUDIO_POSITIONED, .volume = horn->def->volume, .pitch = 1.f};
   return true;
 }
 
@@ -925,17 +926,19 @@ void tm_audio_listen(ft_game *game, const ft_camera *camera) {
     game->listener.right[i] = r[i] / len;
 }
 
-// OpenAL's inverse distance (clamped from the reference distance), silent
-// beyond the sound's range, panned by how far to the side of the view it is.
-// The music (distance -1) is not placed: it plays as loud as the settings say.
+// The Sound settings' volume, then for a placed sound OpenAL's inverse distance
+// (clamped from the reference distance), silent beyond the sound's range,
+// panned by how far to the side of the view it is. The music (distance -1)
+// and the 2D sounds (0) are not placed.
 void tm_audio_spatialize(ft_game *game, int32_t world_index, const ft_audio_sound *sound, float gain[2]) {
   (void)world_index;
   if (sound->distance[0] < 0.f) {
     gain[0] = gain[1] = game->settings.music ? (float)game->settings.music_volume / 100.f : 0.f;
     return;
   }
-  gain[0] = gain[1] = 1.f;
-  if (!game->listener.valid) return;
+  const float sfx = (float)game->settings.sfx_volume / 100.f;
+  gain[0] = gain[1] = sfx;
+  if (sound->distance[0] == 0.f || !game->listener.valid) return;
   float d[3];
   for (int i = 0; i < 3; i++)
     d[i] = sound->position[i] - game->listener.eye[i];
@@ -951,6 +954,6 @@ void tm_audio_spatialize(ft_game *game, int32_t world_index, const ft_audio_soun
     const float r = game->listener.right[0] * d[0] + game->listener.right[1] * d[1] + game->listener.right[2] * d[2];
     pan = r / distance * fminf(distance, 1.f); // (no swing as it passes through the head)
   }
-  gain[0] = g * sqrtf(fmaxf(1.f - pan, 0.f));
-  gain[1] = g * sqrtf(fmaxf(1.f + pan, 0.f));
+  gain[0] = sfx * g * sqrtf(fmaxf(1.f - pan, 0.f));
+  gain[1] = sfx * g * sqrtf(fmaxf(1.f + pan, 0.f));
 }

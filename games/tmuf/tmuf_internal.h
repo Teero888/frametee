@@ -184,6 +184,7 @@ typedef struct tm_settings {
   bool splits;         // the HUD's checkpoint time and its difference to the best run
   bool music;          // the race music
   int music_volume;    // its volume, percent
+  int sfx_volume;      // everything else's, percent
 } tm_settings;
 
 // A car's headlight projector as posed this frame (its night-only

@@ -11,7 +11,7 @@
 static const double TPS = 50.0;
 
 static audio_listener_t listener_for(audio_track_t **track, double tps) {
-  return (audio_listener_t){.track = track, .ticks_per_second = tps};
+  return (audio_listener_t){.track = track, .ticks_per_second = tps, .volume = 1.f};
 }
 
 // Renders ticks `from`..`to` at 1x (or backwards) and returns the frames.
@@ -20,7 +20,7 @@ static float *render(audio_track_t **track, double tps, double from, double to, 
   float *out = malloc((size_t)*frames * 2 * sizeof(float));
   const audio_listener_t listener = listener_for(track, tps);
   const audio_clock_t clock = {0};
-  audio_render(&listener, &clock, from, to, out, *frames);
+  audio_render(&listener, 1, &clock, from, to, out, *frames);
   return out;
 }
 

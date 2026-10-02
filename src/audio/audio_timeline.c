@@ -8,11 +8,12 @@
 #include <user_interface/camera/camera_window.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <user_interface/timeline_events.h>
+#include <user_interface/render/render_profile.h>
 #include <user_interface/user_interface.h>
 
-static void cover(void *user, int first, int last) {
+static void cover(void *user, int world_index, int first, int last) {
   timeline_state_t *ts = &((gfx_handler_t *)user)->user_interface.timeline;
-  model_group_audio_cover(ts, ts->active_group_index, first, last);
+  model_group_audio_cover(ts, world_index, first, last);
 }
 
 static bool spatialize(void *user, int world_index, const ft_audio_sound *sound, float gain[2]) {
@@ -48,26 +49,35 @@ static void sync_event_sounds(gfx_handler_t *handler) {
   free(sounds);
 }
 
-bool audio_timeline_listener(gfx_handler_t *handler, audio_listener_t *out) {
+int audio_timeline_listeners(gfx_handler_t *handler, audio_listener_t out[AUDIO_TIMELINE_MAX_HEARD]) {
   timeline_state_t *ts = &handler->user_interface.timeline;
   if (!handler->level || !game_has_audio(&handler->game_host) || ts->active_group_index < 0 ||
       ts->active_group_index >= ts->group_count)
-    return false;
+    return 0;
   sync_event_sounds(handler);
-  timeline_group_t *group = ts->groups[ts->active_group_index];
-  *out = (audio_listener_t){
-      .track = &group->audio,
-      .start_offset = group->start_offset,
-      .world_index = ts->active_group_index,
-      .ticks_per_second = game_ticks_per_second(&handler->game_host),
-      // Recording: the ticks past the playhead wait for their inputs.
-      .limited = ts->recording,
-      .last_tick = model_group_playhead_tick(ts, ts->active_group_index),
-      .cover = cover,
-      .spatialize = spatialize,
-      .user = handler,
-  };
-  return true;
+  int count = 0;
+  for (int k = -1; k < ts->group_count && count < AUDIO_TIMELINE_MAX_HEARD; ++k) {
+    // the active group first, then the others in order
+    const int g = k < 0 ? ts->active_group_index : k;
+    if (k >= 0 && g == ts->active_group_index) continue;
+    const float volume = render_group_volume(&handler->user_interface, g);
+    if (!(volume > 0.f)) continue;
+    timeline_group_t *group = ts->groups[g];
+    out[count++] = (audio_listener_t){
+        .track = &group->audio,
+        .start_offset = group->start_offset,
+        .world_index = g,
+        .volume = volume,
+        .ticks_per_second = game_ticks_per_second(&handler->game_host),
+        // Recording: the ticks past the playhead wait for their inputs.
+        .limited = ts->recording,
+        .last_tick = model_group_playhead_tick(ts, g),
+        .cover = cover,
+        .spatialize = spatialize,
+        .user = handler,
+    };
+  }
+  return count;
 }
 
 audio_clock_t audio_timeline_camera_clock(gfx_handler_t *handler) {
@@ -78,9 +88,10 @@ void audio_timeline_update(gfx_handler_t *handler) {
   ui_handler_t *ui = &handler->user_interface;
   timeline_state_t *ts = &ui->timeline;
   audio_set_volume(ui->audio_volume);
-  audio_listener_t listener;
-  if (!audio_timeline_listener(handler, &listener)) {
-    audio_update(NULL, NULL);
+  audio_listener_t listeners[AUDIO_TIMELINE_MAX_HEARD];
+  const int heard = audio_timeline_listeners(handler, listeners);
+  if (heard <= 0) {
+    audio_update(NULL, 0, NULL);
     return;
   }
 
@@ -103,5 +114,5 @@ void audio_timeline_update(gfx_handler_t *handler) {
       clock.rate = ts->is_reversing ? -speed : speed;
     }
   }
-  audio_update(&listener, &clock);
+  audio_update(listeners, heard, &clock);
 }

@@ -236,6 +236,7 @@ struct timeline_group_t {
   bool visible;
   bool video_visible; // drawn in rendered video; `visible` is the viewport
   float opacity, video_opacity; // how opaque it is drawn, 0..1, in the viewport and in video
+  float volume, video_volume;   // how loud it is heard, 0..1, likewise (while drawn there)
   bool export_enabled;
   bool prediction_enabled;
   int start_offset;

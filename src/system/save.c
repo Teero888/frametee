@@ -76,6 +76,8 @@ typedef struct project_document_t {
   bool has_video_options;
   uint8_t *group_video_visible;
   float *group_opacities; // viewport and video opacity per group, in pairs (version 26)
+  uint32_t group_volume_count;
+  float *group_volumes; // viewport and video volume per group, in pairs (version 28)
   uint32_t group_opacity_count;
   uint32_t group_video_count;
   char game_id[FT_ID_MAX];
@@ -305,6 +307,9 @@ static bool write_render_video(byte_buffer_t *buffer, ui_handler_t *ui) {
     return false;
   for (int g = 0; g < ts->group_count; ++g)
     if (!buffer_f32(buffer, ts->groups[g]->opacity) || !buffer_f32(buffer, ts->groups[g]->video_opacity)) return false;
+  // Version 28: how loud each group is heard.
+  for (int g = 0; g < ts->group_count; ++g)
+    if (!buffer_f32(buffer, ts->groups[g]->volume) || !buffer_f32(buffer, ts->groups[g]->video_volume)) return false;
   return true;
 }
 
@@ -386,6 +391,15 @@ static bool read_render_video(byte_reader_t *reader, project_document_t *documen
     float value;
     if (!reader_f32(reader, &value)) return false;
     document->group_opacities[i] = isfinite(value) ? (value < 0.f ? 0.f : value > 1.f ? 1.f : value) : 1.f;
+  }
+  if (version < 28) return true;
+  document->group_volumes = count ? malloc(sizeof(float) * 2 * count) : NULL;
+  if (count && !document->group_volumes) return false;
+  document->group_volume_count = count;
+  for (uint32_t i = 0; i < count * 2; ++i) {
+    float value;
+    if (!reader_f32(reader, &value)) return false;
+    document->group_volumes[i] = isfinite(value) ? (value < 0.f ? 0.f : value > 1.f ? 1.f : value) : 1.f;
   }
   return true;
 }
@@ -588,6 +602,7 @@ static void project_document_free(project_document_t *document) {
   free(document->groups);
   free(document->group_video_visible);
   free(document->group_opacities);
+  free(document->group_volumes);
   free(document->tracks);
   free(document->events);
   for (int i = 0; i < document->recording_count; ++i)
@@ -1606,6 +1621,9 @@ bool load_project(ui_handler_t *ui, const char *path) {
     const bool listed = (uint32_t)g < document.group_opacity_count;
     ui->timeline.groups[g]->opacity = listed ? document.group_opacities[2 * g] : 1.f;
     ui->timeline.groups[g]->video_opacity = listed ? document.group_opacities[2 * g + 1] : 1.f;
+    const bool loud = (uint32_t)g < document.group_volume_count;
+    ui->timeline.groups[g]->volume = loud ? document.group_volumes[2 * g] : 1.f;
+    ui->timeline.groups[g]->video_volume = loud ? document.group_volumes[2 * g + 1] : 1.f;
   }
   snprintf(ui->current_project_path, sizeof(ui->current_project_path), "%s", path);
   ui->has_unsaved_changes = false;

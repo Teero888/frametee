@@ -773,9 +773,10 @@ static bool export_audio(gfx_handler_t *h, video_export_job_t *job, double from,
   if (frames <= 0) return true;
   float *out = audio_reserve(e, frames);
   if (!out) return false;
-  audio_listener_t listener;
+  audio_listener_t listeners[AUDIO_TIMELINE_MAX_HEARD];
   const audio_clock_t clock = audio_timeline_camera_clock(h);
-  if (audio_timeline_listener(h, &listener)) audio_render(&listener, &clock, from, to, out, (uint32_t)frames);
+  const int heard = audio_timeline_listeners(h, listeners);
+  if (heard > 0) audio_render(listeners, heard, &clock, from, to, out, (uint32_t)frames);
   else memset(out, 0, (size_t)frames * 2 * sizeof(float));
   e->audio_pending_count += frames;
   return encode_audio(e, false);

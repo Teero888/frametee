@@ -248,7 +248,7 @@ static void focus_row(ui_handler_t *ui, const layer_list_t *list) {
   row_end(list, top);
 }
 
-// An opacity in percent, the width of a column; greyed out while the group is hidden there.
+// An opacity (or volume) in percent, the width of a column; greyed out while the group is hidden there.
 static bool opacity_drag(const char *id, float *opacity, bool shown, float width) {
   if (!shown) igBeginDisabled(true);
   float percent = *opacity * 100.f;
@@ -294,13 +294,28 @@ static void group_layers(ui_handler_t *ui, const layer_list_t *list) {
     row_column(list, RENDER_TARGET_VIDEO, top);
     if (opacity_drag(id, &group->video_opacity, group->video_visible, list->column_width)) ui_mark_unsaved(ui);
     row_end(list, top);
+
+    // And how loud it is heard.
+    top = igGetCursorScreenPos().y;
+    ImDrawList_AddText_Vec2(igGetWindowDrawList(),
+                            (ImVec2){list->left + 42.f * scale, top + 0.5f * (list->row_height - igGetTextLineHeight())},
+                            igGetColorU32_Col(ImGuiCol_TextDisabled, 1.f), "Volume", NULL);
+    snprintf(id, sizeof(id), "##gvo%d", g);
+    row_column(list, RENDER_TARGET_VIEWPORT, top);
+    opacity_drag(id, &group->volume, group->visible, list->column_width);
+    snprintf(id, sizeof(id), "##gdvo%d", g);
+    row_column(list, RENDER_TARGET_VIDEO, top);
+    if (opacity_drag(id, &group->video_volume, group->video_visible, list->column_width)) ui_mark_unsaved(ui);
+    row_end(list, top);
   }
 }
 
-static void render_layers(ui_handler_t *ui, float width, float height) {
+// One panel of layers; `part` says which: 0 all of them, 1 the game's, 2 the
+// editor's overlays and the groups.
+static void layer_panel(ui_handler_t *ui, const char *id, float width, float height, int part) {
   const float scale = gfx_get_ui_scale();
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){10.f * scale, 8.f * scale});
-  igBeginChild_Str("##render_layers", (ImVec2){width, height}, true, 0);
+  igBeginChild_Str(id, (ImVec2){width, height}, true, 0);
   igPopStyleVar(1);
 
   layer_list_t list;
@@ -308,11 +323,26 @@ static void render_layers(ui_handler_t *ui, float width, float height) {
   list.width = igGetContentRegionAvail().x;
   list.column_width = 64.f * scale;
   list.row_height = igGetFrameHeight() + 6.f * scale;
-  game_layers(ui, &list);
-  editor_layers(ui, &list);
-  group_layers(ui, &list);
+  if (part != 2) game_layers(ui, &list);
+  if (part != 1) {
+    editor_layers(ui, &list);
+    group_layers(ui, &list);
+  }
   igDummy((ImVec2){1.f, 4.f * scale});
   igEndChild();
+}
+
+// The layers in one panel, or side by side in two when there is room.
+static void render_layers(ui_handler_t *ui, float width, float height, bool two_columns) {
+  if (!two_columns) {
+    layer_panel(ui, "##render_layers", width, height, 0);
+    return;
+  }
+  const float gap = 8.f * gfx_get_ui_scale();
+  const float half = floorf((width - gap) * 0.5f);
+  layer_panel(ui, "##render_layers_game", half, height, 1);
+  igSameLine(0.f, gap);
+  layer_panel(ui, "##render_layers_editor", width - gap - half, height, 2);
 }
 
 // Output
@@ -549,13 +579,24 @@ void render_window_render(ui_handler_t *ui) {
   const ImVec2 avail = igGetContentRegionAvail();
   // The layer list only needs room for a name and two switches; the output
   // settings get the rest.
-  const float layers_width = fminf(480.f * scale, fmaxf(380.f * scale, avail.x * 0.35f + 100.f * scale));
+  const float column_width = fminf(480.f * scale, fmaxf(380.f * scale, avail.x * 0.35f + 100.f * scale));
   // The output settings mirror the list at the right edge, with the space
-  // between them left open. Three columns want a little more room than the list.
+  // between them left open. Three columns want a little more room than the
+  // list; with room to spare the list takes two columns.
   const float gap = 8.f * scale;
-  const float output_width = fminf(avail.x - layers_width - gap, fmaxf(layers_width, 950.f * scale));
+  // with room to spare the list takes two columns, as wide as the output
+  // settings leave them (up to 720 each).
+  const bool two_columns = avail.x - (2.f * column_width + gap) - gap >= 760.f * scale;
+  float layers_width = column_width, output_width;
+  if (two_columns) {
+    output_width = fmaxf(760.f * scale, fminf(950.f * scale, avail.x * 0.35f));
+    layers_width = fminf(avail.x - output_width - gap, 2.f * 720.f * scale + gap);
+    output_width = fminf(avail.x - layers_width - gap, fmaxf(output_width, 950.f * scale));
+  } else {
+    output_width = fminf(avail.x - layers_width - gap, fmaxf(column_width, 950.f * scale));
+  }
   const float left = igGetCursorPosX();
-  render_layers(ui, layers_width, avail.y);
+  render_layers(ui, layers_width, avail.y, two_columns);
   igSameLine(left + avail.x - output_width, 0.f);
   output_panel(ui, output_width, avail.y);
   igEnd();

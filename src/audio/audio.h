@@ -55,18 +55,20 @@ typedef struct audio_event_sound {
 } audio_event_sound_t;
 void audio_set_event_sounds(const audio_event_sound_t *sounds, int count);
 
-// The group to hear.
+// A group to hear. Several are heard together, each at its volume.
 typedef struct audio_listener {
   audio_track_t **track;
   int start_offset; // the group's tick 0 on the global timeline
   int world_index;
+  float volume;
   double ticks_per_second;
   // While recording, the last local tick whose sound is decided: past it the
   // inputs are still to come, so nothing there is simulated or heard yet.
   bool limited;
   int last_tick;
-  // Makes the track hold local ticks [first, last], simulating what it lacks.
-  void (*cover)(void *user, int first, int last);
+  // Makes the track of world `world_index` hold local ticks [first, last],
+  // simulating what it lacks.
+  void (*cover)(void *user, int world_index, int first, int last);
   // The gains of a positioned sound; false when the game does not say.
   bool (*spatialize)(void *user, int world_index, const ft_audio_sound *sound, float gain[2]);
   void *user;
@@ -82,14 +84,15 @@ typedef struct audio_clock {
   void *user;
 } audio_clock_t;
 
-// Once a frame, after the playhead moved.
-void audio_update(const audio_listener_t *listener, const audio_clock_t *clock);
+// Once a frame, after the playhead moved: the groups heard, the followed one
+// first.
+void audio_update(const audio_listener_t *listeners, int listener_count, const audio_clock_t *clock);
 // Silences whatever is queued: the project or the game is going away.
 void audio_stop(void);
 
 // Offline, for video: `frames` stereo frames (interleaved floats) of the
 // clock's positions from `from` to `to`, at AUDIO_RATE.
-void audio_render(const audio_listener_t *listener, const audio_clock_t *clock, double from, double to, float *out,
-                  uint32_t frames);
+void audio_render(const audio_listener_t *listeners, int listener_count, const audio_clock_t *clock, double from,
+                  double to, float *out, uint32_t frames);
 
 #endif

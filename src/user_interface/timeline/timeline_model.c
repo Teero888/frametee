@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <user_interface/input_effects.h>
+#include <user_interface/render/render_profile.h>
 #include <user_interface/timeline_events.h>
 #include <user_interface/user_interface.h>
 
@@ -87,6 +88,7 @@ timeline_group_t *model_add_group(timeline_state_t *ts, const char *name) {
   group->visible = true;
   group->video_visible = true;
   group->opacity = group->video_opacity = 1.f;
+  group->volume = group->video_volume = 1.f;
   group->export_enabled = true;
   group->prediction_enabled = true;
   group_runtime_init(ts, group, index);
@@ -1161,7 +1163,7 @@ static void presentation_step(timeline_state_t *ts, int group_index, int local_t
   game_host_t *host = model_host(ts);
   timeline_group_t *group = ts->groups[group_index];
   // The world the viewport follows is heard as it steps.
-  const bool previous_heard = audio_set_heard(group_index == ts->active_group_index);
+  const bool previous_heard = audio_set_heard(render_group_volume(ts->ui, group_index) > 0.f);
   ts->simulation_group_index = group_index;
   gh_world_copy(host, group->prev_world_cached, group->world_cached);
   simulate_to(ts, group_index, group->world_cached, local_tick);
@@ -1227,8 +1229,8 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
     return;
   }
 
-  // The world the viewport follows is heard as it steps.
-  const bool previous_heard = audio_set_heard(presentation_enabled && group_index == ts->active_group_index);
+  // The worlds drawn are heard as they step.
+  const bool previous_heard = audio_set_heard(presentation_enabled && render_group_volume(ts->ui, group_index) > 0.f);
   if (group->cached_tick == local_tick - 1 &&
       (!presentation_enabled || group->presentation_tick == local_tick - 1)) {
     // Fast path for sequential forward playback: the current world becomes previous,

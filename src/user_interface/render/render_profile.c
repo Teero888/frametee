@@ -166,6 +166,13 @@ float render_group_opacity(ui_handler_t *ui, int group_index) {
   return opacity < 0.f ? 0.f : opacity > 1.f ? 1.f : opacity;
 }
 
+float render_group_volume(ui_handler_t *ui, int group_index) {
+  if (!render_group_visible(ui, group_index)) return 0.f;
+  const timeline_group_t *group = ui->timeline.groups[group_index];
+  const float volume = ui->render.applied == RENDER_TARGET_VIDEO ? group->video_volume : group->volume;
+  return volume < 0.f ? 0.f : volume > 1.f ? 1.f : volume;
+}
+
 int render_focus_group(ui_handler_t *ui, bool *out_merged) {
   const timeline_state_t *ts = &ui->timeline;
   const int focus = ui->render.applied == RENDER_TARGET_VIDEO ? render_video_profile(ui)->focus : RENDER_FOCUS_SELECTED;

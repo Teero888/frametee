@@ -503,6 +503,7 @@ typedef struct head {
 // the same lock and whatever it took is never rewritten anyway.
 #define KEEP (AUDIO_RATE / 200)       // 5 ms
 #define FILL (AUDIO_RATE * 8 / 100)   // how far ahead is rendered: 80 ms
+#define MAX_LISTENERS 64             // worlds heard together
 
 typedef struct mixer {
   head_t heads[MAX_HEADS];
@@ -512,8 +513,15 @@ typedef struct mixer {
   double last_position;
   double grain_position;
   uint64_t last_grain;
-  audio_track_t *track;
-  uint64_t revision, event_revision;
+  // what was rendered from: each listener's track, its revision and volume
+  int listener_count;
+  struct {
+    audio_track_t *track;
+    uint64_t revision;
+    int world_index;
+    float volume;
+  } heard[MAX_LISTENERS];
+  uint64_t event_revision;
   bool scrub_ready;
 } mixer_t;
 
@@ -598,32 +606,68 @@ typedef struct live_sound {
   bool seen;
 } live_sound_t;
 
-#define MAX_LIVE 512
-static live_sound_t g_live[MAX_LIVE];
-static int g_live_count;
-static bool g_live_seed; // a new head: what is found playing plays on from where it is
+// One set per world heard.
+#define MAX_LIVE 256
+typedef struct live_set {
+  int world_index; // -1: free
+  live_sound_t live[MAX_LIVE];
+  int count;
+  bool seed; // a new head: what is found playing plays on from where it is
+} live_set_t;
+static live_set_t g_live_sets[MAX_LISTENERS];
+static int g_live_set_count;
 
 static void live_reset(void) {
-  g_live_count = 0;
-  g_live_seed = true;
+  for (int i = 0; i < g_live_set_count; ++i) {
+    g_live_sets[i].count = 0;
+    g_live_sets[i].seed = true;
+  }
+}
+
+// A world's set; a world heard anew starts as a new head would.
+static live_set_t *live_set_for(int world_index) {
+  for (int i = 0; i < g_live_set_count; ++i)
+    if (g_live_sets[i].world_index == world_index) return &g_live_sets[i];
+  if (g_live_set_count == MAX_LISTENERS) return NULL;
+  live_set_t *set = &g_live_sets[g_live_set_count++];
+  set->world_index = world_index;
+  set->count = 0;
+  set->seed = true;
+  return set;
+}
+
+// Forgets the sets of the worlds no longer heard.
+static void live_keep(const audio_listener_t *listeners, int count) {
+  int kept = 0;
+  for (int i = 0; i < g_live_set_count; ++i) {
+    bool heard = false;
+    for (int k = 0; k < count && !heard; ++k)
+      heard = listeners[k].world_index == g_live_sets[i].world_index;
+    if (heard) {
+      if (kept != i) g_live_sets[kept] = g_live_sets[i];
+      ++kept;
+    }
+  }
+  g_live_set_count = kept;
 }
 
 // Brings the live sounds up to date with the track for a render from local tick
 // `committed` (the first one still to be rendered) to `until`; `heard` is where
 // the device is.
-static void live_reconcile(const audio_track_t *track, int last_tick, double ticks_per_second, double heard, double committed,
-                           double until) {
+static void live_reconcile(live_set_t *set, const audio_track_t *track, int last_tick, double ticks_per_second,
+                           double heard, double committed, double until) {
+  live_sound_t *sounds = set->live;
   // A sound turning up this late was still to come when its tick was decided
   // (recording); one older than that is an edit behind the playhead. A sound
   // that played is remembered until then, so it is not taken for a late one.
   const double late = 0.15 * ticks_per_second;
   int kept = 0;
-  for (int i = 0; i < g_live_count; ++i)
-    if (g_live[i].begin + g_live[i].duration > heard || g_live[i].origin >= heard - late - 1.0) {
-      g_live[kept] = g_live[i];
-      g_live[kept++].seen = false;
+  for (int i = 0; i < set->count; ++i)
+    if (sounds[i].begin + sounds[i].duration > heard || sounds[i].origin >= heard - late - 1.0) {
+      sounds[kept] = sounds[i];
+      sounds[kept++].seen = false;
     }
-  g_live_count = kept;
+  set->count = kept;
   const int first = track ? (int)floor(fmin(committed - track->tail, heard - late)) : 0;
   const int last = (int)fmin(ceil(until) + 1, (double)last_tick);
   for (int tick = first < 1 ? 1 : first; track && tick <= last; ++tick) {
@@ -637,8 +681,8 @@ static void live_reconcile(const audio_track_t *track, int last_tick, double tic
       int ordinal = 0;
       for (uint32_t j = 0; j < k; ++j) ordinal += t->sounds[j].sound.sample == c->sound.sample && !t->sounds[j].sound.voice;
       live_sound_t *live = NULL;
-      for (int i = 0; i < g_live_count && !live; ++i)
-        if (g_live[i].tick == tick && g_live[i].ordinal == ordinal && g_live[i].sound.sample == c->sound.sample) live = &g_live[i];
+      for (int i = 0; i < set->count && !live; ++i)
+        if (sounds[i].tick == tick && sounds[i].ordinal == ordinal && sounds[i].sound.sample == c->sound.sample) live = &sounds[i];
       if (live) {
         live->seen = true;
         continue;
@@ -647,30 +691,30 @@ static void live_reconcile(const audio_track_t *track, int last_tick, double tic
       // it turned up late, and starts from its beginning now.
       double at;
       if (begin >= committed) at = begin;
-      else if (g_live_seed) {
+      else if (set->seed) {
         if (begin + c->duration <= committed) continue;
         at = begin;
       } else if (begin >= heard - late) at = committed;
       else continue;
-      if (g_live_count == MAX_LIVE) continue;
-      live = &g_live[g_live_count++];
+      if (set->count == MAX_LIVE) continue;
+      live = &sounds[set->count++];
       *live = (live_sound_t){
           .tick = tick, .ordinal = ordinal, .sound = c->sound, .begin = at, .duration = c->duration, .origin = begin, .seen = true};
     }
   }
   // Gone before a frame of it was rendered: never heard, so let it go.
   kept = 0;
-  for (int i = 0; i < g_live_count; ++i)
-    if (g_live[i].seen || g_live[i].begin < committed) g_live[kept++] = g_live[i];
-  g_live_count = kept;
-  g_live_seed = false;
+  for (int i = 0; i < set->count; ++i)
+    if (sounds[i].seen || sounds[i].begin < committed) sounds[kept++] = sounds[i];
+  set->count = kept;
+  set->seed = false;
 }
 
 // Adds the sound of game time going from local tick `from` to `to` over `n`
 // frames, weighted per frame by `envelope`. With `live`, the one-shots are the
 // live ones rather than the track's.
 static void mix_span(const audio_listener_t *listener, double from, double to, int n, const float *envelope, float *out,
-                     bool live) {
+                     const live_set_t *live) {
   const audio_track_t *track = *listener->track;
   if (!track) return;
   const double tps = listener->ticks_per_second;
@@ -680,8 +724,8 @@ static void mix_span(const audio_listener_t *listener, double from, double to, i
   // One-shots that started in the tail before and sound into the span.
   const int first = (int)floor(lo - track->tail);
   const int last = (int)fmin(ceil(hi) + 1, (double)decided(listener));
-  for (int i = 0; live && i < g_live_count; ++i) {
-    const live_sound_t *l = &g_live[i];
+  for (int i = 0; live && i < live->count; ++i) {
+    const live_sound_t *l = &live->live[i];
     if (l->begin <= hi && l->begin + l->duration >= lo)
       mix_one_shot(listener, &l->sound, l->begin, l->duration, from, step, n, envelope, out);
   }
@@ -762,7 +806,7 @@ static void cover_span(const audio_listener_t *listener, double from, double to)
   const int last = (int)fmin(ceil(fmax(from, to)) + 1, (double)decided(listener));
   if (last < 1 || last < first) return;
   if (audio_track_first_missing(track, first < 1 ? 1 : first, last) >= 0)
-    listener->cover(listener->user, first < 1 ? 1 : first, last);
+    listener->cover(listener->user, listener->world_index, first < 1 ? 1 : first, last);
 }
 
 static float head_envelope(const head_t *h, uint64_t frame) {
@@ -781,8 +825,8 @@ static float head_envelope(const head_t *h, uint64_t frame) {
 }
 
 // Renders output frames [first, first + count) from every head.
-static void render_heads(const audio_listener_t *listener, const audio_clock_t *clock, const head_t *heads, int head_count,
-                         int live_head, uint64_t first, uint32_t count, float *out) {
+static void render_heads(const audio_listener_t *listeners, int listener_count, const audio_clock_t *clock,
+                         const head_t *heads, int head_count, int live_head, uint64_t first, uint32_t count, float *out) {
   memset(out, 0, (size_t)count * 2 * sizeof(float));
   float envelope[BLOCK];
   for (int h = 0; h < head_count; ++h) {
@@ -791,12 +835,18 @@ static void render_heads(const audio_listener_t *listener, const audio_clock_t *
     const uint64_t end = head->end < first + count ? head->end : first + count;
     for (uint64_t at = begin; at < end; at += BLOCK) {
       const int n = (int)(end - at < BLOCK ? end - at : BLOCK);
-      const double from = map_tick(clock, head_position(head, at)) - listener->start_offset;
-      const double to = map_tick(clock, head_position(head, at + n)) - listener->start_offset;
-      cover_span(listener, from, to);
-      for (int i = 0; i < n; ++i)
-        envelope[i] = head_envelope(head, at + i);
-      mix_span(listener, from, to, n, envelope, out + 2 * (at - first), h == live_head);
+      const double from_tick = map_tick(clock, head_position(head, at));
+      const double to_tick = map_tick(clock, head_position(head, at + n));
+      for (int k = 0; k < listener_count; ++k) {
+        const audio_listener_t *listener = &listeners[k];
+        if (!(listener->volume > 0.f)) continue;
+        const double from = from_tick - listener->start_offset, to = to_tick - listener->start_offset;
+        cover_span(listener, from, to);
+        for (int i = 0; i < n; ++i)
+          envelope[i] = head_envelope(head, at + i) * listener->volume;
+        mix_span(listener, from, to, n, envelope, out + 2 * (at - first),
+                 h == live_head ? live_set_for(listener->world_index) : NULL);
+      }
     }
   }
   for (uint32_t i = 0; i < count * 2; ++i)
@@ -848,19 +898,28 @@ void audio_stop(void) {
   ma_spinlock_unlock(&g_lock);
   g_mixer.head_count = 0;
   g_mixer.main_head = -1;
-  g_mixer.track = NULL;
+  g_mixer.listener_count = 0;
   g_mixer.was_playing = false;
   g_mixer.scrub_ready = false;
   live_reset();
 }
 
-void audio_update(const audio_listener_t *listener, const audio_clock_t *clock) {
+void audio_update(const audio_listener_t *listeners, int listener_count, const audio_clock_t *clock) {
   if (!g_device_open) return;
   mixer_t *m = &g_mixer;
-  if (!listener || !listener->track || listener->ticks_per_second <= 0.0) {
+  if (listener_count > MAX_LISTENERS) listener_count = MAX_LISTENERS;
+  if (!listeners || listener_count <= 0 || listeners[0].ticks_per_second <= 0.0) {
     audio_stop();
     return;
   }
+  for (int k = 0; k < listener_count; ++k)
+    if (!listeners[k].track) {
+      audio_stop();
+      return;
+    }
+  // (the first is the followed world: its clock and the sound kept in memory)
+  const audio_listener_t *listener = &listeners[0];
+  live_keep(listeners, listener_count);
 
   ma_spinlock_lock(&g_lock);
   const uint64_t read = g_read, written = g_write;
@@ -888,12 +947,22 @@ void audio_update(const audio_listener_t *listener, const audio_clock_t *clock) 
   const uint64_t end = read + FILL;
   bool rerender = false;
 
-  audio_track_t *track = *listener->track;
-  const uint64_t revision = track ? track->revision : 0;
-  if (track != m->track || revision != m->revision || g_event_revision != m->event_revision) {
+  bool same = listener_count == m->listener_count && g_event_revision == m->event_revision;
+  for (int k = 0; same && k < listener_count; ++k) {
+    const audio_track_t *track = *listeners[k].track;
+    same = track == m->heard[k].track && (track ? track->revision : 0) == m->heard[k].revision &&
+           listeners[k].world_index == m->heard[k].world_index && listeners[k].volume == m->heard[k].volume;
+  }
+  if (!same) {
     rerender = true;
-    m->track = track;
-    m->revision = revision;
+    m->listener_count = listener_count;
+    for (int k = 0; k < listener_count; ++k) {
+      audio_track_t *track = *listeners[k].track;
+      m->heard[k].track = track;
+      m->heard[k].revision = track ? track->revision : 0;
+      m->heard[k].world_index = listeners[k].world_index;
+      m->heard[k].volume = listeners[k].volume;
+    }
     m->event_revision = g_event_revision;
   }
 
@@ -972,8 +1041,10 @@ void audio_update(const audio_listener_t *listener, const audio_clock_t *clock) 
 
   // Sound captured since the last look for ticks already rendered (a tick
   // decided only now while recording, or simulated late) is rendered again.
-  if (track && track->fresh != INT_MAX) {
-    const double fresh = track->fresh - 1 + listener->start_offset;
+  for (int k = 0; k < listener_count; ++k) {
+    audio_track_t *track = *listeners[k].track;
+    if (!track || track->fresh == INT_MAX) continue;
+    const double fresh = track->fresh - 1 + listeners[k].start_offset;
     const head_t *h = m->main_head >= 0 ? &m->heads[m->main_head] : NULL;
     if (h && !clock->game_tick && h->rate > 0.0 && fresh < head_position(h, written)) rerender = true;
     track->fresh = INT_MAX;
@@ -988,16 +1059,22 @@ void audio_update(const audio_listener_t *listener, const audio_clock_t *clock) 
   int live_head = -1;
   if (m->main_head >= 0 && !clock->game_tick && m->heads[m->main_head].rate > 0.0) {
     const head_t *h = &m->heads[m->main_head];
-    const double origin = listener->start_offset;
-    cover_span(listener, head_position(h, from) - origin, head_position(h, end) - origin);
-    live_reconcile(*listener->track, decided(listener), listener->ticks_per_second,
-                   head_position(h, read > h->start ? read : h->start) - origin,
-                   head_position(h, from) - origin, head_position(h, end) - origin);
+    for (int k = 0; k < listener_count; ++k) {
+      const audio_listener_t *l = &listeners[k];
+      live_set_t *set = live_set_for(l->world_index);
+      if (!set) continue;
+      const double origin = l->start_offset;
+      cover_span(l, head_position(h, from) - origin, head_position(h, end) - origin);
+      live_reconcile(set, *l->track, decided(l), l->ticks_per_second,
+                     head_position(h, read > h->start ? read : h->start) - origin, head_position(h, from) - origin,
+                     head_position(h, end) - origin);
+    }
     live_head = m->main_head;
   }
-  render_heads(listener, clock, m->heads, m->head_count, live_head, from, count, buffer);
+  render_heads(listeners, listener_count, clock, m->heads, m->head_count, live_head, from, count, buffer);
   // What the lookahead captured while rendering is in this render already.
-  if (*listener->track) (*listener->track)->fresh = INT_MAX;
+  for (int k = 0; k < listener_count; ++k)
+    if (*listeners[k].track) (*listeners[k].track)->fresh = INT_MAX;
 
   ma_spinlock_lock(&g_lock);
   // Whatever the device took meanwhile is heard as it was.
@@ -1016,13 +1093,16 @@ void audio_update(const audio_listener_t *listener, const audio_clock_t *clock) 
   tracks_trim(*listener->track, now, listener->ticks_per_second);
 }
 
-void audio_render(const audio_listener_t *listener, const audio_clock_t *clock, double from, double to, float *out,
-                  uint32_t frames) {
+void audio_render(const audio_listener_t *listeners, int listener_count, const audio_clock_t *clock, double from,
+                  double to, float *out, uint32_t frames) {
   if (!frames) return;
-  if (!listener || !listener->track || listener->ticks_per_second <= 0.0) {
+  bool usable = listeners && listener_count > 0 && listeners[0].ticks_per_second > 0.0;
+  for (int k = 0; usable && k < listener_count; ++k)
+    usable = listeners[k].track != NULL;
+  if (!usable) {
     memset(out, 0, (size_t)frames * 2 * sizeof(float));
     return;
   }
   const head_t head = {.start = 0, .end = frames, .position = from, .rate = (to - from) / frames};
-  render_heads(listener, clock, &head, 1, -1, 0, frames, out);
+  render_heads(listeners, listener_count, clock, &head, 1, -1, 0, frames, out);
 }
