@@ -1,4 +1,5 @@
 #include "fs.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -227,6 +228,21 @@ void *fs_load_library(const char *path) {
   // defined for an absolute path.
   wchar_t wide_path[1024];
   if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide_path, 1024) <= 0) return NULL;
+
+  // The games' own libraries live beside the game modules (games/), and a
+  // plugin may link one of them (the physics profiler links SM64's, sharing
+  // the copy the game loaded): the loader looks there for everyone's
+  // dependencies, as the altered search path allows.
+  static bool games_searched;
+  if (!games_searched) {
+    games_searched = true;
+    char exe_dir[1024], games_dir[1100];
+    wchar_t wide_games[1100];
+    if (fs_get_executable_dir(exe_dir, sizeof(exe_dir)) &&
+        snprintf(games_dir, sizeof(games_dir), "%s\\games", exe_dir) < (int)sizeof(games_dir) &&
+        MultiByteToWideChar(CP_UTF8, 0, games_dir, -1, wide_games, 1100) > 0)
+      SetDllDirectoryW(wide_games);
+  }
 
   wchar_t full_path[1024];
   const DWORD length = GetFullPathNameW(wide_path, 1024, full_path, NULL);
