@@ -151,6 +151,10 @@ jobs:
         update: true
         cache: true
         path-type: strict
+        install: >-
+          make
+          tar
+          xz
         pacboy: >-
           toolchain:p
           cmake:p
@@ -164,8 +168,54 @@ jobs:
           vulkan-headers:p
           vulkan-loader:p
           glslang:p
-          ffmpeg:p
+          x264:p
+          x265:p
+          svt-av1:p
+          libvpl:p
+          ffnvcodec-headers:p
+          amf-headers:p
+          nasm:p
           rust:p
+
+    # MSYS2's FFmpeg is built with nearly every codec and filter library (aom,
+    # rav1e, librsvg with cairo and glib, gnutls, SDL2, whisper.cpp, ...), and
+    # the release bundles every DLL it links: about 100 DLLs, 145 MB. The MP4
+    # export needs only the MP4 muxer, x264, x265, SVT-AV1, AAC and the
+    # hardware encoders, so FFmpeg is built with exactly those and installed
+    # into the UCRT64 prefix, where the steps below find it like a package.
+    - name: Cache FFmpeg
+      id: ffmpeg-cache
+      uses: actions/cache@v4
+      with:
+        path: ffmpeg-ucrt64
+        key: ffmpeg-9.0.2-ucrt64-minimal-v1
+
+    - name: Build FFmpeg
+      if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+      shell: msys2 {0}
+      run: |
+        set -euo pipefail
+        # Built for /ucrt64, staged under ffmpeg-ucrt64 for the cache.
+        stage="$(cygpath -u "$GITHUB_WORKSPACE")/ffmpeg-ucrt64"
+        curl -sSfL -o "$RUNNER_TEMP/ffmpeg.tar.xz" https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+        mkdir -p "$RUNNER_TEMP/ffmpeg-src"
+        tar -xf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg-src" --strip-components=1
+        cd "$RUNNER_TEMP/ffmpeg-src"
+        ./configure --prefix=/ucrt64 \
+          --enable-shared --disable-static --disable-programs --disable-doc --disable-debug \
+          --disable-everything --disable-autodetect \
+          --disable-avdevice --disable-avfilter --disable-swresample --disable-network \
+          --enable-gpl --enable-libx264 --enable-libx265 --enable-libsvtav1 \
+          --enable-ffnvcodec --enable-nvenc --enable-amf --enable-libvpl --enable-d3d11va --enable-dxva2 \
+          --enable-encoder=libx264,libx265,libsvtav1,aac,h264_nvenc,hevc_nvenc,av1_nvenc,h264_amf,hevc_amf,av1_amf,h264_qsv,hevc_qsv,av1_qsv \
+          --enable-parser=h264,hevc,av1 \
+          --enable-muxer=mp4 --enable-protocol=file
+        make -j"$(nproc)"
+        make install DESTDIR="$stage"
+
+    - name: Install FFmpeg
+      shell: msys2 {0}
+      run: cp -r "$(cygpath -u "$GITHUB_WORKSPACE")/ffmpeg-ucrt64/ucrt64/." /ucrt64/
 
     - name: Configure CMake
       shell: msys2 {0}

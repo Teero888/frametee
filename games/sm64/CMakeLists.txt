@@ -135,15 +135,16 @@ foreach(version us jp eu sh)
 endforeach()
 
 # Every module reads its assets from data/games/<id>/: the other versions get
-# the US one's compiled shaders and the thumbnails (the game's card and every
-# version's). Only those: the
-# ROMs the user keeps in data/games/sm64 stay there.
+# the US one's compiled shaders and the two thumbnails they show (the game's
+# card, thumbnail.png, and their own, thumbnail_<version>.png). Only those:
+# the ROMs the user keeps in data/games/sm64 stay there.
 set(SM64_VERSION_DATA_COMMANDS)
 foreach(data_id sm64_jp sm64_eu sm64_sh)
+    string(REPLACE "sm64_" "" data_version "${data_id}")
     list(APPEND SM64_VERSION_DATA_COMMANDS
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/data/games/sm64/shaders"
                 "${CMAKE_BINARY_DIR}/data/games/${data_id}/shaders")
-    foreach(thumbnail thumbnail thumbnail_us thumbnail_jp thumbnail_eu thumbnail_sh)
+    foreach(thumbnail thumbnail thumbnail_${data_version})
         list(APPEND SM64_VERSION_DATA_COMMANDS
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_BINARY_DIR}/data/games/sm64/${thumbnail}.png"
                     "${CMAKE_BINARY_DIR}/data/games/${data_id}/${thumbnail}.png")
