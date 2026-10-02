@@ -132,7 +132,9 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: frametee-linux
-        path: artifact/frametee-linux/
+        # The directory itself, so the zip unpacks into frametee-linux/
+        # rather than spilling its files where it is unpacked.
+        path: artifact/
 
   build-windows:
     name: Windows (MinGW-w64)
@@ -393,7 +395,9 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: frametee-windows
-        path: artifact/frametee-windows/
+        # The directory itself, so the zip unpacks into frametee-windows/
+        # rather than spilling its files where it is unpacked.
+        path: artifact/
 
   release:
     name: Create Release
@@ -407,6 +411,9 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: artifacts
+        # Each artifact holds its platform's directory: merged, they are
+        # artifacts/frametee-linux/ and artifacts/frametee-windows/.
+        merge-multiple: true
 
     - name: Create archives
       run: |
