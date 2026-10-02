@@ -1155,6 +1155,22 @@ static void seed_world(timeline_state_t *ts, int group_index, ft_world *out_worl
   }
 }
 
+// The viewport's world one step on, as playback takes it: the step makes the
+// presentation (particles, sound) the viewport shows.
+static void presentation_step(timeline_state_t *ts, int group_index, int local_tick) {
+  game_host_t *host = model_host(ts);
+  timeline_group_t *group = ts->groups[group_index];
+  // The world the viewport follows is heard as it steps.
+  const bool previous_heard = audio_set_heard(group_index == ts->active_group_index);
+  ts->simulation_group_index = group_index;
+  gh_world_copy(host, group->prev_world_cached, group->world_cached);
+  simulate_to(ts, group_index, group->world_cached, local_tick);
+  gh_world_copy(host, group->previous_world, group->world_cached);
+  group->cached_tick = local_tick;
+  group->presentation_tick = local_tick;
+  audio_set_heard(previous_heard);
+}
+
 const ft_world *model_group_world_at_tick(timeline_state_t *ts, int group_index, int tick) {
   if (!ts || group_index < 0 || group_index >= ts->group_count) return NULL;
   /* Rebuild effects before seeding a simulation world. Rebuilding may ask the
@@ -1167,6 +1183,15 @@ const ft_world *model_group_world_at_tick(timeline_state_t *ts, int group_index,
   ts->simulation_group_index = group_index;
 
   if (group->cached_tick == tick) return group->world_cached;
+  // The tick after the one the viewport shows (playback moved on and the
+  // editor asks before the viewport does): take the step as the viewport
+  // will, rather than one without its presentation that it would have to
+  // simulate again from a snapshot.
+  if (tick > 0 && group->cached_tick == tick - 1 && group->presentation_tick == tick - 1 &&
+      engine_api_presentation_effects_enabled()) {
+    presentation_step(ts, group_index, tick);
+    return group->world_cached;
+  }
 
   // A single-world lookup is observational. Camera/rendering use the adjacent
   // pair API below; inspectors, plugins and input effects must not fill or
@@ -1208,12 +1233,15 @@ void model_group_world_pair(timeline_state_t *ts, int group_index, int tick, con
       (!presentation_enabled || group->presentation_tick == local_tick - 1)) {
     // Fast path for sequential forward playback: the current world becomes previous,
     // and we only simulate the 1 single new tick!
-    ts->simulation_group_index = group_index;
-    gh_world_copy(host, group->prev_world_cached, group->world_cached);
-    simulate_to(ts, group_index, group->world_cached, local_tick);
-    gh_world_copy(host, group->previous_world, group->world_cached);
-    group->cached_tick = local_tick;
-    if (presentation_enabled) group->presentation_tick = local_tick;
+    if (presentation_enabled) {
+      presentation_step(ts, group_index, local_tick);
+    } else {
+      ts->simulation_group_index = group_index;
+      gh_world_copy(host, group->prev_world_cached, group->world_cached);
+      simulate_to(ts, group_index, group->world_cached, local_tick);
+      gh_world_copy(host, group->previous_world, group->world_cached);
+      group->cached_tick = local_tick;
+    }
   } else if (group->cached_tick != local_tick ||
              (presentation_enabled && group->presentation_tick != local_tick) ||
              gh_world_tick(host, group->prev_world_cached) != local_tick - 1) {
