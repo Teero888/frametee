@@ -455,12 +455,12 @@ static int world_player_of_cid(const ft_recording *recording, int cid, const ft_
   return -1;
 }
 
-// Whether something of the replayed recording belonging to `owner` is shown in this world: only
-// what belongs to an imported player, or to the world itself. `world_can_own` says whether the
-// world could have made it at all (an explosion can be a map's, a damage star never is), which
-// decides for things whose owner the demo leaves open.
-static bool owner_shown(const ft_world *world, int owner, bool world_can_own) {
-  if (owner < 0 || owner >= DD_STATE_MAX_CLIENTS) return world_can_own || world->replay_clients == UINT64_MAX;
+// Whether something of the replayed recording belonging to `owner` is shown in this world: what
+// belongs to an imported player or to the map (turrets, doors). What belongs to a player the demo
+// does not show (or cannot be told) is shown only with the whole recording imported.
+static bool owner_shown(const ft_world *world, int owner) {
+  if (owner == DD_STATE_OWNER_WORLD) return true;
+  if (owner < 0 || owner >= DD_STATE_MAX_CLIENTS) return world->replay_clients == UINT64_MAX;
   return (world->replay_clients >> owner) & 1u;
 }
 
@@ -607,9 +607,7 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
   // The pointers in `tick` are only valid until the next call, which the lock keeps away.
   for (int i = 0; ok && i < tick->num_events; ++i) {
     const dd_state_event *event = &tick->events[i];
-    const bool world_can_own = event->type == DD_STATE_EVENT_EXPLOSION || event->type == DD_STATE_EVENT_SOUND_WORLD ||
-                               event->type == DD_STATE_EVENT_SOUND_GLOBAL || event->type == DD_STATE_EVENT_MAP_SOUND_WORLD;
-    if (!owner_shown(world, event->owner, world_can_own)) continue;
+    if (!owner_shown(world, event->owner)) continue;
     const mvec2 pos = world_pos(event->x, event->y);
     const int player = world_player_of_cid(recording, event->client_id, playback, count);
     switch (event->type) {
@@ -647,7 +645,7 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
   // shots leave bullet trails, as for the world's own (emit_bullet_trails).
   for (int i = 0; ok && drawn && core->particle && i < tick->num_projectiles; ++i) {
     const dd_state_projectile *p = &tick->projectiles[i];
-    if (recording_tick - 1 < p->start_tick || !owner_shown(world, p->owner, true)) continue;
+    if (recording_tick - 1 < p->start_tick || !owner_shown(world, p->owner)) continue;
     if (!dd_demo_state_tuning(recording->state, recording_tick, p->tune_zone > 0 ? p->tune_zone : 0, tuning)) continue;
     const float time = (float)(recording_tick - 1 - p->start_tick) / (float)GAME_TICK_SPEED;
     float x, y;
@@ -667,7 +665,7 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
                                                              (int)(sizeof(sounds) / sizeof(sounds[0])))
                                       : 0;
   for (int i = 0; i < sound_count; ++i) {
-    if (!owner_shown(world, sounds[i].client_id, false)) continue;
+    if (!owner_shown(world, sounds[i].client_id)) continue;
     core->sound(world_pos(sounds[i].x, sounds[i].y), sounds[i].sound_id,
                 world_player_of_cid(recording, sounds[i].client_id, playback, count), core->user_data);
   }
@@ -830,7 +828,7 @@ void dd_recording_render_entities(ft_game *game, const ft_world *world, float in
   if (dd_demo_state_entities(recording->state, tick, state) && dd_state_tuning_count() <= 64) {
     for (int i = 0; i < state->num_projectiles; ++i) {
       const dd_state_projectile *p = &state->projectiles[i];
-      if (!owner_shown(world, p->owner, true)) continue; // fired by a player that was not imported
+      if (!owner_shown(world, p->owner)) continue; // fired by a player that was not imported
       const int zone = p->tune_zone > 0 ? p->tune_zone : 0;
       if (!dd_demo_state_tuning(recording->state, tick, zone, tuning)) continue;
       // The world shows the recording tick `tick`; frames interpolate from the one before.
@@ -843,7 +841,7 @@ void dd_recording_render_entities(ft_game *game, const ft_world *world, float in
     }
     for (int i = 0; i < state->num_lasers; ++i) {
       const dd_state_laser *l = &state->lasers[i];
-      if (!owner_shown(world, l->owner, true)) continue;
+      if (!owner_shown(world, l->owner)) continue;
       if (!dd_demo_state_tuning(recording->state, tick, 0, tuning)) continue;
       const vec2 from = {(l->from_x + MAP_EXPAND32) / PX_PER_TILE, (l->from_y + MAP_EXPAND32) / PX_PER_TILE};
       const vec2 to = {(l->to_x + MAP_EXPAND32) / PX_PER_TILE, (l->to_y + MAP_EXPAND32) / PX_PER_TILE};

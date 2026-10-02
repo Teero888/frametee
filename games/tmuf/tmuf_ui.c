@@ -783,13 +783,22 @@ void tm_ui(ft_game *game, const ft_ui_frame *frame) {
   case FT_UI_PANELS: player_panel(game, frame); break;
   case FT_UI_MAIN_MENU:
     if (igBeginMenu("TrackMania", true)) {
+      // the selected track's run, to the finish or else the playhead
+      const int32_t track = frame->state.selected_player >= 0 ? frame->state.selected_player : 0;
       if (igMenuItem_Bool("Export Replay...", NULL, false, game->level != NULL) && game->engine->save_file_dialog) {
         char path[1024], name[300];
         snprintf(name, sizeof name, "%s.Replay.Gbx", game->level->name);
-        if (game->engine->save_file_dialog("TrackMania replay", "Gbx", name, path, sizeof path)) {
-          const int32_t track = frame->state.selected_player >= 0 ? frame->state.selected_player : 0;
-          if (!tm_export_replay(game, path, track)) tm_log(game, FT_LOG_ERROR, "Exporting the replay failed");
-        }
+        if (game->engine->save_file_dialog("TrackMania replay", "Gbx", name, path, sizeof path) &&
+            !tm_export_track(game, TM_EXPORT_REPLAY, path, track))
+          tm_log(game, FT_LOG_ERROR, "Exporting the replay failed");
+      }
+      if (igMenuItem_Bool("Export TMInterface Inputs...", NULL, false, game->level != NULL) &&
+          game->engine->save_file_dialog) {
+        char path[1024], name[300];
+        snprintf(name, sizeof name, "%s.txt", game->level->name);
+        if (game->engine->save_file_dialog("TMInterface input script", "txt", name, path, sizeof path) &&
+            !tm_export_track(game, TM_EXPORT_TMINTERFACE, path, track))
+          tm_log(game, FT_LOG_ERROR, "Exporting the inputs failed");
       }
       igEndMenu();
     }

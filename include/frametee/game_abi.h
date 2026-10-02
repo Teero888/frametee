@@ -1419,6 +1419,12 @@ typedef struct ft_render_frame {
    * selection itself counts either way: what follows it, such as a follow
    * camera's crosshair, still shows. Read only when struct_size covers it. */
   bool highlight_selected;
+  /* Whether the editor's camera animation directs the view (a video, or
+   * looking through it) instead of the game's camera mode, which then shows
+   * nothing: what a game shows for its own camera, such as its follow
+   * camera's crosshair on the selected player, does not apply. Read only when
+   * struct_size covers it. */
+  bool camera_animated;
 } ft_render_frame;
 
 /* Everything a game needs to place the camera for a frame. */

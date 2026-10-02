@@ -818,8 +818,11 @@ static void render_cursor(ft_game *game, const ft_render_frame *frame) {
   const SWorldCore *world = &frame->world->core;
   const SWorldCore *previous = frame->previous_world ? &frame->previous_world->core : NULL;
   const int selected = frame->active ? frame->selected_player : -1;
-  // In free view the crosshair has nothing to sit against and just floats.
-  const bool locked = frame->state.camera.mode == DD_CAMERA_FOLLOW && game->settings.render_cursor_follow;
+  // In free view the crosshair has nothing to sit against and just floats; under the camera
+  // animation the game's own mode shows nothing (its subjects get theirs as `followed`).
+  const bool animated = frame->struct_size >= offsetof(ft_render_frame, camera_animated) + sizeof(frame->camera_animated) &&
+                        frame->camera_animated;
+  const bool locked = frame->state.camera.mode == DD_CAMERA_FOLLOW && game->settings.render_cursor_follow && !animated;
   const bool selected_shown = selected >= 0 && selected < world->m_NumCharacters && (frame->state.recording || locked);
   const uint64_t followed = frame_followed_players(frame);
 

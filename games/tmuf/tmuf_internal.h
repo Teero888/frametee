@@ -795,7 +795,8 @@ void tm_splash_destroy(void *context);
 uint32_t tm_exporter_count(ft_game *game);
 const ft_exporter_desc *tm_exporter_desc(ft_game *game, uint32_t index);
 bool tm_export_run(ft_game *game, uint32_t index, const ft_export_request *request);
-bool tm_export_replay(ft_game *game, const char *path, int32_t track);
+enum { TM_EXPORT_REPLAY, TM_EXPORT_TMINTERFACE };
+bool tm_export_track(ft_game *game, uint32_t format, const char *path, int32_t track);
 
 // tm_replay.c: replays as recordings (FT_CAP_RECORDINGS)
 ft_recording *tm_recording_open(ft_game *game, const void *data, size_t size, const char *name,

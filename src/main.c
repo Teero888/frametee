@@ -82,6 +82,9 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra, bool 
   const int selected_track = ts->selected_player_track_index;
   const int selected_group = model_track_group_index(ts, selected_track);
   const int selected_local = selected_group >= 0 ? model_group_local_track_index(ts, selected_track) : -1;
+  // The Camera tab's animation directs the view: in a video when it has keys, in the viewport while
+  // looking through it.
+  const bool camera_animated = export_frame ? ui->camera_timeline.pose_count > 0 : camera_editor_drives_view(ui);
 
   ft_engine_state base_state;
   engine_api_fill_state(&base_state);
@@ -157,6 +160,7 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra, bool 
       frame.selected_player = per_world && group_index == selected_group ? selected_local : -1;
       // Hiding the highlight leaves the selection: its crosshair still shows.
       frame.highlight_selected = render_layer_enabled(ui, RENDER_LAYER_SELECTION);
+      frame.camera_animated = camera_animated;
       if (per_world) {
         const float *color = ts->groups[group_index]->color;
         frame.accent = (ft_color){color[0], color[1], color[2], color[3]};
