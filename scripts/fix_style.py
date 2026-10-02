@@ -8,7 +8,7 @@ def format_files():
     files_to_format = []
     extensions = ["*.cpp", "*.c", "*.h", "*.glsl"]
     allowed_dirs = ["scripts", "plugins", "src", "tests", "games"]
-    excluded_dirs = {"ForeverValidator"}
+    excluded_dirs = set()
     for base_dir in allowed_dirs:
         for ext in extensions:
             pattern = os.path.join(base_dir, "**", ext)
