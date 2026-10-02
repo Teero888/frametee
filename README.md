@@ -8,7 +8,7 @@ Currently supported games are [Teeworlds](https://teeworlds.com/) / [DDNet](http
 
 <p align="center">
 <img width="45%" height="350" alt="ddnet_gif" src="https://github.com/user-attachments/assets/40258457-b4ea-45a1-8a4b-d95f2fdd2f36" />
-<img align="top" width="48%" alt="tmuf_gif" src="https://github.com/user-attachments/assets/420f16f3-83ca-4129-9c5c-5cadec0f87c6" />
+<img align="top" width="48%" alt="tmuf_gif_didiking" src="https://github.com/user-attachments/assets/a92af5fa-13a6-4d25-bbe1-c822161b2209" />
 <img height="530px" alt="ddnet_image" src="https://github.com/user-attachments/assets/91449a7d-6be8-4d88-b9ff-294106f90a28" />
 <p/>
   
