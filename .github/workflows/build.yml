@@ -378,9 +378,14 @@ jobs:
           test ! -d data/textures
           test ! -f data/fonts/JetBrainsMono-Medium.ttf
           test -z "$(find . -type f \( -name '*.o' -o -name '*.a' -o -name '*.cmake' -o -name '*.pdb' -o -name '*.glsl' -o -name '*.ilk' -o -name '*.lib' -o -name '*.exp' \) -print -quit)"
-          ./frametee.exe --list-games | tee "$RUNNER_TEMP/frametee-game-modules.txt"
+          # With only Windows' own directories on PATH, as on a user's machine:
+          # the bundle's DLLs above are on it, which hid a game that could not
+          # find them beside the executable.
+          PATH="$(cygpath -u "$SYSTEMROOT")/System32:$(cygpath -u "$SYSTEMROOT")" \
+            ./frametee.exe --list-games | tee "$RUNNER_TEMP/frametee-game-modules.txt"
           grep -Eq '^  ddnet[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
           grep -Eq '^  tmuf[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
+          grep -Eq '^  sm64[[:space:]]' "$RUNNER_TEMP/frametee-game-modules.txt"
           find . -type f -print | sort
         )
 

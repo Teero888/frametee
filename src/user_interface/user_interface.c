@@ -1777,7 +1777,6 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
 
   igPushStyleVar_Vec2(ImGuiStyleVar_CellPadding, (ImVec2){card_margin, card_margin});
   if (igBeginTable("SplashGameGrid", columns, ImGuiTableFlags_SizingStretchSame, (ImVec2){0, 0}, 0)) {
-    const int browsed = game_host_browsed_index(host) >= 0 ? game_host_browsed_index(host) : host->active;
     for (int i = 0; i < host->count; ++i) {
       const game_module_slot_t *slot = &host->slots[i];
       if (!slot->usable) continue;
@@ -1831,12 +1830,10 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
         ImDrawList_AddText_Vec2(draw_list, txt_pos, IM_COL32(200, 210, 225, 255), name, NULL);
       }
 
-      const bool current = family ? browsed >= 0 && slot_in_family(&host->slots[browsed], family) : i == browsed;
-      const ImU32 border_color = current   ? IM_COL32(120, 200, 255, 255)
-                                 : hovered ? IM_COL32(90, 175, 255, 255)
-                                           : IM_COL32(48, 56, 75, 140);
-      ImDrawList_AddRect(draw_list, card_min, card_max, border_color, 8.0f, ImDrawFlags_None,
-                         (hovered || current) ? 1.8f : 1.0f);
+      // Only the hovered card stands out: the game browsed last is not a
+      // choice still in effect here.
+      const ImU32 border_color = hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140);
+      ImDrawList_AddRect(draw_list, card_min, card_max, border_color, 8.0f, ImDrawFlags_None, hovered ? 1.8f : 1.0f);
 
       if (clicked) chosen = game_host_browse(host, opens);
       igPopID();
@@ -1914,7 +1911,6 @@ static void render_splash_family_switcher(ui_handler_t *ui) {
     }
     const ImU32 border = current ? IM_COL32(120, 200, 255, 255) : hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140);
     ImDrawList_AddRect(draw_list, min, max, border, 6.0f, ImDrawFlags_None, current ? 2.5f : hovered ? 1.8f : 1.0f);
-    if (hovered) igSetTooltip("%s", slot->module->info.display_name);
     if (clicked && !current && game_host_browse(host, i)) family_remember(family, i);
     igPopID();
   }

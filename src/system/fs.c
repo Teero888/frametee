@@ -229,19 +229,26 @@ void *fs_load_library(const char *path) {
   wchar_t wide_path[1024];
   if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide_path, 1024) <= 0) return NULL;
 
-  // The games' own libraries live beside the game modules (games/), and a
-  // plugin may link one of them (the physics profiler links SM64's, sharing
-  // the copy the game loaded): the loader looks there for everyone's
-  // dependencies, as the altered search path allows.
-  static bool games_searched;
-  if (!games_searched) {
-    games_searched = true;
-    char exe_dir[1024], games_dir[1100];
-    wchar_t wide_games[1100];
+  // The altered search path skips the executable's directory, where the
+  // release keeps the libraries everyone shares (FFmpeg, curl, the C++
+  // runtime), and the games' own libraries live beside the game modules
+  // (games/), where a plugin may link one of them (the physics profiler links
+  // SM64's, sharing the copy the game loaded). PATH is searched, so both go
+  // in front of it. (SetDllDirectory would take the place of the current
+  // directory, which is how the executable's was found before.)
+  static bool path_set;
+  if (!path_set) {
+    path_set = true;
+    char exe_dir[1024];
+    wchar_t wide_exe[1024];
+    static wchar_t old_path[32768], new_path[32768 + 2200];
     if (fs_get_executable_dir(exe_dir, sizeof(exe_dir)) &&
-        snprintf(games_dir, sizeof(games_dir), "%s\\games", exe_dir) < (int)sizeof(games_dir) &&
-        MultiByteToWideChar(CP_UTF8, 0, games_dir, -1, wide_games, 1100) > 0)
-      SetDllDirectoryW(wide_games);
+        MultiByteToWideChar(CP_UTF8, 0, exe_dir, -1, wide_exe, 1024) > 0) {
+      const DWORD old_length = GetEnvironmentVariableW(L"PATH", old_path, 32768);
+      if (old_length < 32768 && swprintf(new_path, sizeof(new_path) / sizeof(*new_path), L"%ls;%ls\\games;%ls",
+                                         wide_exe, wide_exe, old_length ? old_path : L"") > 0)
+        SetEnvironmentVariableW(L"PATH", new_path);
+    }
   }
 
   wchar_t full_path[1024];
