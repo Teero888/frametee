@@ -247,7 +247,18 @@ void camera_editor_update(ui_handler_t *ui) {
     return;
   }
   sync_view_scale(ui->gfx_handler);
-  if (ed->playing) set_playhead(ui, ed->playhead + igGetIO_Nil()->DeltaTime);
+  if (ed->playing) {
+    // As much camera time as the simulation can afford this frame (see
+    // model_playback_affordable_ticks): a slow frame must not make the next
+    // one simulate even more.
+    double step = igGetIO_Nil()->DeltaTime;
+    const double tps = ticks_per_second(ui);
+    const double ticks = fabs(camera_game_tick(&ui->camera_timeline, ed->playhead + step, tps) -
+                              camera_game_tick(&ui->camera_timeline, ed->playhead, tps));
+    const int affordable = model_playback_affordable_ticks();
+    if (ticks > affordable) step *= affordable / ticks;
+    set_playhead(ui, ed->playhead + step);
+  }
   // The path drawn in the level needs the characters' positions all along it,
   // and so does a chase, for which way they are heading.
   if (!looking_through(ui) || camera_rig_needs_heading(ui->gfx_handler)) camera_rig_prepare_paths(ui->gfx_handler);

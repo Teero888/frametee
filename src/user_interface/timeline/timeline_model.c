@@ -4,6 +4,7 @@
 #include <engine/engine_api.h>
 #include <engine/game_host.h>
 #include <engine/input_record.h>
+#include <GLFW/glfw3.h>
 #include <engine/int_math.h>
 #include <limits.h>
 #include <math.h>
@@ -127,6 +128,14 @@ int model_group_track_index(const timeline_state_t *ts, int group_index, int loc
     if (local++ == local_index) return i;
   }
   return -1;
+}
+
+void model_group_tracks(const timeline_state_t *ts, int group_index, int *out, int count) {
+  int local = 0;
+  for (int i = 0; ts && i < ts->player_track_count && local < count; ++i)
+    if (ts->player_tracks[i].group_index == group_index) out[local++] = i;
+  for (; local < count; ++local)
+    out[local] = -1;
 }
 
 int model_group_local_track_index(const timeline_state_t *ts, int track_index) {
@@ -1062,8 +1071,12 @@ bool model_gather_step(timeline_state_t *ts, int group_index, int tick, int play
   game_host_t *host = model_host(ts);
   const size_t input_size = game_input_size(host);
   bool any_playback = false;
+  // The group's tracks are walked once, in player order: looking each
+  // player's track up would scan the tracks once per player, every tick.
+  int next_track = 0;
   for (int p = 0; p < player_count; ++p) {
-    const int track_index = model_group_track_index(ts, group_index, p);
+    while (next_track < ts->player_track_count && ts->player_tracks[next_track].group_index != group_index) ++next_track;
+    const int track_index = next_track < ts->player_track_count ? next_track++ : -1;
     input_record_t record;
     if (track_index >= 0) record = model_get_input_at_tick(ts, track_index, tick);
     else engine_input_default(host, &record);
@@ -1132,7 +1145,11 @@ static void snapshots_store(timeline_state_t *ts, timeline_group_t *group, int g
   else if (index == group->vec.current_size) v_push(ts, &group->vec, world, group_index);
 }
 
+// Simulation time since the playback budget last looked (model_playback_budget_frame).
+static double s_simulation_seconds;
+
 static void simulate_to(timeline_state_t *ts, int group_index, ft_world *world, int target_tick) {
+  const double started = glfwGetTime();
   game_host_t *host = model_host(ts);
   timeline_group_t *group = ts->groups[group_index];
 
@@ -1160,6 +1177,30 @@ static void simulate_to(timeline_state_t *ts, int group_index, ft_world *world, 
 
   free(playback);
   free(inputs);
+  s_simulation_seconds += glfwGetTime() - started;
+}
+
+// How long the simulation may take per frame while playing: a 60 fps frame is
+// 16.7 ms, and the rest of it is left for drawing.
+#define PLAYBACK_SIMULATION_BUDGET (1.0 / 100.0)
+
+static double s_seconds_per_tick; // simulation time per tick played, smoothed
+static int s_budget_last_tick = INT_MIN;
+
+void model_playback_budget_frame(timeline_state_t *ts, bool playing) {
+  const int moved = s_budget_last_tick == INT_MIN ? 0 : abs(ts->current_tick - s_budget_last_tick);
+  if (playing && moved > 0) {
+    const double cost = s_simulation_seconds / moved;
+    s_seconds_per_tick = s_seconds_per_tick > 0.0 ? s_seconds_per_tick * 0.75 + cost * 0.25 : cost;
+  }
+  s_simulation_seconds = 0.0;
+  s_budget_last_tick = ts->current_tick;
+}
+
+int model_playback_affordable_ticks(void) {
+  if (s_seconds_per_tick <= 0.0) return INT_MAX;
+  const double ticks = PLAYBACK_SIMULATION_BUDGET / s_seconds_per_tick;
+  return ticks >= (double)INT_MAX ? INT_MAX : imax(1, (int)ticks);
 }
 
 // Picks the cheapest starting point for reaching `tick`: the cached world when

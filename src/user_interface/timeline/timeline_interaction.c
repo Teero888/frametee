@@ -194,9 +194,16 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     int steps = (int)floor(elapsed / tick_interval);
     int dir = ts->is_reversing ? -1 : 1;
     if (steps > 0) {
+      // Only as many ticks as the simulation can afford this frame; the rest
+      // are dropped rather than owed, or a slow frame makes the next one owe
+      // more and playback falls further behind until the editor hangs.
+      const int affordable = model_playback_affordable_ticks();
+      const bool dropping = steps > affordable;
+      if (dropping) steps = affordable;
       for (int i = 0; i < steps; ++i)
         model_advance_tick(ts, dir);
-      ts->last_update_time += (double)steps * tick_interval;
+      if (dropping) ts->last_update_time = now;
+      else ts->last_update_time += (double)steps * tick_interval;
     }
   }
 

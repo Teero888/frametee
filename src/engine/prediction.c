@@ -130,10 +130,10 @@ static ft_world *prediction_world(timeline_state_t *timeline, timeline_group_t *
   return world;
 }
 
-static int selected_player_count(const timeline_state_t *timeline, int group_index, int players) {
+static int selected_player_count(const timeline_state_t *timeline, const int *tracks, int players) {
   int selected = 0;
   for (int player = 0; player < players; ++player) {
-    const int track = model_group_track_index(timeline, group_index, player);
+    const int track = tracks[player];
     if (track >= 0 && timeline->player_tracks[track].prediction_enabled) ++selected;
   }
   return selected;
@@ -317,15 +317,26 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
 
   game_host_t *host = &ui->gfx_handler->game_host;
   const int players = gh_world_player_count(host, current);
-  const int selected = selected_player_count(timeline, group_index, players);
+  if (players <= 0) return;
+  // each player's track, looked up once rather than per player per step
+  int *tracks = malloc(sizeof(*tracks) * (size_t)players);
+  if (!tracks) return;
+  model_group_tracks(timeline, group_index, tracks, players);
+  const int selected = selected_player_count(timeline, tracks, players);
   const size_t input_size = game_input_size(host);
-  if (players <= 0 || selected <= 0 || input_size == 0) return;
+  if (selected <= 0 || input_size == 0) {
+    free(tracks);
+    return;
+  }
 
   int length = settings->length;
   if (length > 2000) length = 2000;
   const int safe_length = MAX_PREDICTION_SEGMENTS / selected;
   if (length > safe_length) length = safe_length;
-  if (length <= 0) return;
+  if (length <= 0) {
+    free(tracks);
+    return;
+  }
 
   // A 3D game's prediction is a line through the world, not a stripe on a map.
   const bool is_3d = game_is_3d(host);
@@ -349,7 +360,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
 
   alpha = fmaxf(0.f, fminf(alpha, 1.f));
   for (int player = 0; player < players; ++player) {
-    const int track = model_group_track_index(timeline, group_index, player);
+    const int track = tracks[player];
     if (track < 0) {
       engine_input_default(host, &held_inputs[player]);
       continue;
@@ -368,7 +379,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
     resolved_color_rule_t resolved_rules[MAX_PREDICTION_COLOR_RULES];
     resolve_color_rules(host, line, resolved_rules);
     for (int player = 0; player < players; ++player) {
-      const int track = model_group_track_index(timeline, group_index, player);
+      const int track = tracks[player];
       if (track < 0 || !timeline->player_tracks[track].prediction_enabled) continue;
       update_player_color(host, world, player, line, resolved_rules,
                           rule_runtime + (size_t)player * MAX_PREDICTION_COLOR_RULES, active_colors[player]);
@@ -398,13 +409,13 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
       const int step_tick = gh_world_tick(host, world);
       bool replaying = false;
       for (int player = 0; player < players; ++player) {
-        const int track = model_group_track_index(timeline, group_index, player);
+        const int track = tracks[player];
         memset(&playback[player], 0, sizeof(playback[player]));
         if (track >= 0 && recordings_playback_at_tick(timeline, &timeline->player_tracks[track], step_tick, &playback[player]))
           replaying = true;
       }
       for (int player = 0; player < players; ++player) {
-        const int track = model_group_track_index(timeline, group_index, player);
+        const int track = tracks[player];
         input_record_t input;
         if (track >= 0) {
           if (!line->use_timeline_inputs && timeline->player_tracks[track].prediction_enabled) {
@@ -421,7 +432,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
       gh_world_step_playback(host, world, packed_inputs, replaying ? playback : NULL, (unsigned)players);
 
       for (int player = 0; player < players; ++player) {
-        const int track = model_group_track_index(timeline, group_index, player);
+        const int track = tracks[player];
         if (track < 0 || !timeline->player_tracks[track].prediction_enabled) continue;
         update_player_color(host, world, player, line, resolved_rules,
                             rule_runtime + (size_t)player * MAX_PREDICTION_COLOR_RULES, active_colors[player]);
@@ -470,6 +481,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
   }
 
 cleanup:
+  free(tracks);
   free(playback);
   free(segments);
   free(rule_runtime);

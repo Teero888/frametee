@@ -15,6 +15,9 @@ int model_track_group_index(const timeline_state_t *ts, int track_index);
 int model_group_track_count(const timeline_state_t *ts, int group_index);
 int model_group_track_index(const timeline_state_t *ts, int group_index, int local_index);
 int model_group_local_track_index(const timeline_state_t *ts, int track_index);
+// out[p] = the track playing the group's player p (-1 past its tracks), for
+// loops over all players: model_group_track_index scans the tracks per call.
+void model_group_tracks(const timeline_state_t *ts, int group_index, int *out, int count);
 int model_group_playhead_tick(const timeline_state_t *ts, int group_index);
 // Earliest meaningful shared/global tick. Group-local playheads remain clamped to zero.
 int model_get_min_global_tick(const timeline_state_t *ts);
@@ -99,6 +102,13 @@ void model_advance_tick(timeline_state_t *ts, int steps);
 // takes the ticks it passes over the way playing does, rather than getting
 // ahead of the take and being drawn from inputs the take is about to replace.
 void model_move_playhead(timeline_state_t *ts, int tick);
+// Playback keeps the simulation within a budget per frame, so heavy physics
+// play slower instead of falling further behind every frame until the editor
+// hangs. The budget looks once a frame, before anything moves the playhead,
+// at how far the playhead moved last frame and what simulating it cost.
+void model_playback_budget_frame(timeline_state_t *ts, bool playing);
+// How many ticks playing may move the playhead this frame.
+int model_playback_affordable_ticks(void);
 // Upper end of the playback/recording tick rate, shared by the speed widget and its keybinds.
 int model_max_playback_speed(const timeline_state_t *ts);
 void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_id_to_activate);

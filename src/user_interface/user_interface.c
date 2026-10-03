@@ -2179,6 +2179,7 @@ void ui_render(ui_handler_t *ui) {
   interaction_update_recording_input(ui);
 
   keybinds_process_inputs(ui);
+  model_playback_budget_frame(&ui->timeline, ui->timeline.is_playing || ui->timeline.is_reversing || ui->camera_editor.playing);
   interaction_handle_playback_and_shortcuts(&ui->timeline);
   // After the timeline's playback, so a camera that owns the clock has the last word on the tick.
   camera_editor_update(ui);
