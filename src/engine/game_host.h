@@ -137,6 +137,8 @@ void gh_world_step(game_host_t *host, ft_world *world, const void *inputs, unsig
 // world_step with recorded players; `playback` NULL is a plain world_step.
 void gh_world_step_playback(game_host_t *host, ft_world *world, const void *inputs, const ft_player_playback *playback,
                             unsigned player_count);
+// Puts recorded players in place without stepping (a starting world).
+void gh_world_place_playback(game_host_t *host, ft_world *world, const ft_player_playback *playback, unsigned player_count);
 int gh_world_tick(game_host_t *host, const ft_world *world);
 // Sound: whether the game reports any, the sound of a world's last step, and
 // how loud a positioned sound is in each ear (false: the game does not say).

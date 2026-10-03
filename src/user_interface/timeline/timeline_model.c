@@ -24,6 +24,7 @@ static void v_init(timeline_state_t *ts, physics_v_t *t, int world_index);
 static void v_destroy(timeline_state_t *ts, physics_v_t *t);
 static void v_push(timeline_state_t *ts, physics_v_t *t, const ft_world *world, int world_index);
 static void snapshots_reset(timeline_group_t *group);
+static void group_start_world(timeline_state_t *ts, int group_index, ft_world *world);
 
 // The host the timeline simulates through. Every world in here belongs to the
 // active game; the engine only creates, copies and destroys them.
@@ -211,8 +212,8 @@ void model_reset_groups_for_level(timeline_state_t *ts) {
     const int existing = gh_world_player_count(host, group->initial_world);
     for (int p = existing; p < players; ++p)
       gh_world_add_player(host, group->initial_world, -1, NULL);
-    gh_world_copy(host, group->previous_world, group->initial_world);
-    if (group->vec.data && group->vec.data[0]) gh_world_copy(host, group->vec.data[0], group->initial_world);
+    group_start_world(ts, i, group->previous_world);
+    if (group->vec.data && group->vec.data[0]) gh_world_copy(host, group->vec.data[0], group->previous_world);
     snapshots_reset(group);
     group->cached_tick = -1;
     group->presentation_tick = -1;
@@ -918,8 +919,8 @@ void model_invalidate_group_physics(timeline_state_t *ts, int group_index, int t
     snapshots_reset(group);
     group->cached_tick = -1;
     group->presentation_tick = -1;
-    gh_world_copy(host, group->previous_world, group->initial_world);
-    if (group->vec.data && group->vec.data[0]) gh_world_copy(host, group->vec.data[0], group->initial_world);
+    group_start_world(ts, group_index, group->previous_world);
+    if (group->vec.data && group->vec.data[0]) gh_world_copy(host, group->vec.data[0], group->previous_world);
   } else {
     if (group->cached_tick > tick) group->cached_tick = -1;
     if (group->presentation_tick > tick) group->presentation_tick = -1;
@@ -942,7 +943,8 @@ int model_max_playback_speed(const timeline_state_t *ts) {
 void model_recalc_group_physics(timeline_state_t *ts, int group_index, int tick) {
   if (!ts || group_index < 0 || group_index >= ts->group_count) return;
   input_effects_invalidate_group(ts, group_index);
-  model_invalidate_group_physics(ts, group_index, tick);
+  // A demo's tick T is the state world T shows, which the step from T - 1 replays.
+  model_invalidate_group_physics(ts, group_index, tick - 1);
 }
 
 void model_recalc_snippet_physics(timeline_state_t *ts, const input_snippet_t *snippet, int tick) {
@@ -1155,6 +1157,27 @@ bool model_gather_step(timeline_state_t *ts, int group_index, int tick, int play
     }
   }
   return any_playback;
+}
+
+// The group's world at tick 0: the starting world, with the players a demo shows there put in
+// place, since no step reaches tick 0 to replay them.
+static void group_start_world(timeline_state_t *ts, int group_index, ft_world *world) {
+  game_host_t *host = model_host(ts);
+  gh_world_copy(host, world, ts->groups[group_index]->initial_world);
+  const int players = gh_world_player_count(host, world);
+  ft_player_playback *playback = NULL;
+  int next_track = 0;
+  for (int p = 0; p < players; ++p) {
+    while (next_track < ts->player_track_count && ts->player_tracks[next_track].group_index != group_index) ++next_track;
+    if (next_track >= ts->player_track_count) break;
+    ft_player_playback shown;
+    if (!recordings_start_playback(ts, &ts->player_tracks[next_track++], &shown)) continue;
+    if (!playback && !(playback = calloc((size_t)players, sizeof(*playback)))) return;
+    playback[p] = shown;
+  }
+  if (!playback) return;
+  gh_world_place_playback(host, world, playback, (unsigned)players);
+  free(playback);
 }
 
 // The snapshots fit a memory budget per group. When they fill it, the step
@@ -1597,7 +1620,7 @@ static int model_find_group_race_start(timeline_state_t *ts, int group_index) {
   // shown, so a game must not raise effects into a visible world's state.
   ft_world *world = gh_world_create(host, ts->ui->gfx_handler->level, 0, -1);
   if (!world) return -1;
-  gh_world_copy(host, world, ts->groups[group_index]->initial_world);
+  group_start_world(ts, group_index, world);
 
   const int players = gh_world_player_count(host, world);
   const size_t input_size = game_input_size(host);

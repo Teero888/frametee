@@ -160,16 +160,17 @@ static unsigned char *copy_level(game_host_t *host, const ft_level *level, size_
 typedef struct {
   timeline_state_t *ts;
   int group_index;
-  int first_tick; // the recording tick shown at group tick 1
+  int first_tick; // the recording's tick at group tick 0
+  int shown_at;   // the group tick the recording's first tick is seen at
 } event_import_t;
 
-// A recording's event at recording tick m is shown by the group's world at tick m - first + 1:
-// stepping from group tick t shows recording tick first + t.
+// A recording's event at recording tick m is seen at group tick m - first + shown_at: a recording
+// of states shows tick first + t at group tick t, one of inputs steps from it into t + 1.
 static void import_event(void *user, const ft_timeline_event *event) {
   const event_import_t *target = user;
   ft_timeline_event placed = *event;
   placed.world_index = target->group_index;
-  placed.tick = event->tick - target->first_tick + 1;
+  placed.tick = event->tick - target->first_tick + target->shown_at;
   timeline_event_t converted;
   if (placed.tick >= 0 && timeline_event_from_abi(&converted, &placed, target->group_index)) timeline_events_add(target->ts, converted);
 }
@@ -243,7 +244,7 @@ static int add_recording_group(ui_handler_t *ui, timeline_recording_t *recording
     model_insert_snippet_into_track(track, &snippet);
   }
   if (world_players) {
-    event_import_t target = {ts, group_index, recording->first_tick};
+    event_import_t target = {ts, group_index, recording->first_tick, recording->info.ticks_are_states ? 0 : 1};
     gh_recording_events(host, recording->handle, world_players, (unsigned)imp.selected_count, import_event, &target);
     free(world_players);
   }

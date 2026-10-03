@@ -34,11 +34,18 @@ void recordings_remove(timeline_state_t *ts, int id);
 timeline_recording_t *recordings_detach(timeline_state_t *ts, int id);
 void recordings_attach(timeline_state_t *ts, timeline_recording_t *recording);
 
-// What a player replays at `tick` on `track`: the active playback snippet covering it, as the
-// recording and recording tick the world shows after stepping from `tick`. False when the player
-// follows its input, which includes every tick an active input snippet (or, while recording, the
-// recording from its start on) covers: input takes over from a demo where both overlap.
+// What a player replays in the step from `tick` on `track`: the active playback snippet covering
+// the tick the step replays (tick + 1 for a recording of states, `tick` for one of inputs), as its
+// recording and recording tick. False when the player follows its input, which includes every tick
+// an active input snippet (or, while recording, the recording from its start on) covers: input
+// takes over from a demo where both overlap.
 bool recordings_playback_at_tick(const timeline_state_t *ts, const player_track_t *track, int tick, ft_player_playback *out);
+// The state a group's starting world shows for the player on `track`: a snippet of a recording of
+// states covering tick 0, which no step reaches.
+bool recordings_start_playback(const timeline_state_t *ts, const player_track_t *track, ft_player_playback *out);
+// Whether a recording's ticks are the states its worlds show (a demo), rather than inputs. False
+// while it is not open.
+bool recordings_ticks_are_states(const timeline_state_t *ts, int recording_id);
 // The recording tick a playback snippet shows at timeline tick `tick`, or false when the recording
 // is not open yet.
 bool recordings_snippet_tick(const timeline_state_t *ts, const input_snippet_t *snippet, int tick, int *out_recording_tick);

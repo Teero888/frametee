@@ -232,6 +232,7 @@ bool dd_recording_info(ft_game *game, const ft_recording *recording, ft_recordin
   out->level_data = level;
   out->level_size = level_size;
   out->level_name = recording->level_name;
+  out->ticks_are_states = true;
   return true;
 }
 
@@ -687,6 +688,62 @@ static void emit_bullet_trails(SWorldCore *core) {
   }
 }
 
+// Puts the replaying players where the recording shows them at their tick, and remembers which
+// recording the world around them comes from.
+static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slot_count, const ft_player_playback *playback,
+                          uint32_t player_count) {
+  const int count = world->core.m_NumCharacters;
+  world->replay_recording = NULL;
+  world->replay_clients = 0;
+  int replayed_players = 0;
+  for (int i = 0; i < count; ++i) {
+    struct dd_replay_slot *slot = i < slot_count ? &slots[i] : NULL;
+    const ft_player_playback *pb = slot ? playback_of(playback, player_count, i) : NULL;
+    if (!pb) continue;
+    ft_recording *recording = (ft_recording *)pb->recording;
+    SCharacterCore *core = &world->core.m_pCharacters[i];
+    const int cid = recording->players[pb->player].cid;
+    const dd_state_character c = recorded_character(pb);
+    float paused_x, paused_y;
+    if (c.quality == DD_QUALITY_NONE && paused_of(pb, &paused_x, &paused_y)) {
+      apply_absent(core, world_pos(paused_x, paused_y));
+      slot->mode = REPLAY_PAUSED;
+      slot->x = vgetx(core->m_Pos);
+      slot->y = vgety(core->m_Pos);
+    } else if (c.quality == DD_QUALITY_NONE) {
+      apply_absent(core, vec2_init(slot->x, slot->y));
+      slot->mode = REPLAY_ABSENT;
+    } else {
+      const int hooked = c.hooked_player >= 0 ? world_player_of_cid(recording, c.hooked_player, playback, player_count) : -1;
+      const mvec2 pos = world_pos(c.x, c.y);
+      const mvec2 prev = slot->mode == REPLAY_PRESENT ? vec2_init(slot->x, slot->y) : pos;
+      // DDNet's client shows an air jump when the used-air-jump bit appears.
+      const bool air_jump = slot->mode == REPLAY_PRESENT && (c.jumped & 2) && !(slot->jumped & 2);
+      apply_state(core, &c, pb->tick, world->core.m_GameTick - pb->tick, hooked, prev);
+      slot->mode = REPLAY_PRESENT;
+      slot->jumped = (uint8_t)c.jumped;
+      remember_flags(slot, core);
+      if (air_jump && world->core.particle) world->core.particle(core->m_Pos, PARTICLE_TYPE_AIR_JUMP, i, world->core.user_data);
+    }
+
+    // The world around the recording is the recording player's, or else anyone's.
+    if (!world->replay_recording || cid == recording->local_cid) {
+      if (world->replay_recording != recording) {
+        world->replay_clients = 0;
+        replayed_players = 0;
+      }
+      world->replay_recording = recording;
+      world->replay_tick = pb->tick;
+    }
+    if (world->replay_recording == recording && !((world->replay_clients >> cid) & 1u)) {
+      world->replay_clients |= UINT64_C(1) << cid;
+      ++replayed_players;
+    }
+  }
+  if (world->replay_recording && replayed_players >= ((const ft_recording *)world->replay_recording)->player_count)
+    world->replay_clients = UINT64_MAX;
+}
+
 void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs, const ft_player_playback *playback,
                              uint32_t player_count) {
   if (!world) return;
@@ -736,59 +793,32 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
   wc_tick(&world->core);
   world->replay_muted = false;
 
-  world->replay_recording = NULL;
-  world->replay_clients = 0;
-  int replayed_players = 0;
-  for (int i = 0; any_replayed && i < count; ++i) {
-    struct dd_replay_slot *slot = i < slot_count ? &slots[i] : NULL;
-    const ft_player_playback *pb = slot ? playback_of(playback, player_count, i) : NULL;
-    if (!pb) continue;
-    ft_recording *recording = (ft_recording *)pb->recording;
-    SCharacterCore *core = &world->core.m_pCharacters[i];
-    const int cid = recording->players[pb->player].cid;
-    const dd_state_character c = recorded_character(pb);
-    float paused_x, paused_y;
-    if (c.quality == DD_QUALITY_NONE && paused_of(pb, &paused_x, &paused_y)) {
-      apply_absent(core, world_pos(paused_x, paused_y));
-      slot->mode = REPLAY_PAUSED;
-      slot->x = vgetx(core->m_Pos);
-      slot->y = vgety(core->m_Pos);
-    } else if (c.quality == DD_QUALITY_NONE) {
-      apply_absent(core, vec2_init(slot->x, slot->y));
-      slot->mode = REPLAY_ABSENT;
-    } else {
-      const int hooked = c.hooked_player >= 0 ? world_player_of_cid(recording, c.hooked_player, playback, player_count) : -1;
-      const mvec2 pos = world_pos(c.x, c.y);
-      const mvec2 prev = slot->mode == REPLAY_PRESENT ? vec2_init(slot->x, slot->y) : pos;
-      // DDNet's client shows an air jump when the used-air-jump bit appears.
-      const bool air_jump = slot->mode == REPLAY_PRESENT && (c.jumped & 2) && !(slot->jumped & 2);
-      apply_state(core, &c, pb->tick, world->core.m_GameTick - pb->tick, hooked, prev);
-      slot->mode = REPLAY_PRESENT;
-      slot->jumped = (uint8_t)c.jumped;
-      remember_flags(slot, core);
-      if (air_jump && world->core.particle) world->core.particle(core->m_Pos, PARTICLE_TYPE_AIR_JUMP, i, world->core.user_data);
-    }
-
-    // The world around the recording is the recording player's, or else anyone's.
-    if (!world->replay_recording || cid == recording->local_cid) {
-      if (world->replay_recording != recording) {
-        world->replay_clients = 0;
-        replayed_players = 0;
-      }
-      world->replay_recording = recording;
-      world->replay_tick = pb->tick;
-    }
-    if (world->replay_recording == recording && !((world->replay_clients >> cid) & 1u)) {
-      world->replay_clients |= UINT64_C(1) << cid;
-      ++replayed_players;
-    }
+  if (any_replayed) show_recorded(world, slots, slot_count, playback, player_count);
+  else {
+    world->replay_recording = NULL;
+    world->replay_clients = 0;
   }
-  if (world->replay_recording && replayed_players >= ((const ft_recording *)world->replay_recording)->player_count)
-    world->replay_clients = UINT64_MAX;
   if (world->replay_recording)
     emit_events(world, (ft_recording *)world->replay_recording, world->replay_tick, playback, player_count, effects_bound);
   dd_particles_finish(game, world, tick_before, effects_bound, was_skidding);
   if (was_skidding != was_skidding_small) free(was_skidding);
+}
+
+void dd_recording_world_place(ft_game *game, ft_world *world, const ft_player_playback *playback, uint32_t player_count) {
+  (void)game;
+  if (!world || !playback) return;
+  const int count = world->core.m_NumCharacters;
+  struct dd_replay_slot *slots = replay_slots(world, count);
+  if (!slots) return;
+  bool any_replayed = false;
+  for (int i = 0; i < count; ++i) {
+    if (!playback_of(playback, player_count, i)) continue;
+    SCharacterCore *core = &world->core.m_pCharacters[i];
+    if (slots[i].mode == REPLAY_NONE) remember_flags(&slots[i], core);
+    core->m_HookHitDisabled = true;
+    any_replayed = true;
+  }
+  if (any_replayed) show_recorded(world, slots, world->replay_slot_count, playback, player_count);
 }
 
 // --- drawing the recording's world ---------------------------------------------

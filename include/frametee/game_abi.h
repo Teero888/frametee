@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 26u
+#define FT_GAME_ABI_VERSION 27u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -628,6 +628,12 @@ typedef struct ft_recording_info {
    * rather than carrying it (the game found it, say). Used when level_data is
    * NULL. */
   const char *level_path;
+  /* What a playback snippet's tick is. False: the input the step from that
+   * tick replays (a movie of inputs), as with an input snippet. True: the
+   * state the world shows at that tick (a demo of snapshots), so the step
+   * into tick T replays tick T, and a snippet at a world's first tick is put
+   * in place by world_place_playback. */
+  bool ticks_are_states;
 } ft_recording_info;
 
 typedef struct ft_recording_player {
@@ -660,7 +666,9 @@ typedef struct ft_player_playback {
   /* The recording this player replays, or NULL when it follows its input. */
   const ft_recording *recording;
   int32_t player; /* player index within the recording */
-  /* Recording tick the world should show for this player after the step. */
+  /* The recording's tick for this step: for a recording of states the one
+   * the world shows after it, for one of inputs the one it steps from (see
+   * ft_recording_info.ticks_are_states). */
   int32_t tick;
 } ft_player_playback;
 
@@ -1746,6 +1754,11 @@ typedef struct ft_game_module {
    * their input as in world_step. */
   void (*world_step_playback)(ft_game *game, ft_world *world, const void *inputs, const ft_player_playback *playback,
                               uint32_t player_count);
+  /* Optional, for recordings whose ticks are states: puts the players
+   * `playback` names where the recording shows them at its tick, without
+   * stepping. For a world no step reaches: a group's starting world, when a
+   * playback snippet starts at its first tick. */
+  void (*world_place_playback)(ft_game *game, ft_world *world, const ft_player_playback *playback, uint32_t player_count);
   /* Optional: the timeline events a recording carries (chat, broadcasts, ...),
    * reported once when players of it are imported. They become authored
    * events: kept with the project, editable and exported like any other.

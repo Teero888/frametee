@@ -790,6 +790,11 @@ void gh_world_step_playback(game_host_t *host, ft_world *world, const void *inpu
   else m->world_step(host->instance, world, inputs, player_count);
 }
 
+void gh_world_place_playback(game_host_t *host, ft_world *world, const ft_player_playback *playback, unsigned player_count) {
+  REQUIRE_GAME();
+  if (world && playback && m->world_place_playback) m->world_place_playback(host->instance, world, playback, player_count);
+}
+
 bool game_has_audio(const game_host_t *host) { return host && host->instance && host->module->world_audio; }
 
 bool gh_world_audio(game_host_t *host, const ft_world *world, ft_audio_step *out) {

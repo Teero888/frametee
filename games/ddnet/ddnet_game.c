@@ -1437,6 +1437,7 @@ static const ft_game_module module = {
     .recording_tick_flags = dd_recording_tick_flags,
     .recording_input = dd_recording_input,
     .world_step_playback = dd_recording_world_step,
+    .world_place_playback = dd_recording_world_place,
     .recording_events = dd_recording_events,
     .create = ddnet_create,
     .destroy = ddnet_destroy,

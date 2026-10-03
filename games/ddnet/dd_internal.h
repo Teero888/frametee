@@ -757,6 +757,8 @@ void dd_recording_events(ft_game *game, const ft_recording *recording, const int
 // step goes through here, so players whose replay ended carry on under the physics.
 void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs, const ft_player_playback *playback,
                              uint32_t player_count);
+// Puts the players `playback` names where the recording shows them, without a step.
+void dd_recording_world_place(ft_game *game, ft_world *world, const ft_player_playback *playback, uint32_t player_count);
 // A world's replay bookkeeping, kept in step with its characters.
 void dd_replay_copy(ft_world *dst, const ft_world *src);
 void dd_replay_free(ft_world *world);

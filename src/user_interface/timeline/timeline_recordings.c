@@ -231,12 +231,18 @@ static bool input_covers(const timeline_state_t *ts, const player_track_t *track
   return false;
 }
 
-bool recordings_playback_at_tick(const timeline_state_t *ts, const player_track_t *track, int tick, ft_player_playback *out) {
-  if (!ts || !track) return false;
-  if (input_covers(ts, track, tick)) return false;
+bool recordings_ticks_are_states(const timeline_state_t *ts, int recording_id) {
+  const timeline_recording_t *recording = recordings_find(ts, recording_id);
+  return recording && recording->announced && recording->handle && recording->info.ticks_are_states;
+}
+
+// The active playback snippet covering `tick` on `track`, as its recording and recording tick.
+// `shown`: only snippets whose ticks are what the world shows at them (else: what it steps from).
+static bool playback_window(const timeline_state_t *ts, const player_track_t *track, int tick, int shown, ft_player_playback *out) {
   for (int i = 0; i < track->snippet_count; ++i) {
     const input_snippet_t *snippet = &track->snippets[i];
     if (!snippet->is_active || !snippet_is_playback(snippet)) continue;
+    if (shown >= 0 && recordings_ticks_are_states(ts, snippet->recording_id) != (shown != 0)) continue;
     if (tick < snippet->start_tick || tick >= snippet->end_tick) continue;
     int recording_tick;
     if (!recordings_snippet_tick(ts, snippet, tick, &recording_tick)) return false;
@@ -250,11 +256,23 @@ bool recordings_playback_at_tick(const timeline_state_t *ts, const player_track_
   return false;
 }
 
+bool recordings_playback_at_tick(const timeline_state_t *ts, const player_track_t *track, int tick, ft_player_playback *out) {
+  if (!ts || !track) return false;
+  if (input_covers(ts, track, tick)) return false;
+  // A recording of states replays, in the step from `tick`, the state the world reaches: tick + 1.
+  return playback_window(ts, track, tick + 1, 1, out) || playback_window(ts, track, tick, 0, out);
+}
+
+bool recordings_start_playback(const timeline_state_t *ts, const player_track_t *track, ft_player_playback *out) {
+  return ts && track && playback_window(ts, track, 0, 1, out);
+}
+
 input_record_t recordings_display_input(const timeline_state_t *ts, int track_index, int tick) {
   input_record_t record = model_get_input_at_tick(ts, track_index, tick);
   ft_player_playback playback;
   if (track_index < 0 || track_index >= ts->player_track_count ||
-      !recordings_playback_at_tick(ts, &ts->player_tracks[track_index], tick, &playback) || !playback.recording)
+      input_covers(ts, &ts->player_tracks[track_index], tick) ||
+      !playback_window(ts, &ts->player_tracks[track_index], tick, -1, &playback) || !playback.recording)
     return record;
   game_host_t *host = recordings_host(ts);
   input_record_t recorded;
