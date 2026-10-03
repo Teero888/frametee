@@ -95,6 +95,10 @@ struct tas_api_t {
   bool (*find_snippet_at)(int track_index, int tick, int *out_snippet_id, int *out_tick_offset, int *out_available);
   struct undo_command_t *(*do_set_inputs)(int snippet_id, int tick_offset, int count, const void *new_inputs,
                                           size_t record_stride);
+  // Reads `count` of a snippet's input records from `tick_offset` on, as they
+  // were written (before input effects), into `out`, `record_stride` apart.
+  // False when the snippet does not hold that whole range.
+  bool (*get_inputs)(int snippet_id, int tick_offset, int count, void *out, size_t record_stride);
   void (*register_undo_command)(struct undo_command_t *command);
 
   // Lays one run out in a group of its own: a new group holding a single track
@@ -193,7 +197,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 5u
+#define FRAMETEE_PLUGIN_ABI_VERSION 6u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

@@ -261,6 +261,18 @@ static struct undo_command_t *api_do_set_inputs(int snippet_id, int tick_offset,
   return command;
 }
 
+static bool api_get_inputs(int snippet_id, int tick_offset, int count, void *out, size_t record_stride) {
+  game_host_t *host = &g_ui_handler_for_api->gfx_handler->game_host;
+  const size_t record_size = game_input_size(host);
+  if (!out || count <= 0 || tick_offset < 0 || record_stride < record_size) return false;
+  const input_snippet_t *snippet = model_find_snippet_by_id(&g_ui_handler_for_api->timeline, snippet_id, NULL);
+  if (!snippet || snippet_is_playback(snippet) || tick_offset + count > snippet->input_count) return false;
+  const input_record_t *window = snippet_window(snippet);
+  for (int i = 0; i < count; ++i)
+    memcpy((uint8_t *)out + (size_t)i * record_stride, window[tick_offset + i].bytes, record_size);
+  return true;
+}
+
 // A command whose change has already been applied but whose history entry is not
 // wanted: the bulk edit below records itself as one snapshot instead.
 static void discard_undo_command(undo_command_t *command) {
@@ -538,6 +550,7 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .do_create_snippet = api_do_create_snippet,
       .find_snippet_at = api_find_snippet_at,
       .do_set_inputs = api_do_set_inputs,
+      .get_inputs = api_get_inputs,
       .get_level_name = api_get_level_name,
       .get_level_path = api_get_level_path,
       .viewport_accepts_input = api_viewport_accepts_input,

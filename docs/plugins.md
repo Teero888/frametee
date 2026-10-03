@@ -33,7 +33,9 @@ game state, including SM64's full three-dimensional Mario position and velocity.
 `entity_prop_set` edits writable properties on an owned world. `serialize_world`
 and `deserialize_world` persist that game's state using its versioned format.
 These operations do not modify timeline inputs; use the undoable snippet or
-group APIs to publish a computed result into the editor.
+group APIs to publish a computed result into the editor. `get_inputs` reads a
+snippet's inputs back, so a plugin can rewrite some fields of a range and leave
+the others as they were.
 
 Call these services on the host thread and release owned worlds with
 `destroy_world` before shutdown or a game switch. Metadata pointers are borrowed

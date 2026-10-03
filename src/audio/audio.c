@@ -576,20 +576,60 @@ static void pcm_read(const audio_track_t *track, double local, double ticks_per_
 
 // Adds a one-shot starting at local tick `begin` and lasting `duration` ticks
 // to the frames of a span (frame i at local tick from + step * i).
-static void mix_one_shot(const audio_listener_t *listener, const ft_audio_sound *sound, double begin, double duration,
-                         double from, double step, int n, const float *envelope, float *out) {
+// The most one-shots mixed at once. With a crowd of players far more can
+// overlap than anyone can tell apart, and mixing every one of them took most of
+// a frame; the loudest are mixed, as game audio engines do.
+#define MAX_MIXED_ONE_SHOTS 64
+
+typedef struct one_shot_t {
+  const ft_audio_sound *sound;
+  const sample_t *sample;
+  double begin, duration;
+  float gain[2];
+  float loudness;
+} one_shot_t;
+
+// Mixing runs on the main thread only (audio_update), so one buffer serves.
+static one_shot_t *g_one_shots;
+static int g_one_shot_count, g_one_shot_cap;
+
+// Notes a one-shot sounding in the span being mixed, unless it is out of hearing.
+static void one_shot_add(const audio_listener_t *listener, const ft_audio_sound *sound, double begin, double duration) {
   const sample_t *s = sample_get(sound->sample);
   if (!s) return;
   float gain[2];
   gains_for(listener, sound, gain);
-  const double frames_per_tick = s->rate * sound->pitch / listener->ticks_per_second;
+  if (gain[0] == 0.f && gain[1] == 0.f) return; // it would only add silence
+  if (g_one_shot_count == g_one_shot_cap) {
+    const int cap = g_one_shot_cap ? g_one_shot_cap * 2 : 256;
+    one_shot_t *grown = realloc(g_one_shots, sizeof(*grown) * (size_t)cap);
+    if (!grown) return;
+    g_one_shots = grown;
+    g_one_shot_cap = cap;
+  }
+  one_shot_t *o = &g_one_shots[g_one_shot_count++];
+  *o = (one_shot_t){sound, s, begin, duration, {gain[0], gain[1]}, fmaxf(fabsf(gain[0]), fabsf(gain[1]))};
+}
+
+// Loudest first; among equally loud ones the later start, then the sample.
+static int one_shot_compare(const void *pa, const void *pb) {
+  const one_shot_t *a = pa, *b = pb;
+  if (a->loudness != b->loudness) return a->loudness > b->loudness ? -1 : 1;
+  if (a->begin != b->begin) return a->begin > b->begin ? -1 : 1;
+  return (a->sound->sample > b->sound->sample) - (a->sound->sample < b->sound->sample);
+}
+
+static void mix_one_shot(const audio_listener_t *listener, const one_shot_t *o, double from, double step, int n, const float *envelope,
+                         float *out) {
+  const sample_t *s = o->sample;
+  const double frames_per_tick = s->rate * o->sound->pitch / listener->ticks_per_second;
   for (int i = 0; i < n; ++i) {
-    const double since = from + step * i - begin;
-    if (since < 0.0 || since >= duration) continue;
+    const double since = from + step * i - o->begin;
+    if (since < 0.0 || since >= o->duration) continue;
     float l, r;
     sample_read(s, since * frames_per_tick, &l, &r);
-    out[2 * i] += l * gain[0] * envelope[i];
-    out[2 * i + 1] += r * gain[1] * envelope[i];
+    out[2 * i] += l * o->gain[0] * envelope[i];
+    out[2 * i + 1] += r * o->gain[1] * envelope[i];
   }
 }
 
@@ -654,6 +694,44 @@ static void live_keep(const audio_listener_t *listeners, int count) {
 // Brings the live sounds up to date with the track for a render from local tick
 // `committed` (the first one still to be rendered) to `until`; `heard` is where
 // the device is.
+// A tick's one-shots of one sample are told apart by their order among
+// themselves. Counted as the tick's sounds go by, per sample index (one tick's
+// sounds were all captured at once, so an index names one sample there),
+// rather than by counting the earlier ones again for every sound.
+static uint32_t *g_ordinal_count, *g_ordinal_stamp;
+static uint32_t g_ordinal_cap, g_ordinal_generation;
+
+static int next_ordinal(const captured_sound_t *sounds, uint32_t k) {
+  const uint32_t index = (sounds[k].sound.sample & SAMPLE_INDEX_MASK) - 1u;
+  if (sounds[k].sound.sample && index < g_sample_count && index >= g_ordinal_cap) {
+    uint32_t cap = g_ordinal_cap ? g_ordinal_cap : 64;
+    while (cap <= index) cap *= 2;
+    uint32_t *count = realloc(g_ordinal_count, sizeof(*count) * cap);
+    if (count) g_ordinal_count = count;
+    uint32_t *stamp = count ? realloc(g_ordinal_stamp, sizeof(*stamp) * cap) : NULL;
+    if (stamp) {
+      g_ordinal_stamp = stamp;
+      memset(stamp + g_ordinal_cap, 0, sizeof(*stamp) * (cap - g_ordinal_cap));
+      g_ordinal_cap = cap;
+    }
+  }
+  if (!sounds[k].sound.sample || index >= g_sample_count || index >= g_ordinal_cap) {
+    int ordinal = 0; // (no index to count by)
+    for (uint32_t j = 0; j < k; ++j) ordinal += sounds[j].sound.sample == sounds[k].sound.sample && !sounds[j].sound.voice;
+    return ordinal;
+  }
+  const int ordinal = g_ordinal_stamp[index] == g_ordinal_generation ? (int)g_ordinal_count[index] : 0;
+  g_ordinal_stamp[index] = g_ordinal_generation;
+  g_ordinal_count[index] = (uint32_t)ordinal + 1u;
+  return ordinal;
+}
+
+static inline uint32_t live_slot(int tick, int ordinal, ft_audio_sample sample) {
+  uint32_t h = (uint32_t)tick * 0x9e3779b1u ^ (uint32_t)ordinal * 0x85ebca6bu ^ (uint32_t)sample * 0xc2b2ae35u;
+  h ^= h >> 15;
+  return h & (2 * MAX_LIVE - 1);
+}
+
 static void live_reconcile(live_set_t *set, const audio_track_t *track, int last_tick, double ticks_per_second,
                            double heard, double committed, double until) {
   live_sound_t *sounds = set->live;
@@ -668,21 +746,34 @@ static void live_reconcile(live_set_t *set, const audio_track_t *track, int last
       sounds[kept++].seen = false;
     }
   set->count = kept;
+  // The sounds kept, found by what they are rather than by looking at each.
+  uint16_t slots[2 * MAX_LIVE] = {0}; // index + 1, 0 for empty
+  for (int i = 0; i < set->count; ++i) {
+    uint32_t slot = live_slot(sounds[i].tick, sounds[i].ordinal, sounds[i].sound.sample);
+    bool taken = false;
+    for (; slots[slot] && !taken; slot = (slot + 1) & (2 * MAX_LIVE - 1)) {
+      const live_sound_t *other = &sounds[slots[slot] - 1];
+      taken = other->tick == sounds[i].tick && other->ordinal == sounds[i].ordinal && other->sound.sample == sounds[i].sound.sample;
+    }
+    if (!taken) slots[slot] = (uint16_t)(i + 1); // (the first of equal ones answers, as before)
+  }
   const int first = track ? (int)floor(fmin(committed - track->tail, heard - late)) : 0;
   const int last = (int)fmin(ceil(until) + 1, (double)last_tick);
   for (int tick = first < 1 ? 1 : first; track && tick <= last; ++tick) {
     const audio_tick_t *t = track_tick(track, tick);
     if (!t) continue;
+    ++g_ordinal_generation;
     for (uint32_t k = 0; k < t->sound_count; ++k) {
       const captured_sound_t *c = &t->sounds[k];
       if (c->sound.voice) continue;
+      const int ordinal = next_ordinal(t->sounds, k);
       const double begin = tick - 1 + c->sound.offset;
       if (begin > until) continue;
-      int ordinal = 0;
-      for (uint32_t j = 0; j < k; ++j) ordinal += t->sounds[j].sound.sample == c->sound.sample && !t->sounds[j].sound.voice;
       live_sound_t *live = NULL;
-      for (int i = 0; i < set->count && !live; ++i)
-        if (sounds[i].tick == tick && sounds[i].ordinal == ordinal && sounds[i].sound.sample == c->sound.sample) live = &sounds[i];
+      for (uint32_t slot = live_slot(tick, ordinal, c->sound.sample); slots[slot] && !live; slot = (slot + 1) & (2 * MAX_LIVE - 1)) {
+        live_sound_t *candidate = &sounds[slots[slot] - 1];
+        if (candidate->tick == tick && candidate->ordinal == ordinal && candidate->sound.sample == c->sound.sample) live = candidate;
+      }
       if (live) {
         live->seen = true;
         continue;
@@ -713,6 +804,29 @@ static void live_reconcile(live_set_t *set, const audio_track_t *track, int last
 // Adds the sound of game time going from local tick `from` to `to` over `n`
 // frames, weighted per frame by `envelope`. With `live`, the one-shots are the
 // live ones rather than the track's.
+// A continuous voice of the tick being mixed, looked up once for its frames.
+typedef struct run_voice_t {
+  const captured_sound_t *c;
+  const sample_t *sample;
+  const captured_sound_t *next, *before; // the same voice in the ticks around, NULL where it starts or stops
+  float gain[2];
+} run_voice_t;
+
+// Mixing runs on the main thread only (audio_update), so one buffer serves.
+static run_voice_t *g_run_voices;
+static uint32_t g_run_voice_cap;
+
+static bool grow_voice_scratch(uint32_t need) {
+  if (need <= g_run_voice_cap) return true;
+  uint32_t cap = g_run_voice_cap ? g_run_voice_cap : 64;
+  while (cap < need) cap *= 2;
+  run_voice_t *grown = realloc(g_run_voices, sizeof(*grown) * cap);
+  if (!grown) return false;
+  g_run_voices = grown;
+  g_run_voice_cap = cap;
+  return true;
+}
+
 static void mix_span(const audio_listener_t *listener, double from, double to, int n, const float *envelope, float *out,
                      const live_set_t *live) {
   const audio_track_t *track = *listener->track;
@@ -724,10 +838,10 @@ static void mix_span(const audio_listener_t *listener, double from, double to, i
   // One-shots that started in the tail before and sound into the span.
   const int first = (int)floor(lo - track->tail);
   const int last = (int)fmin(ceil(hi) + 1, (double)decided(listener));
+  g_one_shot_count = 0;
   for (int i = 0; live && i < live->count; ++i) {
     const live_sound_t *l = &live->live[i];
-    if (l->begin <= hi && l->begin + l->duration >= lo)
-      mix_one_shot(listener, &l->sound, l->begin, l->duration, from, step, n, envelope, out);
+    if (l->begin <= hi && l->begin + l->duration >= lo) one_shot_add(listener, &l->sound, l->begin, l->duration);
   }
   for (int tick = first < 1 ? 1 : first; !live && tick <= last; ++tick) {
     const audio_tick_t *t = track_tick(track, tick);
@@ -737,7 +851,7 @@ static void mix_span(const audio_listener_t *listener, double from, double to, i
       if (c->sound.voice) continue;
       const double begin = tick - 1 + c->sound.offset;
       if (begin > hi || begin + c->duration < lo) continue;
-      mix_one_shot(listener, &c->sound, begin, c->duration, from, step, n, envelope, out);
+      one_shot_add(listener, &c->sound, begin, c->duration);
     }
   }
 
@@ -751,50 +865,90 @@ static void mix_span(const audio_listener_t *listener, double from, double to, i
     const double begin = e->tick - 1;
     const double duration = (double)s->frames / s->rate / e->sound.pitch * tps;
     if (begin > hi || begin + duration < lo) continue;
-    mix_one_shot(listener, &e->sound, begin, duration, from, step, n, envelope, out);
+    one_shot_add(listener, &e->sound, begin, duration);
   }
+  if (g_one_shot_count > MAX_MIXED_ONE_SHOTS) {
+    qsort(g_one_shots, (size_t)g_one_shot_count, sizeof(*g_one_shots), one_shot_compare);
+    g_one_shot_count = MAX_MIXED_ONE_SHOTS;
+  }
+  for (int i = 0; i < g_one_shot_count; ++i)
+    mix_one_shot(listener, &g_one_shots[i], from, step, n, envelope, out);
 
   // Continuous voices and the game's own stream, tick by tick. While
   // recording, the frames being rendered are heard a device latency after the
   // playhead, past the last tick decided: the voices of that tick hold on
   // until the next is decided and rendered over them.
+  // What a voice needs from its tick (its sample, its neighbours in the ticks
+  // around, its gains) is the same for every frame in that tick, so it is
+  // looked up once per run of frames rather than once per frame: with many
+  // voices, finding each one's neighbours per frame was most of the mixing.
   const double fade = 0.005 * tps; // 5 ms, in ticks
   const int last_decided = decided(listener);
-  for (int i = 0; i < n; ++i) {
-    const double local = from + step * i;
-    if (local < 0.0) continue;
-    const int tick = (int)floor(local) + 1;
+  for (int i = 0; i < n;) {
+    const double first_local = from + step * i;
+    if (first_local < 0.0) {
+      ++i;
+      continue;
+    }
+    const int tick = (int)floor(first_local) + 1;
+    int run_end = i + 1;
+    while (run_end < n) {
+      const double local = from + step * run_end;
+      if (local < 0.0 || (int)floor(local) + 1 != tick) break;
+      ++run_end;
+    }
     const int source = tick <= last_decided ? tick : last_decided;
     const audio_tick_t *t = track_tick(track, source);
-    if (!t) continue;
-    const double f = local - (tick - 1);
+    if (!t) {
+      i = run_end;
+      continue;
+    }
     const double held = tick - source; // ticks past the one captured
-    for (uint32_t k = 0; k < t->sound_count; ++k) {
-      const captured_sound_t *c = &t->sounds[k];
-      if (!c->sound.voice) continue;
-      const sample_t *s = sample_get(c->sound.sample);
-      if (!s) continue;
-      const bool holding = tick >= last_decided;
-      const captured_sound_t *next = holding ? c : find_voice(track_tick(track, tick + 1), &c->sound);
-      const captured_sound_t *before = held > 0.0 ? c : find_voice(track_tick(track, tick - 1), &c->sound);
-      float volume = c->sound.volume;
-      if (next) volume += (next->sound.volume - volume) * (float)f;
-      else volume *= (float)fmin(1.0, (1.0 - f) / fade);
-      if (!before) volume *= (float)fmin(1.0, f / fade);
-      double pos = fmod(c->phase + (held + f) / tps * s->rate * c->sound.pitch, (double)s->frames);
-      float l, r, gain[2];
-      sample_read(s, pos, &l, &r);
-      gains_for(listener, &c->sound, gain);
-      const float w = volume / (c->sound.volume > 0.f ? c->sound.volume : 1.f) * envelope[i];
-      out[2 * i] += l * gain[0] * w;
-      out[2 * i + 1] += r * gain[1] * w;
+    const bool holding = tick >= last_decided;
+    const audio_tick_t *next_tick = holding ? NULL : track_tick(track, tick + 1);
+    const audio_tick_t *before_tick = held > 0.0 ? NULL : track_tick(track, tick - 1);
+    int voices = 0;
+    if (t->sound_count > 0 && grow_voice_scratch(t->sound_count)) {
+      for (uint32_t k = 0; k < t->sound_count; ++k) {
+        const captured_sound_t *c = &t->sounds[k];
+        if (!c->sound.voice) continue;
+        const sample_t *sample = sample_get(c->sound.sample);
+        if (!sample) continue;
+        run_voice_t *v = &g_run_voices[voices];
+        gains_for(listener, &c->sound, v->gain);
+        if (v->gain[0] == 0.f && v->gain[1] == 0.f) continue; // out of hearing
+        v->c = c;
+        v->sample = sample;
+        v->next = holding ? c : find_voice(next_tick, &c->sound);
+        v->before = held > 0.0 ? c : find_voice(before_tick, &c->sound);
+        ++voices;
+      }
     }
-    if (t->pcm && held == 0.0) {
-      float l, r;
-      pcm_read(track, local, tps, &l, &r);
-      out[2 * i] += l * envelope[i];
-      out[2 * i + 1] += r * envelope[i];
+    for (int j = i; j < run_end; ++j) {
+      const double local = from + step * j;
+      const double f = local - (tick - 1);
+      for (int k = 0; k < voices; ++k) {
+        const run_voice_t *v = &g_run_voices[k];
+        const captured_sound_t *c = v->c;
+        float volume = c->sound.volume;
+        if (v->next) volume += (v->next->sound.volume - volume) * (float)f;
+        else volume *= (float)fmin(1.0, (1.0 - f) / fade);
+        if (!v->before) volume *= (float)fmin(1.0, f / fade);
+        double pos = fmod(c->phase + (held + f) / tps * v->sample->rate * c->sound.pitch, (double)v->sample->frames);
+        float l, r;
+        sample_read(v->sample, pos, &l, &r);
+        const float w = volume / (c->sound.volume > 0.f ? c->sound.volume : 1.f) * envelope[j];
+        out[2 * j] += l * v->gain[0] * w;
+        out[2 * j + 1] += r * v->gain[1] * w;
+      }
+      if (t->pcm && held == 0.0) {
+        float l, r;
+        pcm_read(track, local, tps, &l, &r);
+        out[2 * j] += l * envelope[j];
+        out[2 * j + 1] += r * envelope[j];
+      }
     }
+    i = run_end;
   }
 }
 
