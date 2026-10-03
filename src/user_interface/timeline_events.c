@@ -87,7 +87,7 @@ static void timeline_event_jump_to(timeline_state_t *ts, const timeline_event_t 
   if (!ts || !event) return;
   const int group = event->group_index >= 0 && event->group_index < ts->group_count ? event->group_index : 0;
   const int offset = ts->group_count > 0 ? ts->groups[group]->start_offset : 0;
-  ts->current_tick = event->tick + offset;
+  model_move_playhead(ts, event->tick + offset);
 }
 
 static const char *timeline_event_group_name(const timeline_state_t *ts, const timeline_event_t *event, char *fallback,

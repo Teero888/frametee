@@ -924,6 +924,7 @@ void interaction_cancel_recording(timeline_state_t *ts) {
 void interaction_trim_recording_snippet(timeline_state_t *ts) {
   if (!ts->recording) return;
 
+  bool cut = false;
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
 
@@ -935,6 +936,7 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
 
       int trim_to = model_group_playhead_tick(ts, ts->active_group_index);
       if (trim_to < rec->start_tick) {
+        cut |= rec->input_count > 0;
         model_free_snippet_inputs(rec);
         memmove(&track->recording_snippets[j], &track->recording_snippets[j + 1], (track->recording_snippet_count - j - 1) * sizeof(input_snippet_t));
         track->recording_snippet_count--;
@@ -945,6 +947,7 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
       int new_duration = trim_to - rec->start_tick;
       if (new_duration < rec->input_count) {
         model_resize_snippet_inputs(ts, rec, new_duration);
+        cut = true;
       }
 
       if (rec->input_count <= 0) {
@@ -955,6 +958,9 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
       }
     }
   }
+  // The ticks past the playhead fall back to what they held before the take,
+  // so the worlds simulated with the cut inputs go too.
+  if (cut) model_invalidate_group_physics(ts, ts->active_group_index, model_group_playhead_tick(ts, ts->active_group_index));
 
   ts->recording_snippets.count = 0;
 

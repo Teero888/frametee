@@ -198,12 +198,14 @@ void renderer_draw_controls(timeline_state_t *ts) {
   float btn_gap = 6.0f * dpi_scale;
 
   igPushItemWidth(80 * dpi_scale);
-  igDragInt("##CurrentTick", &ts->current_tick, 1, model_get_min_global_tick(ts), 100000000, "Tick %d", ImGuiSliderFlags_AlwaysClamp);
+  int field_tick = ts->current_tick;
+  igDragInt("##CurrentTick", &field_tick, 1, model_get_min_global_tick(ts), 100000000, "Tick %d", ImGuiSliderFlags_AlwaysClamp);
   ts->tick_field_active = igIsItemActive();
+  if (field_tick != ts->current_tick) model_move_playhead(ts, field_tick);
   igPopItemWidth();
 
   switch (renderer_draw_transport(ts->ui, ts->is_playing)) {
-  case TRANSPORT_START: ts->current_tick = model_get_min_global_tick(ts); break;
+  case TRANSPORT_START: model_move_playhead(ts, model_get_min_global_tick(ts)); break;
   case TRANSPORT_BACK: model_advance_tick(ts, -ts->playback_speed); break;
   case TRANSPORT_PLAY:
     ts->is_playing = !ts->is_playing;
@@ -211,13 +213,13 @@ void renderer_draw_controls(timeline_state_t *ts) {
       if (ts->recording && ts->recording_snippets.count > 0) {
         input_snippet_t *recording_snippet = ts->recording_snippets.snippets[0];
         if (recording_snippet)
-          ts->current_tick = recording_snippet->end_tick + ts->groups[ts->active_group_index]->start_offset;
+          model_move_playhead(ts, recording_snippet->end_tick + ts->groups[ts->active_group_index]->start_offset);
       }
       ts->last_update_time = igGetTime();
     }
     break;
   case TRANSPORT_FORWARD: model_advance_tick(ts, ts->playback_speed); break;
-  case TRANSPORT_END: ts->current_tick = model_get_max_timeline_tick(ts); break;
+  case TRANSPORT_END: model_move_playhead(ts, model_get_max_timeline_tick(ts)); break;
   case TRANSPORT_NONE: break;
   }
 

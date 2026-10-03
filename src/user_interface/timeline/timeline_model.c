@@ -930,7 +930,10 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
   int last_input_tick = -1;
 
   if (ts->recording) {
-    for (int i = 0; i < track->recording_snippet_count; ++i) {
+    // Newest first: going back over a take and recording this track again
+    // starts a second buffer on top of the first, and the commit applies them
+    // in order, so the later one is what stays.
+    for (int i = track->recording_snippet_count - 1; i >= 0; --i) {
       const input_snippet_t *snippet = &track->recording_snippets[i];
       if (snippet->is_active) {
         const input_record_t *inputs = input_effects_snippet_window(snippet);
@@ -973,6 +976,16 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
   return blank;
 }
 
+// Whether any world, snapshot or sound of the group was simulated past local
+// `tick`, i.e. whether changing the input at `tick` leaves something stale.
+static bool group_has_worlds_after(timeline_state_t *ts, int group_index, int tick) {
+  if (group_index < 0 || group_index >= ts->group_count) return false;
+  const timeline_group_t *group = ts->groups[group_index];
+  return group->vec.current_size > (uint32_t)(imax(0, tick) / group->snapshot_step) + 1 || group->cached_tick > tick ||
+         group->presentation_tick > tick || group->audio_world_tick > tick ||
+         gh_world_tick(model_host(ts), group->previous_world) > tick;
+}
+
 void model_advance_tick(timeline_state_t *ts, int steps) {
   ts->current_tick = imax(ts->current_tick + steps, model_get_min_global_tick(ts));
 
@@ -994,6 +1007,12 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
         if (relative_tick > active_rec_snip->input_count) {
           int old_count = active_rec_snip->input_count;
           int needed = relative_tick;
+          // The ticks from the old end on get new inputs. Anything simulated past
+          // it went by the inputs that were there before: a take recorded over,
+          // a trimmed tail, or a jump that moved the playhead ahead of the take.
+          const int first_changed = active_rec_snip->start_tick + old_count;
+          if (group_has_worlds_after(ts, track->group_index, first_changed))
+            model_invalidate_group_physics(ts, track->group_index, first_changed);
           model_resize_snippet_inputs(ts, active_rec_snip, needed);
 
           // Fill the first new tick with the current input, then consume any
@@ -1009,6 +1028,11 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
       }
     }
   }
+}
+
+void model_move_playhead(timeline_state_t *ts, int tick) {
+  if (ts->recording) model_advance_tick(ts, tick - ts->current_tick);
+  else ts->current_tick = tick;
 }
 
 void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_id_to_activate) {
@@ -1094,6 +1118,10 @@ static void snapshots_store(timeline_state_t *ts, timeline_group_t *group, int g
   game_host_t *host = model_host(ts);
   const int tick = gh_world_tick(host, world);
   if (tick % group->snapshot_step != 0) return;
+  // While recording, the inputs from the playhead on are not taken yet. A world
+  // past it (a camera path or an inspector looking ahead) would be kept with
+  // inputs the recording is about to replace, and seeking would resume from it.
+  if (ts->recording && group_index == ts->active_group_index && tick > model_group_playhead_tick(ts, group_index)) return;
   uint32_t index = (uint32_t)(tick / group->snapshot_step);
   if (index == group->vec.current_size && index >= snapshot_capacity(ts)) {
     snapshots_thin(group);

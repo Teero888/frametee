@@ -95,6 +95,10 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
 bool model_gather_step(timeline_state_t *ts, int group_index, int tick, int player_count, uint8_t *inputs,
                        ft_player_playback *playback);
 void model_advance_tick(timeline_state_t *ts, int steps);
+// Puts the playhead at a global tick. While recording, a playhead moved ahead
+// takes the ticks it passes over the way playing does, rather than getting
+// ahead of the take and being drawn from inputs the take is about to replace.
+void model_move_playhead(timeline_state_t *ts, int tick);
 // Upper end of the playback/recording tick rate, shared by the speed widget and its keybinds.
 int model_max_playback_speed(const timeline_state_t *ts);
 void model_activate_snippet(timeline_state_t *ts, int track_index, int snippet_id_to_activate);
