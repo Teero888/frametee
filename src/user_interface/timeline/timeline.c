@@ -38,10 +38,11 @@ static void follow_playhead(timeline_state_t *ts, float view_width) {
 
 // A playhead held by the mouse inside a margin scrolls the view that way, the
 // faster the deeper it is held, so it can be dragged along the whole timeline.
+// This is a deliberate act, so it works whether following is on or not.
 // Runs before the drag places the playhead under the mouse in the moved view.
 static void scroll_with_dragged_playhead(timeline_state_t *ts, ImRect header_bb) {
   static double carry = 0.0; // the part of a tick scrolled but not shown yet
-  if (!ts->ui->follow_playhead || !ts->is_header_dragging || ts->recording || ts->zoom <= 0.f) {
+  if (!ts->is_header_dragging || ts->recording || ts->zoom <= 0.f) {
     carry = 0.0;
     return;
   }
@@ -64,7 +65,7 @@ static void scroll_with_dragged_playhead(timeline_state_t *ts, ImRect header_bb)
 
 // While the playhead is held, the margins it scrolls the view from show faintly.
 static void draw_follow_margins(timeline_state_t *ts, ImDrawList *draw_list, ImRect area) {
-  if (!ts->ui->follow_playhead || !ts->is_header_dragging || ts->recording) return;
+  if (!ts->is_header_dragging || ts->recording) return;
   const float margin = follow_margin(area.Max.x - area.Min.x);
   const ImU32 edge = igGetColorU32_Col(ImGuiCol_SeparatorActive, 0.14f);
   const ImU32 inner = igGetColorU32_Col(ImGuiCol_SeparatorActive, 0.f);

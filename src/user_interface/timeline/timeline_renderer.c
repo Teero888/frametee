@@ -225,12 +225,11 @@ void renderer_draw_controls(timeline_state_t *ts) {
   case TRANSPORT_NONE: break;
   }
 
-  // Lit while on, the way the Camera tab shows its toggles.
   igSameLine(0, btn_gap);
   const bool following = ts->ui->follow_playhead;
-  if (following) igPushStyleColor_Vec4(ImGuiCol_Button, igGetStyle()->Colors[ImGuiCol_ButtonActive]);
+  ui_toggle_style_push(following);
   if (ui_icon_button(ts->ui, ICON_FA_ARROWS_TO_DOT, (ImVec2){30 * dpi_scale, 0})) ts->ui->follow_playhead = !following;
-  if (following) igPopStyleColor(1);
+  ui_toggle_style_pop();
   if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("Follow playhead");
 
   igSameLine(0, 12 * dpi_scale);

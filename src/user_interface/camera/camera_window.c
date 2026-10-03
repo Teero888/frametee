@@ -1686,9 +1686,9 @@ static void render_inspector(ui_handler_t *ui, float width, float height) {
 // Controls
 
 static bool toggle_button(const char *label, bool active, const char *tooltip) {
-  if (active) igPushStyleColor_Vec4(ImGuiCol_Button, igGetStyle()->Colors[ImGuiCol_ButtonActive]);
+  ui_toggle_style_push(active);
   const bool pressed = igButton(label, (ImVec2){0, 0});
-  if (active) igPopStyleColor(1);
+  ui_toggle_style_pop();
   if (igIsItemHovered(0)) igSetTooltip("%s", tooltip);
   return pressed;
 }
@@ -1726,7 +1726,8 @@ static void render_controls(ui_handler_t *ui) {
   if (toggle_button(label, ed->look_through, tip)) set_look_through(ui, !ed->look_through);
   igSameLine(0, 8.f * scale);
   snprintf(label, sizeof(label), "%s Key view (%s)", ICON_FA_KEY, binding_text(ui, ACTION_CAMERA_INSERT_KEY));
-  if (toggle_button(label, false, "Key what the viewport shows at the playhead, or update the key there")) key_current_view(ui);
+  if (igButton(label, (ImVec2){0, 0})) key_current_view(ui);
+  if (igIsItemHovered(0)) igSetTooltip("Key what the viewport shows at the playhead, or update the key there");
 
   igSameLine(0, 16.f * scale);
   if (toggle_button("Keys", !ed->graph_mode, "Key lanes for every channel")) ed->graph_mode = false;

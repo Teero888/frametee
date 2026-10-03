@@ -171,5 +171,10 @@ void ui_add_recent_project(ui_handler_t *ui, const char *path);
 void ui_render_game_ui_slot(ui_handler_t *ui, ft_ui_slot slot, int track_index);
 void ui_render_game_snippet_menu(ui_handler_t *ui, int snippet_id);
 bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size);
+// Styles the next button as a toggle that reads on or off at a glance: off is a
+// plain frame with dimmed text, on is the accent colour every button has. The
+// Render tab's switches look the same way. Pop after the button.
+void ui_toggle_style_push(bool on);
+void ui_toggle_style_pop(void);
 
 #endif

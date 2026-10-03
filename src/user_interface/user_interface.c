@@ -2533,6 +2533,16 @@ void ui_cleanup(ui_handler_t *ui) {
   }
 }
 
+void ui_toggle_style_push(bool on) {
+  const ImVec4 *colors = igGetStyle()->Colors;
+  igPushStyleColor_Vec4(ImGuiCol_Button, colors[on ? ImGuiCol_Button : ImGuiCol_FrameBg]);
+  igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, colors[on ? ImGuiCol_ButtonHovered : ImGuiCol_FrameBgHovered]);
+  igPushStyleColor_Vec4(ImGuiCol_ButtonActive, colors[on ? ImGuiCol_ButtonActive : ImGuiCol_FrameBgActive]);
+  igPushStyleColor_Vec4(ImGuiCol_Text, colors[on ? ImGuiCol_Text : ImGuiCol_TextDisabled]);
+}
+
+void ui_toggle_style_pop(void) { igPopStyleColor(4); }
+
 bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size) {
   ImGuiWindow *window = igGetCurrentWindow();
   if (window->SkipItems) return false;
