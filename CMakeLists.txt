@@ -209,6 +209,18 @@ set(IMGUI_SOURCES
     libs/cimgui/imgui/backends/imgui_impl_glfw.cpp
 )
 add_executable(${PROJECT_NAME} ${SRCS} ${IMGUI_SOURCES})
+# UTF-8 as the process's code page (src/system/windows/frametee.manifest), for
+# every path the modules and libraries open with the C library. MinGW embeds it
+# as a resource (taking the place of its default manifest); MSVC's linker
+# merges a .manifest source into its own.
+if(MINGW)
+    enable_language(RC)
+    target_sources(${PROJECT_NAME} PRIVATE src/system/windows/frametee.rc)
+    set_source_files_properties(src/system/windows/frametee.rc PROPERTIES
+        OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/system/windows/frametee.manifest")
+elseif(MSVC)
+    target_sources(${PROJECT_NAME} PRIVATE src/system/windows/frametee.manifest)
+endif()
 
 # Force-include the cached GLFW monitor wrappers instead of renaming the GLFW
 # entry points with -D: a -D rename also hits their declarations in glfw3.h, so
