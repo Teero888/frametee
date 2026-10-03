@@ -719,6 +719,80 @@ undo_command_t *commands_create_track_export_change(ui_handler_t *ui, int track_
   return &command->base;
 }
 
+typedef struct {
+  undo_command_t base;
+  int count;
+  int *tracks;
+  track_link_state_t *before, *after;
+} TrackLinkCommand;
+
+track_link_state_t commands_track_link_state(const timeline_state_t *ts, int track_index) {
+  const player_track_t *track = &ts->player_tracks[track_index];
+  return (track_link_state_t){track->is_linked, track->linked_source_player, track->linked_copy_fields, track->linked_transform_flags};
+}
+
+static void apply_track_links(const TrackLinkCommand *command, timeline_state_t *ts, const track_link_state_t *states) {
+  for (int i = 0; i < command->count; ++i) {
+    if (command->tracks[i] < 0 || command->tracks[i] >= ts->player_track_count) continue;
+    player_track_t *track = &ts->player_tracks[command->tracks[i]];
+    track->is_linked = states[i].linked;
+    track->linked_source_player = states[i].source;
+    track->linked_copy_fields = states[i].copy_fields;
+    track->linked_transform_flags = states[i].transforms;
+  }
+}
+
+static void undo_track_links(void *command, void *ts) {
+  TrackLinkCommand *c = command;
+  apply_track_links(c, ts, c->before);
+}
+
+static void redo_track_links(void *command, void *ts) {
+  TrackLinkCommand *c = command;
+  apply_track_links(c, ts, c->after);
+}
+
+static void cleanup_track_links(void *command) {
+  TrackLinkCommand *c = command;
+  free(c->tracks);
+  free(c->before);
+  free(c->after);
+  free(c);
+}
+
+undo_command_t *commands_create_track_link_change(ui_handler_t *ui, const int *tracks, const track_link_state_t *before, int count,
+                                                  const char *description) {
+  if (!ui || !tracks || !before || count <= 0) return NULL;
+  bool changed = false;
+  for (int i = 0; i < count && !changed; ++i) {
+    if (tracks[i] < 0 || tracks[i] >= ui->timeline.player_track_count) continue;
+    const track_link_state_t now = commands_track_link_state(&ui->timeline, tracks[i]);
+    changed = now.linked != before[i].linked || now.source != before[i].source || now.copy_fields != before[i].copy_fields ||
+              now.transforms != before[i].transforms;
+  }
+  if (!changed) return NULL;
+  TrackLinkCommand *command = calloc(1, sizeof(*command));
+  if (!command) return NULL;
+  command->tracks = malloc(sizeof(int) * (size_t)count);
+  command->before = malloc(sizeof(track_link_state_t) * (size_t)count);
+  command->after = malloc(sizeof(track_link_state_t) * (size_t)count);
+  if (!command->tracks || !command->before || !command->after) {
+    cleanup_track_links(command);
+    return NULL;
+  }
+  command->count = count;
+  for (int i = 0; i < count; ++i) {
+    command->tracks[i] = tracks[i];
+    command->before[i] = before[i];
+    command->after[i] = tracks[i] >= 0 && tracks[i] < ui->timeline.player_track_count ? commands_track_link_state(&ui->timeline, tracks[i]) : before[i];
+  }
+  snprintf(command->base.description, sizeof(command->base.description), "%s", description);
+  command->base.undo = undo_track_links;
+  command->base.redo = redo_track_links;
+  command->base.cleanup = cleanup_track_links;
+  return &command->base;
+}
+
 undo_command_t *commands_create_timeline_event_group_change(ui_handler_t *ui, int event_index, int before) {
   if (!ui || event_index < 0 || event_index >= ui->timeline.event_count || before < 0 || before >= ui->timeline.group_count ||
       before == ui->timeline.events[event_index].group_index)

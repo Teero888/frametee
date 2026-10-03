@@ -305,6 +305,141 @@ static void update_player_color(game_host_t *host, const ft_world *world, int pl
   }
 }
 
+// Everything else a game publishes besides its players (DDNet's projectiles
+// and lasers) is followed through the prediction too. Nothing about them is
+// known here beyond what the class lists: a class with a `from` and a
+// `position` is a beam, drawn as it stands at every step, and one with only a
+// `position` leaves a trail. Entities have no lasting identity across steps
+// (they come and go, and their indices with them), so a trail joins each to
+// the nearest one of its class a step earlier.
+#define ENTITY_TRAIL_REACH 4.f // tiles an entity may move in a step and still be the same one
+
+typedef struct entity_trace_t {
+  unsigned entity_class;
+  int position, from;   // property indices; from < 0 for a trail
+  ft_vec2 *last;        // the class's positions at the previous step
+  ft_vec2 *last_from;   // and, for a beam, where each started
+  int last_count;
+} entity_trace_t;
+
+typedef struct entity_traces_t {
+  entity_trace_t *traces;
+  int count;
+  line_segment_t *segments;
+  uint32_t segment_count, segment_cap;
+  float color[4];
+  float width_px;
+} entity_traces_t;
+
+static int entity_vec2_prop(const ft_entity_class *entity_class, const char *id) {
+  for (uint32_t i = 0; i < entity_class->prop_count; ++i)
+    if (entity_class->props[i].id && strcmp(entity_class->props[i].id, id) == 0 && entity_class->props[i].kind == FT_VALUE_VEC2)
+      return (int)i;
+  return -1;
+}
+
+static void entity_traces_init(game_host_t *host, entity_traces_t *t, const float color[4], float width_px) {
+  memset(t, 0, sizeof(*t));
+  const unsigned classes = gh_entity_class_count(host);
+  if (classes <= 1) return;
+  t->traces = calloc(classes, sizeof(*t->traces));
+  if (!t->traces) return;
+  for (unsigned c = 0; c < classes; ++c) {
+    if (c == FT_ENTITY_CLASS_PLAYER) continue;
+    const ft_entity_class *entity_class = gh_entity_class(host, c);
+    if (!entity_class) continue;
+    const int position = entity_vec2_prop(entity_class, "position");
+    if (position < 0) continue;
+    t->traces[t->count++] = (entity_trace_t){.entity_class = c, .position = position, .from = entity_vec2_prop(entity_class, "from")};
+  }
+  memcpy(t->color, color, sizeof(t->color));
+  t->color[3] *= 0.7f; // a little fainter than the players' own lines
+  t->width_px = width_px * 0.75f;
+}
+
+static void entity_segment(entity_traces_t *t, ft_vec2 from, ft_vec2 to) {
+  if (t->segment_count == t->segment_cap) {
+    const uint32_t cap = t->segment_cap ? t->segment_cap * 2 : 256;
+    line_segment_t *grown = realloc(t->segments, sizeof(*grown) * cap);
+    if (!grown) return;
+    t->segments = grown;
+    t->segment_cap = cap;
+  }
+  line_segment_t *segment = &t->segments[t->segment_count++];
+  segment->p1[0] = from.x;
+  segment->p1[1] = from.y;
+  segment->p2[0] = to.x;
+  segment->p2[1] = to.y;
+  memcpy(segment->color, t->color, sizeof(segment->color));
+  segment->thickness = 0.f;
+  segment->width_px = t->width_px;
+}
+
+// Takes the entities as they are in `world`; `draw` is false for the first
+// look, which only gives the trails their starting points.
+static void entity_traces_step(game_host_t *host, const ft_world *world, entity_traces_t *t, bool draw) {
+  for (int i = 0; i < t->count; ++i) {
+    entity_trace_t *trace = &t->traces[i];
+    const int count = gh_entity_count(host, world, trace->entity_class);
+    ft_vec2 *now = count > 0 ? malloc(sizeof(*now) * (size_t)count) : NULL;
+    ft_vec2 *now_from = count > 0 && trace->from >= 0 ? malloc(sizeof(*now_from) * (size_t)count) : NULL;
+    bool *taken = count > 0 && trace->last_count > 0 ? calloc((size_t)trace->last_count, sizeof(*taken)) : NULL;
+    int now_count = 0;
+    for (int e = 0; now && e < count; ++e) {
+      ft_value value;
+      if (!gh_entity_prop_get(host, world, trace->entity_class, e, (unsigned)trace->position, &value) || value.kind != FT_VALUE_VEC2) continue;
+      const ft_vec2 position = value.as.v;
+      now[now_count++] = position;
+      if (!draw) continue;
+      if (trace->from >= 0) {
+        if (!now_from || !gh_entity_prop_get(host, world, trace->entity_class, e, (unsigned)trace->from, &value) || value.kind != FT_VALUE_VEC2) {
+          --now_count;
+          continue;
+        }
+        const ft_vec2 from = value.as.v;
+        now_from[now_count - 1] = from;
+        // A beam stays as it is for a few steps: drawn once.
+        bool drawn = false;
+        for (int k = 0; k < trace->last_count && !drawn; ++k)
+          drawn = trace->last_from[k].x == from.x && trace->last_from[k].y == from.y && trace->last[k].x == position.x && trace->last[k].y == position.y;
+        if (!drawn) entity_segment(t, from, position);
+        continue;
+      }
+      int nearest = -1;
+      float best = ENTITY_TRAIL_REACH * ENTITY_TRAIL_REACH;
+      for (int k = 0; taken && k < trace->last_count; ++k) {
+        if (taken[k]) continue;
+        const float dx = trace->last[k].x - position.x, dy = trace->last[k].y - position.y;
+        const float d2 = dx * dx + dy * dy;
+        if (d2 < best) {
+          best = d2;
+          nearest = k;
+        }
+      }
+      if (nearest >= 0) {
+        taken[nearest] = true;
+        entity_segment(t, trace->last[nearest], position);
+      }
+    }
+    free(taken);
+    free(trace->last);
+    free(trace->last_from);
+    trace->last = now;
+    trace->last_from = now_from;
+    trace->last_count = now_count;
+  }
+}
+
+static void entity_traces_free(entity_traces_t *t) {
+  for (int i = 0; i < t->count; ++i) {
+    free(t->traces[i].last);
+    free(t->traces[i].last_from);
+  }
+  free(t->traces);
+  free(t->segments);
+  memset(t, 0, sizeof(*t));
+}
+
 void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *previous, const ft_world *current, float alpha) {
   if (!ui || !current) return;
   timeline_state_t *timeline = &ui->timeline;
@@ -403,6 +538,9 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
     }
 
     uint32_t segment_count = 0;
+    entity_traces_t entities;
+    entity_traces_init(host, &entities, line->color, width_px);
+    if (!is_3d) entity_traces_step(host, world, &entities, false);
     for (int step = 0; step < length; ++step) {
       // Recorded players replay their recording here too, so predicted paths meet them where they
       // really are.
@@ -430,6 +568,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
         memcpy(packed_inputs + (size_t)player * input_size, input.bytes, input_size);
       }
       gh_world_step_playback(host, world, packed_inputs, replaying ? playback : NULL, (unsigned)players);
+      if (!is_3d) entity_traces_step(host, world, &entities, true);
 
       for (int player = 0; player < players; ++player) {
         const int track = tracks[player];
@@ -476,8 +615,12 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
         have_position[player] = true;
       }
     }
-    if (!is_3d)
+    if (!is_3d) {
       renderer_submit_line_batch(ui->gfx_handler, PREDICTION_Z + (float)line_index * 0.001f, segments, segment_count);
+      if (entities.segment_count > 0)
+        renderer_submit_line_batch(ui->gfx_handler, PREDICTION_Z + (float)line_index * 0.001f, entities.segments, entities.segment_count);
+    }
+    entity_traces_free(&entities);
   }
 
 cleanup:

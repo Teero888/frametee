@@ -30,16 +30,6 @@ static void select_snippets_in_rect(timeline_state_t *ts, ImRect rect, ImRect ti
 static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_tick, int duration, int exclude_id, int target_track_index);
 static void interaction_start_recording_on_track(timeline_state_t *ts, int track_index);
 
-static void copy_linked_field(game_host_t *host, const ft_input_field *field, int field_index, const input_record_t *source,
-                              input_record_t *target) {
-  if (field->kind == FT_INPUT_VEC2)
-    engine_input_set_vec2(host, target, field_index, engine_input_get_vec2(host, source, field_index));
-  else if (field->kind == FT_INPUT_FLOAT)
-    engine_input_set_float(host, target, field_index, engine_input_get_float(host, source, field_index));
-  else
-    engine_input_set(host, target, field_index, engine_input_get(host, source, field_index));
-}
-
 static void mirror_linked_field(game_host_t *host, const ft_input_field *field, int field_index, uint32_t transforms,
                                 input_record_t *record) {
   const bool mirror_x = (transforms & FT_LINKED_MIRROR_X) && (field->flags & FT_INPUT_FLAG_MIRROR_X);
@@ -57,6 +47,18 @@ static void mirror_linked_field(game_host_t *host, const ft_input_field *field, 
   }
 }
 
+bool interaction_track_is_linked(const timeline_state_t *ts, int track_index) {
+  return track_index >= 0 && track_index < ts->player_track_count && ts->player_tracks[track_index].is_linked &&
+         track_index != ts->selected_player_track_index && game_has_cap(&ts->ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS);
+}
+
+// Works out, for every linked tee being recorded, which fields its link drives
+// this frame and their values: the fields it copies from its source (while
+// copying is on, mirrored as asked), what its linked key binds press, and what
+// the game's linked actions set. The rest of its input is left as it was
+// (model_linked_input_at_tick). The tee being controlled is never driven by its
+// own link. Every link reads its source as it was when the frame began, so a
+// chain of links does not depend on the order of the tracks.
 void interaction_apply_linked_inputs(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   if (!ts->recording || ts->selected_player_track_index == -1) return;
@@ -69,42 +71,71 @@ void interaction_apply_linked_inputs(ui_handler_t *ui) {
   const ft_world *world = model_world_at_tick(ts, ts->current_tick);
   if (!schema || !world) return;
 
+  input_record_t *before = malloc(sizeof(*before) * (size_t)ts->player_track_count);
+  if (!before) return;
+  for (int i = 0; i < ts->player_track_count; ++i)
+    before[i] = ts->player_tracks[i].current_input;
+  const int tick = model_group_playhead_tick(ts, ts->active_group_index);
+
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
-    if (!track->is_linked || track->group_index != ts->active_group_index) continue;
+    if (!interaction_track_is_linked(ts, i) || track->group_index != ts->active_group_index) continue;
     const int target_player = model_group_local_track_index(ts, i);
-    int source_player = track->linked_source_player;
-    const int group_players = model_group_track_count(ts, track->group_index);
-    if (source_player < 0 || source_player >= group_players || source_player == target_player)
-      source_player = model_group_local_track_index(ts, ts->selected_player_track_index);
-    if (source_player < 0 || source_player == target_player) continue;
-    const int source_track = model_group_track_index(ts, track->group_index, source_player);
-    if (source_track < 0) continue;
-    const input_record_t *source_input = &ts->player_tracks[source_track].current_input;
+    const int source_track = model_linked_source_track(ts, i);
+    const int source_player = source_track >= 0 ? model_group_local_track_index(ts, source_track) : -1;
 
-    input_record_t final_input;
-    engine_input_default(host, &final_input);
-
-    if (ts->linked_copy_input) {
-      for (uint32_t field_index = 0; field_index < schema->field_count && field_index < 64; ++field_index) {
-        if ((track->linked_copy_fields & (UINT64_C(1) << field_index)) == 0) continue;
-        const ft_input_field *field = &schema->fields[field_index];
-        copy_linked_field(host, field, (int)field_index, source_input, &final_input);
-        mirror_linked_field(host, field, (int)field_index, track->linked_transform_flags, &final_input);
+    // Starts from the tee's own input, keeps what a linked "pressed" control
+    // set earlier in this take, and a trigger not yet consumed by a tick.
+    input_record_t final_input = model_get_authored_input_at_tick(ts, i, tick);
+    engine_input_copy_fields(host, &before[i], &final_input, track->linked_sticky_fields);
+    uint64_t driven = track->linked_sticky_fields;
+    for (uint32_t field_index = 0; field_index < schema->field_count && field_index < 64; ++field_index) {
+      const ft_input_field *field = &schema->fields[field_index];
+      if (!(field->flags & FT_INPUT_FLAG_TRIGGER)) continue;
+      input_record_t pending;
+      engine_input_default(host, &pending);
+      if (engine_input_changed_fields(host, &pending, &before[i]) & (UINT64_C(1) << field_index)) {
+        engine_input_copy_fields(host, &before[i], &final_input, UINT64_C(1) << field_index);
+        driven |= UINT64_C(1) << field_index;
       }
     }
 
-    // Linked input is rebuilt from defaults every frame. Overlay a trigger
-    // that was pressed on an earlier frame and has not reached a tick yet.
-    engine_input_merge_pending_triggers(host, &track->current_input, &final_input);
+    if (ts->linked_copy_input && source_track >= 0) {
+      const uint64_t copied = track->linked_copy_fields;
+      engine_input_copy_fields(host, &before[source_track], &final_input, copied);
+      for (uint32_t field_index = 0; field_index < schema->field_count && field_index < 64; ++field_index)
+        if (copied & (UINT64_C(1) << field_index))
+          mirror_linked_field(host, &schema->fields[field_index], (int)field_index, track->linked_transform_flags, &final_input);
+      driven |= copied;
+    }
 
-    for (uint32_t control_index = 0; control_index < schema->control_count; ++control_index) {
+    // Linked key binds. Like the controlled tee's controls, every field an
+    // active held control targets starts from its default once, so controls
+    // that add up (left and right on one axis) combine instead of adding to
+    // whatever the tee already had.
+    bool control_active[256] = {false};
+    uint64_t reset = 0;
+    const uint32_t control_count = schema->control_count < 256 ? schema->control_count : 256;
+    for (uint32_t control_index = 0; control_index < control_count; ++control_index) {
       const ft_input_control *control = &schema->controls[control_index];
-      if (control->field >= schema->field_count) continue;
+      if (control->field >= schema->field_count || control->field >= 64) continue;
       const action_t action = keybinds_linked_game_action(control_index);
-      const bool active = (control->flags & FT_CONTROL_PRESSED) ? keybinds_is_action_pressed(&ui->keybinds, action, false)
-                                                                : keybinds_is_action_down(&ui->keybinds, action);
-      if (!active) continue;
+      const bool pressed_control = (control->flags & FT_CONTROL_PRESSED) != 0;
+      control_active[control_index] = pressed_control ? keybinds_is_action_pressed(&ui->keybinds, action, false)
+                                                      : keybinds_is_action_down(&ui->keybinds, action);
+      const uint64_t bit = UINT64_C(1) << control->field;
+      if (control_active[control_index] && !pressed_control && !(reset & bit)) {
+        const ft_input_field *field = &schema->fields[control->field];
+        if (field->kind == FT_INPUT_FLOAT)
+          engine_input_set_float(host, &final_input, (int)control->field, field->default_float);
+        else
+          engine_input_set(host, &final_input, (int)control->field, field->default_value);
+        reset |= bit;
+      }
+    }
+    for (uint32_t control_index = 0; control_index < control_count; ++control_index) {
+      if (!control_active[control_index]) continue;
+      const ft_input_control *control = &schema->controls[control_index];
       const ft_input_field *field = &schema->fields[control->field];
       if (field->kind == FT_INPUT_FLOAT) {
         float value = (float)control->value;
@@ -115,6 +146,11 @@ void interaction_apply_linked_inputs(ui_handler_t *ui) {
         if (control->flags & FT_CONTROL_ADD) value += engine_input_get(host, &final_input, (int)control->field);
         engine_input_set(host, &final_input, (int)control->field, value);
       }
+      const uint64_t bit = UINT64_C(1) << control->field;
+      driven |= bit;
+      // A pressed control that is not a one-shot (a weapon choice) holds
+      // for the rest of the take.
+      if ((control->flags & FT_CONTROL_PRESSED) && !(field->flags & FT_INPUT_FLAG_TRIGGER)) track->linked_sticky_fields |= bit;
     }
 
     uint64_t actions_down = 0;
@@ -124,16 +160,24 @@ void interaction_apply_linked_inputs(ui_handler_t *ui) {
       if (keybinds_is_action_down(&ui->keybinds, action)) actions_down |= UINT64_C(1) << action_index;
       if (keybinds_is_action_pressed(&ui->keybinds, action, false)) actions_pressed |= UINT64_C(1) << action_index;
     }
-    ft_linked_input_frame frame = {.struct_size = sizeof(frame),
-                                   .world = world,
-                                   .source_player = source_player,
-                                   .target_player = target_player,
-                                   .source_input = source_input->bytes,
-                                   .actions_down = actions_down,
-                                   .actions_pressed = actions_pressed};
-    gh_linked_input_update(host, &frame, final_input.bytes);
+    if (actions_down || actions_pressed) {
+      const input_record_t source_input = source_track >= 0 ? before[source_track] : final_input;
+      ft_linked_input_frame frame = {.struct_size = sizeof(frame),
+                                     .world = world,
+                                     .source_player = source_player,
+                                     .target_player = target_player,
+                                     .source_input = source_input.bytes,
+                                     .actions_down = actions_down,
+                                     .actions_pressed = actions_pressed};
+      const input_record_t unchanged = final_input;
+      gh_linked_input_update(host, &frame, final_input.bytes);
+      driven |= engine_input_changed_fields(host, &unchanged, &final_input);
+    }
+
     track->current_input = final_input;
+    track->linked_driven_fields = driven;
   }
+  free(before);
 }
 
 void interaction_update_mouse(timeline_state_t *ts) {
@@ -854,6 +898,14 @@ static int calculate_snapped_tick(const timeline_state_t *ts, int desired_start_
 static void interaction_start_recording_on_track(timeline_state_t *ts, int track_index) {
   if (track_index < 0 || track_index >= ts->player_track_count) return;
   player_track_t *track = &ts->player_tracks[track_index];
+  // Its keys start from what it already does at the playhead: whatever an
+  // earlier session left in current_input (a kill not yet consumed) must not
+  // turn up in this take.
+  const int group_tick_now = model_group_playhead_tick(ts, track->group_index);
+  track->current_input = model_get_authored_input_at_tick(ts, track_index, group_tick_now);
+  engine_input_reset_triggers(&ts->ui->gfx_handler->game_host, &track->current_input);
+  track->linked_driven_fields = 0;
+  track->linked_sticky_fields = 0;
 
   // Create a new snippet to record into
   input_snippet_t new_snippet = {0};
@@ -1003,13 +1055,66 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
   }
 }
 
+// The keys a tee lets go of when control moves away from it, the way DDNet's
+// cl_dummy_resetonswitch lets go: every field a held control drives and every
+// one-shot. The aim and choices such as the weapon stay.
+static void release_held_keys(game_host_t *host, input_record_t *record) {
+  const ft_input_schema *schema = game_input_schema(host);
+  if (!schema) return;
+  for (uint32_t i = 0; i < schema->control_count; ++i) {
+    const ft_input_control *control = &schema->controls[i];
+    if (control->field >= schema->field_count || (control->flags & FT_CONTROL_PRESSED)) continue;
+    const ft_input_field *field = &schema->fields[control->field];
+    if (field->kind == FT_INPUT_FLOAT)
+      engine_input_set_float(host, record, (int)control->field, field->default_float);
+    else
+      engine_input_set(host, record, (int)control->field, field->default_value);
+  }
+  engine_input_reset_triggers(host, record);
+}
+
 void interaction_switch_recording_target(timeline_state_t *ts, int new_track_index) {
-  if (ts->recording && new_track_index >= 0 && new_track_index < ts->player_track_count &&
-      model_track_group_index(ts, new_track_index) == ts->active_group_index) {
-    ts->selected_player_track_index = new_track_index;
-    if (!game_has_cap(&ts->ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS) || !ts->player_tracks[new_track_index].is_linked) {
-      interaction_start_recording_on_track(ts, new_track_index);
+  if (!ts->recording || new_track_index < 0 || new_track_index >= ts->player_track_count ||
+      new_track_index == ts->selected_player_track_index || model_track_group_index(ts, new_track_index) != ts->active_group_index)
+    return;
+  game_host_t *host = &ts->ui->gfx_handler->game_host;
+  const int old_track_index = ts->selected_player_track_index;
+  const bool linked_cap = game_has_cap(host, FT_CAP_LINKED_INPUTS);
+
+  // The tee left behind lets go of its keys from here on, unless its link
+  // takes it over again: its take gets one more tick with them released,
+  // which is what carries on after it.
+  if (old_track_index >= 0 && old_track_index < ts->player_track_count && !(linked_cap && ts->player_tracks[old_track_index].is_linked)) {
+    player_track_t *old_track = &ts->player_tracks[old_track_index];
+    const int group_tick = model_group_playhead_tick(ts, old_track->group_index);
+    input_snippet_t *take = old_track->recording_snippet_count > 0 ? &old_track->recording_snippets[old_track->recording_snippet_count - 1] : NULL;
+    if (take && take->end_tick == group_tick) {
+      // what it did on its last tick, with the keys let go
+      input_record_t released = take->input_count > 0 ? snippet_window(take)[take->input_count - 1] : old_track->current_input;
+      release_held_keys(host, &released);
+      model_resize_snippet_inputs(ts, take, take->input_count + 1);
+      take->inputs[take->input_count - 1] = released;
     }
+  }
+
+  ts->selected_player_track_index = new_track_index;
+  player_track_t *new_track = &ts->player_tracks[new_track_index];
+  if (!linked_cap || !new_track->is_linked) {
+    interaction_start_recording_on_track(ts, new_track_index);
+  } else {
+    // A linked tee already has a take; from now on it plays the keys held,
+    // starting from what it does at the playhead.
+    const int group_tick = model_group_playhead_tick(ts, new_track->group_index);
+    new_track->current_input = model_linked_input_at_tick(ts, new_track_index, group_tick);
+    engine_input_reset_triggers(host, &new_track->current_input);
+  }
+  // The cursor takes up the new tee's aim, rather than pointing it where the
+  // last one was aiming.
+  const int cursor = engine_input_cursor_field();
+  if (cursor >= 0) {
+    const ft_vec2 aim = engine_input_get_vec2(host, &new_track->current_input, cursor);
+    ts->ui->recording_mouse_pos[0] = aim.x;
+    ts->ui->recording_mouse_pos[1] = aim.y;
   }
 }
 
@@ -1089,28 +1194,17 @@ void interaction_update_recording_input(ui_handler_t *ui) {
 
 input_record_t interaction_predict_input(ui_handler_t *ui, const ft_world *world, int track_idx) {
   timeline_state_t *ts = &ui->timeline;
-
-  if (ts->recording) {
-    if (track_idx < 0 || track_idx >= ts->player_track_count) {
-      input_record_t blank;
-      engine_input_default(&ui->gfx_handler->game_host, &blank);
-      return blank;
-    }
-
-    // Force update of recording state to ensure smooth visuals at frame rate
-    // This is safe because it only updates the current_input struct,
-    // it does not commit to the timeline buffer.
-
-    if (track_idx == ts->selected_player_track_index) {
-      interaction_update_recording_input(ui);
-    } else {
-      // Re-evaluate all linked tracks for this preview frame.
-      interaction_apply_linked_inputs(ui);
-    }
-    return ts->player_tracks[track_idx].current_input;
+  const int tick = gh_world_tick(&ui->gfx_handler->game_host, world);
+  if (ts->recording && track_idx >= 0 && track_idx < ts->player_track_count && !model_take_covers(ts, track_idx, tick)) {
+    // Past what has been recorded (going back over a take replays it): the
+    // controlled tee plays the keys held, a linked one its own inputs with
+    // what its link drives (interaction_apply_linked_inputs). Everyone else,
+    // and any tick a take holds already, plays the timeline.
+    if (track_idx == ts->selected_player_track_index) return ts->player_tracks[track_idx].current_input;
+    if (interaction_track_is_linked(ts, track_idx) && ts->player_tracks[track_idx].group_index == ts->active_group_index)
+      return model_linked_input_at_tick(ts, track_idx, tick);
   }
-
-  return model_get_input_at_tick(ts, track_idx, gh_world_tick(&ui->gfx_handler->game_host, world));
+  return model_get_input_at_tick(ts, track_idx, tick);
 }
 
 static bool can_merge_selected(const timeline_state_t *ts) {

@@ -52,6 +52,19 @@ struct undo_command_t *commands_create_starting_config_change(ui_handler_t *ui, 
 struct undo_command_t *commands_create_group_export_change(ui_handler_t *ui, int group_index, bool before);
 struct undo_command_t *commands_create_track_name_change(ui_handler_t *ui, int track_index, const char *before);
 struct undo_command_t *commands_create_track_export_change(ui_handler_t *ui, int track_index, bool before);
+
+// A track's link settings (player_track_t), for undo.
+typedef struct track_link_state_t {
+  bool linked;
+  int source;
+  uint64_t copy_fields;
+  uint32_t transforms;
+} track_link_state_t;
+track_link_state_t commands_track_link_state(const timeline_state_t *ts, int track_index);
+// One undo step for link settings changed on `count` tracks, given what they
+// were before; NULL when nothing changed.
+struct undo_command_t *commands_create_track_link_change(ui_handler_t *ui, const int *tracks, const track_link_state_t *before, int count,
+                                                         const char *description);
 struct undo_command_t *commands_create_timeline_event_group_change(ui_handler_t *ui, int event_index, int before);
 
 // Special command for the snippet editor

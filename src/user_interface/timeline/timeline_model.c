@@ -130,6 +130,18 @@ int model_group_track_index(const timeline_state_t *ts, int group_index, int loc
   return -1;
 }
 
+int model_linked_source_track(const timeline_state_t *ts, int track_index) {
+  if (!ts || track_index < 0 || track_index >= ts->player_track_count) return -1;
+  const player_track_t *track = &ts->player_tracks[track_index];
+  const int pinned = track->linked_source_player >= 0 ? model_group_track_index(ts, track->group_index, track->linked_source_player) : -1;
+  if (pinned >= 0 && pinned != track_index) return pinned;
+  const int controlled = ts->selected_player_track_index;
+  if (controlled >= 0 && controlled != track_index && controlled < ts->player_track_count &&
+      ts->player_tracks[controlled].group_index == track->group_index)
+    return controlled;
+  return -1;
+}
+
 void model_group_tracks(const timeline_state_t *ts, int group_index, int *out, int count) {
   int local = 0;
   for (int i = 0; ts && i < ts->player_track_count && local < count; ++i)
@@ -650,11 +662,13 @@ static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, 
     // A fresh track carries no profile. The game fills one in the first time
     // its panel is used, and reads "none" as its own defaults until then.
     new_track->group_index = group_index;
-    new_track->linked_source_player = 0;
+    new_track->linked_source_player = -1; // whichever tee is being controlled
+    // Copies what can be authored, but not one-shot requests: a kill pressed
+    // for the controlled tee should not kill every linked one too.
     const ft_input_schema *schema = game_input_schema(model_host(ts));
     if (schema) {
       for (uint32_t field = 0; field < schema->field_count && field < 64; ++field)
-        if ((schema->fields[field].flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN)) == 0)
+        if ((schema->fields[field].flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN | FT_INPUT_FLAG_TRIGGER)) == 0)
           new_track->linked_copy_fields |= UINT64_C(1) << field;
     }
     new_track->export_enabled = true;
@@ -729,6 +743,14 @@ void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   int local_index = model_group_local_track_index(ts, track_index);
   if (group_index >= 0 && local_index >= 0)
     gh_world_remove_player(model_host(ts), ts->groups[group_index]->initial_world, local_index);
+  // Links name their source by its place in the group: the players after the
+  // removed one move up, and a link to it falls back to the controlled tee.
+  for (int i = 0; group_index >= 0 && i < ts->player_track_count; ++i) {
+    player_track_t *other = &ts->player_tracks[i];
+    if (i == track_index || other->group_index != group_index) continue;
+    if (other->linked_source_player == local_index) other->linked_source_player = -1;
+    else if (other->linked_source_player > local_index) --other->linked_source_player;
+  }
 
   player_track_t *track = &ts->player_tracks[track_index];
   for (int i = 0; i < track->snippet_count; ++i) {
@@ -769,6 +791,12 @@ void model_insert_track_physics(timeline_state_t *ts, int track_index) {
   // Inserting rather than appending is the game's problem: only it knows what
   // renumbering a player means for the rest of its world.
   gh_world_add_player(model_host(ts), ts->groups[group_index]->initial_world, local_index, NULL);
+  // Links name their source by its place in the group, which moves down.
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    player_track_t *other = &ts->player_tracks[i];
+    if (i != track_index && other->group_index == group_index && other->linked_source_player >= local_index)
+      ++other->linked_source_player;
+  }
   snapshots_reset(ts->groups[group_index]);
   model_recalc_physics(ts, 0);
 }
@@ -930,22 +958,24 @@ void model_recalc_physics(timeline_state_t *ts, int tick) {
     model_recalc_group_physics(ts, i, tick);
 }
 
-input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
-  if (!ts->recording && !ts->input_effects_rebuilding) input_effects_ensure((timeline_state_t *)ts);
+// A track's input at a tick: from the takes being recorded (when `takes`),
+// then from its snippets, carrying the last one's state past its end. `authored`
+// reads the inputs as written, before input effects.
+static input_record_t track_input_at(const timeline_state_t *ts, int track_index, int tick, bool takes, bool authored) {
   const player_track_t *track = &ts->player_tracks[track_index];
   input_record_t blank;
   engine_input_default(model_host(ts), &blank);
   input_record_t last_valid_input = blank;
   int last_input_tick = -1;
 
-  if (ts->recording) {
+  if (takes) {
     // Newest first: going back over a take and recording this track again
     // starts a second buffer on top of the first, and the commit applies them
     // in order, so the later one is what stays.
     for (int i = track->recording_snippet_count - 1; i >= 0; --i) {
       const input_snippet_t *snippet = &track->recording_snippets[i];
       if (snippet->is_active) {
-        const input_record_t *inputs = input_effects_snippet_window(snippet);
+        const input_record_t *inputs = authored ? snippet_window(snippet) : input_effects_snippet_window(snippet);
         if (tick >= snippet->start_tick && tick < snippet->end_tick) return inputs[tick - snippet->start_tick];
         if (snippet->end_tick <= tick && snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
           last_input_tick = snippet->end_tick - 1;
@@ -967,7 +997,7 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
       continue;
     }
     if (snippet->is_active) {
-      const input_record_t *inputs = input_effects_snippet_window(snippet);
+      const input_record_t *inputs = authored ? snippet_window(snippet) : input_effects_snippet_window(snippet);
       if (tick >= snippet->start_tick && tick < snippet->end_tick) return inputs[tick - snippet->start_tick];
       if (snippet->end_tick <= tick && snippet->end_tick - 1 > last_input_tick && snippet->input_count > 0) {
         last_input_tick = snippet->end_tick - 1;
@@ -983,6 +1013,32 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
     return last_valid_input;
   }
   return blank;
+}
+
+input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
+  if (!ts->recording && !ts->input_effects_rebuilding) input_effects_ensure((timeline_state_t *)ts);
+  return track_input_at(ts, track_index, tick, ts->recording, false);
+}
+
+input_record_t model_get_authored_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
+  return track_input_at(ts, track_index, tick, false, true);
+}
+
+bool model_take_covers(const timeline_state_t *ts, int track_index, int tick) {
+  if (!ts || !ts->recording || track_index < 0 || track_index >= ts->player_track_count) return false;
+  const player_track_t *track = &ts->player_tracks[track_index];
+  for (int i = 0; i < track->recording_snippet_count; ++i) {
+    const input_snippet_t *take = &track->recording_snippets[i];
+    if (take->is_active && tick >= take->start_tick && tick < take->end_tick) return true;
+  }
+  return false;
+}
+
+input_record_t model_linked_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
+  const player_track_t *track = &ts->player_tracks[track_index];
+  input_record_t record = model_get_authored_input_at_tick(ts, track_index, tick);
+  engine_input_copy_fields(model_host(ts), &track->current_input, &record, track->linked_driven_fields);
+  return record;
 }
 
 // Whether any world, snapshot or sound of the group was simulated past local
@@ -1026,10 +1082,19 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
 
           // Fill the first new tick with the current input, then consume any
           // one-shot fields. This also keeps a lag frame that advances several
-          // ticks from turning one press into several trigger ticks.
+          // ticks from turning one press into several trigger ticks. A linked
+          // tee only takes the fields its link drives; the rest of each tick
+          // keeps the input it already had there.
+          const bool controlled = i == ts->selected_player_track_index;
           input_record_t sampled_input = track->current_input;
           for (int s = old_count; s < needed; ++s) {
-            active_rec_snip->inputs[s] = sampled_input;
+            if (controlled) {
+              active_rec_snip->inputs[s] = sampled_input;
+            } else {
+              input_record_t merged = model_get_authored_input_at_tick(ts, i, active_rec_snip->start_tick + s);
+              engine_input_copy_fields(model_host(ts), &sampled_input, &merged, track->linked_driven_fields);
+              active_rec_snip->inputs[s] = merged;
+            }
             engine_input_reset_triggers(model_host(ts), &sampled_input);
           }
           track->current_input = sampled_input;

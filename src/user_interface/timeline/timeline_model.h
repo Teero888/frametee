@@ -15,6 +15,9 @@ int model_track_group_index(const timeline_state_t *ts, int track_index);
 int model_group_track_count(const timeline_state_t *ts, int group_index);
 int model_group_track_index(const timeline_state_t *ts, int group_index, int local_index);
 int model_group_local_track_index(const timeline_state_t *ts, int track_index);
+// The track a linked track copies from: its pinned source, else the one being
+// controlled in its group; -1 when there is none.
+int model_linked_source_track(const timeline_state_t *ts, int track_index);
 // out[p] = the track playing the group's player p (-1 past its tracks), for
 // loops over all players: model_group_track_index scans the tracks per call.
 void model_group_tracks(const timeline_state_t *ts, int group_index, int *out, int count);
@@ -92,6 +95,14 @@ void model_recalc_snippet_physics(timeline_state_t *ts, const input_snippet_t *s
 // Conservative fallback for changes whose affected groups are unknown.
 void model_recalc_physics(timeline_state_t *ts, int tick);
 input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
+// The input a track's snippets hold at a tick, as written (before input
+// effects), leaving out what is being recorded right now.
+input_record_t model_get_authored_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
+// Whether a tick of a track is already recorded in the take(s) of this recording.
+bool model_take_covers(const timeline_state_t *ts, int track_index, int tick);
+// What a linked track, while recording, plays at a tick: its own inputs there
+// with the fields its link drives this frame taken from its current input.
+input_record_t model_linked_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
 // One step's inputs for every player of a group's world at `tick`, packed at the game's record
 // size, and in `playback` (may be NULL) which players replay a recording instead. Returns true when
 // anyone does, i.e. when the step must go through gh_world_step_playback.

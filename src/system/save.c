@@ -1106,6 +1106,9 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document, b
         count > MAX_STARTING_OVERRIDES)
       return false;
     track->is_linked = is_linked != 0;
+    // Before version 29 a link's source was always a player, 0 unless chosen;
+    // -1 (whoever is being controlled) is what that default meant in practice.
+    if (version < 29 && track->linked_source_player == 0) track->linked_source_player = -1;
     track->starting_config.enabled = starting_enabled != 0;
     track->starting_config.override_count = (int)count;
     for (uint32_t override_index = 0; override_index < count; ++override_index) {
@@ -1505,7 +1508,8 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
   timeline->current_tick = document->current_tick;
   timeline->active_group_index = document->active_group_index;
   timeline->selected_player_track_index = document->selected_track_index;
-  timeline->linked_copy_input = document->linked_copy_input;
+  // (linked_copy_input is the user's setting, kept in the config; the copy in
+  // the file is left as it is)
   model_recalc_physics(timeline, 0);
   return true;
 }

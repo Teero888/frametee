@@ -800,7 +800,9 @@ static bool api_get_player_setup(int32_t player, ft_player_setup *out) {
                            .track_name = track->name,
                            .data = profile->size ? profile->data : NULL,
                            .data_size = profile->size,
-                           .linked_player = track->is_linked ? track->linked_source_player : -1};
+                           .linked_player = track->is_linked && game_has_cap(&g_engine->game_host, FT_CAP_LINKED_INPUTS)
+                                                ? model_group_local_track_index(timeline, model_linked_source_track(timeline, player))
+                                                : -1};
   return true;
 }
 

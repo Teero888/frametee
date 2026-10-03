@@ -85,7 +85,7 @@ void ui_player_setups_prepare(ui_handler_t *ui) {
           .track_name = track->name,
           .data = profile->size ? profile->data : NULL,
           .data_size = profile->size,
-          .linked_player = supports_linked && track->is_linked ? track->linked_source_player : -1};
+          .linked_player = supports_linked && track->is_linked ? model_group_local_track_index(ts, model_linked_source_track(ts, i)) : -1};
     }
   }
 

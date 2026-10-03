@@ -58,6 +58,11 @@ void engine_input_default(game_host_t *host, input_record_t *record);
 void engine_input_reset_triggers(game_host_t *host, input_record_t *record);
 void engine_input_merge_pending_triggers(game_host_t *host, const input_record_t *pending, input_record_t *record);
 
+// Copies the fields set in `fields` (bit i = schema field i) from `source`.
+void engine_input_copy_fields(game_host_t *host, const input_record_t *source, input_record_t *target, uint64_t fields);
+// Bits of the fields whose values differ between the two records.
+uint64_t engine_input_changed_fields(game_host_t *host, const input_record_t *a, const input_record_t *b);
+
 // True when the game's records fit the engine's storage. Checked once when a
 // game is activated.
 bool engine_input_record_fits(const game_host_t *host);

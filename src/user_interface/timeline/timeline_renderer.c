@@ -452,11 +452,12 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
       player_track_t *track = &ts->player_tracks[i];
       timeline_group_t *group = ts->groups[track->group_index];
       const bool supports_linked = game_has_cap(&ts->ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS);
-      if (!supports_linked) track->is_linked = false;
+      // (a game without linked tracks ignores the flag; the track keeps it)
+      const bool linked = supports_linked && track->is_linked;
 
       // Render Track Info Panel (Left)
       bool is_track_selected = (ts->selected_player_track_index == i);
-      ImU32 header_bg_col = track->is_linked ? igGetColorU32_Col(ImGuiCol_TextLink, 0.6f) : igGetColorU32_Col(ImGuiCol_FrameBg, 0.8f);
+      ImU32 header_bg_col = linked ? igGetColorU32_Col(ImGuiCol_TextLink, 0.6f) : igGetColorU32_Col(ImGuiCol_FrameBg, 0.8f);
 
       ImVec2 header_rect_min = row_start_pos;
       ImVec2 header_rect_max = {row_start_pos.x + track_header_width, row_start_pos.y + (ts->track_height * dpi_scale)};
@@ -482,7 +483,7 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
 
       // Draw track name. Linked tracks get a compact visual marker.
       igSetCursorScreenPos((ImVec2){row_start_pos.x + 20.0f * dpi_scale, row_start_pos.y + ((ts->track_height * dpi_scale) - igGetTextLineHeight()) * 0.5f});
-      if (track->is_linked) {
+      if (linked) {
         igTextDisabled("[L]");
         igSameLine(0, 4.0f * dpi_scale);
       }
@@ -495,11 +496,24 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
       // Handle interactions: double-click to toggle linking, single-click to select.
       if (igIsItemHovered(0)) {
         if (supports_linked && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
-          if (igGetIO_Nil()->KeyShift) {
-            for (int t = 0; t < ts->player_track_count; ++t)
-              if (ts->player_tracks[t].group_index == track->group_index) ts->player_tracks[t].is_linked ^= 1;
-          } else track->is_linked = !track->is_linked;
-
+          // Shift sets the whole group to what this track becomes.
+          const bool become = !track->is_linked;
+          const bool whole_group = igGetIO_Nil()->KeyShift;
+          int changed_tracks[256];
+          track_link_state_t before[256];
+          int changed = 0;
+          for (int t = 0; t < ts->player_track_count && changed < 256; ++t) {
+            if (whole_group ? ts->player_tracks[t].group_index != track->group_index : t != i) continue;
+            changed_tracks[changed] = t;
+            before[changed++] = commands_track_link_state(ts, t);
+            ts->player_tracks[t].is_linked = become;
+          }
+          undo_command_t *command = commands_create_track_link_change(ts->ui, changed_tracks, before, changed,
+                                                                      become ? "Link Track" : "Unlink Track");
+          if (command) {
+            undo_manager_register_command(&ts->ui->undo_manager, command);
+            timeline_mark_unsaved(ts);
+          }
         } else if (igIsItemClicked(ImGuiMouseButton_Left)) {
           interaction_select_track(ts, i);
         }
@@ -538,27 +552,24 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
             const ft_input_schema *schema = game_input_schema(host);
             const int player_count = model_group_track_count(ts, track->group_index);
             const int target_player = model_group_local_track_index(ts, i);
-            if (track->linked_source_player < 0 || track->linked_source_player >= player_count ||
-                track->linked_source_player == target_player) {
-              track->linked_source_player = target_player == 0 && player_count > 1 ? 1 : 0;
-            }
+            const track_link_state_t link_before = commands_track_link_state(ts, i);
 
-            char source_label[96] = "No source";
-            const int source_track = model_group_track_index(ts, track->group_index, track->linked_source_player);
-            if (source_track >= 0)
-              snprintf(source_label, sizeof(source_label), "%d: %s", track->linked_source_player + 1,
-                       ts->player_tracks[source_track].name);
-            if (igBeginCombo("Source", source_label, 0)) {
+            // Whoever is being controlled, unless pinned to one tee.
+            char source_label[96] = "Whoever I control";
+            const int pinned_track = track->linked_source_player >= 0 && track->linked_source_player != target_player
+                                         ? model_group_track_index(ts, track->group_index, track->linked_source_player)
+                                         : -1;
+            if (pinned_track >= 0)
+              snprintf(source_label, sizeof(source_label), "%d: %s", track->linked_source_player + 1, ts->player_tracks[pinned_track].name);
+            if (igBeginCombo("Copies", source_label, 0)) {
+              if (igSelectable_Bool("Whoever I control", pinned_track < 0, 0, (ImVec2){0, 0})) track->linked_source_player = -1;
               for (int local = 0; local < player_count; ++local) {
                 if (local == target_player) continue;
                 const int candidate = model_group_track_index(ts, track->group_index, local);
                 if (candidate < 0) continue;
                 char label[96];
                 snprintf(label, sizeof(label), "%d: %s", local + 1, ts->player_tracks[candidate].name);
-                if (igSelectable_Bool(label, local == track->linked_source_player, 0, (ImVec2){0, 0})) {
-                  track->linked_source_player = local;
-                  timeline_mark_unsaved(ts);
-                }
+                if (igSelectable_Bool(label, local == track->linked_source_player, 0, (ImVec2){0, 0})) track->linked_source_player = local;
               }
               igEndCombo();
             }
@@ -572,10 +583,8 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
                 const ft_input_field *field = &schema->fields[field_index];
                 if (field->flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN)) continue;
                 bool copied = (track->linked_copy_fields & (UINT64_C(1) << field_index)) != 0;
-                if (igCheckbox(field->display_name ? field->display_name : field->id, &copied)) {
+                if (igCheckbox(field->display_name ? field->display_name : field->id, &copied))
                   track->linked_copy_fields ^= UINT64_C(1) << field_index;
-                  timeline_mark_unsaved(ts);
-                }
                 has_mirror_x |= (field->flags & FT_INPUT_FLAG_MIRROR_X) != 0;
                 has_mirror_y |= (field->flags & FT_INPUT_FLAG_MIRROR_Y) != 0;
               }
@@ -584,17 +593,17 @@ void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
             if (has_mirror_x || has_mirror_y) igSeparator();
             if (has_mirror_x) {
               bool mirror = (track->linked_transform_flags & FT_LINKED_MIRROR_X) != 0;
-              if (igCheckbox("Mirror horizontally", &mirror)) {
-                track->linked_transform_flags ^= FT_LINKED_MIRROR_X;
-                timeline_mark_unsaved(ts);
-              }
+              if (igCheckbox("Mirror horizontally", &mirror)) track->linked_transform_flags ^= FT_LINKED_MIRROR_X;
             }
             if (has_mirror_y) {
               bool mirror = (track->linked_transform_flags & FT_LINKED_MIRROR_Y) != 0;
-              if (igCheckbox("Mirror vertically", &mirror)) {
-                track->linked_transform_flags ^= FT_LINKED_MIRROR_Y;
-                timeline_mark_unsaved(ts);
-              }
+              if (igCheckbox("Mirror vertically", &mirror)) track->linked_transform_flags ^= FT_LINKED_MIRROR_Y;
+            }
+            const int this_track = i;
+            undo_command_t *command = commands_create_track_link_change(ts->ui, &this_track, &link_before, 1, "Change Track Link");
+            if (command) {
+              undo_manager_register_command(&ts->ui->undo_manager, command);
+              timeline_mark_unsaved(ts);
             }
           } else {
             igTextDisabled("Not a linked track");

@@ -77,6 +77,41 @@ static void input_set_field_default(game_host_t *host, input_record_t *record, u
     engine_input_set(host, record, (int)field_index, field->default_value);
 }
 
+void engine_input_copy_fields(game_host_t *host, const input_record_t *source, input_record_t *target, uint64_t fields) {
+  const ft_input_schema *schema = game_input_schema(host);
+  if (!schema || !source || !target || !fields) return;
+  for (uint32_t i = 0; i < schema->field_count && i < 64; ++i) {
+    if (!(fields & (UINT64_C(1) << i))) continue;
+    const ft_input_field *field = &schema->fields[i];
+    if (field->kind == FT_INPUT_VEC2)
+      engine_input_set_vec2(host, target, (int)i, engine_input_get_vec2(host, source, (int)i));
+    else if (field->kind == FT_INPUT_FLOAT)
+      engine_input_set_float(host, target, (int)i, engine_input_get_float(host, source, (int)i));
+    else
+      engine_input_set(host, target, (int)i, engine_input_get(host, source, (int)i));
+  }
+}
+
+uint64_t engine_input_changed_fields(game_host_t *host, const input_record_t *a, const input_record_t *b) {
+  const ft_input_schema *schema = game_input_schema(host);
+  uint64_t changed = 0;
+  if (!schema || !a || !b) return 0;
+  for (uint32_t i = 0; i < schema->field_count && i < 64; ++i) {
+    const ft_input_field *field = &schema->fields[i];
+    bool differs;
+    if (field->kind == FT_INPUT_VEC2) {
+      const ft_vec2 x = engine_input_get_vec2(host, a, (int)i), y = engine_input_get_vec2(host, b, (int)i);
+      differs = x.x != y.x || x.y != y.y;
+    } else if (field->kind == FT_INPUT_FLOAT) {
+      differs = engine_input_get_float(host, a, (int)i) != engine_input_get_float(host, b, (int)i);
+    } else {
+      differs = engine_input_get(host, a, (int)i) != engine_input_get(host, b, (int)i);
+    }
+    if (differs) changed |= UINT64_C(1) << i;
+  }
+  return changed;
+}
+
 void engine_input_reset_triggers(game_host_t *host, input_record_t *record) {
   const ft_input_schema *schema = game_input_schema(host);
   if (!schema || !record) return;
