@@ -6,6 +6,7 @@
 #include <frametee/icons.h>
 #include <renderer/graphics_backend.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <system/include_cimgui.h>
 
@@ -299,6 +300,236 @@ static void draw_apply_row(ui_handler_t *ui, int track_index, int group_index, s
   if (dirty) igTextDisabled("Unapplied changes.");
 }
 
+// Which tracks "Apply changes to tracks" is ticked for, by track index. Sized to the
+// track count it was opened with, and cleared whenever that count moves, since
+// an index then no longer means the track it was ticked for.
+static bool *g_targets;
+static int g_target_count;
+
+static bool reset_targets(int count) {
+  bool *resized = realloc(g_targets, sizeof(bool) * (size_t)(count > 0 ? count : 1));
+  if (!resized) return false;
+  g_targets = resized;
+  g_target_count = count;
+  memset(g_targets, 0, sizeof(bool) * (size_t)count);
+  return true;
+}
+
+// A new track in the same group that starts as the panel shows. The run it
+// joins is rebuilt, so this is the whole timeline's undo step, like a clone.
+static void add_track_with_draft(ui_handler_t *ui, int group_index) {
+  timeline_state_t *ts = &ui->timeline;
+  timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
+  if (!before) return;
+
+  const int old_active = ts->active_group_index;
+  ts->active_group_index = group_index;
+  player_track_t *added = model_add_new_track(ts, 1);
+  ts->active_group_index = old_active;
+  if (!added) {
+    commands_free_timeline_data_snapshot(before);
+    return;
+  }
+  copy_config(&added->starting_config, &g_draft);
+  model_apply_starting_config(ts, (int)(added - ts->player_tracks));
+
+  undo_command_t *command = commands_create_timeline_data_change(ui, before, "Add Track with Starting State");
+  if (command) undo_manager_register_command(&ui->undo_manager, command);
+  ui_mark_unsaved(ui);
+}
+
+static bool value_equal(const starting_override_t *override, const ft_value *value) {
+  if (override->value.kind != value->kind) return false;
+  switch (value->kind) {
+  case FT_VALUE_BOOL:
+    return override->value.as.b == value->as.b;
+  case FT_VALUE_INT:
+    return override->value.as.i == value->as.i;
+  case FT_VALUE_FLOAT:
+    return override->value.as.f == value->as.f;
+  case FT_VALUE_VEC2:
+    return override->value.as.v.x == value->as.v.x && override->value.as.v.y == value->as.v.y;
+  case FT_VALUE_VEC3:
+    return override->value.as.v3.x == value->as.v3.x && override->value.as.v3.y == value->as.v3.y &&
+           override->value.as.v3.z == value->as.v3.z;
+  case FT_VALUE_STRING:
+    return strcmp(override->string_value, value->as.s ? value->as.s : "") == 0;
+  default:
+    return memcmp(&override->value.as, &value->as, sizeof(value->as)) == 0;
+  }
+}
+
+// Which of the draft's overrides are edits: different from what the track has
+// applied, or, for a property it has no override for yet, from what the track
+// starts with anyway. Those are what "Apply changes to tracks" hands on, so a
+// start that was only given a weapon hands on the weapon and not its position.
+static int draft_changes(ui_handler_t *ui, int track_index, bool changed[MAX_STARTING_OVERRIDES]) {
+  timeline_state_t *ts = &ui->timeline;
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const starting_config_t *config = &ts->player_tracks[track_index].starting_config;
+  const ft_world *start = model_group_world_at_tick(ts, model_track_group_index(ts, track_index), 0);
+  const int local_index = model_group_local_track_index(ts, track_index);
+
+  int count = 0;
+  for (int i = 0; i < g_draft.override_count; ++i) {
+    const starting_override_t *override = &g_draft.overrides[i];
+    const starting_override_t *applied = config->enabled ? find_override_const(config, override->prop_id) : NULL;
+    if (applied) {
+      changed[i] = !override_equal(override, applied);
+    } else {
+      const int prop = model_find_player_prop(host, override->prop_id);
+      ft_value current;
+      changed[i] = prop < 0 || !start || local_index < 0 ||
+                   !gh_entity_prop_get(host, start, FT_ENTITY_CLASS_PLAYER, local_index, (unsigned)prop, &current) ||
+                   !value_equal(override, &current);
+    }
+    if (changed[i]) ++count;
+  }
+  return count;
+}
+
+// Applies the draft to the track being edited and writes only its edits onto
+// every ticked one, as one undo step. Everything else a ticked track starts
+// with is left as it was.
+static void apply_changes_to_targets(ui_handler_t *ui, int track_index) {
+  timeline_state_t *ts = &ui->timeline;
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const ft_entity_class *player_class = gh_entity_class(host, FT_ENTITY_CLASS_PLAYER);
+  bool changed[MAX_STARTING_OVERRIDES];
+  draft_changes(ui, track_index, changed);
+
+  int *tracks = malloc(sizeof(int) * (size_t)ts->player_track_count);
+  starting_config_t *before = malloc(sizeof(starting_config_t) * (size_t)ts->player_track_count);
+  int count = 0;
+  if (tracks && before) {
+    for (int i = 0; i < ts->player_track_count; ++i) {
+      if (i != track_index && !(i < g_target_count && g_targets[i])) continue;
+      starting_config_t *config = &ts->player_tracks[i].starting_config;
+      tracks[count] = i;
+      copy_config(&before[count++], config);
+      if (i == track_index) {
+        copy_config(config, &g_draft);
+        continue;
+      }
+      // What a switched-off override still stores is not what the track starts
+      // with, so it is not allowed to come back along with the edits.
+      if (!config->enabled) config->override_count = 0;
+      config->enabled = true;
+      // Every other property is pinned to what the track starts with already.
+      // That leaves a complete override, the same one the panel would build for
+      // this track, so it does not then show up there as an edit still to apply.
+      const int target_group = model_track_group_index(ts, i);
+      const int target_local = model_group_local_track_index(ts, i);
+      for (uint32_t p = 0; player_class && target_group >= 0 && target_local >= 0 && p < player_class->prop_count; ++p) {
+        const ft_prop_desc *prop = starting_prop(player_class, p);
+        ft_value current;
+        if (!prop || !prop->id || find_override(config, prop->id)) continue;
+        if (!gh_entity_prop_get(host, ts->groups[target_group]->initial_world, FT_ENTITY_CLASS_PLAYER, target_local, p, &current)) continue;
+        starting_override_t *override = ensure_override(config, prop->id, current.kind);
+        if (override) store_value(override, &current);
+      }
+      for (int o = 0; o < g_draft.override_count; ++o) {
+        if (!changed[o]) continue;
+        const starting_override_t *source = &g_draft.overrides[o];
+        starting_override_t *override = ensure_override(config, source->prop_id, source->value.kind);
+        if (override) store_value(override, &source->value);
+      }
+    }
+    // rebuilt rather than written over, so nothing an old override set outlives it
+    for (int group_index = 0; group_index < ts->group_count; ++group_index) {
+      bool touched = false;
+      for (int i = 0; i < count && !touched; ++i)
+        touched = model_track_group_index(ts, tracks[i]) == group_index;
+      if (touched) model_rebuild_group_start(ts, group_index);
+    }
+    undo_command_t *command = commands_create_starting_configs_change(ui, tracks, before, count, "Apply Starting Changes to Tracks");
+    if (command) undo_manager_register_command(&ui->undo_manager, command);
+    ui_mark_unsaved(ui);
+    seed_draft(&ts->player_tracks[track_index].starting_config, track_index);
+  }
+  free(tracks);
+  free(before);
+}
+
+// The two ways a start leaves the track it was made on: onto a new track, or
+// onto tracks that already exist.
+static void draw_share_row(ui_handler_t *ui, int track_index, int group_index, float dpi) {
+  timeline_state_t *ts = &ui->timeline;
+  game_host_t *host = &ui->gfx_handler->game_host;
+
+  const bool can_add = !ts->recording && game_can_add_player(host, ts->player_track_count);
+  if (!can_add) igBeginDisabled(true);
+  const bool add = igButton(ICON_FA_PLUS " Add track with this start", (ImVec2){-1.f, 0.f});
+  if (!can_add) igEndDisabled();
+
+  bool changed[MAX_STARTING_OVERRIDES];
+  const int change_count = draft_changes(ui, track_index, changed);
+  const bool can_share = ts->player_track_count > 1 && change_count > 0;
+  if (!can_share) igBeginDisabled(true);
+  if (igButton(ICON_FA_COPY " Apply changes to tracks...", (ImVec2){-1.f, 0.f}) && reset_targets(ts->player_track_count))
+    igOpenPopup_Str("StartingStateTargets", ImGuiPopupFlags_None);
+  if (!can_share) igEndDisabled();
+
+  bool apply = false;
+  if (igBeginPopup("StartingStateTargets", ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (g_target_count != ts->player_track_count) reset_targets(ts->player_track_count);
+
+    // what is about to be handed on, by the names the panel shows them under
+    const ft_entity_class *player_class = gh_entity_class(host, FT_ENTITY_CLASS_PLAYER);
+    igTextDisabled("Changes:");
+    for (int o = 0; o < g_draft.override_count; ++o) {
+      if (!changed[o]) continue;
+      const int prop = model_find_player_prop(host, g_draft.overrides[o].prop_id);
+      const char *name = player_class && prop >= 0 && player_class->props[prop].display_name ? player_class->props[prop].display_name
+                                                                                              : g_draft.overrides[o].prop_id;
+      igBulletText("%s", name);
+    }
+    igSeparator();
+
+    if (igButton("All", (ImVec2){0.f, 0.f})) memset(g_targets, 1, sizeof(bool) * (size_t)g_target_count);
+    igSameLine(0.f, 6.f * dpi);
+    if (igButton("None", (ImVec2){0.f, 0.f})) memset(g_targets, 0, sizeof(bool) * (size_t)g_target_count);
+    igSameLine(0.f, 6.f * dpi);
+    if (igButton("This group", (ImVec2){0.f, 0.f}))
+      for (int i = 0; i < g_target_count; ++i)
+        g_targets[i] = model_track_group_index(ts, i) == group_index;
+
+    int ticked = 0;
+    const int rows = g_target_count - 1 < 12 ? g_target_count - 1 : 12;
+    igBeginChild_Str("##targets", (ImVec2){260.f * dpi, (float)rows * igGetFrameHeightWithSpacing()}, false, ImGuiWindowFlags_None);
+    for (int i = 0; i < g_target_count; ++i) {
+      if (i == track_index) continue;
+      const player_track_t *other = &ts->player_tracks[i];
+      const int other_group = model_track_group_index(ts, i);
+      char label[224];
+      if (ts->group_count > 1 && other_group >= 0)
+        snprintf(label, sizeof(label), "%s / %s", ts->groups[other_group]->name, other->name[0] ? other->name : "Track");
+      else snprintf(label, sizeof(label), "%s", other->name[0] ? other->name : "Track");
+      igPushID_Int(i);
+      igCheckbox(label, &g_targets[i]);
+      igPopID();
+      if (g_targets[i]) ++ticked;
+    }
+    igEndChild();
+
+    igSeparator();
+    char apply_label[64];
+    snprintf(apply_label, sizeof(apply_label), ICON_FA_CHECK " Apply to %d track%s", ticked, ticked == 1 ? "" : "s");
+    if (ticked == 0 || change_count == 0) igBeginDisabled(true);
+    if (igButton(apply_label, (ImVec2){-1.f, 0.f})) {
+      apply = true;
+      igCloseCurrentPopup();
+    }
+    if (ticked == 0 || change_count == 0) igEndDisabled();
+    igEndPopup();
+  }
+
+  // Both move or rewrite the track array, so they run with nothing above still
+  // holding a pointer into it.
+  if (apply) apply_changes_to_targets(ui, track_index);
+  else if (add) add_track_with_draft(ui, group_index);
+}
+
 bool starting_state_draw(ui_handler_t *ui, int track_index) {
   if (!ui) return false;
 
@@ -436,6 +667,7 @@ bool starting_state_draw(ui_handler_t *ui, int track_index) {
   }
 
   draw_apply_row(ui, track_index, group_index, config, dpi);
+  draw_share_row(ui, track_index, group_index, dpi);
 
   igPopID();
   return true;

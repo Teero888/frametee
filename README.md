@@ -86,6 +86,7 @@ Tracks inside the same group share a world and interact normally. Separate group
 
 Game modules can expose selected entity properties as editable starting-state values.
 These overrides are applied before timeline playback begins and can be used to change state such as position, velocity or other game-specific properties supported by the module.
+A start can also be handed on: `Add track with this start` creates a new track in the same group with the same starting state, and `Apply changes to tracks...` writes only the values that were just edited onto any number of existing tracks in one step, so every track can be given a weapon without moving any of them.
 
 <img height="400" alt="image" src="https://github.com/user-attachments/assets/5dda3e0e-3760-49b2-b40f-d05956b763ae" />
 <img align="top" height="400" alt="image" src="https://github.com/user-attachments/assets/d69e8d54-7732-41dc-a0c0-9169d0ce89d4" />

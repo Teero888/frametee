@@ -564,15 +564,20 @@ undo_command_t *commands_create_group_visibility_change(ui_handler_t *ui, int gr
   return &command->base;
 }
 
-// A track's whole starting configuration, before and after. It is one edit as
-// far as the user is concerned, "the start changed", and the config is small
-// and pointer-free apart from the inline strings, so both states are simply
-// held by value.
+// Whole starting configurations, before and after, for one track or for several
+// that were given the same start in one go. It is one edit as far as the user
+// is concerned, "the start changed", and a config is small and pointer-free
+// apart from the inline strings, so both states are simply held by value.
 typedef struct {
-  undo_command_t base;
   int track_index;
   starting_config_t before;
   starting_config_t after;
+} StartingConfigEdit;
+
+typedef struct {
+  undo_command_t base;
+  int count;
+  StartingConfigEdit edits[];
 } StartingConfigCommand;
 
 static bool starting_configs_equal(const starting_config_t *a, const starting_config_t *b) {
@@ -592,44 +597,66 @@ static bool starting_configs_equal(const starting_config_t *a, const starting_co
   return true;
 }
 
-static void apply_starting_config(struct timeline_state *ts, int track_index, const starting_config_t *config) {
-  if (track_index < 0 || track_index >= ts->player_track_count) return;
-  player_track_t *track = &ts->player_tracks[track_index];
-  track->starting_config = *config;
-  model_rebind_starting_strings(&track->starting_config);
-  model_rebuild_group_start(ts, model_track_group_index(ts, track_index));
+static void apply_starting_configs(struct timeline_state *ts, StartingConfigCommand *c, bool after) {
+  for (int i = 0; i < c->count; ++i) {
+    const int track_index = c->edits[i].track_index;
+    if (track_index < 0 || track_index >= ts->player_track_count) continue;
+    player_track_t *track = &ts->player_tracks[track_index];
+    track->starting_config = after ? c->edits[i].after : c->edits[i].before;
+    model_rebind_starting_strings(&track->starting_config);
+  }
+  // one rebuild per group touched, however many of its tracks changed
+  for (int i = 0; i < c->count; ++i) {
+    const int group_index = model_track_group_index(ts, c->edits[i].track_index);
+    bool rebuilt = false;
+    for (int earlier = 0; earlier < i && !rebuilt; ++earlier)
+      rebuilt = model_track_group_index(ts, c->edits[earlier].track_index) == group_index;
+    if (!rebuilt) model_rebuild_group_start(ts, group_index);
+  }
 }
 
 static void undo_starting_config(void *cmd, void *ts_void) {
-  StartingConfigCommand *c = (StartingConfigCommand *)cmd;
-  apply_starting_config((struct timeline_state *)ts_void, c->track_index, &c->before);
+  apply_starting_configs((struct timeline_state *)ts_void, (StartingConfigCommand *)cmd, false);
 }
 
 static void redo_starting_config(void *cmd, void *ts_void) {
-  StartingConfigCommand *c = (StartingConfigCommand *)cmd;
-  apply_starting_config((struct timeline_state *)ts_void, c->track_index, &c->after);
+  apply_starting_configs((struct timeline_state *)ts_void, (StartingConfigCommand *)cmd, true);
 }
 
 static void cleanup_starting_config(void *cmd) { free(cmd); }
 
-undo_command_t *commands_create_starting_config_change(ui_handler_t *ui, int track_index, const starting_config_t *before,
-                                                       const char *description) {
-  if (!ui || !before || track_index < 0 || track_index >= ui->timeline.player_track_count) return NULL;
-  const starting_config_t *after = &ui->timeline.player_tracks[track_index].starting_config;
-  if (starting_configs_equal(before, after)) return NULL;
+undo_command_t *commands_create_starting_configs_change(ui_handler_t *ui, const int *track_indices, const starting_config_t *before,
+                                                        int count, const char *description) {
+  if (!ui || !track_indices || !before || count <= 0) return NULL;
 
-  StartingConfigCommand *command = calloc(1, sizeof(*command));
+  StartingConfigCommand *command = calloc(1, sizeof(*command) + sizeof(StartingConfigEdit) * (size_t)count);
   if (!command) return NULL;
+  for (int i = 0; i < count; ++i) {
+    const int track_index = track_indices[i];
+    if (track_index < 0 || track_index >= ui->timeline.player_track_count) continue;
+    const starting_config_t *after = &ui->timeline.player_tracks[track_index].starting_config;
+    if (starting_configs_equal(&before[i], after)) continue;
+    StartingConfigEdit *edit = &command->edits[command->count++];
+    edit->track_index = track_index;
+    edit->before = before[i];
+    edit->after = *after;
+    model_rebind_starting_strings(&edit->before);
+    model_rebind_starting_strings(&edit->after);
+  }
+  if (command->count == 0) {
+    free(command);
+    return NULL;
+  }
   snprintf(command->base.description, sizeof(command->base.description), "%s", description);
   command->base.undo = undo_starting_config;
   command->base.redo = redo_starting_config;
   command->base.cleanup = cleanup_starting_config;
-  command->track_index = track_index;
-  command->before = *before;
-  command->after = *after;
-  model_rebind_starting_strings(&command->before);
-  model_rebind_starting_strings(&command->after);
   return &command->base;
+}
+
+undo_command_t *commands_create_starting_config_change(ui_handler_t *ui, int track_index, const starting_config_t *before,
+                                                       const char *description) {
+  return commands_create_starting_configs_change(ui, &track_index, before, 1, description);
 }
 
 undo_command_t *commands_create_group_start_offset_change(ui_handler_t *ui, int group_index, int before) {

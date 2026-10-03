@@ -49,6 +49,10 @@ struct undo_command_t *commands_create_align_group_starts(ui_handler_t *ui);
 // changed, which is what a drag that ended where it began amounts to.
 struct undo_command_t *commands_create_starting_config_change(ui_handler_t *ui, int track_index, const starting_config_t *before,
                                                               const char *description);
+// The same for several tracks as one undo step. `before[i]` is what
+// `track_indices[i]` held; tracks that did not change are left out.
+struct undo_command_t *commands_create_starting_configs_change(ui_handler_t *ui, const int *track_indices,
+                                                               const starting_config_t *before, int count, const char *description);
 struct undo_command_t *commands_create_group_export_change(ui_handler_t *ui, int group_index, bool before);
 struct undo_command_t *commands_create_track_name_change(ui_handler_t *ui, int track_index, const char *before);
 struct undo_command_t *commands_create_track_export_change(ui_handler_t *ui, int track_index, bool before);
