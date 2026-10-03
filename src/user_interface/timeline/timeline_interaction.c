@@ -241,7 +241,11 @@ void interaction_handle_header(timeline_state_t *ts, ImRect header_bb) {
   if (ts->is_header_dragging) {
     if (igIsMouseDown_Nil(ImGuiMouseButton_Left)) {
       if (!ts->recording) {
-        int mouse_tick = renderer_screen_x_to_tick(ts, io->MousePos.x, header_bb.Min.x);
+        // Following, the playhead stops at the edge it is held against while
+        // the view scrolls on under it, rather than running off out of sight.
+        float mouse_x = io->MousePos.x;
+        if (ts->ui->follow_playhead) mouse_x = fmaxf(header_bb.Min.x, fminf(header_bb.Max.x, mouse_x));
+        int mouse_tick = renderer_screen_x_to_tick(ts, mouse_x, header_bb.Min.x);
         int selected_group = ts->header_drag_group_index;
         int target_tick = mouse_tick + ts->header_drag_grab_offset_ticks + ts->header_drag_current_to_playhead_ticks;
         ts->current_tick = model_clamp_global_tick_for_group(ts, selected_group, target_tick);

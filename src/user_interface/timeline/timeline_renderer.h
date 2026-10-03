@@ -6,6 +6,10 @@
 // Coordinate Conversion
 int renderer_screen_x_to_tick(const timeline_state_t *ts, float screen_x, float timeline_start_x);
 float renderer_tick_to_screen_x(const timeline_state_t *ts, int tick, float timeline_start_x);
+// Width of the track name column, in whole pixels: the lanes and the ruler start
+// where it ends, and a clip rectangle starting between pixels loses the last
+// pixel column on the right once the backend truncates it to a scissor.
+float renderer_track_header_width(void);
 float renderer_get_track_row_height(const timeline_state_t *ts);
 float renderer_get_track_screen_y(const timeline_state_t *ts, int track_index);
 int renderer_screen_y_to_track_index(const timeline_state_t *ts, float screen_y);

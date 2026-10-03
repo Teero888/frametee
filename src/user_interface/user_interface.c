@@ -1365,6 +1365,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->vsync = true;
   ui->fps_limit = 0;
   ui->audio_volume = 1.f;
+  ui->follow_playhead = true;
   ui->lod_bias = -0.5f;
   ui->bg_color[0] = 0.253f;
   ui->bg_color[1] = 0.253f;

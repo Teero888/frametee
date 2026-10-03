@@ -79,6 +79,8 @@ struct ui_handler_t {
   int effects_snippet_id;
   bool vsync;
   bool show_fps;
+  // The timeline view scrolls along with the playhead.
+  bool follow_playhead;
   // Game module the user last worked with. Restored on startup so a project
   // opens under the same game it was authored in.
   char preferred_game_id[32];

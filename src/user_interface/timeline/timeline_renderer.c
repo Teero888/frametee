@@ -43,6 +43,8 @@ int renderer_screen_x_to_tick(const timeline_state_t *ts, float screen_x, float 
   return ts->view_start_tick + (int)roundf((screen_x - timeline_start_x) / ts->zoom);
 }
 
+float renderer_track_header_width(void) { return roundf(120.0f * gfx_get_ui_scale()); }
+
 float renderer_tick_to_screen_x(const timeline_state_t *ts, int tick, float timeline_start_x) {
   return timeline_start_x + (tick - ts->view_start_tick) * ts->zoom;
 }
@@ -222,6 +224,14 @@ void renderer_draw_controls(timeline_state_t *ts) {
   case TRANSPORT_END: model_move_playhead(ts, model_get_max_timeline_tick(ts)); break;
   case TRANSPORT_NONE: break;
   }
+
+  // Lit while on, the way the Camera tab shows its toggles.
+  igSameLine(0, btn_gap);
+  const bool following = ts->ui->follow_playhead;
+  if (following) igPushStyleColor_Vec4(ImGuiCol_Button, igGetStyle()->Colors[ImGuiCol_ButtonActive]);
+  if (ui_icon_button(ts->ui, ICON_FA_ARROWS_TO_DOT, (ImVec2){30 * dpi_scale, 0})) ts->ui->follow_playhead = !following;
+  if (following) igPopStyleColor(1);
+  if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("Follow playhead");
 
   igSameLine(0, 12 * dpi_scale);
   igText("Zoom");
@@ -424,7 +434,7 @@ void renderer_draw_playhead_handle(timeline_state_t *ts, ImDrawList *draw_list, 
 
 void renderer_draw_tracks_area(timeline_state_t *ts, ImRect timeline_bb) {
   float dpi_scale = gfx_get_ui_scale();
-  float track_header_width = 120.0f * dpi_scale;
+  float track_header_width = renderer_track_header_width();
   ImDrawList *draw_list = igGetWindowDrawList();
   int pending_clone_track = -1;
   int pending_clone_group = -1;

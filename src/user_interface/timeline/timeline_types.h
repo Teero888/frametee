@@ -285,7 +285,6 @@ struct timeline_state {
   int gui_playback_speed;
   int playback_speed;
   double last_update_time;
-  bool auto_scroll_playhead;
   bool recording;
   bool is_reversing;
   bool linked_copy_input;

@@ -437,6 +437,12 @@ void config_load(ui_handler_t *ui) {
     if (volume.type == TOML_FP64) ui->audio_volume = fminf(fmaxf((float)volume.u.fp64, 0.f), 1.f);
   }
 
+  toml_datum_t timeline_settings = toml_get(res.toptab, "timeline");
+  if (timeline_settings.type == TOML_TABLE) {
+    toml_datum_t follow = toml_get(timeline_settings, "follow_playhead");
+    if (follow.type == TOML_BOOLEAN) ui->follow_playhead = follow.u.boolean;
+  }
+
   toml_datum_t graphics_settings = toml_get(res.toptab, "graphics");
   if (graphics_settings.type == TOML_TABLE) {
     toml_datum_t vsync = toml_get(graphics_settings, "vsync");
@@ -688,6 +694,9 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "\n[mouse]\n");
   fprintf(fp, "sensitivity = %.2f\n", ui->mouse_sens);
   fprintf(fp, "max_distance = %.2f\n", ui->mouse_max_distance);
+
+  fprintf(fp, "\n[timeline]\n");
+  fprintf(fp, "follow_playhead = %s\n", ui->follow_playhead ? "true" : "false");
 
   fprintf(fp, "\n[graphics]\n");
   fprintf(fp, "vsync = %s\n", ui->vsync ? "true" : "false");
