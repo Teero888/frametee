@@ -532,6 +532,7 @@ typedef struct {
   ft_texture *emoticons_texture;
   ft_texture *speedup_arrow_texture;
   ft_texture *freeze_bar_texture;
+  ft_texture *key_arrow_texture;
   ft_atlas *gameskin;
   ft_atlas *particles;
   ft_atlas *extras;
@@ -539,6 +540,8 @@ typedef struct {
   // DDNet's editor/speed_arrow.png: a single sprite covering the whole sheet.
   ft_atlas *speedup_arrow;
   ft_atlas *freeze_bar;
+  // DDNet's arrow.png, the key press icons above a tee: one sprite.
+  ft_atlas *key_arrow;
   // The crosshair uses its own sprite table over the same sheet.
   ft_atlas *cursor;
   dd_text_renderer_t text;
@@ -549,6 +552,7 @@ typedef struct {
   ft_sprite_rect emoticon_rects[DD_EMOTICON_COUNT];
   ft_sprite_rect speedup_arrow_rect;
   ft_sprite_rect freeze_bar_rects[DD_FREEZE_SPRITE_COUNT];
+  ft_sprite_rect key_arrow_rect;
 
   // Tee rendering: one array texture of skin sheets, one of their grayscale
   // versions for tinting, and the pipeline that composes them.
@@ -658,6 +662,10 @@ typedef struct {
   bool nameplate_clan;
   int nameplate_clan_size;
   int nameplate_offset;
+  // cl_show_direction (on for every player: the editor has no own tee) and
+  // cl_direction_size, a percentage like the nameplate sizes.
+  bool show_key_presses;
+  int key_press_size;
   bool center_dot;
   float cursor_scale;
 } dd_settings_t;
@@ -763,7 +771,7 @@ bool dd_replay_paused(const ft_world *world, int player);
 bool dd_replay_muted(const ft_world *world, int player);
 // The shared drawing of one projectile (interpolated between two positions in
 // tiles) and one laser.
-void dd_render_projectile(ft_game *game, const vec2 from, const vec2 to, float intra, int type, int tick, int id);
+void dd_render_projectile(ft_game *game, const vec2 from, const vec2 to, float intra, int type, int tick, int start_tick);
 void dd_render_laser(ft_game *game, const vec2 from, const vec2 to, bool rifle, float age_ticks, float bounce_delay_ms, int tick,
                      float intra);
 // Draws the replayed recording's projectiles and lasers, as the recording has

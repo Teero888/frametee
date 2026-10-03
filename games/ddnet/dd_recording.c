@@ -837,7 +837,7 @@ void dd_recording_render_entities(ft_game *game, const ft_world *world, float in
       projectile_pos(p, tuning, (float)(tick - p->start_tick) / (float)GAME_TICK_SPEED, &x1, &y1);
       const vec2 from = {(x0 + MAP_EXPAND32) / PX_PER_TILE, (y0 + MAP_EXPAND32) / PX_PER_TILE};
       const vec2 to = {(x1 + MAP_EXPAND32) / PX_PER_TILE, (y1 + MAP_EXPAND32) / PX_PER_TILE};
-      dd_render_projectile(game, from, to, intra, p->type, tick, i);
+      dd_render_projectile(game, from, to, intra, p->type, tick, p->start_tick);
     }
     for (int i = 0; i < state->num_lasers; ++i) {
       const dd_state_laser *l = &state->lasers[i];

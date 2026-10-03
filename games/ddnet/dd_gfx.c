@@ -317,12 +317,14 @@ bool dd_gfx_create(ft_game *game) {
   memcpy(gfx->extra_rects, extra_rects, sizeof(extra_rects));
   memcpy(gfx->emoticon_rects, emoticon_rects, sizeof(emoticon_rects));
   gfx->speedup_arrow_rect = (ft_sprite_rect){0, 0, 64, 64};
+  gfx->key_arrow_rect = (ft_sprite_rect){0, 0, 48, 50};
 
   gfx->gameskin_texture = load_sheet(game, "textures/game.png", NULL, NULL);
   gfx->particles_texture = load_sheet(game, "textures/particles.png", NULL, NULL);
   gfx->extras_texture = load_sheet(game, "textures/extras.png", NULL, NULL);
   gfx->emoticons_texture = load_sheet(game, "textures/emoticons.png", NULL, NULL);
   gfx->speedup_arrow_texture = load_sheet(game, "textures/speed_arrow.png", NULL, NULL);
+  gfx->key_arrow_texture = load_sheet(game, "textures/arrow.png", NULL, NULL);
   load_freeze_bar_sheet(game);
 
   gfx->gameskin = make_atlas(game, gfx->gameskin_texture, gfx->gameskin_rects, GAMESKIN_SPRITE_COUNT, 200000);
@@ -331,6 +333,7 @@ bool dd_gfx_create(ft_game *game) {
   gfx->emoticons = make_atlas(game, gfx->emoticons_texture, gfx->emoticon_rects, DD_EMOTICON_COUNT, 4096);
   gfx->speedup_arrow = make_atlas(game, gfx->speedup_arrow_texture, &gfx->speedup_arrow_rect, 1, 65536);
   gfx->freeze_bar = make_atlas(game, gfx->freeze_bar_texture, gfx->freeze_bar_rects, DD_FREEZE_SPRITE_COUNT, 4096);
+  gfx->key_arrow = make_atlas(game, gfx->key_arrow_texture, &gfx->key_arrow_rect, 1, 4096);
   // One crosshair at a time, so a tiny instance ring is plenty.
   gfx->cursor = make_atlas(game, gfx->gameskin_texture, gfx->cursor_rects, CURSOR_SPRITE_COUNT, 8);
   if (!gfx->gameskin) {
@@ -393,6 +396,7 @@ void dd_gfx_destroy(ft_game *game) {
   if (gfx->emoticons) game->engine->atlas_destroy(gfx->emoticons);
   if (gfx->speedup_arrow) game->engine->atlas_destroy(gfx->speedup_arrow);
   if (gfx->freeze_bar) game->engine->atlas_destroy(gfx->freeze_bar);
+  if (gfx->key_arrow) game->engine->atlas_destroy(gfx->key_arrow);
   if (gfx->cursor) game->engine->atlas_destroy(gfx->cursor);
   dd_text_destroy(game);
   if (gfx->skin_array) game->engine->texture_destroy(gfx->skin_array);
@@ -764,6 +768,7 @@ const ft_sprite_rect *dd_sprite_rect(ft_game *game, ft_atlas *atlas, uint32_t in
   if (atlas == gfx->emoticons && index < DD_EMOTICON_COUNT) return &gfx->emoticon_rects[index];
   if (atlas == gfx->speedup_arrow && index == 0) return &gfx->speedup_arrow_rect;
   if (atlas == gfx->freeze_bar && index < DD_FREEZE_SPRITE_COUNT) return &gfx->freeze_bar_rects[index];
+  if (atlas == gfx->key_arrow && index == 0) return &gfx->key_arrow_rect;
   return NULL;
 }
 

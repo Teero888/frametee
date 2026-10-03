@@ -77,8 +77,28 @@ static float draw_nameplate_line(ft_game *game, float center_x, float bottom, fl
   return bottom - size - padding;
 }
 
+// CNamePlatePartDirection: the plate's bottom line, arrow.png left, up and
+// right, each a square of the direction size padded like the other parts,
+// lit while the tee's input holds that key. The line takes its room whether
+// or not a key is held, so the name does not jump; returns its top edge.
+static float draw_key_presses(ft_game *game, float center_x, float bottom, float size, float alpha,
+                              const SPlayerInput *input) {
+  const float step = size + DD_NAMEPLATE_PADDING / PX_PER_TILE;
+  const float y = bottom - size * 0.75f; // the line is 1.5 sizes tall
+  // DDNet turns the right-pointing arrow by pi and -pi/2; the engine turns
+  // sprites the other way round its y-down world.
+  const bool held[3] = {input->m_Direction == -1, input->m_Jump != 0, input->m_Direction == 1};
+  const float angle[3] = {-(float)M_PI, (float)M_PI * 0.5f, 0.f};
+  for (int k = 0; k < 3; ++k)
+    if (held[k])
+      dd_draw_sprite(game, game->gfx.key_arrow, DD_Z_OVERLAYS, (vec2){center_x + (float)(k - 1) * step, y},
+                     (vec2){size, size}, angle[k], 0, (vec4){1.f, 1.f, 1.f, alpha});
+  return bottom - size * 1.5f;
+}
+
 static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
-  if (!game->settings.render_nameplates || !frame->world) return;
+  const bool names = game->settings.render_nameplates, keys = game->settings.show_key_presses;
+  if (!(names || keys) || !frame->world) return;
   if (frame->world_count > 32 && !frame->active && frame->selected_player < 0) return;
   const SWorldCore *world = &frame->world->core;
   ft_camera camera;
@@ -86,6 +106,7 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
 
   const float name_size = nameplate_font_size(game->settings.nameplate_size);
   const float clan_size = nameplate_font_size(game->settings.nameplate_clan_size);
+  const float key_size = nameplate_font_size(game->settings.key_press_size);
 
   for (int player = 0; player < world->m_NumCharacters; ++player) {
     if (dd_replay_absent(frame->world, player)) continue; // not in its demo at this tick
@@ -102,6 +123,8 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
     const ft_color color = {1.f, 1.f, 1.f, frame->opacity * (dd_replay_paused(frame->world, player) ? 0.4f : 1.f)};
 
     float bottom = pos.y - (float)game->settings.nameplate_offset / PX_PER_TILE;
+    if (keys) bottom = draw_key_presses(game, pos.x, bottom, key_size, color.a, &world->m_pCharacters[player].m_Input);
+    if (!names) continue;
     bottom = draw_nameplate_line(game, pos.x, bottom, name_size, color, name);
 
     if (game->settings.nameplate_clan && (uint32_t)player < frame->player_setup_count) {

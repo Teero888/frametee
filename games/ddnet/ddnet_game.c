@@ -1242,6 +1242,8 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
                                    .nameplate_clan = true,
                                    .nameplate_clan_size = 30,
                                    .nameplate_offset = 30,
+                                   .show_key_presses = true,
+                                   .key_press_size = 30,
                                    .center_dot = false,
                                    .cursor_scale = 1.0f};
   game->auto_finish_events = true;
@@ -1547,6 +1549,8 @@ enum ddnet_setting {
   SET_ENTITIES_VIEW,
   SET_MAP_DETAIL,
   SET_CURSOR_ALL,
+  SET_SHOW_KEY_PRESSES,
+  SET_KEY_PRESS_SIZE,
   SET_COUNT
 };
 
@@ -1582,6 +1586,8 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_NAMEPLATE_CLAN] = {"nameplate_clan", "Show clan", NULL, "Nameplates", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_NAMEPLATE_CLAN_SIZE] = {"nameplate_clan_size", "Clan size", NULL, "Nameplates", FT_VALUE_INT, -50, 100, FT_SETTING_RENDER},
     [SET_NAMEPLATE_OFFSET] = {"nameplate_offset", "Nameplate offset", NULL, "Nameplates", FT_VALUE_INT, 10, 50, FT_SETTING_RENDER},
+    [SET_SHOW_KEY_PRESSES] = {"show_key_presses", "Show players' key presses", NULL, "Key presses", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_KEY_PRESS_SIZE] = {"key_press_size", "Size of key press icons", NULL, "Key presses", FT_VALUE_INT, -50, 100, FT_SETTING_RENDER},
     [SET_AUTO_FINISH_EVENTS] = {"auto_finish_events", "Generate finish events while recording", NULL, "Timeline events", FT_VALUE_BOOL, 0, 0, 0},
 };
 
@@ -1666,6 +1672,12 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
     return true;
   case SET_NAMEPLATE_OFFSET:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->nameplate_offset};
+    return true;
+  case SET_SHOW_KEY_PRESSES:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->show_key_presses};
+    return true;
+  case SET_KEY_PRESS_SIZE:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->key_press_size};
     return true;
   case SET_RENDER_SPEEDUPS:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_speedups};
@@ -1760,6 +1772,12 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
     return true;
   case SET_NAMEPLATE_OFFSET:
     s->nameplate_offset = (int)clamp_setting(value->as.i, 10, 50);
+    return true;
+  case SET_SHOW_KEY_PRESSES:
+    s->show_key_presses = value->as.b;
+    return true;
+  case SET_KEY_PRESS_SIZE:
+    s->key_press_size = (int)clamp_setting(value->as.i, -50, 100);
     return true;
   case SET_RENDER_SPEEDUPS:
     s->render_speedups = value->as.b;

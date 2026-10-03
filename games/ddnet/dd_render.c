@@ -441,15 +441,18 @@ static void render_hook(ft_game *game, const SWorldCore *world, const SCharacter
 
 // --- entities ----------------------------------------------------------------
 
-void dd_render_projectile(ft_game *game, const vec2 from, const vec2 to, float intra, int type, int tick, int id) {
+void dd_render_projectile(ft_game *game, const vec2 from, const vec2 to, float intra, int type, int tick, int start_tick) {
   vec2 p;
   lerp2(from, to, intra, p);
   uint32_t sprite = GAMESKIN_GRENADE_PROJ;
   if (type == WEAPON_GUN) sprite = GAMESKIN_GUN_PROJ;
   else if (type == WEAPON_SHOTGUN) sprite = GAMESKIN_SHOTGUN_PROJ;
   float rotation;
+  // DDNet spins a grenade twice a second from the client's clock plus its
+  // snapshot item index, which shifts whenever a projectile ahead of it comes
+  // or goes and makes it jump. Its own age turns it smoothly instead.
   if (type == WEAPON_GRENADE)
-    rotation = -(((float)tick + intra) / 50.f) * 4.f * M_PI + id;
+    rotation = -(((float)(tick - start_tick) + intra) / 50.f) * 4.f * M_PI;
   else
     rotation = atan2f(-(to[1] - from[1]), to[0] - from[0]);
   dd_draw_sprite(game, game->gfx.gameskin, DD_Z_PROJECTILES, p, (vec2){1.f, 1.f}, rotation, sprite, (vec4){1.f, 1.f, 1.f, 1.f});
@@ -504,7 +507,6 @@ void dd_render_laser(ft_game *game, const vec2 from, const vec2 to, bool rifle, 
 static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world, float intra) {
   if (!world->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE] &&
       !world->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]) return;
-  int id = 0;
   for (SProjectile *ent = (SProjectile *)world->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
        ent = (SProjectile *)ent->m_Base.m_pNextTypeEntity) {
     const float pt = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick - 1) / (float)GAME_TICK_SPEED;
@@ -512,8 +514,7 @@ static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world
     vec2 from, to;
     tile_pos(prj_get_pos(ent, pt), from);
     tile_pos(prj_get_pos(ent, ct), to);
-    dd_render_projectile(game, from, to, intra, ent->m_Type, world->m_GameTick, id);
-    ++id;
+    dd_render_projectile(game, from, to, intra, ent->m_Type, world->m_GameTick, ent->m_StartTick);
   }
 
   for (SLaser *ent = (SLaser *)world->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent; ent = (SLaser *)ent->m_Base.m_pNextTypeEntity) {
