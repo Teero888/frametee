@@ -266,8 +266,8 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
   }
 
   // Trim shortcut (explicit trigger only)
-  bool trim_pressed = keybinds_is_action_down(&ts->ui->keybinds, ACTION_TRIM_SNIPPET);
-  if (trim_pressed) interaction_trim_recording_snippet(ts);
+  if (keybinds_is_action_down(&ts->ui->keybinds, ACTION_TRIM_SNIPPET)) interaction_trim_recording_snippet(ts, false);
+  else if (keybinds_is_action_down(&ts->ui->keybinds, ACTION_TRIM_CONTROLLED)) interaction_trim_recording_snippet(ts, true);
 }
 
 void interaction_handle_header(timeline_state_t *ts, ImRect header_bb) {
@@ -983,7 +983,10 @@ void interaction_cancel_recording(timeline_state_t *ts) {
   model_recalc_physics(ts, 0);
 }
 
-void interaction_trim_recording_snippet(timeline_state_t *ts) {
+// Cuts the takes back to the playhead and keeps recording from there. With
+// only_controlled the linked tees keep their takes: they replay them past the
+// playhead and go on recording once the playhead leaves the end.
+void interaction_trim_recording_snippet(timeline_state_t *ts, bool only_controlled) {
   if (!ts->recording) return;
 
   bool cut = false;
@@ -991,6 +994,7 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
     player_track_t *track = &ts->player_tracks[i];
 
     if (track->recording_snippet_count == 0) continue;
+    if (only_controlled && i != ts->selected_player_track_index) continue;
 
     for (int j = 0; j < track->recording_snippet_count; ++j) {
       input_snippet_t *rec = &track->recording_snippets[j];
@@ -1036,7 +1040,12 @@ void interaction_trim_recording_snippet(timeline_state_t *ts) {
 
     input_snippet_t *target = NULL;
 
-    for (int j = 0; j < track->recording_snippet_count; ++j) {
+    if (only_controlled && i != ts->selected_player_track_index) {
+      // Untouched: it goes on with the take it records into.
+      if (!should_record || track->recording_snippet_count == 0) continue;
+      target = &track->recording_snippets[track->recording_snippet_count - 1];
+    }
+    for (int j = 0; !target && j < track->recording_snippet_count; ++j) {
       if (track->recording_snippets[j].end_tick == model_group_playhead_tick(ts, ts->active_group_index)) {
         target = &track->recording_snippets[j];
         break;

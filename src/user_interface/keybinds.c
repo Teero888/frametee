@@ -225,6 +225,7 @@ void keybinds_init(keybind_manager_t *manager) {
   set_action_info(manager, ACTION_OPEN_CONTROLS, "open_controls", "Open Controls", "General");
 
   set_action_info(manager, ACTION_TRIM_SNIPPET, "trim_snippet", "Trim Recording", "Recording");
+  set_action_info(manager, ACTION_TRIM_CONTROLLED, "trim_controlled", "Trim Controlled Player's Recording", "Recording");
   set_action_info(manager, ACTION_CANCEL_RECORDING, "cancel_recording", "Cancel Recording", "Recording");
   set_action_info(manager, ACTION_TOGGLE_LINKED_COPY, "toggle_linked_copy", "Toggle Linked Input Copy", "Recording");
   set_action_info(manager, ACTION_ZOOM_IN, "zoom_in", "Zoom in", "Camera");
@@ -280,6 +281,7 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_OPEN_CONTROLS, (key_combo_t){ImGuiKey_Comma, true, false, false});
 
   keybinds_add(manager, ACTION_TRIM_SNIPPET, (key_combo_t){ImGuiKey_F, false, false, false});
+  keybinds_add(manager, ACTION_TRIM_CONTROLLED, (key_combo_t){ImGuiKey_F, true, false, false});
   keybinds_add(manager, ACTION_CANCEL_RECORDING, (key_combo_t){ImGuiKey_F4, false, false, false});
   keybinds_add(manager, ACTION_TOGGLE_LINKED_COPY, (key_combo_t){ImGuiKey_R, false, false, false});
   keybinds_add(manager, ACTION_ZOOM_IN, (key_combo_t){ImGuiKey_Equal, false, false, false});
