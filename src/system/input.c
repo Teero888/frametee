@@ -1,5 +1,7 @@
 #include "input.h"
+#include "input_repeat.h"
 #include <GLFW/glfw3.h>
+#include <math.h>
 #include <string.h>
 
 #define KEY_COUNT (GLFW_KEY_LAST + 1)
@@ -8,6 +10,7 @@
 typedef struct {
   GLFWwindow *window;
   bool initialized;
+  bool focused;
 
   unsigned char keys[KEY_COUNT];
   unsigned char keys_prev[KEY_COUNT];
@@ -18,6 +21,9 @@ typedef struct {
 
   unsigned char buttons[BUTTON_COUNT];
   unsigned char buttons_prev[BUTTON_COUNT];
+  unsigned char buttons_repeat[BUTTON_COUNT];
+  double button_next_repeat[BUTTON_COUNT];
+  input_repeat_settings_t repeat_settings;
 
   // Written by the GLFW callbacks between frames, drained by input_new_frame().
   double pending_dx, pending_dy;
@@ -285,8 +291,11 @@ static ImGuiKey glfw_key_to_imgui(int keycode) {
 }
 
 void input_init(GLFWwindow *window) {
-  memset(&g_input, 0, sizeof(g_input));
+  input_shutdown();
   g_input.window = window;
+  g_input.focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) != 0;
+  input_repeat_init();
+  g_input.repeat_settings = input_repeat_settings();
 
   for (int i = 0; i < ImGuiKey_NamedKey_END; ++i)
     g_input.imgui_to_glfw[i] = -1;
@@ -315,6 +324,11 @@ void input_init(GLFWwindow *window) {
   g_input.initialized = true;
 }
 
+void input_shutdown(void) {
+  input_repeat_shutdown();
+  memset(&g_input, 0, sizeof(g_input));
+}
+
 void input_accumulate_mouse_pos(double x, double y, double *out_dx, double *out_dy) {
   const double dx = x - g_input.last_event_x;
   const double dy = y - g_input.last_event_y;
@@ -341,6 +355,16 @@ void input_accumulate_key_repeat(int glfw_key) {
 void input_new_frame(void) {
   if (!g_input.initialized) return;
 
+  const bool focused = glfwGetWindowAttrib(g_input.window, GLFW_FOCUSED) != 0;
+  if (focused && !g_input.focused) input_repeat_refresh();
+  g_input.focused = focused;
+  const input_repeat_settings_t settings = input_repeat_settings();
+  const bool settings_changed = settings.enabled != g_input.repeat_settings.enabled ||
+                                settings.delay != g_input.repeat_settings.delay ||
+                                settings.interval != g_input.repeat_settings.interval;
+  g_input.repeat_settings = settings;
+  const double now = glfwGetTime();
+
   memcpy(g_input.keys_prev, g_input.keys, sizeof(g_input.keys));
   memcpy(g_input.buttons_prev, g_input.buttons, sizeof(g_input.buttons));
 
@@ -352,8 +376,23 @@ void input_new_frame(void) {
   memcpy(g_input.keys_repeat, g_input.pending_repeat, sizeof(g_input.keys_repeat));
   memset(g_input.pending_repeat, 0, sizeof(g_input.pending_repeat));
 
-  for (int button = 0; button <= GLFW_MOUSE_BUTTON_LAST; ++button)
-    g_input.buttons[button] = glfwGetMouseButton(g_input.window, button) == GLFW_PRESS ? 1 : 0;
+  for (int button = 0; button <= GLFW_MOUSE_BUTTON_LAST; ++button) {
+    // Poll even when unfocused to drain sticky presses, but never repeat them.
+    const bool down = glfwGetMouseButton(g_input.window, button) == GLFW_PRESS;
+    g_input.buttons[button] = down && focused;
+    g_input.buttons_repeat[button] = 0;
+    if (!g_input.buttons[button]) {
+      g_input.button_next_repeat[button] = 0.0;
+    } else if (!g_input.buttons_prev[button] || settings_changed) {
+      g_input.button_next_repeat[button] = now + settings.delay;
+    } else if (settings.enabled && settings.interval > 0.0 && now >= g_input.button_next_repeat[button]) {
+      g_input.buttons_repeat[button] = 1;
+      // Preserve the system cadence, dropping missed repeats after a long
+      // frame instead of delivering a burst on subsequent frames.
+      const double missed = floor((now - g_input.button_next_repeat[button]) / settings.interval);
+      g_input.button_next_repeat[button] += (missed + 1.0) * settings.interval;
+    }
+  }
 
   // Drain what the callbacks collected since the previous frame; nothing is lost regardless of how
   // many events arrived between frames.
@@ -383,9 +422,9 @@ bool input_mouse_down(int glfw_button) {
   return g_input.buttons[glfw_button] != 0;
 }
 
-bool input_mouse_pressed(int glfw_button) {
+bool input_mouse_pressed(int glfw_button, bool repeat) {
   if (glfw_button < 0 || glfw_button > GLFW_MOUSE_BUTTON_LAST) return false;
-  return g_input.buttons[glfw_button] && !g_input.buttons_prev[glfw_button];
+  return g_input.buttons[glfw_button] && (!g_input.buttons_prev[glfw_button] || (repeat && g_input.buttons_repeat[glfw_button]));
 }
 
 bool input_ctrl_down(void) { return input_key_down(GLFW_KEY_LEFT_CONTROL) || input_key_down(GLFW_KEY_RIGHT_CONTROL); }
@@ -438,11 +477,11 @@ ImGuiKey input_capture_pressed_key(void) {
     }
   }
 
-  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_LEFT)) return ImGuiKey_MouseLeft;
-  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_RIGHT)) return ImGuiKey_MouseRight;
-  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_MIDDLE)) return ImGuiKey_MouseMiddle;
-  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_4)) return ImGuiKey_MouseX1;
-  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_5)) return ImGuiKey_MouseX2;
+  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_LEFT, false)) return ImGuiKey_MouseLeft;
+  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_RIGHT, false)) return ImGuiKey_MouseRight;
+  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_MIDDLE, false)) return ImGuiKey_MouseMiddle;
+  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_4, false)) return ImGuiKey_MouseX1;
+  if (input_mouse_pressed(GLFW_MOUSE_BUTTON_5, false)) return ImGuiKey_MouseX2;
 
   return modifier_only;
 }

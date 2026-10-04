@@ -26,6 +26,8 @@ jobs:
           build-essential \
           cmake \
           libx11-dev \
+          libwayland-dev \
+          libxkbcommon-dev \
           libxrandr-dev \
           libxinerama-dev \
           libxcursor-dev \
@@ -50,6 +52,9 @@ jobs:
       run: >-
         cmake -S . -B build
         -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_DISABLE_FIND_PACKAGE_glfw3=ON
+        -DGLFW_BUILD_WAYLAND=ON
+        -DGLFW_LIBRARY_TYPE=STATIC
         -DBUILD_GAMES=ON
         -DBUILD_PLUGINS=ON
         '-DFRAMETEE_PLUGIN_ALLOWLIST=example_c;example_cpp;physics_profiler;random_input_filler'

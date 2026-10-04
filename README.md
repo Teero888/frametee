@@ -178,6 +178,8 @@ cmake --build build --config Release -j
 
 FrameTee requires CMake, a suitable C/C++ compiler, Vulkan development libraries and `glslangValidator`.
 
+On Linux, the bundled GLFW builds both native Wayland and X11 support. Install the Wayland and xkbcommon development packages (`libwayland-dev` and `libxkbcommon-dev` on Debian/Ubuntu). Native Wayland uses the compositor's keyboard repeat settings for mouse hold repeat; X11 reads them through XKB. GitHub Linux releases include GLFW statically with both backends.
+
 Windows and Linux are currently supported. (not msvc since it's garbage. use mingw)
 
 ## Contributing

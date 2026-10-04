@@ -355,11 +355,13 @@ int init_gfx_handler(gfx_handler_t *handler) {
   ui_init_config(&handler->user_interface);
 
   if (init_vulkan(handler) != 0) {
+    input_shutdown();
     glfwDestroyWindow(handler->window);
     glfwTerminate();
     return 1;
   }
   if (renderer_init(handler) != 0) {
+    input_shutdown();
     cleanup_vulkan(handler);
     glfwDestroyWindow(handler->window);
     glfwTerminate();
@@ -370,6 +372,7 @@ int init_gfx_handler(gfx_handler_t *handler) {
   handler->renderer.lod_bias = handler->user_interface.lod_bias;
 
   if (init_imgui(handler) != 0) {
+    input_shutdown();
     destroy_export_resources(handler);
     renderer_cleanup(handler);
     cleanup_vulkan(handler);
@@ -712,6 +715,7 @@ void gfx_cleanup(gfx_handler_t *handler) {
     }
     save_window_geometry(handler->window);
     clear_glfw_callbacks(handler->window);
+    input_shutdown();
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
   }

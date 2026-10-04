@@ -29,6 +29,7 @@
 struct GLFWwindow;
 
 void input_init(struct GLFWwindow *window);
+void input_shutdown(void);
 // Samples the keyboard and mouse for this frame. Must run after glfwPollEvents().
 void input_new_frame(void);
 
@@ -42,7 +43,9 @@ void input_accumulate_key_repeat(int glfw_key);
 bool input_key_down(int glfw_key);
 bool input_key_pressed(int glfw_key, bool repeat);
 bool input_mouse_down(int glfw_button);
-bool input_mouse_pressed(int glfw_button);
+// Mouse repeat is synthesized using system keyboard repeat settings, only
+// for callers that opt in. Rebinding and single-press actions pass false.
+bool input_mouse_pressed(int glfw_button, bool repeat);
 
 bool input_ctrl_down(void);
 bool input_alt_down(void);

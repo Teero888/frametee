@@ -80,6 +80,7 @@ set(SRCS
 	src/system/save.c
 	src/system/config.c
 	src/system/input.c
+	src/system/input_repeat.c
 	src/system/fs.c
 	src/system/sha256.c
 	src/logger/logger.c
@@ -137,10 +138,8 @@ if(NOT glfw3_FOUND)
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-    if(UNIX AND NOT APPLE)
-        # keeps the fallback buildable with only the X11 dev packages installed
-        set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
-    endif()
+    # GLFW 3.4 defaults to both Wayland and X11 on Linux. Keep both backends
+    # so one binary works in either session; do not force Wayland off here.
     FetchContent_Declare(
         glfw
         GIT_REPOSITORY https://github.com/glfw/glfw.git
@@ -305,11 +304,20 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Vulkan::Vulkan
 )
 
+find_package(PkgConfig QUIET)
+# Native Wayland supplies keyboard repeat settings through a protocol listener.
+# X11-only builds can omit the client library.
+if(UNIX AND NOT APPLE AND PkgConfig_FOUND)
+    pkg_check_modules(FRAMETEE_WAYLAND QUIET IMPORTED_TARGET wayland-client)
+    if(TARGET PkgConfig::FRAMETEE_WAYLAND)
+        target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FRAMETEE_WAYLAND)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE FT_HAS_WAYLAND=1)
+    endif()
+endif()
 # MP4 export needs FFmpeg's libraries. Without them the editor still builds,
 # with rendering disabled; release builds ask for it so they cannot ship
 # without it by accident.
 option(FRAMETEE_REQUIRE_VIDEO_EXPORT "Fail to configure when FFmpeg is not found" OFF)
-find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(FRAMETEE_VIDEO_FFMPEG QUIET IMPORTED_TARGET
         libavformat libavcodec libavutil libswscale)

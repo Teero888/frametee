@@ -49,7 +49,7 @@ bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
   if (!combo_modifiers_match(combo) || combo_blocked_by_ui(combo)) return false;
 
   int button = input_glfw_button_from_imgui(combo->key);
-  if (button != -1) return input_mouse_pressed(button);
+  if (button != -1) return input_mouse_pressed(button, repeat);
 
   return input_key_pressed(input_glfw_key_from_imgui(combo->key), repeat);
 }
