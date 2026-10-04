@@ -26,8 +26,8 @@ To prevent cheating on official DDNet servers, the physics have been slightly al
 ### TrackMania United Forever
 
 The TrackMania module uses [`tmuf_physics`](https://github.com/Teero888/tmuf_physics), the game's physics in C, bit-exact with TrackMania United Forever 2.11.26 in all seven environments.
-FrameTee can load TrackMania Forever challenges, simulate them and render them in the 3D editor from the game's own files: blocks, decorations, skies and moods, lighting, shadows, water, particles, flares and the car with its skin, aiming for the game's look at its highest settings.
-Replays open as levels (their map, car, seed and laps) or import as recordings to continue from, and runs export as `.Replay.Gbx` files the game validates. Skins a replay names are looked for in the game's data and in a player's TrackMania documents.
+FrameTee can load TrackMania Forever challenges, simulate them and render them in the 3D editor from the game's own files.
+Replays open as levels (their map, car, seed and laps) or import as recordings to continue from, and runs export as `.Replay.Gbx` files the game validates. Skins and replay names are looked for in the game's data and in a player's TrackMania documents.
 TrackMania's proprietary assets are not distributed with FrameTee and must come from an existing TrackMania United Forever installation. See [installation guide](https://github.com/Teero888/frametee/blob/master/data/games/tmuf/README.txt).
 
 ## Timeline
