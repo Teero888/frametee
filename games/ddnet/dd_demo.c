@@ -218,7 +218,7 @@ static bool is_point_in_view(float px, float py, const mvec2 *positions, int cou
   return false;
 }
 
-static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, const int *client_ids, int client_count,
+static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, const int *client_ids, int client_count,
                        const int *client_options, SWorldCore *prev, const ft_world *current_world, bool include_static,
                        const mvec2 *active_positions, int active_pos_count, int demo_tick,
                        int tick_delta, int *next_item_id) {
@@ -397,6 +397,7 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     dd_profile_for_track(game, track_index, &profile);
     SCharacterCore *c_cur = &cur->m_pCharacters[p];
     SCharacterCore *c_prev = &prev->m_pCharacters[p];
+    const bool paused = dd_replay_paused(current_world, p);
 
     dd_netobj_client_info *ci = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, client_id, sizeof(dd_netobj_client_info));
     if (ci) {
@@ -426,8 +427,20 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     dd_netobj_ddnet_player *dp = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPLAYER, client_id, sizeof(dd_netobj_ddnet_player));
     if (dp) {
       dp->m_AuthLevel = 0;
-      dp->m_Flags = 0;
+      dp->m_Flags = paused ? DD_EXPLAYERFLAG_SPEC : 0;
     }
+
+    // Replayed /spec players only have a waiting position. Export it as DDNet
+    // does, rather than turning the placeholder physics character into a tee.
+    if (paused) {
+      dd_netobj_spec_char *spec = demo_sb_add_item(sb, DD_NETOBJTYPE_SPECCHAR, client_id, sizeof(*spec));
+      if (spec) {
+        spec->m_X = round_to_int(vgetx(c_cur->m_Pos)) - MAP_EXPAND32;
+        spec->m_Y = round_to_int(vgety(c_cur->m_Pos)) - MAP_EXPAND32;
+      }
+      continue;
+    }
+    if (dd_replay_absent(current_world, p)) continue;
 
     dd_netobj_character *ch = demo_sb_add_item(sb, DD_NETOBJTYPE_CHARACTER, client_id, sizeof(dd_netobj_character));
     if (ch) {
@@ -648,6 +661,7 @@ static void snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       l->m_Flags = 0;
     }
   }
+  return dd_recording_snap_entities(current_world, sb, client_ids, client_count, demo_tick, next_item_id);
 }
 
 static bool request_includes_track(const ft_export_request *request, int32_t track) {
@@ -929,11 +943,15 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
     for (uint32_t world_index = 0; world_index < world_count; ++world_index) {
       if (!curr_worlds[world_index]) continue;
 
-      snap_world(builder, game, (int)world_index, client_maps[world_index], client_counts[world_index], client_options,
+      if (!snap_world(builder, game, (int)world_index, client_maps[world_index], client_counts[world_index], client_options,
                  (SWorldCore *)&prev_worlds[world_index]->core, curr_worlds[world_index], include_static, active_positions,
-                 active_pos_count, tick - start_tick, worlds[world_index].start_offset - start_tick, &next_item_id);
+                 active_pos_count, tick - start_tick, worlds[world_index].start_offset - start_tick, &next_item_id)) {
+        ok = false;
+        break;
+      }
       include_static = false;
     }
+    if (!ok) break;
 
     const int snapshot_size = demo_sb_finish(builder, snapshot);
     if (snapshot_size <= 0 || !demo_w_write_snap(writer, tick - start_tick, snapshot, snapshot_size)) {

@@ -368,6 +368,8 @@ enum { REPLAY_NONE = 0, REPLAY_PRESENT, REPLAY_ABSENT, REPLAY_PAUSED };
 struct dd_replay_slot {
   uint8_t mode;
   uint8_t jumped; // the recorded m_Jumped of the last replayed tick, for the air jump effect
+  const ft_recording *recording;
+  int cid;
   // The recorded flags a replay overrides while it runs, as of the last tick the player was present.
   bool hook_hit_disabled, solo, collision_disabled;
   // The recorded position of the last replayed tick (world units): the previous position of the
@@ -463,6 +465,25 @@ static bool owner_shown(const ft_world *world, int owner) {
   if (owner == DD_STATE_OWNER_WORLD) return true;
   if (owner < 0 || owner >= DD_STATE_MAX_CLIENTS) return world->replay_clients == UINT64_MAX;
   return (world->replay_clients >> owner) & 1u;
+}
+
+// A hammer's impact belongs to the tee it hits as well as the one that swung.
+// The protocol only sends its position, just outside the target's body. Find
+// the nearest other tee, allowing for movement before the snapshot arrived.
+static bool hammer_target_shown(const ft_world *world, const dd_state_character *characters, const dd_state_event *event) {
+  int target = -1;
+  float nearest = 4.f * PHYSICALSIZE * PHYSICALSIZE;
+  for (int cid = 0; cid < DD_STATE_MAX_CLIENTS; ++cid) {
+    if (cid == event->owner || characters[cid].quality == DD_QUALITY_NONE) continue;
+    const float dx = characters[cid].x - event->x;
+    const float dy = characters[cid].y - event->y;
+    const float distance = dx * dx + dy * dy;
+    if (distance < nearest) {
+      nearest = distance;
+      target = cid;
+    }
+  }
+  return target >= 0 && owner_shown(world, target);
 }
 
 // The playback entry of world player `i`, or NULL when it follows its input.
@@ -604,11 +625,14 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
   if (!tick) return;
   float tuning[64];
   pthread_mutex_lock(&recording->lock);
+  const dd_state_character *characters = characters_at(recording, recording_tick);
   const bool ok = dd_demo_state_entities(recording->state, recording_tick, tick);
   // The pointers in `tick` are only valid until the next call, which the lock keeps away.
   for (int i = 0; ok && i < tick->num_events; ++i) {
     const dd_state_event *event = &tick->events[i];
-    if (!owner_shown(world, event->owner)) continue;
+    if (!owner_shown(world, event->owner) &&
+        !(event->type == DD_STATE_EVENT_HAMMERHIT && hammer_target_shown(world, characters, event)))
+      continue;
     const mvec2 pos = world_pos(event->x, event->y);
     const int player = world_player_of_cid(recording, event->client_id, playback, count);
     switch (event->type) {
@@ -703,6 +727,8 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
     ft_recording *recording = (ft_recording *)pb->recording;
     SCharacterCore *core = &world->core.m_pCharacters[i];
     const int cid = recording->players[pb->player].cid;
+    slot->recording = recording;
+    slot->cid = cid;
     const dd_state_character c = recorded_character(pb);
     float paused_x, paused_y;
     if (c.quality == DD_QUALITY_NONE && paused_of(pb, &paused_x, &paused_y)) {
@@ -819,6 +845,76 @@ void dd_recording_world_place(ft_game *game, ft_world *world, const ft_player_pl
     any_replayed = true;
   }
   if (any_replayed) show_recorded(world, slots, world->replay_slot_count, playback, player_count);
+}
+
+// --- exporting the recording's world ------------------------------------------
+
+static bool recorded_export_owner(const ft_world *world, int owner, const int *client_ids, int client_count, int *out) {
+  if (!owner_shown(world, owner)) return false;
+  if (owner < 0) {
+    *out = -1;
+    return true;
+  }
+  for (int p = 0; p < world->replay_slot_count && p < client_count; ++p) {
+    const struct dd_replay_slot *slot = &world->replay_slots[p];
+    if (slot->mode != REPLAY_NONE && slot->recording == world->replay_recording && slot->cid == owner && client_ids[p] >= 0) {
+      *out = client_ids[p];
+      return true;
+    }
+  }
+  return false;
+}
+
+bool dd_recording_snap_entities(const ft_world *world, dd_snapshot_builder *builder, const int *client_ids,
+                                int client_count, int demo_tick, int *next_item_id) {
+  ft_recording *recording = (ft_recording *)world->replay_recording;
+  if (!recording) return true;
+  dd_state_tick *state = malloc(sizeof(*state));
+  if (!state) return false;
+  const int tick_shift = demo_tick - world->replay_tick;
+  pthread_mutex_lock(&recording->lock);
+  bool ok = dd_demo_state_entities(recording->state, world->replay_tick, state);
+  for (int i = 0; ok && i < state->num_projectiles; ++i) {
+    const dd_state_projectile *source = &state->projectiles[i];
+    int owner;
+    if (!recorded_export_owner(world, source->owner, client_ids, client_count, &owner)) continue;
+    dd_netobj_ddnet_projectile *p = demo_sb_add_item(builder, DD_NETOBJTYPE_DDNETPROJECTILE, (*next_item_id)++, sizeof(*p));
+    if (!p) { ok = false; break; }
+    p->m_X = (int)lroundf(source->x * 100.f);
+    p->m_Y = (int)lroundf(source->y * 100.f);
+    p->m_VelX = (int)lroundf(source->vel_x * 1e6f);
+    p->m_VelY = (int)lroundf(source->vel_y * 1e6f);
+    p->m_Type = source->type;
+    p->m_StartTick = source->start_tick + tick_shift;
+    p->m_Owner = owner;
+    p->m_SwitchNumber = source->switch_number;
+    p->m_TuneZone = source->tune_zone;
+    p->m_Flags = DD_PROJECTILEFLAG_NORMALIZE_VEL;
+    if (source->bouncing & 1) p->m_Flags |= DD_PROJECTILEFLAG_BOUNCE_HORIZONTAL;
+    if (source->bouncing & 2) p->m_Flags |= DD_PROJECTILEFLAG_BOUNCE_VERTICAL;
+    if (source->explosive) p->m_Flags |= DD_PROJECTILEFLAG_EXPLOSIVE;
+    if (source->freeze) p->m_Flags |= DD_PROJECTILEFLAG_FREEZE;
+  }
+  for (int i = 0; ok && i < state->num_lasers; ++i) {
+    const dd_state_laser *source = &state->lasers[i];
+    int owner;
+    if (!recorded_export_owner(world, source->owner, client_ids, client_count, &owner)) continue;
+    dd_netobj_ddnet_laser *l = demo_sb_add_item(builder, DD_NETOBJTYPE_DDNETLASER, (*next_item_id)++, sizeof(*l));
+    if (!l) { ok = false; break; }
+    l->m_ToX = (int)lroundf(source->to_x);
+    l->m_ToY = (int)lroundf(source->to_y);
+    l->m_FromX = (int)lroundf(source->from_x);
+    l->m_FromY = (int)lroundf(source->from_y);
+    l->m_StartTick = source->start_tick < 0 ? source->start_tick : source->start_tick + tick_shift;
+    l->m_Owner = owner;
+    l->m_Type = source->type;
+    l->m_Subtype = source->subtype;
+    l->m_SwitchNumber = source->switch_number;
+    l->m_Flags = source->flags;
+  }
+  pthread_mutex_unlock(&recording->lock);
+  free(state);
+  return ok;
 }
 
 // --- drawing the recording's world ---------------------------------------------

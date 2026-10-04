@@ -771,6 +771,11 @@ bool dd_replay_absent(const ft_world *world, int player);
 bool dd_replay_paused(const ft_world *world, int player);
 // An effect the physics raised for this player is to be dropped (see ft_world::replay_muted).
 bool dd_replay_muted(const ft_world *world, int player);
+// Recorded projectiles and lasers live in the recording, outside the physics
+// entity lists. Write them with the export's client IDs and shared tick clock.
+struct dd_snapshot_builder;
+bool dd_recording_snap_entities(const ft_world *world, struct dd_snapshot_builder *builder, const int *client_ids,
+                                int client_count, int demo_tick, int *next_item_id);
 // The shared drawing of one projectile (interpolated between two positions in
 // tiles) and one laser.
 void dd_render_projectile(ft_game *game, const vec2 from, const vec2 to, float intra, int type, int tick, int start_tick);

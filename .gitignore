@@ -27,3 +27,5 @@ data/games/tmuf/GameData
 *.auto
 !tests/ddnet_project_roundtrip.auto
 *.log
+
+docs/branding
