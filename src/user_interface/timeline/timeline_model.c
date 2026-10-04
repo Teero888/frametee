@@ -990,11 +990,18 @@ static input_record_t track_input_at(const timeline_state_t *ts, int track_index
   for (int i = 0; i < track->snippet_count; ++i) {
     const input_snippet_t *snippet = &track->snippets[i];
     if (snippet->is_active && snippet_is_playback(snippet)) {
-      // A replayed player holds no inputs; after the replay it starts from rest. Inside the replay
-      // an overlapping input snippet still answers, since input takes over from a demo.
-      if (snippet->end_tick <= tick && snippet->end_tick - 1 > last_input_tick) {
+      // Continue with the controls held at the last visible recording tick. A recording of
+      // states stops replaying one step earlier: the step from its final state is simulated.
+      // An overlapping input snippet still answers, since input takes over from a demo.
+      const int last_tick = snippet->end_tick - 1;
+      const int carry_tick = snippet->end_tick - recordings_ticks_are_states(ts, snippet->recording_id);
+      if (snippet->input_count > 0 && carry_tick <= tick && last_tick > last_input_tick) {
         last_input_tick = snippet->end_tick - 1;
         last_valid_input = blank;
+        int recording_tick;
+        if (recordings_snippet_tick(ts, snippet, last_tick, &recording_tick))
+          gh_recording_input(model_host(ts), recordings_handle(ts, snippet->recording_id), snippet->recording_player,
+                             recording_tick, last_valid_input.bytes);
       }
       continue;
     }
@@ -1008,7 +1015,7 @@ static input_record_t track_input_at(const timeline_state_t *ts, int track_index
     }
   }
 
-  if (tick > last_input_tick && last_input_tick != -1) {
+  if (last_input_tick != -1) {
     // Stateful controls carry beyond the end of a snippet, but one-shot
     // requests must only exist on the authored tick.
     engine_input_reset_triggers(model_host(ts), &last_valid_input);
