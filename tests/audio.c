@@ -94,6 +94,37 @@ static void voices(void) {
   audio_sample_destroy(sample);
 }
 
+static void slow_voices(void) {
+  // A seamless short loop with a steep last-to-first slope. At low pitch or
+  // slow timeline speed that slope must span multiple output frames, rather
+  // than holding the final sample and then jumping to the first one.
+  enum { LENGTH = 8 };
+  float tone[LENGTH];
+  for (int i = 0; i < LENGTH; ++i) tone[i] = 0.25f * sinf(2.f * (float)M_PI * i / LENGTH);
+  const ft_audio_sample sample = audio_sample_create(tone, LENGTH, 1, AUDIO_RATE);
+  audio_track_t *track = NULL;
+  const ft_audio_sound sound = {.sample = sample, .voice = 1, .volume = 1.f, .pitch = 0.125f};
+  const ft_audio_step step = {.struct_size = sizeof(step), .sounds = &sound, .sound_count = 1};
+  for (int tick = 1; tick <= 20; ++tick) audio_track_capture(&track, tick, &step, TPS);
+  const audio_listener_t listener = listener_for(&track, TPS);
+  const audio_clock_t clock = {0};
+  const uint32_t frames = 8 * (AUDIO_RATE / 50);
+  float *out = malloc((size_t)frames * 2 * sizeof(float));
+  for (int direction = -1; direction <= 1; direction += 2) {
+    for (int slow = 1; slow <= 4; slow *= 4) {
+      const double from = direction > 0 ? 4.0 : 12.0;
+      const double to = from + direction * 8.0 / slow;
+      audio_render(&listener, 1, &clock, from, to, out, frames);
+      const float max_step = 0.25f * sinf(2.f * (float)M_PI / LENGTH) * sound.pitch / slow;
+      for (uint32_t i = 1; i < frames; ++i)
+        assert(fabsf(out[2 * i] - out[2 * (i - 1)]) <= max_step + 1e-5f);
+    }
+  }
+  free(out);
+  audio_track_free(track);
+  audio_sample_destroy(sample);
+}
+
 static void stream(void) {
   // A console's blocks at 32 kHz and 30 steps a second, a little long or short
   // in turn; each sample holds its place in the stream.
@@ -124,6 +155,7 @@ static void stream(void) {
 int main(void) {
   one_shots();
   voices();
+  slow_voices();
   stream();
   printf("audio: ok\n");
   return 0;

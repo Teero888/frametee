@@ -15,6 +15,21 @@ if(UNIX)
 endif()
 add_test(NAME audio COMMAND audio_test)
 
+add_executable(audio_realtime_test audio_realtime.c ../src/logger/logger.c)
+target_include_directories(audio_realtime_test PRIVATE ../src ../include)
+target_compile_definitions(audio_realtime_test PRIVATE BUILDING_LOGGER)
+target_link_libraries(audio_realtime_test PRIVATE miniaudio)
+if(MSVC)
+    target_compile_options(audio_realtime_test PRIVATE /UNDEBUG)
+else()
+    target_compile_options(audio_realtime_test PRIVATE -UNDEBUG -Wall -Wextra)
+    if(ENABLE_SANITIZERS)
+        target_compile_options(audio_realtime_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(audio_realtime_test PRIVATE -fsanitize=address,undefined)
+    endif()
+endif()
+add_test(NAME audio_realtime COMMAND audio_realtime_test)
+
 add_executable(game_host_browse_test
     game_host_browse.c
     ../src/engine/game_host.c

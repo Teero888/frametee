@@ -134,15 +134,17 @@ void audio_sample_destroy(ft_audio_sample handle) {
   s->used = false;
 }
 
-// Linear interpolation between a sample's frames; `pos` in frames.
-static inline void sample_read(const sample_t *s, double pos, float *left, float *right) {
+// Linear interpolation between a sample's frames; `pos` in frames. Voices
+// interpolate across the loop seam too: holding the final frame until the
+// wrap makes an abrupt jump, especially when low pitch stretches that frame.
+static inline void sample_read(const sample_t *s, double pos, bool loop, float *left, float *right) {
   const uint32_t i = (uint32_t)pos;
   if (i >= s->frames) {
     *left = *right = 0.f;
     return;
   }
   const float t = (float)(pos - (double)i);
-  const uint32_t j = i + 1 < s->frames ? i + 1 : i;
+  const uint32_t j = i + 1 < s->frames ? i + 1 : loop ? 0 : i;
   if (s->channels == 1) {
     *left = *right = s->data[i] + (s->data[j] - s->data[i]) * t;
   } else {
@@ -627,7 +629,7 @@ static void mix_one_shot(const audio_listener_t *listener, const one_shot_t *o, 
     const double since = from + step * i - o->begin;
     if (since < 0.0 || since >= o->duration) continue;
     float l, r;
-    sample_read(s, since * frames_per_tick, &l, &r);
+    sample_read(s, since * frames_per_tick, false, &l, &r);
     out[2 * i] += l * o->gain[0] * envelope[i];
     out[2 * i + 1] += r * o->gain[1] * envelope[i];
   }
@@ -936,7 +938,7 @@ static void mix_span(const audio_listener_t *listener, double from, double to, i
         if (!v->before) volume *= (float)fmin(1.0, f / fade);
         double pos = fmod(c->phase + (held + f) / tps * v->sample->rate * c->sound.pitch, (double)v->sample->frames);
         float l, r;
-        sample_read(v->sample, pos, &l, &r);
+        sample_read(v->sample, pos, true, &l, &r);
         const float w = volume / (c->sound.volume > 0.f ? c->sound.volume : 1.f) * envelope[j];
         out[2 * j] += l * v->gain[0] * w;
         out[2 * j + 1] += r * v->gain[1] * w;
@@ -1058,8 +1060,7 @@ void audio_stop(void) {
   live_reset();
 }
 
-void audio_update(const audio_listener_t *listeners, int listener_count, const audio_clock_t *clock) {
-  if (!g_device_open) return;
+static void mixer_update(const audio_listener_t *listeners, int listener_count, const audio_clock_t *clock, double now_seconds) {
   mixer_t *m = &g_mixer;
   if (listener_count > MAX_LISTENERS) listener_count = MAX_LISTENERS;
   if (!listeners || listener_count <= 0 || listeners[0].ticks_per_second <= 0.0) {
@@ -1086,7 +1087,7 @@ void audio_update(const audio_listener_t *listeners, int listener_count, const a
   // its calls come late now and then (never early), so the line through its
   // takes follows the earliest of them, easing down for a clock that runs slow.
   (void)take_count;
-  const double now_frames = seconds_now() * AUDIO_RATE;
+  const double now_frames = now_seconds * AUDIO_RATE;
   static double offset;
   static bool offset_known;
   if (take_time > 0.0) {
@@ -1234,10 +1235,25 @@ void audio_update(const audio_listener_t *listeners, int listener_count, const a
   // Whatever the device took meanwhile is heard as it was.
   const uint64_t taken = g_read;
   const uint64_t start = taken > from ? taken : from;
+  // Recording holds the last decided voice into the lookahead. A newly
+  // decided tick can change that prediction's pitch, phase or gain, so the
+  // replacement need not meet the audio already queued at `start`. Blend
+  // into it over 5 ms of output time (also at slow timeline speeds).
+  const uint64_t overlap_end = written < end ? written : end;
+  uint64_t blend = rerender && overlap_end > start ? overlap_end - start : 0;
+  if (blend > FADE_IN) blend = FADE_IN;
   for (uint64_t f = start; f < end; ++f) {
     const uint32_t at = (uint32_t)(f % RING_FRAMES);
-    g_ring[2 * at] = buffer[2 * (f - from)];
-    g_ring[2 * at + 1] = buffer[2 * (f - from) + 1];
+    float weight = 1.f;
+    if (blend > 1 && f - start < blend) {
+      const float x = (float)(f - start) / (float)(blend - 1);
+      weight = x * x * (3.f - 2.f * x);
+    }
+    for (uint32_t channel = 0; channel < 2; ++channel) {
+      const float next = buffer[2 * (f - from) + channel];
+      const float previous = g_ring[2 * at + channel];
+      g_ring[2 * at + channel] = weight < 1.f ? previous + (next - previous) * weight : next;
+    }
   }
   if (end > start) g_write = end;
   ma_spinlock_unlock(&g_lock);
@@ -1245,6 +1261,10 @@ void audio_update(const audio_listener_t *listeners, int listener_count, const a
 
   const double now = map_tick(clock, clock->position) - listener->start_offset;
   tracks_trim(*listener->track, now, listener->ticks_per_second);
+}
+
+void audio_update(const audio_listener_t *listeners, int listener_count, const audio_clock_t *clock) {
+  if (g_device_open) mixer_update(listeners, listener_count, clock, seconds_now());
 }
 
 void audio_render(const audio_listener_t *listeners, int listener_count, const audio_clock_t *clock, double from,
