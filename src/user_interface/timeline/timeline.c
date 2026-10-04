@@ -42,7 +42,7 @@ static void follow_playhead(timeline_state_t *ts, float view_width) {
 // Runs before the drag places the playhead under the mouse in the moved view.
 static void scroll_with_dragged_playhead(timeline_state_t *ts, ImRect header_bb) {
   static double carry = 0.0; // the part of a tick scrolled but not shown yet
-  if (!ts->is_header_dragging || ts->recording || ts->zoom <= 0.f) {
+  if (!ts->is_header_dragging || ts->zoom <= 0.f) {
     carry = 0.0;
     return;
   }
@@ -65,7 +65,7 @@ static void scroll_with_dragged_playhead(timeline_state_t *ts, ImRect header_bb)
 
 // While the playhead is held, the margins it scrolls the view from show faintly.
 static void draw_follow_margins(timeline_state_t *ts, ImDrawList *draw_list, ImRect area) {
-  if (!ts->is_header_dragging || ts->recording) return;
+  if (!ts->is_header_dragging) return;
   const float margin = follow_margin(area.Max.x - area.Min.x);
   const ImU32 edge = igGetColorU32_Col(ImGuiCol_SeparatorActive, 0.14f);
   const ImU32 inner = igGetColorU32_Col(ImGuiCol_SeparatorActive, 0.f);
@@ -139,7 +139,7 @@ void render_timeline(ui_handler_t *ui) {
 
     // Handle header interaction and render it
     interaction_handle_header(ts, header_bb);
-    interaction_set_scrubbing(ts, ts->tick_field_active || (ts->is_header_dragging && !ts->recording));
+    interaction_set_scrubbing(ts, ts->tick_field_active || ts->is_header_dragging);
     renderer_draw_header(ts, draw_list, header_bb);
     igDummy((ImVec2){0, header_height}); // Advance cursor
 
