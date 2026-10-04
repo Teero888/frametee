@@ -97,7 +97,7 @@ tm_clouds *tm_clouds_create(ft_game *game, const tmuf_track *track, tm_picture_t
   }
   c->occ = tg_target_create(game->gpu, OCC_SIZE, OCC_SIZE);
   char path[1024];
-  game->engine->resolve_data_path("GameData/Clouds/Media/Texture/Image/CloudsMask.dds", path, sizeof path);
+  tm_data_resolve_path(game->engine, "GameData/Clouds/Media/Texture/Image/CloudsMask.dds", path, sizeof path);
   void *data = NULL;
   size_t size = 0;
   if (game->engine->read_file(path, &data, &size)) {

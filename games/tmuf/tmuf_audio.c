@@ -318,7 +318,7 @@ void tm_audio_level_load(ft_game *game, ft_level *level) {
       hash = (hash ^ (uint8_t)*c) * 16777619u;
     char relative[512], path[1024];
     snprintf(relative, sizeof relative, "GameData/Skins/%s/Music/Race/%s", env->music_dir, env->music[hash % count]);
-    api->resolve_data_path(relative, path, sizeof path);
+    tm_data_resolve_path(api, relative, path, sizeof path);
     a->music = bank_get(game, path, -1);
   }
   const tmuf_sim *sim = tmuf_track_sim(track);

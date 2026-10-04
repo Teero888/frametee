@@ -81,7 +81,7 @@ static const hud_glyph led_glyphs[] = {
 
 static tg_texture load_picture(ft_game *game, const char *relative) {
   char path[1024];
-  game->engine->resolve_data_path(relative, path, sizeof path);
+  tm_data_resolve_path(game->engine, relative, path, sizeof path);
   void *data = NULL;
   size_t size = 0;
   tg_texture texture = 0;

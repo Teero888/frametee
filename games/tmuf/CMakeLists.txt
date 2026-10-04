@@ -4,7 +4,7 @@
 # game's physics in C, bit-exact with TmForever 2.11.26. The library also hands
 # over what the game draws as plain data (tmuf_track_visuals); everything
 # graphical is done here. At runtime the module needs the game's Packs and
-# GameData under data/games/tmuf beside the executable.
+# GameData under data/games/tmuf beside the executable, or a Steam installation.
 
 cmake_minimum_required(VERSION 3.14)
 
@@ -58,6 +58,7 @@ add_custom_target(tmuf_shaders DEPENDS ${TMUF_SHADER_HEADERS})
 
 add_library(tmuf_game MODULE
     tmuf_game.c
+    tmuf_data.c
     tmuf_audio.c
     tmuf_tminterface.c
     tmuf_gpu.c
@@ -106,6 +107,9 @@ target_include_directories(tmuf_game PRIVATE
 )
 target_compile_definitions(tmuf_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
 target_link_libraries(tmuf_game PRIVATE tmuf_physics Vulkan::Vulkan)
+if(WIN32)
+    target_link_libraries(tmuf_game PRIVATE advapi32)
+endif()
 # the game's Bink videos (the Stadium's arrow signs), through the FFmpeg the
 # editor exports videos with
 if(TARGET PkgConfig::FRAMETEE_VIDEO_FFMPEG)

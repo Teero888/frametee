@@ -389,11 +389,13 @@ static ft_game *game_create(const ft_engine_api *engine) {
                                  .music_volume = 50,
                                  .sfx_volume = 100};
   char packs[1024];
-  engine->resolve_data_path("Packs", packs, sizeof packs);
+  tm_data_find(engine);
+  tm_data_resolve_path(engine, "Packs", packs, sizeof packs);
   char err[512];
   game->packs = tmuf_packs_open(packs, err, sizeof err);
   if (!game->packs) {
-    tm_log(game, FT_LOG_ERROR, "Cannot open the game's packs (%s). Copy Packs and GameData from a TrackMania United "
+    tm_log(game, FT_LOG_ERROR, "Cannot open the game's packs (%s). Install TrackMania United Forever in Steam or "
+                                 "copy Packs and GameData from a TrackMania United "
                                  "Forever installation into data/games/tmuf.",
              err);
     free(game);

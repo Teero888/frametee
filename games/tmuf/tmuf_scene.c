@@ -417,7 +417,7 @@ void tm_picture_table_init(ft_game *game, tm_picture_table *table, const tmuf_tr
     if (!strstr(decoration, moods[i])) continue;
     char relative[512];
     snprintf(relative, sizeof relative, "GameData/%s/Media/Moods/%s/", tmuf_track_environment(track), moods[i]);
-    game->engine->resolve_data_path(relative, table->mood_dir, sizeof table->mood_dir);
+    tm_data_resolve_path(game->engine, relative, table->mood_dir, sizeof table->mood_dir);
     break;
   }
   table->weather = tmuf_track_weather(track);
@@ -546,7 +546,7 @@ static uint32_t skin_index(ft_game *game, tm_picture_table *table, const tmuf_bl
       snprintf(relative, sizeof relative, "GameData/%s", skin->file);
       for (char *c = relative; *c; c++)
         if (*c == '\\') *c = '/';
-      if (!game->engine->resolve_data_path(relative, disk, sizeof disk)) return UINT32_MAX;
+      if (!tm_data_resolve_path(game->engine, relative, disk, sizeof disk)) return UINT32_MAX;
       return table_add(game, table, disk, disk, NULL);
     }
     char key[1200];
@@ -562,7 +562,7 @@ static uint32_t skin_index(ft_game *game, tm_picture_table *table, const tmuf_bl
       if (*c == '\\') *c = '/';
     void *zip = NULL;
     size_t zip_size = 0;
-    if (game->engine->resolve_data_path(relative, zip_path, sizeof zip_path) &&
+    if (tm_data_resolve_path(game->engine, relative, zip_path, sizeof zip_path) &&
         game->engine->read_file(zip_path, &zip, &zip_size)) {
       const char *core = rule->pattern[0] == '*' ? rule->pattern + 1 : rule->pattern;
       static const char *const ext[] = {".dds", ".tga", ".png", ".jpg"};
@@ -959,7 +959,7 @@ static uint32_t sea_normal_index(ft_game *game, tm_picture_table *table, const t
 static void water_fog_of(ft_game *game, tm_scene *scene, const tmuf_track *track) {
   char relative[256], file[1200];
   snprintf(relative, sizeof relative, "GameData/%s/Media/Texture/Image/WaterFog.tga", tmuf_track_environment(track));
-  game->engine->resolve_data_path(relative, file, sizeof file);
+  tm_data_resolve_path(game->engine, relative, file, sizeof file);
   FILE *f = fopen(file, "rb");
   if (f) {
     fclose(f);
@@ -999,7 +999,7 @@ static tg_texture lightmap_of(ft_game *game, const tmuf_track *track) {
   for (int d = 0; d < 3; d++) {
     char rel[64], dir[1024];
     snprintf(rel, sizeof rel, "GameData/LightmapsCache/%s", dirs[d]);
-    game->engine->resolve_data_path(rel, dir, sizeof dir);
+    tm_data_resolve_path(game->engine, rel, dir, sizeof dir);
     DIR *dh = opendir(dir);
     if (!dh) continue;
     struct dirent *e;

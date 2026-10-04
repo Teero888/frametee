@@ -270,7 +270,7 @@ static void icon_load(const ft_engine_api *engine, ui_icon *icon, const char *re
   icon->tried = true;
   if (!engine->texture_create || !engine->imgui_texture_id) return;
   char path[1024];
-  engine->resolve_data_path(relative, path, sizeof path);
+  tm_data_resolve_path(engine, relative, path, sizeof path);
   void *data = NULL;
   size_t size = 0;
   if (!engine->read_file(path, &data, &size)) return;
@@ -443,31 +443,6 @@ static bool matches(const track_entry *e, const char *search) {
   return false;
 }
 
-static bool count_pak(void *user, const ft_directory_entry *entry) {
-  const size_t n = strlen(entry->name);
-  if (!entry->is_directory && n > 4 && strcasecmp(entry->name + n - 4, ".pak") == 0) ++*(uint32_t *)user;
-  return true;
-}
-
-static bool any_entry(void *user, const ft_directory_entry *entry) {
-  (void)entry;
-  *(bool *)user = true;
-  return false;
-}
-
-// The game's files are not redistributed (README.txt): without the packs and
-// GameData nothing opens, so the start screen says what to copy where.
-static bool game_data_present(const ft_engine_api *engine) {
-  char dir[1024];
-  uint32_t paks = 0;
-  bool game_data = false;
-  engine->resolve_data_path("Packs", dir, sizeof dir);
-  engine->visit_directory(dir, count_pak, &paks);
-  engine->resolve_data_path("GameData", dir, sizeof dir);
-  engine->visit_directory(dir, any_entry, &game_data);
-  return paks > 0 && game_data;
-}
-
 // A link that opens a file or directory in the system's handler (ImGui's
 // TextLinkOpenURL, without its tooltip repeating the path).
 static void open_link(const char *label, const char *path) {
@@ -483,7 +458,8 @@ static void missing_data(const ft_engine_api *engine, splash_state *s) {
   igTextColored((ImVec4){1.f, 0.75f, 0.3f, 1.f}, ICON_FA_TRIANGLE_EXCLAMATION " TrackMania United Forever's game files are missing");
   igSpacing();
   igPushTextWrapPos(igGetCursorPosX() + fminf(igGetContentRegionAvail().x, 640.f));
-  igTextWrapped("FrameTee doesn't include the game's files. Copy the Packs and GameData directories from a "
+  igTextWrapped("FrameTee doesn't include the game's files. Install TrackMania United Forever in Steam, or copy "
+                "the Packs and GameData directories from a "
                 "TrackMania United Forever installation (version 2.11.26) into this directory:");
   igPopTextWrapPos();
   igBullet();
@@ -507,7 +483,7 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
   }
   if (!s->data_checked && engine->visit_directory) {
     s->data_checked = true;
-    s->data_missing = !game_data_present(engine);
+    s->data_missing = !tm_data_find(engine);
   }
   if (s->data_missing) {
     missing_data(engine, s);
@@ -515,7 +491,7 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
   }
   if (!s->scanned && engine->visit_directory) {
     walk w = {engine, s, "", "", 0};
-    engine->resolve_data_path("GameData/Tracks", w.dir, sizeof w.dir);
+    tm_data_resolve_path(engine, "GameData/Tracks", w.dir, sizeof w.dir);
     scan(&w);
     qsort(s->tracks, s->count, sizeof *s->tracks, compare_tracks);
     s->scanned = true;
@@ -525,7 +501,7 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
       if (s->tracks[i].tab < s->tab) s->tab = s->tracks[i].tab;
   }
   if (!s->count) {
-    igTextDisabled("No tracks found in data/games/tmuf/GameData/Tracks.");
+    igTextDisabled("No tracks found in the game's GameData/Tracks directory.");
     if (igButton(ICON_FA_FOLDER_OPEN " Open a challenge or replay...", (ImVec2){0, 0}) && engine->open_file_dialog) {
       char path[1024];
       if (engine->open_file_dialog("TrackMania challenge or replay", "Gbx", path, sizeof path)) engine->request_level(path);

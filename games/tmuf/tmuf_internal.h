@@ -12,6 +12,7 @@
 #include <tmuf_physics/tmuf_physics.h>
 
 #include "tmuf_gpu.h"
+#include "tmuf_data.h"
 
 #include <stdbool.h>
 #include <stddef.h>

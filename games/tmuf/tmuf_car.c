@@ -166,8 +166,8 @@ const char *tm_profile_name(const ft_player_setup *setups, uint32_t count, int32
 
 uint32_t tm_skin_roots(ft_game *game, char roots[TM_SKIN_ROOTS][1024]) {
   uint32_t n = 0;
-  game->engine->resolve_data_path("GameData", roots[n++], sizeof roots[0]);
-  game->engine->resolve_data_path("Documents", roots[n++], sizeof roots[0]);
+  tm_data_resolve_path(game->engine, "GameData", roots[n++], sizeof roots[0]);
+  tm_data_resolve_path(game->engine, "Documents", roots[n++], sizeof roots[0]);
   const char *home = getenv("HOME"), *user = getenv("USER");
   if (home && home[0]) {
     snprintf(roots[n++], sizeof roots[0], "%s/Documents/TrackMania", home);
