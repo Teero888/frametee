@@ -681,6 +681,11 @@ enum ft_prop_flags {
   FT_PROP_STARTING = 1u << 1, /* meaningful as a starting-state override */
   FT_PROP_SUMMARY = 1u << 2,  /* worth showing in the compact status bar */
   FT_PROP_READ_ONLY_UI = 1u << 3,
+  /* Fixed while the entity lives (an owner, a spawn tick). Entity indices do
+   * not last from one step to the next, so the engine tells entities apart by
+   * these: two steps' entities whose identity properties all agree are the
+   * same one, e.g. for drawing where a projectile goes. */
+  FT_PROP_IDENTITY = 1u << 4,
 };
 
 typedef struct ft_prop_desc {

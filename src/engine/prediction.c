@@ -1,4 +1,5 @@
 #include "prediction.h"
+#include "entity_match.h"
 
 #include <engine/game_host.h>
 #include <engine/input_record.h>
@@ -309,16 +310,22 @@ static void update_player_color(game_host_t *host, const ft_world *world, int pl
 // and lasers) is followed through the prediction too. Nothing about them is
 // known here beyond what the class lists: a class with a `from` and a
 // `position` is a beam, drawn as it stands at every step, and one with only a
-// `position` leaves a trail. Entities have no lasting identity across steps
-// (they come and go, and their indices with them), so a trail joins each to
-// the nearest one of its class a step earlier.
+// `position` leaves a trail, which goes on from step to step with the same
+// entity as entity_trail_match finds it.
 #define ENTITY_TRAIL_REACH 4.f // tiles an entity may move in a step and still be the same one
+#define ENTITY_MAX_IDENTITY 8
 
 typedef struct entity_trace_t {
   unsigned entity_class;
-  int position, from;   // property indices; from < 0 for a trail
-  ft_vec2 *last;        // the class's positions at the previous step
-  ft_vec2 *last_from;   // and, for a beam, where each started
+  int position, from; // property indices; from < 0 for a trail
+  int identity[ENTITY_MAX_IDENTITY];
+  int identity_count;
+  // The class at the previous step: where each entity was, for a beam where it
+  // started, and for a trail how far it moved and its identity.
+  ft_vec2 *last;
+  ft_vec2 *last_from;
+  ft_vec2 *last_motion;
+  uint64_t *last_identity;
   int last_count;
 } entity_trace_t;
 
@@ -350,7 +357,10 @@ static void entity_traces_init(game_host_t *host, entity_traces_t *t, const floa
     if (!entity_class) continue;
     const int position = entity_vec2_prop(entity_class, "position");
     if (position < 0) continue;
-    t->traces[t->count++] = (entity_trace_t){.entity_class = c, .position = position, .from = entity_vec2_prop(entity_class, "from")};
+    entity_trace_t *trace = &t->traces[t->count++];
+    *trace = (entity_trace_t){.entity_class = c, .position = position, .from = entity_vec2_prop(entity_class, "from")};
+    for (uint32_t i = 0; i < entity_class->prop_count && trace->identity_count < ENTITY_MAX_IDENTITY; ++i)
+      if (entity_class->props[i].flags & FT_PROP_IDENTITY) trace->identity[trace->identity_count++] = (int)i;
   }
   memcpy(t->color, color, sizeof(t->color));
   t->color[3] *= 0.7f; // a little fainter than the players' own lines
@@ -375,29 +385,54 @@ static void entity_segment(entity_traces_t *t, ft_vec2 from, ft_vec2 to) {
   segment->width_px = t->width_px;
 }
 
+static void hash_bytes(uint64_t *hash, const void *data, size_t size) {
+  const unsigned char *bytes = data;
+  for (size_t i = 0; i < size; ++i) *hash = (*hash ^ bytes[i]) * UINT64_C(0x100000001b3);
+}
+
+// The entity's identity properties folded into one value; 0 when it has none or one cannot be read.
+static uint64_t entity_identity(game_host_t *host, const ft_world *world, const entity_trace_t *trace, int entity) {
+  if (trace->identity_count == 0) return 0;
+  uint64_t hash = UINT64_C(0xcbf29ce484222325);
+  for (int i = 0; i < trace->identity_count; ++i) {
+    ft_value value;
+    if (!gh_entity_prop_get(host, world, trace->entity_class, entity, (unsigned)trace->identity[i], &value)) return 0;
+    hash_bytes(&hash, &value.kind, sizeof(value.kind));
+    switch (value.kind) {
+    case FT_VALUE_BOOL: hash_bytes(&hash, &value.as.b, sizeof(value.as.b)); break;
+    case FT_VALUE_INT: hash_bytes(&hash, &value.as.i, sizeof(value.as.i)); break;
+    case FT_VALUE_FLOAT: hash_bytes(&hash, &value.as.f, sizeof(value.as.f)); break;
+    case FT_VALUE_VEC2: hash_bytes(&hash, &value.as.v, sizeof(value.as.v)); break;
+    case FT_VALUE_VEC3: hash_bytes(&hash, &value.as.v3, sizeof(value.as.v3)); break;
+    default: break;
+    }
+  }
+  return hash ? hash : 1;
+}
+
 // Takes the entities as they are in `world`; `draw` is false for the first
 // look, which only gives the trails their starting points.
 static void entity_traces_step(game_host_t *host, const ft_world *world, entity_traces_t *t, bool draw) {
   for (int i = 0; i < t->count; ++i) {
     entity_trace_t *trace = &t->traces[i];
     const int count = gh_entity_count(host, world, trace->entity_class);
+    const bool beam = trace->from >= 0;
     ft_vec2 *now = count > 0 ? malloc(sizeof(*now) * (size_t)count) : NULL;
-    ft_vec2 *now_from = count > 0 && trace->from >= 0 ? malloc(sizeof(*now_from) * (size_t)count) : NULL;
-    bool *taken = count > 0 && trace->last_count > 0 ? calloc((size_t)trace->last_count, sizeof(*taken)) : NULL;
+    ft_vec2 *now_from = count > 0 && beam ? malloc(sizeof(*now_from) * (size_t)count) : NULL;
+    ft_vec2 *now_motion = count > 0 && !beam ? calloc((size_t)count, sizeof(*now_motion)) : NULL;
+    uint64_t *now_identity = count > 0 && !beam && trace->identity_count > 0 ? malloc(sizeof(*now_identity) * (size_t)count) : NULL;
     int now_count = 0;
     for (int e = 0; now && e < count; ++e) {
       ft_value value;
       if (!gh_entity_prop_get(host, world, trace->entity_class, e, (unsigned)trace->position, &value) || value.kind != FT_VALUE_VEC2) continue;
       const ft_vec2 position = value.as.v;
-      now[now_count++] = position;
-      if (!draw) continue;
-      if (trace->from >= 0) {
-        if (!now_from || !gh_entity_prop_get(host, world, trace->entity_class, e, (unsigned)trace->from, &value) || value.kind != FT_VALUE_VEC2) {
-          --now_count;
+      if (beam) {
+        if (!now_from || !gh_entity_prop_get(host, world, trace->entity_class, e, (unsigned)trace->from, &value) || value.kind != FT_VALUE_VEC2)
           continue;
-        }
         const ft_vec2 from = value.as.v;
-        now_from[now_count - 1] = from;
+        now_from[now_count] = from;
+        now[now_count++] = position;
+        if (!draw) continue;
         // A beam stays as it is for a few steps: drawn once.
         bool drawn = false;
         for (int k = 0; k < trace->last_count && !drawn; ++k)
@@ -405,27 +440,32 @@ static void entity_traces_step(game_host_t *host, const ft_world *world, entity_
         if (!drawn) entity_segment(t, from, position);
         continue;
       }
-      int nearest = -1;
-      float best = ENTITY_TRAIL_REACH * ENTITY_TRAIL_REACH;
-      for (int k = 0; taken && k < trace->last_count; ++k) {
-        if (taken[k]) continue;
-        const float dx = trace->last[k].x - position.x, dy = trace->last[k].y - position.y;
-        const float d2 = dx * dx + dy * dy;
-        if (d2 < best) {
-          best = d2;
-          nearest = k;
+      if (now_identity) now_identity[now_count] = entity_identity(host, world, trace, e);
+      now[now_count++] = position;
+    }
+
+    if (!beam && now_motion && now_count > 0) {
+      int *match = malloc(sizeof(*match) * (size_t)now_count);
+      if (match) {
+        entity_trail_match(trace->last, trace->last_motion, trace->last_identity, trace->last_count, now, now_identity,
+                           now_count, ENTITY_TRAIL_REACH, match);
+        for (int e = 0; e < now_count; ++e) {
+          if (match[e] < 0) continue;
+          const ft_vec2 last = trace->last[match[e]];
+          now_motion[e] = (ft_vec2){now[e].x - last.x, now[e].y - last.y};
+          if (draw) entity_segment(t, last, now[e]);
         }
-      }
-      if (nearest >= 0) {
-        taken[nearest] = true;
-        entity_segment(t, trace->last[nearest], position);
+        free(match);
       }
     }
-    free(taken);
     free(trace->last);
     free(trace->last_from);
+    free(trace->last_motion);
+    free(trace->last_identity);
     trace->last = now;
     trace->last_from = now_from;
+    trace->last_motion = now_motion;
+    trace->last_identity = now_identity;
     trace->last_count = now_count;
   }
 }
@@ -434,6 +474,8 @@ static void entity_traces_free(entity_traces_t *t) {
   for (int i = 0; i < t->count; ++i) {
     free(t->traces[i].last);
     free(t->traces[i].last_from);
+    free(t->traces[i].last_motion);
+    free(t->traces[i].last_identity);
   }
   free(t->traces);
   free(t->segments);

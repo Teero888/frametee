@@ -87,6 +87,7 @@ set(SRCS
 	src/logger/logger.c
 	src/engine/game_host.c
 	src/engine/engine_api.c
+	src/engine/entity_match.c
 	src/engine/input_record.c
 	src/engine/prediction.c
 	src/audio/audio.c

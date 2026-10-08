@@ -399,12 +399,15 @@ enum ddnet_projectile_prop {
   PROJ_PROP_COUNT
 };
 
+// A projectile keeps its owner, weapon, spawn tick and direction for its whole
+// flight, and those tell two apart (a shotgun's pellets by direction). A
+// bouncing one restarts its flight at each bounce, and its trail with it.
 static const ft_prop_desc projectile_props[PROJ_PROP_COUNT] = {
     [PROJ_POSITION] = {"position", "Position", "Motion", "tiles", FT_VALUE_VEC2, FT_PROP_SUMMARY, 0, 0},
-    [PROJ_DIRECTION] = {"direction", "Direction", "Motion", NULL, FT_VALUE_VEC2, 0, 0, 0},
-    [PROJ_TYPE] = {"type", "Weapon", "Identity", NULL, FT_VALUE_INT, FT_PROP_SUMMARY, 0, 0},
-    [PROJ_OWNER] = {"owner", "Owner", "Identity", NULL, FT_VALUE_INT, 0, 0, 0},
-    [PROJ_START_TICK] = {"start_tick", "Start tick", "Timing", NULL, FT_VALUE_INT, 0, 0, 0},
+    [PROJ_DIRECTION] = {"direction", "Direction", "Motion", NULL, FT_VALUE_VEC2, FT_PROP_IDENTITY, 0, 0},
+    [PROJ_TYPE] = {"type", "Weapon", "Identity", NULL, FT_VALUE_INT, FT_PROP_SUMMARY | FT_PROP_IDENTITY, 0, 0},
+    [PROJ_OWNER] = {"owner", "Owner", "Identity", NULL, FT_VALUE_INT, FT_PROP_IDENTITY, 0, 0},
+    [PROJ_START_TICK] = {"start_tick", "Start tick", "Timing", NULL, FT_VALUE_INT, FT_PROP_IDENTITY, 0, 0},
     [PROJ_LIFESPAN] = {"lifespan", "Lifespan", "Timing", "ticks", FT_VALUE_INT, FT_PROP_SUMMARY, 0, 0},
     [PROJ_EXPLOSIVE] = {"explosive", "Explosive", "Behaviour", NULL, FT_VALUE_BOOL, 0, 0, 0},
     [PROJ_FREEZE] = {"freeze", "Freezes", "Behaviour", NULL, FT_VALUE_BOOL, 0, 0, 0},
