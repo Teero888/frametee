@@ -77,9 +77,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${HOST_APP_DIR}/src/plugins"
     "${HOST_APP_DIR}/libs/cimgui"
     "${HOST_APP_DIR}/libs/cimgui/imgui"
-    "${HOST_APP_DIR}/libs/ddnet_physics/include"
-    "${HOST_APP_DIR}/libs/ddnet_physics/include/ddnet_physics"
-    "${HOST_APP_DIR}/libs/ddnet_physics/libs/ddnet_map_loader"
     "${HOST_APP_DIR}/libs/cglm/include"
 )
 

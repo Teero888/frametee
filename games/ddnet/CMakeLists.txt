@@ -6,22 +6,32 @@
 
 cmake_minimum_required(VERSION 3.14)
 
-# One copy of the physics at runtime rather than one per binary.
+# The physics is ddnet_physics: its optimized backend, with its event build
+# (ddnet_ev_*) for the worlds whose effects are shown, heard or exported.
 #
-# Game modules are dlopened privately, so anything that wants this game's
-# physics used to have to link its own static copy -- which meant its own set of
-# every mutable global the library has, the tile dispatch table among them, and
-# its own vtables and typeinfo. A shared library gives the module and every
-# plugin written for this game the same one.
+# One copy of it at runtime rather than one per binary: game modules are
+# dlopened privately, so anything that wants this game's physics would link its
+# own static copy, with its own count of worlds that ddnet_world_copy relies on.
+# A shared library gives the module and every plugin written for this game the
+# same one. It exports only its own functions (ddnet_*).
 #
-# Windows keeps the static arrangement: there the decoration below is real and
-# the existing import-library path already works.
-if(NOT WIN32)
-    set(SHARED_LIB ON CACHE BOOL "Build ddnet_physics as a shared library" FORCE)
-endif()
-
+# Windows keeps the static arrangement.
+set(FRAMETEE_DDNET_PHYSICS_DIR "${CMAKE_SOURCE_DIR}/libs/ddnet_physics" CACHE PATH
+    "The ddnet_physics checkout the DDNet game is built with")
 if(NOT TARGET ddnet_physics)
-    add_subdirectory(${CMAKE_SOURCE_DIR}/libs/ddnet_physics ${CMAKE_BINARY_DIR}/libs/ddnet_physics)
+    set(DDNET_PHYSICS_BACKEND optimized CACHE STRING "" FORCE)
+    set(DDNET_PHYSICS_EVENTS ON CACHE BOOL "" FORCE)
+    set(DDNET_PHYSICS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(DDNET_PHYSICS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    if(NOT WIN32)
+        set(DDNET_PHYSICS_SHARED ON CACHE BOOL "" FORCE)
+    endif()
+    # The CPUs the old physics was built for already (AVX2 and FMA): the
+    # library's SSE4.1 and AVX paths, with the same results.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND NOT MSVC)
+        set(DDNET_PHYSICS_ARCH "x86-64-v3" CACHE STRING "" FORCE)
+    endif()
+    add_subdirectory(${FRAMETEE_DDNET_PHYSICS_DIR} ${CMAKE_BINARY_DIR}/libs/ddnet_physics)
 endif()
 
 if(NOT TARGET ddnet_ghost)
@@ -37,44 +47,11 @@ if(TARGET ddnet_ghost)
     )
 endif()
 
-# The library's own shared branch decorates its API for MSVC unconditionally,
-# which is meaningless to an ELF build and does not compile there. The submodule
-# is never patched from here, so it is corrected from this side instead.
-if(NOT WIN32)
-    set_property(TARGET ddnet_physics PROPERTY COMPILE_DEFINITIONS "")
-    set_property(TARGET ddnet_physics PROPERTY INTERFACE_COMPILE_DEFINITIONS "")
-    target_compile_definitions(ddnet_physics PUBLIC "DDNET_PHYSICS_API=")
-endif()
-
-# Its objects have to be usable inside a shared library, and so do the map
-# loader's: that is a static library the physics links and therefore carries.
-set_target_properties(ddnet_physics PROPERTIES
-    POSITION_INDEPENDENT_CODE ON
-    BUILD_RPATH_USE_ORIGIN ON
-)
+# The map loader is a static library that the module links too (it loads the
+# maps it hands the physics), so it has to be usable inside a shared object.
+set_target_properties(ddnet_physics PROPERTIES BUILD_RPATH_USE_ORIGIN ON)
 if(TARGET ddnet_map_loader)
-    set_target_properties(ddnet_map_loader PROPERTIES
-        POSITION_INDEPENDENT_CODE ON
-        BUILD_RPATH_USE_ORIGIN ON
-    )
-endif()
-if(UNIX AND NOT APPLE)
-    set_target_properties(ddnet_physics PROPERTIES
-        INSTALL_RPATH "$ORIGIN/libs/ddnet_map_loader"
-    )
-endif()
-if(NOT MSVC)
-    target_compile_options(ddnet_physics PRIVATE -ftls-model=initial-exec)
-endif()
-if(WIN32)
-    get_target_property(DDNET_PHYSICS_TYPE ddnet_physics TYPE)
-    if(DDNET_PHYSICS_TYPE STREQUAL "SHARED_LIBRARY")
-        target_compile_definitions(ddnet_physics PRIVATE "DDNET_PHYSICS_API=__declspec(dllexport)")
-        target_compile_definitions(ddnet_physics INTERFACE "DDNET_PHYSICS_API=__declspec(dllimport)")
-    else()
-        set_target_properties(ddnet_physics PROPERTIES COMPILE_DEFINITIONS "")
-        target_compile_definitions(ddnet_physics PUBLIC "DDNET_PHYSICS_API=__declspec(dllexport)")
-    endif()
+    set_target_properties(ddnet_map_loader PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
 add_library(ddnet_game MODULE

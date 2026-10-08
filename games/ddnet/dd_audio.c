@@ -114,13 +114,24 @@ static ft_audio_sound positioned(ft_audio_sample sample, float x, float y) {
                           .position = {x, y, 0.f}};
 }
 
+// The sound DDNet's client plays with an effect (CEffects::HammerHit, PlayerSpawn, AirJump), or -1. A
+// replayed tee's air jumps are heard from the recording's own reconstruction.
+static int effect_sound(const ft_world *world, const dd_physics_particle_event_t *event) {
+  switch (event->type) {
+  case DDNET_PARTICLE_HAMMER_HIT: return DDNET_SOUND_HAMMER_HIT;
+  case DDNET_PARTICLE_PLAYER_SPAWN: return DDNET_SOUND_PLAYER_SPAWN;
+  case DDNET_PARTICLE_AIR_JUMP: return dd_replay_active(world, event->client_id) ? -1 : DDNET_SOUND_PLAYER_AIRJUMP;
+  default: return -1;
+  }
+}
+
 bool dd_world_audio(ft_game *game, const ft_world *world, ft_audio_step *out) {
   if (!world) return false;
-  // The step's sounds, and the hammer's hits: DDNet's client plays those with
-  // the effect, the physics raises no sound for them.
+  // The step's sounds, and those DDNet's client plays with an effect, for
+  // which the physics raises no sound: hammer hits, spawns and air jumps.
   int count = world->physics_sound_event_count;
   for (int i = 0; i < world->physics_particle_event_count; ++i)
-    if (world->physics_particle_events[i].type == PARTICLE_TYPE_HAMMER_HIT) ++count;
+    if (effect_sound(world, &world->physics_particle_events[i]) >= 0) ++count;
   if (count == 0) return false;
 
   // The list lives with the world, which only its own thread steps.
@@ -132,7 +143,7 @@ bool dd_world_audio(ft_game *game, const ft_world *world, ft_audio_step *out) {
     mutable_world->audio_sound_capacity = count;
   }
   ft_audio_sound *sounds = mutable_world->audio_sounds;
-  const int tick = world->core.m_GameTick;
+  const int tick = ddnet_engine_tick(world);
   uint32_t n = 0;
   for (int i = 0; i < world->physics_sound_event_count; ++i) {
     const dd_physics_sound_event_t *event = &world->physics_sound_events[i];
@@ -141,8 +152,9 @@ bool dd_world_audio(ft_game *game, const ft_world *world, ft_audio_step *out) {
   }
   for (int i = 0; i < world->physics_particle_event_count; ++i) {
     const dd_physics_particle_event_t *event = &world->physics_particle_events[i];
-    if (event->type != PARTICLE_TYPE_HAMMER_HIT) continue;
-    const ft_audio_sample sample = pick_take(game, SOUND_TYPE_HAMMER_HIT, tick, event->client_id, i + 64);
+    const int sound = effect_sound(world, event);
+    if (sound < 0) continue;
+    const ft_audio_sample sample = pick_take(game, sound, tick, event->client_id, i + 64);
     if (sample) sounds[n++] = positioned(sample, event->x, event->y);
   }
   out->sounds = sounds;

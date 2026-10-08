@@ -1,9 +1,6 @@
 #include "dd_internal.h"
 #include "dd_profile.h"
 
-#include <ddnet_physics/collision.h>
-#include <ddnet_physics/gamecore.h>
-#include <ddnet_physics/vmath.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -185,7 +182,7 @@ static int remap_client_id(const int *client_ids, int client_count, int local_id
   return local_id < client_count ? client_ids[local_id] : -1;
 }
 
-static int demo_character_emote(const SWorldCore *world, const SCharacterCore *character) {
+static int demo_character_emote(const ft_world *world, int player, const ddnet_character_t *character) {
   static const int emotes_by_eye[NUM_EYES] = {
       [EYE_NORMAL] = DD_EMOTE_NORMAL,
       [EYE_ANGRY] = DD_EMOTE_ANGRY,
@@ -194,11 +191,12 @@ static int demo_character_emote(const SWorldCore *world, const SCharacterCore *c
       [EYE_BLINK] = DD_EMOTE_BLINK,
       [EYE_SURPRISE] = DD_EMOTE_SURPRISE,
   };
-  int eye = get_flag_eye_state(&character->m_Input);
+  const int client_id = ddnet_player_client(world, player);
+  int eye = get_flag_eye_state(&world->inputs[client_id]);
   if (eye < EYE_NORMAL || eye >= NUM_EYES) eye = EYE_NORMAL;
-  if (character->m_FreezeTime > 0 && eye == EYE_NORMAL) eye = EYE_BLINK;
-  const int damage_age = world->m_GameTick - character->m_DamageTick;
-  if (damage_age >= 0 && damage_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
+  if (character->freeze_time > 0 && eye == EYE_NORMAL) eye = EYE_BLINK;
+  const int pain_age = world->core.tick - world->pain_ticks[client_id];
+  if (pain_age >= 0 && pain_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
   return emotes_by_eye[eye];
 }
 
@@ -207,10 +205,10 @@ static int demo_character_emote(const SWorldCore *world, const SCharacterCore *c
 #define DD_DEMO_MAX_SNAPPED_DOORS 500
 #define DD_DEMO_MAX_SNAPPED_PICKUPS 500
 
-static bool is_point_in_view(float px, float py, const mvec2 *positions, int count, float clip_x, float clip_y) {
+static bool is_point_in_view(float px, float py, const ddnet_vec2_t *positions, int count, float clip_x, float clip_y) {
   for (int i = 0; i < count; ++i) {
-    float dx = fabsf(px - vgetx(positions[i]));
-    float dy = fabsf(py - vgety(positions[i]));
+    float dx = fabsf(px - positions[i].x);
+    float dy = fabsf(py - positions[i].y);
     if (dx <= clip_x && dy <= clip_y) {
       return true;
     }
@@ -218,11 +216,40 @@ static bool is_point_in_view(float px, float py, const mvec2 *positions, int cou
   return false;
 }
 
+// The pickups of a level: every world of it has these in its pickup list, in this order.
+static int level_pickup_count(const ft_level *level) {
+  int count = 0;
+  for (int i = level->prototype.first_entity[DDNET_ENTTYPE_PICKUP]; i != -1; i = level->prototype.entities[i].link.next)
+    count += level->prototype.entities[i].kind == DDNET_ENTITY_PICKUP;
+  return count;
+}
+
+// The demo client of a world client (a player of the world), or -1.
+static int remap_world_client(const ft_world *world, const int *client_ids, int client_count, int world_client) {
+  if (world_client < 0) return world_client;
+  return remap_client_id(client_ids, client_count, ddnet_client_player(world, world_client));
+}
+
+static void snap_laser(dd_netobj_ddnet_laser *l, ddnet_vec2_t to, ddnet_vec2_t from, int start_tick, int owner, int type, int subtype,
+                       int number) {
+  l->m_ToX = (int)to.x;
+  l->m_ToY = (int)to.y;
+  l->m_FromX = (int)from.x;
+  l->m_FromY = (int)from.y;
+  l->m_StartTick = start_tick;
+  l->m_Owner = owner;
+  l->m_Type = type;
+  l->m_Subtype = subtype;
+  l->m_SwitchNumber = number;
+  l->m_Flags = 0;
+}
+
 static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, const int *client_ids, int client_count,
-                       const int *client_options, SWorldCore *prev, const ft_world *current_world, bool include_static,
-                       const mvec2 *active_positions, int active_pos_count, int demo_tick,
-                       int tick_delta, int *next_item_id) {
-  SWorldCore *cur = (SWorldCore *)&current_world->core;
+                       const int *client_options, const ft_world *prev_world, const ft_world *current_world, bool include_static,
+                       const ddnet_vec2_t *active_positions, int active_pos_count, int demo_tick, int tick_delta, int *next_item_id) {
+  (void)client_options;
+  const ddnet_world_t *cur = &current_world->core;
+  const ft_level *level = game->current_level;
   int first_exported_local = -1;
   for (int i = 0; i < client_count; ++i) {
     if (client_ids[i] >= 0) {
@@ -230,64 +257,61 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       break;
     }
   }
+  const ddnet_character_t *view_character = ddnet_player_character(current_world, first_exported_local);
+  // The switch states a demo shows are those of the team of the first player in it.
+  const int view_client = ddnet_player_client(current_world, first_exported_local);
+  const int view_team = view_client >= 0 ? cur->teams.team[view_client] : 0;
 
-  mvec2 fallback_pos[1];
-  if (active_pos_count <= 0 && first_exported_local >= 0 && first_exported_local < cur->m_NumCharacters) {
-    fallback_pos[0] = cur->m_pCharacters[first_exported_local].m_Pos;
+  ddnet_vec2_t fallback_pos[1];
+  if (active_pos_count <= 0 && view_character) {
+    fallback_pos[0] = view_character->pos;
     active_positions = fallback_pos;
     active_pos_count = 1;
   }
 
   // do pickups first since they have static ids basically
-  int pickups_snapped = 0;
-  for (int i = 0; include_static && i < game->current_level->num_pickups; ++i) {
+  const int num_pickups = level ? level_pickup_count(level) : 0;
+  int pickups_snapped = 0, pickup_index = 0;
+  for (int i = include_static ? cur->first_entity[DDNET_ENTTYPE_PICKUP] : -1; i != -1; i = cur->entities[i].link.next) {
+    const ddnet_entity_t *pickup = &cur->entities[i];
+    if (pickup->kind != DDNET_ENTITY_PICKUP) continue;
+    const int id = 64 + pickup_index++;
     if (pickups_snapped >= DD_DEMO_MAX_SNAPPED_PICKUPS) break;
-    const SPickup pickup = game->current_level->pickups[i];
-    if (cur->m_UniqueRace &&
-        ((pickup.m_Type == POWERUP_WEAPON && pickup.m_Subtype != WEAPON_GRENADE) || pickup.m_Type == POWERUP_NINJA)) {
-      continue;
-    }
-    if (game->current_level->num_pickups > 128) {
+    if (num_pickups > 128) {
       if (active_pos_count > 0) {
-        float px = vgetx(game->current_level->pickup_positions[i]);
-        float py = vgety(game->current_level->pickup_positions[i]);
-        if (!is_point_in_view(px, py, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y)) {
+        if (!is_point_in_view(pickup->pos.x, pickup->pos.y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X,
+                              DD_DEMO_VIEW_CLIP_Y)) {
           continue;
         }
       } else if (pickups_snapped >= 64) {
         break;
       }
     }
-    dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, 64 + i, sizeof(dd_netobj_ddnet_pickup));
+    dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, id, sizeof(dd_netobj_ddnet_pickup));
     if (!p) break;
     pickups_snapped++;
-    p->m_X = vgetx(game->current_level->pickup_positions[i]) - MAP_EXPAND32;
-    p->m_Y = vgety(game->current_level->pickup_positions[i]) - MAP_EXPAND32;
-    p->m_Type = pickup.m_Type;
-    p->m_Subtype = pickup.m_Subtype;
-    p->m_SwitchNumber = pickup.m_Number;
+    p->m_X = (int)pickup->pos.x;
+    p->m_Y = (int)pickup->pos.y;
+    p->m_Type = pickup->u.pickup.type;
+    p->m_Subtype = pickup->u.pickup.subtype;
+    p->m_SwitchNumber = pickup->number;
     p->m_Flags = 0;
-    // log_info("DemoExport", "Added pickup id %d at (%d, %d), type %d, subtype %d", next_item_id, p->m_X, p->m_Y, p->m_Type, p->m_Subtype);
   }
 
   // do doors and switch state
-  if (include_static && game->current_level) {
-    const SCollision *collision = &game->current_level->collision;
+  if (include_static && level) {
+    const ddnet_collision_t *collision = &level->collision;
 
     int doors_snapped = 0;
-    for (int i = 0; i < collision->m_NumDoors; ++i) {
+    for (int i = 0; i < collision->num_doors; ++i) {
       if (doors_snapped >= DD_DEMO_MAX_SNAPPED_DOORS) break;
-      const SDoor *door = &collision->m_pDoors[i];
-      if (collision->m_NumDoors > 64) {
+      const ddnet_map_door_t *door = &collision->doors[i];
+      if (collision->num_doors > 64) {
         if (active_pos_count > 0) {
-          float pos_x = vgetx(door->m_Pos);
-          float pos_y = vgety(door->m_Pos);
-          float to_x = vgetx(door->m_To);
-          float to_y = vgety(door->m_To);
-          float mid_x = 0.5f * (pos_x + to_x);
-          float mid_y = 0.5f * (pos_y + to_y);
-          if (!is_point_in_view(pos_x, pos_y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y) &&
-              !is_point_in_view(to_x, to_y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y) &&
+          const float mid_x = 0.5f * (door->pos.x + door->to.x);
+          const float mid_y = 0.5f * (door->pos.y + door->to.y);
+          if (!is_point_in_view(door->pos.x, door->pos.y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y) &&
+              !is_point_in_view(door->to.x, door->to.y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y) &&
               !is_point_in_view(mid_x, mid_y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y)) {
             continue;
           }
@@ -295,42 +319,33 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
           break;
         }
       }
-      const int door_id = 64 + game->current_level->num_pickups + i;
+      const int door_id = 64 + num_pickups + i;
       dd_netobj_ddnet_laser *l = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, door_id, sizeof(dd_netobj_ddnet_laser));
       if (!l) break;
       doors_snapped++;
-
-      bool closed = (door->m_Number <= 0) ||
-                    (cur->m_pSwitches && door->m_Number < cur->m_NumSwitches && cur->m_pSwitches[door->m_Number].m_Status);
-      mvec2 from = closed ? door->m_To : door->m_Pos;
-      l->m_ToX = round_to_int(vgetx(door->m_Pos)) - MAP_EXPAND32;
-      l->m_ToY = round_to_int(vgety(door->m_Pos)) - MAP_EXPAND32;
-      l->m_FromX = round_to_int(vgetx(from)) - MAP_EXPAND32;
-      l->m_FromY = round_to_int(vgety(from)) - MAP_EXPAND32;
-      l->m_StartTick = -1;
-      l->m_Owner = -1;
-      l->m_Type = DD_LASERTYPE_DOOR;
-      l->m_Subtype = 0;
-      l->m_SwitchNumber = door->m_Number;
-      l->m_Flags = 0;
+      // CDoor::Snap for a client with DDNet's entity objects: from where it ends, whatever the switch;
+      // the client shows it by the switch states.
+      snap_laser(l, (ddnet_vec2_t){(float)round_to_int(door->pos.x), (float)round_to_int(door->pos.y)},
+                 (ddnet_vec2_t){(float)round_to_int(door->to.x), (float)round_to_int(door->to.y)}, -1, -1, DD_LASERTYPE_DOOR, 0,
+                 door->number);
     }
-    if (cur->m_pSwitches && cur->m_NumSwitches > 0) {
+    if (cur->num_switchers > 0) {
       dd_netobj_switch_state *ss = demo_sb_add_item(sb, DD_NETOBJTYPE_SWITCHSTATE, 0, sizeof(dd_netobj_switch_state));
       if (ss) {
         memset(ss, 0, sizeof(*ss));
-        ss->m_HighestSwitchNumber = cur->m_NumSwitches - 1;
+        ss->m_HighestSwitchNumber = cur->num_switchers - 1;
         if (ss->m_HighestSwitchNumber > 255) ss->m_HighestSwitchNumber = 255;
         for (int i = 0; i <= ss->m_HighestSwitchNumber; ++i) {
-          if (cur->m_pSwitches[i].m_Status) {
+          if (cur->switchers[i].status[view_team]) {
             ss->m_aStatus[i / 32] |= (1 << (i % 32));
           }
         }
         int num_timed = 0;
         for (int i = 0; i <= ss->m_HighestSwitchNumber && num_timed < 4; ++i) {
-          if (cur->m_pSwitches[i].m_EndTick > 0 &&
-              cur->m_pSwitches[i].m_EndTick < cur->m_GameTick + 3 * 50) {
+          const int end_tick = cur->switchers[i].end_tick[view_team];
+          if (end_tick > 0 && end_tick < cur->tick + 3 * 50) {
             ss->m_aSwitchNumbers[num_timed] = i;
-            ss->m_aEndTicks[num_timed] = cur->m_pSwitches[i].m_EndTick + tick_delta;
+            ss->m_aEndTicks[num_timed] = end_tick + tick_delta;
             num_timed++;
           }
         }
@@ -341,12 +356,9 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
   // game info
   dd_netobj_game_info *game_info = include_static ? demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEINFO, 0, sizeof(dd_netobj_game_info)) : NULL;
   if (game_info) *game_info = (dd_netobj_game_info){0};
-  if (game_info && first_exported_local >= 0) {
-    SCharacterCore *c = &cur->m_pCharacters[first_exported_local];
-    if (c->m_StartTick != -1) {
-      game_info->m_WarmupTimer = -(c->m_StartTime + tick_delta);
-      game_info->m_GameStateFlags = DD_GAMESTATEFLAG_RACETIME;
-    }
+  if (game_info && view_character && view_character->race_state != DDNET_RACE_NONE) {
+    game_info->m_WarmupTimer = -(view_character->start_time + tick_delta);
+    game_info->m_GameStateFlags = DD_GAMESTATEFLAG_RACETIME;
   }
   dd_netobj_game_info_ex *game_info_ex = include_static ? demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEINFOEX, 0, sizeof(dd_netobj_game_info_ex)) : NULL;
   if (game_info_ex) {
@@ -358,45 +370,17 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
                             DD_GAMEINFOFLAG_PREDICT_DDRACE_TILES | DD_GAMEINFOFLAG_ENTITIES_DDNET | DD_GAMEINFOFLAG_ENTITIES_DDRACE |
                             DD_GAMEINFOFLAG_ENTITIES_RACE | DD_GAMEINFOFLAG_RACE;
     game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_DDRACE;
-    if (cur->m_pConfig->m_SvHealthAndAmmo) {
-      game_info_ex->m_Flags &=
-          ~(DD_GAMEINFOFLAG_UNLIMITED_AMMO | DD_GAMEINFOFLAG_GAMETYPE_DDNET | DD_GAMEINFOFLAG_GAMETYPE_DDRACE | DD_GAMEINFOFLAG_PREDICT_DDRACE);
-      game_info_ex->m_Flags |= DD_GAMEINFOFLAG_GAMETYPE_VANILLA | DD_GAMEINFOFLAG_PREDICT_VANILLA;
-      game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_HEALTH_ARMOR | DD_GAMEINFOFLAG2_HUD_AMMO;
-    }
-  }
-  if (include_static && game_info_ex && cur->m_pConfig->m_SvFastcap) {
-    game_info_ex->m_Flags |= DD_GAMEINFOFLAG_GAMETYPE_FASTCAP | DD_GAMEINFOFLAG_FLAG_STARTS_RACE;
-
-    dd_netobj_game_data *game_data = demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEDATA, 0, sizeof(dd_netobj_game_data));
-    if (game_data) {
-      *game_data = (dd_netobj_game_data){.m_FlagCarrierRed = -3, .m_FlagCarrierBlue = -3};
-      const SCharacterCore *view_character = first_exported_local >= 0 ? &cur->m_pCharacters[first_exported_local] : NULL;
-      if (!view_character || view_character->m_FinishTick < 0) {
-        for (int team = 0; team < 2; ++team) {
-          if (!cur->m_pCollision->m_aFastcapFlagPresent[team]) continue;
-          dd_netobj_flag *flag = demo_sb_add_item(sb, DD_NETOBJTYPE_FLAG, team, sizeof(dd_netobj_flag));
-          if (!flag) continue;
-          flag->m_X = vgetx(cur->m_pCollision->m_aFastcapFlagPositions[team]) - MAP_EXPAND32;
-          flag->m_Y = vgety(cur->m_pCollision->m_aFastcapFlagPositions[team]) - MAP_EXPAND32;
-          flag->m_Team = team;
-          int carrier = view_character && view_character->m_aGotFastcapFlag[team] ? client_ids[first_exported_local] : -2;
-          if (team == 0) game_data->m_FlagCarrierRed = carrier;
-          else game_data->m_FlagCarrierBlue = carrier;
-        }
-      }
-    }
   }
 
-  for (int p = 0; p < cur->m_NumCharacters; ++p) {
+  for (int p = 0; p < current_world->player_count; ++p) {
     if (p >= client_count || client_ids[p] < 0) continue;
     const int client_id = client_ids[p];
     const int track_index = game->engine->timeline_player_track((uint32_t)world_index, (uint32_t)p);
     if (track_index < 0) continue;
     dd_player_profile_t profile;
     dd_profile_for_track(game, track_index, &profile);
-    SCharacterCore *c_cur = &cur->m_pCharacters[p];
-    SCharacterCore *c_prev = &prev->m_pCharacters[p];
+    const ddnet_character_t *c_cur = ddnet_player_character(current_world, p);
+    const int world_client = ddnet_player_client(current_world, p);
     const bool paused = dd_replay_paused(current_world, p);
 
     dd_netobj_client_info *ci = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, client_id, sizeof(dd_netobj_client_info));
@@ -432,48 +416,45 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
 
     // Replayed /spec players only have a waiting position. Export it as DDNet
     // does, rather than turning the placeholder physics character into a tee.
-    if (paused) {
+    if (paused && c_cur) {
       dd_netobj_spec_char *spec = demo_sb_add_item(sb, DD_NETOBJTYPE_SPECCHAR, client_id, sizeof(*spec));
       if (spec) {
-        spec->m_X = round_to_int(vgetx(c_cur->m_Pos)) - MAP_EXPAND32;
-        spec->m_Y = round_to_int(vgety(c_cur->m_Pos)) - MAP_EXPAND32;
+        spec->m_X = round_to_int(c_cur->pos.x);
+        spec->m_Y = round_to_int(c_cur->pos.y);
       }
       continue;
     }
-    if (dd_replay_absent(current_world, p)) continue;
+    if (!c_cur || dd_replay_absent(current_world, p)) continue;
+    const ddnet_character_core_t *core = &c_cur->core;
 
     dd_netobj_character *ch = demo_sb_add_item(sb, DD_NETOBJTYPE_CHARACTER, client_id, sizeof(dd_netobj_character));
     if (ch) {
       memset(ch, 0, sizeof(*ch));
-      ch->core.m_X = round_to_int(vgetx(c_cur->m_Pos)) - MAP_EXPAND32;
-      ch->core.m_Y = round_to_int(vgety(c_cur->m_Pos)) - MAP_EXPAND32;
-      ch->core.m_VelX = round_to_int(vgetx(c_cur->m_Vel) * 256.0f);
-      ch->core.m_VelY = round_to_int(vgety(c_cur->m_Vel) * 256.0f);
-      ch->core.m_HookState = c_cur->m_HookState;
-      ch->core.m_HookTick = c_cur->m_HookTick;
-      ch->core.m_HookX = round_to_int(vgetx(c_cur->m_HookPos)) - MAP_EXPAND32;
-      ch->core.m_HookY = round_to_int(vgety(c_cur->m_HookPos)) - MAP_EXPAND32;
-      ch->core.m_HookDx = round_to_int(vgetx(c_cur->m_HookDir) * 256.0f);
-      ch->core.m_HookDy = round_to_int(vgety(c_cur->m_HookDir) * 256.0f);
-      ch->core.m_HookedPlayer = remap_client_id(client_ids, client_count, c_cur->m_HookedPlayer);
-      ch->core.m_Jumped = c_cur->m_Jumped;
-      ch->core.m_Direction = c_cur->m_Input.m_Direction;
-      // setup angle
-      float tmp_angle = atan2(c_cur->m_Input.m_TargetY, c_cur->m_Input.m_TargetX);
-      if (tmp_angle < -(M_PI / 2.0f)) ch->core.m_Angle = (int)((tmp_angle + (2.0f * M_PI)) * 256.0f);
-      else ch->core.m_Angle = (int)(tmp_angle * 256.0f);
+      ch->core.m_X = round_to_int(c_cur->pos.x);
+      ch->core.m_Y = round_to_int(c_cur->pos.y);
+      ch->core.m_VelX = round_to_int(core->vel.x * 256.0f);
+      ch->core.m_VelY = round_to_int(core->vel.y * 256.0f);
+      ch->core.m_HookState = core->hook_state;
+      ch->core.m_HookTick = core->hook_tick;
+      ch->core.m_HookX = round_to_int(core->hook_pos.x);
+      ch->core.m_HookY = round_to_int(core->hook_pos.y);
+      ch->core.m_HookDx = round_to_int(core->hook_dir.x * 256.0f);
+      ch->core.m_HookDy = round_to_int(core->hook_dir.y * 256.0f);
+      ch->core.m_HookedPlayer = remap_world_client(current_world, client_ids, client_count, core->hooked_player);
+      ch->core.m_Jumped = core->jumped;
+      ch->core.m_Direction = core->direction;
+      ch->core.m_Angle = ddnet_character_angle(c_cur);
 
       // Physics groups run on local clocks, while a demo has one shared clock. Every absolute tick
       // written to the protocol must be translated or the client predicts offset groups far away.
       ch->core.m_Tick = demo_tick;
-      ch->m_Emote = demo_character_emote(cur, c_cur);
+      ch->m_Emote = demo_character_emote(current_world, p, c_cur);
 
-      ch->m_AttackTick = c_cur->m_AttackTick + tick_delta;
-      ch->core.m_Direction = c_cur->m_Input.m_Direction;
-      ch->m_Weapon = (c_cur->m_DeepFrozen || c_cur->m_FreezeTime > 0) ? WEAPON_NINJA : c_cur->m_ActiveWeapon;
-      ch->m_AmmoCount = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_aWeaponAmmo[c_cur->m_ActiveWeapon] : 0;
-      ch->m_Health = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_Health : 10;
-      ch->m_Armor = cur->m_pConfig->m_SvHealthAndAmmo ? c_cur->m_Armor : 10;
+      ch->m_AttackTick = c_cur->attack_tick + tick_delta;
+      ch->m_Weapon = (core->deep_frozen || c_cur->freeze_time > 0) ? DDNET_WEAPON_NINJA : core->active_weapon;
+      ch->m_AmmoCount = 0;
+      ch->m_Health = 10;
+      ch->m_Armor = 10;
       ch->m_PlayerFlags = 0;
     }
 
@@ -482,49 +463,50 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       memset(dc, 0, sizeof(*dc));
       dc->m_TuneZoneOverride = -1;
       dc->m_Flags = 0;
-      if (c_cur->m_Solo) dc->m_Flags |= DD_CHARACTERFLAG_SOLO;
-      if (c_cur->m_EndlessHook) dc->m_Flags |= DD_CHARACTERFLAG_ENDLESS_HOOK;
-      if (c_cur->m_CollisionDisabled) dc->m_Flags |= DD_CHARACTERFLAG_COLLISION_DISABLED;
-      if (c_cur->m_HookHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_HOOK_HIT_DISABLED;
-      if (c_cur->m_EndlessJump) dc->m_Flags |= DD_CHARACTERFLAG_ENDLESS_JUMP;
-      if (c_cur->m_Jetpack) dc->m_Flags |= DD_CHARACTERFLAG_JETPACK;
-      if (c_cur->m_HammerHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_HAMMER_HIT_DISABLED;
-      if (c_cur->m_ShotgunHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_SHOTGUN_HIT_DISABLED;
-      if (c_cur->m_GrenadeHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_GRENADE_HIT_DISABLED;
-      if (c_cur->m_LaserHitDisabled) dc->m_Flags |= DD_CHARACTERFLAG_LASER_HIT_DISABLED;
-      if (c_cur->m_HasTelegunGun) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_GUN;
-      if (c_cur->m_HasTelegunGrenade) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_GRENADE;
-      if (c_cur->m_HasTelegunLaser) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_LASER;
-      if (c_cur->m_aWeaponGot[WEAPON_HAMMER]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_HAMMER;
-      if (c_cur->m_aWeaponGot[WEAPON_GUN]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GUN;
-      if (c_cur->m_aWeaponGot[WEAPON_SHOTGUN]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_SHOTGUN;
-      if (c_cur->m_aWeaponGot[WEAPON_GRENADE]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GRENADE;
-      if (c_cur->m_aWeaponGot[WEAPON_LASER]) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_LASER;
-      if (c_cur->m_ActiveWeapon == WEAPON_NINJA) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_NINJA;
-      if (c_cur->m_LiveFrozen) dc->m_Flags |= DD_CHARACTERFLAG_MOVEMENTS_DISABLED;
+      if (core->solo) dc->m_Flags |= DD_CHARACTERFLAG_SOLO;
+      if (core->endless_hook) dc->m_Flags |= DD_CHARACTERFLAG_ENDLESS_HOOK;
+      if (core->collision_disabled) dc->m_Flags |= DD_CHARACTERFLAG_COLLISION_DISABLED;
+      if (core->hook_hit_disabled) dc->m_Flags |= DD_CHARACTERFLAG_HOOK_HIT_DISABLED;
+      if (core->endless_jump) dc->m_Flags |= DD_CHARACTERFLAG_ENDLESS_JUMP;
+      if (core->jetpack) dc->m_Flags |= DD_CHARACTERFLAG_JETPACK;
+      if (core->hammer_hit_disabled) dc->m_Flags |= DD_CHARACTERFLAG_HAMMER_HIT_DISABLED;
+      if (core->shotgun_hit_disabled) dc->m_Flags |= DD_CHARACTERFLAG_SHOTGUN_HIT_DISABLED;
+      if (core->grenade_hit_disabled) dc->m_Flags |= DD_CHARACTERFLAG_GRENADE_HIT_DISABLED;
+      if (core->laser_hit_disabled) dc->m_Flags |= DD_CHARACTERFLAG_LASER_HIT_DISABLED;
+      if (core->has_telegun_gun) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_GUN;
+      if (core->has_telegun_grenade) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_GRENADE;
+      if (core->has_telegun_laser) dc->m_Flags |= DD_CHARACTERFLAG_TELEGUN_LASER;
+      if (core->weapons[DDNET_WEAPON_HAMMER].got) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_HAMMER;
+      if (core->weapons[DDNET_WEAPON_GUN].got) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GUN;
+      if (core->weapons[DDNET_WEAPON_SHOTGUN].got) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_SHOTGUN;
+      if (core->weapons[DDNET_WEAPON_GRENADE].got) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GRENADE;
+      if (core->weapons[DDNET_WEAPON_LASER].got) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_LASER;
+      if (core->active_weapon == DDNET_WEAPON_NINJA) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_NINJA;
+      if (core->live_frozen) dc->m_Flags |= DD_CHARACTERFLAG_MOVEMENTS_DISABLED;
 
-      dc->m_Jumps = c_cur->m_Jumps;
-      dc->m_TeleCheckpoint = c_cur->m_TeleCheckpoint;
-      dc->m_StrongWeakId = client_id;
-      dc->m_JumpedTotal = c_cur->m_JumpedTotal;
-      dc->m_NinjaActivationTick = c_cur->m_Ninja.m_ActivationTick + tick_delta;
+      dc->m_Jumps = core->jumps;
+      dc->m_TeleCheckpoint = c_cur->tele_checkpoint;
+      dc->m_StrongWeakId = c_cur->strong_weak_id;
+      dc->m_JumpedTotal = core->jumped_total;
+      dc->m_NinjaActivationTick = core->ninja.activation_tick + tick_delta;
 
-      dc->m_FreezeStart = c_cur->m_FreezeStart == 0 ? 0 : c_cur->m_FreezeStart + tick_delta;
-      dc->m_FreezeEnd = c_cur->m_DeepFrozen ? -1 : c_cur->m_FreezeTime == 0 ? 0
-                                                                            : demo_tick + c_cur->m_FreezeTime;
+      dc->m_FreezeStart = core->freeze_start == 0 ? 0 : core->freeze_start + tick_delta;
+      dc->m_FreezeEnd = core->deep_frozen ? -1 : c_cur->freeze_time == 0 ? 0 : demo_tick + c_cur->freeze_time;
 
-      if (c_cur->m_IsInFreeze) {
+      if (core->is_in_freeze) {
         dc->m_Flags |= DD_CHARACTERFLAG_IN_FREEZE;
       }
-      dc->m_TargetX = c_cur->m_Input.m_TargetX;
-      dc->m_TargetY = c_cur->m_Input.m_TargetY;
+      dc->m_TargetX = core->input.target_x;
+      dc->m_TargetY = core->input.target_y;
     }
 
-    if (c_cur->m_StartTick != -1 && c_prev->m_FinishTick == -1 && c_cur->m_FinishTick != -1) {
+    // CreateFinishEffect, which is when DDNet's server sends it
+    if (prev_world && world_client >= 0 && ddnet_player_client(prev_world, p) == world_client &&
+        prev_world->core.players[world_client].finish_tick < 0 && cur->players[world_client].finish_tick >= 0) {
       dd_netevent_finish *nf = demo_sb_add_item(sb, DD_NETEVENTTYPE_FINISH, (*next_item_id)++, sizeof(dd_netevent_finish));
       if (nf) {
-        nf->common.m_X = vgetx(c_cur->m_Pos) - MAP_EXPAND32;
-        nf->common.m_Y = vgety(c_cur->m_Pos) - MAP_EXPAND32;
+        nf->common.m_X = (int)c_cur->pos.x;
+        nf->common.m_Y = (int)c_cur->pos.y;
       }
     }
   }
@@ -536,10 +518,10 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     const dd_physics_particle_event_t *event = &current_world->physics_particle_events[i];
     const int client_id = remap_client_id(client_ids, client_count, event->client_id);
     if (event->client_id >= 0 && client_id < 0) continue;
-    const int x = (int)event->x - MAP_EXPAND32;
-    const int y = (int)event->y - MAP_EXPAND32;
+    const int x = (int)event->x;
+    const int y = (int)event->y;
     switch (event->type) {
-    case PARTICLE_TYPE_PLAYER_SPAWN: {
+    case DDNET_PARTICLE_PLAYER_SPAWN: {
       dd_netevent_spawn *spawn = demo_sb_add_item(sb, DD_NETEVENTTYPE_SPAWN, (*next_item_id)++, sizeof(*spawn));
       if (spawn) {
         spawn->common.m_X = x;
@@ -547,7 +529,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       }
       break;
     }
-    case PARTICLE_TYPE_PLAYER_DEATH: {
+    case DDNET_PARTICLE_PLAYER_DEATH: {
       dd_netevent_death *death = demo_sb_add_item(sb, DD_NETEVENTTYPE_DEATH, (*next_item_id)++, sizeof(*death));
       if (death) {
         death->common.m_X = x;
@@ -556,7 +538,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       }
       break;
     }
-    case PARTICLE_TYPE_HAMMER_HIT: {
+    case DDNET_PARTICLE_HAMMER_HIT: {
       dd_netevent_hammer_hit *hit = demo_sb_add_item(sb, DD_NETEVENTTYPE_HAMMERHIT, (*next_item_id)++, sizeof(*hit));
       if (hit) {
         hit->common.m_X = x;
@@ -564,7 +546,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       }
       break;
     }
-    case PARTICLE_TYPE_EXPLOSION: {
+    case DDNET_PARTICLE_EXPLOSION: {
       dd_netevent_explosion *explosion = demo_sb_add_item(sb, DD_NETEVENTTYPE_EXPLOSION, (*next_item_id)++, sizeof(*explosion));
       if (explosion) {
         explosion->common.m_X = x;
@@ -572,8 +554,6 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       }
       break;
     }
-    case PARTICLE_TYPE_AIR_JUMP:
-      break;
     default:
       break;
     }
@@ -585,81 +565,111 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     dd_netevent_sound_world *sound =
         demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, (*next_item_id)++, sizeof(*sound));
     if (sound) {
-      sound->common.m_X = (int)event->x - MAP_EXPAND32;
-      sound->common.m_Y = (int)event->y - MAP_EXPAND32;
+      sound->common.m_X = (int)event->x;
+      sound->common.m_Y = (int)event->y;
       sound->m_SoundId = event->sound_id;
     }
   }
+  // one event per star, at its final angle (CGameContext::CreateDamageInd)
   for (int i = 0; i < current_world->physics_damage_event_count; ++i) {
     const dd_physics_damage_event_t *event = &current_world->physics_damage_events[i];
     if (event->client_id >= 0 && remap_client_id(client_ids, client_count, event->client_id) < 0) continue;
-    const float center = 3.0f * (float)M_PI / 2.0f + event->angle;
-    const float start = center - (float)M_PI / 3.0f;
-    const float end = center + (float)M_PI / 3.0f;
-    for (int indicator = 0; indicator < event->amount; ++indicator) {
-      const float angle = start + (end - start) * (float)(indicator + 1) / (float)(event->amount + 1);
-      dd_netevent_damage_ind *damage =
-          demo_sb_add_item(sb, DD_NETEVENTTYPE_DAMAGEIND, (*next_item_id)++, sizeof(*damage));
-      if (damage) {
-        damage->common.m_X = (int)event->x - MAP_EXPAND32;
-        damage->common.m_Y = (int)event->y - MAP_EXPAND32;
-        damage->m_Angle = (int)(angle * 256.0f);
-      }
+    dd_netevent_damage_ind *damage = demo_sb_add_item(sb, DD_NETEVENTTYPE_DAMAGEIND, (*next_item_id)++, sizeof(*damage));
+    if (damage) {
+      damage->common.m_X = (int)event->x;
+      damage->common.m_Y = (int)event->y;
+      damage->m_Angle = (int)(event->angle * 256.0f);
     }
   }
 
   // do entities
-  for (SProjectile *proj = (SProjectile *)cur->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; proj;
-       proj = (SProjectile *)proj->m_Base.m_pNextTypeEntity) {
-    int owner = remap_client_id(client_ids, client_count, proj->m_Owner);
-    if (proj->m_Owner >= 0 && owner < 0) continue;
+  for (int i = cur->first_entity[DDNET_ENTTYPE_PROJECTILE]; i != -1; i = cur->entities[i].link.next) {
+    const ddnet_entity_t *ent = &cur->entities[i];
+    const ddnet_projectile_t *proj = &ent->u.projectile;
+    const int owner = remap_world_client(current_world, client_ids, client_count, proj->owner);
+    if (proj->owner >= 0 && owner < 0) continue;
     dd_netobj_ddnet_projectile *p =
         demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPROJECTILE, (*next_item_id)++, sizeof(dd_netobj_ddnet_projectile));
     if (p) {
       int Flags = 0;
-      if (proj->m_Bouncing & 1) {
-        Flags |= DD_PROJECTILEFLAG_BOUNCE_HORIZONTAL;
-      }
-      if (proj->m_Bouncing & 2) {
-        Flags |= DD_PROJECTILEFLAG_BOUNCE_VERTICAL;
-      }
-      if (proj->m_Explosive) {
-        Flags |= DD_PROJECTILEFLAG_EXPLOSIVE;
-      }
-      if (proj->m_Freeze) {
-        Flags |= DD_PROJECTILEFLAG_FREEZE;
-      }
+      if (proj->bouncing & 1) Flags |= DD_PROJECTILEFLAG_BOUNCE_HORIZONTAL;
+      if (proj->bouncing & 2) Flags |= DD_PROJECTILEFLAG_BOUNCE_VERTICAL;
+      if (proj->explosive) Flags |= DD_PROJECTILEFLAG_EXPLOSIVE;
+      if (proj->freeze) Flags |= DD_PROJECTILEFLAG_FREEZE;
       Flags |= DD_PROJECTILEFLAG_NORMALIZE_VEL;
-      p->m_VelX = round_to_int(vgetx(proj->m_Direction) * 1e6f);
-      p->m_VelY = round_to_int(vgety(proj->m_Direction) * 1e6f);
-      p->m_X = round_to_int((vgetx(proj->m_Base.m_Pos) - MAP_EXPAND32) * 100.0f);
-      p->m_Y = round_to_int((vgety(proj->m_Base.m_Pos) - MAP_EXPAND32) * 100.0f);
-      p->m_Type = proj->m_Type;
-      p->m_StartTick = proj->m_StartTick + tick_delta;
+      p->m_VelX = round_to_int(proj->direction.x * 1e6f);
+      p->m_VelY = round_to_int(proj->direction.y * 1e6f);
+      p->m_X = round_to_int(ent->pos.x * 100.0f);
+      p->m_Y = round_to_int(ent->pos.y * 100.0f);
+      p->m_Type = proj->type;
+      p->m_StartTick = proj->start_tick + tick_delta;
       p->m_Owner = owner;
       p->m_Flags = Flags;
-      p->m_SwitchNumber = proj->m_Base.m_Number;
+      p->m_SwitchNumber = ent->number;
       p->m_TuneZone = 0;
     }
   }
 
-  for (SLaser *laser = (SLaser *)cur->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; laser; laser = (SLaser *)laser->m_Base.m_pNextTypeEntity) {
-    int owner = remap_client_id(client_ids, client_count, laser->m_Owner);
-    if (laser->m_Owner >= 0 && owner < 0) continue;
-    dd_netobj_ddnet_laser *l = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, (*next_item_id)++, sizeof(dd_netobj_ddnet_laser));
-    // laser
-    if (l) {
-      l->m_ToX = (int)vgetx(laser->m_Base.m_Pos) - MAP_EXPAND32;
-      l->m_ToY = (int)vgety(laser->m_Base.m_Pos) - MAP_EXPAND32;
-      l->m_FromX = (int)vgetx(laser->m_From) - MAP_EXPAND32;
-      l->m_FromY = (int)vgety(laser->m_From) - MAP_EXPAND32;
-      l->m_StartTick = laser->m_EvalTick + tick_delta;
-      l->m_Owner = owner;
-      l->m_Type = laser->m_Type == DD_WEAPON_LASER ? DD_LASERTYPE_RIFLE : DD_LASERTYPE_SHOTGUN;
-      l->m_Subtype = -1;
-      l->m_SwitchNumber = laser->m_Base.m_Number;
-      l->m_Flags = 0;
+  // The laser list as DDNet's server snaps it for a demo (CLaser, CLight, CGun, CPlasma, CDragger and
+  // CDraggerBeam::Snap for SERVER_DEMO_CLIENT, with DDNet's entity objects).
+  for (int i = cur->first_entity[DDNET_ENTTYPE_LASER]; i != -1; i = cur->entities[i].link.next) {
+    const ddnet_entity_t *ent = &cur->entities[i];
+    int owner = -1, type = -1, subtype = 0, start_tick = -1;
+    ddnet_vec2_t to = ent->pos, from = ent->pos;
+    switch (ent->kind) {
+    case DDNET_ENTITY_LASER:
+      owner = remap_world_client(current_world, client_ids, client_count, ent->u.laser.owner);
+      if (ent->u.laser.owner >= 0 && owner < 0) continue;
+      from = ent->u.laser.from;
+      start_tick = ent->u.laser.eval_tick + tick_delta;
+      type = ent->u.laser.type == DDNET_WEAPON_LASER ? DD_LASERTYPE_RIFLE : DD_LASERTYPE_SHOTGUN;
+      subtype = -1;
+      break;
+    case DDNET_ENTITY_LIGHT:
+      // light on game and switch layer with a number 0 is always on; the demo client has no team
+      if (ent->number == 0) from = ent->u.light.to;
+      type = DD_LASERTYPE_FREEZE;
+      break;
+    case DDNET_ENTITY_GUN:
+      type = DD_LASERTYPE_GUN;
+      subtype = (ent->u.gun.explosive ? 1 : 0) | (ent->u.gun.freeze ? 2 : 0);
+      break;
+    case DDNET_ENTITY_PLASMA:
+      owner = remap_world_client(current_world, client_ids, client_count, ent->u.plasma.for_client_id);
+      if (owner < 0) continue;
+      type = DD_LASERTYPE_PLASMA;
+      subtype = (ent->u.plasma.explosive ? 1 : 0) | (ent->u.plasma.freeze ? 2 : 0);
+      start_tick = ent->u.plasma.eval_tick + tick_delta;
+      break;
+    case DDNET_ENTITY_DRAGGER: {
+      const int strength = (int)lroundf(ent->u.dragger.strength - 1.f);
+      type = DD_LASERTYPE_DRAGGER;
+      subtype = (ent->u.dragger.ignore_walls ? 1 : 0) | ((strength < 0 ? 0 : strength > 2 ? 2 : strength) << 1);
+      break;
     }
+    case DDNET_ENTITY_DRAGGER_BEAM: {
+      const ddnet_dragger_beam_t *beam = &ent->u.dragger_beam;
+      const ddnet_character_t *target = beam->active ? ddnet_world_character((ddnet_world_t *)cur, beam->for_client_id) : NULL;
+      owner = remap_world_client(current_world, client_ids, client_count, beam->for_client_id);
+      if (!target || owner < 0) continue;
+      const float dx = target->pos.x - ent->pos.x, dy = target->pos.y - ent->pos.y;
+      if (sqrtf(dx * dx + dy * dy) >= (float)cur->config.sv_dragger_range) continue;
+      to = target->pos;
+      from = ent->pos;
+      const int strength = (int)lroundf(beam->strength - 1.f);
+      type = DD_LASERTYPE_DRAGGER;
+      subtype = (beam->ignore_walls ? 1 : 0) | ((strength < 0 ? 0 : strength > 2 ? 2 : strength) << 1);
+      break;
+    }
+    default:
+      continue;
+    }
+    if (active_pos_count > 0 && ent->kind != DDNET_ENTITY_LASER &&
+        !is_point_in_view(to.x, to.y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y) &&
+        !is_point_in_view(from.x, from.y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X, DD_DEMO_VIEW_CLIP_Y))
+      continue;
+    dd_netobj_ddnet_laser *l = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, (*next_item_id)++, sizeof(dd_netobj_ddnet_laser));
+    if (l) snap_laser(l, to, from, start_tick, owner, type, subtype, ent->number);
   }
   return dd_recording_snap_entities(current_world, sb, client_ids, client_count, demo_tick, next_item_id);
 }
@@ -735,65 +745,15 @@ static bool write_timeline_event(dd_demo_writer *writer, const dd_event_payload_
   return true;
 }
 
-static void write_sv_tuneparams(dd_demo_writer *writer, const STuningParams *tuning) {
+// CGameContext::SendTuningParams: every parameter, in hundredths, in DDNet's order.
+static void write_sv_tuneparams(dd_demo_writer *writer, const ddnet_tuning_t *tuning) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
   demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_TUNEPARAMS << 1);
-
-#define PACK_TUNE(name) demo_msg_add_int(&packer, round_to_int((tuning ? tuning->m_##name : 0.0f) * 100.0f))
-  PACK_TUNE(GroundControlSpeed);
-  PACK_TUNE(GroundControlAccel);
-  PACK_TUNE(GroundFriction);
-  PACK_TUNE(GroundJumpImpulse);
-  PACK_TUNE(AirJumpImpulse);
-  PACK_TUNE(AirControlSpeed);
-  PACK_TUNE(AirControlAccel);
-  PACK_TUNE(AirFriction);
-  PACK_TUNE(HookLength);
-  PACK_TUNE(HookFireSpeed);
-  PACK_TUNE(HookDragAccel);
-  PACK_TUNE(HookDragSpeed);
-  PACK_TUNE(Gravity);
-  PACK_TUNE(VelrampStart);
-  PACK_TUNE(VelrampRange);
-  PACK_TUNE(VelrampCurvature);
-  PACK_TUNE(GunCurvature);
-  PACK_TUNE(GunSpeed);
-  PACK_TUNE(GunLifetime);
-  PACK_TUNE(ShotgunCurvature);
-  PACK_TUNE(ShotgunSpeed);
-  PACK_TUNE(ShotgunSpeeddiff);
-  PACK_TUNE(ShotgunLifetime);
-  PACK_TUNE(GrenadeCurvature);
-  PACK_TUNE(GrenadeSpeed);
-  PACK_TUNE(GrenadeLifetime);
-  PACK_TUNE(LaserReach);
-  PACK_TUNE(LaserBounceDelay);
-  PACK_TUNE(LaserBounceNum);
-  PACK_TUNE(LaserBounceCost);
-  PACK_TUNE(LaserDamage);
-  PACK_TUNE(PlayerCollision);
-  PACK_TUNE(PlayerHooking);
-  // DDNet tunings
-  {
-    float jetpack_strength = (tuning && tuning->m_JetpackStrength > 0.0f) ? tuning->m_JetpackStrength : 400.0f;
-    demo_msg_add_int(&packer, round_to_int(jetpack_strength * 100.0f));
-  }
-  PACK_TUNE(ShotgunStrength);
-  PACK_TUNE(ExplosionStrength);
-  PACK_TUNE(HammerStrength);
-  PACK_TUNE(HookDuration);
-  PACK_TUNE(HammerFireDelay);
-  PACK_TUNE(GunFireDelay);
-  PACK_TUNE(ShotgunFireDelay);
-  PACK_TUNE(GrenadeFireDelay);
-  PACK_TUNE(LaserFireDelay);
-  PACK_TUNE(NinjaFireDelay);
-  PACK_TUNE(HammerHitFireDelay);
-  demo_msg_add_int(&packer, 0); // GroundElasticityX
-  demo_msg_add_int(&packer, 0); // GroundElasticityY
-#undef PACK_TUNE
+  const ddnet_tune_param_t *params = (const ddnet_tune_param_t *)tuning;
+  for (int i = 0; i < DDNET_NUM_TUNING_PARAMS; ++i)
+    demo_msg_add_int(&packer, params[i]);
 
   int size = demo_msg_finish(&packer);
   if (size >= 0) {
@@ -869,8 +829,8 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
     return false;
   }
 
-  const void *map_data = game->current_level->collision.m_MapData._map_file_data;
-  const size_t map_size = game->current_level->collision.m_MapData._map_file_size;
+  const void *map_data = game->current_level->map._map_file_data;
+  const size_t map_size = game->current_level->map._map_file_size;
   if (!map_data || map_size == 0) {
     dd_log(game, FT_LOG_ERROR, "The loaded map has no source bytes to embed in the demo.");
     free_client_maps(client_maps, client_counts, world_count);
@@ -914,13 +874,15 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
   uint8_t snapshot[DD_SNAPSHOT_MAX_SIZE];
   bool ok = (curr_worlds && prev_worlds);
   const int tick_span = end_tick - start_tick + 1;
+  // The worlds asked for below are stepped with their effects, which the snapshots carry.
+  game->physics_events_forced = true;
   for (int tick = start_tick; ok && tick <= end_tick; ++tick) {
     demo_sb_clear(builder);
-    int num_pickups = game->current_level ? game->current_level->num_pickups : 0;
-    int num_doors = game->current_level ? game->current_level->collision.m_NumDoors : 0;
+    int num_pickups = game->current_level ? level_pickup_count(game->current_level) : 0;
+    int num_doors = game->current_level ? game->current_level->collision.num_doors : 0;
     int next_item_id = 64 + num_pickups + num_doors;
 
-    mvec2 active_positions[64];
+    ddnet_vec2_t active_positions[64];
     int active_pos_count = 0;
     for (uint32_t wi = 0; wi < world_count; ++wi) {
       curr_worlds[wi] = NULL;
@@ -930,10 +892,10 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
         ok = false;
         break;
       }
-      const SWorldCore *w_core = (const SWorldCore *)&curr_worlds[wi]->core;
-      for (int p = 0; p < w_core->m_NumCharacters && active_pos_count < 64; ++p) {
-        if (p < client_counts[wi] && client_maps[wi][p] >= 0) {
-          active_positions[active_pos_count++] = w_core->m_pCharacters[p].m_Pos;
+      for (int p = 0; p < curr_worlds[wi]->player_count && active_pos_count < 64; ++p) {
+        const ddnet_character_t *chr = ddnet_player_character(curr_worlds[wi], p);
+        if (chr && p < client_counts[wi] && client_maps[wi][p] >= 0) {
+          active_positions[active_pos_count++] = chr->pos;
         }
       }
     }
@@ -944,7 +906,7 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
       if (!curr_worlds[world_index]) continue;
 
       if (!snap_world(builder, game, (int)world_index, client_maps[world_index], client_counts[world_index], client_options,
-                 (SWorldCore *)&prev_worlds[world_index]->core, curr_worlds[world_index], include_static, active_positions,
+                 prev_worlds[world_index], curr_worlds[world_index], include_static, active_positions,
                  active_pos_count, tick - start_tick, worlds[world_index].start_offset - start_tick, &next_item_id)) {
         ok = false;
         break;
@@ -960,7 +922,7 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
     }
 
     if (game->current_level && tick == start_tick) {
-      write_sv_tuneparams(writer, &game->current_level->collision.m_aTuningList[0]);
+      write_sv_tuneparams(writer, &game->current_level->prototype.tuning[0]);
     }
 
     // Authored protocol messages are stored by the engine as opaque DDNet
@@ -985,6 +947,7 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
       request->progress(request->progress_user, (float)(tick - start_tick + 1) / (float)tick_span, "Writing DDNet demo");
   }
 
+  game->physics_events_forced = false;
   if (!demo_w_finish(writer)) ok = false;
   demo_sb_destroy(&builder);
   demo_w_destroy(&writer);

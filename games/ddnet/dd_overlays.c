@@ -15,9 +15,9 @@
 
 static float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 
-static ft_vec2 character_position(const SCharacterCore *character, float alpha) {
-  return (ft_vec2){lerpf(vgetx(character->m_PrevPos), vgetx(character->m_Pos), alpha) / PX_PER_TILE,
-                   lerpf(vgety(character->m_PrevPos), vgety(character->m_Pos), alpha) / PX_PER_TILE};
+static ft_vec2 character_position(const ddnet_character_t *character, float alpha) {
+  return (ft_vec2){lerpf(character->prev_pos.x, character->pos.x, alpha) / PX_PER_TILE,
+                   lerpf(character->prev_pos.y, character->pos.y, alpha) / PX_PER_TILE};
 }
 
 static float pixels_to_world(ft_game *game, float pixels) {
@@ -82,7 +82,7 @@ static float draw_nameplate_line(ft_game *game, float center_x, float bottom, fl
 // lit while the tee's input holds that key. The line takes its room whether
 // or not a key is held, so the name does not jump; returns its top edge.
 static float draw_key_presses(ft_game *game, float center_x, float bottom, float size, float alpha,
-                              const SPlayerInput *input) {
+                              const dd_input_t *input) {
   const float step = size + DD_NAMEPLATE_PADDING / PX_PER_TILE;
   const float y = bottom - size * 0.75f; // the line is 1.5 sizes tall
   // DDNet turns the right-pointing arrow by pi and -pi/2; the engine turns
@@ -100,7 +100,7 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
   const bool names = game->settings.render_nameplates, keys = game->settings.show_key_presses;
   if (!(names || keys) || !frame->world) return;
   if (frame->world_count > 32 && !frame->active && frame->selected_player < 0) return;
-  const SWorldCore *world = &frame->world->core;
+  const ft_world *world = frame->world;
   ft_camera camera;
   game->engine->camera_get(&camera);
 
@@ -108,9 +108,11 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
   const float clan_size = nameplate_font_size(game->settings.nameplate_clan_size);
   const float key_size = nameplate_font_size(game->settings.key_press_size);
 
-  for (int player = 0; player < world->m_NumCharacters; ++player) {
+  for (int player = 0; player < world->player_count; ++player) {
     if (dd_replay_absent(frame->world, player)) continue; // not in its demo at this tick
-    ft_vec2 pos = character_position(&world->m_pCharacters[player], frame->alpha);
+    const ddnet_character_t *chr = ddnet_player_character(world, player);
+    if (!chr) continue;
+    ft_vec2 pos = character_position(chr, frame->alpha);
     // DDNet assumes the plate fits an 800x800 box above the tee, so a tee that
     // far below the view can still have a visible one.
     if (pos.x < camera.visible.x - 400.f / PX_PER_TILE || pos.x > camera.visible.x + camera.visible.w + 400.f / PX_PER_TILE ||
@@ -123,7 +125,8 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
     const ft_color color = {1.f, 1.f, 1.f, frame->opacity * (dd_replay_paused(frame->world, player) ? 0.4f : 1.f)};
 
     float bottom = pos.y - (float)game->settings.nameplate_offset / PX_PER_TILE;
-    if (keys) bottom = draw_key_presses(game, pos.x, bottom, key_size, color.a, &world->m_pCharacters[player].m_Input);
+    if (keys)
+      bottom = draw_key_presses(game, pos.x, bottom, key_size, color.a, &world->inputs[ddnet_player_client(world, player)]);
     if (!names) continue;
     bottom = draw_nameplate_line(game, pos.x, bottom, name_size, color, name);
 
@@ -209,22 +212,23 @@ static void draw_freeze_bar(ft_game *game, ft_vec2 position, float progress, flo
 
 static void render_freeze_bars(ft_game *game, const ft_render_frame *frame) {
   if (!game->settings.render_freeze_bars || !frame->world) return;
-  const SWorldCore *world = &frame->world->core;
+  const ft_world *world = frame->world;
 
-  for (int player = 0; player < world->m_NumCharacters; ++player) {
-    const SCharacterCore *character = &world->m_pCharacters[player];
-    if (dd_replay_absent(frame->world, player) || dd_replay_paused(frame->world, player)) continue;
-    if (character->m_DeepFrozen || character->m_IsInFreeze || character->m_FreezeTime <= 0 || character->m_FreezeStart <= 0)
+  for (int player = 0; player < world->player_count; ++player) {
+    const ddnet_character_t *character = ddnet_player_character(world, player);
+    if (!character || dd_replay_absent(frame->world, player) || dd_replay_paused(frame->world, player)) continue;
+    if (character->core.deep_frozen || character->core.is_in_freeze || character->freeze_time <= 0 ||
+        character->core.freeze_start <= 0)
       continue;
 
     // DDNet's Max is the whole freeze and its numerator the ticks left, which
-    // is exactly what the core already tracks as m_FreezeTime.
-    const int freeze_end = world->m_GameTick + character->m_FreezeTime;
-    const int duration = freeze_end - character->m_FreezeStart;
+    // is exactly what the tee tracks as freeze_time.
+    const int freeze_end = world->core.tick + character->freeze_time;
+    const int duration = freeze_end - character->core.freeze_start;
     if (duration <= 0) continue;
 
     draw_freeze_bar(game, character_position(character, frame->alpha),
-                    (float)character->m_FreezeTime / (float)duration, frame->opacity);
+                    (float)character->freeze_time / (float)duration, frame->opacity);
   }
 }
 
@@ -586,10 +590,10 @@ static void render_emoticons(ft_game *game, const ft_render_frame *frame) {
   if (!game->engine->timeline_event_count || game->engine->timeline_event_count() == 0) return;
   visible_event emotes[64];
   const int count = recent_events(game, frame, DD_EVENT_EMOTICON, 2 * GAME_TICK_SPEED, false, emotes, 64);
-  const SWorldCore *world = &frame->world->core;
+  const ft_world *world = frame->world;
   for (int i = 0; i < count; ++i) {
     const dd_event_payload_t *event = &emotes[i].payload;
-    if (event->client_id < 0 || event->client_id >= world->m_NumCharacters || event->emoticon < 0 ||
+    if (event->client_id < 0 || event->client_id >= world->player_count || event->emoticon < 0 ||
         event->emoticon >= DD_EMOTICON_COUNT)
       continue;
     // DDNet keeps one emoticon per player: a newer one replaces it and starts over.
@@ -602,7 +606,9 @@ static void render_emoticons(ft_game *game, const ft_render_frame *frame) {
     float height = since < GAME_TICK_SPEED / 10.f ? since / (GAME_TICK_SPEED / 10.f) : 1.f;
     if (alpha <= 0.f || height <= 0.f) continue;
     float wiggle = since < GAME_TICK_SPEED / 5.f ? since / (GAME_TICK_SPEED / 5.f) : 0.f;
-    ft_vec2 base = character_position(&world->m_pCharacters[event->client_id], frame->alpha);
+    const ddnet_character_t *chr = ddnet_player_character(world, event->client_id);
+    if (!chr) continue;
+    ft_vec2 base = character_position(chr, frame->alpha);
     vec2 pos = {base.x, base.y - (23.f + 32.f * height) / PX_PER_TILE};
     vec2 size = {2.f, 2.f * height};
     dd_draw_sprite(game, game->gfx.emoticons, DD_Z_EMOTICONS, pos, size,
@@ -638,7 +644,7 @@ static void map_text(ft_game *game, float z, int x, int y, int style, int value)
 
 void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame) {
   if ((!game->settings.render_entity_text && !game->settings.render_speedups) || !frame->level) return;
-  const map_data_t *map = &frame->level->collision.m_MapData;
+  const map_data_t *map = &frame->level->map;
   ft_camera camera;
   game->engine->camera_get(&camera);
   int x0 = (int)floorf(camera.visible.x) - 1;
@@ -722,18 +728,21 @@ static void draw_door(ft_game *game, vec2 pos, vec2 to, float opacity, bool on) 
 
 void dd_render_doors(ft_game *game, const ft_render_frame *frame) {
   if (!game->settings.render_doors || !frame->active || !frame->world || !frame->level) return;
-  const SCollision *collision = &frame->level->collision;
-  const SWorldCore *world = &frame->world->core;
+  const ddnet_collision_t *collision = &frame->level->collision;
+  const ft_world *world = frame->world;
   ft_camera camera;
   game->engine->camera_get(&camera);
+  // Switches are per team: DDNet's client shows the ones of the team of the tee it follows.
+  const int team = dd_view_team(frame);
 
-  for (int i = 0; i < collision->m_NumDoors; ++i) {
-    const SDoor *door = &collision->m_pDoors[i];
-    // A switcher that is on holds its door shut, which is also the state
-    // get_move_restrictions blocks movement in. Switcher 0 is always on.
-    bool off = door->m_Number > 0 && (!world->m_pSwitches || door->m_Number >= world->m_NumSwitches || !world->m_pSwitches[door->m_Number].m_Status);
-    vec2 from = {vgetx(door->m_Pos) / PX_PER_TILE, vgety(door->m_Pos) / PX_PER_TILE};
-    vec2 to = {vgetx(door->m_To) / PX_PER_TILE, vgety(door->m_To) / PX_PER_TILE};
+  for (int i = 0; i < collision->num_doors; ++i) {
+    const ddnet_map_door_t *door = &collision->doors[i];
+    // A switcher that is on holds its door shut, which is also the state the
+    // physics blocks movement in.
+    const bool off = !(door->number >= 0 && door->number < world->core.num_switchers &&
+                       world->core.switchers[door->number].status[team]);
+    vec2 from = {door->pos.x / PX_PER_TILE, door->pos.y / PX_PER_TILE};
+    vec2 to = {door->to.x / PX_PER_TILE, door->to.y / PX_PER_TILE};
     if ((from[0] < camera.visible.x && to[0] < camera.visible.x) ||
         (from[0] > camera.visible.x + camera.visible.w && to[0] > camera.visible.x + camera.visible.w) ||
         (from[1] < camera.visible.y && to[1] < camera.visible.y) ||

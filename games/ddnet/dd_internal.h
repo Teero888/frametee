@@ -9,7 +9,8 @@
 
 #include "include/ddnet/ddnet_game.h"
 
-#include <ddnet_physics/gamecore.h>
+#include <ddnet_map_loader.h>
+#include <ddnet_physics/ddnet_physics.h>
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <cglm/cglm.h>
 #include <stdbool.h>
@@ -18,6 +19,9 @@
 // DDNet physics works in pixels, 32 to a tile. The editor's world units are
 // tiles, so everything crossing the ABI is scaled by this.
 #define PX_PER_TILE 32.0f
+
+// DDNet's server ticks per second.
+#define GAME_TICK_SPEED 50
 
 // Draw order inside the module's own passes. The engine sorts every command in
 // the frame by this float, whichever pass produced it, so these bands are what
@@ -68,12 +72,13 @@ typedef struct dd_physics_particle_event {
   int client_id;
 } dd_physics_particle_event_t;
 
+// One star of a damage indicator, as DDNet sends each: angle is its final
+// direction in radians (CGameContext::CreateDamageInd spreads them).
 typedef struct dd_physics_damage_event {
   float x;
   float y;
   float angle;
-  int amount;
-  int client_id;
+  int client_id; // a player of the world, or -1
 } dd_physics_damage_event_t;
 
 // DDNet's sound sets by protocol id (SOUND_GUN_FIRE ... SOUND_CTF_CAPTURE; the
@@ -90,21 +95,13 @@ typedef struct dd_physics_sound_event {
 } dd_physics_sound_event_t;
 
 struct ft_level {
-  SCollision collision;
-  STeeGrid grid;
-  SConfig config;
-  SWorldCore prototype; // pristine world, cloned for every ft_world
-  EGameMode mode;
+  // The map as loaded: its layers are drawn, and its file is what a project embeds.
+  map_data_t map;
+  ddnet_collision_t collision;
+  ddnet_config_t config;
+  ddnet_world_t prototype; // pristine world, cloned for every ft_world
   char name[128];
   bool loaded;
-
-  // Pickups are derived from the map once, then drawn every frame.
-  SPickup *pickups;
-  mvec2 *pickup_positions;
-  int *pickup_cooldown_keys;
-  int *ninja_pickup_indices;
-  int num_ninja_pickups;
-  int num_pickups;
 
   // Tile layers uploaded for rendering; owned by the module, rebuilt per level.
   ft_texture *layer_textures[3];
@@ -273,7 +270,7 @@ typedef struct {
 } dd_weapon_spec_t;
 
 typedef struct {
-  dd_weapon_spec_t id[NUM_WEAPONS];
+  dd_weapon_spec_t id[DDNET_NUM_WEAPONS];
 } dd_weapon_specs_t;
 
 typedef struct {
@@ -348,7 +345,7 @@ typedef struct {
 void dd_particles_init(dd_particle_system_t *ps);
 void dd_particles_reset(dd_particle_system_t *ps);
 void dd_particles_cleanup(dd_particle_system_t *ps);
-void dd_particles_update_sim(dd_particle_system_t *ps, SCollision *collision);
+void dd_particles_update_sim(dd_particle_system_t *ps, const ddnet_collision_t *collision);
 void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer);
 // Installs the physics' effect callbacks. Every step retains its demo events on
 // `world`; visible worlds additionally spawn into their particle system.
@@ -359,12 +356,18 @@ bool dd_particles_bind(ft_game *game, ft_world *world);
 void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool bound, const uint8_t *was_skidding);
 // DDNet's client skids a tee that is on the ground, fast, and steered against the way it moves.
 bool dd_skidding(const ft_world *world, int player);
+// A world into another (zero initialized, or one copied to before; it keeps its index), and what a world
+// holds without the world itself (for one that is not on the heap).
+void dd_world_copy(ft_game *game, ft_world *dst, const ft_world *src);
+void dd_world_release(ft_world *world);
+// A star of a damage indicator at its final angle: kept for demo export and drawn.
+void dd_damage_star(ft_world *world, float x, float y, float angle, int player);
 // Advances the visible particle simulation to `tick + alpha`.
 void dd_particles_advance(ft_game *game, int world_index, const ft_level *level, int tick, float alpha);
 dd_particle_system_t *dd_particles_for(ft_game *game, int world_index);
 void dd_particles_rewind_to_tick(dd_particle_system_t *ps, int replay_tick);
 
-void dd_particles_create_explosion(dd_particle_system_t *ps, SCollision *collision, vec2 pos);
+void dd_particles_create_explosion(dd_particle_system_t *ps, const ddnet_collision_t *collision, vec2 pos);
 void dd_particles_create_smoke(dd_particle_system_t *ps, vec2 pos, vec2 vel, float alpha, float time_passed);
 void dd_particles_create_bullet_trail(dd_particle_system_t *ps, vec2 pos, float alpha, float time_passed);
 void dd_particles_create_player_death(dd_particle_system_t *ps, vec2 pos, vec4 blood_color);
@@ -686,6 +689,9 @@ struct ft_game {
   dd_particle_system_t *particles;
   int particle_count;
   bool headless;
+  // Worlds stepped while this is set make their effects whatever the engine
+  // presents (a demo export reads them from the worlds it asks the timeline for).
+  bool physics_events_forced;
 
   // The start screen this game shows before a run: its map browser. Held by
   // pointer so this header stays free of the browser's own types.
@@ -771,6 +777,8 @@ bool dd_replay_absent(const ft_world *world, int player);
 bool dd_replay_paused(const ft_world *world, int player);
 // An effect the physics raised for this player is to be dropped (see ft_world::replay_muted).
 bool dd_replay_muted(const ft_world *world, int player);
+// The player replays a recording.
+bool dd_replay_active(const ft_world *world, int player);
 // Recorded projectiles and lasers live in the recording, outside the physics
 // entity lists. Write them with the export's client IDs and shared tick clock.
 struct dd_snapshot_builder;
@@ -881,6 +889,8 @@ void dd_render(ft_game *game, const ft_render_frame *frame);
 void dd_render_world_overlays(ft_game *game, const ft_render_frame *frame);
 void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame);
 void dd_render_doors(ft_game *game, const ft_render_frame *frame);
+// The team whose switch states a frame shows: the one of the tee it follows (team 0 without one).
+int dd_view_team(const ft_render_frame *frame);
 
 enum { DD_CAMERA_FREE = 0,
        DD_CAMERA_FOLLOW,
@@ -890,7 +900,6 @@ bool dd_camera_update(ft_game *game, const ft_camera_frame *frame, ft_camera *in
 bool dd_player_label(ft_game *game, const ft_world *world, int32_t player, char *out, size_t out_size);
 uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, float alpha, char *out, uint32_t max_lines,
                          uint32_t line_size);
-void dd_level_build_pickups(ft_level *level);
 
 void dd_map_create(ft_game *game, ft_level *level);
 void dd_map_destroy(ft_game *game, ft_level *level);

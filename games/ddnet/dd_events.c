@@ -149,28 +149,28 @@ static int current_local_tick(ft_game *game, const ft_ui_frame *frame, int world
   return frame->state.current_tick;
 }
 
-static void generate_finish_events(ft_game *game, int world_index, int local_tick, int local_player, const SCharacterCore *character) {
-  if (!character || character->m_RaceTime <= 0.f) return;
+static void generate_finish_events(ft_game *game, int world_index, int local_tick, int local_player, float race_time) {
+  if (race_time <= 0.f) return;
   const int track = game->engine->timeline_player_track((uint32_t)world_index, (uint32_t)local_player);
   char name[32];
   dd_profile_display_name(game, track, name, sizeof(name));
 
   if (!has_event(game, world_index, local_tick, DD_EVENT_CHAT)) {
     dd_event_payload_t payload = {.magic = DD_EVENT_PAYLOAD_MAGIC, .type = DD_EVENT_CHAT, .team = 0, .client_id = -1};
-    const int minutes = (int)character->m_RaceTime / 60;
-    const float seconds = fmodf(character->m_RaceTime, 60.f);
+    const int minutes = (int)race_time / 60;
+    const float seconds = fmodf(race_time, 60.f);
     snprintf(payload.message, sizeof(payload.message), "%s finished in: %d minute(s) %.3f second(s)", name, minutes, seconds);
     add_event(game, world_index, local_tick, &payload);
   }
   if (!has_event(game, world_index, local_tick, DD_EVENT_DDRACE_TIME)) {
     dd_event_payload_t payload = {.magic = DD_EVENT_PAYLOAD_MAGIC,
                                   .type = DD_EVENT_DDRACE_TIME,
-                                  .time = (int)lroundf(character->m_RaceTime * 100.f),
+                                  .time = (int)lroundf(race_time * 100.f),
                                   .finish = 1};
     add_event(game, world_index, local_tick, &payload);
   }
   if (!has_event(game, world_index, local_tick, DD_EVENT_RECORD)) {
-    const int time = (int)lroundf(character->m_RaceTime * 100.f);
+    const int time = (int)lroundf(race_time * 100.f);
     dd_event_payload_t payload = {
         .magic = DD_EVENT_PAYLOAD_MAGIC, .type = DD_EVENT_RECORD, .server_time_best = time, .player_time_best = time};
     add_event(game, world_index, local_tick, &payload);
@@ -186,13 +186,15 @@ static void scan_finish_tick(ft_game *game, int global_tick) {
     const ft_world *previous = NULL;
     const ft_world *current = NULL;
     if (!game->engine->timeline_world_pair(world_index, global_tick, &previous, &current) || !previous || !current) continue;
-    const int players = current->core.m_NumCharacters < previous->core.m_NumCharacters ? current->core.m_NumCharacters
-                                                                                       : previous->core.m_NumCharacters;
+    const int players = current->player_count < previous->player_count ? current->player_count : previous->player_count;
     for (int player = 0; player < players; ++player) {
-      const SCharacterCore *before = &previous->core.m_pCharacters[player];
-      const SCharacterCore *after = &current->core.m_pCharacters[player];
-      if (before->m_FinishTick < 0 && after->m_FinishTick >= 0)
-        generate_finish_events(game, (int)world_index, current->core.m_GameTick, player, after);
+      const int client_id = ddnet_player_client(current, player);
+      if (ddnet_player_client(previous, player) != client_id) continue;
+      const ddnet_player_t *before = &previous->core.players[client_id];
+      const ddnet_player_t *after = &current->core.players[client_id];
+      if (before->finish_tick < 0 && after->finish_tick >= 0)
+        generate_finish_events(game, (int)world_index, ddnet_engine_tick(current), player,
+                               (float)after->finish_time_ticks / (float)GAME_TICK_SPEED);
     }
   }
 }

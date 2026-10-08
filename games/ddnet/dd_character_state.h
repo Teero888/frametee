@@ -1,212 +1,106 @@
 #ifndef DD_CHARACTER_STATE_H
 #define DD_CHARACTER_STATE_H
 
-#include <ddnet_physics/gamecore.h>
+#include "include/ddnet/ddnet_game.h"
+
 #include <string.h>
 
-// Version 1 projects stored the original 544-byte character layout on 64-bit
-// builds. Keep that disk record frozen as the runtime layout evolves. Pointer
-// slots are reserved bytes: writes zero them and reads keep the live pointers.
-// Access records with memcpy because the 20-byte world header is not SIMD aligned.
+// A tee as a project stores it for a starting state: what the editor can set a
+// tee up with (the properties it offers as starting overrides), at the spawn of
+// a new world. Fixed sizes and no padding, read and written with memcpy.
 typedef struct {
-  uint64_t m_pWorld;
-  uint64_t m_pCollision;
-  int m_Id;
-  mvec2 m_PrevPos;
-  mvec2 m_Pos;
-  mvec2 m_Vel;
-  uivec2 m_BlockPos;
-  int m_BlockIdx;
-  unsigned char m_BlockInfo;
-  mvec2 m_HookPos;
-  mvec2 m_HookDir;
-  mvec2 m_HookTeleBase;
-  int m_HookTick;
-  int8_t m_HookState;
-  unsigned char m_LastWeapon;
-  unsigned char m_ActiveWeapon;
-  bool m_aWeaponGot[8];
-  struct {
-    mvec2 m_ActivationDir;
-    int m_ActivationTick;
-    int m_CurrentMoveTime;
-    int m_OldVelAmount;
-  } m_Ninja;
-  bool m_NewHook;
-  bool m_Grounded;
-  int m_Jumped;
-  int m_JumpedTotal;
-  int m_Jumps;
-  unsigned char m_PrevFire;
-  SPlayerInput m_Input;
-  int m_StartTime;
-  unsigned char m_Colliding;
-  bool m_LeftWall;
-  unsigned char m_TeleCheckpoint;
-  bool m_LastRefillJumps;
-  bool m_LastPenalty;
-  bool m_LastBonus;
-  bool m_Solo;
-  bool m_Jetpack;
-  bool m_CollisionDisabled;
-  bool m_EndlessHook;
-  bool m_EndlessJump;
-  bool m_HammerHitDisabled;
-  bool m_GrenadeHitDisabled;
-  bool m_LaserHitDisabled;
-  bool m_ShotgunHitDisabled;
-  bool m_HookHitDisabled;
-  bool m_HasTelegunGun;
-  bool m_HasTelegunGrenade;
-  bool m_HasTelegunLaser;
-  int m_FreezeTime;
-  int m_FreezeStart;
-  bool m_DeepFrozen;
-  bool m_LiveFrozen;
-  bool m_FrozenLastTick;
-  int m_TuningBlockIdx;
-  uint64_t m_pTuning;
-  unsigned char m_MoveRestrictions;
-  int m_HookedPlayer;
-  mvec2 m_TeleGunPos;
-  bool m_TeleGunTeleport;
-  bool m_IsBlueTeleGunTeleport;
-  int m_ReloadTimer;
-  int m_aHitObjects[10];
-  uint8_t m_NumObjectsHit;
-  int m_StartTick;
-  int m_FinishTick;
-  float m_StartTickOffset;
-  float m_FinishTickOffset;
-  float m_RaceTime;
-  float m_aTimeCp[NUM_TIME_CHECKPOINTS];
-  uint32_t m_TimeCpMask;
-  int m_LastTimeCp;
-  float m_TileFraction;
-  bool m_aGotFastcapFlag[2];
-  int m_FastcapStartTeam;
-  int m_DamageTick;
-  int m_DamageTaken;
-  uint8_t m_RespawnDelay;
-  int m_HitNum;
-  int m_AttackTick;
-  bool m_IsInFreeze;
-  float m_VelMag;
-  float m_VelRamp;
-  int8_t m_aWeaponAmmo[NUM_WEAPONS];
-  int8_t m_Health;
-  int8_t m_Armor;
-  uint32_t m_SpawnGeneration;
-} dd_character_state_v1;
+  float pos_x, pos_y;
+  float vel_x, vel_y;
+  int32_t active_weapon;
+  int32_t freeze_time;
+  int32_t jumps;
+  int32_t jumped_total;
+  int32_t health;
+  int32_t armor;
+  uint8_t weapons_got[DDNET_NUM_WEAPONS];
+  uint8_t deep_frozen, live_frozen;
+  uint8_t endless_jump, endless_hook, jetpack, solo;
+  uint8_t has_telegun_gun, has_telegun_grenade, has_telegun_laser;
+  uint8_t collision_disabled, hook_hit_disabled;
+  uint8_t hammer_hit_disabled, shotgun_hit_disabled, grenade_hit_disabled, laser_hit_disabled;
+  uint8_t padding[3];
+} dd_character_state_v2;
 
-typedef char dd_character_state_v1_size_check[sizeof(dd_character_state_v1) == 544 ? 1 : -1];
-
-#define DD_CHARACTER_STATE_FIELDS(FIELD, ARRAY) \
-  FIELD(m_Id)                                   \
-  FIELD(m_PrevPos)                              \
-  FIELD(m_Pos)                                  \
-  FIELD(m_Vel)                                  \
-  FIELD(m_BlockPos)                             \
-  FIELD(m_BlockIdx)                             \
-  FIELD(m_BlockInfo)                            \
-  FIELD(m_HookPos)                              \
-  FIELD(m_HookDir)                              \
-  FIELD(m_HookTeleBase)                         \
-  FIELD(m_HookTick)                             \
-  FIELD(m_HookState)                            \
-  FIELD(m_LastWeapon)                           \
-  FIELD(m_ActiveWeapon)                         \
-  FIELD(m_Ninja.m_ActivationDir)                \
-  FIELD(m_Ninja.m_ActivationTick)               \
-  FIELD(m_Ninja.m_CurrentMoveTime)              \
-  FIELD(m_Ninja.m_OldVelAmount)                 \
-  FIELD(m_NewHook)                              \
-  FIELD(m_Grounded)                             \
-  FIELD(m_Jumped)                               \
-  FIELD(m_JumpedTotal)                          \
-  FIELD(m_Jumps)                                \
-  FIELD(m_PrevFire)                             \
-  FIELD(m_Input)                                \
-  FIELD(m_StartTime)                            \
-  FIELD(m_Colliding)                            \
-  FIELD(m_LeftWall)                             \
-  FIELD(m_TeleCheckpoint)                       \
-  FIELD(m_LastRefillJumps)                      \
-  FIELD(m_LastPenalty)                          \
-  FIELD(m_LastBonus)                            \
-  FIELD(m_Solo)                                 \
-  FIELD(m_Jetpack)                              \
-  FIELD(m_CollisionDisabled)                    \
-  FIELD(m_EndlessHook)                          \
-  FIELD(m_EndlessJump)                          \
-  FIELD(m_HammerHitDisabled)                    \
-  FIELD(m_GrenadeHitDisabled)                   \
-  FIELD(m_LaserHitDisabled)                     \
-  FIELD(m_ShotgunHitDisabled)                   \
-  FIELD(m_HookHitDisabled)                      \
-  FIELD(m_HasTelegunGun)                        \
-  FIELD(m_HasTelegunGrenade)                    \
-  FIELD(m_HasTelegunLaser)                      \
-  FIELD(m_FreezeTime)                           \
-  FIELD(m_FreezeStart)                          \
-  FIELD(m_DeepFrozen)                           \
-  FIELD(m_LiveFrozen)                           \
-  FIELD(m_FrozenLastTick)                       \
-  FIELD(m_TuningBlockIdx)                       \
-  FIELD(m_MoveRestrictions)                     \
-  FIELD(m_HookedPlayer)                         \
-  FIELD(m_TeleGunPos)                           \
-  FIELD(m_TeleGunTeleport)                      \
-  FIELD(m_IsBlueTeleGunTeleport)                \
-  FIELD(m_ReloadTimer)                          \
-  FIELD(m_NumObjectsHit)                        \
-  FIELD(m_StartTick)                            \
-  FIELD(m_FinishTick)                           \
-  FIELD(m_StartTickOffset)                      \
-  FIELD(m_FinishTickOffset)                     \
-  FIELD(m_RaceTime)                             \
-  FIELD(m_TimeCpMask)                           \
-  FIELD(m_LastTimeCp)                           \
-  FIELD(m_TileFraction)                         \
-  FIELD(m_FastcapStartTeam)                     \
-  FIELD(m_DamageTick)                           \
-  FIELD(m_DamageTaken)                          \
-  FIELD(m_RespawnDelay)                         \
-  FIELD(m_HitNum)                               \
-  FIELD(m_AttackTick)                           \
-  FIELD(m_IsInFreeze)                           \
-  FIELD(m_VelMag)                               \
-  FIELD(m_VelRamp)                              \
-  FIELD(m_Health)                               \
-  FIELD(m_Armor)                                \
-  FIELD(m_SpawnGeneration)                      \
-  ARRAY(m_aWeaponGot)                           \
-  ARRAY(m_aHitObjects)                          \
-  ARRAY(m_aTimeCp)                              \
-  ARRAY(m_aGotFastcapFlag)                      \
-  ARRAY(m_aWeaponAmmo)
-
-static inline void dd_character_state_write(void *out, const SCharacterCore *character) {
-  dd_character_state_v1 state;
-  memset(&state, 0, sizeof(state));
-#define FIELD(name) state.name = character->name;
-#define ARRAY(name) memcpy(state.name, character->name, sizeof(state.name));
-  DD_CHARACTER_STATE_FIELDS(FIELD, ARRAY)
-#undef ARRAY
-#undef FIELD
-  memcpy(out, &state, sizeof(state));
+// The tee of the world's player `player` into `out` (zeros for a player without one).
+static inline void dd_character_state_write(void *out, const ft_world *world, int player) {
+  dd_character_state_v2 s;
+  memset(&s, 0, sizeof(s));
+  const ddnet_character_t *chr = ddnet_player_character(world, player);
+  if (chr) {
+    const ddnet_character_core_t *c = &chr->core;
+    s.pos_x = chr->pos.x;
+    s.pos_y = chr->pos.y;
+    s.vel_x = c->vel.x;
+    s.vel_y = c->vel.y;
+    s.active_weapon = c->active_weapon;
+    s.freeze_time = chr->freeze_time;
+    s.jumps = c->jumps;
+    s.jumped_total = c->jumped_total;
+    s.health = chr->health;
+    s.armor = chr->armor;
+    for (int w = 0; w < DDNET_NUM_WEAPONS; ++w)
+      s.weapons_got[w] = c->weapons[w].got;
+    s.deep_frozen = c->deep_frozen;
+    s.live_frozen = c->live_frozen;
+    s.endless_jump = c->endless_jump;
+    s.endless_hook = c->endless_hook;
+    s.jetpack = c->jetpack;
+    s.solo = c->solo;
+    s.has_telegun_gun = c->has_telegun_gun;
+    s.has_telegun_grenade = c->has_telegun_grenade;
+    s.has_telegun_laser = c->has_telegun_laser;
+    s.collision_disabled = c->collision_disabled;
+    s.hook_hit_disabled = c->hook_hit_disabled;
+    s.hammer_hit_disabled = c->hammer_hit_disabled;
+    s.shotgun_hit_disabled = c->shotgun_hit_disabled;
+    s.grenade_hit_disabled = c->grenade_hit_disabled;
+    s.laser_hit_disabled = c->laser_hit_disabled;
+  }
+  memcpy(out, &s, sizeof(s));
 }
 
-static inline void dd_character_state_read(SCharacterCore *character, const void *data) {
-  dd_character_state_v1 state;
-  memcpy(&state, data, sizeof(state));
-#define FIELD(name) character->name = state.name;
-#define ARRAY(name) memcpy(character->name, state.name, sizeof(character->name));
-  DD_CHARACTER_STATE_FIELDS(FIELD, ARRAY)
-#undef ARRAY
-#undef FIELD
+// A stored tee over the tee of the world's player `player`.
+static inline void dd_character_state_read(ft_world *world, int player, const void *in) {
+  dd_character_state_v2 s;
+  memcpy(&s, in, sizeof(s));
+  ddnet_character_t *chr = ddnet_player_character_mut(world, player);
+  if (!chr) return;
+  ddnet_character_core_t *c = &chr->core;
+  chr->pos = (ddnet_vec2_t){s.pos_x, s.pos_y};
+  chr->prev_pos = chr->pos;
+  c->pos = chr->pos;
+  c->vel = (ddnet_vec2_t){s.vel_x, s.vel_y};
+  c->active_weapon = s.active_weapon >= 0 && s.active_weapon < DDNET_NUM_WEAPONS ? s.active_weapon : DDNET_WEAPON_GUN;
+  chr->freeze_time = s.freeze_time;
+  c->jumps = s.jumps;
+  c->jumped_total = s.jumped_total;
+  chr->health = s.health;
+  chr->armor = s.armor;
+  for (int w = 0; w < DDNET_NUM_WEAPONS; ++w)
+    c->weapons[w].got = s.weapons_got[w] != 0;
+  c->deep_frozen = s.deep_frozen;
+  c->live_frozen = s.live_frozen;
+  c->endless_jump = s.endless_jump;
+  c->endless_hook = s.endless_hook;
+  c->jetpack = s.jetpack;
+  c->solo = s.solo;
+  c->has_telegun_gun = s.has_telegun_gun;
+  c->has_telegun_grenade = s.has_telegun_grenade;
+  c->has_telegun_laser = s.has_telegun_laser;
+  c->collision_disabled = s.collision_disabled;
+  c->hook_hit_disabled = s.hook_hit_disabled;
+  c->hammer_hit_disabled = s.hammer_hit_disabled;
+  c->shotgun_hit_disabled = s.shotgun_hit_disabled;
+  c->grenade_hit_disabled = s.grenade_hit_disabled;
+  c->laser_hit_disabled = s.laser_hit_disabled;
+  const int client_id = ddnet_player_client(world, player);
+  world->core.teams.is_solo[client_id] = c->solo;
+  ddnet_character_changed(&world->core, client_id);
 }
 
-#undef DD_CHARACTER_STATE_FIELDS
-
-#endif
+#endif // DD_CHARACTER_STATE_H

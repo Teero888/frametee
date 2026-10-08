@@ -159,7 +159,7 @@ void dd_map_create(ft_game *game, ft_level *level) {
 
   if (!game->gfx.entities) game->gfx.entities = entities_array(game);
 
-  const map_data_t *map = &level->collision.m_MapData;
+  const map_data_t *map = &level->map;
   uint8_t *const planes[3][3] = {
       {map->game_layer.data, map->front_layer.data, map->tele_layer.type},
       {map->tune_layer.type, map->speedup_layer.type, map->switch_layer.type},
@@ -186,7 +186,7 @@ void dd_map_render(ft_game *game, const ft_render_frame *frame) {
   ft_camera camera;
   game->engine->camera_get(&camera);
 
-  const map_data_t *map = &level->collision.m_MapData;
+  const map_data_t *map = &level->map;
   const float map_ratio = (float)map->width / (float)map->height;
   const float zoom = 1.0f / (camera.zoom * (float)(map->width > map->height ? map->width : map->height) * 0.001f);
 

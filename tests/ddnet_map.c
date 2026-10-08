@@ -308,9 +308,9 @@ static void test_render(void) {
   ft_level level = {0};
   size_t size;
   unsigned char *data = fixture(4, 0, 0, 0, &size);
-  level.collision.m_MapData = load_map_from_memory(data, size);
-  assert(level.collision.m_MapData.game_layer.data);
-  camera.visible = (ft_rect){-1 + MAP_EXPAND, -1 + MAP_EXPAND, 4, 4};
+  level.map = load_map_from_memory(data, size);
+  assert(level.map.game_layer.data);
+  camera.visible = (ft_rect){-1, -1, 4, 4};
   camera.viewport = (ft_vec2){400, 400};
   ft_render_frame frame = {.level = &level, .pass = FT_PASS_LEVEL_BACKGROUND, .tick = 25};
   dd_map_design_create(&game, &level);
@@ -328,7 +328,7 @@ static void test_render(void) {
   frame.pass = FT_PASS_LEVEL_FOREGROUND;
   dd_map_design_render(&game, &frame);
   assert(draws == 1 && last_z == DD_Z_MAP);
-  map_group_t *group = &level.collision.m_MapData.groups[0];
+  map_group_t *group = &level.map.groups[0];
   group->use_clipping = 1;
   group->clip_x = group->clip_y = 32;
   group->clip_w = group->clip_h = 32;
@@ -344,14 +344,14 @@ static void test_render(void) {
   dd_map_design_render(&game, &frame);
   assert(!draws);
   group->use_clipping = 0;
-  camera.visible = (ft_rect){100 + MAP_EXPAND, 100 + MAP_EXPAND, 4, 4};
+  camera.visible = (ft_rect){100, 100, 4, 4};
   draws = 0;
   dd_map_design_render(&game, &frame);
   assert(!draws);
   dd_map_design_destroy(&game, &level);
   assert(!level.design && !meshes);
   // A zoomed-out layer spans three chunks, but shares one contiguous draw.
-  map_layer_t *tiles = &level.collision.m_MapData.layers[0];
+  map_layer_t *tiles = &level.map.layers[0];
   free(tiles->tiles);
   tiles->width = 130;
   tiles->height = 2;
@@ -360,7 +360,7 @@ static void test_render(void) {
   assert(tiles->tiles);
   for (int i = 0; i < 260; ++i)
     tiles->tiles[i].index = 1;
-  camera.visible = (ft_rect){0 + MAP_EXPAND, 0 + MAP_EXPAND, 130, 2};
+  camera.visible = (ft_rect){0, 0, 130, 2};
   frame.pass = FT_PASS_LEVEL_BACKGROUND;
   dd_map_design_create(&game, &level);
   draws = 0;
@@ -375,7 +375,7 @@ static void test_render(void) {
     dd_map_design_destroy(&game, &level);
     assert(meshes == 0 && textures == 2);
   }
-  free_map_data(&level.collision.m_MapData);
+  free_map_data(&level.map);
   texture_destroy(game.gfx.design_white);
   texture_destroy(game.gfx.design_white_tiles);
   free(game.gfx.design_tiles);

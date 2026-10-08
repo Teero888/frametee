@@ -26,9 +26,15 @@ static void lerp2(const vec2 a, const vec2 b, float f, vec2 out) {
   out[1] = lint2(a[1], b[1], f);
 }
 
-static void tile_pos(mvec2 v, vec2 out) {
-  out[0] = vgetx(v) / PX_PER_TILE;
-  out[1] = vgety(v) / PX_PER_TILE;
+static void tile_pos(ddnet_vec2_t v, vec2 out) {
+  out[0] = v.x / PX_PER_TILE;
+  out[1] = v.y / PX_PER_TILE;
+}
+
+int dd_view_team(const ft_render_frame *frame) {
+  if (!frame || !frame->world) return 0;
+  const int client_id = ddnet_player_client(frame->world, frame->selected_player);
+  return client_id >= 0 ? frame->world->core.teams.team[client_id] : 0;
 }
 
 static void render_cursor(ft_game *game, const ft_render_frame *frame);
@@ -61,50 +67,6 @@ static void submit_tee_hand(ft_game *game, const vec2 center_phys, const vec2 di
   dd_hand_push(game, hand, 10.0f / PX_PER_TILE, skin, render_angle, (float *)col_body, custom, hook_hand);
 }
 
-static void render_fastcap_flag(ft_game *game, int team, vec2 pos) {
-  const uint32_t sprite = team == 0 ? GAMESKIN_FLAG_RED : GAMESKIN_FLAG_BLUE;
-  vec2 size = {42.0f / PX_PER_TILE, 84.0f / PX_PER_TILE};
-  vec2 draw_pos = {pos[0], pos[1] - 31.5f / PX_PER_TILE};
-  dd_draw_sprite(game, game->gfx.gameskin, DD_Z_PICKUPS, draw_pos, size, 0.f, sprite, (vec4){1.f, 1.f, 1.f, 1.f});
-}
-
-static void render_fastcap_flags(ft_game *game, const SWorldCore *world, float intra) {
-  if (!world->m_pConfig->m_SvFastcap) return;
-
-  const SCollision *collision = world->m_pCollision;
-  // FastCap progress is encoded per character: no flags means unstarted,
-  // exactly one means carrying, and both means finished.
-  bool flag_at_stand[2] = {collision->m_aFastcapFlagPresent[0], collision->m_aFastcapFlagPresent[1]};
-  for (int i = 0; i < world->m_NumCharacters; ++i) {
-    for (int team = 0; team < 2; ++team) {
-      if (world->m_pCharacters[i].m_aGotFastcapFlag[team]) flag_at_stand[team] = false;
-    }
-  }
-
-  for (int team = 0; team < 2; ++team) {
-    if (!flag_at_stand[team]) continue;
-    vec2 pos;
-    tile_pos(collision->m_aFastcapFlagPositions[team], pos);
-    render_fastcap_flag(game, team, pos);
-  }
-
-  for (int i = 0; i < world->m_NumCharacters; ++i) {
-    const SCharacterCore *character = &world->m_pCharacters[i];
-    if (character->m_FinishTick >= 0) continue;
-    const int held = character->m_aGotFastcapFlag[0] + character->m_aGotFastcapFlag[1];
-    if (held != 1) continue;
-
-    for (int team = 0; team < 2; ++team) {
-      if (!collision->m_aFastcapFlagPresent[team] || !character->m_aGotFastcapFlag[team]) continue;
-      vec2 prev, cur, pos;
-      tile_pos(character->m_PrevPos, prev);
-      tile_pos(character->m_Pos, cur);
-      lerp2(prev, cur, intra, pos);
-      render_fastcap_flag(game, team, pos);
-    }
-  }
-}
-
 // --- one tee -----------------------------------------------------------------
 
 typedef struct {
@@ -121,15 +83,13 @@ typedef struct {
   float attack_ticks_passed;
 } tee_visual_t;
 
-static inline bool fast_check_point(const SCollision *col, float x, float y) {
-  const int Nx = (int)(x + 0.5f) >> 5;
-  const int Ny = (int)(y + 0.5f) >> 5;
-  return (col->m_pTileInfos[col->m_pWidthLookup[Ny] + Nx] & INFO_ISSOLID) != 0;
-}
-
-static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const SWorldCore *world, const SWorldCore *prev_world, int index,
-                             float intra, const vec2 pos, tee_visual_t *out) {
-  const SCharacterCore *core = &world->m_pCharacters[index];
+static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const ft_world *world, const ft_world *prev_world,
+                             int index, float intra, const vec2 pos, tee_visual_t *out) {
+  const ddnet_character_t *chr = ddnet_player_character(world, index);
+  const ddnet_character_t *prev_chr = ddnet_player_character(prev_world, index);
+  if (!prev_chr) prev_chr = chr;
+  const ddnet_character_core_t *core = &chr->core;
+  const dd_input_t *record = &world->inputs[ddnet_player_client(world, index)];
 
   static dd_anim_state_t s_anim_base_idle;
   static dd_anim_state_t s_anim_base_inair;
@@ -142,14 +102,13 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
     s_anim_precomp_done = true;
   }
 
-  out->stationary = fabsf(vgetx(core->m_Vel) * 256.f) <= 1;
-  const bool running = fabsf(vgetx(core->m_Vel) * 256.f) >= 5000;
-  const bool want_other_dir =
-      (core->m_Input.m_Direction == -1 && vgetx(core->m_Vel) > 0) || (core->m_Input.m_Direction == 1 && vgetx(core->m_Vel) < 0);
-  out->inactive = get_flag_sit(&core->m_Input);
-  out->in_air = !(core->m_pCollision->m_pTileInfos[core->m_BlockIdx] & INFO_CANGROUND) ||
-                !fast_check_point(core->m_pCollision, vgetx(core->m_Pos), vgety(core->m_Pos) + 16.0f);
-  out->attack_ticks_passed = (world->m_GameTick - core->m_AttackTick) + intra;
+  out->stationary = fabsf(core->vel.x * 256.f) <= 1;
+  const bool running = fabsf(core->vel.x * 256.f) >= 5000;
+  const bool want_other_dir = (core->input.direction == -1 && core->vel.x > 0) || (core->input.direction == 1 && core->vel.x < 0);
+  out->inactive = get_flag_sit(record);
+  // CPlayers::RenderPlayer: below the drawn tee
+  out->in_air = !world->level || !ddnet_collision_check_point(&world->level->collision, pos[0] * PX_PER_TILE, pos[1] * PX_PER_TILE + 16.0f);
+  out->attack_ticks_passed = (world->core.tick - chr->attack_tick) + intra;
   const float last_attack_time = out->attack_ticks_passed / (float)GAME_TICK_SPEED;
 
   if (out->in_air) {
@@ -157,7 +116,7 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   } else if (out->stationary) {
     if (out->inactive) {
       dd_anim_state_set(&out->anim, &anim_base, 0.0f);
-      dd_anim_state_add(&out->anim, core->m_Input.m_Direction < 0 ? &anim_sit_left : &anim_sit_right, 0.0f, 1.0f);
+      dd_anim_state_add(&out->anim, core->input.direction < 0 ? &anim_sit_left : &anim_sit_right, 0.0f, 1.0f);
     } else {
       out->anim = s_anim_base_idle;
     }
@@ -168,16 +127,15 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
       float run_time = fmodf(pos[0] * PX_PER_TILE, 200.0f) / 200.0f;
       if (walk_time < 0.0f) walk_time += 1.0f;
       if (run_time < 0.0f) run_time += 1.0f;
-      if (running) dd_anim_state_add(&out->anim, vgetx(core->m_Vel) < 0.0f ? &anim_run_left : &anim_run_right, run_time, 1.0f);
+      if (running) dd_anim_state_add(&out->anim, core->vel.x < 0.0f ? &anim_run_left : &anim_run_right, run_time, 1.0f);
       else dd_anim_state_add(&out->anim, &anim_walk, walk_time, 1.0f);
     }
   }
-  if (core->m_ActiveWeapon == WEAPON_HAMMER) dd_anim_state_add(&out->anim, &anim_hammer_swing, last_attack_time * 5.f, 1.0f);
-  if (core->m_ActiveWeapon == WEAPON_NINJA) dd_anim_state_add(&out->anim, &anim_ninja_swing, last_attack_time * 2.f, 1.0f);
+  if (core->active_weapon == DDNET_WEAPON_HAMMER) dd_anim_state_add(&out->anim, &anim_hammer_swing, last_attack_time * 5.f, 1.0f);
+  if (core->active_weapon == DDNET_WEAPON_NINJA) dd_anim_state_add(&out->anim, &anim_ninja_swing, last_attack_time * 2.f, 1.0f);
 
-  const SPlayerInput *prev_input = &prev_world->m_pCharacters[index].m_Input;
-  out->dir[0] = lint2((float)prev_input->m_TargetX, (float)core->m_Input.m_TargetX, intra);
-  out->dir[1] = lint2((float)prev_input->m_TargetY, (float)core->m_Input.m_TargetY, intra);
+  out->dir[0] = lint2((float)prev_chr->core.input.target_x, (float)core->input.target_x, intra);
+  out->dir[1] = lint2((float)prev_chr->core.input.target_y, (float)core->input.target_y, intra);
   glm_vec2_normalize(out->dir);
   out->aim_angle = atan2f(-out->dir[1], out->dir[0]);
 
@@ -193,7 +151,7 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
     dd_hsl_to_rgb(profile.color_feet, out->feet_col);
   }
 
-  if (core->m_FreezeTime > 0 || core->m_ActiveWeapon == WEAPON_NINJA) {
+  if (chr->freeze_time > 0 || core->active_weapon == DDNET_WEAPON_NINJA) {
     out->skin = game->gfx.ninja_skin;
     out->custom = false;
     // The native-color path still reads feet_col.r for air-jump dimming, so
@@ -203,7 +161,7 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   }
   // Jumping off the last available jump dims the feet, which is DDNet's tell
   // that there is nothing left.
-  if (core->m_JumpedTotal >= core->m_Jumps - 1) {
+  if (core->jumped_total >= core->jumps - 1) {
     if (out->custom) {
       out->feet_col[0] *= 0.5f;
       out->feet_col[1] *= 0.5f;
@@ -214,20 +172,24 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   }
 }
 
-static int tee_eye_state(const SWorldCore *world, const SCharacterCore *core) {
+static int tee_eye_state(const ft_world *world, int index, const ddnet_character_t *chr) {
+  const int client_id = ddnet_player_client(world, index);
+  const dd_input_t *record = &world->inputs[client_id];
   // An inactive tee sleeps: its eyes are closed over any others, frozen or not.
-  if (get_flag_sit(&core->m_Input)) return EYE_BLINK;
-  int eye = get_flag_eye_state(&core->m_Input);
-  if (core->m_FreezeTime > 0 && eye == 0) eye = EYE_BLINK;
-  const int damage_age = world->m_GameTick - core->m_DamageTick;
-  if (damage_age >= 0 && damage_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
+  if (get_flag_sit(record)) return EYE_BLINK;
+  int eye = get_flag_eye_state(record);
+  if (chr->freeze_time > 0 && eye == 0) eye = EYE_BLINK;
+  const int pain_age = world->core.tick - world->pain_ticks[client_id];
+  if (pain_age >= 0 && pain_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
   return eye;
 }
 
-static void render_weapon(ft_game *game, const SWorldCore *world, const SCharacterCore *core, const SCharacterCore *prev_core,
+static void render_weapon(ft_game *game, const ft_world *world, const ddnet_character_t *chr, const ddnet_character_t *prev_chr,
                           const tee_visual_t *tee, float intra, const vec2 pos) {
-  if (core->m_FreezeTime || core->m_ActiveWeapon >= NUM_WEAPONS) return;
-  const dd_weapon_spec_t *spec = &dd_game_data.weapons.id[core->m_ActiveWeapon];
+  (void)intra;
+  const int active_weapon = chr->core.active_weapon;
+  if (chr->freeze_time || active_weapon < 0 || active_weapon >= DDNET_NUM_WEAPONS) return;
+  const dd_weapon_spec_t *spec = &dd_game_data.weapons.id[active_weapon];
   const float aim_angle = tee->aim_angle;
   const bool is_sit = tee->inactive && !tee->in_air && tee->stationary;
   const float flip_factor = (tee->dir[0] < 0.0f) ? -1.0f : 1.0f;
@@ -239,7 +201,7 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
   float weapon_angle = anim_attach_angle_rad + aim_angle;
   int weapon_sprite_id = -1;
 
-  if (core->m_ActiveWeapon == WEAPON_HAMMER) {
+  if (active_weapon == DDNET_WEAPON_HAMMER) {
     weapon_sprite_id = GAMESKIN_HAMMER_BODY;
     weapon_pos[0] += tee->anim.attach.x;
     weapon_pos[1] += tee->anim.attach.y;
@@ -254,7 +216,7 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
     } else {
       weapon_angle = tee->dir[0] < 0.0 ? -100.f : -500.f;
     }
-  } else if (core->m_ActiveWeapon == WEAPON_NINJA) {
+  } else if (active_weapon == DDNET_WEAPON_NINJA) {
     weapon_sprite_id = GAMESKIN_NINJA_BODY;
     weapon_pos[1] += spec->offsety;
     if (is_sit) weapon_pos[1] += 3.0f;
@@ -263,8 +225,8 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
 
     const float attack_time_sec = tee->attack_ticks_passed / (float)GAME_TICK_SPEED;
     if (attack_time_sec <= 1.0f / 6.0f && spec->num_muzzles > 0) {
-      const int muzzle_idx = world->m_GameTick % spec->num_muzzles;
-      vec2 hadoken_dir = {vgetx(core->m_Pos) - vgetx(prev_core->m_Pos), vgety(core->m_Pos) - vgety(prev_core->m_Pos)};
+      const int muzzle_idx = world->core.tick % spec->num_muzzles;
+      vec2 hadoken_dir = {chr->pos.x - prev_chr->pos.x, chr->pos.y - prev_chr->pos.y};
       if (glm_vec2_norm2(hadoken_dir) < 0.0001f) {
         hadoken_dir[0] = 1.0f;
         hadoken_dir[1] = 0.0f;
@@ -288,17 +250,17 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
       }
     }
   } else {
-    switch (core->m_ActiveWeapon) {
-    case WEAPON_GUN:
+    switch (active_weapon) {
+    case DDNET_WEAPON_GUN:
       weapon_sprite_id = GAMESKIN_GUN_BODY;
       break;
-    case WEAPON_SHOTGUN:
+    case DDNET_WEAPON_SHOTGUN:
       weapon_sprite_id = GAMESKIN_SHOTGUN_BODY;
       break;
-    case WEAPON_GRENADE:
+    case DDNET_WEAPON_GRENADE:
       weapon_sprite_id = GAMESKIN_GRENADE_BODY;
       break;
-    case WEAPON_LASER:
+    case DDNET_WEAPON_LASER:
       weapon_sprite_id = GAMESKIN_LASER_BODY;
       break;
     default:
@@ -314,9 +276,9 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
     weapon_pos[1] += spec->offsety;
     if (is_sit) weapon_pos[1] += 3.0f;
 
-    if ((core->m_ActiveWeapon == WEAPON_GUN || core->m_ActiveWeapon == WEAPON_SHOTGUN) && spec->num_muzzles > 0) {
+    if ((active_weapon == DDNET_WEAPON_GUN || active_weapon == DDNET_WEAPON_SHOTGUN) && spec->num_muzzles > 0) {
       if (tee->attack_ticks_passed > 0 && tee->attack_ticks_passed < spec->muzzleduration + 3.0f) {
-        const int muzzle_idx = world->m_GameTick % spec->num_muzzles;
+        const int muzzle_idx = world->core.tick % spec->num_muzzles;
         vec2 muzzle_dir_y = {-tee->dir[1], tee->dir[0]};
         const float offset_y = -spec->muzzleoffsety * flip_factor;
 
@@ -325,7 +287,7 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
         muzzle_phys[0] += tee->dir[0] * spec->muzzleoffsetx + muzzle_dir_y[0] * offset_y;
         muzzle_phys[1] += tee->dir[1] * spec->muzzleoffsetx + muzzle_dir_y[1] * offset_y;
 
-        const uint32_t muzzle_sprite = (core->m_ActiveWeapon == WEAPON_GUN ? GAMESKIN_GUN_MUZZLE1 : GAMESKIN_SHOTGUN_MUZZLE1) + muzzle_idx;
+        const uint32_t muzzle_sprite = (active_weapon == DDNET_WEAPON_GUN ? GAMESKIN_GUN_MUZZLE1 : GAMESKIN_SHOTGUN_MUZZLE1) + muzzle_idx;
         const float w = 96.0f, h = 64.0f;
         const float f = sqrtf(w * w + h * h);
         vec2 muzzle_size = {spec->visual_size * (w / f) * (4.0f / 3.0f) / PX_PER_TILE, spec->visual_size * (h / f) / PX_PER_TILE};
@@ -338,13 +300,13 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
     }
   }
 
-  static vec2 s_weapon_base_size[NUM_WEAPONS];
+  static vec2 s_weapon_base_size[DDNET_NUM_WEAPONS];
   static bool s_weapon_size_init = false;
   if (!s_weapon_size_init) {
-    const int sprites[NUM_WEAPONS] = {
+    const int sprites[DDNET_NUM_WEAPONS] = {
         GAMESKIN_HAMMER_BODY, GAMESKIN_GUN_BODY, GAMESKIN_SHOTGUN_BODY,
         GAMESKIN_GRENADE_BODY, GAMESKIN_LASER_BODY, GAMESKIN_NINJA_BODY};
-    for (int w = 0; w < NUM_WEAPONS; ++w) {
+    for (int w = 0; w < DDNET_NUM_WEAPONS; ++w) {
       const dd_weapon_spec_t *wspec = &dd_game_data.weapons.id[w];
       const ft_sprite_rect *rect = dd_sprite_rect(game, game->gfx.gameskin, (uint32_t)sprites[w]);
       if (rect) {
@@ -357,22 +319,22 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
   }
 
   if (weapon_sprite_id != -1) {
-    vec2 weapon_size = {s_weapon_base_size[core->m_ActiveWeapon][0],
-                        s_weapon_base_size[core->m_ActiveWeapon][1] * flip_factor};
+    vec2 weapon_size = {s_weapon_base_size[active_weapon][0],
+                        s_weapon_base_size[active_weapon][1] * flip_factor};
     vec2 render_pos = {weapon_pos[0] / PX_PER_TILE, weapon_pos[1] / PX_PER_TILE};
     dd_weapon_push(game, render_pos, weapon_size, weapon_angle, (uint32_t)weapon_sprite_id);
   }
   (void)pos;
 
   // Only these three are held with a visible hand in DDNet.
-  switch (core->m_ActiveWeapon) {
-  case WEAPON_GUN:
+  switch (active_weapon) {
+  case DDNET_WEAPON_GUN:
     submit_tee_hand(game, weapon_pos, tee->dir, aim_angle, -3.0f * M_PI / 4.0f, -15.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false);
     break;
-  case WEAPON_SHOTGUN:
+  case DDNET_WEAPON_SHOTGUN:
     submit_tee_hand(game, weapon_pos, tee->dir, aim_angle, -M_PI / 2.0f, -5.0f, 4.0f, tee->skin, tee->body_col, tee->custom, false);
     break;
-  case WEAPON_GRENADE:
+  case DDNET_WEAPON_GRENADE:
     submit_tee_hand(game, weapon_pos, tee->dir, aim_angle, -M_PI / 2.0f, -4.0f, 7.0f, tee->skin, tee->body_col, tee->custom, false);
     break;
   default:
@@ -380,19 +342,20 @@ static void render_weapon(ft_game *game, const SWorldCore *world, const SCharact
   }
 }
 
-static void render_hook(ft_game *game, const SWorldCore *world, const SCharacterCore *core, const SCharacterCore *prev_core,
+static void render_hook(ft_game *game, const ft_world *world, const ddnet_character_t *chr, const ddnet_character_t *prev_chr,
                         const tee_visual_t *tee, float intra, const vec2 pos) {
-  if (core->m_HookState < 1 || (prev_core->m_HookState == HOOK_IDLE && intra <= 0.25)) return;
+  if (chr->core.hook_state < 1 || (prev_chr->core.hook_state == DDNET_HOOK_IDLE && intra <= 0.25)) return;
 
   vec2 hook_pos;
   {
     vec2 from, to;
-    tile_pos(prev_core->m_HookPos, from);
-    tile_pos(core->m_HookPos, to);
-    if (core->m_HookedPlayer != -1 && core->m_HookedPlayer < world->m_NumCharacters) {
-      const SCharacterCore *hooked = &world->m_pCharacters[core->m_HookedPlayer];
-      tile_pos(hooked->m_PrevPos, from);
-      tile_pos(hooked->m_Pos, to);
+    tile_pos(prev_chr->core.hook_pos, from);
+    tile_pos(chr->core.hook_pos, to);
+    const ddnet_character_t *hooked =
+        chr->core.hooked_player >= 0 ? ddnet_world_character((ddnet_world_t *)&world->core, chr->core.hooked_player) : NULL;
+    if (hooked) {
+      tile_pos(hooked->prev_pos, from);
+      tile_pos(hooked->pos, to);
     }
     lerp2(from, to, intra, hook_pos);
   }
@@ -445,85 +408,260 @@ void dd_render_projectile(ft_game *game, const vec2 from, const vec2 to, float i
   vec2 p;
   lerp2(from, to, intra, p);
   uint32_t sprite = GAMESKIN_GRENADE_PROJ;
-  if (type == WEAPON_GUN) sprite = GAMESKIN_GUN_PROJ;
-  else if (type == WEAPON_SHOTGUN) sprite = GAMESKIN_SHOTGUN_PROJ;
+  if (type == DDNET_WEAPON_GUN) sprite = GAMESKIN_GUN_PROJ;
+  else if (type == DDNET_WEAPON_SHOTGUN) sprite = GAMESKIN_SHOTGUN_PROJ;
   float rotation;
   // DDNet spins a grenade twice a second from the client's clock plus its
   // snapshot item index, which shifts whenever a projectile ahead of it comes
   // or goes and makes it jump. Its own age turns it smoothly instead.
-  if (type == WEAPON_GRENADE)
+  if (type == DDNET_WEAPON_GRENADE)
     rotation = -(((float)(tick - start_tick) + intra) / 50.f) * 4.f * M_PI;
   else
     rotation = atan2f(-(to[1] - from[1]), to[0] - from[0]);
   dd_draw_sprite(game, game->gfx.gameskin, DD_Z_PROJECTILES, p, (vec2){1.f, 1.f}, rotation, sprite, (vec4){1.f, 1.f, 1.f, 1.f});
 }
 
-void dd_render_laser(ft_game *game, const vec2 from, const vec2 to, bool rifle, float age_ticks, float bounce_delay_ms, int tick,
-                     float intra) {
-  // cl_laser_rifle_* and cl_laser_sg_*, converted from the packed HSL those
-  // defaults are stored as. DDNet draws a laser fully opaque; only another
-  // team's shots are faded, which a recording has no notion of.
-  vec4 laser_outer = {0.074402f, 0.074402f, 0.247166f, 1.f};
-  vec4 laser_inner = {0.498039f, 0.498039f, 1.000000f, 1.f};
-  vec4 shotgun_outer = {0.122399f, 0.095073f, 0.042307f, 1.f};
-  vec4 shotgun_inner = {0.571626f, 0.417407f, 0.251903f, 1.f};
-  float *outer = rifle ? laser_outer : shotgun_outer;
-  float *inner = rifle ? laser_inner : shotgun_inner;
+// DDNet's laser types (LASERTYPE_*) and turret kinds (LASERGUNTYPE_*), as its
+// client draws them.
+enum { LASER_RIFLE, LASER_SHOTGUN, LASER_DOOR, LASER_FREEZE, LASER_DRAGGER, LASER_GUN, LASER_PLASMA };
+enum { LASERGUN_UNFREEZE, LASERGUN_EXPLOSIVE, LASERGUN_FREEZE, LASERGUN_EXPFREEZE };
 
-  // DDNet collapses both parts of a laser over its bounce delay. The two
-  // coloured bodies and animated splat head are what distinguish rifle and
-  // shotgun shots; a single opaque debug line loses both cues.
-  const float delay_ms = bounce_delay_ms > 0 ? bounce_delay_ms : 150.f;
-  float fade = 1.f - age_ticks * (1000.f / GAME_TICK_SPEED) / delay_ms;
-  if (fade < 0.f) fade = 0.f;
-  if (fade > 1.f) fade = 1.f;
-  if (fade > 0.f) {
-    // DDNet's 7 and 5 are offsets on each side of the beam; FrameTee's line
-    // primitive takes the full width.
-    dd_draw_line(game, DD_Z_LASERS, (float *)from, (float *)to, outer, 14.f * fade / PX_PER_TILE);
-    // RenderLaser's ExtraOutline: the inner body stops one pixel short at
-    // both tips so the outline caps the beam instead of being buried by it.
-    vec2 dir;
-    glm_vec2_sub((float *)to, (float *)from, dir);
-    if (glm_vec2_norm(dir) > 2.f / PX_PER_TILE) {
-      glm_vec2_normalize(dir);
-      glm_vec2_scale(dir, 1.f / PX_PER_TILE, dir);
-      vec2 inner_from = {from[0] + dir[0], from[1] + dir[1]};
-      vec2 inner_to = {to[0] - dir[0], to[1] - dir[1]};
-      dd_draw_line(game, DD_Z_LASERS + 0.01f, inner_from, inner_to, inner, 10.f * fade / PX_PER_TILE);
-    }
+// ColorHSLA(packed) turned into ColorRGBA, as DDNet's color_cast does it.
+static void laser_color(uint32_t packed, vec4 out) {
+  const float h = (float)((packed >> 16) & 0xff) / 255.f, s = (float)((packed >> 8) & 0xff) / 255.f,
+              l = (float)(packed & 0xff) / 255.f;
+  const float h1 = h * 6.f;
+  const float c = (1.f - fabsf(2.f * l - 1.f)) * s;
+  const float x = c * (1.f - fabsf(fmodf(h1, 2.f) - 1.f));
+  float r = 0.f, g = 0.f, b = 0.f;
+  switch ((int)h1) {
+  case 0: r = c; g = x; break;
+  case 1: r = x; g = c; break;
+  case 2: g = c; b = x; break;
+  case 3: g = x; b = c; break;
+  case 4: r = x; b = c; break;
+  default: r = c; b = x; break;
   }
-
-  // One of the three splat particles, picked and spun by the tick itself.
-  // DDNet's rotation is that tick count read as radians, and the engine
-  // turns sprites the opposite way around its y-down world.
-  const int ticks_head = (int)((float)tick + intra);
-  const uint32_t head = PARTICLE_SPLAT01 + (uint32_t)(((ticks_head % 3) + 3) % 3);
-  const float rotation = -(float)ticks_head;
-  dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.02f, (float *)to, (vec2){0.75f, 0.75f}, rotation, head, outer);
-  dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.03f, (float *)to, (vec2){0.625f, 0.625f}, rotation, head, inner);
+  const float m = l - c / 2.f;
+  out[0] = r + m;
+  out[1] = g + m;
+  out[2] = b + m;
+  out[3] = 1.f;
 }
 
-static void render_projectiles_and_lasers(ft_game *game, const SWorldCore *world, float intra) {
-  if (!world->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE] &&
-      !world->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]) return;
-  for (SProjectile *ent = (SProjectile *)world->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; ent;
-       ent = (SProjectile *)ent->m_Base.m_pNextTypeEntity) {
-    const float pt = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick - 1) / (float)GAME_TICK_SPEED;
-    const float ct = (ent->m_Base.m_pWorld->m_GameTick - ent->m_StartTick) / (float)GAME_TICK_SPEED;
-    vec2 from, to;
-    tile_pos(prj_get_pos(ent, pt), from);
-    tile_pos(prj_get_pos(ent, ct), to);
-    dd_render_projectile(game, from, to, intra, ent->m_Type, world->m_GameTick, ent->m_StartTick);
+// The scale DDNet's GetSpriteScale gives a sprite of the extras sheet.
+static float extras_scale(ft_game *game, uint32_t sprite) {
+  const ft_sprite_rect *rect = dd_sprite_rect(game, game->gfx.extras, sprite);
+  if (!rect || rect->w <= 0 || rect->h <= 0) return 0.70710678f;
+  return (float)rect->w / sqrtf((float)rect->w * rect->w + (float)rect->h * rect->h);
+}
+
+// CItems::RenderLaser: a laser of DDNet's `type` from `from` to `to` (tiles), whose body is `ticks_body`
+// ticks old (it thins out over the bounce delay) and whose head turns with `ticks_head`.
+static void draw_laser(ft_game *game, const vec2 from, const vec2 to, int type, int subtype, float ticks_body,
+                       float ticks_head, float bounce_delay_ms) {
+  uint32_t outer_hsl = 11176233, inner_hsl = 11206591; // cl_laser_rifle_*
+  switch (type) {
+  case LASER_SHOTGUN: outer_hsl = 1866773, inner_hsl = 1467241; break;
+  case LASER_DOOR: outer_hsl = 7667473, inner_hsl = 7701379; break;
+  case LASER_FREEZE: outer_hsl = 11613223, inner_hsl = 12001153; break;
+  case LASER_DRAGGER: outer_hsl = 57618, inner_hsl = 42398; break;
+  case LASER_GUN:
+  case LASER_PLASMA:
+    if (subtype == LASERGUN_FREEZE || subtype == LASERGUN_EXPFREEZE) outer_hsl = 11613223, inner_hsl = 12001153;
+    break;
+  default: break;
+  }
+  vec4 outer, inner;
+  laser_color(outer_hsl, outer);
+  laser_color(inner_hsl, inner);
+
+  if (type == LASER_DRAGGER) {
+    ticks_head *= (float)(((subtype >> 1) % 3) * 4) + 1.f;
+    ticks_head *= (subtype & 1) ? -1.f : 1.f;
   }
 
-  for (SLaser *ent = (SLaser *)world->m_apFirstEntityTypes[WORLD_ENTTYPE_LASER]; ent; ent = (SLaser *)ent->m_Base.m_pNextTypeEntity) {
-    vec2 p1, p0;
-    tile_pos(ent->m_Base.m_Pos, p1);
-    tile_pos(ent->m_From, p0);
-    const float age_ticks = (float)(world->m_GameTick - ent->m_EvalTick) + intra;
-    const float delay_ms = ent->m_pTuning && ent->m_pTuning->m_LaserBounceDelay > 0 ? ent->m_pTuning->m_LaserBounceDelay : 150.f;
-    dd_render_laser(game, p0, p1, ent->m_Type == WEAPON_LASER, age_ticks, delay_ms, world->m_GameTick, intra);
+  vec2 dir;
+  glm_vec2_sub((float *)to, (float *)from, dir);
+  const float len = glm_vec2_norm(dir) * PX_PER_TILE;
+  if (len > 0.f) {
+    // rubber band effect
+    if (type == LASER_DRAGGER) ticks_body = fminf(fmaxf(sqrtf(len) / 5.f, 1.f), 5.f);
+    const float ms = ticks_body * 1000.f / GAME_TICK_SPEED;
+    const float delay = type == LASER_RIFLE || type == LASER_SHOTGUN ? (bounce_delay_ms > 0 ? bounce_delay_ms : 150.f) : 150.f;
+    float a = ms / delay;
+    a = fminf(fmaxf(a, 0.f), 1.f);
+    const float ia = 1.f - a;
+    // DDNet's 7 and 5 are offsets on each side of the beam; FrameTee's line primitive takes the full width.
+    dd_draw_line(game, DD_Z_LASERS, (float *)from, (float *)to, outer, 14.f * ia / PX_PER_TILE);
+    // RenderLaser's ExtraOutline: the inner body stops a unit short of the head, and of the other end but
+    // for a door.
+    glm_vec2_normalize(dir);
+    glm_vec2_scale(dir, 1.f / PX_PER_TILE, dir);
+    vec2 inner_from = {from[0], from[1]};
+    if (type != LASER_DOOR) glm_vec2_add(inner_from, dir, inner_from);
+    vec2 inner_to = {to[0] - dir[0], to[1] - dir[1]};
+    dd_draw_line(game, DD_Z_LASERS + 0.01f, inner_from, inner_to, inner, 10.f * ia / PX_PER_TILE);
+  }
+
+  // The engine turns sprites the other way round its y-down world than DDNet does.
+  if (type == LASER_DOOR) {
+    game->engine->draw_rect(DD_Z_LASERS + 0.02f, (ft_vec2){to[0] - 8.f / PX_PER_TILE, to[1] - 8.f / PX_PER_TILE},
+                            (ft_vec2){16.f / PX_PER_TILE, 16.f / PX_PER_TILE}, (ft_color){outer[0], outer[1], outer[2], outer[3]});
+    game->engine->draw_rect(DD_Z_LASERS + 0.03f, (ft_vec2){to[0] - 6.f / PX_PER_TILE, to[1] - 6.f / PX_PER_TILE},
+                            (ft_vec2){12.f / PX_PER_TILE, 12.f / PX_PER_TILE}, (ft_color){inner[0], inner[1], inner[2], inner[3]});
+  } else if (type == LASER_DRAGGER) {
+    const float base = 20.f * extras_scale(game, EXTRA_PULLEY) / PX_PER_TILE;
+    for (int in = 0; in < 2; ++in) {
+      float *color = in ? inner : outer;
+      // the circle at the end of the laser
+      if (len > 0.f) {
+        const float size = base * (in ? 4.f / 5.f : 1.f);
+        dd_draw_sprite(game, game->gfx.extras, DD_Z_LASERS + 0.02f + 0.01f * in, (float *)from, (vec2){size, size}, 0.f,
+                       EXTRA_PULLEY, color);
+      }
+      // the rotating orbs: rotate(vec2(10, 0), orb * 120 + ticks_head), in degrees
+      const float size = base * (in ? 0.75f - 1.f / 5.f : 0.75f);
+      for (int orb = 0; orb < 3; ++orb) {
+        const float degrees = (float)(orb * 120) + ticks_head;
+        const float rad = degrees * (float)M_PI / 180.f;
+        vec2 p = {from[0] + cosf(rad) * 10.f / PX_PER_TILE, from[1] + sinf(rad) * 10.f / PX_PER_TILE};
+        dd_draw_sprite(game, game->gfx.extras, DD_Z_LASERS + 0.04f + 0.01f * in, p, (vec2){size, size},
+                       -(ticks_head + (float)orb * (float)M_PI * 2.f / 3.f), EXTRA_PULLEY, color);
+      }
+    }
+  } else if (type == LASER_FREEZE) {
+    const float pulsation = 6.f / 5.f + 1.f / 10.f * sinf(ticks_head / 2.f);
+    const float angle = atan2f(to[1] - from[1], to[0] - from[0]);
+    const float base = 20.f * extras_scale(game, EXTRA_HECTAGON) / PX_PER_TILE;
+    const float outer_size = base * 6.f / 5.f * pulsation;
+    dd_draw_sprite(game, game->gfx.extras, DD_Z_LASERS + 0.02f, (float *)to, (vec2){outer_size, outer_size}, -angle,
+                   EXTRA_HECTAGON, outer);
+    const float flake = 20.f * extras_scale(game, EXTRA_SNOWFLAKE) / PX_PER_TILE * pulsation;
+    // snowflakes are white
+    dd_draw_sprite(game, game->gfx.extras, DD_Z_LASERS + 0.03f, (float *)to, (vec2){flake, flake}, -angle, EXTRA_SNOWFLAKE,
+                   (vec4){1.f, 1.f, 1.f, 1.f});
+  } else {
+    // One of the three splat particles, picked and spun by the tick itself.
+    const int ticks = (int)ticks_head;
+    const uint32_t head = PARTICLE_SPLAT01 + (uint32_t)(((ticks % 3) + 3) % 3);
+    const float rotation = -(float)ticks;
+    dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.02f, (float *)to, (vec2){0.75f, 0.75f}, rotation, head, outer);
+    dd_draw_sprite(game, game->gfx.particles, DD_Z_LASERS + 0.03f, (float *)to, (vec2){0.625f, 0.625f}, rotation, head, inner);
+  }
+}
+
+void dd_render_laser(ft_game *game, const vec2 from, const vec2 to, bool rifle, float age_ticks, float bounce_delay_ms, int tick,
+                     float intra) {
+  draw_laser(game, from, to, rifle ? LASER_RIFLE : LASER_SHOTGUN, 0, age_ticks, (float)tick + intra, bounce_delay_ms);
+}
+
+// The switch of an entity is off for a team (it blinks or shows as a dot), see CItems::OnRender.
+static bool switch_off(const ddnet_world_t *core, int number, int team) {
+  return number > 0 && number < core->num_switchers && !core->switchers[number].status[team];
+}
+
+// Whether a dragger is left out for the viewer, which sees its beam instead (CDragger::DraggerBeamUsingDraggerId).
+static bool dragger_beam_shown(const ft_world *world, const ddnet_dragger_t *dragger, int viewer) {
+  if (viewer < 0 || !ddnet_world_character((ddnet_world_t *)&world->core, viewer)) return false;
+  const int team = world->core.teams.team[viewer];
+  const ddnet_dragger_targets_t *targets = &world->core.dragger_targets[dragger->targets];
+  const int target = world->core.teams.is_solo[viewer] || targets->target_id_in_team[team] < 0 ? viewer : targets->target_id_in_team[team];
+  if (target < 0 || targets->beam[target] == -1) return false;
+  return ddnet_world_character((ddnet_world_t *)&world->core, target) && world->core.teams.team[target] == team;
+}
+
+// What DDNet's server sends of the world and its client draws (see "Effects, sounds and drawing" in the
+// physics' README): projectiles, lasers, and the laser walls, turrets, plasma, draggers and their beams of
+// the laser list.
+static void render_projectiles_and_lasers(ft_game *game, const ft_render_frame *frame, const ft_world *world, float intra) {
+  const ddnet_world_t *core = &world->core;
+  const int tick = core->tick;
+  const int team = dd_view_team(frame);
+  const int viewer = ddnet_player_client(world, frame->selected_player);
+  // CItems::OnRender's blinking, on the ticks of a second
+  const int ticks = tick % GAME_TICK_SPEED;
+  const bool blink_slow = (ticks % 22) < 4, blink_proj = (ticks % 20) < 2, blink_fast = (ticks % 6) < 2;
+
+  for (int i = core->first_entity[DDNET_ENTTYPE_PROJECTILE]; i != -1; i = core->entities[i].link.next) {
+    const ddnet_entity_t *ent = &core->entities[i];
+    const ddnet_projectile_t *proj = &ent->u.projectile;
+    if (switch_off(core, ent->number, team) && (proj->explosive ? blink_fast : blink_proj)) continue;
+    const float pt = (tick - proj->start_tick - 1) / (float)GAME_TICK_SPEED;
+    const float ct = (tick - proj->start_tick) / (float)GAME_TICK_SPEED;
+    vec2 from, to;
+    tile_pos(ddnet_projectile_get_pos(core, ent, pt), from);
+    tile_pos(ddnet_projectile_get_pos(core, ent, ct), to);
+    dd_render_projectile(game, from, to, intra, proj->type, tick, proj->start_tick);
+  }
+
+  // the start tick DDNet's client gives laser walls, draggers and turrets
+  const int dragger_start = tick / 7 * 7 > tick - 4 ? tick / 7 * 7 : tick - 4;
+  const int gun_start = tick / 7 * 7;
+  const float head = (float)tick + intra;
+  for (int i = core->first_entity[DDNET_ENTTYPE_LASER]; i != -1; i = core->entities[i].link.next) {
+    const ddnet_entity_t *ent = &core->entities[i];
+    const bool off = switch_off(core, ent->number, team);
+    vec2 at;
+    tile_pos(ent->pos, at);
+    switch (ent->kind) {
+    case DDNET_ENTITY_LASER: {
+      const ddnet_laser_t *laser = &ent->u.laser;
+      vec2 from;
+      tile_pos(laser->from, from);
+      const int zone = laser->tune_zone >= 0 && laser->tune_zone < core->num_tune_zones ? laser->tune_zone : 0;
+      draw_laser(game, from, at, laser->type == DDNET_WEAPON_SHOTGUN ? LASER_SHOTGUN : LASER_RIFLE, 0,
+                 (float)(tick - laser->eval_tick) + intra, head, core->tuning_values[zone].laser_bounce_delay);
+      break;
+    }
+    case DDNET_ENTITY_LIGHT: {
+      if (off && blink_fast) break;
+      // a laser wall whose switch is off is its head alone
+      vec2 from;
+      tile_pos(off ? ent->pos : ent->u.light.to, from);
+      draw_laser(game, from, at, LASER_FREEZE, 0, (float)(tick - dragger_start) + intra, head, 150.f);
+      break;
+    }
+    case DDNET_ENTITY_GUN: {
+      if (off && blink_slow) break;
+      const int subtype = (ent->u.gun.explosive ? 1 : 0) | (ent->u.gun.freeze ? 2 : 0);
+      draw_laser(game, at, at, LASER_GUN, subtype, (float)(tick - gun_start) + intra, head, 150.f);
+      break;
+    }
+    case DDNET_ENTITY_PLASMA: {
+      if (off && blink_slow) break;
+      const int subtype = (ent->u.plasma.explosive ? 1 : 0) | (ent->u.plasma.freeze ? 2 : 0);
+      draw_laser(game, at, at, LASER_PLASMA, subtype, (float)(tick - ent->u.plasma.eval_tick) + intra, head, 150.f);
+      break;
+    }
+    case DDNET_ENTITY_DRAGGER: {
+      const ddnet_dragger_t *dragger = &ent->u.dragger;
+      if ((off && blink_slow) || dragger_beam_shown(world, dragger, viewer)) break;
+      const int strength = (int)lroundf(dragger->strength - 1.f);
+      const int subtype = (dragger->ignore_walls ? 1 : 0) | ((strength < 0 ? 0 : strength > 2 ? 2 : strength) << 1);
+      draw_laser(game, at, at, LASER_DRAGGER, subtype, (float)(tick - dragger_start) + intra, head, 150.f);
+      break;
+    }
+    case DDNET_ENTITY_DRAGGER_BEAM: {
+      const ddnet_dragger_beam_t *beam = &ent->u.dragger_beam;
+      if (!beam->active || (off && blink_slow)) break;
+      const ddnet_character_t *target = ddnet_world_character((ddnet_world_t *)core, beam->for_client_id);
+      if (!target) break;
+      const float dx = target->pos.x - ent->pos.x, dy = target->pos.y - ent->pos.y;
+      if (sqrtf(dx * dx + dy * dy) >= (float)core->config.sv_dragger_range) break;
+      // from the dragger to the tee, where it is drawn
+      vec2 prev, cur, to;
+      tile_pos(target->prev_pos, prev);
+      tile_pos(target->pos, cur);
+      lerp2(prev, cur, intra, to);
+      const int strength = (int)lroundf(beam->strength - 1.f);
+      const int subtype = (beam->ignore_walls ? 1 : 0) | ((strength < 0 ? 0 : strength > 2 ? 2 : strength) << 1);
+      draw_laser(game, at, to, LASER_DRAGGER, subtype, (float)(tick - dragger_start) + intra, head, 150.f);
+      break;
+    }
+    default:
+      break;
+    }
   }
 }
 
@@ -533,19 +671,18 @@ static bool frame_highlights_selected(const ft_render_frame *frame) {
          frame->highlight_selected;
 }
 
-static void render_pickups(ft_game *game, const ft_render_frame *frame, const SWorldCore *world, float intra) {
-  const ft_level *level = frame->level;
-  if (!game->settings.render_pickups || !frame->active || !level || level->num_pickups <= 0) return;
-
-  const bool unique_race = world->m_UniqueRace;
-  const int selected = frame->selected_player;
+static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft_world *world, const ft_world *prev_world, float intra) {
+  if (!game->settings.render_pickups || !frame->active) return;
+  const ddnet_world_t *core = &world->core;
+  const int team = dd_view_team(frame);
+  const bool blink = (core->tick % GAME_TICK_SPEED) % 22 < 4;
 
   ft_sprite_draw stack_draws[128];
-  ft_sprite_draw *draws = (size_t)level->num_pickups <= 128 ? stack_draws : malloc(sizeof(ft_sprite_draw) * (size_t)level->num_pickups);
-  if (!draws) return;
+  int capacity = 128;
+  ft_sprite_draw *draws = stack_draws;
   uint32_t count = 0;
 
-  const float animation_time = intra + (float)world->m_GameTick;
+  const float animation_time = intra + (float)core->tick;
 
   ft_camera camera;
   game->engine->camera_get(&camera);
@@ -555,34 +692,29 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const SW
   const float min_y = camera.visible.y - margin;
   const float max_y = camera.visible.y + camera.visible.h + margin;
 
-  for (int i = 0; i < level->num_pickups; ++i) {
-    vec2 pos;
-    tile_pos(level->pickup_positions[i], pos);
+  for (int i = core->first_entity[DDNET_ENTTYPE_PICKUP]; i != -1; i = core->entities[i].link.next) {
+    const ddnet_entity_t *ent = &core->entities[i];
+    if (ent->kind != DDNET_ENTITY_PICKUP) continue;
+    if (switch_off(core, ent->number, team) && blink) continue;
+    // Pickups on conveyors move: drawn between where they were and are, like DDNet's client.
+    vec2 pos, cur;
+    tile_pos(ent->pos, cur);
+    glm_vec2_copy(cur, pos);
+    if (prev_world && i < prev_world->core.num_entities && prev_world->core.entities[i].kind == DDNET_ENTITY_PICKUP) {
+      vec2 prev;
+      tile_pos(prev_world->core.entities[i].pos, prev);
+      lerp2(prev, cur, intra, pos);
+    }
     if (pos[0] < min_x || pos[0] > max_x || pos[1] < min_y || pos[1] > max_y) continue;
 
-    const SPickup pickup = level->pickups[i];
+    const int type = ent->u.pickup.type, subtype = ent->u.pickup.subtype;
     vec2 size = {1.0f, 1.0f};
     int idx = -1;
-
-    // Unique Race hides everything but grenades, and health/ammo servers hide
-    // pickups the viewed tee is still on cooldown for.
-    if (unique_race && ((pickup.m_Type == POWERUP_WEAPON && pickup.m_Subtype != WEAPON_GRENADE) || pickup.m_Type == POWERUP_NINJA)) continue;
-    if (selected >= 0 && world->m_pConfig->m_SvHealthAndAmmo && world->m_pPickupCooldowns) {
-      const SPickupCooldownList *cooldowns = &world->m_pPickupCooldowns[selected];
-      bool on_cooldown = false;
-      for (int c = 0; c < cooldowns->m_NumEntries; ++c) {
-        if (cooldowns->m_pEntries[c].m_Key == level->pickup_cooldown_keys[i] && world->m_GameTick <= cooldowns->m_pEntries[c].m_EndTick) {
-          on_cooldown = true;
-          break;
-        }
-      }
-      if (on_cooldown) continue;
-    }
-
-    if (pickup.m_Type == POWERUP_HEALTH || pickup.m_Type == POWERUP_ARMOR) idx = GAMESKIN_PICKUP_HEALTH + pickup.m_Type;
-    else if (pickup.m_Type >= POWERUP_ARMOR_SHOTGUN) idx = GAMESKIN_PICKUP_ARMOR_SHOTGUN + pickup.m_Type - POWERUP_ARMOR_SHOTGUN;
-    else if (pickup.m_Type == POWERUP_WEAPON && pickup.m_Subtype < NUM_WEAPONS) idx = GAMESKIN_PICKUP_HAMMER + pickup.m_Subtype;
-    else if (pickup.m_Type == POWERUP_NINJA) idx = GAMESKIN_PICKUP_NINJA;
+    if (type == DDNET_POWERUP_HEALTH || type == DDNET_POWERUP_ARMOR) idx = GAMESKIN_PICKUP_HEALTH + type;
+    else if (type >= DDNET_POWERUP_ARMOR_SHOTGUN && type <= DDNET_POWERUP_ARMOR_LASER)
+      idx = GAMESKIN_PICKUP_ARMOR_SHOTGUN + type - DDNET_POWERUP_ARMOR_SHOTGUN;
+    else if (type == DDNET_POWERUP_WEAPON && subtype >= 0 && subtype < DDNET_NUM_WEAPONS) idx = GAMESKIN_PICKUP_HAMMER + subtype;
+    else if (type == DDNET_POWERUP_NINJA) idx = GAMESKIN_PICKUP_NINJA;
     if (idx < 0) continue;
 
     const ft_sprite_rect *rect = dd_sprite_rect(game, game->gfx.gameskin, (uint32_t)idx);
@@ -591,14 +723,14 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const SW
       const float scale_x = (float)rect->w / f;
       const float scale_y = (float)rect->h / f;
 
-      if (pickup.m_Type == POWERUP_HEALTH || pickup.m_Type == POWERUP_ARMOR || pickup.m_Type >= POWERUP_ARMOR_SHOTGUN) {
+      if (type == DDNET_POWERUP_HEALTH || type == DDNET_POWERUP_ARMOR || type >= DDNET_POWERUP_ARMOR_SHOTGUN) {
         size[0] = 1.f / scale_x;
         size[1] = 1.f / scale_y;
-      } else if (pickup.m_Type == POWERUP_WEAPON) {
-        const dd_weapon_spec_t *spec = &dd_game_data.weapons.id[pickup.m_Subtype];
+      } else if (type == DDNET_POWERUP_WEAPON) {
+        const dd_weapon_spec_t *spec = &dd_game_data.weapons.id[subtype];
         size[0] = spec->visual_size * scale_x / PX_PER_TILE;
         size[1] = spec->visual_size * scale_y / PX_PER_TILE;
-      } else if (pickup.m_Type == POWERUP_NINJA) {
+      } else if (type == DDNET_POWERUP_NINJA) {
         size[0] = 4.f * scale_x;
         size[1] = 4.f * scale_y;
         pos[0] -= 10.f / PX_PER_TILE;
@@ -610,6 +742,14 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const SW
     pos[0] += (cosf((animation_time / GAME_TICK_SPEED) * 2.0f + offset) * 2.5f) / PX_PER_TILE;
     pos[1] += (sinf((animation_time / GAME_TICK_SPEED) * 2.0f + offset) * 2.5f) / PX_PER_TILE;
 
+    if ((int)count == capacity) {
+      ft_sprite_draw *grown = malloc(sizeof(*grown) * (size_t)capacity * 2);
+      if (!grown) break;
+      memcpy(grown, draws, sizeof(*grown) * count);
+      if (draws != stack_draws) free(draws);
+      draws = grown;
+      capacity *= 2;
+    }
     draws[count++] = (ft_sprite_draw){.pos = {pos[0], pos[1]},
                                       .size = {size[0], size[1]},
                                       .rotation = 0.f,
@@ -625,18 +765,15 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const SW
 // --- entry point -------------------------------------------------------------
 
 static void render_entities(ft_game *game, const ft_render_frame *frame) {
-  const ft_world *world_handle = frame->world;
-  const ft_world *prev_handle = frame->previous_world ? frame->previous_world : frame->world;
-  if (!world_handle) return;
-
-  const SWorldCore *world = &world_handle->core;
-  const SWorldCore *prev_world = &prev_handle->core;
-  if (world->m_NumCharacters != prev_world->m_NumCharacters) prev_world = world;
+  const ft_world *world = frame->world;
+  const ft_world *prev_world = frame->previous_world ? frame->previous_world : frame->world;
+  if (!world) return;
+  if (world->player_count != prev_world->player_count) prev_world = world;
 
   const float intra = frame->alpha;
   const int selected = frame->selected_player;
 
-  render_pickups(game, frame, world, intra);
+  render_pickups(game, frame, world, prev_world, intra);
 
   if (game->settings.render_players) {
     // Cull to the viewport with a margin wide enough that a tee entering the
@@ -648,22 +785,23 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
     const float min_y = vis->y - margin;
     const float max_y = vis->y + vis->h + margin;
 
-    for (int i = 0; i < world->m_NumCharacters; ++i) {
-      const SCharacterCore *core = &world->m_pCharacters[i];
-      const SCharacterCore *prev_core = &prev_world->m_pCharacters[i];
-      // Not in its recording at this tick: dead, or not joined yet.
-      if (dd_replay_absent(world_handle, i)) continue;
+    for (int i = 0; i < world->player_count; ++i) {
+      // No tee: dead, in /spec, or not in its recording at this tick.
+      const ddnet_character_t *chr = ddnet_player_character(world, i);
+      if (!chr || dd_replay_absent(world, i)) continue;
+      const ddnet_character_t *prev_chr = ddnet_player_character(prev_world, i);
+      if (!prev_chr) prev_chr = chr;
 
       vec2 from, to, p;
-      tile_pos(core->m_PrevPos, from);
-      tile_pos(core->m_Pos, to);
+      tile_pos(chr->prev_pos, from);
+      tile_pos(chr->pos, to);
       lerp2(from, to, intra, p);
 
       if (p[0] < min_x || p[0] > max_x || p[1] < min_y || p[1] > max_y) {
         if (!(frame->state.recording && i == selected)) continue;
       }
 
-      if (dd_replay_paused(world_handle, i)) {
+      if (dd_replay_paused(world, i)) {
         // DDNet's spectating tee: idle, blinking, facing right, in the x_spec skin.
         dd_anim_state_t idle;
         dd_anim_state_set(&idle, &anim_base, 0.0f);
@@ -675,7 +813,7 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
 
       tee_visual_t tee;
       build_tee_visual(game, frame, world, prev_world, i, intra, p, &tee);
-      const int eye = tee_eye_state(world, core);
+      const int eye = tee_eye_state(world, i, chr);
 
       dd_skin_push(game, p, 1.0f, tee.skin, eye, tee.dir, &tee.anim, tee.body_col, tee.feet_col, tee.custom);
 
@@ -689,27 +827,23 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
         dd_draw_triangle(game, DD_Z_LINES, tip, left, right, marker);
       }
 
-      if (game->settings.center_dot) {
-        const map_data_t *map = &world->m_pCollision->m_MapData;
-        const int idx = (int)p[1] * map->width + (int)p[0];
-        bool freeze = false;
-        if (idx >= 0 && idx < map->width * map->height) {
-          freeze = map->game_layer.data[idx] == TILE_FREEZE;
-          if (!freeze && map->front_layer.data) freeze = map->front_layer.data[idx] == TILE_FREEZE;
-        }
+      if (game->settings.center_dot && world->level) {
+        const ddnet_collision_t *collision = &world->level->collision;
+        const int x = (int)(p[0] * PX_PER_TILE), y = (int)(p[1] * PX_PER_TILE);
+        const bool freeze = ddnet_collision_get_tile(collision, x, y) == TILE_FREEZE ||
+                            ddnet_collision_get_front_tile(collision, x, y) == TILE_FREEZE;
         dd_draw_circle(game, DD_Z_LINES + 1.0f, p, 2.f / PX_PER_TILE, freeze ? (vec4){0, 0, 1, 1} : (vec4){0, 1, 0, 1}, 4);
       }
 
       if (game->settings.render_weapons) {
-        render_hook(game, world, core, prev_core, &tee, intra, p);
-        render_weapon(game, world, core, prev_core, &tee, intra, p);
+        render_hook(game, world, chr, prev_chr, &tee, intra, p);
+        render_weapon(game, world, chr, prev_chr, &tee, intra, p);
       }
     }
   }
 
-  render_projectiles_and_lasers(game, world, intra);
-  dd_recording_render_entities(game, world_handle, intra);
-  render_fastcap_flags(game, world, intra);
+  render_projectiles_and_lasers(game, frame, world, intra);
+  dd_recording_render_entities(game, world, intra);
 }
 
 void dd_render(ft_game *game, const ft_render_frame *frame) {
@@ -781,8 +915,8 @@ static float tiles_to_pixels(const ft_camera *camera) {
 }
 
 // One player's crosshair: `aim` relative to the tee, in DDNet's aim units.
-static void draw_crosshair(ft_game *game, const ft_render_frame *frame, const SCharacterCore *core, ft_vec2 aim) {
-  const uint32_t weapon = core->m_ActiveWeapon < CURSOR_SPRITE_COUNT ? core->m_ActiveWeapon : 0;
+static void draw_crosshair(ft_game *game, const ft_render_frame *frame, const ddnet_character_t *chr, ft_vec2 aim) {
+  const uint32_t weapon = chr->core.active_weapon >= 0 && chr->core.active_weapon < CURSOR_SPRITE_COUNT ? (uint32_t)chr->core.active_weapon : 0;
   const ft_sprite_rect *rect = dd_sprite_rect(game, game->gfx.cursor, weapon);
   if (!rect) return;
 
@@ -798,8 +932,8 @@ static void draw_crosshair(ft_game *game, const ft_render_frame *frame, const SC
   // Anchored on the drawn tee, not on its tick position: against a camera that
   // moves smoothly, the raw position makes the crosshair jitter every tick.
   vec2 from, to, tee_pos;
-  tile_pos(core->m_PrevPos, from);
-  tile_pos(core->m_Pos, to);
+  tile_pos(chr->prev_pos, from);
+  tile_pos(chr->pos, to);
   lerp2(from, to, frame->alpha, tee_pos);
 
   vec2 pos = {tee_pos[0] + aim.x / PX_PER_TILE * zoom1_tiles, tee_pos[1] + aim.y / PX_PER_TILE * zoom1_tiles};
@@ -816,32 +950,34 @@ static uint64_t frame_followed_players(const ft_render_frame *frame) {
 // or, if asked, everyone.
 static void render_cursor(ft_game *game, const ft_render_frame *frame) {
   if (!game->gfx.cursor || !frame->world) return;
-  const SWorldCore *world = &frame->world->core;
-  const SWorldCore *previous = frame->previous_world ? &frame->previous_world->core : NULL;
+  const ft_world *world = frame->world;
+  const ft_world *previous = frame->previous_world;
   const int selected = frame->active ? frame->selected_player : -1;
   // In free view the crosshair has nothing to sit against and just floats; under the camera
   // animation the game's own mode shows nothing (its subjects get theirs as `followed`).
   const bool animated = frame->struct_size >= offsetof(ft_render_frame, camera_animated) + sizeof(frame->camera_animated) &&
                         frame->camera_animated;
   const bool locked = frame->state.camera.mode == DD_CAMERA_FOLLOW && game->settings.render_cursor_follow && !animated;
-  const bool selected_shown = selected >= 0 && selected < world->m_NumCharacters && (frame->state.recording || locked);
+  const bool selected_shown = selected >= 0 && selected < world->player_count && (frame->state.recording || locked);
   const uint64_t followed = frame_followed_players(frame);
 
-  for (int player = 0; player < world->m_NumCharacters; ++player) {
+  for (int player = 0; player < world->player_count; ++player) {
     const bool is_selected = selected_shown && player == selected;
     if (!is_selected && !game->settings.render_cursor_all && !(player < 64 && ((followed >> player) & 1u))) continue;
     if (dd_replay_absent(frame->world, player) || dd_replay_paused(frame->world, player)) continue;
-    const SCharacterCore *core = &world->m_pCharacters[player];
+    const ddnet_character_t *chr = ddnet_player_character(world, player);
+    if (!chr) continue;
 
     // Aim interpolated between the two ticks, exactly like the tee it belongs to:
     // from the input each world was stepped with, which is the timeline's input
     // of the tick before it. Asking the timeline for this tick and the one before
     // put the crosshair a tick ahead of the weapon.
-    ft_vec2 aim = {(float)core->m_Input.m_TargetX, (float)core->m_Input.m_TargetY};
+    ft_vec2 aim = {(float)chr->core.input.target_x, (float)chr->core.input.target_y};
     if (!(is_selected && frame->state.recording)) {
-      const SPlayerInput *prev = previous && player < previous->m_NumCharacters ? &previous->m_pCharacters[player].m_Input : &core->m_Input;
-      aim.x = lint2((float)prev->m_TargetX, (float)core->m_Input.m_TargetX, frame->alpha);
-      aim.y = lint2((float)prev->m_TargetY, (float)core->m_Input.m_TargetY, frame->alpha);
+      const ddnet_character_t *prev = previous ? ddnet_player_character(previous, player) : NULL;
+      if (!prev) prev = chr;
+      aim.x = lint2((float)prev->core.input.target_x, (float)chr->core.input.target_x, frame->alpha);
+      aim.y = lint2((float)prev->core.input.target_y, (float)chr->core.input.target_y, frame->alpha);
     } else {
       // While recording, get_player_input hands back the live input for the tick
       // under the playhead, so the crosshair tracks the mouse directly.
@@ -849,13 +985,13 @@ static void render_cursor(ft_game *game, const ft_render_frame *frame) {
       const bool have_prev = game->engine->get_player_input(frame->state.selected_player, frame->tick - 1, &previous_input);
       const bool have_cur = game->engine->get_player_input(frame->state.selected_player, frame->tick, &current);
       if (have_cur) {
-        const SPlayerInput *cur = (const SPlayerInput *)&current;
-        const SPlayerInput *prev = have_prev ? (const SPlayerInput *)&previous_input : cur;
+        const dd_input_t *cur = (const dd_input_t *)&current;
+        const dd_input_t *prev = have_prev ? (const dd_input_t *)&previous_input : cur;
         aim.x = lint2((float)prev->m_TargetX, (float)cur->m_TargetX, frame->alpha);
         aim.y = lint2((float)prev->m_TargetY, (float)cur->m_TargetY, frame->alpha);
       }
     }
-    draw_crosshair(game, frame, core, aim);
+    draw_crosshair(game, frame, chr, aim);
   }
 }
 
@@ -878,16 +1014,14 @@ bool dd_camera_update(ft_game *game, const ft_camera_frame *frame, ft_camera *in
   const bool follow = frame->recording || frame->mode == DD_CAMERA_FOLLOW;
   if (!follow) return false;
 
-  const int player = frame->player;
-  if (player < 0 || player >= frame->world->core.m_NumCharacters) return false;
-
-  const SCharacterCore *core = &frame->world->core.m_pCharacters[player];
+  const ddnet_character_t *chr = ddnet_player_character(frame->world, frame->player);
+  if (!chr) return false;
 
   // Interpolate exactly as the tee itself is drawn. Snapping to the tick
   // position while the tee moves smoothly is what made the lock look jittery.
   vec2 from, to, pos;
-  tile_pos(core->m_PrevPos, from);
-  tile_pos(core->m_Pos, to);
+  tile_pos(chr->prev_pos, from);
+  tile_pos(chr->pos, to);
   lerp2(from, to, frame->alpha, pos);
 
   inout->position = (ft_vec2){pos[0], pos[1]};
@@ -902,8 +1036,10 @@ bool dd_camera_update(ft_game *game, const ft_camera_frame *frame, ft_camera *in
 uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, float alpha, char *out, uint32_t max_lines,
                          uint32_t line_size) {
   (void)game;
-  if (!world || player < 0 || player >= world->core.m_NumCharacters || max_lines == 0) return 0;
-  const SCharacterCore *c = &world->core.m_pCharacters[player];
+  const ddnet_character_t *chr = ddnet_player_character(world, player);
+  if (!chr || max_lines == 0) return 0;
+  const ddnet_character_core_t *c = &chr->core;
+  const ddnet_player_t *p = &world->core.players[ddnet_player_client(world, player)];
 
   uint32_t count = 0;
 #define LINE(...)                                                      \
@@ -913,55 +1049,44 @@ uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, f
     ++count;                                                           \
   } while (0)
 
-  // Positions are reported relative to the map's origin, the same way DDNet's
-  // own debug output does, hence the 200-tile offset.
-  const int pos_x = (int)(vgetx(c->m_Pos) - 200 * 32);
-  const int pos_y = (int)(vgety(c->m_Pos) - 200 * 32);
-  const float vel_x = vgetx(c->m_Vel);
-  const float vel_y = vgety(c->m_Vel);
+  const int pos_x = (int)chr->pos.x;
+  const int pos_y = (int)chr->pos.y;
+  const float vel_x = c->vel.x;
+  const float vel_y = c->vel.y;
 
   const float vel_scaled_x = roundf(vel_x * 256.0f);
   const float vel_scaled_y = roundf(vel_y * 256.0f);
 
-  float velspeed_x = vel_scaled_x / 256.0f * (50.0f / 32.0f);
+  float speed_x = vel_scaled_x / 256.0f * (50.0f / 32.0f);
   if (vel_scaled_x >= -1.0f && vel_scaled_x <= 1.0f) {
-    velspeed_x = 0.0f;
+    speed_x = 0.0f;
   }
-  float velspeed_y = vel_scaled_y / 256.0f * (50.0f / 32.0f);
+  float speed_y = vel_scaled_y / 256.0f * (50.0f / 32.0f);
   if (vel_scaled_y >= -128.0f && vel_scaled_y <= 128.0f) {
-    velspeed_y = 0.0f;
+    speed_y = 0.0f;
   }
-
-  const float ramp = c->m_VelRamp > 0.0f ? c->m_VelRamp : 1.0f;
-  const float speed_x = velspeed_x * ramp;
-  const float speed_y = velspeed_y;
 
   LINE("Character:");
   LINE("Pos: %d, %d; (%.4f, %.4f)", pos_x, pos_y, pos_x / 32.f, pos_y / 32.f);
-  LINE("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", vel_x * ramp, vel_y, speed_x, speed_y);
-  LINE("Freeze: %d", c->m_FreezeTime);
-  LINE("Reload: %d", c->m_ReloadTimer);
-  LINE("Weapon: %d", c->m_ActiveWeapon);
-  LINE("Weapons: [ %d, %d, %d, %d, %d, %d ]", c->m_aWeaponGot[0], c->m_aWeaponGot[1], c->m_aWeaponGot[2], c->m_aWeaponGot[3],
-       c->m_aWeaponGot[4], c->m_aWeaponGot[5]);
-
-  if (world->core.m_pConfig && world->core.m_pConfig->m_SvHealthAndAmmo) {
-    LINE("Health: %d", c->m_Health);
-    LINE("Shield: %d", c->m_Armor);
-    LINE("Ammo: %d", c->m_aWeaponAmmo[c->m_ActiveWeapon]);
-  }
+  LINE("Vel: %.2f, %.2f; (%.2f, %.2f BPS)", vel_x, vel_y, speed_x, speed_y);
+  LINE("Freeze: %d", chr->freeze_time);
+  LINE("Reload: %d", chr->reload_timer);
+  LINE("Weapon: %d", c->active_weapon);
+  LINE("Weapons: [ %d, %d, %d, %d, %d, %d ]", c->weapons[0].got, c->weapons[1].got, c->weapons[2].got, c->weapons[3].got,
+       c->weapons[4].got, c->weapons[5].got);
 
   // Race timer, counting up until the run finishes and then holding.
-  float race_time = c->m_RaceTime;
-  if (race_time < 0.0f && c->m_StartTick >= 0) {
-    const float now = (float)world->core.m_GameTick + alpha;
-    race_time = (now - (float)c->m_StartTime - c->m_StartTickOffset) / GAME_TICK_SPEED;
+  float race_time = -1.f;
+  if (p->finish_tick >= 0) {
+    race_time = (float)p->finish_time_ticks / GAME_TICK_SPEED;
+  } else if (chr->race_state == DDNET_RACE_STARTED) {
+    race_time = ((float)world->core.tick + alpha - (float)chr->start_time) / GAME_TICK_SPEED;
     if (race_time < 0.0f) race_time = 0.0f;
   }
   if (race_time >= 0.0f) {
     const int minutes = (int)race_time / 60;
     const float seconds = fmodf(race_time, 60.0f);
-    LINE(c->m_FinishTick >= 0 ? "Finish Time: %02d:%06.3f" : "Time: %02d:%06.3f", minutes, seconds);
+    LINE(p->finish_tick >= 0 ? "Finish Time: %02d:%06.3f" : "Time: %02d:%06.3f", minutes, seconds);
   }
 #undef LINE
 
@@ -972,19 +1097,17 @@ uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, f
 // it has one, otherwise how far it got.
 bool dd_player_label(ft_game *game, const ft_world *world, int32_t player, char *out, size_t out_size) {
   (void)game;
-  if (!world || player < 0 || player >= world->core.m_NumCharacters) return false;
-  const SCharacterCore *c = &world->core.m_pCharacters[player];
-
-  if (c->m_FinishTick > 0) {
-    float time = c->m_RaceTime;
-    if (time < 0.0f && c->m_StartTick >= 0)
-      time = ((float)world->core.m_GameTick - (float)c->m_StartTime - c->m_StartTickOffset) / GAME_TICK_SPEED;
-    if (time < 0.0f) time = 0.0f;
+  const int client_id = ddnet_player_client(world, player);
+  if (client_id < 0) return false;
+  const ddnet_player_t *p = &world->core.players[client_id];
+  if (p->finish_tick >= 0) {
+    const float time = (float)p->finish_time_ticks / GAME_TICK_SPEED;
     snprintf(out, out_size, "%02d:%06.3f", (int)time / 60, fmodf(time, 60.0f));
     return true;
   }
-  if (c->m_LastTimeCp >= 0 && c->m_LastTimeCp < NUM_TIME_CHECKPOINTS) {
-    snprintf(out, out_size, "CP%d %.3fs", c->m_LastTimeCp + 1, c->m_aTimeCp[c->m_LastTimeCp]);
+  const ddnet_character_t *c = ddnet_player_character(world, player);
+  if (c && c->last_time_cp >= 0 && c->last_time_cp < DDNET_MAX_CHECKPOINTS) {
+    snprintf(out, out_size, "CP%d %.3fs", c->last_time_cp + 1, c->current_time_cp[c->last_time_cp]);
     return true;
   }
   return false;

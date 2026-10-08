@@ -309,7 +309,7 @@ void dd_map_design_destroy(ft_game *game, ft_level *level) {
   if (!d) return;
   if (d->mesh) game->engine->mesh_destroy(d->mesh);
   if (d->images)
-    for (int i = 0; i < level->collision.m_MapData.num_images; ++i) {
+    for (int i = 0; i < level->map.num_images; ++i) {
       if (d->images[i].tiles) game->engine->texture_destroy(d->images[i].tiles);
       if (d->images[i].quads) game->engine->texture_destroy(d->images[i].quads);
     }
@@ -325,7 +325,7 @@ void dd_map_design_create(ft_game *game, ft_level *level) {
     dd_log(game, FT_LOG_ERROR, "Could not create map design pipelines.");
     return;
   }
-  const map_data_t *map = &level->collision.m_MapData;
+  const map_data_t *map = &level->map;
   struct dd_map_design *d = calloc(1, sizeof(*d));
   if (!d) return;
   level->design = d;
@@ -419,12 +419,11 @@ static bool border_geometry(int border, const map_layer_t *l, const float view[4
 void dd_map_design_render(ft_game *game, const ft_render_frame *frame) {
   const ft_level *level = frame->level;
   if (!level || !level->design || !level->design->mesh) return;
-  const map_data_t *map = &level->collision.m_MapData;
+  const map_data_t *map = &level->map;
   const struct dd_map_design *d = level->design;
   ft_camera cam;
   game->engine->camera_get(&cam);
-  float camera[4] = {cam.visible.x - MAP_EXPAND, cam.visible.y - MAP_EXPAND,
-                     cam.visible.x + cam.visible.w - MAP_EXPAND, cam.visible.y + cam.visible.h - MAP_EXPAND};
+  float camera[4] = {cam.visible.x, cam.visible.y, cam.visible.x + cam.visible.w, cam.visible.y + cam.visible.h};
   if (!(cam.visible.w > 0 && cam.visible.h > 0)) return;
   bool foreground = false, want_foreground = frame->pass == FT_PASS_LEVEL_FOREGROUND;
   // The frame interpolates from tick-1 to tick, like DDNet's envelope state

@@ -13,8 +13,6 @@
 
 #include <ddnet_demo/ddnet_demo.h>
 #include <ddnet_demo/ddnet_demo_state.h>
-#include <ddnet_physics/collision.h>
-#include <ddnet_physics/vmath.h>
 
 #include <math.h>
 #include <stdint.h>
@@ -53,9 +51,8 @@ struct ft_recording {
   dd_state_character cached[DD_STATE_MAX_CLIENTS];
 };
 
-// FrameTee's world is the DDNet map with MAP_EXPAND tiles of border on every side, so a position in
-// the demo sits MAP_EXPAND32 units further in.
-static mvec2 world_pos(float x, float y) { return vec2_init(x + (float)MAP_EXPAND32, y + (float)MAP_EXPAND32); }
+// A position in the demo, which is one in the world: both are DDNet's.
+static ddnet_vec2_t world_pos(float x, float y) { return (ddnet_vec2_t){x, y}; }
 
 // --- opening -------------------------------------------------------------------
 
@@ -258,7 +255,7 @@ bool dd_recording_level_matches(ft_game *game, const ft_recording *recording, co
   (void)game;
   size_t size = 0;
   const uint8_t *demo_map = dd_demo_state_map(recording->state, &size);
-  const map_data_t *map = &level->collision.m_MapData;
+  const map_data_t *map = &level->map;
   return demo_map && map->_map_file_data && map->_map_file_size == size && memcmp(map->_map_file_data, demo_map, size) == 0;
 }
 
@@ -330,7 +327,7 @@ static dd_state_character recorded_at(ft_recording *recording, int cid, int tick
   return c;
 }
 
-static void recorded_input(const dd_state_character *c, int tick, SPlayerInput *out) {
+static void recorded_input(const dd_state_character *c, int tick, dd_input_t *out) {
   memset(out, 0, sizeof(*out));
   int target_x, target_y;
   recorded_target(c, &target_x, &target_y);
@@ -338,9 +335,9 @@ static void recorded_input(const dd_state_character *c, int tick, SPlayerInput *
   out->m_TargetX = (int16_t)target_x;
   out->m_TargetY = (int16_t)target_y;
   out->m_Jump = (c->jumped & 1) != 0;
-  out->m_Hook = c->hook_state != HOOK_IDLE && c->hook_state != HOOK_RETRACTED;
+  out->m_Hook = c->hook_state != DDNET_HOOK_IDLE && c->hook_state != DDNET_HOOK_RETRACTED;
   out->m_Fire = c->attack_tick == tick || c->attack_tick == tick - 1;
-  out->m_WantedWeapon = (uint8_t)(c->weapon >= 0 && c->weapon < NUM_WEAPONS ? c->weapon : WEAPON_GUN);
+  out->m_WantedWeapon = (uint8_t)(c->weapon >= 0 && c->weapon < DDNET_NUM_WEAPONS ? c->weapon : DDNET_WEAPON_GUN);
   set_flag_eye_state(out, eyes_for_emote(c->emote));
   // DDNet's client sits a tee whose player is AFK or paused, not one that is only in a menu.
   set_flag_sit(out, (c->player_flags & RECORDED_INACTIVE) != 0);
@@ -438,6 +435,10 @@ bool dd_replay_paused(const ft_world *world, int player) {
   return world && player >= 0 && player < world->replay_slot_count && world->replay_slots[player].mode == REPLAY_PAUSED;
 }
 
+bool dd_replay_active(const ft_world *world, int player) {
+  return world && player >= 0 && player < world->replay_slot_count && world->replay_slots[player].mode != REPLAY_NONE;
+}
+
 bool dd_replay_muted(const ft_world *world, int player) {
   return world && world->replay_muted && player >= 0 && player < world->replay_slot_count &&
          world->replay_slots[player].mode != REPLAY_NONE;
@@ -445,9 +446,9 @@ bool dd_replay_muted(const ft_world *world, int player) {
 
 // Sounds a tee's motion makes, which dd_demo_state_sounds works out.
 static bool motion_sound(int sound_id) {
-  return sound_id == SOUND_TYPE_PLAYER_JUMP || sound_id == SOUND_TYPE_PLAYER_AIRJUMP ||
-         sound_id == SOUND_TYPE_HOOK_ATTACH_GROUND || sound_id == SOUND_TYPE_HOOK_ATTACH_PLAYER ||
-         sound_id == SOUND_TYPE_HOOK_NOATTACH;
+  return sound_id == DDNET_SOUND_PLAYER_JUMP || sound_id == DDNET_SOUND_PLAYER_AIRJUMP ||
+         sound_id == DDNET_SOUND_HOOK_ATTACH_GROUND || sound_id == DDNET_SOUND_HOOK_ATTACH_PLAYER ||
+         sound_id == DDNET_SOUND_HOOK_NOATTACH;
 }
 
 // Which world player replays the recording's client `cid` this step, or -1.
@@ -472,7 +473,7 @@ static bool owner_shown(const ft_world *world, int owner) {
 // the nearest other tee, allowing for movement before the snapshot arrived.
 static bool hammer_target_shown(const ft_world *world, const dd_state_character *characters, const dd_state_event *event) {
   int target = -1;
-  float nearest = 4.f * PHYSICALSIZE * PHYSICALSIZE;
+  float nearest = 4.f * 28.f * 28.f; // two of a tee's physical size
   for (int cid = 0; cid < DD_STATE_MAX_CLIENTS; ++cid) {
     if (cid == event->owner || characters[cid].quality == DD_QUALITY_NONE) continue;
     const float dx = characters[cid].x - event->x;
@@ -513,102 +514,114 @@ static bool paused_of(const ft_player_playback *pb, float *x, float *y) {
   return paused;
 }
 
-// Writes a recorded state into a world character. `offset` turns recording ticks into world ticks;
-// `prev_pos` is where it was the tick before, which the physics walks tiles from next tick.
-static void apply_state(SCharacterCore *core, const dd_state_character *c, int recording_tick, int offset, int hooked_player,
-                        mvec2 prev_pos) {
-  const mvec2 pos = world_pos(c->x, c->y);
-  core->m_PrevPos = prev_pos;
-  core->m_Pos = pos;
-  core->m_Vel = vec2_init(c->vel_x, c->vel_y);
-  core->m_VelMag = sqrtf(c->vel_x * c->vel_x + c->vel_y * c->vel_y);
-  core->m_VelRamp = 1.f;
-  core->m_HookPos = world_pos(c->hook_x, c->hook_y);
-  core->m_HookDir = vec2_init(c->hook_dx, c->hook_dy);
-  core->m_HookState = (int8_t)c->hook_state;
-  core->m_HookTick = c->hook_tick;
-  core->m_HookedPlayer = hooked_player;
-  recorded_input(c, recording_tick, &core->m_Input);
+// Writes a recorded state into the tee of world client `client_id`. `offset` turns recording ticks
+// into world ticks; `prev_pos` is where it was the tick before, which the physics walks tiles from
+// next tick.
+static void apply_state(ft_world *world, int client_id, ddnet_character_t *chr, const dd_state_character *c,
+                        int recording_tick, int offset, int hooked_client, ddnet_vec2_t prev_pos) {
+  ddnet_character_core_t *core = &chr->core;
+  const ddnet_vec2_t pos = world_pos(c->x, c->y);
+  chr->prev_pos = prev_pos;
+  chr->pos = pos;
+  core->pos = pos;
+  core->vel = (ddnet_vec2_t){c->vel_x, c->vel_y};
+  core->hook_pos = world_pos(c->hook_x, c->hook_y);
+  core->hook_dir = (ddnet_vec2_t){c->hook_dx, c->hook_dy};
+  core->hook_state = c->hook_state;
+  core->hook_tick = c->hook_tick;
+  core->hooked_player = hooked_client;
+  // What it is drawn with (aim, eyes); the physics takes its input from the player again next tick.
+  recorded_input(c, recording_tick, &world->inputs[client_id]);
+  ddnet_input_from_record(&world->inputs[client_id], &core->input);
 
-  core->m_Jumped = (uint8_t)c->jumped;
-  core->m_Jumps = c->jumps;
+  core->jumped = c->jumped;
+  core->jumps = c->jumps;
   // Servers without DDNet's extras do not send it; a used air jump means all but one are gone.
-  core->m_JumpedTotal = c->jumped_total >= 0 ? c->jumped_total : ((c->jumped & 2) ? (c->jumps > 1 ? c->jumps - 1 : 0) : 0);
-  core->m_ActiveWeapon = (unsigned char)(c->weapon >= 0 && c->weapon < NUM_WEAPONS ? c->weapon : WEAPON_GUN);
-  core->m_AttackTick = c->attack_tick + offset;
-  core->m_Health = (int8_t)c->health;
-  core->m_Armor = (int8_t)c->armor;
-  if (core->m_ActiveWeapon < NUM_WEAPONS) core->m_aWeaponAmmo[core->m_ActiveWeapon] = (int8_t)(c->ammo > 127 ? 127 : c->ammo);
+  core->jumped_total = c->jumped_total >= 0 ? c->jumped_total : ((c->jumped & 2) ? (c->jumps > 1 ? c->jumps - 1 : 0) : 0);
+  core->active_weapon = c->weapon >= 0 && c->weapon < DDNET_NUM_WEAPONS ? c->weapon : DDNET_WEAPON_GUN;
+  chr->attack_tick = c->attack_tick + offset;
+  chr->health = c->health;
+  chr->armor = c->armor;
+  core->weapons[core->active_weapon].ammo = c->ammo;
 
   if (c->has_ddnet_info) {
     const unsigned f = c->flags;
-    core->m_DeepFrozen = c->freeze_end == -1;
-    core->m_FreezeTime = c->freeze_end > recording_tick ? c->freeze_end - recording_tick : 0;
-    core->m_FreezeStart = c->freeze_start + offset;
-    core->m_IsInFreeze = (f & DD_CHARACTERFLAG_IN_FREEZE) != 0;
-    core->m_Solo = (f & DD_CHARACTERFLAG_SOLO) != 0;
-    core->m_Jetpack = (f & DD_CHARACTERFLAG_JETPACK) != 0;
-    core->m_CollisionDisabled = (f & DD_CHARACTERFLAG_COLLISION_DISABLED) != 0;
-    core->m_EndlessHook = (f & DD_CHARACTERFLAG_ENDLESS_HOOK) != 0;
-    core->m_EndlessJump = (f & DD_CHARACTERFLAG_ENDLESS_JUMP) != 0;
-    core->m_HammerHitDisabled = (f & DD_CHARACTERFLAG_HAMMER_HIT_DISABLED) != 0;
-    core->m_ShotgunHitDisabled = (f & DD_CHARACTERFLAG_SHOTGUN_HIT_DISABLED) != 0;
-    core->m_GrenadeHitDisabled = (f & DD_CHARACTERFLAG_GRENADE_HIT_DISABLED) != 0;
-    core->m_LaserHitDisabled = (f & DD_CHARACTERFLAG_LASER_HIT_DISABLED) != 0;
-    core->m_HookHitDisabled = (f & DD_CHARACTERFLAG_HOOK_HIT_DISABLED) != 0;
-    core->m_HasTelegunGun = (f & DD_CHARACTERFLAG_TELEGUN_GUN) != 0;
-    core->m_HasTelegunGrenade = (f & DD_CHARACTERFLAG_TELEGUN_GRENADE) != 0;
-    core->m_HasTelegunLaser = (f & DD_CHARACTERFLAG_TELEGUN_LASER) != 0;
-    core->m_aWeaponGot[WEAPON_HAMMER] = (f & DD_CHARACTERFLAG_WEAPON_HAMMER) != 0;
-    core->m_aWeaponGot[WEAPON_GUN] = (f & DD_CHARACTERFLAG_WEAPON_GUN) != 0;
-    core->m_aWeaponGot[WEAPON_SHOTGUN] = (f & DD_CHARACTERFLAG_WEAPON_SHOTGUN) != 0;
-    core->m_aWeaponGot[WEAPON_GRENADE] = (f & DD_CHARACTERFLAG_WEAPON_GRENADE) != 0;
-    core->m_aWeaponGot[WEAPON_LASER] = (f & DD_CHARACTERFLAG_WEAPON_LASER) != 0;
-    core->m_aWeaponGot[WEAPON_NINJA] = (f & DD_CHARACTERFLAG_WEAPON_NINJA) != 0;
-    core->m_Ninja.m_ActivationTick = c->ninja_activation_tick + offset;
-    core->m_TeleCheckpoint = (unsigned char)(c->tele_checkpoint > 0 ? c->tele_checkpoint : 0);
+    core->deep_frozen = c->freeze_end == -1;
+    chr->freeze_time = c->freeze_end > recording_tick ? c->freeze_end - recording_tick : 0;
+    core->freeze_start = c->freeze_start + offset;
+    core->freeze_end = c->freeze_end > 0 ? c->freeze_end + offset : c->freeze_end;
+    core->is_in_freeze = (f & DD_CHARACTERFLAG_IN_FREEZE) != 0;
+    core->solo = (f & DD_CHARACTERFLAG_SOLO) != 0;
+    world->core.teams.is_solo[client_id] = core->solo;
+    core->jetpack = (f & DD_CHARACTERFLAG_JETPACK) != 0;
+    core->collision_disabled = (f & DD_CHARACTERFLAG_COLLISION_DISABLED) != 0;
+    core->endless_hook = (f & DD_CHARACTERFLAG_ENDLESS_HOOK) != 0;
+    core->endless_jump = (f & DD_CHARACTERFLAG_ENDLESS_JUMP) != 0;
+    core->hammer_hit_disabled = (f & DD_CHARACTERFLAG_HAMMER_HIT_DISABLED) != 0;
+    core->shotgun_hit_disabled = (f & DD_CHARACTERFLAG_SHOTGUN_HIT_DISABLED) != 0;
+    core->grenade_hit_disabled = (f & DD_CHARACTERFLAG_GRENADE_HIT_DISABLED) != 0;
+    core->laser_hit_disabled = (f & DD_CHARACTERFLAG_LASER_HIT_DISABLED) != 0;
+    core->hook_hit_disabled = (f & DD_CHARACTERFLAG_HOOK_HIT_DISABLED) != 0;
+    core->has_telegun_gun = (f & DD_CHARACTERFLAG_TELEGUN_GUN) != 0;
+    core->has_telegun_grenade = (f & DD_CHARACTERFLAG_TELEGUN_GRENADE) != 0;
+    core->has_telegun_laser = (f & DD_CHARACTERFLAG_TELEGUN_LASER) != 0;
+    core->weapons[DDNET_WEAPON_HAMMER].got = (f & DD_CHARACTERFLAG_WEAPON_HAMMER) != 0;
+    core->weapons[DDNET_WEAPON_GUN].got = (f & DD_CHARACTERFLAG_WEAPON_GUN) != 0;
+    core->weapons[DDNET_WEAPON_SHOTGUN].got = (f & DD_CHARACTERFLAG_WEAPON_SHOTGUN) != 0;
+    core->weapons[DDNET_WEAPON_GRENADE].got = (f & DD_CHARACTERFLAG_WEAPON_GRENADE) != 0;
+    core->weapons[DDNET_WEAPON_LASER].got = (f & DD_CHARACTERFLAG_WEAPON_LASER) != 0;
+    core->weapons[DDNET_WEAPON_NINJA].got = (f & DD_CHARACTERFLAG_WEAPON_NINJA) != 0;
+    core->ninja.activation_tick = c->ninja_activation_tick + offset;
+    chr->tele_checkpoint = c->tele_checkpoint > 0 ? c->tele_checkpoint : 0;
   } else {
     // Vanilla servers have none of these; the physics keeps the freeze and tele checkpoint it saw.
-    core->m_Solo = false;
-    core->m_CollisionDisabled = false;
-    core->m_HookHitDisabled = false;
+    core->solo = false;
+    world->core.teams.is_solo[client_id] = false;
+    core->collision_disabled = false;
+    core->hook_hit_disabled = false;
     // Only the weapon in hand is known to be owned.
-    core->m_aWeaponGot[core->m_ActiveWeapon] = true;
+    core->weapons[core->active_weapon].got = true;
   }
-  if (c->emote == DD_EMOTE_PAIN) core->m_DamageTick = recording_tick + offset;
-  cc_calc_indices(core);
+  if (c->emote == DD_EMOTE_PAIN) world->pain_ticks[client_id] = world->core.tick;
+  ddnet_character_changed(&world->core, client_id);
 }
 
 // Not in the recording at this tick: waits at `pos`, out of everyone's way. An absent player waits
 // where it was last seen, a paused one where the demo shows it.
-static void apply_absent(SCharacterCore *core, mvec2 pos) {
-  core->m_Pos = pos;
-  core->m_PrevPos = pos;
-  core->m_Vel = vec2_init(0.f, 0.f);
-  core->m_Solo = true;
-  core->m_CollisionDisabled = true;
-  core->m_HookState = HOOK_IDLE;
-  core->m_HookedPlayer = -1;
-  core->m_FreezeTime = 0;
-  cc_calc_indices(core);
+static void apply_absent(ft_world *world, int client_id, ddnet_character_t *chr, ddnet_vec2_t pos) {
+  chr->pos = pos;
+  chr->prev_pos = pos;
+  chr->core.pos = pos;
+  chr->core.vel = (ddnet_vec2_t){0.f, 0.f};
+  chr->core.solo = true;
+  world->core.teams.is_solo[client_id] = true;
+  chr->core.collision_disabled = true;
+  chr->core.hook_state = DDNET_HOOK_IDLE;
+  chr->core.hooked_player = -1;
+  chr->freeze_time = 0;
+  ddnet_character_changed(&world->core, client_id);
 }
 
 // Hands a player whose replay ended back to its input, with the flags the replay overrode.
-static void release_replay(SCharacterCore *core, struct dd_replay_slot *slot) {
-  core->m_HookHitDisabled = slot->hook_hit_disabled;
-  if (slot->mode == REPLAY_ABSENT || slot->mode == REPLAY_PAUSED) {
-    core->m_Solo = slot->solo;
-    core->m_CollisionDisabled = slot->collision_disabled;
+static void release_replay(ft_world *world, int client_id, ddnet_character_t *chr, struct dd_replay_slot *slot) {
+  if (chr) {
+    chr->core.hook_hit_disabled = slot->hook_hit_disabled;
+    if (slot->mode == REPLAY_ABSENT || slot->mode == REPLAY_PAUSED) {
+      chr->core.solo = slot->solo;
+      world->core.teams.is_solo[client_id] = slot->solo;
+      chr->core.collision_disabled = slot->collision_disabled;
+    }
+    ddnet_character_changed(&world->core, client_id);
   }
   slot->mode = REPLAY_NONE;
 }
 
-static void remember_flags(struct dd_replay_slot *slot, const SCharacterCore *core) {
-  slot->hook_hit_disabled = core->m_HookHitDisabled;
-  slot->solo = core->m_Solo;
-  slot->collision_disabled = core->m_CollisionDisabled;
-  slot->x = vgetx(core->m_Pos);
-  slot->y = vgety(core->m_Pos);
+static void remember_flags(struct dd_replay_slot *slot, const ddnet_character_t *chr) {
+  slot->hook_hit_disabled = chr->core.hook_hit_disabled;
+  slot->solo = chr->core.solo;
+  slot->collision_disabled = chr->core.collision_disabled;
+  slot->x = chr->pos.x;
+  slot->y = chr->pos.y;
 }
 
 static void projectile_pos(const dd_state_projectile *p, const float *tuning, float time, float *out_x, float *out_y);
@@ -619,7 +632,7 @@ static void projectile_pos(const dd_state_projectile *p, const float *tuning, fl
 // these are all it gets). `drawn`: the world's particles are drawn, so trails are worth puffing.
 static void emit_events(ft_world *world, ft_recording *recording, int recording_tick, const ft_player_playback *playback,
                         uint32_t count, bool drawn) {
-  SWorldCore *core = &world->core;
+  ddnet_world_t *core = &world->core;
   if (!core->particle && !core->damage_indicator && !core->sound) return;
   dd_state_tick *tick = malloc(sizeof(*tick));
   if (!tick) return;
@@ -633,34 +646,34 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
     if (!owner_shown(world, event->owner) &&
         !(event->type == DD_STATE_EVENT_HAMMERHIT && hammer_target_shown(world, characters, event)))
       continue;
-    const mvec2 pos = world_pos(event->x, event->y);
+    const ddnet_vec2_t pos = world_pos(event->x, event->y);
     const int player = world_player_of_cid(recording, event->client_id, playback, count);
+    // (the callbacks take the world's client ids)
+    const int client_id = ddnet_player_client(world, player);
     switch (event->type) {
     case DD_STATE_EVENT_EXPLOSION:
-      if (core->particle) core->particle(pos, PARTICLE_TYPE_EXPLOSION, -1, core->user_data);
+      if (core->particle) core->particle(pos, DDNET_PARTICLE_EXPLOSION, -1, core->user_data);
       break;
     case DD_STATE_EVENT_SPAWN:
-      if (core->particle) core->particle(pos, PARTICLE_TYPE_PLAYER_SPAWN, -1, core->user_data);
+      if (core->particle) core->particle(pos, DDNET_PARTICLE_PLAYER_SPAWN, -1, core->user_data);
       break;
     case DD_STATE_EVENT_HAMMERHIT:
-      if (core->particle) core->particle(pos, PARTICLE_TYPE_HAMMER_HIT, -1, core->user_data);
+      if (core->particle) core->particle(pos, DDNET_PARTICLE_HAMMER_HIT, -1, core->user_data);
       break;
     case DD_STATE_EVENT_DEATH:
-      if (core->particle) core->particle(pos, PARTICLE_TYPE_PLAYER_DEATH, player, core->user_data);
+      if (core->particle) core->particle(pos, DDNET_PARTICLE_PLAYER_DEATH, client_id, core->user_data);
       break;
     case DD_STATE_EVENT_BIRTHDAY:
     case DD_STATE_EVENT_FINISH:
-      if (core->particle) core->particle(pos, PARTICLE_TYPE_CONFETTI, -1, core->user_data);
+      if (core->particle) core->particle(pos, DDNET_PARTICLE_CONFETTI, -1, core->user_data);
       break;
     case DD_STATE_EVENT_DAMAGE_IND:
-      // DDNet sends one event per star, already turned to its final direction; the callback spreads
-      // `amount` stars around 3pi/2 + angle, which for one star is exactly that centre.
-      if (core->damage_indicator)
-        core->damage_indicator(pos, (float)event->angle / 256.f - 3.f * (float)M_PI / 2.f, 1, player, core->user_data);
+      // DDNet sends one event per star, already turned to its final direction.
+      if (core->damage_indicator) dd_damage_star(world, pos.x, pos.y, (float)event->angle / 256.f, player);
       break;
     case DD_STATE_EVENT_SOUND_WORLD:
       // The motion's own sounds come from the reconstruction below, on time.
-      if (core->sound && !motion_sound(event->sound_id)) core->sound(pos, event->sound_id, player, core->user_data);
+      if (core->sound && !motion_sound(event->sound_id)) core->sound(pos, event->sound_id, client_id, core->user_data);
       break;
     default:
       break;
@@ -675,13 +688,13 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
     const float time = (float)(recording_tick - 1 - p->start_tick) / (float)GAME_TICK_SPEED;
     float x, y;
     projectile_pos(p, tuning, time, &x, &y);
-    if (p->type == WEAPON_GRENADE) {
-      core->particle(world_pos(x, y), PARTICLE_TYPE_SMOKE, -1, core->user_data);
+    if (p->type == DDNET_WEAPON_GRENADE) {
+      core->particle(world_pos(x, y), DDNET_PARTICLE_SMOKE, -1, core->user_data);
       continue;
     }
-    core->particle(world_pos(x, y), PARTICLE_TYPE_BULLET_TRAIL, -1, core->user_data);
+    core->particle(world_pos(x, y), DDNET_PARTICLE_BULLET_TRAIL, -1, core->user_data);
     projectile_pos(p, tuning, time + 0.5f / (float)GAME_TICK_SPEED, &x, &y);
-    core->particle(world_pos(x, y), PARTICLE_TYPE_BULLET_TRAIL, -1, core->user_data);
+    core->particle(world_pos(x, y), DDNET_PARTICLE_BULLET_TRAIL, -1, core->user_data);
   }
   // Jumps and hooks, as the reconstructed tees made them: the demo has its own late, and none for
   // the recording player.
@@ -692,7 +705,8 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
   for (int i = 0; i < sound_count; ++i) {
     if (!owner_shown(world, sounds[i].client_id)) continue;
     core->sound(world_pos(sounds[i].x, sounds[i].y), sounds[i].sound_id,
-                world_player_of_cid(recording, sounds[i].client_id, playback, count), core->user_data);
+                ddnet_player_client(world, world_player_of_cid(recording, sounds[i].client_id, playback, count)),
+                core->user_data);
   }
   pthread_mutex_unlock(&recording->lock);
   free(tick);
@@ -701,14 +715,15 @@ static void emit_events(ft_world *world, ft_recording *recording, int recording_
 // DDNet's client leaves a bullet trail behind every shot but a grenade, at 100 Hz: two per tick,
 // from where the shot is at the start of the tick the world is about to step. The physics only
 // puffs grenade smoke, from the same place.
-static void emit_bullet_trails(SWorldCore *core) {
+static void emit_bullet_trails(ddnet_world_t *core) {
   if (!core->particle) return;
-  for (SProjectile *p = (SProjectile *)core->m_apFirstEntityTypes[WORLD_ENTTYPE_PROJECTILE]; p;
-       p = (SProjectile *)p->m_Base.m_pNextTypeEntity) {
-    if (p->m_Type == WEAPON_GRENADE) continue;
-    const float time = (float)(core->m_GameTick - p->m_StartTick) / (float)GAME_TICK_SPEED;
-    core->particle(prj_get_pos(p, time), PARTICLE_TYPE_BULLET_TRAIL, p->m_Owner, core->user_data);
-    core->particle(prj_get_pos(p, time + 0.5f / (float)GAME_TICK_SPEED), PARTICLE_TYPE_BULLET_TRAIL, p->m_Owner, core->user_data);
+  for (int i = core->first_entity[DDNET_ENTTYPE_PROJECTILE]; i != -1; i = core->entities[i].link.next) {
+    const ddnet_entity_t *p = &core->entities[i];
+    if (p->u.projectile.type == DDNET_WEAPON_GRENADE) continue;
+    const float time = (float)(core->tick - p->u.projectile.start_tick) / (float)GAME_TICK_SPEED;
+    core->particle(ddnet_projectile_get_pos(core, p, time), DDNET_PARTICLE_BULLET_TRAIL, p->u.projectile.owner, core->user_data);
+    core->particle(ddnet_projectile_get_pos(core, p, time + 0.5f / (float)GAME_TICK_SPEED), DDNET_PARTICLE_BULLET_TRAIL,
+                   p->u.projectile.owner, core->user_data);
   }
 }
 
@@ -716,7 +731,7 @@ static void emit_bullet_trails(SWorldCore *core) {
 // recording the world around them comes from.
 static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slot_count, const ft_player_playback *playback,
                           uint32_t player_count) {
-  const int count = world->core.m_NumCharacters;
+  const int count = world->player_count;
   world->replay_recording = NULL;
   world->replay_clients = 0;
   int replayed_players = 0;
@@ -725,31 +740,36 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
     const ft_player_playback *pb = slot ? playback_of(playback, player_count, i) : NULL;
     if (!pb) continue;
     ft_recording *recording = (ft_recording *)pb->recording;
-    SCharacterCore *core = &world->core.m_pCharacters[i];
+    const int client_id = world->client_ids[i];
+    // A tee the physics killed comes back when it respawns.
+    ddnet_character_t *chr = ddnet_world_character(&world->core, client_id);
     const int cid = recording->players[pb->player].cid;
     slot->recording = recording;
     slot->cid = cid;
     const dd_state_character c = recorded_character(pb);
     float paused_x, paused_y;
-    if (c.quality == DD_QUALITY_NONE && paused_of(pb, &paused_x, &paused_y)) {
-      apply_absent(core, world_pos(paused_x, paused_y));
+    if (!chr) {
+      // nothing to put anywhere
+    } else if (c.quality == DD_QUALITY_NONE && paused_of(pb, &paused_x, &paused_y)) {
+      apply_absent(world, client_id, chr, world_pos(paused_x, paused_y));
       slot->mode = REPLAY_PAUSED;
-      slot->x = vgetx(core->m_Pos);
-      slot->y = vgety(core->m_Pos);
+      slot->x = chr->pos.x;
+      slot->y = chr->pos.y;
     } else if (c.quality == DD_QUALITY_NONE) {
-      apply_absent(core, vec2_init(slot->x, slot->y));
+      apply_absent(world, client_id, chr, (ddnet_vec2_t){slot->x, slot->y});
       slot->mode = REPLAY_ABSENT;
     } else {
       const int hooked = c.hooked_player >= 0 ? world_player_of_cid(recording, c.hooked_player, playback, player_count) : -1;
-      const mvec2 pos = world_pos(c.x, c.y);
-      const mvec2 prev = slot->mode == REPLAY_PRESENT ? vec2_init(slot->x, slot->y) : pos;
+      const ddnet_vec2_t pos = world_pos(c.x, c.y);
+      const ddnet_vec2_t prev = slot->mode == REPLAY_PRESENT ? (ddnet_vec2_t){slot->x, slot->y} : pos;
       // DDNet's client shows an air jump when the used-air-jump bit appears.
       const bool air_jump = slot->mode == REPLAY_PRESENT && (c.jumped & 2) && !(slot->jumped & 2);
-      apply_state(core, &c, pb->tick, world->core.m_GameTick - pb->tick, hooked, prev);
+      apply_state(world, client_id, chr, &c, pb->tick, world->core.tick - pb->tick, ddnet_player_client(world, hooked), prev);
       slot->mode = REPLAY_PRESENT;
       slot->jumped = (uint8_t)c.jumped;
-      remember_flags(slot, core);
-      if (air_jump && world->core.particle) world->core.particle(core->m_Pos, PARTICLE_TYPE_AIR_JUMP, i, world->core.user_data);
+      remember_flags(slot, chr);
+      if (air_jump && world->core.particle)
+        world->core.particle(chr->pos, DDNET_PARTICLE_AIR_JUMP, client_id, world->core.user_data);
     }
 
     // The world around the recording is the recording player's, or else anyone's.
@@ -770,32 +790,49 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
     world->replay_clients = UINT64_MAX;
 }
 
+// What a player does on the tick about to be stepped: its input, and a kill before the tick (with the
+// effects of the build the world steps with).
+static void apply_input(ft_world *world, int client_id, const dd_input_t *record, bool events) {
+  if (get_flag_kill(record) && ddnet_world_character(&world->core, client_id)) {
+    if (events)
+      ddnet_ev_player_kill(&world->core, client_id);
+    else
+      ddnet_player_kill(&world->core, client_id);
+  }
+  world->inputs[client_id] = *record;
+  // (a kill is a trigger: one held on is not one again)
+  set_flag_kill(&world->inputs[client_id], 0);
+  ddnet_input_from_record(record, &world->core.players[client_id].input);
+  world->core.characters[client_id].tele_out = record->m_TeleOut;
+}
+
 void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs, const ft_player_playback *playback,
                              uint32_t player_count) {
   if (!world) return;
-  const int tick_before = world->core.m_GameTick;
+  const int tick_before = ddnet_engine_tick(world);
   const bool effects_bound = dd_particles_bind(game, world);
+  const bool events = ddnet_step_events(world);
+  const int count = world->player_count;
   // Who skids before the step, so a skid's first tick is heard.
-  uint8_t was_skidding_small[64];
-  uint8_t *was_skidding = world->core.m_NumCharacters <= 64 ? was_skidding_small : malloc((size_t)world->core.m_NumCharacters);
-  for (int i = 0; was_skidding && i < world->core.m_NumCharacters; ++i)
+  uint8_t was_skidding[DDNET_MAX_CLIENTS];
+  for (int i = 0; i < count; ++i)
     was_skidding[i] = dd_skidding(world, i);
-  const SPlayerInput *records = inputs;
-  const int count = world->core.m_NumCharacters;
+  const dd_input_t *records = inputs;
   // Slots only come into being with the first replay; a world that never replays stays without.
   struct dd_replay_slot *slots = playback ? replay_slots(world, count) : world->replay_slots;
   const int slot_count = slots ? world->replay_slot_count : 0;
 
   bool any_replayed = false;
   for (int i = 0; i < count; ++i) {
-    SCharacterCore *core = &world->core.m_pCharacters[i];
+    const int client_id = world->client_ids[i];
+    ddnet_character_t *chr = ddnet_world_character(&world->core, client_id);
     struct dd_replay_slot *slot = i < slot_count ? &slots[i] : NULL;
     const ft_player_playback *pb = slot ? playback_of(playback, player_count, i) : NULL;
     if (pb) {
       // Stepped with what it most likely held, so the physics keeps up with it, but it never
       // fires and never hooks anyone: nothing it does may reach a simulated tee.
       const dd_state_character c = recorded_character(pb);
-      SPlayerInput input;
+      dd_input_t input;
       if (c.quality != DD_QUALITY_NONE) {
         recorded_input(&c, pb->tick, &input);
         input.m_Fire = 0;
@@ -803,20 +840,27 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
         memset(&input, 0, sizeof(input));
         input.m_TargetY = -1;
       }
-      if (slot->mode == REPLAY_NONE) remember_flags(slot, core);
-      core->m_HookHitDisabled = true;
-      cc_on_input(core, &input);
+      if (chr) {
+        if (slot->mode == REPLAY_NONE) remember_flags(slot, chr);
+        chr->core.hook_hit_disabled = true;
+        ddnet_character_changed(&world->core, client_id);
+      }
+      apply_input(world, client_id, &input, events);
       any_replayed = true;
       continue;
     }
-    if (slot && slot->mode != REPLAY_NONE) release_replay(core, slot);
+    if (slot && slot->mode != REPLAY_NONE) release_replay(world, client_id, chr, slot);
     // Players the engine has no input for keep holding their last one.
-    cc_on_input(core, records && (uint32_t)i < player_count ? &records[i] : &core->m_Input);
+    if (records && (uint32_t)i < player_count) apply_input(world, client_id, &records[i], events);
+    else apply_input(world, client_id, &world->inputs[client_id], events);
   }
 
   world->replay_muted = any_replayed;
   emit_bullet_trails(&world->core);
-  wc_tick(&world->core);
+  if (events)
+    ddnet_ev_world_tick(&world->core);
+  else
+    ddnet_world_tick(&world->core);
   world->replay_muted = false;
 
   if (any_replayed) show_recorded(world, slots, slot_count, playback, player_count);
@@ -827,21 +871,24 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
   if (world->replay_recording)
     emit_events(world, (ft_recording *)world->replay_recording, world->replay_tick, playback, player_count, effects_bound);
   dd_particles_finish(game, world, tick_before, effects_bound, was_skidding);
-  if (was_skidding != was_skidding_small) free(was_skidding);
 }
 
 void dd_recording_world_place(ft_game *game, ft_world *world, const ft_player_playback *playback, uint32_t player_count) {
   (void)game;
   if (!world || !playback) return;
-  const int count = world->core.m_NumCharacters;
+  const int count = world->player_count;
   struct dd_replay_slot *slots = replay_slots(world, count);
   if (!slots) return;
   bool any_replayed = false;
   for (int i = 0; i < count; ++i) {
     if (!playback_of(playback, player_count, i)) continue;
-    SCharacterCore *core = &world->core.m_pCharacters[i];
-    if (slots[i].mode == REPLAY_NONE) remember_flags(&slots[i], core);
-    core->m_HookHitDisabled = true;
+    const int client_id = world->client_ids[i];
+    ddnet_character_t *chr = ddnet_world_character(&world->core, client_id);
+    if (chr) {
+      if (slots[i].mode == REPLAY_NONE) remember_flags(&slots[i], chr);
+      chr->core.hook_hit_disabled = true;
+      ddnet_character_changed(&world->core, client_id);
+    }
     any_replayed = true;
   }
   if (any_replayed) show_recorded(world, slots, world->replay_slot_count, playback, player_count);
@@ -923,15 +970,15 @@ bool dd_recording_snap_entities(const ft_world *world, dd_snapshot_builder *buil
 static void projectile_pos(const dd_state_projectile *p, const float *tuning, float time, float *out_x, float *out_y) {
   float curvature = 0.f, speed = 0.f;
   switch (p->type) {
-  case WEAPON_GRENADE:
+  case DDNET_WEAPON_GRENADE:
     curvature = tuning[23];
     speed = tuning[24];
     break;
-  case WEAPON_SHOTGUN:
+  case DDNET_WEAPON_SHOTGUN:
     curvature = tuning[19];
     speed = tuning[20];
     break;
-  case WEAPON_GUN:
+  case DDNET_WEAPON_GUN:
     curvature = tuning[16];
     speed = tuning[17];
     break;
@@ -961,18 +1008,18 @@ void dd_recording_render_entities(ft_game *game, const ft_world *world, float in
       float x0, y0, x1, y1;
       projectile_pos(p, tuning, (float)(tick - 1 - p->start_tick) / (float)GAME_TICK_SPEED, &x0, &y0);
       projectile_pos(p, tuning, (float)(tick - p->start_tick) / (float)GAME_TICK_SPEED, &x1, &y1);
-      const vec2 from = {(x0 + MAP_EXPAND32) / PX_PER_TILE, (y0 + MAP_EXPAND32) / PX_PER_TILE};
-      const vec2 to = {(x1 + MAP_EXPAND32) / PX_PER_TILE, (y1 + MAP_EXPAND32) / PX_PER_TILE};
+      const vec2 from = {x0 / PX_PER_TILE, y0 / PX_PER_TILE};
+      const vec2 to = {x1 / PX_PER_TILE, y1 / PX_PER_TILE};
       dd_render_projectile(game, from, to, intra, p->type, tick, p->start_tick);
     }
     for (int i = 0; i < state->num_lasers; ++i) {
       const dd_state_laser *l = &state->lasers[i];
       if (!owner_shown(world, l->owner)) continue;
       if (!dd_demo_state_tuning(recording->state, tick, 0, tuning)) continue;
-      const vec2 from = {(l->from_x + MAP_EXPAND32) / PX_PER_TILE, (l->from_y + MAP_EXPAND32) / PX_PER_TILE};
-      const vec2 to = {(l->to_x + MAP_EXPAND32) / PX_PER_TILE, (l->to_y + MAP_EXPAND32) / PX_PER_TILE};
+      const vec2 from = {l->from_x / PX_PER_TILE, l->from_y / PX_PER_TILE};
+      const vec2 to = {l->to_x / PX_PER_TILE, l->to_y / PX_PER_TILE};
       // DDNet's own laser types (doors, draggers, freeze) are drawn like rifle shots.
-      const bool shotgun = l->type == WEAPON_SHOTGUN;
+      const bool shotgun = l->type == DDNET_WEAPON_SHOTGUN;
       dd_render_laser(game, from, to, !shotgun, (float)(tick - 1 - l->start_tick) + intra, tuning[27], tick, intra);
     }
   }

@@ -10,6 +10,7 @@
 #include "dd_internal.h"
 #include "dd_maps.h"
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,8 +20,8 @@
 // Input schema
 // -----------------------------------------------------------------------------
 //
-// SPlayerInput packs its booleans into a bitfield, which is precisely why the
-// engine edits inputs through named fields instead of reaching into the record.
+// dd_input_t packs its booleans into flags, which is precisely why the engine
+// edits inputs through named fields instead of reaching into the record.
 
 enum ddnet_input_field {
   IN_DIRECTION = 0,
@@ -78,7 +79,7 @@ static const ft_input_field input_fields[IN_COUNT] = {
                    .kind = FT_INPUT_ENUM,
                    .flags = FT_INPUT_FLAG_TIMELINE_LANE,
                    .min_value = 0,
-                   .max_value = NUM_WEAPONS - 1,
+                   .max_value = DDNET_NUM_WEAPONS - 1,
                    .enum_labels = weapon_labels,
                    .enum_count = (uint32_t)(sizeof(weapon_labels) / sizeof(weapon_labels[0])),
                    .color = {0.8f, 0.6f, 1.0f, 1.0f}},
@@ -116,8 +117,8 @@ static const ft_input_control input_controls[] = {
 
 static const ft_input_schema input_schema = {
     .struct_size = sizeof(ft_input_schema),
-    .record_size = sizeof(SPlayerInput),
-    .record_align = _Alignof(SPlayerInput),
+    .record_size = sizeof(dd_input_t),
+    .record_align = _Alignof(dd_input_t),
     .fields = input_fields,
     .field_count = IN_COUNT,
     .controls = input_controls,
@@ -135,19 +136,19 @@ static const ft_linked_action linked_actions[] = {
 
 static void ddnet_input_default(ft_game *game, void *record) {
   (void)game;
-  SPlayerInput *input = record;
+  dd_input_t *input = record;
   memset(input, 0, sizeof(*input));
   // A zero aim would leave the tee pointing at itself, which no real client
   // ever sends; straight up matches what DDNet does on spawn.
   input->m_TargetY = -1;
   // Gun is DDNet's neutral wanted-weapon value. A zeroed record requests the
   // hammer and would switch away from the weapon the tee spawns with.
-  input->m_WantedWeapon = WEAPON_GUN;
+  input->m_WantedWeapon = DDNET_WEAPON_GUN;
 }
 
 static int64_t ddnet_input_get(ft_game *game, const void *record, uint32_t field) {
   (void)game;
-  const SPlayerInput *in = record;
+  const dd_input_t *in = record;
   switch (field) {
   case IN_DIRECTION:
     return in->m_Direction;
@@ -176,7 +177,7 @@ static int64_t ddnet_input_get(ft_game *game, const void *record, uint32_t field
 
 static void ddnet_input_set(ft_game *game, void *record, uint32_t field, int64_t value) {
   (void)game;
-  SPlayerInput *in = record;
+  dd_input_t *in = record;
   switch (field) {
   case IN_DIRECTION:
     in->m_Direction = (int8_t)(value < -1 ? -1 : (value > 1 ? 1 : value));
@@ -193,7 +194,7 @@ static void ddnet_input_set(ft_game *game, void *record, uint32_t field, int64_t
     in->m_Hook = value ? 1 : 0;
     break;
   case IN_WEAPON:
-    in->m_WantedWeapon = (uint8_t)(value < 0 ? 0 : (value >= NUM_WEAPONS ? NUM_WEAPONS - 1 : value));
+    in->m_WantedWeapon = (uint8_t)(value < 0 ? 0 : (value >= DDNET_NUM_WEAPONS ? DDNET_NUM_WEAPONS - 1 : value));
     break;
   case IN_KILL:
     set_flag_kill(in, value != 0);
@@ -218,14 +219,14 @@ static void ddnet_input_set(ft_game *game, void *record, uint32_t field, int64_t
 
 static ft_vec2 ddnet_input_get_vec2(ft_game *game, const void *record, uint32_t field) {
   (void)game;
-  const SPlayerInput *in = record;
+  const dd_input_t *in = record;
   if (field != IN_TARGET) return (ft_vec2){0.f, 0.f};
   return (ft_vec2){(float)in->m_TargetX, (float)in->m_TargetY};
 }
 
 static void ddnet_input_set_vec2(ft_game *game, void *record, uint32_t field, ft_vec2 value) {
   (void)game;
-  SPlayerInput *in = record;
+  dd_input_t *in = record;
   if (field != IN_TARGET) return;
   in->m_TargetX = (int16_t)value.x;
   in->m_TargetY = (int16_t)value.y;
@@ -233,10 +234,10 @@ static void ddnet_input_set_vec2(ft_game *game, void *record, uint32_t field, ft
 
 static void ddnet_input_describe(ft_game *game, const void *record, char *out, size_t out_size) {
   (void)game;
-  const SPlayerInput *in = record;
+  const dd_input_t *in = record;
   const char *dir = in->m_Direction < 0 ? "<" : (in->m_Direction > 0 ? ">" : "-");
   snprintf(out, out_size, "%s%s%s%s %s", dir, in->m_Jump ? " jump" : "", (in->m_Fire & 1) ? " fire" : "", in->m_Hook ? " hook" : "",
-           in->m_WantedWeapon < NUM_WEAPONS ? weapon_labels[in->m_WantedWeapon] : "?");
+           in->m_WantedWeapon < DDNET_NUM_WEAPONS ? weapon_labels[in->m_WantedWeapon] : "?");
 }
 
 // -----------------------------------------------------------------------------
@@ -302,7 +303,7 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
                             .kind = FT_VALUE_INT,
                             .flags = FT_PROP_WRITABLE | FT_PROP_STARTING | FT_PROP_SUMMARY,
                             .min_value = 0,
-                            .max_value = NUM_WEAPONS - 1},
+                            .max_value = DDNET_NUM_WEAPONS - 1},
     [PROP_HAS_SHOTGUN] = {.id = "has_shotgun", .display_name = "Shotgun", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_HAS_GRENADE] = {.id = "has_grenade", .display_name = "Grenade", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_HAS_LASER] = {.id = "has_laser", .display_name = "Laser", .group = "Weapons", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
@@ -439,31 +440,34 @@ static const ft_entity_class entity_classes[] = {
     [DD_CLASS_LASER] = {.id = "laser", .display_name = "Laser", .props = laser_props, .prop_count = LASER_PROP_COUNT},
 };
 
-// Entities hang off the world in singly linked lists, so an index means "the
-// nth one still alive".
+// Entities hang off the world in linked lists, so an index means "the nth one
+// still alive" of the class (the laser list also holds the map's turrets,
+// draggers and laser walls, which are not lasers).
 static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out);
 static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out);
 
-static SEntity *entity_at(const ft_world *world, int type, int32_t index) {
+static const ddnet_entity_t *entity_at(const ft_world *world, int type, ddnet_entity_kind_t kind, int32_t index) {
   if (!world || index < 0) return NULL;
   int32_t seen = 0;
-  for (SEntity *ent = world->core.m_apFirstEntityTypes[type]; ent; ent = ent->m_pNextTypeEntity) {
-    if (seen++ == index) return ent;
+  for (int i = world->core.first_entity[type]; i != -1; i = world->core.entities[i].link.next) {
+    const ddnet_entity_t *ent = &world->core.entities[i];
+    if (ent->kind == kind && seen++ == index) return ent;
   }
   return NULL;
 }
 
-static int32_t entity_list_count(const ft_world *world, int type) {
+static int32_t entity_list_count(const ft_world *world, int type, ddnet_entity_kind_t kind) {
   if (!world) return 0;
   int32_t count = 0;
-  for (SEntity *ent = world->core.m_apFirstEntityTypes[type]; ent; ent = ent->m_pNextTypeEntity)
-    ++count;
+  for (int i = world->core.first_entity[type]; i != -1; i = world->core.entities[i].link.next)
+    count += world->core.entities[i].kind == kind;
   return count;
 }
 
-static SCharacterCore *character_at(const ft_world *world, int32_t index) {
-  if (!world || index < 0 || index >= world->core.m_NumCharacters) return NULL;
-  return &world->core.m_pCharacters[index];
+// The race time of a player that finished, in seconds; -1 until then.
+static float race_time(const ft_world *world, int client_id) {
+  const ddnet_player_t *player = &world->core.players[client_id];
+  return player->finish_tick >= 0 ? (float)player->finish_time_ticks / (float)GAME_TICK_SPEED : -1.f;
 }
 
 static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t entity_class, int32_t entity, uint32_t prop, ft_value *out) {
@@ -471,100 +475,100 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   if (entity_class == DD_CLASS_PROJECTILE) return projectile_prop_get(world, entity, prop, out);
   if (entity_class == DD_CLASS_LASER) return laser_prop_get(world, entity, prop, out);
   if (entity_class != FT_ENTITY_CLASS_PLAYER) return false;
-  const SCharacterCore *c = character_at(world, entity);
-  if (!c || prop >= PROP_COUNT) return false;
+  const ddnet_character_t *chr = ddnet_player_character(world, entity);
+  if (!chr || prop >= PROP_COUNT) return false;
+  const ddnet_character_core_t *c = &chr->core;
 
   switch (prop) {
   case PROP_POSITION:
-    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(c->m_Pos) / PX_PER_TILE, vgety(c->m_Pos) / PX_PER_TILE}};
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {chr->pos.x / PX_PER_TILE, chr->pos.y / PX_PER_TILE}};
     return true;
-  case PROP_VELOCITY: {
-    const float ramp = c->m_VelRamp > 0.0f ? c->m_VelRamp : 1.0f;
-    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(c->m_Vel) * ramp, vgety(c->m_Vel)}};
+  case PROP_VELOCITY:
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {c->vel.x, c->vel.y}};
     return true;
-  }
   case PROP_ACTIVE_WEAPON:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_ActiveWeapon};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->active_weapon};
     return true;
   case PROP_HEALTH:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_Health};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = chr->health};
     return true;
   case PROP_ARMOR:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_Armor};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = chr->armor};
     return true;
   case PROP_FREEZE_TIME:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_FreezeTime};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = chr->freeze_time};
     return true;
   case PROP_HAS_SHOTGUN:
   case PROP_HAS_GRENADE:
   case PROP_HAS_LASER:
   case PROP_HAS_NINJA:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_aWeaponGot[prop - (PROP_HAS_SHOTGUN - 2)]};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->weapons[prop - (PROP_HAS_SHOTGUN - 2)].got};
     return true;
   case PROP_JUMPS:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_Jumps};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->jumps};
     return true;
   case PROP_JUMPS_LEFT:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_JumpedTotal};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->jumped_total};
     return true;
   case PROP_ENDLESS_JUMP:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_EndlessJump};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->endless_jump};
     return true;
   case PROP_GROUNDED:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Grounded};
+    *out = (ft_value){.kind = FT_VALUE_BOOL,
+                      .as.b = world->level && ddnet_collision_is_on_ground(&world->level->collision, c->pos, 28.f)};
     return true;
   case PROP_HOOK_STATE:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_HookState};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->hook_state};
     return true;
   case PROP_HOOKED_PLAYER:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->m_HookedPlayer};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->hooked_player >= 0 ? ddnet_client_player(world, c->hooked_player) : -1};
     return true;
   case PROP_RACE_TIME:
-    *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = c->m_RaceTime};
+    *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = race_time(world, ddnet_player_client(world, entity))};
     return true;
   case PROP_DEEP_FROZEN:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_DeepFrozen};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->deep_frozen};
     return true;
   case PROP_ENDLESS_HOOK:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_EndlessHook};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->endless_hook};
     return true;
   case PROP_JETPACK:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Jetpack};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->jetpack};
     return true;
   case PROP_SOLO:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_Solo};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->solo};
     return true;
   case PROP_LIVE_FROZEN:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_LiveFrozen};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->live_frozen};
     return true;
   case PROP_TELEGUN:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_HasTelegunGun};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->has_telegun_gun};
     return true;
   case PROP_TELEGRENADE:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_HasTelegunGrenade};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->has_telegun_grenade};
     return true;
   case PROP_TELELASER:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->m_HasTelegunLaser};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->has_telegun_laser};
     return true;
   // The physics stores these as things that are switched off; the editor shows
   // them as things that work, so both sides read the way their owner thinks.
   case PROP_COLLIDE_OTHERS:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_CollisionDisabled};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->collision_disabled};
     return true;
   case PROP_HOOK_OTHERS:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_HookHitDisabled};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->hook_hit_disabled};
     return true;
   case PROP_HAMMER_HITS_OTHERS:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_HammerHitDisabled};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->hammer_hit_disabled};
     return true;
   case PROP_SHOTGUN_HITS_OTHERS:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_ShotgunHitDisabled};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->shotgun_hit_disabled};
     return true;
   case PROP_GRENADE_HITS_OTHERS:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_GrenadeHitDisabled};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->grenade_hit_disabled};
     return true;
   case PROP_LASER_HITS_OTHERS:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->m_LaserHitDisabled};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->laser_hit_disabled};
     return true;
   default:
     return false;
@@ -574,104 +578,107 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
 static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entity_class, int32_t entity, uint32_t prop, const ft_value *value) {
   (void)game;
   if (entity_class != FT_ENTITY_CLASS_PLAYER) return false;
-  SCharacterCore *c = character_at(world, entity);
-  if (!c || prop >= PROP_COUNT || !value) return false;
+  ddnet_character_t *chr = ddnet_player_character_mut(world, entity);
+  if (!chr || prop >= PROP_COUNT || !value) return false;
+  const int client_id = ddnet_player_client(world, entity);
+  ddnet_character_core_t *c = &chr->core;
 
   switch (prop) {
   case PROP_POSITION:
-    c->m_Pos = vec2_init(value->as.v.x * PX_PER_TILE, value->as.v.y * PX_PER_TILE);
-    c->m_PrevPos = c->m_Pos;
-    // Tile lookups are cached per position, so they have to be refreshed or the
-    // tee keeps colliding against wherever it used to be.
-    cc_calc_indices(c);
-    return true;
+    chr->pos = (ddnet_vec2_t){value->as.v.x * PX_PER_TILE, value->as.v.y * PX_PER_TILE};
+    chr->prev_pos = chr->pos;
+    c->pos = chr->pos;
+    break;
   case PROP_VELOCITY:
-    c->m_Vel = vec2_init(value->as.v.x, value->as.v.y);
-    return true;
+    c->vel = (ddnet_vec2_t){value->as.v.x, value->as.v.y};
+    break;
   case PROP_ACTIVE_WEAPON:
-    if (value->as.i < 0 || value->as.i >= NUM_WEAPONS) return false;
-    c->m_ActiveWeapon = (unsigned char)value->as.i;
-    c->m_aWeaponGot[value->as.i] = true;
-    return true;
+    if (value->as.i < 0 || value->as.i >= DDNET_NUM_WEAPONS) return false;
+    c->active_weapon = (int)value->as.i;
+    c->weapons[value->as.i].got = true;
+    break;
   case PROP_HEALTH:
-    c->m_Health = (int8_t)value->as.i;
-    return true;
+    chr->health = (int)value->as.i;
+    break;
   case PROP_ARMOR:
-    c->m_Armor = (int8_t)value->as.i;
-    return true;
+    chr->armor = (int)value->as.i;
+    break;
   case PROP_FREEZE_TIME:
-    c->m_FreezeTime = (int)value->as.i;
-    return true;
+    chr->freeze_time = (int)value->as.i;
+    break;
   case PROP_HAS_SHOTGUN:
   case PROP_HAS_GRENADE:
   case PROP_HAS_LASER:
   case PROP_HAS_NINJA: {
     const int weapon = (int)prop - (PROP_HAS_SHOTGUN - 2);
-    c->m_aWeaponGot[weapon] = value->as.b;
+    c->weapons[weapon].got = value->as.b;
     // A tee cannot hold a weapon it does not have; fall back to the hammer,
     // which every tee keeps.
-    if (!value->as.b && c->m_ActiveWeapon == weapon) c->m_ActiveWeapon = WEAPON_HAMMER;
-    if (c->m_aWeaponGot[WEAPON_NINJA]) {
-      c->m_ActiveWeapon = WEAPON_NINJA;
-      c->m_Ninja.m_ActivationTick = world->core.m_GameTick;
+    if (!value->as.b && c->active_weapon == weapon) c->active_weapon = DDNET_WEAPON_HAMMER;
+    if (c->weapons[DDNET_WEAPON_NINJA].got) {
+      c->active_weapon = DDNET_WEAPON_NINJA;
+      c->ninja.activation_tick = world->core.tick;
     }
-    return true;
+    break;
   }
   case PROP_JUMPS:
     if (value->as.i < 0 || value->as.i > 255) return false;
-    c->m_Jumps = (int)value->as.i;
-    return true;
+    c->jumps = (int)value->as.i;
+    break;
   case PROP_JUMPS_LEFT:
-    c->m_JumpedTotal = (int)value->as.i;
-    return true;
+    c->jumped_total = (int)value->as.i;
+    break;
   case PROP_ENDLESS_JUMP:
-    c->m_EndlessJump = value->as.b;
-    return true;
+    c->endless_jump = value->as.b;
+    break;
   case PROP_DEEP_FROZEN:
-    c->m_DeepFrozen = value->as.b;
-    return true;
+    c->deep_frozen = value->as.b;
+    break;
   case PROP_ENDLESS_HOOK:
-    c->m_EndlessHook = value->as.b;
-    return true;
+    c->endless_hook = value->as.b;
+    break;
   case PROP_JETPACK:
-    c->m_Jetpack = value->as.b;
-    return true;
+    c->jetpack = value->as.b;
+    break;
   case PROP_SOLO:
-    c->m_Solo = value->as.b;
-    return true;
+    c->solo = value->as.b;
+    world->core.teams.is_solo[client_id] = value->as.b;
+    break;
   case PROP_LIVE_FROZEN:
-    c->m_LiveFrozen = value->as.b;
-    return true;
+    c->live_frozen = value->as.b;
+    break;
   case PROP_TELEGUN:
-    c->m_HasTelegunGun = value->as.b;
-    return true;
+    c->has_telegun_gun = value->as.b;
+    break;
   case PROP_TELEGRENADE:
-    c->m_HasTelegunGrenade = value->as.b;
-    return true;
+    c->has_telegun_grenade = value->as.b;
+    break;
   case PROP_TELELASER:
-    c->m_HasTelegunLaser = value->as.b;
-    return true;
+    c->has_telegun_laser = value->as.b;
+    break;
   case PROP_COLLIDE_OTHERS:
-    c->m_CollisionDisabled = !value->as.b;
-    return true;
+    c->collision_disabled = !value->as.b;
+    break;
   case PROP_HOOK_OTHERS:
-    c->m_HookHitDisabled = !value->as.b;
-    return true;
+    c->hook_hit_disabled = !value->as.b;
+    break;
   case PROP_HAMMER_HITS_OTHERS:
-    c->m_HammerHitDisabled = !value->as.b;
-    return true;
+    c->hammer_hit_disabled = !value->as.b;
+    break;
   case PROP_SHOTGUN_HITS_OTHERS:
-    c->m_ShotgunHitDisabled = !value->as.b;
-    return true;
+    c->shotgun_hit_disabled = !value->as.b;
+    break;
   case PROP_GRENADE_HITS_OTHERS:
-    c->m_GrenadeHitDisabled = !value->as.b;
-    return true;
+    c->grenade_hit_disabled = !value->as.b;
+    break;
   case PROP_LASER_HITS_OTHERS:
-    c->m_LaserHitDisabled = !value->as.b;
-    return true;
+    c->laser_hit_disabled = !value->as.b;
+    break;
   default:
     return false;
   }
+  ddnet_character_changed(&world->core, client_id);
+  return true;
 }
 
 static int32_t ddnet_entity_count(ft_game *game, const ft_world *world, uint32_t entity_class) {
@@ -679,52 +686,54 @@ static int32_t ddnet_entity_count(ft_game *game, const ft_world *world, uint32_t
   if (!world) return 0;
   switch (entity_class) {
   case DD_CLASS_PLAYER:
-    return world->core.m_NumCharacters;
+    return world->player_count;
   case DD_CLASS_PROJECTILE:
-    return entity_list_count(world, WORLD_ENTTYPE_PROJECTILE);
+    return entity_list_count(world, DDNET_ENTTYPE_PROJECTILE, DDNET_ENTITY_PROJECTILE);
   case DD_CLASS_LASER:
-    return entity_list_count(world, WORLD_ENTTYPE_LASER);
+    return entity_list_count(world, DDNET_ENTTYPE_LASER, DDNET_ENTITY_LASER);
   default:
     return 0;
   }
 }
 
 static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
-  SProjectile *proj = (SProjectile *)entity_at(world, WORLD_ENTTYPE_PROJECTILE, entity);
-  if (!proj) return false;
+  const ddnet_entity_t *ent = entity_at(world, DDNET_ENTTYPE_PROJECTILE, DDNET_ENTITY_PROJECTILE, entity);
+  if (!ent) return false;
+  const ddnet_projectile_t *proj = &ent->u.projectile;
 
   switch (prop) {
   case PROJ_POSITION: {
     // Where it is *now*, which for a projectile is a function of flight time
     // rather than a stored position.
-    const float time = (world->core.m_GameTick - proj->m_StartTick) / (float)GAME_TICK_SPEED;
-    const mvec2 pos = prj_get_pos(proj, time);
-    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(pos) / PX_PER_TILE, vgety(pos) / PX_PER_TILE}};
+    const float time = (world->core.tick - proj->start_tick) / (float)GAME_TICK_SPEED;
+    const ddnet_vec2_t pos = ddnet_projectile_get_pos(&world->core, ent, time);
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {pos.x / PX_PER_TILE, pos.y / PX_PER_TILE}};
     return true;
   }
   case PROJ_DIRECTION:
-    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(proj->m_Direction), vgety(proj->m_Direction)}};
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {proj->direction.x, proj->direction.y}};
     return true;
   case PROJ_TYPE:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_Type};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->type};
     return true;
   case PROJ_OWNER:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_Owner};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->owner >= 0 ? ddnet_client_player(world, proj->owner) : -1};
     return true;
   case PROJ_START_TICK:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_StartTick};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->start_tick};
     return true;
   case PROJ_LIFESPAN:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_LifeSpan};
+    // ticks left, -1 for none (the bullets of map shotguns)
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->expire_tick == INT_MAX ? -1 : proj->expire_tick - world->core.tick - 1};
     return true;
   case PROJ_EXPLOSIVE:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = proj->m_Explosive};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = proj->explosive};
     return true;
   case PROJ_FREEZE:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = proj->m_Freeze};
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = proj->freeze};
     return true;
   case PROJ_BOUNCING:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->m_Bouncing};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->bouncing};
     return true;
   default:
     return false;
@@ -732,31 +741,31 @@ static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t 
 }
 
 static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
-  SLaser *laser = (SLaser *)entity_at(world, WORLD_ENTTYPE_LASER, entity);
-  if (!laser) return false;
+  const ddnet_entity_t *ent = entity_at(world, DDNET_ENTTYPE_LASER, DDNET_ENTITY_LASER, entity);
+  if (!ent) return false;
+  const ddnet_laser_t *laser = &ent->u.laser;
 
   switch (prop) {
   case LASER_POSITION:
-    *out = (ft_value){.kind = FT_VALUE_VEC2,
-                      .as.v = {vgetx(laser->m_Base.m_Pos) / PX_PER_TILE, vgety(laser->m_Base.m_Pos) / PX_PER_TILE}};
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {ent->pos.x / PX_PER_TILE, ent->pos.y / PX_PER_TILE}};
     return true;
   case LASER_FROM:
-    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {vgetx(laser->m_From) / PX_PER_TILE, vgety(laser->m_From) / PX_PER_TILE}};
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {laser->from.x / PX_PER_TILE, laser->from.y / PX_PER_TILE}};
     return true;
   case LASER_ENERGY:
-    *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = laser->m_Energy};
+    *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = laser->energy};
     return true;
   case LASER_BOUNCES:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_Bounces};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->bounces};
     return true;
   case LASER_OWNER:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_Owner};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->owner >= 0 ? ddnet_client_player(world, laser->owner) : -1};
     return true;
   case LASER_TYPE:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_Type};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->type};
     return true;
   case LASER_EVAL_TICK:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->m_EvalTick};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->eval_tick};
     return true;
   default:
     return false;
@@ -767,20 +776,10 @@ static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop,
 // Levels
 // -----------------------------------------------------------------------------
 
+// The physics has DDNet's DDRace game type; race and fastcap are not in it yet.
 static const ft_game_variant variants[] = {
     {.id = "ddrace", .display_name = "DDRace"},
-    {.id = "race", .display_name = "Race"},
-    {.id = "fastcap", .display_name = "FastCap"},
-    {.id = "fastcap_no_weapons", .display_name = "FastCap (no weapons)"},
 };
-
-static EGameMode variant_to_mode(const char *variant_id) {
-  if (!variant_id) return GAME_MODE_DDRACE;
-  if (strcmp(variant_id, "race") == 0) return GAME_MODE_RACE;
-  if (strcmp(variant_id, "fastcap") == 0) return GAME_MODE_FASTCAP;
-  if (strcmp(variant_id, "fastcap_no_weapons") == 0) return GAME_MODE_FASTCAP_NO_WPNS;
-  return GAME_MODE_DDRACE;
-}
 
 static ft_level *level_finish(ft_game *game, map_data_t *map, const char *variant_id, const char *name) {
   ft_level *level = calloc(1, sizeof(ft_level));
@@ -788,17 +787,21 @@ static ft_level *level_finish(ft_game *game, map_data_t *map, const char *varian
     free_map_data(map);
     return NULL;
   }
+  if (variant_id && strcmp(variant_id, "ddrace") != 0)
+    dd_log(game, FT_LOG_WARN, "The game type '%s' is not supported; the map is played as DDRace.", variant_id);
 
-  level->mode = variant_to_mode(variant_id);
-  if (!init_game_mode(&level->prototype, &level->collision, &level->grid, &level->config, map, level->mode)) {
-    dd_log(game, FT_LOG_ERROR, "Map '%s' could not be prepared for %s.", name ? name : "?", variant_id ? variant_id : "ddrace");
-    free_map_data(map);
+  level->map = *map;
+  level->config = ddnet_config_default(DDNET_MODE_DDRACE);
+  if (!ddnet_collision_init(&level->collision, &level->map) ||
+      !ddnet_world_init(&level->prototype, &level->collision, &level->config)) {
+    dd_log(game, FT_LOG_ERROR, "Map '%s' could not be prepared.", name ? name : "?");
+    ddnet_collision_free(&level->collision);
+    free_map_data(&level->map);
     free(level);
     return NULL;
   }
 
   snprintf(level->name, sizeof(level->name), "%s", name ? name : "map");
-  dd_level_build_pickups(level);
   dd_map_create(game, level);
   level->loaded = true;
   for (int i = 0; i < game->particle_count; ++i)
@@ -859,13 +862,9 @@ static void ddnet_level_destroy(ft_game *game, ft_level *level) {
   if (!level) return;
   if (game->current_level == level) game->current_level = NULL;
   dd_map_destroy(game, level);
-  free(level->pickups);
-  free(level->pickup_positions);
-  free(level->pickup_cooldown_keys);
-  free(level->ninja_pickup_indices);
-  tg_destroy(&level->grid);
-  wc_free(&level->prototype);
-  free_collision(&level->collision);
+  ddnet_world_free(&level->prototype);
+  ddnet_collision_free(&level->collision);
+  free_map_data(&level->map);
   free(level);
 }
 
@@ -874,7 +873,7 @@ static void ddnet_level_destroy(ft_game *game, ft_level *level) {
 static size_t ddnet_level_serialize(ft_game *game, const ft_level *level, void *out, size_t out_size) {
   (void)game;
   if (!level || !level->loaded) return 0;
-  const map_data_t *map = &level->collision.m_MapData;
+  const map_data_t *map = &level->map;
   if (!map->_map_file_data || map->_map_file_size == 0) return 0;
   if (!out) return map->_map_file_size;
   if (out_size < map->_map_file_size) return 0;
@@ -885,7 +884,7 @@ static size_t ddnet_level_serialize(ft_game *game, const ft_level *level, void *
 static bool ddnet_level_info(ft_game *game, const ft_level *level, ft_level_info *out) {
   (void)game;
   if (!level || !level->loaded || !out) return false;
-  const map_data_t *map = &level->collision.m_MapData;
+  const map_data_t *map = &level->map;
   out->name = level->name;
   out->width_tiles = map->width;
   out->height_tiles = map->height;
@@ -898,36 +897,72 @@ static bool ddnet_level_info(ft_game *game, const ft_level *level, ft_level_info
 // Worlds
 // -----------------------------------------------------------------------------
 
-static ft_world *ddnet_world_create(ft_game *game, const ft_world_desc *desc) {
+// A new player at `at_index` of the engine's players (or the end): the lowest
+// free client id joins the world and spawns right away, so that it stands at the
+// spawn like the players a world is made with. Returns the player, or -1.
+static int32_t add_player(ft_world *world, int32_t at_index) {
+  if (world->player_count >= DDNET_MAX_CLIENTS) return -1;
+  int client_id = 0;
+  // (the world has slots for the clients below num_clients; a higher one makes it grow)
+  while (client_id < world->core.num_clients && world->core.players[client_id].active)
+    ++client_id;
+  if (client_id == DDNET_MAX_CLIENTS || !ddnet_player_join(&world->core, client_id)) return -1;
+  ddnet_player_spawn(&world->core, client_id);
+  dd_input_t *held = &world->inputs[client_id];
+  memset(held, 0, sizeof(*held));
+  held->m_TargetY = -1;
+  held->m_WantedWeapon = DDNET_WEAPON_GUN;
+  world->pain_ticks[client_id] = -GAME_TICK_SPEED;
+
+  const int last = world->player_count++;
+  if (at_index < 0 || at_index >= last) {
+    world->client_ids[last] = (uint8_t)client_id;
+    return last;
+  }
+  // Track order is the user's, so a player inserted in the middle moves the
+  // ones after it down; their clients stay who they are.
+  memmove(&world->client_ids[at_index + 1], &world->client_ids[at_index], (size_t)(last - at_index));
+  world->client_ids[at_index] = (uint8_t)client_id;
+  return at_index;
+}
+
+static ft_world *dd_world_create(ft_game *game, const ft_world_desc *desc) {
   if (!desc || !desc->level || !desc->level->loaded) return NULL;
   ft_level *level = (ft_level *)desc->level;
 
   ft_world *world = calloc(1, sizeof(ft_world));
   if (!world) return NULL;
-  world->core = wc_empty();
   world->level = level;
   world->game = game;
   world->index = desc->world_index;
-  wc_copy_world(&world->core, &level->prototype);
+  if (!ddnet_world_copy(&world->core, &level->prototype)) {
+    free(world);
+    return NULL;
+  }
 
   const int32_t wanted = desc->player_count > 0 ? desc->player_count : 0;
-  if (wanted > world->core.m_NumCharacters) {
-    if (!wc_add_character(&world->core, wanted - world->core.m_NumCharacters)) {
-      dd_log(game, FT_LOG_ERROR, "Could not create %d characters.", wanted);
+  for (int32_t i = 0; i < wanted; ++i) {
+    if (add_player(world, -1) < 0) {
+      dd_log(game, FT_LOG_ERROR, "Could not create %d players.", wanted);
+      break;
     }
   }
   return world;
 }
 
-static void ddnet_world_destroy(ft_game *game, ft_world *world) {
-  (void)game;
-  if (!world) return;
-  wc_free(&world->core);
+void dd_world_release(ft_world *world) {
+  ddnet_world_free(&world->core);
   dd_replay_free(world);
   free(world->physics_particle_events);
   free(world->physics_damage_events);
   free(world->physics_sound_events);
   free(world->audio_sounds);
+}
+
+static void dd_world_destroy(ft_game *game, ft_world *world) {
+  (void)game;
+  if (!world) return;
+  dd_world_release(world);
   free(world);
 }
 
@@ -943,7 +978,7 @@ static bool copy_effect_events(void **destination, int *capacity, const void *so
   return true;
 }
 
-static void ddnet_world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
+void dd_world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
   if (!dst || !src) return;
   const int world_index = dst->index;
   dst->level = src->level;
@@ -951,9 +986,14 @@ static void ddnet_world_copy(ft_game *game, ft_world *dst, const ft_world *src) 
   // Keep the destination's identity. Prediction worlds use index -1 so their
   // speculative ticks cannot emit particles into a visible simulation group.
   dst->index = world_index;
-  // wc_copy_world reuses whatever dst already allocated, which is what keeps
-  // the engine's constant snapshotting affordable.
-  wc_copy_world(&dst->core, (SWorldCore *)&src->core);
+  // ddnet_world_copy reuses whatever dst already allocated (and only copies
+  // what changed since the two were the same), which is what keeps the engine's
+  // constant snapshotting affordable.
+  ddnet_world_copy(&dst->core, &src->core);
+  dst->player_count = src->player_count;
+  memcpy(dst->client_ids, src->client_ids, sizeof(dst->client_ids));
+  memcpy(dst->inputs, src->inputs, sizeof(dst->inputs));
+  memcpy(dst->pain_ticks, src->pain_ticks, sizeof(dst->pain_ticks));
   dst->replay_recording = src->replay_recording;
   dst->replay_tick = src->replay_tick;
   dst->replay_clients = src->replay_clients;
@@ -984,33 +1024,32 @@ static void ddnet_world_copy(ft_game *game, ft_world *dst, const ft_world *src) 
 // Players the engine has no input for keep holding their last one, which is how a track that ran
 // out of snippets behaves in DDNet. A plain step is a replay step without recordings, so players
 // whose replay just ended are handed back to the physics.
-static void ddnet_world_step(ft_game *game, ft_world *world, const void *inputs, uint32_t player_count) {
+static void dd_world_step(ft_game *game, ft_world *world, const void *inputs, uint32_t player_count) {
   dd_recording_world_step(game, world, inputs, NULL, player_count);
 }
 
-static int32_t ddnet_world_tick(ft_game *game, const ft_world *world) {
+static int32_t dd_world_tick(ft_game *game, const ft_world *world) {
   (void)game;
-  return world ? world->core.m_GameTick : 0;
+  return ddnet_engine_tick(world);
 }
 
-static int32_t ddnet_world_player_count(ft_game *game, const ft_world *world) {
+static int32_t dd_world_player_count(ft_game *game, const ft_world *world) {
   (void)game;
-  return world ? world->core.m_NumCharacters : 0;
+  return world ? world->player_count : 0;
 }
 
-static bool ddnet_world_player_view(ft_game *game, const ft_world *world, int32_t player, ft_player_view *out) {
+static bool dd_world_player_view(ft_game *game, const ft_world *world, int32_t player, ft_player_view *out) {
   (void)game;
-  const SCharacterCore *c = character_at(world, player);
-  if (!c || !out) return false;
-
-  const float ramp = c->m_VelRamp > 0.0f ? c->m_VelRamp : 1.0f;
-  out->position = (ft_vec2){vgetx(c->m_Pos) / PX_PER_TILE, vgety(c->m_Pos) / PX_PER_TILE};
-  out->velocity = (ft_vec2){vgetx(c->m_Vel) * ramp, vgety(c->m_Vel)};
-  out->aim = (ft_vec2){(float)c->m_Input.m_TargetX / PX_PER_TILE, (float)c->m_Input.m_TargetY / PX_PER_TILE};
+  const ddnet_character_t *chr = ddnet_player_character(world, player);
+  if (!chr || !out) return false;
+  const int client_id = ddnet_player_client(world, player);
+  out->position = (ft_vec2){chr->pos.x / PX_PER_TILE, chr->pos.y / PX_PER_TILE};
+  out->velocity = (ft_vec2){chr->core.vel.x, chr->core.vel.y};
+  out->aim = (ft_vec2){(float)chr->core.input.target_x / PX_PER_TILE, (float)chr->core.input.target_y / PX_PER_TILE};
   out->flags = FT_PLAYER_ALIVE;
-  if (c->m_FreezeTime > 0 || c->m_DeepFrozen) out->flags |= FT_PLAYER_DISABLED;
-  if (c->m_RaceTime >= 0.f) out->flags |= FT_PLAYER_FINISHED;
-  out->run_start_tick = c->m_StartTick;
+  if (chr->freeze_time > 0 || chr->core.deep_frozen) out->flags |= FT_PLAYER_DISABLED;
+  if (world->core.players[client_id].finish_tick >= 0) out->flags |= FT_PLAYER_FINISHED;
+  out->run_start_tick = chr->race_state == DDNET_RACE_NONE ? -1 : chr->start_time;
   return true;
 }
 
@@ -1019,17 +1058,18 @@ static void ddnet_collect_events(ft_game *game, const ft_world *previous, const 
   (void)game;
   if (!previous || !world || !emit) return;
 
-  const int count = world->core.m_NumCharacters < previous->core.m_NumCharacters ? world->core.m_NumCharacters
-                                                                                 : previous->core.m_NumCharacters;
+  const int count = world->player_count < previous->player_count ? world->player_count : previous->player_count;
   for (int player = 0; player < count; ++player) {
-    const SCharacterCore *before = &previous->core.m_pCharacters[player];
-    const SCharacterCore *after = &world->core.m_pCharacters[player];
+    const ddnet_character_t *before = ddnet_player_character(previous, player);
+    const ddnet_character_t *after = ddnet_player_character(world, player);
+    const int client_id = ddnet_player_client(world, player);
 
-    if (after->m_LastTimeCp >= 0 && after->m_LastTimeCp < NUM_TIME_CHECKPOINTS && after->m_LastTimeCp != before->m_LastTimeCp) {
+    if (before && after && after->last_time_cp >= 0 && after->last_time_cp < DDNET_MAX_CHECKPOINTS &&
+        after->last_time_cp != before->last_time_cp) {
       char text[64];
-      snprintf(text, sizeof(text), "Checkpoint %d: %.3fs", after->m_LastTimeCp + 1, after->m_aTimeCp[after->m_LastTimeCp]);
+      snprintf(text, sizeof(text), "Checkpoint %d: %.3fs", after->last_time_cp + 1, after->current_time_cp[after->last_time_cp]);
       const ft_timeline_event event = {.struct_size = sizeof(ft_timeline_event),
-                                       .tick = world->core.m_GameTick,
+                                       .tick = ddnet_engine_tick(world),
                                        .player = player,
                                        .category = "checkpoint",
                                        .text = text,
@@ -1037,11 +1077,12 @@ static void ddnet_collect_events(ft_game *game, const ft_world *previous, const 
       emit(user, &event);
     }
 
-    if (before->m_FinishTick < 0 && after->m_FinishTick >= 0) {
+    if (client_id >= 0 && ddnet_player_client(previous, player) == client_id &&
+        previous->core.players[client_id].finish_tick < 0 && world->core.players[client_id].finish_tick >= 0) {
       char text[64];
-      snprintf(text, sizeof(text), "Finish: %.3fs", after->m_RaceTime >= 0.f ? after->m_RaceTime : 0.f);
+      snprintf(text, sizeof(text), "Finish: %.3fs", race_time(world, client_id));
       const ft_timeline_event event = {.struct_size = sizeof(ft_timeline_event),
-                                       .tick = world->core.m_GameTick,
+                                       .tick = ddnet_engine_tick(world),
                                        .player = player,
                                        .category = "finish",
                                        .text = text,
@@ -1054,58 +1095,43 @@ static void ddnet_collect_events(ft_game *game, const ft_world *previous, const 
 static void ddnet_linked_input_update(ft_game *game, const ft_linked_input_frame *frame, void *inout_record) {
   (void)game;
   if (!frame || !frame->world || !inout_record || (frame->actions_down & (UINT64_C(1) << LINKED_AIM_AT_SOURCE)) == 0) return;
-  const SCharacterCore *source = character_at(frame->world, frame->source_player);
-  const SCharacterCore *target = character_at(frame->world, frame->target_player);
+  const ddnet_character_t *source = ddnet_player_character(frame->world, frame->source_player);
+  const ddnet_character_t *target = ddnet_player_character(frame->world, frame->target_player);
   if (!source || !target) return;
-  SPlayerInput *input = inout_record;
-  input->m_TargetX = (int16_t)(vgetx(source->m_Pos) - vgetx(target->m_Pos));
-  input->m_TargetY = (int16_t)(vgety(source->m_Pos) - vgety(target->m_Pos));
+  dd_input_t *input = inout_record;
+  input->m_TargetX = (int16_t)(source->pos.x - target->pos.x);
+  input->m_TargetY = (int16_t)(source->pos.y - target->pos.y);
 }
 
-static int32_t ddnet_world_add_player(ft_game *game, ft_world *world, int32_t at_index, const ft_player_setup *setup) {
+static int32_t dd_world_add_player(ft_game *game, ft_world *world, int32_t at_index, const ft_player_setup *setup) {
   (void)setup;
   if (!world) return -1;
-  if (!wc_add_character(&world->core, 1)) {
-    dd_log(game, FT_LOG_ERROR, "Adding a character failed.");
+  const int32_t player = add_player(world, at_index);
+  if (player < 0) {
+    dd_log(game, FT_LOG_ERROR, "Adding a player failed.");
     return -1;
   }
-
-  const int last = world->core.m_NumCharacters - 1;
-  if (at_index < 0 || at_index >= last) {
-    dd_replay_insert_player(world, last);
-    return last;
-  }
-  dd_replay_insert_player(world, at_index);
-
-  // Track order is the user's, so a character inserted in the middle has to be
-  // rotated into place and every id below it renumbered.
-  SCharacterCore moved = world->core.m_pCharacters[last];
-  memmove(&world->core.m_pCharacters[at_index + 1], &world->core.m_pCharacters[at_index], sizeof(SCharacterCore) * (last - at_index));
-  world->core.m_pCharacters[at_index] = moved;
-  for (int i = 0; i < world->core.m_NumCharacters; ++i) {
-    world->core.m_pCharacters[i].m_Id = i;
-    cc_calc_indices(&world->core.m_pCharacters[i]);
-  }
-  return at_index;
+  dd_replay_insert_player(world, player);
+  return player;
 }
 
-static bool ddnet_world_remove_player(ft_game *game, ft_world *world, int32_t player) {
+static bool dd_world_remove_player(ft_game *game, ft_world *world, int32_t player) {
   (void)game;
-  if (!world || player < 0 || player >= world->core.m_NumCharacters) return false;
-  wc_remove_character(&world->core, player);
+  if (!world || player < 0 || player >= world->player_count) return false;
+  ddnet_player_leave(&world->core, world->client_ids[player]);
+  memmove(&world->client_ids[player], &world->client_ids[player + 1], (size_t)(world->player_count - player - 1));
+  --world->player_count;
   dd_replay_remove_player(world, player);
-  for (int i = 0; i < world->core.m_NumCharacters; ++i)
-    world->core.m_pCharacters[i].m_Id = i;
   return true;
 }
 
 // --- serialization -----------------------------------------------------------
 //
-// Only what a starting state needs: the tick and the characters. Entities in
-// flight (projectiles, lasers) are deliberately dropped, because a project
-// stores a point to simulate from, not a mid-flight snapshot.
+// Only what a starting state needs: the tick and the tees. Entities in flight
+// (projectiles, lasers) are deliberately dropped, because a project stores a
+// point to simulate from, not a mid-flight snapshot.
 
-#define DDNET_STATE_MAGIC 0x444E5731u /* "DDNW1" */
+#define DDNET_STATE_MAGIC 0x444E5732u /* "DDNW2" */
 
 typedef struct {
   uint32_t magic;
@@ -1115,54 +1141,49 @@ typedef struct {
   uint32_t character_size;
 } ddnet_state_header;
 
-static size_t ddnet_world_serialize(ft_game *game, const ft_world *world, void *out, size_t out_size) {
+static size_t dd_world_serialize(ft_game *game, const ft_world *world, void *out, size_t out_size) {
   (void)game;
   if (!world) return 0;
-  const size_t needed = sizeof(ddnet_state_header) + (size_t)world->core.m_NumCharacters * sizeof(dd_character_state_v1);
+  const size_t needed = sizeof(ddnet_state_header) + (size_t)world->player_count * sizeof(dd_character_state_v2);
   if (!out) return needed;
   if (out_size < needed) return 0;
 
   ddnet_state_header header = {.magic = DDNET_STATE_MAGIC,
-                               .version = 1,
-                               .game_tick = world->core.m_GameTick,
-                               .character_count = world->core.m_NumCharacters,
-                               .character_size = (uint32_t)sizeof(dd_character_state_v1)};
+                               .version = 2,
+                               .game_tick = world->core.tick,
+                               .character_count = world->player_count,
+                               .character_size = (uint32_t)sizeof(dd_character_state_v2)};
   memcpy(out, &header, sizeof(header));
-  for (int i = 0; i < world->core.m_NumCharacters; ++i)
-    dd_character_state_write((char *)out + sizeof(header) + (size_t)i * sizeof(dd_character_state_v1),
-                             &world->core.m_pCharacters[i]);
+  for (int i = 0; i < world->player_count; ++i)
+    dd_character_state_write((char *)out + sizeof(header) + (size_t)i * sizeof(dd_character_state_v2), world, i);
   return needed;
 }
 
-static bool ddnet_world_deserialize(ft_game *game, ft_world *world, const void *data, size_t size) {
+static bool dd_world_deserialize(ft_game *game, ft_world *world, const void *data, size_t size) {
   if (!world || !data || size < sizeof(ddnet_state_header)) return false;
 
   ddnet_state_header header;
   memcpy(&header, data, sizeof(header));
-  if (header.magic != DDNET_STATE_MAGIC || header.version != 1) return false;
-  if (header.character_size != sizeof(dd_character_state_v1)) {
+  if (header.magic != DDNET_STATE_MAGIC || header.version != 2) return false;
+  if (header.character_size != sizeof(dd_character_state_v2)) {
     dd_log(game, FT_LOG_WARN, "Stored world was written by a different physics build; ignoring it.");
     return false;
   }
-  if (header.character_count < 0) return false;
-  if ((size_t)header.character_count > (size - sizeof(header)) / sizeof(dd_character_state_v1)) return false;
+  if (header.character_count < 0 || header.character_count > DDNET_MAX_CLIENTS) return false;
+  if ((size_t)header.character_count > (size - sizeof(header)) / sizeof(dd_character_state_v2)) return false;
 
-  // A deserialized world is a fresh starting point: nobody in it replays anything yet.
+  // A deserialized world is a fresh starting point: nobody in it replays anything yet, and its tees
+  // are the stored ones at the spawn of a new world.
   dd_replay_free(world);
   world->replay_recording = NULL;
   world->replay_clients = 0;
-  while (world->core.m_NumCharacters > header.character_count)
-    wc_remove_character(&world->core, world->core.m_NumCharacters - 1);
-  if (header.character_count > world->core.m_NumCharacters)
-    if (!wc_add_character(&world->core, header.character_count - world->core.m_NumCharacters)) return false;
-
-  for (int i = 0; i < header.character_count; ++i) {
-    SCharacterCore *live = &world->core.m_pCharacters[i];
-    dd_character_state_read(live, (const char *)data + sizeof(header) + (size_t)i * sizeof(dd_character_state_v1));
-    live->m_Id = i;
-    cc_calc_indices(live);
-  }
-  world->core.m_GameTick = header.game_tick;
+  ft_level *level = world->level;
+  ddnet_world_copy(&world->core, &level->prototype);
+  world->player_count = 0;
+  for (int i = 0; i < header.character_count; ++i)
+    if (add_player(world, -1) < 0) return false;
+  for (int i = 0; i < header.character_count; ++i)
+    dd_character_state_read(world, i, (const char *)data + sizeof(header) + (size_t)i * sizeof(dd_character_state_v2));
   world->physics_particle_event_count = 0;
   world->physics_damage_event_count = 0;
   world->physics_sound_event_count = 0;
@@ -1293,7 +1314,7 @@ static void ddnet_map_settings_menu(const ft_game *game) {
   const bool has_level = game && game->current_level;
   if (!igBeginMenu("Map Server Settings", has_level)) return;
 
-  const map_data_t *map = &game->current_level->collision.m_MapData;
+  const map_data_t *map = &game->current_level->map;
   if (map->num_settings <= 0) {
     igTextDisabled("This map has no embedded server settings.");
   } else {
@@ -1409,7 +1430,7 @@ static const ft_game_module module = {
                             FT_CAP_LEVEL_FROM_MEMORY | FT_CAP_TIMELINE_EVENTS | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS |
                             FT_CAP_HOSTS_STARTING_STATE | FT_CAP_RECORDINGS,
                     .min_players = 0,
-                    .max_players = 1024,
+                    .max_players = DDNET_MAX_CLIENTS,
                     .ticks_per_second = 50,
                     .units_per_tile = 1.f,
                     .default_camera_height = 20.f,
@@ -1448,17 +1469,17 @@ static const ft_game_module module = {
     .level_info = ddnet_level_info,
     .level_serialize = ddnet_level_serialize,
 
-    .world_create = ddnet_world_create,
-    .world_destroy = ddnet_world_destroy,
-    .world_copy = ddnet_world_copy,
-    .world_step = ddnet_world_step,
-    .world_tick = ddnet_world_tick,
-    .world_player_count = ddnet_world_player_count,
-    .world_player_view = ddnet_world_player_view,
-    .world_add_player = ddnet_world_add_player,
-    .world_remove_player = ddnet_world_remove_player,
-    .world_serialize = ddnet_world_serialize,
-    .world_deserialize = ddnet_world_deserialize,
+    .world_create = dd_world_create,
+    .world_destroy = dd_world_destroy,
+    .world_copy = dd_world_copy,
+    .world_step = dd_world_step,
+    .world_tick = dd_world_tick,
+    .world_player_count = dd_world_player_count,
+    .world_player_view = dd_world_player_view,
+    .world_add_player = dd_world_add_player,
+    .world_remove_player = dd_world_remove_player,
+    .world_serialize = dd_world_serialize,
+    .world_deserialize = dd_world_deserialize,
 
     .input_default = ddnet_input_default,
     .input_get = ddnet_input_get,

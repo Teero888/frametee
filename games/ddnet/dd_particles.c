@@ -1,7 +1,6 @@
 #include "dd_internal.h"
 #include "dd_profile.h"
 
-#include <ddnet_physics/collision.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -202,14 +201,11 @@ static void flow_get(dd_particle_system_t *ps, double sim_time, vec2 pos, vec2 o
   }
 }
 
-static inline bool point_is_solid(const SCollision *collision, float x, float y) {
-  if (!collision) return false;
-  const int Nx = (int)(x + 0.5f) >> 5;
-  const int Ny = (int)(y + 0.5f) >> 5;
-  return (collision->m_pTileInfos[collision->m_pWidthLookup[Ny] + Nx] & INFO_ISSOLID) != 0;
+static inline bool point_is_solid(const ddnet_collision_t *collision, float x, float y) {
+  return collision && ddnet_collision_check_point(collision, x, y);
 }
 
-static void move_point(SCollision *collision, vec2 *inout_pos, vec2 *inout_vel, float elasticity) {
+static void move_point(const ddnet_collision_t *collision, vec2 *inout_pos, vec2 *inout_vel, float elasticity) {
   if (!collision) {
     glm_vec2_add(*inout_pos, *inout_vel, *inout_pos);
     return;
@@ -240,7 +236,7 @@ static void move_point(SCollision *collision, vec2 *inout_pos, vec2 *inout_vel, 
 }
 
 static void particle_simulate_step(dd_particle_system_t *ps, dd_particle_t *p, vec2 pos, vec2 vel, uint32_t *seed,
-                                   double sim_time, float dt, SCollision *collision) {
+                                   double sim_time, float dt, const ddnet_collision_t *collision) {
   vel[1] += p->gravity * dt;
 
   if (p->flow_affected > 0.0f) {
@@ -278,7 +274,7 @@ static void particle_simulate_step(dd_particle_system_t *ps, dd_particle_t *p, v
   }
 }
 
-void dd_particles_update_sim(dd_particle_system_t *ps, SCollision *collision) {
+void dd_particles_update_sim(dd_particle_system_t *ps, const ddnet_collision_t *collision) {
   const double step = 0.02;
   double sim_target = ps->current_time;
 
@@ -428,7 +424,7 @@ void dd_particles_render(dd_particle_system_t *ps, ft_game *game, int layer) {
   }
 }
 
-void dd_particles_create_explosion(dd_particle_system_t *ps, SCollision *collision, vec2 pos) {
+void dd_particles_create_explosion(dd_particle_system_t *ps, const ddnet_collision_t *collision, vec2 pos) {
   flow_add(ps, pos, 5000.0f);
   dd_particle_t p = particle_default();
   glm_vec2_copy(pos, p.start_pos);
@@ -775,20 +771,23 @@ static dd_physics_sound_event_t *append_physics_sound_event(ft_world *world) {
   return &world->physics_sound_events[world->physics_sound_event_count++];
 }
 
-static void on_particle(mvec2 pos, int type, int cid, void *user_data) {
+// The callbacks get DDNet's client ids; everything here is about the engine's players.
+static int player_of(const ft_world *world, int client_id) { return client_id >= 0 ? ddnet_client_player(world, client_id) : -1; }
+
+static void on_particle(ddnet_vec2_t pos, int type, int cid, void *user_data) {
   ft_world *world = user_data;
   if (!world || !world->game) return;
-  if (dd_replay_muted(world, cid)) return;
+  const int player = player_of(world, cid);
+  if (dd_replay_muted(world, player)) return;
 
   switch (type) {
-  case PARTICLE_TYPE_PLAYER_SPAWN:
-  case PARTICLE_TYPE_PLAYER_DEATH:
-  case PARTICLE_TYPE_HAMMER_HIT:
-  case PARTICLE_TYPE_EXPLOSION:
-  case PARTICLE_TYPE_AIR_JUMP: {
+  case DDNET_PARTICLE_PLAYER_SPAWN:
+  case DDNET_PARTICLE_PLAYER_DEATH:
+  case DDNET_PARTICLE_HAMMER_HIT:
+  case DDNET_PARTICLE_EXPLOSION:
+  case DDNET_PARTICLE_AIR_JUMP: {
     dd_physics_particle_event_t *event = append_physics_particle_event(world);
-    if (event)
-      *event = (dd_physics_particle_event_t){.x = vgetx(pos), .y = vgety(pos), .type = type, .client_id = cid};
+    if (event) *event = (dd_physics_particle_event_t){.x = pos.x, .y = pos.y, .type = type, .client_id = player};
   } break;
   default:
     break;
@@ -798,20 +797,20 @@ static void on_particle(mvec2 pos, int type, int cid, void *user_data) {
   dd_particle_system_t *ps = dd_particles_for(world->game, world->index);
   if (!ps) return;
 
-  vec2 p = {vgetx(pos), vgety(pos)};
+  vec2 p = {pos.x, pos.y};
   const vec2 zero_vel = {0, -1};
 
   switch (type) {
-  case PARTICLE_TYPE_SMOKE:
+  case DDNET_PARTICLE_SMOKE:
     dd_particles_create_smoke(ps, p, (float *)zero_vel, 1.0f, 0.0f);
     break;
-  case PARTICLE_TYPE_PLAYER_SPAWN:
+  case DDNET_PARTICLE_PLAYER_SPAWN:
     dd_particles_create_player_spawn(ps, p, 1.0f);
     break;
-  case PARTICLE_TYPE_PLAYER_DEATH: {
+  case DDNET_PARTICLE_PLAYER_DEATH: {
     vec4 color = {1, 1, 1, 1};
     const int track = world->game->engine->timeline_player_track
-                          ? world->game->engine->timeline_player_track((uint32_t)world->index, (uint32_t)cid)
+                          ? world->game->engine->timeline_player_track((uint32_t)world->index, (uint32_t)player)
                           : -1;
     if (track >= 0) {
       dd_player_profile_t profile;
@@ -821,22 +820,22 @@ static void on_particle(mvec2 pos, int type, int cid, void *user_data) {
     dd_particles_create_player_death(ps, p, color);
     break;
   }
-  case PARTICLE_TYPE_AIR_JUMP:
+  case DDNET_PARTICLE_AIR_JUMP:
     dd_particles_create_air_jump(ps, p, 1.0f);
     break;
-  case PARTICLE_TYPE_BULLET_TRAIL:
+  case DDNET_PARTICLE_BULLET_TRAIL:
     dd_particles_create_bullet_trail(ps, p, 1.0f, 0.0f);
     break;
-  case PARTICLE_TYPE_BULLET_STARS:
+  case DDNET_PARTICLE_BULLET_STARS:
     dd_particles_create_star(ps, p);
     break;
-  case PARTICLE_TYPE_EXPLOSION:
+  case DDNET_PARTICLE_EXPLOSION:
     dd_particles_create_explosion(ps, world->level ? &world->level->collision : NULL, p);
     break;
-  case PARTICLE_TYPE_HAMMER_HIT:
+  case DDNET_PARTICLE_HAMMER_HIT:
     dd_particles_create_hammer_hit(ps, p, 1.0f);
     break;
-  case PARTICLE_TYPE_CONFETTI:
+  case DDNET_PARTICLE_CONFETTI:
     dd_particles_create_confetti(ps, p, 1.0f);
     break;
   default:
@@ -844,39 +843,43 @@ static void on_particle(mvec2 pos, int type, int cid, void *user_data) {
   }
 }
 
-static void on_damage_indicator(mvec2 pos, float angle, int amount, int cid, void *user_data) {
-  ft_world *world = user_data;
-  if (!world || !world->game) return;
-  if (dd_replay_muted(world, cid)) return;
-  {
-    dd_physics_damage_event_t *event = append_physics_damage_event(world);
-    if (event)
-      *event = (dd_physics_damage_event_t){.x = vgetx(pos), .y = vgety(pos), .angle = angle, .amount = amount, .client_id = cid};
-  }
+void dd_damage_star(ft_world *world, float x, float y, float angle, int player) {
+  if (!world || !world->game || dd_replay_muted(world, player)) return;
+  dd_physics_damage_event_t *event = append_physics_damage_event(world);
+  if (event) *event = (dd_physics_damage_event_t){.x = x, .y = y, .angle = angle, .client_id = player};
 
   if (!world->render_physics_effects) return;
   dd_particle_system_t *ps = dd_particles_for(world->game, world->index);
   if (!ps) return;
+  vec2 p = {x, y};
+  vec2 dir = {cosf(angle), sinf(angle)};
+  dd_particles_create_damage_ind(ps, p, dir, 1.0f);
+}
 
-  vec2 p = {vgetx(pos), vgety(pos)};
+// CGameContext::CreateDamageInd: `amount` stars spread over the third of a turn
+// around 3pi/2 + angle, each sent as its own event.
+static void on_damage_indicator(ddnet_vec2_t pos, float angle, int amount, int cid, void *user_data) {
+  ft_world *world = user_data;
+  if (!world) return;
+  const int player = player_of(world, cid);
   const float pi = 3.14159265358979323846f;
-  const float center = 3.0f * pi / 2.0f + angle;
-  const float start = center - pi / 3.0f;
-  const float end = center + pi / 3.0f;
+  const float a = 3.0f * pi / 2.0f + angle;
+  const float s = a - pi / 3.0f;
+  const float e = a + pi / 3.0f;
   for (int i = 0; i < amount; ++i) {
-    const float indicator_angle = start + (end - start) * (float)(i + 1) / (float)(amount + 1);
-    vec2 dir = {cosf(indicator_angle), sinf(indicator_angle)};
-    dd_particles_create_damage_ind(ps, p, dir, 1.0f);
+    // mix(s, e, (i + 1) / (float)(Amount + 2))
+    const float f = s + (e - s) * ((float)(i + 1) / (float)(amount + 2));
+    dd_damage_star(world, pos.x, pos.y, f, player);
   }
 }
 
-static void on_sound(mvec2 pos, int sound_id, int cid, void *user_data) {
+static void on_sound(ddnet_vec2_t pos, int sound_id, int cid, void *user_data) {
   ft_world *world = user_data;
   if (!world || !world->game) return;
-  if (dd_replay_muted(world, cid)) return;
+  const int player = player_of(world, cid);
+  if (dd_replay_muted(world, player)) return;
   dd_physics_sound_event_t *event = append_physics_sound_event(world);
-  if (event)
-    *event = (dd_physics_sound_event_t){.x = vgetx(pos), .y = vgety(pos), .sound_id = sound_id, .client_id = cid};
+  if (event) *event = (dd_physics_sound_event_t){.x = pos.x, .y = pos.y, .sound_id = sound_id, .client_id = player};
 }
 
 bool dd_particles_bind(ft_game *game, ft_world *world) {
@@ -885,15 +888,19 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
   world->physics_damage_event_count = 0;
   world->physics_sound_event_count = 0;
   world->game = game;
-  world->core.user_data = world;
-  world->core.particle = on_particle;
-  world->core.damage_indicator = on_damage_indicator;
-  world->core.sound = on_sound;
 
   const bool presentation_enabled =
       !game->engine->presentation_effects_enabled || game->engine->presentation_effects_enabled();
   const int index = world->index;
-  world->render_physics_effects = presentation_enabled && index >= 0 && !game->headless && game->settings.render_particles;
+  // A world steps with the event build of the physics while its effects are of use: shown, heard, or
+  // written into a demo. Searches, seeking and lookups step without (and faster).
+  const bool events = index >= 0 && (presentation_enabled || game->physics_events_forced);
+  world->core.user_data = events ? world : NULL;
+  world->core.particle = events ? on_particle : NULL;
+  world->core.damage_indicator = events ? on_damage_indicator : NULL;
+  world->core.sound = events ? on_sound : NULL;
+
+  world->render_physics_effects = events && presentation_enabled && !game->headless && game->settings.render_particles;
   if (!world->render_physics_effects) return false;
 
   dd_particle_system_t *ps = dd_particles_for(game, index);
@@ -905,17 +912,18 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
   // A fresh world may reuse an index from a group that was removed. Tick zero
   // is an unambiguous new presentation history, so no particles from the old
   // occupant may survive it.
-  if (world->core.m_GameTick == 0 && ps->last_simulated_tick >= 0) dd_particles_reset(ps);
+  const int tick = ddnet_engine_tick(world);
+  if (tick == 0 && ps->last_simulated_tick >= 0) dd_particles_reset(ps);
 
   // Re-simulating a tick that already ran means the editor rewound or replayed.
   // Drop everything newer than this moment and resume from here: without this
   // the high-water mark stays ahead forever and nothing ever spawns again.
-  if (world->core.m_GameTick <= ps->last_simulated_tick) {
-    dd_particles_rewind_to_tick(ps, world->core.m_GameTick);
+  if (tick <= ps->last_simulated_tick) {
+    dd_particles_rewind_to_tick(ps, tick);
   }
 
-  ps->rng_seed = (uint32_t)world->core.m_GameTick;
-  ps->current_time = (double)world->core.m_GameTick / (double)GAME_TICK_SPEED;
+  ps->rng_seed = (uint32_t)tick;
+  ps->current_time = (double)tick / (double)GAME_TICK_SPEED;
   // Long jumps can simulate thousands of ticks before the next render. Expire
   // dead particles as the logic clock advances so old smoke cannot fill the
   // fixed pool and crowd out the effects near the destination.
@@ -924,34 +932,34 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
 }
 
 bool dd_skidding(const ft_world *world, int player) {
-  if (!world->level || player < 0 || player >= world->core.m_NumCharacters) return false;
-  const SCharacterCore *core = &world->core.m_pCharacters[player];
-  const float vx = vgetx(core->m_Vel), vy = vgety(core->m_Vel);
-  const int direction = core->m_Input.m_Direction;
+  const ddnet_character_t *chr = ddnet_player_character(world, player);
+  if (!world->level || !chr) return false;
+  const float vx = chr->core.vel.x, vy = chr->core.vel.y;
+  const int direction = chr->core.input.direction;
   const bool against = (direction == -1 && vx > 0.f) || (direction == 1 && vx < 0.f);
   // length(Vel * 50) > 500 in units a second
   if (!against || vx * vx + vy * vy <= 100.f) return false;
-  return check_point((SCollision *)&world->level->collision, vec2_init(vgetx(core->m_Pos), vgety(core->m_Pos) + 16.f));
+  return ddnet_collision_check_point(&world->level->collision, chr->pos.x, chr->pos.y + 16.f);
 }
 
 // A skid sounds when it starts and then every tenth of a second, as DDNet's
 // client times it, and trails smoke at its hundred hertz.
 static void skids(ft_world *world, dd_particle_system_t *ps, const uint8_t *was_skidding) {
-  const int tick = world->core.m_GameTick;
-  for (int player = 0; player < world->core.m_NumCharacters; ++player) {
+  const int tick = world->core.tick;
+  for (int player = 0; player < world->player_count; ++player) {
     if (dd_replay_absent(world, player) || !dd_skidding(world, player)) continue;
-    const SCharacterCore *core = &world->core.m_pCharacters[player];
-    const float x = vgetx(core->m_Pos), y = vgety(core->m_Pos);
+    const ddnet_character_t *chr = ddnet_player_character(world, player);
+    const float x = chr->pos.x, y = chr->pos.y;
     if (!was_skidding || !was_skidding[player] || tick % 5 == 0) {
       dd_physics_sound_event_t *event = append_physics_sound_event(world);
       if (event)
         *event = (dd_physics_sound_event_t){
-            .x = x, .y = y, .sound_id = SOUND_TYPE_PLAYER_SKID, .client_id = player, .client_side = true};
+            .x = x, .y = y, .sound_id = DDNET_SOUND_PLAYER_SKID, .client_id = player, .client_side = true};
     }
     if (!ps) continue;
-    vec2 pos = {x, y}, vel = {vgetx(core->m_Vel), vgety(core->m_Vel)};
+    vec2 pos = {x, y}, vel = {chr->core.vel.x, chr->core.vel.y};
     for (int i = 0; i < 2; ++i)
-      dd_particles_create_skid_trail(ps, pos, vel, core->m_Input.m_Direction, 1.f);
+      dd_particles_create_skid_trail(ps, pos, vel, chr->core.input.direction, 1.f);
   }
 }
 
@@ -970,21 +978,20 @@ void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool b
 
   // DDNet's client adds these presentation-only effects after the physics
   // tick; they are not raised by gamecore callbacks.
-  if (world->core.m_GameTick % 5 == 0) {
-    for (int player = 0; player < world->core.m_NumCharacters; ++player) {
-      const SCharacterCore *character = &world->core.m_pCharacters[player];
-      if (character->m_FreezeTime > 0) {
-        vec2 pos = {vgetx(character->m_Pos), vgety(character->m_Pos)};
+  if (world->core.tick % 5 == 0) {
+    for (int player = 0; player < world->player_count; ++player) {
+      const ddnet_character_t *chr = ddnet_player_character(world, player);
+      if (chr && chr->freeze_time > 0) {
+        vec2 pos = {chr->pos.x, chr->pos.y};
         dd_particles_create_freezing_flakes(ps, pos, (vec2){32.f, 32.f}, 1.f);
       }
     }
   }
-  if (!world->core.m_UniqueRace && world->level) {
-    for (int i = 0; i < world->level->num_ninja_pickups; ++i) {
-      const int pickup = world->level->ninja_pickup_indices[i];
-      vec2 pos = {vgetx(world->level->pickup_positions[pickup]), vgety(world->level->pickup_positions[pickup])};
-      dd_particles_create_powerup_shine(ps, pos, (vec2){96.f, 18.f}, 1.f);
-    }
+  for (int i = world->core.first_entity[DDNET_ENTTYPE_PICKUP]; i != -1; i = world->core.entities[i].link.next) {
+    const ddnet_entity_t *pickup = &world->core.entities[i];
+    if (pickup->kind != DDNET_ENTITY_PICKUP || pickup->u.pickup.type != DDNET_POWERUP_NINJA) continue;
+    vec2 pos = {pickup->pos.x, pickup->pos.y};
+    dd_particles_create_powerup_shine(ps, pos, (vec2){96.f, 18.f}, 1.f);
   }
   ps->last_simulated_tick = tick_before;
 }
@@ -1003,5 +1010,5 @@ void dd_particles_advance(ft_game *game, int world_index, const ft_level *level,
   // interpolates between the two, so this only has to set where "now" is.
   const double particle_time = ((double)tick - 1.0 + (double)alpha) / (double)GAME_TICK_SPEED;
   ps->current_time = particle_time < 0.0 ? 0.0 : particle_time;
-  dd_particles_update_sim(ps, (SCollision *)&level->collision);
+  dd_particles_update_sim(ps, &level->collision);
 }

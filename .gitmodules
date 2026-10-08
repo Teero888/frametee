@@ -9,7 +9,7 @@
 	url = https://github.com/btzy/nativefiledialog-extended.git
 [submodule "libs/ddnet_physics"]
 	path = libs/ddnet_physics
-	url = https://github.com/Teero888/ddnet_physics_c.git
+	url = https://github.com/Teero888/ddnet_physics.git
 [submodule "libs/ddnet_demo"]
 	path = libs/ddnet_demo
 	url = https://github.com/Teero888/ddnet_demo_c99.git

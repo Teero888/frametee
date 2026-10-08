@@ -97,15 +97,15 @@ static const char *field_names[DD_IN_COUNT] = {
     [DD_IN_KILL] = "Kill",
 };
 
-static SPlayerInput default_input(void) {
-  SPlayerInput input;
+static dd_input_t default_input(void) {
+  dd_input_t input;
   memset(&input, 0, sizeof(input));
   input.m_TargetY = -1;
-  input.m_WantedWeapon = WEAPON_GUN;
+  input.m_WantedWeapon = DDNET_WEAPON_GUN;
   return input;
 }
 
-static bool field_equal(const SPlayerInput *left, const SPlayerInput *right, int field) {
+static bool field_equal(const dd_input_t *left, const dd_input_t *right, int field) {
   switch (field) {
   case DD_IN_DIRECTION:
     return left->m_Direction == right->m_Direction;
@@ -128,7 +128,7 @@ static bool field_equal(const SPlayerInput *left, const SPlayerInput *right, int
   }
 }
 
-static void copy_field(SPlayerInput *destination, const SPlayerInput *source, int field) {
+static void copy_field(dd_input_t *destination, const dd_input_t *source, int field) {
   switch (field) {
   case DD_IN_DIRECTION:
     destination->m_Direction = source->m_Direction;
@@ -163,43 +163,57 @@ static void copy_field(SPlayerInput *destination, const SPlayerInput *source, in
 typedef struct clean_context_t {
   const ft_input_effect_frame *frame;
   unsigned char *records;
-  SPlayerInput *saved;
-  SPlayerInput *candidate_inputs;
+  dd_input_t *saved;
+  dd_input_t *candidate_inputs;
   int first_edit;
   int last_edit;
   int horizon;
-  SWorldCore candidate_world;
+  ft_world candidate_world;
   struct expected_player_t *expected;
   int expected_tick_count;
   dd_clean_runtime_t *runtime;
 } clean_context_t;
 
 typedef struct expected_player_t {
-  mvec2 position;
-  mvec2 velocity;
+  bool has_tee;
+  ddnet_vec2_t position;
+  ddnet_vec2_t velocity;
   int freeze_time;
   bool deep_frozen;
-  float race_time;
-  int start_tick;
+  int finish_tick;
+  int start_time;
 } expected_player_t;
 
-static SPlayerInput *clean_cell(clean_context_t *context, int row) {
-  return (SPlayerInput *)(context->records + (size_t)row * context->frame->record_stride);
+static void expect(expected_player_t *out, const ft_world *world, int player) {
+  memset(out, 0, sizeof(*out));
+  const ddnet_character_t *chr = ddnet_player_character(world, player);
+  out->finish_tick = world->core.players[ddnet_player_client(world, player)].finish_tick;
+  if (!chr) return;
+  out->has_tee = true;
+  out->position = chr->pos;
+  out->velocity = chr->core.vel;
+  out->freeze_time = chr->freeze_time;
+  out->deep_frozen = chr->core.deep_frozen;
+  out->start_time = chr->start_time;
 }
 
-static bool world_matches_expected(const clean_context_t *context, const SWorldCore *world, int tick) {
+static dd_input_t *clean_cell(clean_context_t *context, int row) {
+  return (dd_input_t *)(context->records + (size_t)row * context->frame->record_stride);
+}
+
+static bool world_matches_expected(const clean_context_t *context, const ft_world *world, int tick) {
   const int tick_index = tick - context->frame->start_tick;
-  if (tick_index < 0 || tick_index >= context->expected_tick_count ||
-      world->m_NumCharacters != (int)context->frame->player_count)
+  if (tick_index < 0 || tick_index >= context->expected_tick_count || world->player_count != (int)context->frame->player_count)
     return false;
   const expected_player_t *expected = context->expected + (size_t)tick_index * context->frame->player_count;
   for (uint32_t i = 0; i < context->frame->player_count; ++i) {
-    const SCharacterCore *actual = &world->m_pCharacters[i];
-    if (memcmp(&actual->m_Pos, &expected[i].position, sizeof(actual->m_Pos)) != 0 ||
-        memcmp(&actual->m_Vel, &expected[i].velocity, sizeof(actual->m_Vel)) != 0 ||
-        actual->m_FreezeTime != expected[i].freeze_time || actual->m_DeepFrozen != expected[i].deep_frozen ||
-        memcmp(&actual->m_RaceTime, &expected[i].race_time, sizeof(actual->m_RaceTime)) != 0 ||
-        actual->m_StartTick != expected[i].start_tick)
+    expected_player_t actual;
+    expect(&actual, world, (int)i);
+    // (compared as bits, as the members are: the same bits are the same run)
+    if (actual.has_tee != expected[i].has_tee || memcmp(&actual.position, &expected[i].position, sizeof(actual.position)) != 0 ||
+        memcmp(&actual.velocity, &expected[i].velocity, sizeof(actual.velocity)) != 0 ||
+        actual.freeze_time != expected[i].freeze_time || actual.deep_frozen != expected[i].deep_frozen ||
+        actual.finish_tick != expected[i].finish_tick || actual.start_time != expected[i].start_time)
       return false;
   }
   return true;
@@ -207,23 +221,22 @@ static bool world_matches_expected(const clean_context_t *context, const SWorldC
 
 static void fill_simulation_inputs(clean_context_t *context, int tick) {
   const ft_input_effect_frame *frame = context->frame;
-  const SPlayerInput fallback = default_input();
+  const dd_input_t fallback = default_input();
   for (uint32_t player = 0; player < frame->player_count; ++player) {
-    SPlayerInput candidate = fallback;
+    dd_input_t candidate = fallback;
     if (frame->input_at_tick) frame->input_at_tick(frame->timeline_user, (int32_t)player, tick, &candidate);
     context->candidate_inputs[player] = candidate;
   }
 }
 
 static bool candidate_preserves_run(clean_context_t *context, const ft_world *source, int candidate_tick) {
-  wc_copy_world(&context->candidate_world, (SWorldCore *)&source->core);
+  // (index -1: a world of nobody's, which makes no effects and steps with the physics without them)
+  context->candidate_world.index = -1;
+  dd_world_copy(source->game, &context->candidate_world, source);
   ++context->runtime->simulations;
   for (int tick = candidate_tick; tick < context->horizon; ++tick) {
     fill_simulation_inputs(context, tick);
-    for (uint32_t player = 0; player < context->frame->player_count; ++player) {
-      cc_on_input(&context->candidate_world.m_pCharacters[player], &context->candidate_inputs[player]);
-    }
-    wc_tick(&context->candidate_world);
+    dd_recording_world_step(source->game, &context->candidate_world, context->candidate_inputs, NULL, context->frame->player_count);
     ++context->runtime->simulated_ticks;
     if (!world_matches_expected(context, &context->candidate_world, tick + 1)) return false;
   }
@@ -232,7 +245,7 @@ static bool candidate_preserves_run(clean_context_t *context, const ft_world *so
 
 typedef struct clean_job_t {
   clean_context_t *context;
-  const SPlayerInput *defaults;
+  const dd_input_t *defaults;
   uint64_t fields;
   bool *changed_rows;
   bool *changed_fields;
@@ -242,7 +255,7 @@ typedef struct clean_job_t {
 static bool field_selected(const clean_job_t *job, int field) { return (job->fields & (UINT64_C(1) << field)) != 0; }
 
 static int row_change_count(const clean_job_t *job, int row, int field) {
-  const SPlayerInput *record = clean_cell(job->context, row);
+  const dd_input_t *record = clean_cell(job->context, row);
   if (field >= 0) return field_equal(record, job->defaults, field) ? 0 : 1;
   int count = 0;
   for (int i = 0; i < DD_IN_COUNT; ++i)
@@ -251,7 +264,7 @@ static int row_change_count(const clean_job_t *job, int row, int field) {
 }
 
 static int saved_change_count(const clean_job_t *job, int row, int field) {
-  const SPlayerInput *record = &job->context->saved[row];
+  const dd_input_t *record = &job->context->saved[row];
   if (field >= 0) return field_equal(record, job->defaults, field) ? 0 : 1;
   int count = 0;
   for (int i = 0; i < DD_IN_COUNT; ++i)
@@ -277,7 +290,7 @@ static void mark_fast_change(clean_job_t *job, int row, int field) {
 static uint64_t fast_clean_ddnet_fields(clean_job_t *job) {
   uint64_t changed = 0;
   for (uint32_t row = 0; row < job->context->frame->record_count; ++row) {
-    SPlayerInput *input = clean_cell(job->context, (int)row);
+    dd_input_t *input = clean_cell(job->context, (int)row);
     if (field_selected(job, DD_IN_TARGET) && !input->m_Hook && !(input->m_Fire & 1) &&
         !field_equal(input, job->defaults, DD_IN_TARGET)) {
       copy_field(input, job->defaults, DD_IN_TARGET);
@@ -296,7 +309,7 @@ static bool try_clean_range(clean_job_t *job, int first, int last, int field) {
   if (changes == 0) return true;
 
   for (int row = first; row <= last; ++row) {
-    SPlayerInput *cell = clean_cell(context, row);
+    dd_input_t *cell = clean_cell(context, row);
     context->saved[row] = *cell;
     if (field >= 0)
       copy_field(cell, job->defaults, field);
@@ -377,7 +390,7 @@ static void clean_field_runs(clean_job_t *job, int field) {
 static void clean_quiet_weapon_ranges(clean_job_t *job) {
   int row = (int)job->context->frame->record_count - 1;
   while (row >= 0) {
-    SPlayerInput *input = clean_cell(job->context, row);
+    dd_input_t *input = clean_cell(job->context, row);
     while (row >= 0 && ((input->m_Fire & 1) || row_change_count(job, row, DD_IN_WEAPON) == 0)) {
       --row;
       if (row >= 0) input = clean_cell(job->context, row);
@@ -385,7 +398,7 @@ static void clean_quiet_weapon_ranges(clean_job_t *job) {
     if (row < 0) break;
     const int last = row;
     while (row > 0) {
-      const SPlayerInput *previous = clean_cell(job->context, row - 1);
+      const dd_input_t *previous = clean_cell(job->context, row - 1);
       if ((previous->m_Fire & 1) || row_change_count(job, row - 1, DD_IN_WEAPON) == 0) break;
       --row;
     }
@@ -406,17 +419,10 @@ static bool prepare_expected_path(clean_context_t *context) {
     const ft_world *world = frame->world_at_tick
                                 ? frame->world_at_tick(frame->timeline_user, frame->start_tick + tick_index)
                                 : NULL;
-    if (!world || world->core.m_NumCharacters != (int)frame->player_count) return false;
+    if (!world || world->player_count != (int)frame->player_count) return false;
     expected_player_t *expected = context->expected + (size_t)tick_index * frame->player_count;
-    for (uint32_t player = 0; player < frame->player_count; ++player) {
-      const SCharacterCore *character = &world->core.m_pCharacters[player];
-      expected[player].position = character->m_Pos;
-      expected[player].velocity = character->m_Vel;
-      expected[player].freeze_time = character->m_FreezeTime;
-      expected[player].deep_frozen = character->m_DeepFrozen;
-      expected[player].race_time = character->m_RaceTime;
-      expected[player].start_tick = character->m_StartTick;
-    }
+    for (uint32_t player = 0; player < frame->player_count; ++player)
+      expect(&expected[player], world, (int)player);
   }
   return true;
 }
@@ -424,7 +430,7 @@ static bool prepare_expected_path(clean_context_t *context) {
 static bool clean_inputs(const ft_input_effect_frame *frame, const dd_clean_parameters_t *parameters,
                          dd_clean_runtime_t *runtime, void *records) {
   if (!frame || !records || frame->record_count == 0 || frame->player < 0 ||
-      (uint32_t)frame->player >= frame->player_count || frame->record_stride < sizeof(SPlayerInput))
+      (uint32_t)frame->player >= frame->player_count || frame->record_stride < sizeof(dd_input_t))
     return false;
   uint64_t selected = parameters->fields & DD_CLEANABLE_FIELDS;
   if (selected == 0) return true;
@@ -432,7 +438,7 @@ static bool clean_inputs(const ft_input_effect_frame *frame, const dd_clean_para
   clean_context_t context = {
       .frame = frame,
       .records = records,
-      .candidate_world = wc_empty(),
+      .candidate_world = {0},
       .runtime = runtime,
   };
   context.saved = calloc(frame->record_count, sizeof(*context.saved));
@@ -443,11 +449,11 @@ static bool clean_inputs(const ft_input_effect_frame *frame, const dd_clean_para
     free(context.saved);
     free(context.candidate_inputs);
     free(changed_rows);
-    wc_free(&context.candidate_world);
+    dd_world_release(&context.candidate_world);
     return false;
   }
 
-  const SPlayerInput defaults = default_input();
+  const dd_input_t defaults = default_input();
   clean_job_t initial_job = {.context = &context,
                              .defaults = &defaults,
                              .fields = selected,
@@ -459,7 +465,7 @@ static bool clean_inputs(const ft_input_effect_frame *frame, const dd_clean_para
     free(context.candidate_inputs);
     free(context.expected);
     free(changed_rows);
-    wc_free(&context.candidate_world);
+    dd_world_release(&context.candidate_world);
     return false;
   }
 
@@ -504,7 +510,7 @@ static bool clean_inputs(const ft_input_effect_frame *frame, const dd_clean_para
   free(context.candidate_inputs);
   free(context.expected);
   free(changed_rows);
-  wc_free(&context.candidate_world);
+  dd_world_release(&context.candidate_world);
   return true;
 }
 
@@ -522,7 +528,7 @@ static int16_t clamp_target(float value) {
 
 static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_parameters_t *parameters,
                           dd_smooth_runtime_t *runtime, void *records) {
-  if (!frame || !records || frame->record_count < 2 || frame->record_stride < sizeof(SPlayerInput)) return true;
+  if (!frame || !records || frame->record_count < 2 || frame->record_stride < sizeof(dd_input_t)) return true;
   const uint32_t count = frame->record_count;
   bool *anchors = calloc(count, sizeof(*anchors));
   int *attack_ticks = calloc(count, sizeof(*attack_ticks));
@@ -539,8 +545,8 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
   anchors[count - 1] = true;
   runtime->anchors = count > 1 ? 2 : 1;
   for (uint32_t row = 1; row + 1 < count; ++row) {
-    const SPlayerInput *previous = (const SPlayerInput *)((unsigned char *)records + (size_t)(row - 1) * frame->record_stride);
-    const SPlayerInput *current = (const SPlayerInput *)((unsigned char *)records + (size_t)row * frame->record_stride);
+    const dd_input_t *previous = (const dd_input_t *)((unsigned char *)records + (size_t)(row - 1) * frame->record_stride);
+    const dd_input_t *current = (const dd_input_t *)((unsigned char *)records + (size_t)row * frame->record_stride);
     const bool fire = (current->m_Fire & 1) &&
                       (!(previous->m_Fire & 1) || current->m_Fire != previous->m_Fire);
     const bool hook = current->m_Hook && !previous->m_Hook;
@@ -554,16 +560,16 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
     if (frame->reset_simulation) frame->reset_simulation(frame->timeline_user);
     for (uint32_t row = 0; row < count; ++row) {
       const ft_world *world = frame->world_at_tick(frame->timeline_user, frame->start_tick + (int32_t)row);
-      if (!world || frame->player < 0 || frame->player >= world->core.m_NumCharacters) continue;
-      const SCharacterCore *character = &world->core.m_pCharacters[frame->player];
-      attack_ticks[row] = character->m_AttackTick;
-      hook_states[row] = character->m_HookState;
-      jetpacks[row] = character->m_Jetpack && character->m_ActiveWeapon == WEAPON_GUN;
+      const ddnet_character_t *character = world ? ddnet_player_character(world, frame->player) : NULL;
+      if (!character) continue;
+      attack_ticks[row] = character->attack_tick;
+      hook_states[row] = character->core.hook_state;
+      jetpacks[row] = character->core.jetpack && character->core.active_weapon == DDNET_WEAPON_GUN;
     }
     for (uint32_t row = 0; row + 1 < count; ++row) {
-      const SPlayerInput *current = (const SPlayerInput *)((unsigned char *)records + (size_t)row * frame->record_stride);
+      const dd_input_t *current = (const dd_input_t *)((unsigned char *)records + (size_t)row * frame->record_stride);
       const bool fired = attack_ticks[row + 1] != attack_ticks[row];
-      const bool hooked = hook_states[row] == HOOK_IDLE && hook_states[row + 1] != HOOK_IDLE;
+      const bool hooked = hook_states[row] == DDNET_HOOK_IDLE && hook_states[row + 1] != DDNET_HOOK_IDLE;
       const bool jetpack_active = jetpacks[row] && (current->m_Fire & 1);
       if ((fired || hooked || jetpack_active) && !anchors[row]) {
         anchors[row] = true;
@@ -579,8 +585,8 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
       ++right;
     const int gap = (int)(right - left);
     if (parameters->maximum_gap <= 0 || gap <= parameters->maximum_gap) {
-      const SPlayerInput *a = (const SPlayerInput *)((unsigned char *)records + (size_t)left * frame->record_stride);
-      const SPlayerInput *b = (const SPlayerInput *)((unsigned char *)records + (size_t)right * frame->record_stride);
+      const dd_input_t *a = (const dd_input_t *)((unsigned char *)records + (size_t)left * frame->record_stride);
+      const dd_input_t *b = (const dd_input_t *)((unsigned char *)records + (size_t)right * frame->record_stride);
       ft_vec2 start = {(float)a->m_TargetX, (float)a->m_TargetY};
       ft_vec2 end = {(float)b->m_TargetX, (float)b->m_TargetY};
       const float start_length = hypotf(start.x, start.y);
@@ -602,7 +608,7 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
           value = (ft_vec2){start.x + (end.x - start.x) * t,
                             start.y + (end.y - start.y) * t};
         }
-        SPlayerInput *input = (SPlayerInput *)((unsigned char *)records + (size_t)row * frame->record_stride);
+        dd_input_t *input = (dd_input_t *)((unsigned char *)records + (size_t)row * frame->record_stride);
         const int16_t x = clamp_target(value.x);
         const int16_t y = clamp_target(value.y);
         bool changed = false;

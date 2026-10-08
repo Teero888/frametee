@@ -168,4 +168,22 @@ if(TARGET ddnet_game)
         target_compile_options(ddnet_map_test PRIVATE /UNDEBUG)
     endif()
     add_test(NAME ddnet_map COMMAND ddnet_map_test)
+
+    # The game headless with a plugin that steps its worlds, through the engine's simulation API and
+    # through ddnet_physics directly, on a map of the physics' own tests.
+    add_library(ddnet_simulation_probe MODULE ddnet_simulation.c)
+    target_include_directories(ddnet_simulation_probe PRIVATE ../src/plugins ../include ../libs/cglm/include ../games/ddnet/include)
+    target_link_libraries(ddnet_simulation_probe PRIVATE ddnet_physics)
+    set_target_properties(ddnet_simulation_probe PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/ddnet_simulation_probe"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/ddnet_simulation_probe"
+        BUILD_RPATH_USE_ORIGIN ON)
+    file(WRITE "${CMAKE_BINARY_DIR}/plugins/ddnet_simulation_probe/plugin.toml"
+         "name = \"DDNet simulation test\"\ndescription = \"Headless test of the DDNet game's simulation\"\ngame = \"ddnet\"\n")
+    if(EXISTS "${FRAMETEE_DDNET_PHYSICS_DIR}/tests/Aip-Gores.map")
+        add_test(NAME ddnet_plugin_simulation COMMAND frametee --headless --game ddnet
+            --level "${FRAMETEE_DDNET_PHYSICS_DIR}/tests/Aip-Gores.map" --plugin ddnet_simulation_probe)
+        set_tests_properties(ddnet_plugin_simulation PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+            ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config;APPDATA=${CMAKE_BINARY_DIR}/test-config")
+    endif()
 endif()

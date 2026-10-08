@@ -2,9 +2,9 @@
 #include <string.h>
 
 const dd_data_container_t dd_game_data = {
-    .weapons = {.id = {[WEAPON_HAMMER] = {.firedelay = 125, .offsetx = 4, .offsety = -20, .visual_size = 96.0f, .num_muzzles = 0},
+    .weapons = {.id = {[DDNET_WEAPON_HAMMER] = {.firedelay = 125, .offsetx = 4, .offsety = -20, .visual_size = 96.0f, .num_muzzles = 0},
 
-                       [WEAPON_GUN] = {.firedelay = 125,
+                       [DDNET_WEAPON_GUN] = {.firedelay = 125,
                                        .offsetx = 32,
                                        .offsety = 4,
                                        .muzzleoffsetx = 58.8752f,
@@ -13,7 +13,7 @@ const dd_data_container_t dd_game_data = {
                                        .visual_size = 64.0f,
                                        .num_muzzles = 3},
 
-                       [WEAPON_SHOTGUN] = {.firedelay = 500,
+                       [DDNET_WEAPON_SHOTGUN] = {.firedelay = 500,
                                            .offsetx = 24,
                                            .offsety = -2,
                                            .muzzleoffsetx = 83.3128f,
@@ -22,11 +22,11 @@ const dd_data_container_t dd_game_data = {
                                            .visual_size = 96.0f,
                                            .num_muzzles = 3},
 
-                       [WEAPON_GRENADE] = {.firedelay = 500, .offsetx = 24, .offsety = -2, .visual_size = 96.0f, .num_muzzles = 0},
+                       [DDNET_WEAPON_GRENADE] = {.firedelay = 500, .offsetx = 24, .offsety = -2, .visual_size = 96.0f, .num_muzzles = 0},
 
-                       [WEAPON_LASER] = {.firedelay = 800, .offsetx = 24, .offsety = -2, .visual_size = 92.0f, .num_muzzles = 0},
+                       [DDNET_WEAPON_LASER] = {.firedelay = 800, .offsetx = 24, .offsety = -2, .visual_size = 92.0f, .num_muzzles = 0},
 
-                       [WEAPON_NINJA] = {.firedelay = 800,
+                       [DDNET_WEAPON_NINJA] = {.firedelay = 800,
                                          .offsetx = 0,
                                          .offsety = 0,
                                          .muzzleoffsetx = 40,

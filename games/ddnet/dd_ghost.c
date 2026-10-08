@@ -3,9 +3,6 @@
 #include "dd_profile.h"
 
 #include <ddnet_ghost/ghost.h>
-#include <ddnet_physics/collision.h>
-#include <ddnet_physics/gamecore.h>
-#include <ddnet_physics/vmath.h>
 
 #include <math.h>
 #include <stdint.h>
@@ -68,24 +65,23 @@ bool dd_ghost_scan_track(ft_game *game, int world_index, int local_player,
     if (!game->engine->timeline_world_pair((uint32_t)world_index, tick, &prev, &curr) || !prev || !curr) {
       continue;
     }
-    if (local_player >= curr->core.m_NumCharacters || local_player >= prev->core.m_NumCharacters) {
+    const int client_id = ddnet_player_client(curr, local_player);
+    if (client_id < 0 || ddnet_player_client(prev, local_player) != client_id) {
       continue;
     }
-    const SCharacterCore *before = &prev->core.m_pCharacters[local_player];
-    const SCharacterCore *after = &curr->core.m_pCharacters[local_player];
+    const ddnet_player_t *before = &prev->core.players[client_id];
+    const ddnet_player_t *after = &curr->core.players[client_id];
 
-    if (before->m_FinishTick < 0 && after->m_FinishTick >= 0) {
+    if (before->finish_tick < 0 && after->finish_tick >= 0) {
       int global_finish = tick;
-      int global_start = after->m_StartTick + info.start_offset;
+      int global_start = after->finish_tick - after->finish_time_ticks + info.start_offset;
       if (global_start < first_tick) global_start = first_tick;
       if (global_start >= global_finish) global_start = (global_finish > first_tick) ? global_finish - 1 : first_tick;
 
       if (out_start_tick) *out_start_tick = global_start;
       if (out_end_tick) *out_end_tick = global_finish;
       if (out_time) {
-        *out_time = (after->m_RaceTime > 0.0f)
-                        ? after->m_RaceTime
-                        : ((float)(global_finish - global_start) / (float)GAME_TICK_SPEED);
+        *out_time = (float)after->finish_time_ticks / (float)GAME_TICK_SPEED;
       }
       if (out_has_finish) *out_has_finish = true;
       return true;
@@ -100,12 +96,10 @@ bool dd_ghost_scan_track(ft_game *game, int world_index, int local_player,
     if (!game->engine->timeline_world_pair((uint32_t)world_index, tick, &prev, &curr) || !curr) {
       continue;
     }
-    if (local_player >= curr->core.m_NumCharacters) {
-      continue;
-    }
-    const SCharacterCore *c = &curr->core.m_pCharacters[local_player];
-    if (c->m_StartTick >= 0) {
-      last_start = c->m_StartTick + info.start_offset;
+    const ddnet_character_t *c = ddnet_player_character(curr, local_player);
+    if (!c) continue;
+    if (c->race_state != DDNET_RACE_NONE) {
+      last_start = c->start_time + info.start_offset;
       break;
     }
   }
@@ -146,9 +140,11 @@ bool dd_ghost_export(ft_game *game, int world_index, int local_player, int start
   int time_ms = 0;
   const ft_world *prev = NULL;
   const ft_world *curr = NULL;
-  if (game->engine->timeline_world_pair((uint32_t)world_index, end_tick, &prev, &curr) && curr &&
-      local_player < curr->core.m_NumCharacters && curr->core.m_pCharacters[local_player].m_RaceTime > 0.0f) {
-    time_ms = (int)roundf(curr->core.m_pCharacters[local_player].m_RaceTime * 1000.0f);
+  const int finished_client = game->engine->timeline_world_pair((uint32_t)world_index, end_tick, &prev, &curr) && curr
+                                  ? ddnet_player_client(curr, local_player)
+                                  : -1;
+  if (finished_client >= 0 && curr->core.players[finished_client].finish_tick >= 0) {
+    time_ms = (int)roundf((float)curr->core.players[finished_client].finish_time_ticks * 1000.0f / (float)GAME_TICK_SPEED);
   } else {
     float dur = (float)(end_tick - start_tick) / (float)GAME_TICK_SPEED;
     time_ms = (int)roundf(dur * 1000.0f);
@@ -174,38 +170,31 @@ bool dd_ghost_export(ft_game *game, int world_index, int local_player, int start
       ghost_free(ghost);
       return false;
     }
-    if (local_player >= curr->core.m_NumCharacters) {
-      dd_log(game, FT_LOG_ERROR, "Ghost export failed: track not present in world at tick %d.", tick);
-      ghost_free(ghost);
-      return false;
+    const ddnet_character_t *c_cur = ddnet_player_character(curr, local_player);
+    if (!c_cur) {
+      // Dead for a tick or two: a ghost has no gaps, so it stays where it was.
+      continue;
     }
-
-    const SCharacterCore *c_cur = &curr->core.m_pCharacters[local_player];
     ghost_character_t snap;
     memset(&snap, 0, sizeof(snap));
 
-    snap.x = round_to_int(vgetx(c_cur->m_Pos)) - MAP_EXPAND32;
-    snap.y = round_to_int(vgety(c_cur->m_Pos)) - MAP_EXPAND32;
-    snap.vel_x = round_to_int(vgetx(c_cur->m_Vel) * 256.0f);
+    snap.x = round_to_int(c_cur->pos.x);
+    snap.y = round_to_int(c_cur->pos.y);
+    snap.vel_x = round_to_int(c_cur->core.vel.x * 256.0f);
     snap.vel_y = 0;
 
-    float tmp_angle = atan2f(c_cur->m_Input.m_TargetY, c_cur->m_Input.m_TargetX);
-    if (tmp_angle < -(M_PI / 2.0f))
-      snap.angle = (int)((tmp_angle + (2.0f * M_PI)) * 256.0f);
-    else
-      snap.angle = (int)(tmp_angle * 256.0f);
+    snap.angle = ddnet_character_angle(c_cur);
+    snap.direction = c_cur->core.input.direction;
 
-    snap.direction = c_cur->m_Input.m_Direction;
+    const bool frozen = (c_cur->core.deep_frozen || c_cur->freeze_time > 0);
+    snap.weapon = frozen ? DDNET_WEAPON_NINJA : c_cur->core.active_weapon;
 
-    const bool frozen = (c_cur->m_DeepFrozen || c_cur->m_FreezeTime > 0);
-    snap.weapon = frozen ? WEAPON_NINJA : c_cur->m_ActiveWeapon;
+    snap.hook_state = c_cur->core.hook_state;
+    snap.hook_x = round_to_int(c_cur->core.hook_pos.x);
+    snap.hook_y = round_to_int(c_cur->core.hook_pos.y);
 
-    snap.hook_state = c_cur->m_HookState;
-    snap.hook_x = round_to_int(vgetx(c_cur->m_HookPos)) - MAP_EXPAND32;
-    snap.hook_y = round_to_int(vgety(c_cur->m_HookPos)) - MAP_EXPAND32;
-
-    if (c_cur->m_AttackTick > local_start)
-      snap.attack_tick = c_cur->m_AttackTick - local_start;
+    if (c_cur->attack_tick > local_start)
+      snap.attack_tick = c_cur->attack_tick - local_start;
     else
       snap.attack_tick = -9999;
 
