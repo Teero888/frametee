@@ -145,10 +145,14 @@ struct tas_api_t {
 
   void (*register_script_command)(const char *name, void (*callback)(int argc, const char **argv));
 
-  // opens the native "save file" dialog and writes the chosen path into out_path.
+  // opens the native "save file" dialog. It runs on a thread of its own while the editor goes on
+  // drawing (and ignores its own input); `done` is called later from the host thread with the chosen
+  // path, or NULL when the user cancelled or the dialog failed. The path is only valid during the call.
   // filter_name/filter_ext describe a single file type (e.g. "FrameTee Script", "ftee"), both may be NULL.
-  // returns false when the user cancelled, the dialog failed, or the app runs headless.
-  bool (*save_file_dialog)(const char *filter_name, const char *filter_ext, const char *default_name, char *out_path, int out_path_size);
+  // returns false, and never calls `done`, when no dialog could be opened (one is already up, or the
+  // app runs headless). Nor is `done` called once the plugin has been unloaded.
+  bool (*save_file_dialog)(const char *filter_name, const char *filter_ext, const char *default_name,
+                           void (*done)(void *user, const char *path), void *user);
 
   // Graphics-free simulation of plugin-owned worlds. Clone a borrowed timeline
   // world before changing it; destroy every owned world before game/plugin
@@ -197,7 +201,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 6u
+#define FRAMETEE_PLUGIN_ABI_VERSION 7u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

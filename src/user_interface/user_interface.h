@@ -131,8 +131,10 @@ void on_camera_update(struct gfx_handler_t *handler, bool hovered, float intra);
 // The toolbar button and the keybind are one action, so both come through here
 // and neither can forget to store the choice or hand the viewport the keyboard.
 void ui_cycle_camera_mode(ui_handler_t *ui);
-bool ui_quick_save(ui_handler_t *ui);
-// Asks for a file and writes the project to it.
+// Writes the project to its file, or asks for one first (ui_save_project_as).
+void ui_quick_save(ui_handler_t *ui);
+// Asks for a file and writes the project to it once the dialog answers. The dialog starts in
+// <config dir>/projects.
 void ui_save_project_as(ui_handler_t *ui);
 void ui_check_auto_save(ui_handler_t *ui);
 struct timeline_state;

@@ -108,6 +108,36 @@ static const char *track_name(ft_game *game, int world, int local, char *fallbac
   return fallback;
 }
 
+// The save dialog's answer: the demo of the tracks selected in the window.
+static void demo_export_chosen(void *user, const char *path) {
+  ft_game *game = user;
+  if (!path) return;
+  int32_t players[64], pings[64];
+  int player_count = 0;
+  for (int world = 0; world < game->demo_export_world_count; ++world) {
+    const dd_demo_export_world_t *selection = &game->demo_export_worlds[world];
+    if (!selection->enabled) continue;
+    for (int local = 0; local < selection->track_count && player_count < 64; ++local) {
+      if (!selection->tracks[local]) continue;
+      players[player_count] = game->engine->timeline_player_track((uint32_t)world, (uint32_t)local);
+      pings[player_count++] = selection->pings[local];
+    }
+  }
+  const ft_export_request request = {.struct_size = sizeof(request),
+                                     .path = path,
+                                     .start_tick = game->demo_export_start_tick,
+                                     .end_tick = game->demo_export_end_tick,
+                                     .players = players,
+                                     .player_count = (uint32_t)player_count};
+  if (dd_demo_export_with_pings(game, &request, pings)) {
+    dd_log(game, FT_LOG_INFO, "Exported DDNet demo to '%s'.", path);
+    game->demo_export_error[0] = '\0';
+    game->demo_export_done = true;
+  } else {
+    snprintf(game->demo_export_error, sizeof(game->demo_export_error), "Export failed; see the log for details.");
+  }
+}
+
 void dd_export_window_render(ft_game *game) {
   if (!game) return;
   if (game->open_demo_export) {
@@ -117,6 +147,10 @@ void dd_export_window_render(ft_game *game) {
 
   igSetNextWindowSize((ImVec2){620.f, 640.f}, ImGuiCond_FirstUseEver);
   if (!igBeginPopupModal("Export DDNet Demo", NULL, ImGuiWindowFlags_None)) return;
+  if (game->demo_export_done) {
+    game->demo_export_done = false;
+    igCloseCurrentPopup();
+  }
 
   const bool selection_ok = sync_selection(game);
   igTextWrapped("Choose the inclusive global tick range and the DDNet groups/tracks to combine in the demo.");
@@ -166,21 +200,6 @@ void dd_export_window_render(ft_game *game) {
                      game->demo_export_end_tick >= game->demo_export_start_tick;
   if (!valid) igBeginDisabled(true);
   if (igButton("Export...", (ImVec2){120.f, 0.f})) {
-    int32_t *players = malloc(sizeof(*players) * (size_t)selected_count);
-    int32_t *pings = malloc(sizeof(*pings) * (size_t)selected_count);
-    int player_count = 0;
-    if (players && pings) {
-      for (int world = 0; world < game->demo_export_world_count; ++world) {
-        const dd_demo_export_world_t *selection = &game->demo_export_worlds[world];
-        if (!selection->enabled) continue;
-        for (int local = 0; local < selection->track_count; ++local) {
-          if (!selection->tracks[local]) continue;
-          players[player_count] = game->engine->timeline_player_track((uint32_t)world, (uint32_t)local);
-          pings[player_count++] = selection->pings[local];
-        }
-      }
-    }
-
     const char *map_name = (game->current_level && game->current_level->name[0] && strcmp(game->current_level->name, "map") != 0)
                                ? game->current_level->name
                                : (game->engine && game->engine->get_level_name ? game->engine->get_level_name() : NULL);
@@ -191,26 +210,7 @@ void dd_export_window_render(ft_game *game) {
     }
     char default_name[256];
     snprintf(default_name, sizeof(default_name), "%s.demo", map_name);
-    char path[1024];
-    if (!players || !pings) {
-      snprintf(game->demo_export_error, sizeof(game->demo_export_error), "Could not allocate the track selection.");
-    } else if (game->engine->save_file_dialog && game->engine->save_file_dialog("DDNet Demo", "demo", default_name, path, sizeof(path))) {
-      const ft_export_request request = {.struct_size = sizeof(request),
-                                         .path = path,
-                                         .start_tick = game->demo_export_start_tick,
-                                         .end_tick = game->demo_export_end_tick,
-                                         .players = players,
-                                         .player_count = (uint32_t)player_count};
-      if (dd_demo_export_with_pings(game, &request, pings)) {
-        dd_log(game, FT_LOG_INFO, "Exported DDNet demo to '%s'.", path);
-        game->demo_export_error[0] = '\0';
-        igCloseCurrentPopup();
-      } else {
-        snprintf(game->demo_export_error, sizeof(game->demo_export_error), "Export failed; see the log for details.");
-      }
-    }
-    free(players);
-    free(pings);
+    if (game->engine->save_file_dialog) game->engine->save_file_dialog("DDNet Demo", "demo", default_name, demo_export_chosen, game);
   }
   if (!valid) igEndDisabled();
   igSameLine(0, 10.f);

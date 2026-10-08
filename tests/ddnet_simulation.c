@@ -65,6 +65,29 @@ FT_API int plugin_cli(void *data, int argc, const char **argv) {
   CHECK(inputs);
   for (int p = 0; p < players; ++p) api->input_default((char *)inputs + (size_t)p * record_size);
 
+  // Fire is a counter whose low bit is the button, and the physics counts every value between two
+  // ticks' counters as presses and releases: pressing or letting go only ever steps it up, so a
+  // release is +1 from odd and nothing from even. Lowering it would fire.
+  {
+    dd_input_t *record = inputs;
+    const int fire = api->input_field_index("fire");
+    const uint8_t start = record->m_Fire;
+    api->input_set(record, fire, 0);
+    CHECK(record->m_Fire == start);
+    api->input_set(record, fire, 1);
+    CHECK(record->m_Fire == start + 1 && api->input_get(record, fire) == 1);
+    api->input_set(record, fire, 1);
+    CHECK(record->m_Fire == start + 1);
+    api->input_set(record, fire, 0);
+    CHECK(record->m_Fire == start + 2 && api->input_get(record, fire) == 0);
+    api->input_set(record, fire, 0);
+    CHECK(record->m_Fire == start + 2);
+    record->m_Fire = 63;
+    api->input_set(record, fire, 0);
+    CHECK(record->m_Fire == 0);
+    api->input_default(record);
+  }
+
   // Two clones, stepped alike, stay alike.
   for (int tick = 0; tick < 300; ++tick) {
     for (int p = 0; p < players; ++p) scripted_input(api, (char *)inputs + (size_t)p * record_size, tick + p * 7);

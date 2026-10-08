@@ -21,7 +21,6 @@
 #include <limits.h>
 #include <logger/logger.h>
 #include <math.h>
-#include <nfd.h>
 #include <plugins/api_impl.h>
 #include <renderer/graphics_backend.h>
 #include <renderer/renderer.h>
@@ -30,6 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <system/config.h>
+#include <system/file_dialog.h>
 #include <system/fs.h>
 #include <system/input.h>
 #include <system/save.h>
@@ -84,15 +84,41 @@ void ui_render_game_snippet_menu(ui_handler_t *ui, int snippet_id) {
   gh_ui(&ui->gfx_handler->game_host, &frame);
 }
 
-void ui_save_project_as(ui_handler_t *ui) {
-  nfdu8char_t *save_path = NULL;
-  nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
-  char default_file_name[256];
-  project_default_file_name(ui, default_file_name, sizeof(default_file_name));
-  if (NFD_SaveDialogU8(&save_path, filters, 1, NULL, default_file_name) != NFD_OKAY) return;
-  save_project(ui, save_path);
-  NFD_FreePathU8(save_path);
+// Where project dialogs start: <config dir>/projects, made on first use. Empty when there is no
+// config dir, which leaves the choice to the dialog.
+static void projects_dir(char *out, size_t size) {
+  char config_dir[1024];
+  out[0] = '\0';
+  if (!fs_get_config_dir(config_dir, sizeof(config_dir))) return;
+  fs_mkdir(config_dir);
+  if (snprintf(out, size, "%s%cprojects", config_dir, PATH_SEP) >= (int)size) {
+    out[0] = '\0';
+    return;
+  }
+  fs_mkdir(out);
 }
+
+// A dialog for a project file; `save` asks where to write one.
+static void open_project_dialog(ui_handler_t *ui, bool save, file_dialog_done_fn done) {
+  char dir[1024], name[256];
+  projects_dir(dir, sizeof(dir));
+  project_default_file_name(ui, name, sizeof(name));
+  const file_dialog_t dialog = {
+      .save = save, .filter_name = "TAS Project", .filter_ext = "tasp", .default_dir = dir[0] ? dir : NULL, .default_name = name};
+  file_dialog_open(&dialog, done, ui);
+}
+
+static void save_as_chosen(void *user, const char *path) {
+  if (path) save_project(user, path);
+}
+
+// The unsaved-changes prompt's Save: the project switch it holds goes ahead once the work is saved.
+static void save_as_chosen_then_switch(void *user, const char *path) {
+  ui_handler_t *ui = user;
+  if (path && save_project(ui, path)) ui->pending_confirmed = true;
+}
+
+void ui_save_project_as(ui_handler_t *ui) { open_project_dialog(ui, true, save_as_chosen); }
 
 // A game's level extension may be a list ("z64,n64,v64"): labels name the first.
 static void level_extension_label(const char *extensions, char *out, size_t out_size) {
@@ -110,15 +136,13 @@ static const ft_game_constraints *active_level_constraints(ui_handler_t *ui) {
   return &module->constraints;
 }
 
+static void level_chosen(void *user, const char *path) {
+  if (path) ui_request_load_level(user, path);
+}
+
 static void level_open_dialog(ui_handler_t *ui, const ft_game_constraints *constraints) {
-  nfdu8char_t *path = NULL;
-  nfdu8filteritem_t filters[] = {{constraints->level_filter_name, constraints->level_extension}};
-  nfdopendialogu8args_t args = {0};
-  args.filterList = filters;
-  args.filterCount = 1;
-  if (NFD_OpenDialogU8_With(&path, &args) != NFD_OKAY || !path) return;
-  ui_request_load_level(ui, path);
-  NFD_FreePathU8(path);
+  const file_dialog_t dialog = {.filter_name = constraints->level_filter_name, .filter_ext = constraints->level_extension};
+  file_dialog_open(&dialog, level_chosen, ui);
 }
 
 // The keybind the user has on an action, spelled the way the menu wants it, or
@@ -660,6 +684,14 @@ static void register_timeline_data_change(ui_handler_t *ui, timeline_data_snapsh
   if (command) undo_manager_register_command(&ui->undo_manager, command);
 }
 
+static void project_import_chosen(void *user, const char *path) {
+  ui_handler_t *ui = user;
+  if (!path) return;
+  timeline_data_snapshot_t *before = commands_capture_timeline_data(&ui->timeline);
+  if (before && import_project_as_group(ui, path)) register_timeline_data_change(ui, before, "Import Project as Group");
+  else commands_free_timeline_data_snapshot(before);
+}
+
 void render_player_manager(ui_handler_t *ui) {
   timeline_state_t *ts = &ui->timeline;
   float dpi_scale = gfx_get_ui_scale();
@@ -689,16 +721,7 @@ void render_player_manager(ui_handler_t *ui) {
       } else commands_free_timeline_data_snapshot(before);
     }
     igSameLine(0, 5.0f * dpi_scale);
-    if (igButton(ICON_FA_FILE_IMPORT " Import", (ImVec2){0, 0})) {
-      nfdu8char_t *path = NULL;
-      nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
-      if (NFD_OpenDialogU8(&path, filters, 1, NULL) == NFD_OKAY && path) {
-        timeline_data_snapshot_t *before = commands_capture_timeline_data(ts);
-        if (before && import_project_as_group(ui, path)) register_timeline_data_change(ui, before, "Import Project as Group");
-        else commands_free_timeline_data_snapshot(before);
-        NFD_FreePathU8(path);
-      }
-    }
+    if (igButton(ICON_FA_FILE_IMPORT " Import", (ImVec2){0, 0})) open_project_dialog(ui, false, project_import_chosen);
     // Recordings come in as a group of their own, beside imported projects. Starting a project from
     // one is the start screen's.
     if (recording_import_available(ui)) {
@@ -1483,9 +1506,6 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   camera_init(&gfx_handler->renderer.camera);
   config_apply_game_editor_state(ui);
   undo_manager_init(&ui->undo_manager);
-  if (!g_is_headless) {
-    NFD_Init();
-  }
 
   ui->plugin_api = api_init(ui);
   ui->plugin_context.imgui_context = igGetCurrentContext();
@@ -1615,6 +1635,12 @@ static void render_unsaved_prompt(ui_handler_t *ui) {
   igSetNextWindowPos(center, ImGuiCond_Appearing, (ImVec2){0.5f, 0.5f});
 
   if (igBeginPopupModal(popup_id, NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    // Saved through the file dialog, which answers after the Save button's frame.
+    if (ui->pending_confirmed || ui->pending_action == UI_PENDING_NONE) {
+      igCloseCurrentPopup();
+      igEndPopup();
+      return;
+    }
     if (ui->current_project_path[0] != '\0') {
       igText("'%s' has unsaved changes.", ui->current_project_path);
     } else {
@@ -1631,7 +1657,9 @@ static void render_unsaved_prompt(ui_handler_t *ui) {
 
     if (igButton("Save", button_size)) {
       // a cancelled or failed save leaves the dialog up instead of moving on
-      if (ui_quick_save(ui)) {
+      if (ui->current_project_path[0] == '\0') {
+        open_project_dialog(ui, true, save_as_chosen_then_switch);
+      } else if (save_project(ui, ui->current_project_path)) {
         ui->pending_confirmed = true;
         igCloseCurrentPopup();
       }
@@ -1967,6 +1995,34 @@ void ui_splash_open(ui_handler_t *ui, ui_pending_action_t action, const char *pa
   igCloseCurrentPopup();
 }
 
+// A file picked from the start screen. The dialog answers outside the screen's popup, which
+// ui_splash_open has to close, so the screen opens it the next time it draws.
+static struct {
+  ui_pending_action_t action;
+  char path[1024];
+} g_splash_pick;
+
+static void splash_pick(ui_pending_action_t action, const char *path) {
+  if (!path) return;
+  g_splash_pick.action = action;
+  snprintf(g_splash_pick.path, sizeof(g_splash_pick.path), "%s", path);
+}
+
+static void splash_level_chosen(void *user, const char *path) {
+  (void)user;
+  splash_pick(UI_PENDING_LOAD_LEVEL, path);
+}
+
+static void splash_recording_chosen(void *user, const char *path) {
+  (void)user;
+  splash_pick(UI_PENDING_OPEN_RECORDING, path);
+}
+
+static void splash_project_chosen(void *user, const char *path) {
+  (void)user;
+  splash_pick(UI_PENDING_OPEN_PROJECT, path);
+}
+
 static void render_splash_screen(ui_handler_t *ui) {
   if (!igIsPopupOpen_Str("Splash Screen", ImGuiPopupFlags_None)) {
     igOpenPopup_Str("Splash Screen", ImGuiPopupFlags_None);
@@ -1996,6 +2052,10 @@ static void render_splash_screen(ui_handler_t *ui) {
   igPushStyleVar_Float(ImGuiStyleVar_WindowBorderSize, 1.5f);
 
   if (igBeginPopupModal("Splash Screen", NULL, window_flags)) {
+    if (g_splash_pick.action != UI_PENDING_NONE) {
+      ui_splash_open(ui, g_splash_pick.action, g_splash_pick.path);
+      g_splash_pick.action = UI_PENDING_NONE;
+    }
     float sidebar_w = 250.0f;
 
     // Left sidebar column
@@ -2026,16 +2086,8 @@ static void render_splash_screen(ui_handler_t *ui) {
         snprintf(level_label, sizeof(level_label), ICON_FA_MAP "  Load Local %s", extension);
         if (igButton(level_label, (ImVec2){btn_w, 42})) {
           // The open is deferred until the next frame, after any unsaved-work prompt.
-          nfdu8char_t *out_path;
-          nfdu8filteritem_t filters[] = {{level_game->constraints.level_filter_name, level_ext}};
-          nfdopendialogu8args_t args = {0};
-          args.filterList = filters;
-          args.filterCount = 1;
-          nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
-          if (result == NFD_OKAY) {
-            ui_splash_open(ui, UI_PENDING_LOAD_LEVEL, out_path);
-            NFD_FreePathU8(out_path);
-          }
+          const file_dialog_t dialog = {.filter_name = level_game->constraints.level_filter_name, .filter_ext = level_ext};
+          file_dialog_open(&dialog, splash_level_chosen, ui);
         }
       }
 
@@ -2045,31 +2097,14 @@ static void render_splash_screen(ui_handler_t *ui) {
         snprintf(recording_label, sizeof(recording_label), ICON_FA_FILM "  Load %s", kind);
         if (igButton(recording_label, (ImVec2){btn_w, 42})) {
           // Like a level: opened next frame, after any unsaved-work prompt, as a new project.
-          nfdu8char_t *out_path;
-          nfdu8filteritem_t filters[] = {
-              {kind, level_game->constraints.recording_extension ? level_game->constraints.recording_extension : "*"}};
-          nfdopendialogu8args_t args = {0};
-          args.filterList = filters;
-          args.filterCount = 1;
-          if (NFD_OpenDialogU8_With(&out_path, &args) == NFD_OKAY) {
-            ui_splash_open(ui, UI_PENDING_OPEN_RECORDING, out_path);
-            NFD_FreePathU8(out_path);
-          }
+          const file_dialog_t dialog = {
+              .filter_name = kind,
+              .filter_ext = level_game->constraints.recording_extension ? level_game->constraints.recording_extension : "*"};
+          file_dialog_open(&dialog, splash_recording_chosen, ui);
         }
       }
 
-      if (igButton(ICON_FA_FOLDER_OPEN "  Load Project", (ImVec2){btn_w, 42})) {
-        nfdu8char_t *out_path;
-        nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
-        nfdopendialogu8args_t args = {0};
-        args.filterList = filters;
-        args.filterCount = 1;
-        nfdresult_t result = NFD_OpenDialogU8_With(&out_path, &args);
-        if (result == NFD_OKAY) {
-          ui_splash_open(ui, UI_PENDING_OPEN_PROJECT, out_path);
-          NFD_FreePathU8(out_path);
-        }
-      }
+      if (igButton(ICON_FA_FOLDER_OPEN "  Load Project", (ImVec2){btn_w, 42})) open_project_dialog(ui, false, splash_project_chosen);
 
       igPopStyleVar(2);
 
@@ -2172,7 +2207,23 @@ static void render_splash_screen(ui_handler_t *ui) {
   igPopStyleVar(4);
 }
 
+// Input is held back while a file dialog is up (main.c), so the editor says why nothing answers.
+static void render_file_dialog_note(void) {
+  if (!file_dialog_active()) return;
+  const char *text = "Waiting for the file dialog...";
+  ImGuiViewport *viewport = igGetMainViewport();
+  const ImVec2 size = igCalcTextSize(text, NULL, false, 0.f);
+  const float pad = 8.f * gfx_get_ui_scale();
+  const ImVec2 pos = {roundf(viewport->WorkPos.x + (viewport->WorkSize.x - size.x) * 0.5f), viewport->WorkPos.y + 3.f * pad};
+  ImDrawList *draw = igGetForegroundDrawList_ViewportPtr(viewport);
+  ImDrawList_AddRectFilled(draw, (ImVec2){pos.x - 2.f * pad, pos.y - pad}, (ImVec2){pos.x + size.x + 2.f * pad, pos.y + size.y + pad},
+                           IM_COL32(0, 0, 0, 210), pad, 0);
+  ImDrawList_AddText_Vec2(draw, pos, IM_COL32(255, 255, 255, 255), text, NULL);
+}
+
 void ui_render(ui_handler_t *ui) {
+  // A dialog's answer acts like the click that asked for it, before anything else this frame.
+  file_dialog_update();
   // Before anything simulates this frame, so a recording that just finished opening is replayed
   // by every world at once.
   recordings_update(&ui->timeline);
@@ -2248,6 +2299,7 @@ void ui_render(ui_handler_t *ui) {
   if ((ui->gfx_handler->level == NULL && !recording_import_active()) || ui->show_splash) {
     render_splash_screen(ui);
   }
+  render_file_dialog_note();
 }
 
 #define WORD_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c"
@@ -2528,10 +2580,7 @@ void ui_cleanup(ui_handler_t *ui) {
   undo_manager_cleanup(&ui->undo_manager);
   timeline_cleanup(&ui->timeline);
   keybinds_cleanup(&ui->keybinds);
-  extern bool g_is_headless;
-  if (!g_is_headless) {
-    NFD_Quit();
-  }
+  file_dialog_shutdown();
 }
 
 void ui_toggle_style_push(bool on) {
@@ -2613,22 +2662,9 @@ bool ui_icon_button(ui_handler_t *ui, const char *icon, ImVec2 size) {
   return pressed;
 }
 
-bool ui_quick_save(ui_handler_t *ui) {
-  if (ui->current_project_path[0] != '\0') {
-    return save_project(ui, ui->current_project_path);
-  } else {
-    nfdu8char_t *save_path = NULL;
-    nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
-    char default_file_name[256];
-    project_default_file_name(ui, default_file_name, sizeof(default_file_name));
-    nfdresult_t result = NFD_SaveDialogU8(&save_path, filters, 1, NULL, default_file_name);
-    if (result == NFD_OKAY) {
-      bool ok = save_project(ui, save_path);
-      NFD_FreePathU8(save_path);
-      return ok;
-    }
-    return false;
-  }
+void ui_quick_save(ui_handler_t *ui) {
+  if (ui->current_project_path[0] != '\0') save_project(ui, ui->current_project_path);
+  else ui_save_project_as(ui);
 }
 
 // Every entry point that would throw away unsaved work funnels through here:
@@ -2649,18 +2685,14 @@ void ui_request_new_project(ui_handler_t *ui) {
   ui->show_unsaved_prompt = false;
 }
 
+static void project_open_chosen(void *user, const char *path) {
+  if (path) ui_request_project_switch(user, UI_PENDING_OPEN_PROJECT, path);
+}
+
 void ui_request_open_project(ui_handler_t *ui, const char *path) {
   // Asking for the file first means a cancelled dialog asks nothing else.
-  char chosen[1024];
-  if (!path) {
-    nfdu8char_t *picked = NULL;
-    nfdu8filteritem_t filters[] = {{"TAS Project", "tasp"}};
-    if (NFD_OpenDialogU8(&picked, filters, 1, NULL) != NFD_OKAY || !picked) return;
-    snprintf(chosen, sizeof(chosen), "%s", picked);
-    NFD_FreePathU8(picked);
-    path = chosen;
-  }
-  ui_request_project_switch(ui, UI_PENDING_OPEN_PROJECT, path);
+  if (!path) open_project_dialog(ui, false, project_open_chosen);
+  else ui_request_project_switch(ui, UI_PENDING_OPEN_PROJECT, path);
 }
 
 void ui_request_load_level(ui_handler_t *ui, const char *path) {

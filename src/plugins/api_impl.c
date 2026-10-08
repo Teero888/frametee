@@ -7,8 +7,8 @@
 #include "renderer/renderer.h"
 #include <engine/input_record.h>
 #include <limits.h>
-#include <nfd.h>
 #include <stdio.h>
+#include <system/file_dialog.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -491,27 +491,33 @@ static double api_get_time(void) {
   return glfwGetTime();
 }
 
-static bool api_save_file_dialog(const char *filter_name, const char *filter_ext, const char *default_name, char *out_path, int out_path_size) {
-  if (!out_path || out_path_size <= 0) return false;
-  out_path[0] = '\0';
+// A plugin's dialog. Its answer goes through here so that it can be dropped when plugins unload.
+static struct {
+  void (*done)(void *user, const char *path);
+  void *user;
+} g_plugin_dialog;
 
+static void plugin_dialog_done(void *user, const char *path) {
+  (void)user;
+  void (*done)(void *, const char *) = g_plugin_dialog.done;
+  g_plugin_dialog.done = NULL;
+  if (done) done(g_plugin_dialog.user, path);
+}
+
+void api_forget_file_dialog(void) { g_plugin_dialog.done = NULL; }
+
+static bool api_save_file_dialog(const char *filter_name, const char *filter_ext, const char *default_name,
+                                 void (*done)(void *user, const char *path), void *user) {
   extern bool g_is_headless;
+  if (!done) return false;
   if (g_is_headless) {
     log_warn("PluginAPI", "save_file_dialog is unavailable in headless mode");
     return false;
   }
-
-  nfdu8filteritem_t filter = {filter_name, filter_ext};
-  nfdu8char_t *save_path = NULL;
-  nfdresult_t result = NFD_SaveDialogU8(&save_path, (filter_name && filter_ext) ? &filter : NULL,
-                                        (filter_name && filter_ext) ? 1 : 0, NULL, default_name);
-  if (result != NFD_OKAY || !save_path) {
-    if (result == NFD_ERROR) log_error("PluginAPI", "Save dialog failed: %s", NFD_GetError());
-    return false;
-  }
-
-  snprintf(out_path, (size_t)out_path_size, "%s", save_path);
-  NFD_FreePathU8(save_path);
+  const file_dialog_t dialog = {.save = true, .filter_name = filter_name, .filter_ext = filter_ext, .default_name = default_name};
+  if (!file_dialog_open(&dialog, plugin_dialog_done, &g_plugin_dialog)) return false;
+  g_plugin_dialog.done = done;
+  g_plugin_dialog.user = user;
   return true;
 }
 

@@ -10,7 +10,6 @@
 #include <frametee/icons.h>
 #include <include_cimgui.h>
 #include <logger/logger.h>
-#include <nfd.h>
 #include <renderer/graphics_backend.h>
 #include <stdint.h>
 #include <float.h>
@@ -18,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <system/file_dialog.h>
 #include <system/fs.h>
 #include <user_interface/widgets/imcol.h>
 
@@ -74,19 +74,22 @@ static void close_dialog(ui_handler_t *ui, bool drop_recording) {
   memset(&imp, 0, sizeof(imp));
 }
 
+static void recording_chosen(void *user, const char *path) {
+  if (path) recording_import_open(user, path, false);
+}
+
+static void recording_chosen_as_project(void *user, const char *path) {
+  if (path) recording_import_open(user, path, true);
+}
+
 void recording_import_begin(ui_handler_t *ui, bool new_project) {
   if (!recording_import_available(ui) || imp.active || ui->timeline.recording) return;
   if (!new_project && !ui->gfx_handler->level) return; // nothing to import into yet
   const ft_game_constraints *constraints = &ui->gfx_handler->game_host.module->constraints;
-  nfdu8char_t *path = NULL;
-  nfdu8filteritem_t filters[] = {{constraints->recording_filter_name ? constraints->recording_filter_name : "Recording",
-                                  constraints->recording_extension ? constraints->recording_extension : "*"}};
-  nfdopendialogu8args_t args = {0};
-  args.filterList = filters;
-  args.filterCount = 1;
-  if (NFD_OpenDialogU8_With(&path, &args) != NFD_OKAY || !path) return;
-  recording_import_open(ui, path, new_project);
-  NFD_FreePathU8(path);
+  const file_dialog_t dialog = {
+      .filter_name = constraints->recording_filter_name ? constraints->recording_filter_name : "Recording",
+      .filter_ext = constraints->recording_extension ? constraints->recording_extension : "*"};
+  file_dialog_open(&dialog, new_project ? recording_chosen_as_project : recording_chosen, ui);
 }
 
 void recording_import_open(ui_handler_t *ui, const char *path, bool new_project) {

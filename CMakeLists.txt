@@ -81,6 +81,7 @@ set(SRCS
 	src/system/config.c
 	src/system/input.c
 	src/system/input_repeat.c
+	src/system/file_dialog.c
 	src/system/fs.c
 	src/system/sha256.c
 	src/logger/logger.c

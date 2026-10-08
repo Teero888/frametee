@@ -13,7 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <system/file_dialog.h>
 #include <system/fs.h>
+#include <system/input.h>
 #include <system/save.h>
 #include <user_interface/starting_state.h>
 #include <user_interface/timeline/timeline_commands.h>
@@ -776,8 +778,12 @@ int main(int argc, char **argv) {
     // the old capture behaviour. Keyboard-only games such as TMUF do not: a
     // normal cursor lets their recording continue while the user works in the
     // rest of the editor.
+    // While a file dialog is up the editor goes on drawing and simulating but
+    // answers no input, and the cursor stays free for the dialog.
+    const bool dialog_up = file_dialog_active();
+    input_set_blocked(dialog_up);
     const bool capture_recording_cursor =
-        handler.user_interface.timeline.recording && engine_input_cursor_field() >= 0;
+        handler.user_interface.timeline.recording && engine_input_cursor_field() >= 0 && !dialog_up;
     if (capture_recording_cursor) {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
       io->ConfigFlags |= ImGuiConfigFlags_NoMouse;
@@ -785,6 +791,8 @@ int main(int argc, char **argv) {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
       io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     }
+    if (dialog_up) io->ConfigFlags |= ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoKeyboard;
+    else io->ConfigFlags &= ~ImGuiConfigFlags_NoKeyboard;
 
     gfx_end_frame(&handler);
 

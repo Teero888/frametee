@@ -12,6 +12,8 @@ typedef struct {
   GLFWwindow *window;
   bool initialized;
   bool focused;
+  // Set while a file dialog is up: everything reads as idle, as if another window had focus.
+  bool blocked;
 
   unsigned char keys[KEY_COUNT];
   unsigned char keys_prev[KEY_COUNT];
@@ -367,6 +369,8 @@ void input_accumulate_scroll(double x, double y) {
     g_input.wheel_queue[(g_input.wheel_queue_start + g_input.wheel_queue_count++) % WHEEL_QUEUE_SIZE] = direction;
 }
 
+void input_set_blocked(bool blocked) { g_input.blocked = blocked; }
+
 void input_accumulate_key_repeat(int glfw_key) {
   if (glfw_key < 0 || glfw_key > GLFW_KEY_LAST) return;
   g_input.pending_repeat[glfw_key] = 1;
@@ -388,18 +392,21 @@ void input_new_frame(void) {
   memcpy(g_input.keys_prev, g_input.keys, sizeof(g_input.keys));
   memcpy(g_input.buttons_prev, g_input.buttons, sizeof(g_input.buttons));
 
+  // Polled even while blocked, to drain sticky presses.
   for (int i = 0; i < g_input.poll_key_count; ++i) {
     int key = g_input.poll_keys[i];
-    g_input.keys[key] = glfwGetKey(g_input.window, key) == GLFW_PRESS ? 1 : 0;
+    g_input.keys[key] = glfwGetKey(g_input.window, key) == GLFW_PRESS && !g_input.blocked ? 1 : 0;
   }
 
-  memcpy(g_input.keys_repeat, g_input.pending_repeat, sizeof(g_input.keys_repeat));
+  if (g_input.blocked) memset(g_input.keys_repeat, 0, sizeof(g_input.keys_repeat));
+  else memcpy(g_input.keys_repeat, g_input.pending_repeat, sizeof(g_input.keys_repeat));
   memset(g_input.pending_repeat, 0, sizeof(g_input.pending_repeat));
+  const bool live = focused && !g_input.blocked;
 
   for (int button = 0; button <= GLFW_MOUSE_BUTTON_LAST; ++button) {
     // Poll even when unfocused to drain sticky presses, but never repeat them.
     const bool down = glfwGetMouseButton(g_input.window, button) == GLFW_PRESS;
-    g_input.buttons[button] = down && focused;
+    g_input.buttons[button] = down && live;
     g_input.buttons_repeat[button] = 0;
     if (!g_input.buttons[button]) {
       g_input.button_next_repeat[button] = 0.0;
@@ -416,15 +423,15 @@ void input_new_frame(void) {
 
   // Drain what the callbacks collected since the previous frame; nothing is lost regardless of how
   // many events arrived between frames.
-  g_input.frame_dx = g_input.pending_dx;
-  g_input.frame_dy = g_input.pending_dy;
-  g_input.frame_scroll_y = g_input.pending_scroll_y;
+  g_input.frame_dx = g_input.blocked ? 0.0 : g_input.pending_dx;
+  g_input.frame_dy = g_input.blocked ? 0.0 : g_input.pending_dy;
+  g_input.frame_scroll_y = g_input.blocked ? 0.0 : g_input.pending_scroll_y;
   g_input.pending_dx = g_input.pending_dy = 0.0;
   g_input.pending_scroll_y = 0.0;
 
   // Like the buttons, the wheel presses nothing while another window has focus.
   g_input.frame_wheel = 0;
-  if (!focused) {
+  if (!live) {
     g_input.wheel_queue_count = 0;
     g_input.wheel_partial = 0.0;
   } else if (g_input.wheel_queue_count > 0) {

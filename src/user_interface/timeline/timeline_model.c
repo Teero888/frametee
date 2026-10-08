@@ -1102,6 +1102,15 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
             } else {
               input_record_t merged = model_get_authored_input_at_tick(ts, i, active_rec_snip->start_tick + s);
               engine_input_copy_fields(model_host(ts), &sampled_input, &merged, track->linked_driven_fields);
+              // On top of the take's previous tick, field by field: a field that counts
+              // edges (DDNet's fire) has to go on from the value the last tick left.
+              if (s > 0) {
+                input_record_t previous = active_rec_snip->inputs[s - 1];
+                const ft_input_schema *schema = game_input_schema(model_host(ts));
+                const uint64_t fields = !schema ? 0 : schema->field_count >= 64 ? ~UINT64_C(0) : (UINT64_C(1) << schema->field_count) - 1;
+                engine_input_copy_fields(model_host(ts), &merged, &previous, fields);
+                merged = previous;
+              }
               active_rec_snip->inputs[s] = merged;
             }
             engine_input_reset_triggers(model_host(ts), &sampled_input);

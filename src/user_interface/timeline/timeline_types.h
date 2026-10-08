@@ -161,17 +161,21 @@ struct player_track_t {
   // A linked track is authored alongside the one being recorded, like a DDNet
   // dummy: it copies the fields in linked_copy_fields from its source (while
   // copying is on) and takes what its linked key binds and the game's linked
-  // actions drive. Everything else keeps the inputs it already has.
+  // actions drive. What its link stops driving holds its last value; everything
+  // its link never drove keeps the inputs it already has.
   bool is_linked;
   // The source, as a player of the track's group; -1 for whichever tee is
   // being controlled.
   int linked_source_player;
   uint64_t linked_copy_fields;
   uint32_t linked_transform_flags;
-  // While recording: the fields the link drives this frame (bit i = schema
-  // field i), and those a linked "pressed" control set for the rest of the take.
+  // While recording (bit i = schema field i): the fields the link drives this
+  // frame, those it holds for the rest of the take because something drove them
+  // (the link, or the user while the tee was controlled), and those its held
+  // linked key binds drove last frame, released when the key is.
   uint64_t linked_driven_fields;
   uint64_t linked_sticky_fields;
+  uint64_t linked_bound_fields;
 
   // Generic exporter selection; every exporter receives the same chosen track
   // set and interprets its own output format inside the game module.

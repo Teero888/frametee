@@ -710,6 +710,8 @@ struct ft_game {
   dd_demo_export_world_t *demo_export_worlds;
   int demo_export_world_count;
   bool preserve_demo_export_on_level_load;
+  // Set once the save dialog's answer has been written; the window then closes.
+  bool demo_export_done;
 
   // DDNet ghost export configuration
   bool open_ghost_export;
@@ -722,6 +724,7 @@ struct ft_game {
   float ghost_export_detected_time;
   bool ghost_export_has_finish;
   char ghost_export_error[160];
+  bool ghost_export_done;
 
   // This game's cache directory with a trailing separator, resolved once on the
   // main thread: recordings open on worker threads and keep their demo files

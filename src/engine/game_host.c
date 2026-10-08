@@ -505,6 +505,7 @@ bool game_host_activate_index(game_host_t *host, int index) {
   }
 
   host->instance = instance;
+  host->instance_serial++;
   if (!instance_effects_valid(slot->module, instance, slot->id)) {
     slot->module->destroy(instance);
     host->instance = NULL;

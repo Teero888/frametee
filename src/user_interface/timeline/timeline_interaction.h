@@ -23,6 +23,9 @@ void interaction_cancel_recording(timeline_state_t *ts);
 void interaction_trim_recording_snippet(timeline_state_t *ts, bool only_controlled);
 void interaction_switch_recording_target(timeline_state_t *ts, int new_track_index);
 void interaction_apply_linked_inputs(ui_handler_t *ui);
+// While recording, every linked tee but the controlled one lets go of the keys it holds and holds
+// them released. The aim and choices such as the weapon stay.
+void interaction_release_linked_keys(timeline_state_t *ts);
 // A track driven by its link right now: linked, and not the one being controlled.
 bool interaction_track_is_linked(const timeline_state_t *ts, int track_index);
 void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timeline_bb, int *out_snapped_tick, int *out_base_track);

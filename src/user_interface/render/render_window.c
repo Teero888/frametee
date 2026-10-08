@@ -6,11 +6,11 @@
 #include <export/video_export.h>
 #include <frametee/icons.h>
 #include <math.h>
-#include <nfd.h>
 #include <renderer/graphics_backend.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <system/file_dialog.h>
 #include <system/include_cimgui.h>
 #include <user_interface/camera/camera_window.h>
 #include <user_interface/user_interface.h>
@@ -417,21 +417,24 @@ static void default_video_name(const ui_handler_t *ui, char *out, size_t size) {
   else snprintf(out, size, "%.*s.mp4", (int)length, name);
 }
 
-static void start_render(ui_handler_t *ui) {
+static void render_path_chosen(void *user, const char *path) {
+  ui_handler_t *ui = user;
   video_export_job_t *job = &ui->video_job;
-  nfdu8char_t *path = NULL;
-  nfdu8filteritem_t filter[] = {{"MP4 Video", "mp4"}};
-  char suggested[256];
-  default_video_name(ui, suggested, sizeof(suggested));
-  if (NFD_SaveDialogU8(&path, filter, 1, NULL, suggested) != NFD_OKAY || !path) return;
+  if (!path) return;
   char output[1024];
   snprintf(output, sizeof(output), "%s", path);
-  NFD_FreePathU8(path);
   const size_t length = strlen(output);
   if ((length < 4 || strcasecmp(output + length - 4, ".mp4") != 0) && length + 4 < sizeof(output)) strcat(output, ".mp4");
   render_video_profile(ui); // the snapshot carries the video's look
   if (!video_export_start(ui->gfx_handler, job, &ui->video_options, output) && !job->status[0])
     snprintf(job->status, sizeof(job->status), "Invalid settings or encoder unavailable");
+}
+
+static void start_render(ui_handler_t *ui) {
+  char suggested[256];
+  default_video_name(ui, suggested, sizeof(suggested));
+  const file_dialog_t dialog = {.save = true, .filter_name = "MP4 Video", .filter_ext = "mp4", .default_name = suggested};
+  file_dialog_open(&dialog, render_path_chosen, ui);
 }
 
 // Labels beside the fields of one column, as wide as the widest of them.

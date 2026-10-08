@@ -203,6 +203,10 @@ struct ft_game {
   const ft_engine_api *engine;
   tmuf_packs *packs;
   ft_level *level; // the level loaded last
+  // What an open file dialog is for, kept until it answers: the snippet TMInterface inputs go
+  // into, the track an export is of.
+  int32_t dialog_snippet;
+  int32_t dialog_track;
   tm_settings settings;
   // drawing (tmuf_gpu.h): the scene into `frame`, which the engine shows
   tg *gpu;

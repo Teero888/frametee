@@ -1,4 +1,5 @@
 #include "plugin_manager.h"
+#include "api_impl.h"
 #include <ctype.h>
 #include <float.h>
 #include <frametee/icons.h>
@@ -481,6 +482,8 @@ void plugin_manager_unload_plugin(plugin_manager_t *manager, int index) {
   if (p->shutdown && p->data) {
     p->shutdown(p->data);
   }
+  // A save dialog the plugin may have open would answer into unmapped code.
+  api_forget_file_dialog();
   if (p->handle) {
     fs_free_library(p->handle);
     p->handle = NULL;

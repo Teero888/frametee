@@ -13,13 +13,13 @@
 #include <frametee/game_abi.h>
 #include <logger/logger.h>
 #include <math.h>
-#include <nfd.h>
 #include <renderer/graphics_backend.h>
 #include <renderer/renderer.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <system/file_dialog.h>
 #include <system/fs.h>
 #include <user_interface/starting_state.h>
 #include <stdint.h>
@@ -742,37 +742,47 @@ static bool api_snippet_set_inputs(int32_t snippet_id, int32_t start_tick, const
   return true;
 }
 
-static bool api_save_file_dialog(const char *filter_name, const char *filter_ext, const char *default_name, char *out_path, size_t out_size) {
-  if (!out_path || out_size == 0) return false;
-  out_path[0] = '\0';
+// The game's dialog. Its answer goes through here so that a game destroyed while the dialog was up
+// is not called back.
+static struct {
+  ft_file_dialog_done done;
+  void *user;
+  const ft_game *instance;
+  uint32_t instance_serial;
+} g_game_dialog;
+
+static void game_dialog_done(void *user, const char *path) {
+  (void)user;
+  const ft_file_dialog_done done = g_game_dialog.done;
+  g_game_dialog.done = NULL;
+  const game_host_t *host = &g_engine->game_host;
+  if (done && host->instance == g_game_dialog.instance && host->instance_serial == g_game_dialog.instance_serial)
+    done(g_game_dialog.user, path);
+}
+
+static bool open_game_dialog(bool save, const char *filter_name, const char *filter_ext, const char *default_name,
+                             ft_file_dialog_done done, void *user) {
+  if (!done || !g_engine) return false;
   if (g_is_headless) {
-    log_warn(LOG_SOURCE, "save_file_dialog is unavailable in headless mode");
+    log_warn(LOG_SOURCE, "file dialogs are unavailable in headless mode");
     return false;
   }
-
-  nfdu8filteritem_t filter = {filter_name, filter_ext};
-  nfdu8char_t *path = NULL;
-  const bool has_filter = filter_name && filter_ext;
-  if (NFD_SaveDialogU8(&path, has_filter ? &filter : NULL, has_filter ? 1 : 0, NULL, default_name) != NFD_OKAY || !path) return false;
-
-  snprintf(out_path, out_size, "%s", path);
-  NFD_FreePathU8(path);
+  const file_dialog_t dialog = {.save = save, .filter_name = filter_name, .filter_ext = filter_ext, .default_name = default_name};
+  if (!file_dialog_open(&dialog, game_dialog_done, &g_game_dialog)) return false;
+  g_game_dialog.done = done;
+  g_game_dialog.user = user;
+  g_game_dialog.instance = g_engine->game_host.instance;
+  g_game_dialog.instance_serial = g_engine->game_host.instance_serial;
   return true;
 }
 
-static bool api_open_file_dialog(const char *filter_name, const char *filter_ext, char *out_path, size_t out_size) {
-  if (!out_path || out_size == 0) return false;
-  out_path[0] = '\0';
-  if (g_is_headless) return false;
+static bool api_save_file_dialog(const char *filter_name, const char *filter_ext, const char *default_name, ft_file_dialog_done done,
+                                 void *user) {
+  return open_game_dialog(true, filter_name, filter_ext, default_name, done, user);
+}
 
-  nfdu8filteritem_t filter = {filter_name, filter_ext};
-  nfdu8char_t *path = NULL;
-  const bool has_filter = filter_name && filter_ext;
-  if (NFD_OpenDialogU8(&path, has_filter ? &filter : NULL, has_filter ? 1 : 0, NULL) != NFD_OKAY || !path) return false;
-
-  snprintf(out_path, out_size, "%s", path);
-  NFD_FreePathU8(path);
-  return true;
+static bool api_open_file_dialog(const char *filter_name, const char *filter_ext, ft_file_dialog_done done, void *user) {
+  return open_game_dialog(false, filter_name, filter_ext, NULL, done, user);
 }
 
 static uint32_t api_visit_directory(const char *path, ft_directory_visitor visitor, void *user) {

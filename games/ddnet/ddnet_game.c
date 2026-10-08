@@ -185,10 +185,13 @@ static void ddnet_input_set(ft_game *game, void *record, uint32_t field, int64_t
   case IN_JUMP:
     in->m_Jump = value ? 1 : 0;
     break;
-  // Fire is a counter in the protocol: the physics acts on odd values, so
-  // toggling the low bit is what "pressed this tick" means.
+  // Fire is a counter in the protocol whose low bit is the button. The physics
+  // counts the presses between two ticks by stepping up from one value to the
+  // other, wrapping at 64 (count_input), so the counter may only go up: a press
+  // or a release moves it on to the next odd or even value, and lowering it
+  // would count as presses. Letting go is DDNet's own reset, +1 when odd.
   case IN_FIRE:
-    in->m_Fire = value ? (in->m_Fire | 1) : (uint8_t)(in->m_Fire & ~1);
+    if ((in->m_Fire & 1) != (value != 0)) in->m_Fire = (uint8_t)((in->m_Fire + 1) & 0x3f);
     break;
   case IN_HOOK:
     in->m_Hook = value ? 1 : 0;

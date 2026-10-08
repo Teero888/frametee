@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 27u
+#define FT_GAME_ABI_VERSION 28u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -1125,6 +1125,11 @@ typedef struct ft_snippet_info {
   bool playback;                 /* a window onto a demo's player rather than inputs of its own */
 } ft_snippet_info;
 
+/* The answer to a file dialog (ft_engine_api.save_file_dialog): the chosen
+ * path, or NULL when the dialog was cancelled or failed. The path is only valid
+ * during the call. */
+typedef void (*ft_file_dialog_done)(void *user, const char *path);
+
 /* Services the engine exposes to a game module. Every pointer is non-NULL for
  * the lifetime of the module, except where noted for headless runs. */
 typedef struct ft_engine_api {
@@ -1250,10 +1255,14 @@ typedef struct ft_engine_api {
   /* Input the engine currently holds for a player at a tick, in the game's own
    * record format. Returns false when the player or tick is out of range. */
   bool (*get_player_input)(int32_t player, int32_t tick, void *out_record);
-  /* Native file dialogs; return false when cancelled or headless. */
-  bool (*save_file_dialog)(const char *filter_name, const char *filter_ext, const char *default_name, char *out_path,
-                           size_t out_size);
-  bool (*open_file_dialog)(const char *filter_name, const char *filter_ext, char *out_path, size_t out_size);
+  /* Native file dialogs. The dialog runs on a thread of its own while the
+   * editor goes on drawing (and ignores its own input), and `done` is called
+   * later from the frame loop, on the main thread, with the answer. False when
+   * no dialog could be opened (one is already up, or the run is headless);
+   * `done` is then never called. Nor is it once the module is destroyed. */
+  bool (*save_file_dialog)(const char *filter_name, const char *filter_ext, const char *default_name, ft_file_dialog_done done,
+                           void *user);
+  bool (*open_file_dialog)(const char *filter_name, const char *filter_ext, ft_file_dialog_done done, void *user);
 
   /* Enumerates one directory synchronously. Returns the number of entries
    * delivered to `visitor`; zero also covers a directory that cannot be read. */

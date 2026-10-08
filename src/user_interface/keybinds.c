@@ -100,9 +100,9 @@ static bool combo_modifiers_satisfied(const key_combo_t *combo) {
   return true;
 }
 
-bool is_key_combo_held(const key_combo_t *combo) {
-  if (combo->key == ImGuiKey_None) return false;
-  if (!combo_modifiers_satisfied(combo) || combo_blocked_by_ui(combo)) return false;
+// The combo's own key, button or wheel notch, whatever modifiers are held.
+static bool combo_key_down(const key_combo_t *combo) {
+  if (combo->key == ImGuiKey_None || combo_blocked_by_ui(combo)) return false;
 
   // The wheel is held for the one frame of its notch.
   const int wheel = wheel_direction(combo->key);
@@ -114,19 +114,10 @@ bool is_key_combo_held(const key_combo_t *combo) {
   return input_key_down(input_glfw_key_from_imgui(combo->key));
 }
 
+bool is_key_combo_held(const key_combo_t *combo) { return combo_modifiers_satisfied(combo) && combo_key_down(combo); }
+
 // check if a key combination is held down
-bool is_key_combo_down(const key_combo_t *combo) {
-  if (combo->key == ImGuiKey_None) return false;
-  if (!combo_modifiers_match(combo) || combo_blocked_by_ui(combo)) return false;
-
-  const int wheel = wheel_direction(combo->key);
-  if (wheel) return input_wheel_notch() == wheel;
-
-  int button = input_glfw_button_from_imgui(combo->key);
-  if (button != -1) return input_mouse_down(button);
-
-  return input_key_down(input_glfw_key_from_imgui(combo->key));
-}
+bool is_key_combo_down(const key_combo_t *combo) { return combo_modifiers_match(combo) && combo_key_down(combo); }
 
 // The name a key is shown and saved under.
 static const char *key_name(ImGuiKey key) {
@@ -165,6 +156,7 @@ void keybinds_add(keybind_manager_t *kb, action_t action, key_combo_t combo) {
   }
   kb->bindings[kb->bind_count].action_id = action;
   kb->bindings[kb->bind_count].combo = combo;
+  kb->bindings[kb->bind_count].down_frame = INT_MIN;
   kb->bind_count++;
 }
 
@@ -203,12 +195,21 @@ bool keybinds_is_action_held(keybind_manager_t *kb, action_t action) {
 }
 
 bool keybinds_is_action_down(keybind_manager_t *kb, action_t action) {
+  // A bind goes down with exactly its modifiers and then stays down for as long as its key is held,
+  // whatever modifiers join: holding D to walk while pressing Alt+1 to switch tracks must not stop
+  // the walk. That takes asking every frame; a bind not asked for a frame has to go down afresh.
+  const int frame = igGetFrameCount();
+  bool down = false;
   for (int i = 0; i < kb->bind_count; i++) {
-    if (kb->bindings[i].action_id == action) {
-      if (is_key_combo_down(&kb->bindings[i].combo)) return true;
+    keybind_entry_t *bind = &kb->bindings[i];
+    if (bind->action_id != action) continue;
+    const bool was_down = bind->down_frame == frame || bind->down_frame == frame - 1;
+    if (is_key_combo_down(&bind->combo) || (was_down && combo_key_down(&bind->combo))) {
+      bind->down_frame = frame;
+      down = true;
     }
   }
-  return false;
+  return down;
 }
 
 bool keybinds_is_view_action_pressed(keybind_manager_t *kb, action_t action, bool repeat, bool hovered) {
@@ -301,7 +302,10 @@ void keybinds_init(keybind_manager_t *manager) {
   set_action_info(manager, ACTION_TRIM_SNIPPET, "trim_snippet", "Trim Recording", "Recording");
   set_action_info(manager, ACTION_TRIM_CONTROLLED, "trim_controlled", "Trim Controlled Player's Recording", "Recording");
   set_action_info(manager, ACTION_CANCEL_RECORDING, "cancel_recording", "Cancel Recording", "Recording");
-  set_action_info(manager, ACTION_TOGGLE_LINKED_COPY, "toggle_linked_copy", "Toggle Linked Input Copy", "Recording");
+  // Listed with the game's linked inputs by keybinds_bind_game, and not at all for a game without
+  // them, where it does nothing.
+  set_action_info(manager, ACTION_TOGGLE_LINKED_COPY, "toggle_linked_copy", "Toggle Linked Input Copy", "");
+  set_action_info(manager, ACTION_RELEASE_LINKED_KEYS, "reset_linked_inputs", "Reset Linked Inputs", "");
   set_action_info(manager, ACTION_ZOOM_IN, "zoom_in", "Zoom in", "Camera");
   set_action_info(manager, ACTION_ZOOM_OUT, "zoom_out", "Zoom out", "Camera");
   set_action_info(manager, ACTION_CYCLE_CAMERA_MODE, "cycle_camera_mode", "Cycle Camera Mode", "Camera");
@@ -358,6 +362,7 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_TRIM_CONTROLLED, (key_combo_t){ImGuiKey_F, true, false, false});
   keybinds_add(manager, ACTION_CANCEL_RECORDING, (key_combo_t){ImGuiKey_F4, false, false, false});
   keybinds_add(manager, ACTION_TOGGLE_LINKED_COPY, (key_combo_t){ImGuiKey_R, false, false, false});
+  keybinds_add(manager, ACTION_RELEASE_LINKED_KEYS, (key_combo_t){ImGuiKey_R, false, false, true});
   keybinds_add(manager, ACTION_ZOOM_IN, (key_combo_t){ImGuiKey_Equal, false, false, false});
   keybinds_add(manager, ACTION_ZOOM_IN, (key_combo_t){INPUT_KEY_WHEEL_UP, false, false, false});
   keybinds_add(manager, ACTION_ZOOM_OUT, (key_combo_t){ImGuiKey_Minus, false, false, false});
@@ -442,6 +447,8 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
   manager->game_action_count = 0;
   manager->linked_action_count = 0;
   manager->action_count = ACTION_ENGINE_COUNT;
+  manager->action_infos[ACTION_TOGGLE_LINKED_COPY].category[0] = '\0';
+  manager->action_infos[ACTION_RELEASE_LINKED_KEYS].category[0] = '\0';
   if (!host || !game_host_ready(host)) return;
 
   const ft_input_schema *schema = game_input_schema(host);
@@ -462,15 +469,18 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
 
   if (!game_has_cap(host, FT_CAP_LINKED_INPUTS)) return;
 
+  char category[64];
+  snprintf(category, sizeof(category), "%s Linked Inputs", host->module->info.display_name);
+  snprintf(manager->action_infos[ACTION_TOGGLE_LINKED_COPY].category, sizeof(manager->action_infos[0].category), "%s", category);
+  snprintf(manager->action_infos[ACTION_RELEASE_LINKED_KEYS].category, sizeof(manager->action_infos[0].category), "%s", category);
+
   for (unsigned i = 0; i < count; ++i) {
     const ft_input_control *control = &schema->controls[i];
     const action_t action = keybinds_linked_game_action(i);
     char identifier[96];
     char name[64];
-    char category[64];
     snprintf(identifier, sizeof(identifier), "game_%s_linked_%s", game_host_active_id(host), control->id);
     snprintf(name, sizeof(name), "Linked: %s", control->display_name);
-    snprintf(category, sizeof(category), "%s Linked Inputs", host->module->info.display_name);
     set_action_info(manager, action, identifier, name, category);
     add_default_bindings(manager, action, control->linked_default_binding);
   }
@@ -481,9 +491,7 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
     const ft_linked_action *desc = &host->module->linked_actions[i];
     const action_t action = keybinds_linked_extra_action(i);
     char identifier[96];
-    char category[64];
     snprintf(identifier, sizeof(identifier), "game_%s_linked_%s", game_host_active_id(host), desc->id);
-    snprintf(category, sizeof(category), "%s Linked Inputs", host->module->info.display_name);
     set_action_info(manager, action, identifier, desc->display_name, category);
     add_default_bindings(manager, action, desc->default_binding);
   }
@@ -581,6 +589,7 @@ void keybinds_process_inputs(ui_handler_t *ui) {
       keybinds_is_action_pressed(kb, ACTION_TOGGLE_LINKED_COPY, false)) {
     ts->linked_copy_input ^= 1;
   }
+  if (keybinds_is_action_pressed(kb, ACTION_RELEASE_LINKED_KEYS, false)) interaction_release_linked_keys(ts);
 
   if (keybinds_is_action_pressed(kb, ACTION_CYCLE_CAMERA_MODE, false)) ui_cycle_camera_mode(ui);
 
@@ -693,6 +702,10 @@ static void render_keybind_entry(ui_handler_t *ui, keybind_manager_t *manager, a
   igPopID();
 }
 
+// Sections are listed in the order of their first action. The engine's actions filed with the
+// game's linked inputs head that section's rows but leave it after the game's own controls.
+static bool opens_section(int action) { return action != ACTION_TOGGLE_LINKED_COPY && action != ACTION_RELEASE_LINKED_KEYS; }
+
 void keybinds_render_settings_window(ui_handler_t *ui) {
   keybind_manager_t *manager = &ui->keybinds;
   if (!manager->show_settings_window) return;
@@ -765,10 +778,10 @@ void keybinds_render_settings_window(ui_handler_t *ui) {
 
   for (int cat_idx = 0; cat_idx < manager->action_count; ++cat_idx) {
     const char *current_category = manager->action_infos[cat_idx].category;
-    if (!*current_category) continue;
+    if (!*current_category || !opens_section(cat_idx)) continue;
     bool already_rendered = false;
     for (int previous = 0; previous < cat_idx; ++previous) {
-      if (strcmp(manager->action_infos[previous].category, current_category) == 0) already_rendered = true;
+      if (opens_section(previous) && strcmp(manager->action_infos[previous].category, current_category) == 0) already_rendered = true;
     }
     if (already_rendered) continue;
 

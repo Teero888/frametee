@@ -472,6 +472,11 @@ static void missing_data(const ft_engine_api *engine, splash_state *s) {
   if (igButton(ICON_FA_ARROW_ROTATE_RIGHT " Check again", (ImVec2){0, 0})) s->data_checked = false;
 }
 
+static void level_chosen(void *user, const char *path) {
+  const ft_engine_api *engine = user;
+  if (path) engine->request_level(path);
+}
+
 void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *frame) {
   tm_imgui_attach(engine);
   splash_state *s = *context;
@@ -502,10 +507,8 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
   }
   if (!s->count) {
     igTextDisabled("No tracks found in the game's GameData/Tracks directory.");
-    if (igButton(ICON_FA_FOLDER_OPEN " Open a challenge or replay...", (ImVec2){0, 0}) && engine->open_file_dialog) {
-      char path[1024];
-      if (engine->open_file_dialog("TrackMania challenge or replay", "Gbx", path, sizeof path)) engine->request_level(path);
-    }
+    if (igButton(ICON_FA_FOLDER_OPEN " Open a challenge or replay...", (ImVec2){0, 0}) && engine->open_file_dialog)
+      engine->open_file_dialog("TrackMania challenge or replay", "Gbx", level_chosen, (void *)engine);
     return;
   }
   const ImVec2 avail = igGetContentRegionAvail();
@@ -571,10 +574,8 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
   igInputTextWithHint("##tmuf_search", ICON_FA_MAGNIFYING_GLASS " Search tracks...", s->search, sizeof s->search, 0,
                       NULL, NULL);
   igSameLine(0, 12.f);
-  if (igButton(open_label, (ImVec2){open_w, 0}) && engine->open_file_dialog) {
-    char path[1024];
-    if (engine->open_file_dialog("TrackMania challenge or replay", "Gbx", path, sizeof path)) engine->request_level(path);
-  }
+  if (igButton(open_label, (ImVec2){open_w, 0}) && engine->open_file_dialog)
+    engine->open_file_dialog("TrackMania challenge or replay", "Gbx", level_chosen, (void *)engine);
   igSpacing();
 
   // the cards, by series
@@ -817,8 +818,7 @@ static void player_panel(ft_game *game, const ft_ui_frame *frame) {
 // A snippet's inputs as TMInterface's script: copied to the clipboard, or
 // replaced with a script's (from the clipboard or a file), which holds the
 // run from the race's start, so the snippet then starts at tick 0.
-static void replace_with_script(ft_game *game, const ft_ui_frame *frame, const char *data, size_t size,
-                                const char *what) {
+static void replace_with_script(ft_game *game, int32_t snippet_id, const char *data, size_t size, const char *what) {
   const ft_engine_api *api = game->engine;
   int32_t count = 0;
   uint32_t skipped = 0;
@@ -828,11 +828,24 @@ static void replace_with_script(ft_game *game, const ft_ui_frame *frame, const c
     free(inputs);
     return;
   }
-  if (!api->snippet_set_inputs(frame->snippet.id, 0, inputs, (uint32_t)count, what))
+  if (!api->snippet_set_inputs(snippet_id, 0, inputs, (uint32_t)count, what))
     tm_log(game, FT_LOG_ERROR, "%s: the snippet cannot take inputs", what);
   else if (skipped)
     tm_log(game, FT_LOG_WARN, "%s: %u commands that are not inputs were left out", what, skipped);
   free(inputs);
+}
+
+static void script_import_chosen(void *user, const char *path) {
+  ft_game *game = user;
+  if (!path) return;
+  void *data = NULL;
+  size_t size = 0;
+  if (game->engine->read_file(path, &data, &size)) {
+    replace_with_script(game, game->dialog_snippet, data, size, "Import TMInterface Inputs");
+    game->engine->free_file_data(data);
+  } else {
+    tm_log(game, FT_LOG_ERROR, "Cannot read %s", path);
+  }
 }
 
 void tm_snippet_menu(ft_game *game, const ft_ui_frame *frame) {
@@ -856,21 +869,23 @@ void tm_snippet_menu(ft_game *game, const ft_ui_frame *frame) {
   }
   if (igMenuItem_Bool("Paste TMInterface Inputs", NULL, false, !s->playback)) {
     const char *clip = igGetClipboardText();
-    replace_with_script(game, frame, clip, clip ? strlen(clip) : 0, "Paste TMInterface Inputs");
+    replace_with_script(game, s->id, clip, clip ? strlen(clip) : 0, "Paste TMInterface Inputs");
   }
-  if (igMenuItem_Bool("Import TMInterface Inputs...", NULL, false, !s->playback) && api->open_file_dialog) {
-    char path[1024];
-    void *data = NULL;
-    size_t size = 0;
-    if (api->open_file_dialog("TMInterface input script", "txt", path, sizeof path)) {
-      if (api->read_file(path, &data, &size)) {
-        replace_with_script(game, frame, data, size, "Import TMInterface Inputs");
-        api->free_file_data(data);
-      } else {
-        tm_log(game, FT_LOG_ERROR, "Cannot read %s", path);
-      }
-    }
-  }
+  if (igMenuItem_Bool("Import TMInterface Inputs...", NULL, false, !s->playback) && api->open_file_dialog &&
+      api->open_file_dialog("TMInterface input script", "txt", script_import_chosen, game))
+    game->dialog_snippet = s->id;
+}
+
+static void replay_export_chosen(void *user, const char *path) {
+  ft_game *game = user;
+  if (path && !tm_export_track(game, TM_EXPORT_REPLAY, path, game->dialog_track))
+    tm_log(game, FT_LOG_ERROR, "Exporting the replay failed");
+}
+
+static void tminterface_export_chosen(void *user, const char *path) {
+  ft_game *game = user;
+  if (path && !tm_export_track(game, TM_EXPORT_TMINTERFACE, path, game->dialog_track))
+    tm_log(game, FT_LOG_ERROR, "Exporting the inputs failed");
 }
 
 void tm_ui(ft_game *game, const ft_ui_frame *frame) {
@@ -884,19 +899,16 @@ void tm_ui(ft_game *game, const ft_ui_frame *frame) {
       // the selected track's run, to the finish or else the playhead
       const int32_t track = frame->state.selected_player >= 0 ? frame->state.selected_player : 0;
       if (igMenuItem_Bool("Export Replay...", NULL, false, game->level != NULL) && game->engine->save_file_dialog) {
-        char path[1024], name[300];
+        char name[300];
         snprintf(name, sizeof name, "%s.Replay.Gbx", game->level->name);
-        if (game->engine->save_file_dialog("TrackMania replay", "Gbx", name, path, sizeof path) &&
-            !tm_export_track(game, TM_EXPORT_REPLAY, path, track))
-          tm_log(game, FT_LOG_ERROR, "Exporting the replay failed");
+        if (game->engine->save_file_dialog("TrackMania replay", "Gbx", name, replay_export_chosen, game)) game->dialog_track = track;
       }
       if (igMenuItem_Bool("Export TMInterface Inputs...", NULL, false, game->level != NULL) &&
           game->engine->save_file_dialog) {
-        char path[1024], name[300];
+        char name[300];
         snprintf(name, sizeof name, "%s.txt", game->level->name);
-        if (game->engine->save_file_dialog("TMInterface input script", "txt", name, path, sizeof path) &&
-            !tm_export_track(game, TM_EXPORT_TMINTERFACE, path, track))
-          tm_log(game, FT_LOG_ERROR, "Exporting the inputs failed");
+        if (game->engine->save_file_dialog("TMInterface input script", "txt", name, tminterface_export_chosen, game))
+          game->dialog_track = track;
       }
       igEndMenu();
     }

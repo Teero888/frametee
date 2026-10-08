@@ -33,6 +33,9 @@ void input_init(struct GLFWwindow *window);
 void input_shutdown(void);
 // Samples the keyboard and mouse for this frame. Must run after glfwPollEvents().
 void input_new_frame(void);
+// While blocked (a file dialog is up), from the next input_new_frame() on, every key, button, wheel
+// notch and motion reads as idle, as if another window had focus.
+void input_set_blocked(bool blocked);
 
 // Fed from the GLFW callbacks, which see every event even between frames.
 void input_accumulate_mouse_pos(double x, double y, double *out_dx, double *out_dy);

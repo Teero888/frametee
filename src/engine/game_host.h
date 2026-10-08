@@ -31,6 +31,9 @@ typedef struct game_host_t {
   int active; // index into slots, -1 when no game is active
   const ft_game_module *module;
   ft_game *instance;
+  // Counts the instances created, so something kept for one (a file dialog's
+  // answer) can tell it from a later one at the same address.
+  uint32_t instance_serial;
   const ft_engine_api *engine_api;
 
   int browsed; // selected slot, -1 when no game is selected on the splash

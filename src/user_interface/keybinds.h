@@ -50,6 +50,7 @@ typedef enum {
   ACTION_TRIM_CONTROLLED,
   ACTION_CANCEL_RECORDING,
   ACTION_TOGGLE_LINKED_COPY,
+  ACTION_RELEASE_LINKED_KEYS,
 
   // camera
   ACTION_ZOOM_IN,
@@ -98,6 +99,8 @@ struct action_info_t {
 struct keybind_entry_t {
   action_t action_id;
   key_combo_t combo;
+  // The last frame keybinds_is_action_down found it down (INT_MIN for never).
+  int down_frame;
 };
 
 struct keybind_manager_t {

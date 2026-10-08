@@ -281,6 +281,20 @@ void dd_ghost_export_window_open(ft_game *game) {
   game->open_ghost_export = true;
 }
 
+// The save dialog's answer: the ghost of the track and range chosen in the window.
+static void ghost_export_chosen(void *user, const char *path) {
+  ft_game *game = user;
+  if (!path) return;
+  if (dd_ghost_export(game, game->ghost_export_world, game->ghost_export_track, game->ghost_export_start_tick,
+                      game->ghost_export_end_tick, path)) {
+    dd_log(game, FT_LOG_INFO, "Exported DDNet ghost to '%s'.", path);
+    game->ghost_export_error[0] = '\0';
+    game->ghost_export_done = true;
+  } else {
+    snprintf(game->ghost_export_error, sizeof(game->ghost_export_error), "Ghost export failed; see the log for details.");
+  }
+}
+
 void dd_ghost_export_window_render(ft_game *game) {
   if (!game) return;
   if (game->open_ghost_export) {
@@ -290,6 +304,10 @@ void dd_ghost_export_window_render(ft_game *game) {
 
   igSetNextWindowSize((ImVec2){560.f, 540.f}, ImGuiCond_FirstUseEver);
   if (!igBeginPopupModal("Export DDNet Ghost", NULL, ImGuiWindowFlags_None)) return;
+  if (game->ghost_export_done) {
+    game->ghost_export_done = false;
+    igCloseCurrentPopup();
+  }
 
   if (!game->engine->timeline_world_count || !game->engine->timeline_world_info) {
     igTextColored((ImVec4){1.f, 0.35f, 0.3f, 1.f}, "Could not query timeline.");
@@ -406,17 +424,7 @@ void dd_ghost_export_window_render(ft_game *game) {
     char default_name[256];
     snprintf(default_name, sizeof(default_name), "%s_%s_%d.%03d.gho", map_name, player_name, time_ms / 1000, time_ms % 1000);
 
-    char path[1024];
-    if (game->engine->save_file_dialog && game->engine->save_file_dialog("DDNet Ghost", "gho", default_name, path, sizeof(path))) {
-      if (dd_ghost_export(game, game->ghost_export_world, game->ghost_export_track,
-                          game->ghost_export_start_tick, game->ghost_export_end_tick, path)) {
-        dd_log(game, FT_LOG_INFO, "Exported DDNet ghost to '%s'.", path);
-        game->ghost_export_error[0] = '\0';
-        igCloseCurrentPopup();
-      } else {
-        snprintf(game->ghost_export_error, sizeof(game->ghost_export_error), "Ghost export failed; see the log for details.");
-      }
-    }
+    if (game->engine->save_file_dialog) game->engine->save_file_dialog("DDNet Ghost", "gho", default_name, ghost_export_chosen, game);
   }
   if (!valid) igEndDisabled();
 

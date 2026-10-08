@@ -285,6 +285,27 @@ static void modifier_capture(void) {
   assert(input_capture_pressed_key() == ImGuiKey_None);
 }
 
+static void blocked_while_dialog(void) {
+  reset();
+  // While a file dialog is up nothing reads as pressed or moved, and nothing is left over after.
+  input_set_blocked(true);
+  keys[GLFW_KEY_D] = GLFW_PRESS;
+  buttons[GLFW_MOUSE_BUTTON_LEFT] = GLFW_PRESS;
+  input_accumulate_scroll(0.0, 1.0);
+  input_accumulate_mouse_pos(5.0, 3.0, NULL, NULL);
+  frame(0.0);
+  assert(!input_key_down(GLFW_KEY_D) && !input_mouse_down(GLFW_MOUSE_BUTTON_LEFT));
+  assert(input_wheel_notch() == 0 && input_scroll_y() == 0.0);
+  double dx, dy;
+  input_mouse_delta(&dx, &dy);
+  assert(dx == 0.0 && dy == 0.0);
+  input_set_blocked(false);
+  frame(0.1);
+  assert(input_wheel_notch() == 0);
+  // Keys still down when it closes count from then on, as a fresh press.
+  assert(input_key_pressed(GLFW_KEY_D, false) && input_mouse_pressed(GLFW_MOUSE_BUTTON_LEFT, false));
+}
+
 int main(void) {
   mouse_repeat();
   repeat_settings();
@@ -292,6 +313,7 @@ int main(void) {
   keyboard_and_capture();
   wheel_notches();
   modifier_capture();
+  blocked_while_dialog();
   puts("Input repeat tests passed");
   return 0;
 }
