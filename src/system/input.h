@@ -8,9 +8,10 @@
  * with install_callbacks=false. Every event goes to this module first and is then passed on to
  * ImGui_ImplGlfw_*Callback, so there is one path from the window to both consumers.
  *
- * This module keeps no queue. Key and button state is polled from GLFW once per frame, mouse motion
- * and scroll are summed by the callbacks as they arrive and drained in input_new_frame(). Binds and
- * viewport pan/zoom read from here, so nothing they do can fall behind the hardware.
+ * Key and button state is polled from GLFW once per frame, mouse motion and scroll are summed by the
+ * callbacks as they arrive and drained in input_new_frame(). Binds and viewport pan/zoom read from
+ * here, so nothing they do can fall behind the hardware. The one queue is a few wheel notches deep:
+ * a bind on the wheel is pressed once per notch, and a spin can bring several notches in one frame.
  *
  * Imgui does keep a queue, and trickles it: events of the same kind arriving in one frame are spread
  * over several, so that e.g. a click that is pressed and released inside one frame is not flattened
@@ -56,6 +57,9 @@ bool input_super_down(void);
 void input_mouse_delta(double *out_dx, double *out_dy);
 double input_scroll_y(void);
 void input_cursor_pos(double *out_x, double *out_y);
+// The wheel notch this frame hands to binds: 1 up, -1 down, 0 none. At most one per frame; the
+// rest of a quick spin follows on the next frames.
+int input_wheel_notch(void);
 
 // Keybinds are stored as ImGuiKey so that saved configs and the rebinding UI keep working.
 // Returns -1 when the key has no GLFW equivalent.
@@ -63,8 +67,14 @@ int input_glfw_key_from_imgui(ImGuiKey key);
 // Returns -1 when the key is not one of ImGuiKey_MouseLeft..ImGuiKey_MouseX2.
 int input_glfw_button_from_imgui(ImGuiKey key);
 
-// For the rebinding UI: the first key or mouse button pressed this frame, as the ImGuiKey the
-// binding is stored as. Modifiers are skipped since they are recorded separately in the combo.
+// Imgui only knows the wheel as an axis (ImGuiKey_MouseWheelY), so a bind stores each direction
+// as a key past imgui's named keys. These must never reach an imgui function such as GetKeyName.
+#define INPUT_KEY_WHEEL_UP ((ImGuiKey)ImGuiKey_NamedKey_END)
+#define INPUT_KEY_WHEEL_DOWN ((ImGuiKey)(ImGuiKey_NamedKey_END + 1))
+
+// For the rebinding UI: the first key, mouse button or wheel notch pressed this frame, as the
+// ImGuiKey the binding is stored as. A modifier pressed with it is recorded separately in the
+// combo; a modifier on its own is returned when it is released.
 ImGuiKey input_capture_pressed_key(void);
 
 #endif // INPUT_H

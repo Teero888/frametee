@@ -1315,7 +1315,7 @@ static void handle_input(ui_handler_t *ui, layout_t *l) {
 
   // Ctrl+wheel zooms around the pointer, like the timeline; the wheel alone pans.
   if (hovered) {
-    const float wheel = (float)input_scroll_y();
+    const float wheel = (float)keybinds_free_scroll_y(ui);
     if (wheel != 0.f && input_ctrl_down()) {
       ed->pixels_per_second = (float)fmin(MAX_PIXELS_PER_SECOND,
                                           fmax(MIN_PIXELS_PER_SECOND, ed->pixels_per_second * powf(1.15f, wheel)));

@@ -6,6 +6,7 @@
 
 #define KEY_COUNT (GLFW_KEY_LAST + 1)
 #define BUTTON_COUNT (GLFW_MOUSE_BUTTON_LAST + 1)
+#define WHEEL_QUEUE_SIZE 8
 
 typedef struct {
   GLFWwindow *window;
@@ -33,6 +34,15 @@ typedef struct {
   double frame_scroll_y;
   double cursor_x, cursor_y;
   double last_event_x, last_event_y;
+
+  // Wheel notches not handed out yet, oldest first: +1 up, -1 down. One goes out per frame, so a
+  // quick spin presses a bind once per notch instead of once per frame. A spin that outruns the
+  // queue drops the rest rather than keep pressing after the wheel has stopped.
+  signed char wheel_queue[WHEEL_QUEUE_SIZE];
+  int wheel_queue_start, wheel_queue_count;
+  // Scroll short of a whole notch, from touchpads and high resolution wheels.
+  double wheel_partial;
+  int frame_wheel;
 
   int imgui_to_glfw[ImGuiKey_NamedKey_END];
 
@@ -345,6 +355,16 @@ void input_accumulate_mouse_pos(double x, double y, double *out_dx, double *out_
 void input_accumulate_scroll(double x, double y) {
   (void)x;
   g_input.pending_scroll_y += y;
+
+  // GLFW reports a notch as 1.0 on every platform. Smaller steps add up to notches, and turning
+  // the wheel back starts over instead of finishing a notch in the other direction.
+  if ((y > 0.0 && g_input.wheel_partial < 0.0) || (y < 0.0 && g_input.wheel_partial > 0.0)) g_input.wheel_partial = 0.0;
+  g_input.wheel_partial += y;
+  const double notches = trunc(g_input.wheel_partial);
+  g_input.wheel_partial -= notches;
+  const signed char direction = notches > 0.0 ? 1 : -1;
+  for (double left = fabs(notches); left >= 1.0 && g_input.wheel_queue_count < WHEEL_QUEUE_SIZE; left -= 1.0)
+    g_input.wheel_queue[(g_input.wheel_queue_start + g_input.wheel_queue_count++) % WHEEL_QUEUE_SIZE] = direction;
 }
 
 void input_accumulate_key_repeat(int glfw_key) {
@@ -402,6 +422,17 @@ void input_new_frame(void) {
   g_input.pending_dx = g_input.pending_dy = 0.0;
   g_input.pending_scroll_y = 0.0;
 
+  // Like the buttons, the wheel presses nothing while another window has focus.
+  g_input.frame_wheel = 0;
+  if (!focused) {
+    g_input.wheel_queue_count = 0;
+    g_input.wheel_partial = 0.0;
+  } else if (g_input.wheel_queue_count > 0) {
+    g_input.frame_wheel = g_input.wheel_queue[g_input.wheel_queue_start];
+    g_input.wheel_queue_start = (g_input.wheel_queue_start + 1) % WHEEL_QUEUE_SIZE;
+    g_input.wheel_queue_count--;
+  }
+
   glfwGetCursorPos(g_input.window, &g_input.cursor_x, &g_input.cursor_y);
 }
 
@@ -439,6 +470,8 @@ void input_mouse_delta(double *out_dx, double *out_dy) {
 
 double input_scroll_y(void) { return g_input.frame_scroll_y; }
 
+int input_wheel_notch(void) { return g_input.frame_wheel; }
+
 void input_cursor_pos(double *out_x, double *out_y) {
   if (out_x) *out_x = g_input.cursor_x;
   if (out_y) *out_y = g_input.cursor_y;
@@ -450,16 +483,13 @@ int input_glfw_key_from_imgui(ImGuiKey key) {
 }
 
 ImGuiKey input_capture_pressed_key(void) {
-  // A modifier is normally part of a combo rather than its key, so a real key
-  // always wins. On its own, though, it is a perfectly good bind: a freecam
-  // wants Shift to sprint, so it is remembered and used when nothing else was
-  // pressed.
-  ImGuiKey modifier_only = ImGuiKey_None;
+  // A modifier is normally part of a combo rather than its key, so it only counts on its own once
+  // it is let go: binding Ctrl+S or Ctrl+WheelUp starts with holding Ctrl, which must not bind Ctrl
+  // right there. On its own it is still a perfectly good bind, a freecam wants Shift to sprint.
+  ImGuiKey released_modifier = ImGuiKey_None;
 
   for (int i = 0; i < g_input.poll_key_count; ++i) {
     int keycode = g_input.poll_keys[i];
-    if (!input_key_pressed(keycode, false)) continue;
-
     ImGuiKey key = glfw_key_to_imgui(keycode);
     switch (key) {
     case ImGuiKey_LeftCtrl:
@@ -470,10 +500,10 @@ ImGuiKey input_capture_pressed_key(void) {
     case ImGuiKey_RightAlt:
     case ImGuiKey_LeftSuper:
     case ImGuiKey_RightSuper:
-      if (modifier_only == ImGuiKey_None) modifier_only = key;
+      if (released_modifier == ImGuiKey_None && g_input.keys_prev[keycode] && !g_input.keys[keycode]) released_modifier = key;
       continue;
     default:
-      return key;
+      if (input_key_pressed(keycode, false)) return key;
     }
   }
 
@@ -482,8 +512,9 @@ ImGuiKey input_capture_pressed_key(void) {
   if (input_mouse_pressed(GLFW_MOUSE_BUTTON_MIDDLE, false)) return ImGuiKey_MouseMiddle;
   if (input_mouse_pressed(GLFW_MOUSE_BUTTON_4, false)) return ImGuiKey_MouseX1;
   if (input_mouse_pressed(GLFW_MOUSE_BUTTON_5, false)) return ImGuiKey_MouseX2;
+  if (g_input.frame_wheel) return g_input.frame_wheel > 0 ? INPUT_KEY_WHEEL_UP : INPUT_KEY_WHEEL_DOWN;
 
-  return modifier_only;
+  return released_modifier;
 }
 
 int input_glfw_button_from_imgui(ImGuiKey key) {

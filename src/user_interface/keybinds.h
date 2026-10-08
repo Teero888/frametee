@@ -144,6 +144,13 @@ bool keybinds_is_action_down(keybind_manager_t *kb, action_t action);
 // run continuously and may overlap with a modifier bind, such as moving a
 // freecam while sprinting.
 bool keybinds_is_action_held(keybind_manager_t *kb, action_t action);
+// For an action on the view under the pointer, such as zooming the viewport: a wheel bind only
+// counts while the pointer is over the view (hovered), a key bind only while no widget is active.
+bool keybinds_is_view_action_pressed(keybind_manager_t *kb, action_t action, bool repeat, bool hovered);
+// input_scroll_y() for the editor's own wheel controls (zooming the timeline, panning the camera
+// lanes), or 0 when a bind takes this frame's wheel direction: a wheel bound to stepping frames
+// steps frames without also zooming the timeline.
+double keybinds_free_scroll_y(ui_handler_t *ui);
 int keybinds_get_count_for_action(keybind_manager_t *kb, action_t action);
 keybind_entry_t *keybinds_get_binding_for_action(keybind_manager_t *kb, action_t action, int n); // Get n-th binding for action
 int keybinds_get_global_index_for_action(keybind_manager_t *kb, action_t action, int n);

@@ -187,11 +187,111 @@ static void keyboard_and_capture(void) {
   input_new_frame();
 }
 
+static void wheel_notches(void) {
+  reset();
+  // Each notch is pressed once, on a frame of its own, in the order the wheel turned.
+  input_accumulate_scroll(0.0, 1.0);
+  input_accumulate_scroll(0.0, 1.0);
+  input_accumulate_scroll(0.0, -1.0);
+  frame(0.0);
+  assert(input_wheel_notch() == 1);
+  assert(input_scroll_y() == 1.0);
+  frame(0.01);
+  assert(input_wheel_notch() == 1);
+  assert(input_scroll_y() == 0.0);
+  frame(0.02);
+  assert(input_wheel_notch() == -1);
+  frame(0.03);
+  assert(input_wheel_notch() == 0);
+
+  // Touchpads and high resolution wheels report fractions, which add up to notches.
+  input_accumulate_scroll(0.0, 0.5);
+  frame(0.04);
+  assert(input_wheel_notch() == 0);
+  input_accumulate_scroll(0.0, 0.25);
+  input_accumulate_scroll(0.0, 0.25);
+  frame(0.05);
+  assert(input_wheel_notch() == 1);
+  // Turning back drops the part notch instead of finishing it the other way.
+  input_accumulate_scroll(0.0, 0.75);
+  input_accumulate_scroll(0.0, -0.5);
+  frame(0.06);
+  assert(input_wheel_notch() == 0);
+  input_accumulate_scroll(0.0, -0.5);
+  frame(0.07);
+  assert(input_wheel_notch() == -1);
+
+  // Notches the platform merged into one event still count one by one.
+  input_accumulate_scroll(0.0, -2.0);
+  frame(0.08);
+  assert(input_wheel_notch() == -1);
+  frame(0.09);
+  assert(input_wheel_notch() == -1);
+  frame(0.1);
+  assert(input_wheel_notch() == 0);
+
+  // A spin that outruns the queue drops the rest instead of pressing on after it stopped.
+  for (int i = 0; i < 100; ++i)
+    input_accumulate_scroll(0.0, 1.0);
+  int pressed = 0;
+  for (int i = 0; i < 100; ++i) {
+    frame(0.2 + i * 0.01);
+    pressed += input_wheel_notch();
+  }
+  assert(pressed > 1 && pressed < 100);
+
+  // The rebinding UI takes a notch as a key.
+  input_accumulate_scroll(0.0, -1.0);
+  frame(2.0);
+  assert(input_capture_pressed_key() == INPUT_KEY_WHEEL_DOWN);
+  frame(2.01);
+  assert(input_capture_pressed_key() == ImGuiKey_None);
+
+  // Like the buttons, the wheel presses nothing while unfocused, then or later.
+  focused = false;
+  input_accumulate_scroll(0.0, 1.0);
+  frame(3.0);
+  assert(input_wheel_notch() == 0);
+  focused = true;
+  frame(3.01);
+  assert(input_wheel_notch() == 0);
+}
+
+static void modifier_capture(void) {
+  reset();
+  // Holding Ctrl starts a combo, so it is not bound on its own while it goes down.
+  keys[GLFW_KEY_LEFT_CONTROL] = GLFW_PRESS;
+  frame(0.0);
+  assert(input_capture_pressed_key() == ImGuiKey_None);
+  input_accumulate_scroll(0.0, 1.0);
+  frame(0.1);
+  assert(input_capture_pressed_key() == INPUT_KEY_WHEEL_UP);
+  assert(input_ctrl_down());
+  keys[GLFW_KEY_S] = GLFW_PRESS;
+  frame(0.2);
+  assert(input_capture_pressed_key() == ImGuiKey_S);
+
+  // A modifier on its own is bound when it is let go.
+  reset();
+  keys[GLFW_KEY_LEFT_SHIFT] = GLFW_PRESS;
+  frame(0.0);
+  assert(input_capture_pressed_key() == ImGuiKey_None);
+  frame(0.1);
+  assert(input_capture_pressed_key() == ImGuiKey_None);
+  keys[GLFW_KEY_LEFT_SHIFT] = GLFW_RELEASE;
+  frame(0.2);
+  assert(input_capture_pressed_key() == ImGuiKey_LeftShift);
+  frame(0.3);
+  assert(input_capture_pressed_key() == ImGuiKey_None);
+}
+
 int main(void) {
   mouse_repeat();
   repeat_settings();
   focus_and_stalls();
   keyboard_and_capture();
+  wheel_notches();
+  modifier_capture();
   puts("Input repeat tests passed");
   return 0;
 }

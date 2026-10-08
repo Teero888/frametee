@@ -362,7 +362,7 @@ static void handle_pan_and_zoom(timeline_state_t *ts, ImRect timeline_bb) {
   if (!is_timeline_hovered) return;
 
   // Zoom with mouse wheel, read from GLFW so it is not delayed by imgui's event trickling.
-  float wheel = (float)input_scroll_y();
+  float wheel = (float)keybinds_free_scroll_y(ts->ui);
   if (wheel != 0.0f) {
     int mouse_tick_before = renderer_screen_x_to_tick(ts, io->MousePos.x, timeline_bb.Min.x);
     float zoom_delta = (input_ctrl_down() ? 1.0f : 0.0f) * wheel * 0.1f * ts->zoom;

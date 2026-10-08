@@ -166,11 +166,27 @@ static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) 
   ImGui_ImplGlfw_ScrollCallback((void *)window, xoffset, yoffset);
 }
 
+static bool either_key_down(GLFWwindow *window, int left, int right) {
+  return glfwGetKey(window, left) == GLFW_PRESS || glfwGetKey(window, right) == GLFW_PRESS;
+}
+
 static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods) {
   // Down/up state is polled; only the OS repeat timing has to come from events.
   if (action == GLFW_REPEAT) input_accumulate_key_repeat(key);
   flush_imgui_mouse_pos();
   ImGui_ImplGlfw_KeyCallback((void *)window, key, scancode, action, mods);
+
+  // The backend reads the modifiers with glfwGetKey, which under sticky keys still reports a
+  // modifier as pressed while its own release is being delivered. Imgui then kept Ctrl held after
+  // Ctrl+S until the next key or click, and panels would not scroll with the wheel meanwhile. That
+  // read used up the sticky state, so reading again gets the real one.
+  if (action == GLFW_RELEASE) {
+    ImGuiIO *io = igGetIO_Nil();
+    ImGuiIO_AddKeyEvent(io, ImGuiMod_Ctrl, either_key_down(window, GLFW_KEY_LEFT_CONTROL, GLFW_KEY_RIGHT_CONTROL));
+    ImGuiIO_AddKeyEvent(io, ImGuiMod_Shift, either_key_down(window, GLFW_KEY_LEFT_SHIFT, GLFW_KEY_RIGHT_SHIFT));
+    ImGuiIO_AddKeyEvent(io, ImGuiMod_Alt, either_key_down(window, GLFW_KEY_LEFT_ALT, GLFW_KEY_RIGHT_ALT));
+    ImGuiIO_AddKeyEvent(io, ImGuiMod_Super, either_key_down(window, GLFW_KEY_LEFT_SUPER, GLFW_KEY_RIGHT_SUPER));
+  }
 }
 
 static void mouse_button_callback(GLFWwindow *window, int button, int action, int mods) {

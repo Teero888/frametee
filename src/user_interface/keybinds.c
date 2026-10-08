@@ -16,10 +16,41 @@
 #include <system/include_cimgui.h>
 #include <system/input.h>
 
+static int wheel_direction(ImGuiKey key) {
+  if (key == INPUT_KEY_WHEEL_UP) return 1;
+  if (key == INPUT_KEY_WHEEL_DOWN) return -1;
+  return 0;
+}
+
+// Whether imgui scrolls a panel with the wheel this frame, worked out the way its UpdateMouseWheel()
+// picks one: the window still locked from recent wheeling, else the hovered window or its first
+// parent that can scroll. Ctrl keeps imgui from scrolling at all and Shift turns it sideways.
+static bool wheel_scrolls_panel(void) {
+  ImGuiContext *g = igGetCurrentContext();
+  if ((g->IO.ConfigFlags & ImGuiConfigFlags_NoMouse) || g->IO.KeyCtrl) return false;
+  const bool sideways = g->IO.MouseWheelRequestAxisSwap;
+  ImGuiWindow *window = g->WheelingWindow ? g->WheelingWindow : g->HoveredWindow;
+  if (!window || window->Collapsed) return false;
+  if (!g->WheelingWindow) {
+    while (window->Flags & ImGuiWindowFlags_ChildWindow) {
+      const bool can_scroll = (sideways ? window->ScrollMax.x : window->ScrollMax.y) != 0.f;
+      const bool refuses = (window->Flags & ImGuiWindowFlags_NoScrollWithMouse) && !(window->Flags & ImGuiWindowFlags_NoMouseInputs);
+      if (can_scroll && !refuses) break;
+      window = window->ParentWindow;
+    }
+  }
+  if (window->Flags & (ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoMouseInputs)) return false;
+  return (sideways ? window->ScrollMax.x : window->ScrollMax.y) != 0.f;
+}
+
 // Binds read GLFW directly. Imgui trickles its event queue, holding back every mouse position
 // queued behind a key or wheel event, which put input several frames behind the hardware at high
 // polling rates. Imgui is still asked whether a text field is focused so typing cannot fire binds.
 static bool combo_blocked_by_ui(const key_combo_t *combo) {
+  // A wheel bind gives way to a panel the wheel scrolls, or scrolling the Controls window would
+  // fire it. The viewport never scrolls, so there the wheel always goes to the binds.
+  if (wheel_direction(combo->key)) return wheel_scrolls_panel();
+
   // Mouse binds are left ungated: the viewport is itself an imgui window, so WantCaptureMouse is
   // true whenever the cursor is over it and gating on it would stop mouse-bound game controls.
   if (input_glfw_button_from_imgui(combo->key) != -1) return false;
@@ -48,6 +79,10 @@ bool is_key_combo_pressed(const key_combo_t *combo, bool repeat) {
   if (combo->key == ImGuiKey_None) return false;
   if (!combo_modifiers_match(combo) || combo_blocked_by_ui(combo)) return false;
 
+  // A notch is a press, never a repeat.
+  const int wheel = wheel_direction(combo->key);
+  if (wheel) return input_wheel_notch() == wheel;
+
   int button = input_glfw_button_from_imgui(combo->key);
   if (button != -1) return input_mouse_pressed(button, repeat);
 
@@ -69,6 +104,10 @@ bool is_key_combo_held(const key_combo_t *combo) {
   if (combo->key == ImGuiKey_None) return false;
   if (!combo_modifiers_satisfied(combo) || combo_blocked_by_ui(combo)) return false;
 
+  // The wheel is held for the one frame of its notch.
+  const int wheel = wheel_direction(combo->key);
+  if (wheel) return input_wheel_notch() == wheel;
+
   int button = input_glfw_button_from_imgui(combo->key);
   if (button != -1) return input_mouse_down(button);
 
@@ -80,10 +119,20 @@ bool is_key_combo_down(const key_combo_t *combo) {
   if (combo->key == ImGuiKey_None) return false;
   if (!combo_modifiers_match(combo) || combo_blocked_by_ui(combo)) return false;
 
+  const int wheel = wheel_direction(combo->key);
+  if (wheel) return input_wheel_notch() == wheel;
+
   int button = input_glfw_button_from_imgui(combo->key);
   if (button != -1) return input_mouse_down(button);
 
   return input_key_down(input_glfw_key_from_imgui(combo->key));
+}
+
+// The name a key is shown and saved under.
+static const char *key_name(ImGuiKey key) {
+  if (key == INPUT_KEY_WHEEL_UP) return "WheelUp";
+  if (key == INPUT_KEY_WHEEL_DOWN) return "WheelDown";
+  return igGetKeyName(key);
 }
 
 // This buffer is used by keybind_get_combo_string to avoid repeated allocations.
@@ -98,9 +147,9 @@ const char *keybind_get_combo_string(const key_combo_t *combo) {
   if (combo->alt) strcat(combo_string_buffer, "Alt+");
   if (combo->shift) strcat(combo_string_buffer, "Shift+");
 
-  const char *key_name = igGetKeyName(combo->key);
-  if (key_name) {
-    strcat(combo_string_buffer, key_name);
+  const char *name = key_name(combo->key);
+  if (name) {
+    strcat(combo_string_buffer, name);
   } else {
     strcat(combo_string_buffer, "Unknown");
   }
@@ -160,6 +209,31 @@ bool keybinds_is_action_down(keybind_manager_t *kb, action_t action) {
     }
   }
   return false;
+}
+
+bool keybinds_is_view_action_pressed(keybind_manager_t *kb, action_t action, bool repeat, bool hovered) {
+  const bool widget_active = igIsAnyItemActive();
+  for (int i = 0; i < kb->bind_count; i++) {
+    const keybind_entry_t *bind = &kb->bindings[i];
+    if (bind->action_id != action) continue;
+    if (wheel_direction(bind->combo.key) ? !hovered : widget_active) continue;
+    if (is_key_combo_pressed(&bind->combo, repeat)) return true;
+  }
+  return false;
+}
+
+double keybinds_free_scroll_y(ui_handler_t *ui) {
+  const double scroll = input_scroll_y();
+  if (scroll == 0.0) return 0.0;
+  const keybind_manager_t *kb = &ui->keybinds;
+  const ImGuiKey key = scroll > 0.0 ? INPUT_KEY_WHEEL_UP : INPUT_KEY_WHEEL_DOWN;
+  for (int i = 0; i < kb->bind_count; i++) {
+    const keybind_entry_t *bind = &kb->bindings[i];
+    // Game controls are only read while recording, so otherwise they leave the wheel alone.
+    if (bind->action_id >= ACTION_GAME_FIRST && !ui->timeline.recording) continue;
+    if (bind->combo.key == key && combo_modifiers_match(&bind->combo) && !combo_blocked_by_ui(&bind->combo)) return 0.0;
+  }
+  return scroll;
 }
 
 int keybinds_get_count_for_action(keybind_manager_t *kb, action_t action) {
@@ -285,7 +359,9 @@ void keybinds_init(keybind_manager_t *manager) {
   keybinds_add(manager, ACTION_CANCEL_RECORDING, (key_combo_t){ImGuiKey_F4, false, false, false});
   keybinds_add(manager, ACTION_TOGGLE_LINKED_COPY, (key_combo_t){ImGuiKey_R, false, false, false});
   keybinds_add(manager, ACTION_ZOOM_IN, (key_combo_t){ImGuiKey_Equal, false, false, false});
+  keybinds_add(manager, ACTION_ZOOM_IN, (key_combo_t){INPUT_KEY_WHEEL_UP, false, false, false});
   keybinds_add(manager, ACTION_ZOOM_OUT, (key_combo_t){ImGuiKey_Minus, false, false, false});
+  keybinds_add(manager, ACTION_ZOOM_OUT, (key_combo_t){INPUT_KEY_WHEEL_DOWN, false, false, false});
   keybinds_add(manager, ACTION_CYCLE_CAMERA_MODE, (key_combo_t){ImGuiKey_V, false, false, false});
   keybinds_add(manager, ACTION_FREECAM_FORWARD, (key_combo_t){ImGuiKey_W, false, false, false});
   keybinds_add(manager, ACTION_FREECAM_BACK, (key_combo_t){ImGuiKey_S, false, false, false});
@@ -324,8 +400,9 @@ bool keybinds_parse_combo(const char *text, key_combo_t *out) {
     else if (strcmp(part, "Alt") == 0) out->alt = true;
     else if (strcmp(part, "Shift") == 0) out->shift = true;
     else {
-      for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key) {
-        const char *name = igGetKeyName(key);
+      // The wheel keys follow right after imgui's named keys.
+      for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; key <= INPUT_KEY_WHEEL_DOWN; ++key) {
+        const char *name = key_name(key);
         if (name && strcmp(name, part) == 0) {
           out->key = key;
           break;

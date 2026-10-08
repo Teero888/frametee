@@ -1232,9 +1232,10 @@ static void on_camera3_update(gfx_handler_t *handler, bool hovered, float intra)
   // A drag has to start over the viewport, but may wander off it once it has.
   c->dragging = drag_button && (hovered || c->dragging);
 
-  float scroll_y = !hovered ? 0.f : (float)input_scroll_y();
-  if (keybinds_is_action_pressed(keys, ACTION_ZOOM_IN, true)) scroll_y = 1.f;
-  if (keybinds_is_action_pressed(keys, ACTION_ZOOM_OUT, true)) scroll_y = -1.f;
+  // The wheel zooms only through the zoom binds, so unbinding them frees it.
+  float scroll_y = 0.f;
+  if (keybinds_is_view_action_pressed(keys, ACTION_ZOOM_IN, true, hovered)) scroll_y = 1.f;
+  if (keybinds_is_view_action_pressed(keys, ACTION_ZOOM_OUT, true, hovered)) scroll_y = -1.f;
 
   switch (c->mode) {
   case CAMERA3_TOP_DOWN:
@@ -1258,13 +1259,12 @@ void on_camera_update(gfx_handler_t *handler, bool hovered, float intra) {
   camera_t *camera = &handler->renderer.camera;
   ImGuiIO *io = igGetIO_Nil();
 
-  // Scroll comes from the GLFW callback: imgui holds back the mouse position events queued behind a
-  // wheel event, so reading both from imgui made panning stutter exactly while zooming.
-  float scroll_y = !hovered ? 0.0f : (float)input_scroll_y();
-  if (!igIsAnyItemActive()) { // Prevent shortcuts while typing in a text field
-    if (keybinds_is_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_IN, true)) scroll_y = 1.0f;
-    if (keybinds_is_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_OUT, true)) scroll_y = -1.0f;
-  }
+  // The wheel zooms only through the zoom binds, so unbinding them frees it. Its notches come from
+  // the GLFW callback: imgui holds back the mouse position events queued behind a wheel event, so
+  // reading both from imgui made panning stutter exactly while zooming.
+  float scroll_y = 0.0f;
+  if (keybinds_is_view_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_IN, true, hovered)) scroll_y = 1.0f;
+  if (keybinds_is_view_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_OUT, true, hovered)) scroll_y = -1.0f;
   if (scroll_y != 0.0f) {
     float zoom_factor = 1.0f + scroll_y * 0.1f;
     camera->zoom_wanted *= zoom_factor;
