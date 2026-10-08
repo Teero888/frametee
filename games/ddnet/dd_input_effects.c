@@ -547,8 +547,8 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
   for (uint32_t row = 1; row + 1 < count; ++row) {
     const dd_input_t *previous = (const dd_input_t *)((unsigned char *)records + (size_t)(row - 1) * frame->record_stride);
     const dd_input_t *current = (const dd_input_t *)((unsigned char *)records + (size_t)row * frame->record_stride);
-    const bool fire = (current->m_Fire & 1) &&
-                      (!(previous->m_Fire & 1) || current->m_Fire != previous->m_Fire);
+    // A shot is the button going down, as the physics sees it (ddnet_input_from_record).
+    const bool fire = (current->m_Fire & 1) && !(previous->m_Fire & 1);
     const bool hook = current->m_Hook && !previous->m_Hook;
     if (fire || hook) {
       anchors[row] = true;

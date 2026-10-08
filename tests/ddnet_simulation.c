@@ -31,6 +31,34 @@ static void scripted_input(const tas_api_t *api, void *record, int tick) {
   api->input_set_vec2(record, api->input_field_index("target"), (ft_vec2){(float)(tick % 200 - 100), -60.f});
 }
 
+// How often the first tee shoots its gun while its record's fire counter goes through `runs` (pairs
+// of value and ticks, ended by a zero length): a shot shows as the reload timer going up.
+static int gun_shots(const tas_api_t *api, const ft_world *initial, void *inputs, uint32_t record_size, int players,
+                     const int (*runs)[2]) {
+  ft_world *world = api->clone_world(initial);
+  if (!world) return -1;
+  for (int p = 0; p < players; ++p) api->input_default((char *)inputs + (size_t)p * record_size);
+  dd_input_t *record = inputs;
+  record->m_TargetX = 100;
+  record->m_TargetY = 0;
+  int shots = 0, reload = 0;
+  for (int run = 0; runs[run][1] > 0; ++run) {
+    for (int tick = 0; tick < runs[run][1]; ++tick) {
+      record->m_Fire = (uint8_t)runs[run][0];
+      if (!api->step_world(world, inputs, (uint32_t)players)) {
+        api->destroy_world(world);
+        return -1;
+      }
+      const ddnet_character_t *chr = ddnet_player_character(world, 0);
+      if (chr && chr->reload_timer > reload) ++shots;
+      reload = chr ? chr->reload_timer : 0;
+    }
+  }
+  api->destroy_world(world);
+  for (int p = 0; p < players; ++p) api->input_default((char *)inputs + (size_t)p * record_size);
+  return shots;
+}
+
 FT_API int plugin_cli(void *data, int argc, const char **argv) {
   (void)argc;
   (void)argv;
@@ -86,6 +114,20 @@ FT_API int plugin_cli(void *data, int argc, const char **argv) {
     api->input_set(record, fire, 0);
     CHECK(record->m_Fire == 0);
     api->input_default(record);
+  }
+
+  // The record only says whether fire is held, as its lane shows; the counter itself may jump or
+  // drop where inputs made apart meet (a take recorded on after rewinding, a snippet boundary, an
+  // edited tick). The tee shoots when the button goes down, and only then.
+  {
+    static const int held_then_let_go[][2] = {{0, 5}, {1, 30}, {0, 30}, {0, 0}};
+    static const int jump_while_held[][2] = {{0, 5}, {1, 30}, {5, 30}, {0, 0}};
+    static const int drop_while_released[][2] = {{0, 5}, {1, 10}, {2, 20}, {0, 20}, {0, 0}};
+    static const int pressed_twice[][2] = {{0, 5}, {1, 30}, {2, 30}, {3, 30}, {0, 0}};
+    CHECK(gun_shots(api, initial, inputs, record_size, players, held_then_let_go) == 1);
+    CHECK(gun_shots(api, initial, inputs, record_size, players, jump_while_held) == 1);
+    CHECK(gun_shots(api, initial, inputs, record_size, players, drop_while_released) == 1);
+    CHECK(gun_shots(api, initial, inputs, record_size, players, pressed_twice) == 2);
   }
 
   // Two clones, stepped alike, stay alike.

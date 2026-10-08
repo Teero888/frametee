@@ -95,13 +95,21 @@ static inline void set_flag_emote_index(dd_input_t *p, uint8_t index) {
 }
 
 // What the physics gets from a record on the tick it is for (the kill flag is
-// done apart, before the tick, and the teleporter exit goes to the tee).
+// done apart, before the tick, and the teleporter exit goes to the tee). `out`
+// is the tee's input of the tick before, which it replaces.
 static inline void ddnet_input_from_record(const dd_input_t *record, ddnet_input_t *out) {
   out->direction = record->m_Direction;
   out->target_x = record->m_TargetX;
   out->target_y = record->m_TargetY;
   out->jump = record->m_Jump != 0;
-  out->fire = record->m_Fire;
+  // Fire is a counter whose low bit is the button, and the physics counts
+  // every value between two ticks' counters as presses and releases. A record
+  // only says whether the button is down, as its lane shows: where inputs made
+  // apart meet (a take recorded on after rewinding, a snippet boundary, an
+  // edited tick) its counter can jump or drop, which would count as presses.
+  // So the counter goes on from the tick before's, one step when the button
+  // changes, and the tee shoots when it goes down and only then.
+  if ((out->fire & 1) != (record->m_Fire & 1)) out->fire = (out->fire + 1) & 0x3f;
   out->hook = record->m_Hook != 0;
   out->player_flags = 0;
   // DDNet's client sends the weapon it wants on every tick, as a number one
