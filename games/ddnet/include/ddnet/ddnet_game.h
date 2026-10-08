@@ -129,14 +129,17 @@ struct ft_world {
   // player i is client client_ids[i]. A client keeps its id for as long as it
   // is in the world, whatever players are added or removed before it.
   int player_count;
-  uint8_t client_ids[DDNET_MAX_CLIENTS];
-  // The record each client held on its last tick, by client id: what its tee
-  // shows (eyes, emote, sitting), and what a player the engine has no input for
-  // goes on holding.
-  dd_input_t inputs[DDNET_MAX_CLIENTS];
-  // The game tick a client's tee last showed pain (a replayed tee, from its
-  // recording), by client id: its eyes show it for half a second.
-  int pain_ticks[DDNET_MAX_CLIENTS];
+  uint8_t *client_ids; // [player_count] (room for player_room)
+  // By client id, for the client ids the world has had (below
+  // core.num_clients; room for client_room):
+  // the record each client held on its last tick: what its tee shows (eyes,
+  // emote, sitting), and what a player the engine has no input for goes on
+  // holding;
+  dd_input_t *inputs;
+  // the game tick a client's tee last showed pain (a replayed tee, from its
+  // recording): its eyes show it for half a second.
+  int *pain_ticks;
+  int player_room, client_room;
   bool render_physics_effects;
   struct dd_physics_particle_event *physics_particle_events;
   int physics_particle_event_count;

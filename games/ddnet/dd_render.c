@@ -34,7 +34,7 @@ static void tile_pos(ddnet_vec2_t v, vec2 out) {
 int dd_view_team(const ft_render_frame *frame) {
   if (!frame || !frame->world) return 0;
   const int client_id = ddnet_player_client(frame->world, frame->selected_player);
-  return client_id >= 0 ? frame->world->core.teams.team[client_id] : 0;
+  return client_id >= 0 ? frame->world->core.players[client_id].team : 0;
 }
 
 static void render_cursor(ft_game *game, const ft_render_frame *frame);
@@ -558,17 +558,17 @@ void dd_render_laser(ft_game *game, const vec2 from, const vec2 to, bool rifle, 
 
 // The switch of an entity is off for a team (it blinks or shows as a dot), see CItems::OnRender.
 static bool switch_off(const ddnet_world_t *core, int number, int team) {
-  return number > 0 && number < core->num_switchers && !core->switchers[number].status[team];
+  return number > 0 && number < core->num_switchers && !ddnet_world_switch(core, number, team).status;
 }
 
 // Whether a dragger is left out for the viewer, which sees its beam instead (CDragger::DraggerBeamUsingDraggerId).
 static bool dragger_beam_shown(const ft_world *world, const ddnet_dragger_t *dragger, int viewer) {
   if (viewer < 0 || !ddnet_world_character((ddnet_world_t *)&world->core, viewer)) return false;
-  const int team = world->core.teams.team[viewer];
-  const ddnet_dragger_targets_t *targets = &world->core.dragger_targets[dragger->targets];
-  const int target = world->core.teams.is_solo[viewer] || targets->target_id_in_team[team] < 0 ? viewer : targets->target_id_in_team[team];
-  if (target < 0 || targets->beam[target] == -1) return false;
-  return ddnet_world_character((ddnet_world_t *)&world->core, target) && world->core.teams.team[target] == team;
+  const int team = world->core.players[viewer].team;
+  const int team_target = ddnet_dragger_target(&world->core, dragger, team);
+  const int target = world->core.players[viewer].is_solo || team_target < 0 ? viewer : team_target;
+  if (target < 0 || ddnet_dragger_beam(&world->core, dragger, target) == -1) return false;
+  return ddnet_world_character((ddnet_world_t *)&world->core, target) && world->core.players[target].team == team;
 }
 
 // What DDNet's server sends of the world and its client draws (see "Effects, sounds and drawing" in the

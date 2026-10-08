@@ -260,7 +260,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
   const ddnet_character_t *view_character = ddnet_player_character(current_world, first_exported_local);
   // The switch states a demo shows are those of the team of the first player in it.
   const int view_client = ddnet_player_client(current_world, first_exported_local);
-  const int view_team = view_client >= 0 ? cur->teams.team[view_client] : 0;
+  const int view_team = view_client >= 0 ? cur->players[view_client].team : 0;
 
   ddnet_vec2_t fallback_pos[1];
   if (active_pos_count <= 0 && view_character) {
@@ -336,13 +336,13 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
         ss->m_HighestSwitchNumber = cur->num_switchers - 1;
         if (ss->m_HighestSwitchNumber > 255) ss->m_HighestSwitchNumber = 255;
         for (int i = 0; i <= ss->m_HighestSwitchNumber; ++i) {
-          if (cur->switchers[i].status[view_team]) {
+          if (ddnet_world_switch(cur, i, view_team).status) {
             ss->m_aStatus[i / 32] |= (1 << (i % 32));
           }
         }
         int num_timed = 0;
         for (int i = 0; i <= ss->m_HighestSwitchNumber && num_timed < 4; ++i) {
-          const int end_tick = cur->switchers[i].end_tick[view_team];
+          const int end_tick = ddnet_world_switch(cur, i, view_team).end_tick;
           if (end_tick > 0 && end_tick < cur->tick + 3 * 50) {
             ss->m_aSwitchNumbers[num_timed] = i;
             ss->m_aEndTicks[num_timed] = end_tick + tick_delta;

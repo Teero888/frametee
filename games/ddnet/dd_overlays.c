@@ -740,7 +740,7 @@ void dd_render_doors(ft_game *game, const ft_render_frame *frame) {
     // A switcher that is on holds its door shut, which is also the state the
     // physics blocks movement in.
     const bool off = !(door->number >= 0 && door->number < world->core.num_switchers &&
-                       world->core.switchers[door->number].status[team]);
+                       ddnet_world_switch(&world->core, door->number, team).status);
     vec2 from = {door->pos.x / PX_PER_TILE, door->pos.y / PX_PER_TILE};
     vec2 to = {door->to.x / PX_PER_TILE, door->to.y / PX_PER_TILE};
     if ((from[0] < camera.visible.x && to[0] < camera.visible.x) ||

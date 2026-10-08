@@ -99,7 +99,7 @@ static inline void dd_character_state_read(ft_world *world, int player, const vo
   c->grenade_hit_disabled = s.grenade_hit_disabled;
   c->laser_hit_disabled = s.laser_hit_disabled;
   const int client_id = ddnet_player_client(world, player);
-  world->core.teams.is_solo[client_id] = c->solo;
+  world->core.players[client_id].is_solo = c->solo;
   ddnet_character_changed(&world->core, client_id);
 }
 

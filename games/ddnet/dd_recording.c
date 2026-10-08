@@ -552,7 +552,7 @@ static void apply_state(ft_world *world, int client_id, ddnet_character_t *chr, 
     core->freeze_end = c->freeze_end > 0 ? c->freeze_end + offset : c->freeze_end;
     core->is_in_freeze = (f & DD_CHARACTERFLAG_IN_FREEZE) != 0;
     core->solo = (f & DD_CHARACTERFLAG_SOLO) != 0;
-    world->core.teams.is_solo[client_id] = core->solo;
+    world->core.players[client_id].is_solo = core->solo;
     core->jetpack = (f & DD_CHARACTERFLAG_JETPACK) != 0;
     core->collision_disabled = (f & DD_CHARACTERFLAG_COLLISION_DISABLED) != 0;
     core->endless_hook = (f & DD_CHARACTERFLAG_ENDLESS_HOOK) != 0;
@@ -576,7 +576,7 @@ static void apply_state(ft_world *world, int client_id, ddnet_character_t *chr, 
   } else {
     // Vanilla servers have none of these; the physics keeps the freeze and tele checkpoint it saw.
     core->solo = false;
-    world->core.teams.is_solo[client_id] = false;
+    world->core.players[client_id].is_solo = false;
     core->collision_disabled = false;
     core->hook_hit_disabled = false;
     // Only the weapon in hand is known to be owned.
@@ -594,7 +594,7 @@ static void apply_absent(ft_world *world, int client_id, ddnet_character_t *chr,
   chr->core.pos = pos;
   chr->core.vel = (ddnet_vec2_t){0.f, 0.f};
   chr->core.solo = true;
-  world->core.teams.is_solo[client_id] = true;
+  world->core.players[client_id].is_solo = true;
   chr->core.collision_disabled = true;
   chr->core.hook_state = DDNET_HOOK_IDLE;
   chr->core.hooked_player = -1;
@@ -608,7 +608,7 @@ static void release_replay(ft_world *world, int client_id, ddnet_character_t *ch
     chr->core.hook_hit_disabled = slot->hook_hit_disabled;
     if (slot->mode == REPLAY_ABSENT || slot->mode == REPLAY_PAUSED) {
       chr->core.solo = slot->solo;
-      world->core.teams.is_solo[client_id] = slot->solo;
+      world->core.players[client_id].is_solo = slot->solo;
       chr->core.collision_disabled = slot->collision_disabled;
     }
     ddnet_character_changed(&world->core, client_id);

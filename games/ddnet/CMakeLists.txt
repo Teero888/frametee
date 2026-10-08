@@ -19,6 +19,12 @@ cmake_minimum_required(VERSION 3.14)
 set(FRAMETEE_DDNET_PHYSICS_DIR "${CMAKE_SOURCE_DIR}/libs/ddnet_physics" CACHE PATH
     "The ddnet_physics checkout the DDNet game is built with")
 if(NOT TARGET ddnet_physics)
+    # (its map loader is a submodule of its own, which a checkout made before
+    # the physics was switched does not have yet)
+    if(NOT EXISTS "${FRAMETEE_DDNET_PHYSICS_DIR}/libs/ddnet_maploader/CMakeLists.txt")
+        message(FATAL_ERROR "ddnet_physics at ${FRAMETEE_DDNET_PHYSICS_DIR} has no map loader: "
+                            "run `git submodule update --init --recursive`")
+    endif()
     set(DDNET_PHYSICS_BACKEND optimized CACHE STRING "" FORCE)
     set(DDNET_PHYSICS_EVENTS ON CACHE BOOL "" FORCE)
     set(DDNET_PHYSICS_BUILD_TESTS OFF CACHE BOOL "" FORCE)

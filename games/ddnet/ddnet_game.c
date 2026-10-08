@@ -642,7 +642,7 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
     break;
   case PROP_SOLO:
     c->solo = value->as.b;
-    world->core.teams.is_solo[client_id] = value->as.b;
+    world->core.players[client_id].is_solo = value->as.b;
     break;
   case PROP_LIVE_FROZEN:
     c->live_frozen = value->as.b;
@@ -897,6 +897,30 @@ static bool ddnet_level_info(ft_game *game, const ft_level *level, ft_level_info
 // Worlds
 // -----------------------------------------------------------------------------
 
+// Room in a world's arrays for `clients` client ids and `players` players.
+static bool dd_world_reserve(ft_world *world, int clients, int players) {
+  if (players > world->player_room) {
+    const int room = players > 2 * world->player_room ? players : 2 * world->player_room;
+    uint8_t *client_ids = realloc(world->client_ids, (size_t)room * sizeof(*client_ids));
+    if (!client_ids) return false;
+    world->client_ids = client_ids;
+    world->player_room = room;
+  }
+  if (clients > world->client_room) {
+    const int room = clients > 2 * world->client_room ? clients : 2 * world->client_room;
+    dd_input_t *inputs = realloc(world->inputs, (size_t)room * sizeof(*inputs));
+    if (!inputs) return false;
+    world->inputs = inputs;
+    int *pain_ticks = realloc(world->pain_ticks, (size_t)room * sizeof(*pain_ticks));
+    if (!pain_ticks) return false;
+    world->pain_ticks = pain_ticks;
+    memset(&inputs[world->client_room], 0, (size_t)(room - world->client_room) * sizeof(*inputs));
+    memset(&pain_ticks[world->client_room], 0, (size_t)(room - world->client_room) * sizeof(*pain_ticks));
+    world->client_room = room;
+  }
+  return true;
+}
+
 // A new player at `at_index` of the engine's players (or the end): the lowest
 // free client id joins the world and spawns right away, so that it stands at the
 // spawn like the players a world is made with. Returns the player, or -1.
@@ -906,7 +930,9 @@ static int32_t add_player(ft_world *world, int32_t at_index) {
   // (the world has slots for the clients below num_clients; a higher one makes it grow)
   while (client_id < world->core.num_clients && world->core.players[client_id].active)
     ++client_id;
-  if (client_id == DDNET_MAX_CLIENTS || !ddnet_player_join(&world->core, client_id)) return -1;
+  if (client_id == DDNET_MAX_CLIENTS || !dd_world_reserve(world, client_id + 1, world->player_count + 1) ||
+      !ddnet_player_join(&world->core, client_id))
+    return -1;
   ddnet_player_spawn(&world->core, client_id);
   dd_input_t *held = &world->inputs[client_id];
   memset(held, 0, sizeof(*held));
@@ -952,6 +978,13 @@ static ft_world *dd_world_create(ft_game *game, const ft_world_desc *desc) {
 
 void dd_world_release(ft_world *world) {
   ddnet_world_free(&world->core);
+  free(world->client_ids);
+  free(world->inputs);
+  free(world->pain_ticks);
+  world->client_ids = NULL;
+  world->inputs = NULL;
+  world->pain_ticks = NULL;
+  world->player_room = world->client_room = 0;
   dd_replay_free(world);
   free(world->physics_particle_events);
   free(world->physics_damage_events);
@@ -990,10 +1023,18 @@ void dd_world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
   // what changed since the two were the same), which is what keeps the engine's
   // constant snapshotting affordable.
   ddnet_world_copy(&dst->core, &src->core);
+  // (only the players and client ids that src has)
+  const int clients = src->core.num_clients;
+  if (!dd_world_reserve(dst, clients, src->player_count)) {
+    dst->player_count = 0;
+    return;
+  }
   dst->player_count = src->player_count;
-  memcpy(dst->client_ids, src->client_ids, sizeof(dst->client_ids));
-  memcpy(dst->inputs, src->inputs, sizeof(dst->inputs));
-  memcpy(dst->pain_ticks, src->pain_ticks, sizeof(dst->pain_ticks));
+  if (src->player_count) memcpy(dst->client_ids, src->client_ids, (size_t)src->player_count * sizeof(*dst->client_ids));
+  if (clients) {
+    memcpy(dst->inputs, src->inputs, (size_t)clients * sizeof(*dst->inputs));
+    memcpy(dst->pain_ticks, src->pain_ticks, (size_t)clients * sizeof(*dst->pain_ticks));
+  }
   dst->replay_recording = src->replay_recording;
   dst->replay_tick = src->replay_tick;
   dst->replay_clients = src->replay_clients;
