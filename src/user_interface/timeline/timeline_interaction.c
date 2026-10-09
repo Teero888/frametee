@@ -1266,15 +1266,22 @@ void interaction_update_recording_input(ui_handler_t *ui) {
 
 input_record_t interaction_predict_input(ui_handler_t *ui, const ft_world *world, int track_idx) {
   timeline_state_t *ts = &ui->timeline;
-  const int tick = gh_world_tick(&ui->gfx_handler->game_host, world);
-  if (ts->recording && track_idx >= 0 && track_idx < ts->player_track_count && !model_take_covers(ts, track_idx, tick)) {
-    // Past what has been recorded (going back over a take replays it): the
-    // controlled tee plays the keys held, a linked one its own inputs with
-    // what its link drives (interaction_apply_linked_inputs). Everyone else,
-    // and any tick a take holds already, plays the timeline.
-    if (track_idx == ts->selected_player_track_index) return ts->player_tracks[track_idx].current_input;
-    if (interaction_track_is_linked(ts, track_idx) && ts->player_tracks[track_idx].group_index == ts->active_group_index)
-      return model_linked_input_at_tick(ts, track_idx, tick);
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const int tick = gh_world_tick(host, world);
+  if (ts->recording && track_idx >= 0 && track_idx < ts->player_track_count) {
+    // What is being recorded goes on from the playhead with what is held now,
+    // as if its takes were cut there: the controlled tee plays the keys held,
+    // a linked one its own inputs with what its link drives
+    // (interaction_apply_linked_inputs), also over ticks a take already holds
+    // ahead of the playhead. Everyone else plays the timeline.
+    const player_track_t *track = &ts->player_tracks[track_idx];
+    const bool controlled = track_idx == ts->selected_player_track_index;
+    if (controlled || (interaction_track_is_linked(ts, track_idx) && track->group_index == ts->active_group_index)) {
+      input_record_t input = controlled ? track->current_input : model_linked_input_at_tick(ts, track_idx, tick);
+      // A one-shot press is recorded on the tick at the playhead only.
+      if (tick > model_group_playhead_tick(ts, track->group_index)) engine_input_reset_triggers(host, &input);
+      return input;
+    }
   }
   return model_get_input_at_tick(ts, track_idx, tick);
 }

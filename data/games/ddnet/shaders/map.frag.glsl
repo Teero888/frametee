@@ -18,7 +18,17 @@ layout(binding = 0) uniform UniformBufferObject {
 }
 ubo;
 
+// The tile's corner of the sheet for a point of the tile, as DDNet's CalculateTexCoords puts it:
+// it mirrors the texture coordinates of the corners and then hands each corner the one of the
+// corner before it, so the tile is turned first and mirrored after. (The other way round, a tile
+// with one mirror and a rotation, such as a mirrored stopper, ends up mirrored across the other axis.)
 void apply_flags(uint flags, inout vec2 uv, inout vec2 dx, inout vec2 dy) {
+  // ROTATE (90 CW): (u, v) -> (v, 1 - u), and the derivatives with it
+  if ((flags & 8u) != 0u) {
+    uv = vec2(uv.y, 1.0 - uv.x);
+    dx = vec2(dx.y, -dx.x);
+    dy = vec2(dy.y, -dy.x);
+  }
   // XFLIP
   if ((flags & 1u) != 0u) {
     uv.x = 1.0 - uv.x;
@@ -30,24 +40,6 @@ void apply_flags(uint flags, inout vec2 uv, inout vec2 dx, inout vec2 dy) {
     uv.y = 1.0 - uv.y;
     dx.y = -dx.y;
     dy.y = -dy.y;
-  }
-  // ROTATE (90 CW)
-  if ((flags & 8u) != 0u) {
-    // uv transform: (u, v) -> (v, 1-u)
-    float tmp = uv.x;
-    uv.x = uv.y;
-    uv.y = 1.0 - tmp;
-
-    // derivative transform:
-    // new_dx.x = d(v)/dx = dx.y
-    // new_dx.y = d(1-u)/dx = -dx.x
-    vec2 old_dx = dx;
-    dx.x = old_dx.y;
-    dx.y = -old_dx.x;
-
-    vec2 old_dy = dy;
-    dy.x = old_dy.y;
-    dy.y = -old_dy.x;
   }
 }
 

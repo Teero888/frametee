@@ -267,6 +267,33 @@ FT_API int plugin_cli(void *data, int argc, const char **argv) {
     for (int p = 0; p < players; ++p) api->input_default((char *)inputs + (size_t)p * record_size);
   }
 
+  // The used-up bit of m_Jumped, which the feet are dimmed by: a ground and an air jump use up the
+  // two jumps a tee has, but one with endless jumps always has one left.
+  {
+    const ft_entity_class *player_class = api->entity_class(FT_ENTITY_CLASS_PLAYER);
+    CHECK(player_class);
+    int endless = -1;
+    for (uint32_t i = 0; i < player_class->prop_count; ++i)
+      if (strcmp(player_class->props[i].id, "endless_jump") == 0) endless = (int)i;
+    CHECK(endless >= 0);
+    const int jump = api->input_field_index("jump");
+    for (int with_endless = 0; with_endless < 2; ++with_endless) {
+      ft_world *w = api->clone_world(initial);
+      CHECK(w);
+      const ft_value value = {.kind = FT_VALUE_BOOL, .as.b = with_endless != 0};
+      CHECK(api->entity_prop_set(w, FT_ENTITY_CLASS_PLAYER, 0, (uint32_t)endless, &value));
+      for (int p = 0; p < players; ++p) api->input_default((char *)inputs + (size_t)p * record_size);
+      for (int tick = 0; tick < 50; ++tick) {
+        api->input_set(inputs, jump, (tick >= 40 && tick < 42) || tick >= 48);
+        CHECK(api->step_world(w, inputs, (uint32_t)players));
+      }
+      const ddnet_character_t *chr = ddnet_player_character(w, 0);
+      CHECK(chr && ((chr->core.jumped & 2) != 0) == !with_endless);
+      api->destroy_world(w);
+    }
+    for (int p = 0; p < players; ++p) api->input_default((char *)inputs + (size_t)p * record_size);
+  }
+
   // A starting state can have the tee in a team, locked, with its race started some time ago, and
   // a stored world keeps all of it.
   {

@@ -617,6 +617,8 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
         if (track >= 0) {
           if (!line->use_timeline_inputs && timeline->player_tracks[track].prediction_enabled) {
             input = held_inputs[player];
+            // (a one-shot press only on the tick at the playhead)
+            if (step > 0) engine_input_reset_triggers(host, &input);
             apply_controls(host, &input, line->controls);
           } else {
             input = interaction_predict_input(ui, world, track);

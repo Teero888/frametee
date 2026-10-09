@@ -99,7 +99,6 @@ input_record_t model_get_input_at_tick(const timeline_state_t *ts, int track_ind
 // effects), leaving out what is being recorded right now.
 input_record_t model_get_authored_input_at_tick(const timeline_state_t *ts, int track_index, int tick);
 // Whether a tick of a track is already recorded in the take(s) of this recording.
-bool model_take_covers(const timeline_state_t *ts, int track_index, int tick);
 // What a linked track, while recording, plays at a tick: its own inputs there
 // with the fields its link drives this frame taken from its current input.
 input_record_t model_linked_input_at_tick(const timeline_state_t *ts, int track_index, int tick);

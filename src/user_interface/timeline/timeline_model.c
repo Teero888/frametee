@@ -1036,16 +1036,6 @@ input_record_t model_get_authored_input_at_tick(const timeline_state_t *ts, int 
   return track_input_at(ts, track_index, tick, false, true);
 }
 
-bool model_take_covers(const timeline_state_t *ts, int track_index, int tick) {
-  if (!ts || !ts->recording || track_index < 0 || track_index >= ts->player_track_count) return false;
-  const player_track_t *track = &ts->player_tracks[track_index];
-  for (int i = 0; i < track->recording_snippet_count; ++i) {
-    const input_snippet_t *take = &track->recording_snippets[i];
-    if (take->is_active && tick >= take->start_tick && tick < take->end_tick) return true;
-  }
-  return false;
-}
-
 input_record_t model_linked_input_at_tick(const timeline_state_t *ts, int track_index, int tick) {
   const player_track_t *track = &ts->player_tracks[track_index];
   input_record_t record = model_get_authored_input_at_tick(ts, track_index, tick);

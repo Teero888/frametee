@@ -199,9 +199,10 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
     glm_vec3_copy((vec3){1.f, 1.f, 1.f}, out->body_col);
     glm_vec3_copy((vec3){1.f, 1.f, 1.f}, out->feet_col);
   }
-  // Jumping off the last available jump dims the feet, which is DDNet's tell
-  // that there is nothing left.
-  if (core->jumped_total >= core->jumps - 1) {
+  // The feet are dimmed while the tee has no air jump left: the used-up bit of
+  // m_Jumped (CPlayers::RenderPlayer's m_GotAirJump), which the physics keeps
+  // clear for a tee with endless jumps, as DDNet's server does.
+  if (core->jumped & 2) {
     if (out->custom) {
       out->feet_col[0] *= 0.5f;
       out->feet_col[1] *= 0.5f;
