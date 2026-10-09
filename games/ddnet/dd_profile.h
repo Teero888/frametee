@@ -44,6 +44,9 @@ void dd_hsl_to_rgb(uint32_t packed_hsl, float out_rgb[3]);
 uint32_t dd_hsl_pack(float h, float s, float l);
 void dd_hsl_unpack(uint32_t packed_hsl, float *out_h, float *out_s, float *out_l);
 void dd_hsl_components_to_rgb(float h, float s, float l, float out_rgb[3]);
+// CGameClient::GetDDTeamColor: the colour of a ddrace team (not team 0) at a lightness. The hues of
+// the teams are a golden angle apart, so that teams next to each other differ; team 1 is red.
+void dd_team_color(int team, float lightness, float out_rgb[3]);
 
 // Lightness below this is never reachable: the client's own clamp.
 #define DD_DARKEST_LIGHTNESS 0.5f

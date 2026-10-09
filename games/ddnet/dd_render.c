@@ -31,10 +31,51 @@ static void tile_pos(ddnet_vec2_t v, vec2 out) {
   out[1] = v.y / PX_PER_TILE;
 }
 
+static uint64_t frame_followed_players(const ft_render_frame *frame);
+
+int dd_view_player(const ft_render_frame *frame) {
+  if (!frame || !frame->world) return -1;
+  const int count = frame->world->player_count;
+  if (frame->selected_player >= 0 && frame->selected_player < count) return frame->selected_player;
+  const uint64_t followed = frame_followed_players(frame);
+  for (int player = 0; player < count && player < 64; ++player)
+    if ((followed >> player) & 1u) return player;
+  return -1;
+}
+
 int dd_view_team(const ft_render_frame *frame) {
   if (!frame || !frame->world) return 0;
-  const int client_id = ddnet_player_client(frame->world, frame->selected_player);
+  const int client_id = ddnet_player_client(frame->world, dd_view_player(frame));
   return client_id >= 0 ? frame->world->core.players[client_id].team : 0;
+}
+
+int dd_seen_team(const ft_game *game, int world_index, int player) {
+  if (world_index < 0 || world_index >= game->seen_team_worlds || player < 0 || player >= DDNET_MAX_CLIENTS) return 0;
+  return game->seen_teams[world_index][player];
+}
+
+// Remembers the teams of a world's players for dd_seen_team.
+static void see_teams(ft_game *game, const ft_world *world, int world_index) {
+  if (world_index < 0) return;
+  if (world_index >= game->seen_team_worlds) {
+    uint8_t(*grown)[DDNET_MAX_CLIENTS] = realloc(game->seen_teams, (size_t)(world_index + 1) * sizeof(*grown));
+    if (!grown) return;
+    memset(&grown[game->seen_team_worlds], 0, (size_t)(world_index + 1 - game->seen_team_worlds) * sizeof(*grown));
+    game->seen_teams = grown;
+    game->seen_team_worlds = world_index + 1;
+  }
+  for (int player = 0; player < DDNET_MAX_CLIENTS; ++player) {
+    const int client_id = ddnet_player_client(world, player);
+    game->seen_teams[world_index][player] = client_id >= 0 ? world->core.players[client_id].team : 0;
+  }
+}
+
+float dd_team_alpha(const ft_game *game, const ft_world *world, int viewer, int player) {
+  const int seen_as = ddnet_player_client(world, viewer), owner = ddnet_player_client(world, player);
+  if (seen_as < 0 || owner < 0 || seen_as == owner) return 1.f;
+  const ddnet_player_t *a = &world->core.players[seen_as], *b = &world->core.players[owner];
+  if (!a->is_solo && !b->is_solo && a->team == b->team) return 1.f;
+  return (float)game->settings.others_alpha / 100.f;
 }
 
 static void render_cursor(ft_game *game, const ft_render_frame *frame);
@@ -89,7 +130,6 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   const ddnet_character_t *prev_chr = ddnet_player_character(prev_world, index);
   if (!prev_chr) prev_chr = chr;
   const ddnet_character_core_t *core = &chr->core;
-  const dd_input_t *record = &world->inputs[ddnet_player_client(world, index)];
 
   static dd_anim_state_t s_anim_base_idle;
   static dd_anim_state_t s_anim_base_inair;
@@ -105,7 +145,7 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   out->stationary = fabsf(core->vel.x * 256.f) <= 1;
   const bool running = fabsf(core->vel.x * 256.f) >= 5000;
   const bool want_other_dir = (core->input.direction == -1 && core->vel.x > 0) || (core->input.direction == 1 && core->vel.x < 0);
-  out->inactive = get_flag_sit(record);
+  out->inactive = dd_player_inactive(world, index);
   // CPlayers::RenderPlayer: below the drawn tee
   out->in_air = !world->level || !ddnet_collision_check_point(&world->level->collision, pos[0] * PX_PER_TILE, pos[1] * PX_PER_TILE + 16.0f);
   out->attack_ticks_passed = (world->core.tick - chr->attack_tick) + intra;
@@ -176,7 +216,7 @@ static int tee_eye_state(const ft_world *world, int index, const ddnet_character
   const int client_id = ddnet_player_client(world, index);
   const dd_input_t *record = &world->inputs[client_id];
   // An inactive tee sleeps: its eyes are closed over any others, frozen or not.
-  if (get_flag_sit(record)) return EYE_BLINK;
+  if (dd_player_inactive(world, index)) return EYE_BLINK;
   int eye = get_flag_eye_state(record);
   if (chr->freeze_time > 0 && eye == 0) eye = EYE_BLINK;
   const int pain_age = world->core.tick - world->pain_ticks[client_id];
@@ -574,11 +614,21 @@ static bool dragger_beam_shown(const ft_world *world, const ddnet_dragger_t *dra
 // What DDNet's server sends of the world and its client draws (see "Effects, sounds and drawing" in the
 // physics' README): projectiles, lasers, and the laser walls, turrets, plasma, draggers and their beams of
 // the laser list.
+// What belongs to the tee of client `owner` (-1 for none) is drawn with its team's opacity
+// (CItems: a projectile or laser with an owner, which for plasma and dragger beams is the tee they
+// are for). Returns the world's own opacity, to go back to.
+static float owned_alpha(ft_game *game, const ft_world *world, int viewer_player, int owner) {
+  const float world_alpha = game->gfx.world_alpha;
+  if (owner >= 0) game->gfx.world_alpha = world_alpha * dd_team_alpha(game, world, viewer_player, ddnet_client_player(world, owner));
+  return world_alpha;
+}
+
 static void render_projectiles_and_lasers(ft_game *game, const ft_render_frame *frame, const ft_world *world, float intra) {
   const ddnet_world_t *core = &world->core;
   const int tick = core->tick;
   const int team = dd_view_team(frame);
-  const int viewer = ddnet_player_client(world, frame->selected_player);
+  const int viewer_player = dd_view_player(frame);
+  const int viewer = ddnet_player_client(world, viewer_player);
   // CItems::OnRender's blinking, on the ticks of a second
   const int ticks = tick % GAME_TICK_SPEED;
   const bool blink_slow = (ticks % 22) < 4, blink_proj = (ticks % 20) < 2, blink_fast = (ticks % 6) < 2;
@@ -592,7 +642,9 @@ static void render_projectiles_and_lasers(ft_game *game, const ft_render_frame *
     vec2 from, to;
     tile_pos(ddnet_projectile_get_pos(core, ent, pt), from);
     tile_pos(ddnet_projectile_get_pos(core, ent, ct), to);
+    const float world_alpha = owned_alpha(game, world, viewer_player, proj->owner);
     dd_render_projectile(game, from, to, intra, proj->type, tick, proj->start_tick);
+    game->gfx.world_alpha = world_alpha;
   }
 
   // the start tick DDNet's client gives laser walls, draggers and turrets
@@ -604,6 +656,11 @@ static void render_projectiles_and_lasers(ft_game *game, const ft_render_frame *
     const bool off = switch_off(core, ent->number, team);
     vec2 at;
     tile_pos(ent->pos, at);
+    const int owner = ent->kind == DDNET_ENTITY_LASER          ? ent->u.laser.owner
+                      : ent->kind == DDNET_ENTITY_PLASMA       ? ent->u.plasma.for_client_id
+                      : ent->kind == DDNET_ENTITY_DRAGGER_BEAM ? ent->u.dragger_beam.for_client_id
+                                                               : -1;
+    const float world_alpha = owned_alpha(game, world, viewer_player, owner);
     switch (ent->kind) {
     case DDNET_ENTITY_LASER: {
       const ddnet_laser_t *laser = &ent->u.laser;
@@ -662,6 +719,7 @@ static void render_projectiles_and_lasers(ft_game *game, const ft_render_frame *
     default:
       break;
     }
+    game->gfx.world_alpha = world_alpha;
   }
 }
 
@@ -772,6 +830,9 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
 
   const float intra = frame->alpha;
   const int selected = frame->selected_player;
+  const int viewer = dd_view_player(frame);
+  // The world's own opacity, which a tee of another team draws a part of.
+  const float world_alpha = game->gfx.world_alpha;
 
   render_pickups(game, frame, world, prev_world, intra);
 
@@ -801,7 +862,10 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
         if (!(frame->state.recording && i == selected)) continue;
       }
 
-      if (dd_replay_paused(world, i)) {
+      // Everything of a tee in another team is drawn faded, as CPlayers does.
+      game->gfx.world_alpha = world_alpha * dd_team_alpha(game, world, viewer, i);
+
+      if (dd_player_specced(world, i)) {
         // DDNet's spectating tee: idle, blinking, facing right, in the x_spec skin.
         dd_anim_state_t idle;
         dd_anim_state_set(&idle, &anim_base, 0.0f);
@@ -840,10 +904,11 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
         render_weapon(game, world, chr, prev_chr, &tee, intra, p);
       }
     }
+    game->gfx.world_alpha = world_alpha;
   }
 
   render_projectiles_and_lasers(game, frame, world, intra);
-  dd_recording_render_entities(game, world, intra);
+  dd_recording_render_entities(game, world, intra, viewer);
 }
 
 void dd_render(ft_game *game, const ft_render_frame *frame) {
@@ -876,6 +941,7 @@ void dd_render(ft_game *game, const ft_render_frame *frame) {
       if (particles) dd_particles_render(particles, game, -1);
     }
     render_entities(game, frame);
+    if (frame->world) see_teams(game, frame->world, frame->world_index);
     game->gfx.world_alpha = 1.f;
     dd_render_doors(game, frame);
     if (frame->last_world || frame->world_index < 0 || frame->world_index >= frame->world_count - 1) {
@@ -964,7 +1030,7 @@ static void render_cursor(ft_game *game, const ft_render_frame *frame) {
   for (int player = 0; player < world->player_count; ++player) {
     const bool is_selected = selected_shown && player == selected;
     if (!is_selected && !game->settings.render_cursor_all && !(player < 64 && ((followed >> player) & 1u))) continue;
-    if (dd_replay_absent(frame->world, player) || dd_replay_paused(frame->world, player)) continue;
+    if (dd_replay_absent(frame->world, player) || dd_player_specced(frame->world, player)) continue;
     const ddnet_character_t *chr = ddnet_player_character(world, player);
     if (!chr) continue;
 

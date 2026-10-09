@@ -641,6 +641,9 @@ typedef struct {
   bool entities_view;
   bool map_detail;
   bool render_players;
+  // cl_show_others_alpha: the opacity, in percent, of what belongs to a tee in
+  // another team than the one the world is seen as (see dd_team_alpha).
+  int others_alpha;
   bool render_weapons;
   bool render_particles;
   bool render_pickups;
@@ -651,6 +654,8 @@ typedef struct {
   // CHAT_FONTSIZE_WIDTH_RATIO so the two never fight each other.
   int chat_font_size;
   int chat_width;
+  // cl_chat_teamcolors: the names of players in a ddrace team in its colour.
+  bool chat_team_colors;
   bool render_nameplates;
   bool render_emoticons;
   bool render_freeze_bars;
@@ -665,6 +670,8 @@ typedef struct {
   bool nameplate_clan;
   int nameplate_clan_size;
   int nameplate_offset;
+  // cl_nameplates_teamcolors: the plates of tees in a ddrace team in its colour.
+  bool nameplate_team_colors;
   // cl_show_direction (on for every player: the editor has no own tee) and
   // cl_direction_size, a percentage like the nameplate sizes.
   bool show_key_presses;
@@ -688,6 +695,10 @@ struct ft_game {
   // One particle system per world the engine shows, indexed by world_index.
   dd_particle_system_t *particles;
   int particle_count;
+  // The ddrace team of every player of every world, as its last entity pass drew
+  // it, by world index: what a merged chat shows of a player of another world.
+  uint8_t (*seen_teams)[DDNET_MAX_CLIENTS];
+  int seen_team_worlds;
   bool headless;
   // Worlds stepped while this is set make their effects whatever the engine
   // presents (a demo export reads them from the worlds it asks the timeline for).
@@ -778,6 +789,12 @@ bool dd_replay_absent(const ft_world *world, int player);
 // The player replays a recording that has it paused with /spec at this tick: out of the game,
 // drawn where it waits with the x_spec skin, like DDNet does.
 bool dd_replay_paused(const ft_world *world, int player);
+// The player is out of the game in /spec at this tick: replayed so, or taken out of the world by
+// the physics. Drawn like dd_replay_paused.
+bool dd_player_specced(const ft_world *world, int player);
+// The player is paused with its tee in the world (/spec where that keeps the tee there), or its
+// record says it sits: DDNet's client shows the tee sitting with its eyes closed.
+bool dd_player_inactive(const ft_world *world, int player);
 // An effect the physics raised for this player is to be dropped (see ft_world::replay_muted).
 bool dd_replay_muted(const ft_world *world, int player);
 // The player replays a recording.
@@ -793,8 +810,9 @@ void dd_render_projectile(ft_game *game, const vec2 from, const vec2 to, float i
 void dd_render_laser(ft_game *game, const vec2 from, const vec2 to, bool rifle, float age_ticks, float bounce_delay_ms, int tick,
                      float intra);
 // Draws the replayed recording's projectiles and lasers, as the recording has
-// them at the world's replay tick.
-void dd_recording_render_entities(ft_game *game, const ft_world *world, float intra);
+// them at the world's replay tick, as seen by the world's player `viewer` (-1
+// for none; see dd_team_alpha).
+void dd_recording_render_entities(ft_game *game, const ft_world *world, float intra, int viewer);
 
 bool dd_gfx_create(ft_game *game);
 void dd_gfx_destroy(ft_game *game);
@@ -892,8 +910,20 @@ void dd_render(ft_game *game, const ft_render_frame *frame);
 void dd_render_world_overlays(ft_game *game, const ft_render_frame *frame);
 void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame);
 void dd_render_doors(ft_game *game, const ft_render_frame *frame);
+// The player of the frame's world that the world is seen as, DDNet's local or
+// spectated player: the selected one, or else the first one the camera animation
+// follows; -1 for none.
+int dd_view_player(const ft_render_frame *frame);
 // The team whose switch states a frame shows: the one of the tee it follows (team 0 without one).
 int dd_view_team(const ft_render_frame *frame);
+// The ddrace team of player `player` of world `world_index` as it was last drawn (team 0 when
+// it was not).
+int dd_seen_team(const ft_game *game, int world_index, int player);
+// CGameClient::IsOtherTeam with cl_show_others_alpha: the opacity of what belongs
+// to the world's player `player` (its tee, hook, weapon, plate, shots and the
+// effects it makes) seen as `viewer`. Faded when the two are in different teams
+// or one of them is in a solo part; 1 without a viewer.
+float dd_team_alpha(const ft_game *game, const ft_world *world, int viewer, int player);
 
 enum { DD_CAMERA_FREE = 0,
        DD_CAMERA_FOLLOW,

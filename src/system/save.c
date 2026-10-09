@@ -632,8 +632,7 @@ static uint64_t hash_string(uint64_t hash, const char *text) {
   return hash_bytes(hash, text, strlen(text) + 1);
 }
 
-static uint64_t input_schema_hash(const game_host_t *host) {
-  const ft_input_schema *schema = game_input_schema(host);
+static uint64_t schema_hash(const ft_input_schema *schema) {
   uint64_t hash = UINT64_C(1469598103934665603);
   if (!schema) return hash;
   hash = hash_u32(hash, schema->record_size);
@@ -666,9 +665,8 @@ static uint64_t input_schema_hash(const game_host_t *host) {
 /* Version 17 projects originally included the key-control table in the input
  * schema hash. Controls are editor bindings, not bytes stored in a project;
  * keep accepting those hashes so a binding-only change cannot strand a file. */
-static uint64_t legacy_control_schema_hash(const game_host_t *host) {
-  const ft_input_schema *schema = game_input_schema(host);
-  uint64_t hash = input_schema_hash(host);
+static uint64_t legacy_control_schema_hash(const ft_input_schema *schema) {
+  uint64_t hash = schema_hash(schema);
   if (!schema) return hash;
   hash = hash_u32(hash, schema->control_count);
   for (uint32_t i = 0; i < schema->control_count; ++i) {
@@ -685,9 +683,8 @@ static uint64_t legacy_control_schema_hash(const game_host_t *host) {
 /* The multiple-binding migration collapsed controls named "foo" and
  * "foo_alt" into one "foo" control whose default binding contains '|'.
  * Reconstruct that one historical hash without restoring duplicate actions. */
-static uint64_t legacy_split_control_schema_hash(const game_host_t *host) {
-  const ft_input_schema *schema = game_input_schema(host);
-  uint64_t hash = input_schema_hash(host);
+static uint64_t legacy_split_control_schema_hash(const ft_input_schema *schema) {
+  uint64_t hash = schema_hash(schema);
   if (!schema) return hash;
 
   uint32_t legacy_count = 0;
@@ -730,6 +727,27 @@ static uint64_t legacy_split_control_schema_hash(const game_host_t *host) {
     } while (binding);
   }
   return hash;
+}
+
+static uint64_t input_schema_hash(const game_host_t *host) { return schema_hash(game_input_schema(host)); }
+
+static bool schema_has_hash(const ft_input_schema *schema, uint64_t hash) {
+  return hash == schema_hash(schema) || hash == legacy_control_schema_hash(schema) ||
+         hash == legacy_split_control_schema_hash(schema);
+}
+
+// Whether records saved under `hash` with `record_size` bytes each are this game's records: the
+// schema it has now, or one of the earlier ones it still reads as they are.
+static bool input_schema_compatible(const game_host_t *host, uint64_t hash, uint32_t record_size) {
+  const ft_input_schema *schema = game_input_schema(host);
+  if (!schema) return false;
+  if (record_size == schema->record_size && schema_has_hash(schema, hash)) return true;
+  for (uint32_t i = 0; i < schema->legacy_schema_count; ++i) {
+    const ft_input_schema *legacy = schema->legacy_schemas[i];
+    if (record_size == legacy->record_size && legacy->record_size == schema->record_size && schema_has_hash(legacy, hash))
+      return true;
+  }
+  return false;
 }
 
 static bool collect_level_data(ui_handler_t *ui, uint8_t **out, size_t *out_size) {
@@ -1240,11 +1258,7 @@ static bool validate_document_compatibility(const project_document_t *document, 
               document->game_version, game_host_active_version(host));
     return false;
   }
-  const uint64_t schema_hash = input_schema_hash(host);
-  const bool compatible_schema = document->input_schema_hash == schema_hash ||
-                                 document->input_schema_hash == legacy_control_schema_hash(host) ||
-                                 document->input_schema_hash == legacy_split_control_schema_hash(host);
-  if (document->input_record_size != game_input_size(host) || !compatible_schema) {
+  if (!input_schema_compatible(host, document->input_schema_hash, document->input_record_size)) {
     log_error(LOG_SOURCE, "Project '%s' uses a different input schema for game '%s'.", path, document->game_id);
     return false;
   }

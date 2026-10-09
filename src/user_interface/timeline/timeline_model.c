@@ -665,11 +665,14 @@ static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, 
     new_track->group_index = group_index;
     new_track->linked_source_player = -1; // whichever tee is being controlled
     // Copies what can be authored, but not one-shot requests: a kill pressed
-    // for the controlled tee should not kill every linked one too.
+    // for the controlled tee should not kill every linked one too. Nor the
+    // state a player is in, such as its team.
     const ft_input_schema *schema = game_input_schema(model_host(ts));
     if (schema) {
+      const uint32_t not_copied =
+          FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN | FT_INPUT_FLAG_TRIGGER | FT_INPUT_FLAG_PLAYER_STATE;
       for (uint32_t field = 0; field < schema->field_count && field < 64; ++field)
-        if ((schema->fields[field].flags & (FT_INPUT_FLAG_INTERNAL | FT_INPUT_FLAG_EDITOR_HIDDEN | FT_INPUT_FLAG_TRIGGER)) == 0)
+        if ((schema->fields[field].flags & not_copied) == 0)
           new_track->linked_copy_fields |= UINT64_C(1) << field;
     }
     new_track->export_enabled = true;
@@ -1484,11 +1487,18 @@ void model_apply_starting_config(timeline_state_t *ts, int track_index) {
   if (!sc->enabled) return;
 
   // Each override names a property the game published. The engine never has to
-  // know what any of them mean.
-  for (int i = 0; i < sc->override_count; ++i) {
-    const int prop = model_find_player_prop(host, sc->overrides[i].prop_id);
-    if (prop < 0) continue;
-    gh_entity_prop_set(host, world, FT_ENTITY_CLASS_PLAYER, local_index, (unsigned)prop, &sc->overrides[i].value);
+  // know what any of them mean. They are written in the order the game lists
+  // its properties, not the order they were turned on in, so that a game can
+  // put one that others depend on first (DDNet's team before its switches).
+  const ft_entity_class *player_class = gh_entity_class(host, FT_ENTITY_CLASS_PLAYER);
+  const uint32_t prop_count = player_class ? player_class->prop_count : 0;
+  for (uint32_t prop = 0; prop < prop_count; ++prop) {
+    const char *id = player_class->props[prop].id;
+    for (int i = 0; id && i < sc->override_count; ++i) {
+      if (strcmp(sc->overrides[i].prop_id, id) != 0) continue;
+      gh_entity_prop_set(host, world, FT_ENTITY_CLASS_PLAYER, local_index, prop, &sc->overrides[i].value);
+      break;
+    }
   }
   model_recalc_group_physics(ts, group_index, 0);
 }

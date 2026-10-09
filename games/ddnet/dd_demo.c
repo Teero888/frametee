@@ -2,6 +2,7 @@
 #include "dd_profile.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -381,7 +382,9 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     dd_profile_for_track(game, track_index, &profile);
     const ddnet_character_t *c_cur = ddnet_player_character(current_world, p);
     const int world_client = ddnet_player_client(current_world, p);
-    const bool paused = dd_replay_paused(current_world, p);
+    // A player that left the game is not in it.
+    if (!current_world->core.players[world_client].active) continue;
+    const bool paused = dd_player_specced(current_world, p);
 
     dd_netobj_client_info *ci = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, client_id, sizeof(dd_netobj_client_info));
     if (ci) {
@@ -411,7 +414,8 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     dd_netobj_ddnet_player *dp = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPLAYER, client_id, sizeof(dd_netobj_ddnet_player));
     if (dp) {
       dp->m_AuthLevel = 0;
-      dp->m_Flags = paused ? DD_EXPLAYERFLAG_SPEC : 0;
+      dp->m_Flags = paused ? DD_EXPLAYERFLAG_SPEC
+                           : (current_world->core.players[world_client].paused == DDNET_PAUSE_PAUSED ? DD_EXPLAYERFLAG_PAUSED : 0);
     }
 
     // Replayed /spec players only have a waiting position. Export it as DDNet
@@ -455,7 +459,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       ch->m_AmmoCount = 0;
       ch->m_Health = 10;
       ch->m_Armor = 10;
-      ch->m_PlayerFlags = 0;
+      ch->m_PlayerFlags = current_world->inputs[world_client].m_PlayerFlags;
     }
 
     dd_netobj_ddnet_character *dc = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETCHARACTER, client_id, sizeof(dd_netobj_ddnet_character));
@@ -761,6 +765,64 @@ static void write_sv_tuneparams(dd_demo_writer *writer, const ddnet_tuning_t *tu
   }
 }
 
+// CGameTeams::SendTeamsState: the ddrace team of every client. It is DDNet's extended message
+// teamsstate@netmsg.ddnet.tw, so the message id is NETMSGTYPE_EX (0) followed by the message's UUID.
+static bool write_sv_teamsstate(dd_demo_writer *writer, const int *teams, int count) {
+  static const uint8_t uuid[16] = {0xa0, 0x91, 0x96, 0x1a, 0x95, 0xe8, 0x37, 0x44, 0xbb, 0x60, 0x5e, 0xac, 0x9b, 0xd5, 0x63, 0xc6};
+  char buffer[DD_MAX_MESSAGE_SIZE];
+  dd_msg_packer packer;
+  demo_msg_init(&packer, buffer, sizeof(buffer));
+  demo_msg_add_int(&packer, 0);
+  if (packer.error || packer.end - packer.current < (ptrdiff_t)sizeof(uuid)) return false;
+  memcpy(packer.current, uuid, sizeof(uuid));
+  packer.current += sizeof(uuid);
+  for (int i = 0; i < count; ++i)
+    demo_msg_add_int(&packer, teams[i]);
+  const int size = demo_msg_finish(&packer);
+  return size >= 0 && demo_w_write_msg(writer, buffer, size);
+}
+
+// A demo has at most 64 clients, and clients that know 64 players know the team numbers below 64
+// only. As CGameTeams::UpdateLegacyTeamMap does for them, a team numbered above gets a number that
+// no team uses, which keeps who is in a team with whom (though not the number it shows).
+static void legacy_team_numbers(int teams[64]) {
+  bool occupied[DDNET_NUM_TEAMS] = {false};
+  for (int i = 0; i < 64; ++i)
+    occupied[teams[i]] = true;
+  int number[DDNET_NUM_TEAMS];
+  for (int team = 0; team < DDNET_NUM_TEAMS; ++team)
+    number[team] = team < 64 ? team : DDNET_TEAM_FLOCK;
+  int next = DDNET_TEAM_FLOCK + 1;
+  for (int team = 64; team < DDNET_NUM_TEAMS; ++team) {
+    if (!occupied[team]) continue;
+    while (next < 64 && occupied[next])
+      ++next;
+    // (more teams than fit stay in team 0)
+    if (next == 64) break;
+    number[team] = next++;
+  }
+  for (int i = 0; i < 64; ++i)
+    teams[i] = number[teams[i]];
+}
+
+// The ddrace teams of the exported clients, by their client id in the demo. A server that puts every
+// tee into a team of its own sends none, which leaves its clients with everyone in team 0.
+static void exported_teams(const ft_world *const *worlds, uint32_t world_count, int *const *client_maps, const int *client_counts,
+                           int teams[64]) {
+  memset(teams, 0, 64 * sizeof(*teams));
+  for (uint32_t wi = 0; wi < world_count; ++wi) {
+    const ft_world *world = worlds[wi];
+    if (!world || world->core.config.sv_team == DDNET_SV_TEAM_FORCED_SOLO) continue;
+    for (int p = 0; p < world->player_count && p < client_counts[wi]; ++p) {
+      const int exported = client_maps[wi][p];
+      const int client_id = ddnet_player_client(world, p);
+      if (exported >= 0 && exported < 64 && client_id >= 0 && world->core.players[client_id].active)
+        teams[exported] = world->core.players[client_id].team;
+    }
+  }
+  legacy_team_numbers(teams);
+}
+
 static void free_client_maps(int **maps, int *counts, uint32_t world_count) {
   if (maps)
     for (uint32_t i = 0; i < world_count; ++i)
@@ -872,6 +934,8 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
   const ft_world **curr_worlds = (const ft_world **)calloc(world_count, sizeof(const ft_world *));
   const ft_world **prev_worlds = (const ft_world **)calloc(world_count, sizeof(const ft_world *));
   uint8_t snapshot[DD_SNAPSHOT_MAX_SIZE];
+  // The teams the demo's clients were last told about.
+  int sent_teams[64];
   bool ok = (curr_worlds && prev_worlds);
   const int tick_span = end_tick - start_tick + 1;
   // The worlds asked for below are stepped with their effects, which the snapshots carry.
@@ -923,6 +987,17 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
 
     if (game->current_level && tick == start_tick) {
       write_sv_tuneparams(writer, &game->current_level->prototype.tuning[0]);
+    }
+
+    // A server sends the teams when a client joins and whenever one changes.
+    int teams[64];
+    exported_teams(curr_worlds, world_count, client_maps, client_counts, teams);
+    if (tick == start_tick || memcmp(teams, sent_teams, sizeof(teams)) != 0) {
+      if (!write_sv_teamsstate(writer, teams, 64)) {
+        ok = false;
+        break;
+      }
+      memcpy(sent_teams, teams, sizeof(teams));
     }
 
     // Authored protocol messages are stored by the engine as opaque DDNet

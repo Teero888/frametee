@@ -774,6 +774,11 @@ static dd_physics_sound_event_t *append_physics_sound_event(ft_world *world) {
 // The callbacks get DDNet's client ids; everything here is about the engine's players.
 static int player_of(const ft_world *world, int client_id) { return client_id >= 0 ? ddnet_client_player(world, client_id) : -1; }
 
+// How opaque the effects a player makes are, as the world's effects are seen (cl_show_others_alpha).
+static float effect_alpha(const ft_world *world, int player) {
+  return dd_team_alpha(world->game, world, world->effects_viewer, player);
+}
+
 static void on_particle(ddnet_vec2_t pos, int type, int cid, void *user_data) {
   ft_world *world = user_data;
   if (!world || !world->game) return;
@@ -802,7 +807,7 @@ static void on_particle(ddnet_vec2_t pos, int type, int cid, void *user_data) {
 
   switch (type) {
   case DDNET_PARTICLE_SMOKE:
-    dd_particles_create_smoke(ps, p, (float *)zero_vel, 1.0f, 0.0f);
+    dd_particles_create_smoke(ps, p, (float *)zero_vel, effect_alpha(world, player), 0.0f);
     break;
   case DDNET_PARTICLE_PLAYER_SPAWN:
     dd_particles_create_player_spawn(ps, p, 1.0f);
@@ -821,10 +826,10 @@ static void on_particle(ddnet_vec2_t pos, int type, int cid, void *user_data) {
     break;
   }
   case DDNET_PARTICLE_AIR_JUMP:
-    dd_particles_create_air_jump(ps, p, 1.0f);
+    dd_particles_create_air_jump(ps, p, effect_alpha(world, player));
     break;
   case DDNET_PARTICLE_BULLET_TRAIL:
-    dd_particles_create_bullet_trail(ps, p, 1.0f, 0.0f);
+    dd_particles_create_bullet_trail(ps, p, effect_alpha(world, player), 0.0f);
     break;
   case DDNET_PARTICLE_BULLET_STARS:
     dd_particles_create_star(ps, p);
@@ -882,8 +887,22 @@ static void on_sound(ddnet_vec2_t pos, int sound_id, int cid, void *user_data) {
   if (event) *event = (dd_physics_sound_event_t){.x = pos.x, .y = pos.y, .sound_id = sound_id, .client_id = player};
 }
 
+// The player of the world its effects are seen as: the selected one, -1 when the selection is in
+// another world or there is none.
+static int selected_player_of(ft_game *game, const ft_world *world) {
+  if (!game->engine->get_state || !game->engine->timeline_player_track || world->index < 0) return -1;
+  ft_engine_state state;
+  memset(&state, 0, sizeof(state));
+  game->engine->get_state(&state);
+  if (state.selected_player < 0) return -1;
+  for (int player = 0; player < world->player_count; ++player)
+    if (game->engine->timeline_player_track((uint32_t)world->index, (uint32_t)player) == state.selected_player) return player;
+  return -1;
+}
+
 bool dd_particles_bind(ft_game *game, ft_world *world) {
   if (!world) return false;
+  world->effects_viewer = -1;
   world->physics_particle_event_count = 0;
   world->physics_damage_event_count = 0;
   world->physics_sound_event_count = 0;
@@ -902,6 +921,7 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
 
   world->render_physics_effects = events && presentation_enabled && !game->headless && game->settings.render_particles;
   if (!world->render_physics_effects) return false;
+  world->effects_viewer = selected_player_of(game, world);
 
   dd_particle_system_t *ps = dd_particles_for(game, index);
   if (!ps) {
@@ -959,7 +979,7 @@ static void skids(ft_world *world, dd_particle_system_t *ps, const uint8_t *was_
     if (!ps) continue;
     vec2 pos = {x, y}, vel = {chr->core.vel.x, chr->core.vel.y};
     for (int i = 0; i < 2; ++i)
-      dd_particles_create_skid_trail(ps, pos, vel, chr->core.input.direction, 1.f);
+      dd_particles_create_skid_trail(ps, pos, vel, chr->core.input.direction, effect_alpha(world, player));
   }
 }
 
@@ -983,7 +1003,7 @@ void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool b
       const ddnet_character_t *chr = ddnet_player_character(world, player);
       if (chr && chr->freeze_time > 0) {
         vec2 pos = {chr->pos.x, chr->pos.y};
-        dd_particles_create_freezing_flakes(ps, pos, (vec2){32.f, 32.f}, 1.f);
+        dd_particles_create_freezing_flakes(ps, pos, (vec2){32.f, 32.f}, effect_alpha(world, player));
       }
     }
   }

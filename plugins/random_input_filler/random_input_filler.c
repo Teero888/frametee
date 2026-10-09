@@ -34,7 +34,7 @@ static bool field_fillable(const ft_input_field *field) {
 }
 
 // Follows the active game's input schema: a field seen before keeps its
-// choice, a new one starts out filled.
+// choice, a new one starts out filled unless it is a player state.
 static void sync_fields(random_input_state_t *state) {
   uint32_t count = state->api->input_field_count();
   if (count > MAX_FIELDS) count = MAX_FIELDS;
@@ -53,7 +53,8 @@ static void sync_fields(random_input_state_t *state) {
   for (uint32_t i = 0; i < count; ++i) {
     const ft_input_field *field = state->api->input_field(i);
     snprintf(state->field_ids[i], sizeof(state->field_ids[i]), "%s", field && field->id ? field->id : "");
-    state->fill_field[i] = true;
+    // (what a player is in rather than presses, such as its team, only when asked for)
+    state->fill_field[i] = field && !(field->flags & FT_INPUT_FLAG_PLAYER_STATE);
     for (uint32_t j = 0; j < old_count; ++j)
       if (strcmp(old_ids[j], state->field_ids[i]) == 0) state->fill_field[i] = old_fill[j];
   }

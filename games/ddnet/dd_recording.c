@@ -312,7 +312,6 @@ static uint8_t eyes_for_emote(int emote) {
   }
 }
 
-// What the player most likely held, as far as the state shows it.
 // Beside DDNet's player flags in a recorded character, never sent by a server: the player is AFK
 // or paused (/pause), which DDNet's client shows as a tee sitting with its eyes closed.
 #define RECORDED_INACTIVE (1 << 30)
@@ -327,7 +326,15 @@ static dd_state_character recorded_at(ft_recording *recording, int cid, int tick
   return c;
 }
 
-static void recorded_input(const dd_state_character *c, int tick, dd_input_t *out) {
+// The ddrace team a recorded client is in at `tick` (team 0 where the recording does not say).
+// Callers hold the lock.
+static int recorded_team_at(ft_recording *recording, int cid, int tick) {
+  dd_state_player player;
+  return dd_demo_state_player(recording->state, tick, cid, &player) ? player.ddrace_team : 0;
+}
+
+// What the player most likely held and the team it is in, as far as the state shows it.
+static void recorded_input(const dd_state_character *c, int team, int tick, dd_input_t *out) {
   memset(out, 0, sizeof(*out));
   int target_x, target_y;
   recorded_target(c, &target_x, &target_y);
@@ -341,8 +348,9 @@ static void recorded_input(const dd_state_character *c, int tick, dd_input_t *ou
   set_flag_eye_state(out, eyes_for_emote(c->emote));
   // DDNet's client sits a tee whose player is AFK or paused, not one that is only in a menu.
   set_flag_sit(out, (c->player_flags & RECORDED_INACTIVE) != 0);
-  set_flag_chatbubble(out, (c->player_flags & DD_PLAYERFLAG_CHATTING) != 0);
-  set_flag_hookline(out, (c->player_flags & DD_PLAYERFLAG_AIM) != 0);
+  // (the protocol's bits, which are the ones of DDNET_PLAYERFLAG_*)
+  out->m_PlayerFlags = (uint8_t)(c->player_flags & 0x3f);
+  dd_input_set_team(out, team);
 }
 
 bool dd_recording_input(ft_game *game, const ft_recording *recording, int32_t player, int32_t tick, void *out_record) {
@@ -350,10 +358,12 @@ bool dd_recording_input(ft_game *game, const ft_recording *recording, int32_t pl
   if (player < 0 || player >= recording->player_count) return false;
   ft_recording *mutable_recording = (ft_recording *)recording;
   pthread_mutex_lock(&mutable_recording->lock);
-  const dd_state_character c = recorded_at(mutable_recording, recording->players[player].cid, tick);
+  const int cid = recording->players[player].cid;
+  const dd_state_character c = recorded_at(mutable_recording, cid, tick);
+  const int team = recorded_team_at(mutable_recording, cid, tick);
   pthread_mutex_unlock(&mutable_recording->lock);
   if (c.quality == DD_QUALITY_NONE) return false;
-  recorded_input(&c, tick, ddnet_input_mut(out_record));
+  recorded_input(&c, team, tick, ddnet_input_mut(out_record));
   return true;
 }
 
@@ -435,6 +445,17 @@ bool dd_replay_paused(const ft_world *world, int player) {
   return world && player >= 0 && player < world->replay_slot_count && world->replay_slots[player].mode == REPLAY_PAUSED;
 }
 
+bool dd_player_specced(const ft_world *world, int player) {
+  if (dd_replay_paused(world, player)) return true;
+  const ddnet_character_t *chr = ddnet_player_character(world, player);
+  return chr && chr->paused;
+}
+
+bool dd_player_inactive(const ft_world *world, int player) {
+  const int client_id = ddnet_player_client(world, player);
+  return client_id >= 0 && (get_flag_sit(&world->inputs[client_id]) || world->core.players[client_id].paused == DDNET_PAUSE_PAUSED);
+}
+
 bool dd_replay_active(const ft_world *world, int player) {
   return world && player >= 0 && player < world->replay_slot_count && world->replay_slots[player].mode != REPLAY_NONE;
 }
@@ -502,6 +523,14 @@ static dd_state_character recorded_character(const ft_player_playback *pb) {
   return c;
 }
 
+static int recorded_team(const ft_player_playback *pb) {
+  ft_recording *recording = (ft_recording *)pb->recording;
+  pthread_mutex_lock(&recording->lock);
+  const int team = recorded_team_at(recording, recording->players[pb->player].cid, pb->tick);
+  pthread_mutex_unlock(&recording->lock);
+  return team;
+}
+
 // Where the player of `pb` waits paused at its tick, if it is paused.
 static bool paused_of(const ft_player_playback *pb, float *x, float *y) {
   ft_recording *recording = (ft_recording *)pb->recording;
@@ -517,7 +546,7 @@ static bool paused_of(const ft_player_playback *pb, float *x, float *y) {
 // Writes a recorded state into the tee of world client `client_id`. `offset` turns recording ticks
 // into world ticks; `prev_pos` is where it was the tick before, which the physics walks tiles from
 // next tick.
-static void apply_state(ft_world *world, int client_id, ddnet_character_t *chr, const dd_state_character *c,
+static void apply_state(ft_world *world, int client_id, ddnet_character_t *chr, const dd_state_character *c, int team,
                         int recording_tick, int offset, int hooked_client, ddnet_vec2_t prev_pos) {
   ddnet_character_core_t *core = &chr->core;
   const ddnet_vec2_t pos = world_pos(c->x, c->y);
@@ -531,7 +560,7 @@ static void apply_state(ft_world *world, int client_id, ddnet_character_t *chr, 
   core->hook_tick = c->hook_tick;
   core->hooked_player = hooked_client;
   // What it is drawn with (aim, eyes); the physics takes its input from the player again next tick.
-  recorded_input(c, recording_tick, &world->inputs[client_id]);
+  recorded_input(c, team, recording_tick, &world->inputs[client_id]);
   ddnet_input_from_record(&world->inputs[client_id], &core->input);
 
   core->jumped = c->jumped;
@@ -746,6 +775,11 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
     const int cid = recording->players[pb->player].cid;
     slot->recording = recording;
     slot->cid = cid;
+    // In the team the recording has it in, also where it is only placed (a step puts it there before
+    // the tick, see dd_recording_world_step).
+    const int team = recorded_team(pb);
+    if (world->core.players[client_id].active && world->core.players[client_id].team != team)
+      ddnet_player_set_team(&world->core, client_id, team);
     const dd_state_character c = recorded_character(pb);
     float paused_x, paused_y;
     if (!chr) {
@@ -764,7 +798,8 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
       const ddnet_vec2_t prev = slot->mode == REPLAY_PRESENT ? (ddnet_vec2_t){slot->x, slot->y} : pos;
       // DDNet's client shows an air jump when the used-air-jump bit appears.
       const bool air_jump = slot->mode == REPLAY_PRESENT && (c.jumped & 2) && !(slot->jumped & 2);
-      apply_state(world, client_id, chr, &c, pb->tick, world->core.tick - pb->tick, ddnet_player_client(world, hooked), prev);
+      apply_state(world, client_id, chr, &c, team, pb->tick, world->core.tick - pb->tick, ddnet_player_client(world, hooked),
+                  prev);
       slot->mode = REPLAY_PRESENT;
       slot->jumped = (uint8_t)c.jumped;
       remember_flags(slot, chr);
@@ -790,20 +825,13 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
     world->replay_clients = UINT64_MAX;
 }
 
-// What a player does on the tick about to be stepped: its input, and a kill before the tick (with the
-// effects of the build the world steps with).
+// What a player does on the tick about to be stepped (with the effects of the build the world steps
+// with), and what it holds from then on.
 static void apply_input(ft_world *world, int client_id, const dd_input_t *record, bool events) {
-  if (get_flag_kill(record) && ddnet_world_character(&world->core, client_id)) {
-    if (events)
-      ddnet_ev_player_kill(&world->core, client_id);
-    else
-      ddnet_player_kill(&world->core, client_id);
-  }
+  ddnet_record_apply(&world->core, client_id, record, events);
   world->inputs[client_id] = *record;
   // (a kill is a trigger: one held on is not one again)
   set_flag_kill(&world->inputs[client_id], 0);
-  ddnet_input_from_record(record, &world->core.players[client_id].input);
-  world->core.characters[client_id].tele_out = record->m_TeleOut;
 }
 
 void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs, const ft_player_playback *playback,
@@ -830,11 +858,12 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
     const ft_player_playback *pb = slot ? playback_of(playback, player_count, i) : NULL;
     if (pb) {
       // Stepped with what it most likely held, so the physics keeps up with it, but it never
-      // fires and never hooks anyone: nothing it does may reach a simulated tee.
+      // fires and never hooks anyone: nothing it does may reach a simulated tee. It is in the team
+      // the recording has it in, which is who it is there for.
       const dd_state_character c = recorded_character(pb);
       dd_input_t input;
       if (c.quality != DD_QUALITY_NONE) {
-        recorded_input(&c, pb->tick, &input);
+        recorded_input(&c, recorded_team(pb), pb->tick, &input);
         input.m_Fire = 0;
       } else {
         memset(&input, 0, sizeof(input));
@@ -990,9 +1019,20 @@ static void projectile_pos(const dd_state_projectile *p, const float *tuning, fl
   *out_y = p->y + p->vel_y * travelled + curvature / 10000.f * travelled * travelled;
 }
 
-void dd_recording_render_entities(ft_game *game, const ft_world *world, float intra) {
+// The world player that replays client `cid` of the recording the world shows, or -1.
+static int replayed_player(const ft_world *world, int cid) {
+  for (int i = 0; i < world->replay_slot_count; ++i) {
+    const struct dd_replay_slot *slot = &world->replay_slots[i];
+    if (slot->mode != REPLAY_NONE && slot->recording == world->replay_recording && slot->cid == cid) return i;
+  }
+  return -1;
+}
+
+void dd_recording_render_entities(ft_game *game, const ft_world *world, float intra, int viewer) {
   ft_recording *recording = (ft_recording *)world->replay_recording;
   if (!recording) return;
+  // (the world's own opacity, which a shot of a tee in another team draws a part of)
+  const float world_alpha = game->gfx.world_alpha;
   const int tick = world->replay_tick;
   dd_state_tick *state = malloc(sizeof(*state));
   if (!state) return;
@@ -1010,6 +1050,7 @@ void dd_recording_render_entities(ft_game *game, const ft_world *world, float in
       projectile_pos(p, tuning, (float)(tick - p->start_tick) / (float)GAME_TICK_SPEED, &x1, &y1);
       const vec2 from = {x0 / PX_PER_TILE, y0 / PX_PER_TILE};
       const vec2 to = {x1 / PX_PER_TILE, y1 / PX_PER_TILE};
+      game->gfx.world_alpha = world_alpha * dd_team_alpha(game, world, viewer, replayed_player(world, p->owner));
       dd_render_projectile(game, from, to, intra, p->type, tick, p->start_tick);
     }
     for (int i = 0; i < state->num_lasers; ++i) {
@@ -1020,9 +1061,11 @@ void dd_recording_render_entities(ft_game *game, const ft_world *world, float in
       const vec2 to = {l->to_x / PX_PER_TILE, l->to_y / PX_PER_TILE};
       // DDNet's own laser types (doors, draggers, freeze) are drawn like rifle shots.
       const bool shotgun = l->type == DDNET_WEAPON_SHOTGUN;
+      game->gfx.world_alpha = world_alpha * dd_team_alpha(game, world, viewer, replayed_player(world, l->owner));
       dd_render_laser(game, from, to, !shotgun, (float)(tick - 1 - l->start_tick) + intra, tuning[27], tick, intra);
     }
   }
+  game->gfx.world_alpha = world_alpha;
   pthread_mutex_unlock(&recording->lock);
   free(state);
 }

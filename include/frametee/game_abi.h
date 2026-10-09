@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 28u
+#define FT_GAME_ABI_VERSION 29u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -359,6 +359,11 @@ enum ft_input_field_flags {
    * compatibility, so a game may hide an existing field without invalidating
    * projects whose input record layout and semantics are unchanged. */
   FT_INPUT_FLAG_EDITOR_HIDDEN = 1u << 7,
+  /* Not a key the player presses but a state it is in or asks for (being in a
+   * team, spectating, being connected). New linked tracks do not copy it from
+   * their source, and tools that make up inputs leave it alone, unless the
+   * user asks for it. */
+  FT_INPUT_FLAG_PLAYER_STATE = 1u << 8,
 };
 
 typedef struct ft_input_field {
@@ -424,6 +429,12 @@ typedef struct ft_input_schema {
    * no controls and rely entirely on snippet editing or its own UI. */
   const ft_input_control *controls;
   uint32_t control_count;
+  /* Earlier versions of this schema whose records this one reads as they are,
+   * typically fields added in bytes the old layout left zero (and whose zero
+   * means what the old records meant). Projects saved with any of them open.
+   * Only their record size, alignment, fields and controls are looked at. */
+  const struct ft_input_schema *const *legacy_schemas;
+  uint32_t legacy_schema_count;
 } ft_input_schema;
 
 /* Game-defined helpers that only make sense while authoring a linked track.

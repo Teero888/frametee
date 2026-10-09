@@ -115,6 +115,14 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
   if (m->input_schema->field_count > 0 && !m->input_schema->fields) FAIL("input schema declares fields but has no field table");
   if (m->input_schema->control_count > 0 && !m->input_schema->controls) FAIL("input schema declares controls but has no control table");
   if (m->input_schema->control_count > 64) FAIL("input schema declares %u controls; the editor supports at most 64", m->input_schema->control_count);
+  if (m->input_schema->legacy_schema_count > 0 && !m->input_schema->legacy_schemas)
+    FAIL("input schema declares legacy schemas but has no table of them");
+  for (uint32_t i = 0; i < m->input_schema->legacy_schema_count; ++i) {
+    const ft_input_schema *legacy = m->input_schema->legacy_schemas[i];
+    if (!legacy || legacy->struct_size != sizeof(ft_input_schema) || (legacy->field_count > 0 && !legacy->fields) ||
+        (legacy->control_count > 0 && !legacy->controls))
+      FAIL("legacy input schema %u is incomplete", i);
+  }
   const bool has_effects = m->input_effect_count || m->input_effect_desc || m->input_effect_default ||
                            m->input_effect_apply || m->input_effect_ui;
   if (has_effects && (!m->input_effect_count || !m->input_effect_desc || !m->input_effect_default ||

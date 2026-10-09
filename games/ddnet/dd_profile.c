@@ -145,6 +145,11 @@ uint32_t dd_hsl_pack(float h, float s, float l) {
   return (hb << 16) | (sb << 8) | lb;
 }
 
+void dd_team_color(int team, float lightness, float out_rgb[3]) {
+  const float normalized_golden_angle = 137.50776f / 360.0f;
+  dd_hsl_components_to_rgb(fmodf((float)(team - 1) * normalized_golden_angle, 1.0f), 1.0f, lightness, out_rgb);
+}
+
 void dd_hsl_to_rgb(uint32_t packed_hsl, float out_rgb[3]) {
   float h, s, l;
   dd_hsl_unpack(packed_hsl, &h, &s, &l);

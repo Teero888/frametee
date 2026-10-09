@@ -373,7 +373,7 @@ static const ft_input_control kControls[] = {
 
 static const ft_input_schema kInputSchema = {
     sizeof(ft_input_schema), sizeof(uint32_t), sizeof(uint32_t), kFields, FIELD_COUNT, kControls,
-    sizeof(kControls) / sizeof(kControls[0]),
+    sizeof(kControls) / sizeof(kControls[0]), NULL, 0,
 };
 
 static void input_default(ft_game *game, void *record) {

@@ -31,9 +31,13 @@ extern "C" {
 // DDNet's input as the engine stores it for every tick of a track: the record
 // of this game's input schema. Not the library's ddnet_input_t, which a step
 // is made from (ddnet_input_from_record): fire and the weapon are what the
-// editor edits, and it carries what only shows (eyes, emote, sitting) and the
-// teleporter exit. Padded to 16 bytes and 8-byte aligned so that copying one is
-// two moves.
+// editor edits, and it carries what only shows (eyes, emote, sitting) and what
+// a player does to the world outside of its tee (team, lock, /spec, being
+// connected, the teleporter exit). Padded to 16 bytes and 8-byte aligned so
+// that copying one is two moves.
+//
+// Records of older projects have zeros in m_Team, m_PlayerFlags, FLAG_SPEC,
+// FLAG_LOCK and FLAG_CONNECTION, which all mean "nothing" at zero.
 typedef struct __attribute__((aligned(8))) dd_input {
   int8_t m_Direction; // -1 left, 0, 1 right
   int16_t m_TargetX;  // aim, relative to the tee
@@ -46,21 +50,27 @@ typedef struct __attribute__((aligned(8))) dd_input {
   uint8_t m_WantedWeapon; // DDNET_WEAPON_*, switched to as soon as the tee has it
   uint8_t m_TeleOut;      // picks the exit of a teleporter with several, see ddnet_character_t::tele_out
   uint16_t m_Flags;       // FLAG_*
-  uint8_t m_aPadding[2];
+  // The ddrace team the player is put into while this is set, as team + 1; 0
+  // leaves the team to the physics (spawning, finishing and so on move tees).
+  uint8_t m_Team;
+  uint8_t m_PlayerFlags; // DDNET_PLAYERFLAG_*, as a DDNet client sends them
 } dd_input_t;
 
 enum {
   FLAG_KILL = 1 << 0, // kills the tee before the tick (DDNet's kill command)
-  FLAG_SPEC = 1 << 1,
-  FLAG_HOOKLINE = 1 << 2,
-  FLAG_CHATBUBBLE = 1 << 3,
+  FLAG_SPEC = 1 << 1, // the player wants to be in /spec (ddnet_character_t::spec)
+  FLAG_LOCK = 3 << 2, // bits 2..3: DD_LOCK_*, what is done to the lock of the player's team
   FLAG_SIT = 1 << 4,
-  FLAG_CONNECT = 1 << 5,
-  FLAG_DISCONNECT = 1 << 6,
-  FLAG_EYESTATE = 7 << 7, // bits 7..9
+  FLAG_CONNECTION = 3 << 5, // bits 5..6: DD_CONNECTION_*, whether the player is in the game
+  FLAG_EYESTATE = 7 << 7,   // bits 7..9
   FLAG_EMOTE_TRIGGER = 1 << 10,
   FLAG_EMOTE_INDEX = 15 << 11, // bits 11..14
 };
+
+// What a record does to the lock of the player's team while it says so.
+enum { DD_LOCK_KEEP = 0, DD_LOCK_LOCKED, DD_LOCK_UNLOCKED, DD_LOCK_COUNT };
+// What a record does to whether the player is in the game while it says so.
+enum { DD_CONNECTION_KEEP = 0, DD_CONNECTION_CONNECTED, DD_CONNECTION_DISCONNECTED, DD_CONNECTION_COUNT };
 
 // Not the same ordering as in DDNet, but it matches the texture offsets.
 enum { EYE_NORMAL, EYE_ANGRY, EYE_PAIN, EYE_HAPPY, EYE_BLINK, EYE_SURPRISE, NUM_EYES };
@@ -75,11 +85,7 @@ enum { EYE_NORMAL, EYE_ANGRY, EYE_PAIN, EYE_HAPPY, EYE_BLINK, EYE_SURPRISE, NUM_
   }
 DD_INPUT_FLAG_ACCESSORS(kill, FLAG_KILL)
 DD_INPUT_FLAG_ACCESSORS(spec, FLAG_SPEC)
-DD_INPUT_FLAG_ACCESSORS(hookline, FLAG_HOOKLINE)
-DD_INPUT_FLAG_ACCESSORS(chatbubble, FLAG_CHATBUBBLE)
 DD_INPUT_FLAG_ACCESSORS(sit, FLAG_SIT)
-DD_INPUT_FLAG_ACCESSORS(connect, FLAG_CONNECT)
-DD_INPUT_FLAG_ACCESSORS(disconnect, FLAG_DISCONNECT)
 DD_INPUT_FLAG_ACCESSORS(emote_trigger, FLAG_EMOTE_TRIGGER)
 #undef DD_INPUT_FLAG_ACCESSORS
 
@@ -93,10 +99,40 @@ static inline void set_flag_emote_index(dd_input_t *p, uint8_t index) {
   index &= 0xF;
   p->m_Flags = (uint16_t)((p->m_Flags & ~FLAG_EMOTE_INDEX) | (index << 11));
 }
+// DD_LOCK_*: what the record does to the lock of the player's team (an unknown value does nothing).
+static inline uint8_t get_flag_lock(const dd_input_t *p) {
+  const uint8_t lock = (uint8_t)((p->m_Flags & FLAG_LOCK) >> 2);
+  return lock < DD_LOCK_COUNT ? lock : DD_LOCK_KEEP;
+}
+static inline void set_flag_lock(dd_input_t *p, uint8_t lock) {
+  if (lock >= DD_LOCK_COUNT) lock = DD_LOCK_KEEP;
+  p->m_Flags = (uint16_t)((p->m_Flags & ~FLAG_LOCK) | (lock << 2));
+}
+// DD_CONNECTION_*: what the record does to whether the player is in the game.
+static inline uint8_t get_flag_connection(const dd_input_t *p) {
+  const uint8_t connection = (uint8_t)((p->m_Flags & FLAG_CONNECTION) >> 5);
+  return connection < DD_CONNECTION_COUNT ? connection : DD_CONNECTION_KEEP;
+}
+static inline void set_flag_connection(dd_input_t *p, uint8_t connection) {
+  if (connection >= DD_CONNECTION_COUNT) connection = DD_CONNECTION_KEEP;
+  p->m_Flags = (uint16_t)((p->m_Flags & ~FLAG_CONNECTION) | (connection << 5));
+}
+// The team the record puts the player into, or -1 for none.
+static inline int dd_input_team(const dd_input_t *p) { return p->m_Team > 0 && p->m_Team <= DDNET_NUM_TEAMS ? p->m_Team - 1 : -1; }
+static inline void dd_input_set_team(dd_input_t *p, int team) {
+  p->m_Team = (uint8_t)(team >= 0 && team < DDNET_NUM_TEAMS ? team + 1 : 0);
+}
 
-// What the physics gets from a record on the tick it is for (the kill flag is
-// done apart, before the tick, and the teleporter exit goes to the tee). `out`
-// is the tee's input of the tick before, which it replaces.
+// The player flags the physics acts on: the input of a tee whose player is
+// chatting or in the spectator camera does not reach it. The others only show,
+// and leaving them out keeps the physics on its fast way for a world of one tee
+// that does nothing special.
+#define DD_PHYSICS_PLAYER_FLAGS (DDNET_PLAYERFLAG_CHATTING | DDNET_PLAYERFLAG_SPEC_CAM)
+
+// What the physics gets from a record on the tick it is for (the kill, the
+// team, the lock, /spec and the connection are done apart, before the tick,
+// and the teleporter exit goes to the tee). `out` is the tee's input of the
+// tick before, which it replaces.
 static inline void ddnet_input_from_record(const dd_input_t *record, ddnet_input_t *out) {
   out->direction = record->m_Direction;
   out->target_x = record->m_TargetX;
@@ -111,12 +147,46 @@ static inline void ddnet_input_from_record(const dd_input_t *record, ddnet_input
   // changes, and the tee shoots when it goes down and only then.
   if ((out->fire & 1) != (record->m_Fire & 1)) out->fire = (out->fire + 1) & 0x3f;
   out->hook = record->m_Hook != 0;
-  out->player_flags = 0;
+  out->player_flags = record->m_PlayerFlags & DD_PHYSICS_PLAYER_FLAGS;
   // DDNet's client sends the weapon it wants on every tick, as a number one
   // higher (0 is none).
   out->wanted_weapon = record->m_WantedWeapon < DDNET_NUM_WEAPONS ? record->m_WantedWeapon + 1 : 0;
   out->next_weapon = 0;
   out->prev_weapon = 0;
+}
+
+// Hands a record to the physics for the tick about to be stepped, for client
+// `client_id`: what the player does to the world first (being connected, its
+// team and the lock of the team, a kill), then what goes to the physics with
+// the tick (/spec, the teleporter exit and the input). `events` picks the event
+// build of the physics (see ddnet_step_events). A player that connects spawns
+// during the tick after, as on a server.
+static inline void ddnet_record_apply(ddnet_world_t *world, int client_id, const dd_input_t *record, bool events) {
+  if (client_id < 0 || client_id >= world->num_clients) return;
+#if defined(DDNET_PHYSICS_HAS_EVENTS)
+#define DD_PHYSICS_CALL(name, ...) (events ? ddnet_ev_##name(__VA_ARGS__) : ddnet_##name(__VA_ARGS__))
+#else
+#define DD_PHYSICS_CALL(name, ...) ((void)events, ddnet_##name(__VA_ARGS__))
+#endif
+  ddnet_player_t *player = &world->players[client_id];
+  const uint8_t connection = get_flag_connection(record);
+  if (connection == DD_CONNECTION_CONNECTED && !player->active)
+    DD_PHYSICS_CALL(player_join, world, client_id);
+  else if (connection == DD_CONNECTION_DISCONNECTED && player->active)
+    DD_PHYSICS_CALL(player_leave, world, client_id);
+  if (player->active) {
+    const int team = dd_input_team(record);
+    if (team >= 0 && team != player->team) DD_PHYSICS_CALL(player_set_team, world, client_id, team);
+    const uint8_t lock = get_flag_lock(record);
+    if (lock != DD_LOCK_KEEP && player->team != DDNET_TEAM_FLOCK &&
+        ddnet_world_team(world, player->team).locked != (lock == DD_LOCK_LOCKED))
+      ddnet_world_lock_team(world, player->team, lock == DD_LOCK_LOCKED);
+    if (get_flag_kill(record) && ddnet_world_character(world, client_id)) DD_PHYSICS_CALL(player_kill, world, client_id);
+  }
+#undef DD_PHYSICS_CALL
+  world->characters[client_id].spec = get_flag_spec(record) != 0;
+  world->characters[client_id].tele_out = record->m_TeleOut;
+  ddnet_input_from_record(record, &player->input);
 }
 
 // --- worlds ------------------------------------------------------------------
@@ -149,6 +219,9 @@ struct ft_world {
   int *pain_ticks;
   int player_room, client_room;
   bool render_physics_effects;
+  // While it steps with its effects shown: the player they are seen as (see
+  // dd_team_alpha in the game), -1 for none.
+  int effects_viewer;
   struct dd_physics_particle_event *physics_particle_events;
   int physics_particle_event_count;
   int physics_particle_event_capacity;

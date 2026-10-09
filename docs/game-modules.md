@@ -178,6 +178,16 @@ such as `direction`, `jump`, or `target`.
 
 `id` strings end up in project files and scripts, so treat them as permanent.
 
+Fields that are a state the player is in or asks for rather than a key it
+presses (DDNet's team, `/spec`, being connected) carry
+`FT_INPUT_FLAG_PLAYER_STATE`: new linked tracks do not copy them and input
+generators leave them alone unless the user asks.
+
+A project stores a hash of the schema and only opens under the same one. To add
+fields without stranding projects, put them in bytes the old record left zero
+(with zero meaning what the old records meant) and list the previous schema in
+`legacy_schemas`; records saved with it are then read as they are.
+
 ---
 
 ## Levels and worlds
@@ -578,7 +588,8 @@ Two consequences worth knowing:
   settings are engine-owned preferences stored in each game's config table.
   Only per-group/per-track prediction scope remains project state. A project
   carries its game id and SemVer, ruleset, and a hash of the full input schema;
-  any version or schema mismatch is refused before the open project is replaced.
+  any version or schema mismatch (other than one of the schema's
+  `legacy_schemas`) is refused before the open project is replaced.
   Modules without level serialization use the stored reloadable level path
   instead.
 - **DDNet-specific plugins link the game's physics themselves.** The engine used

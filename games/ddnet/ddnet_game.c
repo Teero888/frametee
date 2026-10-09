@@ -11,7 +11,9 @@
 #include "dd_maps.h"
 
 #include <limits.h>
+#include <math.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,11 +37,33 @@ enum ddnet_input_field {
   IN_EMOTE,
   IN_SIT,
   IN_TELE_OUT,
+  // What a player does to the world besides moving its tee. Every one of them
+  // is applied before the tick its record is for, like the kill.
+  IN_TEAM,
+  IN_LOCK,
+  IN_SPEC,
+  IN_CONNECTION,
+  // DDNet's player flags. Chatting and the spectator camera keep the input
+  // from the tee; the others only show.
+  IN_PLAYING,
+  IN_IN_MENU,
+  IN_CHATTING,
+  IN_SCOREBOARD,
+  IN_AIM,
+  IN_SPEC_CAM,
   IN_COUNT
 };
 
 static const char *const weapon_labels[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
 static const char *const eye_labels[] = {"Normal", "Angry", "Pain", "Happy", "Blink", "Surprise"};
+static const char *const lock_labels[] = {"Unchanged", "Locked", "Unlocked"};
+static const char *const connection_labels[] = {"Unchanged", "Connected", "Disconnected"};
+
+// The player flag of each of the fields IN_PLAYING to IN_SPEC_CAM.
+static const uint8_t player_flag_of_field[] = {
+    DDNET_PLAYERFLAG_PLAYING, DDNET_PLAYERFLAG_IN_MENU, DDNET_PLAYERFLAG_CHATTING,
+    DDNET_PLAYERFLAG_SCOREBOARD, DDNET_PLAYERFLAG_AIM, DDNET_PLAYERFLAG_SPEC_CAM,
+};
 
 static const ft_input_field input_fields[IN_COUNT] = {
     [IN_DIRECTION] = {.id = "direction",
@@ -98,7 +122,46 @@ static const ft_input_field input_fields[IN_COUNT] = {
                  .enum_count = (uint32_t)(sizeof(eye_labels) / sizeof(eye_labels[0]))},
     [IN_EMOTE] = {.id = "emote", .display_name = "Emoticon", .kind = FT_INPUT_INT, .flags = FT_INPUT_FLAG_EDITOR_HIDDEN, .min_value = 0, .max_value = 15},
     [IN_SIT] = {.id = "sit", .display_name = "Sit", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_EDITOR_HIDDEN},
-    [IN_TELE_OUT] = {.id = "tele_out", .display_name = "Tele out", .kind = FT_INPUT_INT, .flags = FT_INPUT_FLAG_INTERNAL, .max_value = 255},
+    [IN_TELE_OUT] = {.id = "tele_out",
+                     .display_name = "Tele out",
+                     .description = "Which exit a teleporter with several takes: this value modulo their number, in map order",
+                     .kind = FT_INPUT_INT,
+                     .flags = FT_INPUT_FLAG_PLAYER_STATE,
+                     .max_value = 255},
+    [IN_TEAM] = {.id = "team",
+                 .display_name = "Team",
+                 .description = "Puts the player into this team while set; -1 leaves its team to the game",
+                 .kind = FT_INPUT_INT,
+                 .flags = FT_INPUT_FLAG_PLAYER_STATE,
+                 .min_value = -1,
+                 .max_value = DDNET_NUM_TEAMS - 1,
+                 .default_value = -1,
+                 .color = {0.55f, 0.85f, 0.95f, 1.0f}},
+    [IN_LOCK] = {.id = "lock",
+                 .display_name = "Team lock",
+                 .kind = FT_INPUT_ENUM,
+                 .flags = FT_INPUT_FLAG_PLAYER_STATE,
+                 .min_value = 0,
+                 .max_value = DD_LOCK_COUNT - 1,
+                 .enum_labels = lock_labels,
+                 .enum_count = (uint32_t)(sizeof(lock_labels) / sizeof(lock_labels[0])),
+                 .color = {0.95f, 0.8f, 0.45f, 1.0f}},
+    [IN_SPEC] = {.id = "spec", .display_name = "Spec", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_PLAYER_STATE, .color = {0.75f, 0.75f, 0.8f, 1.0f}},
+    [IN_CONNECTION] = {.id = "connection",
+                       .display_name = "Connection",
+                       .kind = FT_INPUT_ENUM,
+                       .flags = FT_INPUT_FLAG_PLAYER_STATE,
+                       .min_value = 0,
+                       .max_value = DD_CONNECTION_COUNT - 1,
+                       .enum_labels = connection_labels,
+                       .enum_count = (uint32_t)(sizeof(connection_labels) / sizeof(connection_labels[0])),
+                       .color = {0.6f, 0.9f, 0.6f, 1.0f}},
+    [IN_PLAYING] = {.id = "flag_playing", .display_name = "Playing", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_PLAYER_STATE},
+    [IN_IN_MENU] = {.id = "flag_in_menu", .display_name = "In menu", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_PLAYER_STATE},
+    [IN_CHATTING] = {.id = "flag_chatting", .display_name = "Chatting", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_PLAYER_STATE},
+    [IN_SCOREBOARD] = {.id = "flag_scoreboard", .display_name = "Scoreboard", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_PLAYER_STATE},
+    [IN_AIM] = {.id = "flag_aim", .display_name = "Aim", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_PLAYER_STATE},
+    [IN_SPEC_CAM] = {.id = "flag_spec_cam", .display_name = "Spectator camera", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_PLAYER_STATE},
 };
 
 static const ft_input_control input_controls[] = {
@@ -115,6 +178,66 @@ static const ft_input_control input_controls[] = {
     {.id = "kill", .display_name = "Kill", .category = "DDNet", .default_binding = "K", .field = IN_KILL, .value = 1, .flags = FT_CONTROL_PRESSED},
 };
 
+// The record keeps the layout of the one before the fields after IN_TELE_OUT:
+// they took bytes that were padding (and flags that were never set).
+_Static_assert(sizeof(dd_input_t) == 16 && _Alignof(dd_input_t) == 8 && offsetof(dd_input_t, m_Flags) == 12 &&
+                   offsetof(dd_input_t, m_Team) == 14 && offsetof(dd_input_t, m_PlayerFlags) == 15,
+               "dd_input_t must keep the layout projects store");
+
+// The schema before the fields after IN_TELE_OUT were added, when the
+// teleporter exit was internal. Its records are this schema's records with
+// nothing set in the bytes the new fields took (see dd_input_t).
+static const ft_input_field input_fields_v1[IN_TELE_OUT + 1] = {
+    [IN_DIRECTION] = {.id = "direction",
+                      .display_name = "Direction",
+                      .description = "-1 left, 0 still, 1 right",
+                      .kind = FT_INPUT_INT,
+                      .flags = FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X,
+                      .min_value = -1,
+                      .max_value = 1},
+    [IN_TARGET] = {.id = "target",
+                   .display_name = "Aim",
+                   .kind = FT_INPUT_VEC2,
+                   .flags = FT_INPUT_FLAG_MIRROR_X | FT_INPUT_FLAG_MIRROR_Y | FT_INPUT_FLAG_RECORDING_CURSOR,
+                   .min_float = -1000.f,
+                   .max_float = 1000.f},
+    [IN_JUMP] = {.id = "jump", .display_name = "Jump", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_TIMELINE_LANE},
+    [IN_FIRE] = {.id = "fire", .display_name = "Fire", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_LATCHED},
+    [IN_HOOK] = {.id = "hook", .display_name = "Hook", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_TIMELINE_LANE},
+    [IN_WEAPON] = {.id = "weapon",
+                   .display_name = "Weapon",
+                   .kind = FT_INPUT_ENUM,
+                   .flags = FT_INPUT_FLAG_TIMELINE_LANE,
+                   .min_value = 0,
+                   .max_value = DDNET_NUM_WEAPONS - 1,
+                   .enum_labels = weapon_labels,
+                   .enum_count = (uint32_t)(sizeof(weapon_labels) / sizeof(weapon_labels[0]))},
+    [IN_KILL] = {.id = "kill", .display_name = "Kill", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_TRIGGER},
+    [IN_EYES] = {.id = "eyes",
+                 .display_name = "Eyes",
+                 .kind = FT_INPUT_ENUM,
+                 .flags = FT_INPUT_FLAG_EDITOR_HIDDEN,
+                 .min_value = 0,
+                 .max_value = NUM_EYES - 1,
+                 .enum_labels = eye_labels,
+                 .enum_count = (uint32_t)(sizeof(eye_labels) / sizeof(eye_labels[0]))},
+    [IN_EMOTE] = {.id = "emote", .display_name = "Emoticon", .kind = FT_INPUT_INT, .flags = FT_INPUT_FLAG_EDITOR_HIDDEN, .max_value = 15},
+    [IN_SIT] = {.id = "sit", .display_name = "Sit", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_EDITOR_HIDDEN},
+    [IN_TELE_OUT] = {.id = "tele_out", .display_name = "Tele out", .kind = FT_INPUT_INT, .flags = FT_INPUT_FLAG_INTERNAL, .max_value = 255},
+};
+
+static const ft_input_schema input_schema_v1 = {
+    .struct_size = sizeof(ft_input_schema),
+    .record_size = sizeof(dd_input_t),
+    .record_align = _Alignof(dd_input_t),
+    .fields = input_fields_v1,
+    .field_count = IN_TELE_OUT + 1,
+    .controls = input_controls,
+    .control_count = (uint32_t)(sizeof(input_controls) / sizeof(input_controls[0])),
+};
+
+static const ft_input_schema *const legacy_input_schemas[] = {&input_schema_v1};
+
 static const ft_input_schema input_schema = {
     .struct_size = sizeof(ft_input_schema),
     .record_size = sizeof(dd_input_t),
@@ -123,6 +246,8 @@ static const ft_input_schema input_schema = {
     .field_count = IN_COUNT,
     .controls = input_controls,
     .control_count = (uint32_t)(sizeof(input_controls) / sizeof(input_controls[0])),
+    .legacy_schemas = legacy_input_schemas,
+    .legacy_schema_count = (uint32_t)(sizeof(legacy_input_schemas) / sizeof(legacy_input_schemas[0])),
 };
 
 enum { LINKED_AIM_AT_SOURCE = 0 };
@@ -170,6 +295,21 @@ static int64_t ddnet_input_get(ft_game *game, const void *record, uint32_t field
     return get_flag_sit(in) != 0;
   case IN_TELE_OUT:
     return in->m_TeleOut;
+  case IN_TEAM:
+    return dd_input_team(in);
+  case IN_LOCK:
+    return get_flag_lock(in);
+  case IN_SPEC:
+    return get_flag_spec(in) != 0;
+  case IN_CONNECTION:
+    return get_flag_connection(in);
+  case IN_PLAYING:
+  case IN_IN_MENU:
+  case IN_CHATTING:
+  case IN_SCOREBOARD:
+  case IN_AIM:
+  case IN_SPEC_CAM:
+    return (in->m_PlayerFlags & player_flag_of_field[field - IN_PLAYING]) != 0;
   default:
     return 0;
   }
@@ -215,6 +355,28 @@ static void ddnet_input_set(ft_game *game, void *record, uint32_t field, int64_t
   case IN_TELE_OUT:
     in->m_TeleOut = (uint8_t)value;
     break;
+  case IN_TEAM:
+    dd_input_set_team(in, (int)(value < -1 ? -1 : (value >= DDNET_NUM_TEAMS ? DDNET_NUM_TEAMS - 1 : value)));
+    break;
+  case IN_LOCK:
+    set_flag_lock(in, (uint8_t)(value < 0 || value >= DD_LOCK_COUNT ? DD_LOCK_KEEP : value));
+    break;
+  case IN_SPEC:
+    set_flag_spec(in, value != 0);
+    break;
+  case IN_CONNECTION:
+    set_flag_connection(in, (uint8_t)(value < 0 || value >= DD_CONNECTION_COUNT ? DD_CONNECTION_KEEP : value));
+    break;
+  case IN_PLAYING:
+  case IN_IN_MENU:
+  case IN_CHATTING:
+  case IN_SCOREBOARD:
+  case IN_AIM:
+  case IN_SPEC_CAM: {
+    const uint8_t flag = player_flag_of_field[field - IN_PLAYING];
+    in->m_PlayerFlags = (uint8_t)(value ? in->m_PlayerFlags | flag : in->m_PlayerFlags & ~flag);
+    break;
+  }
   default:
     break;
   }
@@ -247,8 +409,18 @@ static void ddnet_input_describe(ft_game *game, const void *record, char *out, s
 // Entity properties
 // -----------------------------------------------------------------------------
 
+// Starting overrides are written in this order. Whether the player is in the
+// game comes before everything about its tee but where it is (the property
+// games list first), and its team before its race and switches, which joining
+// a team changes.
 enum ddnet_player_prop {
   PROP_POSITION = 0,
+  PROP_CONNECTED,
+  PROP_TEAM,
+  PROP_TEAM_LOCKED,
+  PROP_RACE_STARTED,
+  PROP_RACE_ELAPSED,
+  PROP_SWITCHES_OFF,
   PROP_VELOCITY,
   PROP_ACTIVE_WEAPON,
   PROP_HAS_SHOTGUN,
@@ -288,6 +460,30 @@ enum ddnet_player_prop {
 #define DD_PROP_START (FT_PROP_WRITABLE | FT_PROP_STARTING)
 
 static const ft_prop_desc player_props[PROP_COUNT] = {
+    [PROP_CONNECTED] = {.id = "connected", .display_name = "Connected", .group = "Team", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_TEAM] = {.id = "team",
+                   .display_name = "Team",
+                   .group = "Team",
+                   .kind = FT_VALUE_INT,
+                   .flags = DD_PROP_START,
+                   .min_value = 0,
+                   .max_value = DDNET_NUM_TEAMS - 1},
+    [PROP_TEAM_LOCKED] = {.id = "team_locked", .display_name = "Team locked", .group = "Team", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_RACE_STARTED] = {.id = "race_started", .display_name = "Race started", .group = "Race", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
+    [PROP_RACE_ELAPSED] = {.id = "race_elapsed",
+                           .display_name = "Time since start",
+                           .group = "Race",
+                           .unit = "s",
+                           .kind = FT_VALUE_FLOAT,
+                           .flags = DD_PROP_START,
+                           .min_value = 0,
+                           .max_value = 86400},
+    // As text, which is what a property can hold: "2 5-7".
+    [PROP_SWITCHES_OFF] = {.id = "switches_off",
+                           .display_name = "Deactivated switches",
+                           .group = "Team",
+                           .kind = FT_VALUE_STRING,
+                           .flags = DD_PROP_START},
     [PROP_POSITION] = {.id = "position",
                        .display_name = "Position",
                        .group = "Movement",
@@ -435,15 +631,36 @@ static const ft_prop_desc laser_props[LASER_PROP_COUNT] = {
     [LASER_EVAL_TICK] = {"eval_tick", "Eval tick", "Timing", NULL, FT_VALUE_INT, 0, 0, 0},
 };
 
+enum ddnet_hook_prop {
+  HOOK_POSITION = 0,
+  HOOK_ORIGIN,
+  HOOK_DIRECTION,
+  HOOK_OWNER,
+  HOOK_PROP_COUNT
+};
+
+// A tee's hook while it is out, from its throw until it is back. The owner and
+// the direction it was thrown in last its whole way, and a hook only comes back
+// out after a tick at the tee. The origin is where it is thrown from: the tee,
+// or the teleporter it came out of.
+static const ft_prop_desc hook_props[HOOK_PROP_COUNT] = {
+    [HOOK_POSITION] = {"position", "Position", "Motion", "tiles", FT_VALUE_VEC2, FT_PROP_SUMMARY, 0, 0},
+    [HOOK_ORIGIN] = {"origin", "Origin", "Motion", "tiles", FT_VALUE_VEC2, 0, 0, 0},
+    [HOOK_DIRECTION] = {"direction", "Direction", "Motion", NULL, FT_VALUE_VEC2, FT_PROP_IDENTITY, 0, 0},
+    [HOOK_OWNER] = {"owner", "Owner", "Identity", NULL, FT_VALUE_INT, FT_PROP_SUMMARY | FT_PROP_IDENTITY, 0, 0},
+};
+
 enum { DD_CLASS_PLAYER = 0,
        DD_CLASS_PROJECTILE,
        DD_CLASS_LASER,
+       DD_CLASS_HOOK,
        DD_CLASS_COUNT };
 
 static const ft_entity_class entity_classes[] = {
     [DD_CLASS_PLAYER] = {.id = "player", .display_name = "Tee", .props = player_props, .prop_count = PROP_COUNT},
     [DD_CLASS_PROJECTILE] = {.id = "projectile", .display_name = "Projectile", .props = projectile_props, .prop_count = PROJ_PROP_COUNT},
     [DD_CLASS_LASER] = {.id = "laser", .display_name = "Laser", .props = laser_props, .prop_count = LASER_PROP_COUNT},
+    [DD_CLASS_HOOK] = {.id = "hook", .display_name = "Hook", .props = hook_props, .prop_count = HOOK_PROP_COUNT},
 };
 
 // Entities hang off the world in linked lists, so an index means "the nth one
@@ -451,6 +668,20 @@ static const ft_entity_class entity_classes[] = {
 // draggers and laser walls, which are not lasers).
 static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out);
 static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out);
+static bool hook_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out);
+
+// A hook is out from its throw until it is back at the tee, which is when the
+// game draws it.
+static bool hook_out(const ddnet_character_t *chr) { return chr && chr->core.hook_state >= DDNET_HOOK_RETRACT_START; }
+
+// The player whose hook is the nth one out, or -1.
+static int hook_player(const ft_world *world, int32_t index) {
+  if (!world || index < 0) return -1;
+  int32_t seen = 0;
+  for (int player = 0; player < world->player_count; ++player)
+    if (hook_out(ddnet_player_character(world, player)) && seen++ == index) return player;
+  return -1;
+}
 
 static const ddnet_entity_t *entity_at(const ft_world *world, int type, ddnet_entity_kind_t kind, int32_t index) {
   if (!world || index < 0) return NULL;
@@ -480,12 +711,42 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   (void)game;
   if (entity_class == DD_CLASS_PROJECTILE) return projectile_prop_get(world, entity, prop, out);
   if (entity_class == DD_CLASS_LASER) return laser_prop_get(world, entity, prop, out);
+  if (entity_class == DD_CLASS_HOOK) return hook_prop_get(world, entity, prop, out);
   if (entity_class != FT_ENTITY_CLASS_PLAYER) return false;
+  // (the one property of a player that has no tee)
+  if (prop == PROP_CONNECTED) {
+    const int client_id = ddnet_player_client(world, entity);
+    if (client_id < 0) return false;
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = world->core.players[client_id].active};
+    return true;
+  }
   const ddnet_character_t *chr = ddnet_player_character(world, entity);
   if (!chr || prop >= PROP_COUNT) return false;
   const ddnet_character_core_t *c = &chr->core;
+  const int team = world->core.players[ddnet_player_client(world, entity)].team;
 
   switch (prop) {
+  case PROP_TEAM:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = team};
+    return true;
+  case PROP_TEAM_LOCKED:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = ddnet_world_team(&world->core, team).locked};
+    return true;
+  case PROP_RACE_STARTED:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = dd_player_race_started(chr)};
+    return true;
+  case PROP_RACE_ELAPSED:
+    *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = (double)dd_player_race_ticks(&world->core, chr) / GAME_TICK_SPEED};
+    return true;
+  case PROP_SWITCHES_OFF: {
+    // (read on the main thread and copied by the caller before the next read; a
+    // starting override holds 255 characters)
+    static char text[256];
+    const dd_switch_set off = dd_team_switches_off(&world->core, team);
+    if (!dd_switch_set_format(&off, text, sizeof(text))) return false;
+    *out = (ft_value){.kind = FT_VALUE_STRING, .as.s = text};
+    return true;
+  }
   case PROP_POSITION:
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {chr->pos.x / PX_PER_TILE, chr->pos.y / PX_PER_TILE}};
     return true;
@@ -583,13 +844,46 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
 
 static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entity_class, int32_t entity, uint32_t prop, const ft_value *value) {
   (void)game;
-  if (entity_class != FT_ENTITY_CLASS_PLAYER) return false;
-  ddnet_character_t *chr = ddnet_player_character_mut(world, entity);
-  if (!chr || prop >= PROP_COUNT || !value) return false;
+  if (entity_class != FT_ENTITY_CLASS_PLAYER || !value) return false;
   const int client_id = ddnet_player_client(world, entity);
+  if (client_id < 0) return false;
+  // A player that is not in the game when the world starts has no tee, and one
+  // that is stands at the spawn like the others.
+  if (prop == PROP_CONNECTED) {
+    if (!value->as.b) ddnet_player_leave(&world->core, client_id);
+    else if (!world->core.players[client_id].active)
+      return ddnet_player_join(&world->core, client_id) && ddnet_player_spawn(&world->core, client_id);
+    return true;
+  }
+  ddnet_character_t *chr = ddnet_player_character_mut(world, entity);
+  if (!chr || prop >= PROP_COUNT) return false;
   ddnet_character_core_t *c = &chr->core;
 
   switch (prop) {
+  case PROP_TEAM:
+    if (value->as.i < 0 || value->as.i >= DDNET_NUM_TEAMS) return false;
+    dd_player_set_team(&world->core, client_id, (int)value->as.i);
+    break;
+  case PROP_TEAM_LOCKED: {
+    // (team 0 cannot be locked)
+    const int team = world->core.players[client_id].team;
+    if (team == DDNET_TEAM_FLOCK) return !value->as.b;
+    if (ddnet_world_team(&world->core, team).locked != value->as.b) ddnet_world_lock_team(&world->core, team, value->as.b);
+    break;
+  }
+  case PROP_RACE_STARTED:
+    dd_player_set_race_started(&world->core, client_id, chr, value->as.b);
+    break;
+  case PROP_RACE_ELAPSED:
+    if (!(value->as.f >= 0.0) || value->as.f > 86400.0) return false;
+    if (dd_player_race_started(chr)) chr->start_time = world->core.tick - (int)lround(value->as.f * GAME_TICK_SPEED);
+    break;
+  case PROP_SWITCHES_OFF: {
+    dd_switch_set off;
+    if (value->kind != FT_VALUE_STRING || !dd_switch_set_parse(value->as.s, &off)) return false;
+    dd_team_set_switches_off(&world->core, client_id, &off);
+    break;
+  }
   case PROP_POSITION:
     chr->pos = (ddnet_vec2_t){value->as.v.x * PX_PER_TILE, value->as.v.y * PX_PER_TILE};
     chr->prev_pos = chr->pos;
@@ -697,6 +991,11 @@ static int32_t ddnet_entity_count(ft_game *game, const ft_world *world, uint32_t
     return entity_list_count(world, DDNET_ENTTYPE_PROJECTILE, DDNET_ENTITY_PROJECTILE);
   case DD_CLASS_LASER:
     return entity_list_count(world, DDNET_ENTTYPE_LASER, DDNET_ENTITY_LASER);
+  case DD_CLASS_HOOK: {
+    int32_t count = 0;
+    for (int player = 0; player < world->player_count; ++player) count += hook_out(ddnet_player_character(world, player));
+    return count;
+  }
   default:
     return 0;
   }
@@ -772,6 +1071,33 @@ static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop,
     return true;
   case LASER_EVAL_TICK:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = laser->eval_tick};
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool hook_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
+  const int player = hook_player(world, entity);
+  const ddnet_character_t *chr = ddnet_player_character(world, player);
+  if (!chr) return false;
+  const ddnet_character_core_t *c = &chr->core;
+
+  switch (prop) {
+  case HOOK_POSITION:
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {c->hook_pos.x / PX_PER_TILE, c->hook_pos.y / PX_PER_TILE}};
+    return true;
+  case HOOK_ORIGIN: {
+    // the base the physics measures the hook's length from
+    const ddnet_vec2_t base = c->new_hook ? c->hook_tele_base : chr->pos;
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {base.x / PX_PER_TILE, base.y / PX_PER_TILE}};
+    return true;
+  }
+  case HOOK_DIRECTION:
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {c->hook_dir.x, c->hook_dir.y}};
+    return true;
+  case HOOK_OWNER:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = player};
     return true;
   default:
     return false;
@@ -927,14 +1253,21 @@ static bool dd_world_reserve(ft_world *world, int clients, int players) {
   return true;
 }
 
+// Whether a player of the world has client id `client_id`, connected or not.
+static bool client_taken(const ft_world *world, int client_id) {
+  for (int i = 0; i < world->player_count; ++i)
+    if (world->client_ids[i] == client_id) return true;
+  return false;
+}
+
 // A new player at `at_index` of the engine's players (or the end): the lowest
 // free client id joins the world and spawns right away, so that it stands at the
-// spawn like the players a world is made with. Returns the player, or -1.
+// spawn like the players a world is made with. A player that left the game keeps
+// its id to come back with. Returns the player, or -1.
 static int32_t add_player(ft_world *world, int32_t at_index) {
   if (world->player_count >= DDNET_MAX_CLIENTS) return -1;
   int client_id = 0;
-  // (the world has slots for the clients below num_clients; a higher one makes it grow)
-  while (client_id < world->core.num_clients && world->core.players[client_id].active)
+  while (client_id < DDNET_MAX_CLIENTS && client_taken(world, client_id))
     ++client_id;
   if (client_id == DDNET_MAX_CLIENTS || !dd_world_reserve(world, client_id + 1, world->player_count + 1) ||
       !ddnet_player_join(&world->core, client_id))
@@ -1174,9 +1507,9 @@ static bool dd_world_remove_player(ft_game *game, ft_world *world, int32_t playe
 
 // --- serialization -----------------------------------------------------------
 //
-// Only what a starting state needs: the tick and the tees. Entities in flight
-// (projectiles, lasers) are deliberately dropped, because a project stores a
-// point to simulate from, not a mid-flight snapshot.
+// Only what a starting state needs: the tick, the tees and their teams. Entities
+// in flight (projectiles, lasers) are deliberately dropped, because a project
+// stores a point to simulate from, not a mid-flight snapshot.
 
 #define DDNET_STATE_MAGIC 0x444E5732u /* "DDNW2" */
 
@@ -1191,18 +1524,18 @@ typedef struct {
 static size_t dd_world_serialize(ft_game *game, const ft_world *world, void *out, size_t out_size) {
   (void)game;
   if (!world) return 0;
-  const size_t needed = sizeof(ddnet_state_header) + (size_t)world->player_count * sizeof(dd_character_state_v2);
+  const size_t needed = sizeof(ddnet_state_header) + (size_t)world->player_count * sizeof(dd_character_state_v3);
   if (!out) return needed;
   if (out_size < needed) return 0;
 
   ddnet_state_header header = {.magic = DDNET_STATE_MAGIC,
-                               .version = 2,
+                               .version = 3,
                                .game_tick = world->core.tick,
                                .character_count = world->player_count,
-                               .character_size = (uint32_t)sizeof(dd_character_state_v2)};
+                               .character_size = (uint32_t)sizeof(dd_character_state_v3)};
   memcpy(out, &header, sizeof(header));
   for (int i = 0; i < world->player_count; ++i)
-    dd_character_state_write((char *)out + sizeof(header) + (size_t)i * sizeof(dd_character_state_v2), world, i);
+    dd_character_state_write((char *)out + sizeof(header) + (size_t)i * sizeof(dd_character_state_v3), world, i);
   return needed;
 }
 
@@ -1211,13 +1544,14 @@ static bool dd_world_deserialize(ft_game *game, ft_world *world, const void *dat
 
   ddnet_state_header header;
   memcpy(&header, data, sizeof(header));
-  if (header.magic != DDNET_STATE_MAGIC || header.version != 2) return false;
-  if (header.character_size != sizeof(dd_character_state_v2)) {
+  if (header.magic != DDNET_STATE_MAGIC || (header.version != 2 && header.version != 3)) return false;
+  const size_t character_size = header.version == 3 ? sizeof(dd_character_state_v3) : sizeof(dd_character_state_v2);
+  if (header.character_size != character_size) {
     dd_log(game, FT_LOG_WARN, "Stored world was written by a different physics build; ignoring it.");
     return false;
   }
   if (header.character_count < 0 || header.character_count > DDNET_MAX_CLIENTS) return false;
-  if ((size_t)header.character_count > (size - sizeof(header)) / sizeof(dd_character_state_v2)) return false;
+  if ((size_t)header.character_count > (size - sizeof(header)) / character_size) return false;
 
   // A deserialized world is a fresh starting point: nobody in it replays anything yet, and its tees
   // are the stored ones at the spawn of a new world.
@@ -1230,7 +1564,7 @@ static bool dd_world_deserialize(ft_game *game, ft_world *world, const void *dat
   for (int i = 0; i < header.character_count; ++i)
     if (add_player(world, -1) < 0) return false;
   for (int i = 0; i < header.character_count; ++i)
-    dd_character_state_read(world, i, (const char *)data + sizeof(header) + (size_t)i * sizeof(dd_character_state_v2));
+    dd_character_state_read(world, i, (const char *)data + sizeof(header) + (size_t)i * character_size, header.version);
   world->physics_particle_event_count = 0;
   world->physics_damage_event_count = 0;
   world->physics_sound_event_count = 0;
@@ -1289,6 +1623,8 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
   // Presentation defaults. These are the game's, not the editor's, which is why
   // they no longer sit in the engine's ui_handler_t.
   game->settings = (dd_settings_t){.render_map = true,
+                                   .others_alpha = 40,
+                                   .chat_team_colors = true,
                                    .map_detail = true,
                                    .entities_view = false,
                                    .render_players = true,
@@ -1310,6 +1646,7 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
                                    .nameplate_clan = true,
                                    .nameplate_clan_size = 30,
                                    .nameplate_offset = 30,
+                                   .nameplate_team_colors = true,
                                    .show_key_presses = true,
                                    .key_press_size = 30,
                                    .center_dot = false,
@@ -1334,6 +1671,7 @@ static void ddnet_destroy(ft_game *game) {
   for (int i = 0; i < game->particle_count; ++i)
     dd_particles_cleanup(&game->particles[i]);
   free(game->particles);
+  free(game->seen_teams);
   dd_audio_unload(game);
   free(game);
 }
@@ -1594,6 +1932,7 @@ FT_GAME_EXPORT const ft_game_module *ft_game_module_entry(uint32_t engine_abi_ve
 enum ddnet_setting {
   SET_RENDER_MAP = 0,
   SET_RENDER_PLAYERS,
+  SET_OTHERS_ALPHA,
   SET_RENDER_WEAPONS,
   SET_RENDER_PARTICLES,
   SET_RENDER_PICKUPS,
@@ -1603,6 +1942,7 @@ enum ddnet_setting {
   SET_RENDER_CHAT,
   SET_CHAT_FONT_SIZE,
   SET_CHAT_WIDTH,
+  SET_CHAT_TEAM_COLORS,
   SET_RENDER_EMOTICONS,
   SET_RENDER_FREEZE_BARS,
   SET_RENDER_ENTITY_TEXT,
@@ -1614,6 +1954,7 @@ enum ddnet_setting {
   SET_NAMEPLATE_CLAN,
   SET_NAMEPLATE_CLAN_SIZE,
   SET_NAMEPLATE_OFFSET,
+  SET_NAMEPLATE_TEAM_COLORS,
   SET_AUTO_FINISH_EVENTS,
   SET_ENTITIES_VIEW,
   SET_MAP_DETAIL,
@@ -1632,6 +1973,9 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_RENDER_MAP] = {"render_map", "Map", "The map's own tile layers and the overlays drawn onto them", "World",
                         FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_PLAYERS] = {"render_players", "Tees", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_OTHERS_ALPHA] = {"others_alpha", "Opacity of other teams",
+                          "Of the tees, plates, shots and effects of tees in another team than the selected one, in percent",
+                          "World", FT_VALUE_INT, 0, 100, FT_SETTING_RENDER},
     [SET_RENDER_WEAPONS] = {"render_weapons", "Weapons and hooks", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_PARTICLES] = {"render_particles", "Particles", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_PICKUPS] = {"render_pickups", "Pickups", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
@@ -1644,6 +1988,7 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_RENDER_CHAT] = {"render_chat", "Show chat", NULL, "Chat", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CHAT_FONT_SIZE] = {"chat_font_size", "Chat font size", NULL, "Chat", FT_VALUE_INT, 10, 100, FT_SETTING_RENDER},
     [SET_CHAT_WIDTH] = {"chat_width", "Chat width", NULL, "Chat", FT_VALUE_INT, 140, 400, FT_SETTING_RENDER},
+    [SET_CHAT_TEAM_COLORS] = {"chat_team_colors", "Team colors", NULL, "Chat", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_EMOTICONS] = {"render_emoticons", "Emoticons", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_FREEZE_BARS] = {"render_freeze_bars", "Freeze bars", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_ENTITY_TEXT] = {"render_entity_text", "Entity text", NULL, "Map entities", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
@@ -1655,6 +2000,7 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_NAMEPLATE_CLAN] = {"nameplate_clan", "Show clan", NULL, "Nameplates", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_NAMEPLATE_CLAN_SIZE] = {"nameplate_clan_size", "Clan size", NULL, "Nameplates", FT_VALUE_INT, -50, 100, FT_SETTING_RENDER},
     [SET_NAMEPLATE_OFFSET] = {"nameplate_offset", "Nameplate offset", NULL, "Nameplates", FT_VALUE_INT, 10, 50, FT_SETTING_RENDER},
+    [SET_NAMEPLATE_TEAM_COLORS] = {"nameplate_team_colors", "Team colors", NULL, "Nameplates", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_SHOW_KEY_PRESSES] = {"show_key_presses", "Show players' key presses", NULL, "Key presses", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_KEY_PRESS_SIZE] = {"key_press_size", "Size of key press icons", NULL, "Key presses", FT_VALUE_INT, -50, 100, FT_SETTING_RENDER},
     [SET_AUTO_FINISH_EVENTS] = {"auto_finish_events", "Generate finish events while recording", NULL, "Timeline events", FT_VALUE_BOOL, 0, 0, 0},
@@ -1715,6 +2061,12 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
   case SET_CHAT_WIDTH:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->chat_width};
     return true;
+  case SET_CHAT_TEAM_COLORS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->chat_team_colors};
+    return true;
+  case SET_OTHERS_ALPHA:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->others_alpha};
+    return true;
   case SET_RENDER_EMOTICONS:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_emoticons};
     return true;
@@ -1741,6 +2093,9 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
     return true;
   case SET_NAMEPLATE_OFFSET:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = s->nameplate_offset};
+    return true;
+  case SET_NAMEPLATE_TEAM_COLORS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->nameplate_team_colors};
     return true;
   case SET_SHOW_KEY_PRESSES:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->show_key_presses};
@@ -1813,6 +2168,12 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
   case SET_CHAT_WIDTH:
     s->chat_width = (int)clamp_setting(value->as.i, 140, 400);
     return true;
+  case SET_CHAT_TEAM_COLORS:
+    s->chat_team_colors = value->as.b;
+    return true;
+  case SET_OTHERS_ALPHA:
+    s->others_alpha = (int)clamp_setting(value->as.i, 0, 100);
+    return true;
   case SET_RENDER_EMOTICONS:
     s->render_emoticons = value->as.b;
     return true;
@@ -1841,6 +2202,9 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
     return true;
   case SET_NAMEPLATE_OFFSET:
     s->nameplate_offset = (int)clamp_setting(value->as.i, 10, 50);
+    return true;
+  case SET_NAMEPLATE_TEAM_COLORS:
+    s->nameplate_team_colors = value->as.b;
     return true;
   case SET_SHOW_KEY_PRESSES:
     s->show_key_presses = value->as.b;

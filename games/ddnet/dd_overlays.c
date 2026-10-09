@@ -107,6 +107,7 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
   const float name_size = nameplate_font_size(game->settings.nameplate_size);
   const float clan_size = nameplate_font_size(game->settings.nameplate_clan_size);
   const float key_size = nameplate_font_size(game->settings.key_press_size);
+  const int viewer = dd_view_player(frame);
 
   for (int player = 0; player < world->player_count; ++player) {
     if (dd_replay_absent(frame->world, player)) continue; // not in its demo at this tick
@@ -121,10 +122,22 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
 
     char fallback[32];
     const char *name = profile_name(frame, player, fallback, sizeof(fallback));
-    // DDNet fades the plate of a tee paused with /spec.
-    const ft_color color = {1.f, 1.f, 1.f, frame->opacity * (dd_replay_paused(frame->world, player) ? 0.4f : 1.f)};
+    // DDNet fades the plate of a tee paused with /spec or in another team, and colours the name and
+    // clan of one in a ddrace team in the team's colour (CNamePlates::RenderNamePlateGame).
+    ft_color color = {1.f, 1.f, 1.f,
+                      frame->opacity * (dd_player_specced(frame->world, player) ? 0.4f : 1.f) *
+                          dd_team_alpha(game, world, viewer, player)};
+    const int team = world->core.players[ddnet_player_client(world, player)].team;
+    if (game->settings.nameplate_team_colors && team != DDNET_TEAM_FLOCK) {
+      float rgb[3];
+      dd_team_color(team, 0.75f, rgb);
+      color.r = rgb[0];
+      color.g = rgb[1];
+      color.b = rgb[2];
+    }
 
     float bottom = pos.y - (float)game->settings.nameplate_offset / PX_PER_TILE;
+    // (the arrows keep their own colour)
     if (keys)
       bottom = draw_key_presses(game, pos.x, bottom, key_size, color.a, &world->inputs[ddnet_player_client(world, player)]);
     if (!names) continue;
@@ -213,10 +226,11 @@ static void draw_freeze_bar(ft_game *game, ft_vec2 position, float progress, flo
 static void render_freeze_bars(ft_game *game, const ft_render_frame *frame) {
   if (!game->settings.render_freeze_bars || !frame->world) return;
   const ft_world *world = frame->world;
+  const int viewer = dd_view_player(frame);
 
   for (int player = 0; player < world->player_count; ++player) {
     const ddnet_character_t *character = ddnet_player_character(world, player);
-    if (!character || dd_replay_absent(frame->world, player) || dd_replay_paused(frame->world, player)) continue;
+    if (!character || dd_replay_absent(frame->world, player) || dd_player_specced(frame->world, player)) continue;
     if (character->core.deep_frozen || character->core.is_in_freeze || character->freeze_time <= 0 ||
         character->core.freeze_start <= 0)
       continue;
@@ -228,7 +242,7 @@ static void render_freeze_bars(ft_game *game, const ft_render_frame *frame) {
     if (duration <= 0) continue;
 
     draw_freeze_bar(game, character_position(character, frame->alpha),
-                    (float)character->freeze_time / (float)duration, frame->opacity);
+                    (float)character->freeze_time / (float)duration, frame->opacity * dd_team_alpha(game, world, viewer, player));
   }
 }
 
@@ -453,6 +467,12 @@ static bool sender_profile(ft_game *game, const ft_render_frame *frame, int worl
   return true;
 }
 
+// The ddrace team of player `player` of a world.
+static int sender_team(const ft_world *world, int player) {
+  const int client_id = ddnet_player_client(world, player);
+  return client_id >= 0 ? world->core.players[client_id].team : DDNET_TEAM_FLOCK;
+}
+
 static const char *sender_name(ft_game *game, const ft_render_frame *frame, int world, int client_id, char *fallback,
                                size_t fallback_size) {
   if (world == frame->world_index) return profile_name(frame, client_id, fallback, fallback_size);
@@ -530,9 +550,17 @@ static void render_chat(ft_game *game, const ft_render_frame *frame) {
     } else {
       char fallback[32];
       snprintf(prefix, sizeof(prefix), "%s: ", sender_name(game, frame, messages[i].world, chat->client_id, fallback, sizeof(fallback)));
+      // and cl_chat_teamcolors: the name of a player in a ddrace team in its colour, as it is now
+      const int team = messages[i].world == frame->world_index ? sender_team(frame->world, chat->client_id)
+                                                                 : dd_seen_team(game, messages[i].world, chat->client_id);
       if (chat->team > 0) {
         name_color = (ft_color){0.440659f, 0.893459f, 0.440659f, blend};
         text_color = (ft_color){0.647059f, 1.000000f, 0.647059f, blend};
+      } else if (game->settings.chat_team_colors && team != DDNET_TEAM_FLOCK) {
+        float rgb[3];
+        dd_team_color(team, 0.75f, rgb);
+        name_color = (ft_color){rgb[0], rgb[1], rgb[2], blend};
+        text_color = (ft_color){1.f, 1.f, 1.f, blend};
       } else {
         name_color = (ft_color){0.8f, 0.8f, 0.8f, blend};
         text_color = (ft_color){1.f, 1.f, 1.f, blend};
@@ -591,6 +619,7 @@ static void render_emoticons(ft_game *game, const ft_render_frame *frame) {
   visible_event emotes[64];
   const int count = recent_events(game, frame, DD_EVENT_EMOTICON, 2 * GAME_TICK_SPEED, false, emotes, 64);
   const ft_world *world = frame->world;
+  const int viewer = dd_view_player(frame);
   for (int i = 0; i < count; ++i) {
     const dd_event_payload_t *event = &emotes[i].payload;
     if (event->client_id < 0 || event->client_id >= world->player_count || event->emoticon < 0 ||
@@ -613,7 +642,7 @@ static void render_emoticons(ft_game *game, const ft_render_frame *frame) {
     vec2 size = {2.f, 2.f * height};
     dd_draw_sprite(game, game->gfx.emoticons, DD_Z_EMOTICONS, pos, size,
                    (float)(M_PI / 6.0) * sinf(5.f * wiggle), (uint32_t)event->emoticon,
-                   (vec4){1.f, 1.f, 1.f, alpha * frame->opacity});
+                   (vec4){1.f, 1.f, 1.f, alpha * frame->opacity * dd_team_alpha(game, world, viewer, event->client_id)});
   }
 }
 

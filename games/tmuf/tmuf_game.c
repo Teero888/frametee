@@ -118,6 +118,7 @@ static const ft_input_control input_controls[] = {
 static const ft_input_schema input_schema = {
     sizeof(ft_input_schema),     sizeof(tm_input), _Alignof(tm_input), input_fields, TM_FIELD_COUNT,
     input_controls,              (uint32_t)(sizeof input_controls / sizeof input_controls[0]),
+    NULL,                        0,
 };
 
 static void input_default(ft_game *game, void *record) { memset(record, 0, sizeof(tm_input)); }
