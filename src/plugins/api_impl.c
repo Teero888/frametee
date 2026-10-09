@@ -9,6 +9,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <system/file_dialog.h>
+#include <system/save.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -289,6 +290,10 @@ static bool s_bulk_edit_active = false;
 static int s_bulk_edit_original_active_group = -1;
 static timeline_data_snapshot_t *s_bulk_edit_before = NULL;
 static char s_bulk_edit_description[64] = {0};
+
+static bool api_save_project_snapshot(const char *path) {
+  return path && path[0] && save_project_snapshot(g_ui_handler_for_api, path);
+}
 
 static void api_set_undo_suppressed(bool suppressed) {
   s_undo_suppressed = suppressed;
@@ -590,5 +595,6 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .begin_bulk_edit = api_begin_bulk_edit,
       .end_bulk_edit = api_end_bulk_edit,
       .set_undo_suppressed = api_set_undo_suppressed,
+      .save_project_snapshot = api_save_project_snapshot,
   };
 }

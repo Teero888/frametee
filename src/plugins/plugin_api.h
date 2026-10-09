@@ -182,6 +182,12 @@ struct tas_api_t {
   // Global override to suppress creating undo commands for operations like
   // export_run_to_group.
   void (*set_undo_suppressed)(bool suppressed);
+
+  // Writes the open project -- level, timeline, playhead and all -- to `path` in
+  // the project file format, without changing where it is saved or whether it
+  // has unsaved changes. A headless editor opens it with --project. False
+  // without a level, or when the file could not be written.
+  bool (*save_project_snapshot)(const char *path);
 };
 
 // A plugin's name, author, version and description come from the manifest
@@ -201,7 +207,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 7u
+#define FRAMETEE_PLUGIN_ABI_VERSION 8u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

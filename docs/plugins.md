@@ -42,6 +42,14 @@ Call these services on the host thread and release owned worlds with
 from the active module. Rebuild plugins against ABI 4; the loader rejects older
 ABI versions before calling their entry points.
 
+## Project snapshots (plugin ABI 8)
+
+`save_project_snapshot(path)` writes the open project -- level, timeline,
+playhead and selected track -- to a file in the project format, without changing
+where the project is saved or whether it has unsaved changes. A headless editor
+opens it with `--project`, which is how a plugin hands a starting point to
+another machine: the world it gets there at the same tick is the same world.
+
 ## Layout
 
 A plugin is a directory inside `plugins/`, holding its library, its manifest,
