@@ -122,13 +122,16 @@ static bool update_event(ft_game *game, uint32_t index, int world_index, int tic
   return game->engine->timeline_event_update(index, &event);
 }
 
-static bool has_event(ft_game *game, int world_index, int tick, dd_event_type_t type) {
+// An event of the type on the tick, and with a message that starts with prefix
+// unless it is NULL.
+static bool has_event(ft_game *game, int world_index, int tick, dd_event_type_t type, const char *prefix) {
   const uint32_t count = game->engine->timeline_event_count();
   for (uint32_t i = 0; i < count; ++i) {
     ft_timeline_event event = {.struct_size = sizeof(event)};
     dd_event_payload_t payload;
     if (game->engine->timeline_event_get(i, &event) && event.world_index == world_index && event.tick == tick &&
-        dd_event_decode(&event, &payload) && payload.type == (int32_t)type)
+        dd_event_decode(&event, &payload) && payload.type == (int32_t)type &&
+        (!prefix || strncmp(payload.message, prefix, strlen(prefix)) == 0))
       return true;
   }
   return false;
@@ -155,21 +158,25 @@ static void generate_finish_events(ft_game *game, int world_index, int local_tic
   char name[32];
   dd_profile_display_name(game, track, name, sizeof(name));
 
-  if (!has_event(game, world_index, local_tick, DD_EVENT_CHAT)) {
+  // A team finishes on one tick, with a line for each of its tees; the time and
+  // the record are the demo's own client's, the same for all of them.
+  char prefix[64];
+  snprintf(prefix, sizeof(prefix), "%s finished in:", name);
+  if (!has_event(game, world_index, local_tick, DD_EVENT_CHAT, prefix)) {
     dd_event_payload_t payload = {.magic = DD_EVENT_PAYLOAD_MAGIC, .type = DD_EVENT_CHAT, .team = 0, .client_id = -1};
     const int minutes = (int)race_time / 60;
     const float seconds = fmodf(race_time, 60.f);
-    snprintf(payload.message, sizeof(payload.message), "%s finished in: %d minute(s) %.3f second(s)", name, minutes, seconds);
+    snprintf(payload.message, sizeof(payload.message), "%s %d minute(s) %.3f second(s)", prefix, minutes, seconds);
     add_event(game, world_index, local_tick, &payload);
   }
-  if (!has_event(game, world_index, local_tick, DD_EVENT_DDRACE_TIME)) {
+  if (!has_event(game, world_index, local_tick, DD_EVENT_DDRACE_TIME, NULL)) {
     dd_event_payload_t payload = {.magic = DD_EVENT_PAYLOAD_MAGIC,
                                   .type = DD_EVENT_DDRACE_TIME,
                                   .time = (int)lroundf(race_time * 100.f),
                                   .finish = 1};
     add_event(game, world_index, local_tick, &payload);
   }
-  if (!has_event(game, world_index, local_tick, DD_EVENT_RECORD)) {
+  if (!has_event(game, world_index, local_tick, DD_EVENT_RECORD, NULL)) {
     const int time = (int)lroundf(race_time * 100.f);
     dd_event_payload_t payload = {
         .magic = DD_EVENT_PAYLOAD_MAGIC, .type = DD_EVENT_RECORD, .server_time_best = time, .player_time_best = time};
@@ -192,7 +199,8 @@ static void scan_finish_tick(ft_game *game, int global_tick) {
       if (ddnet_player_client(previous, player) != client_id) continue;
       const ddnet_player_t *before = &previous->core.players[client_id];
       const ddnet_player_t *after = &current->core.players[client_id];
-      if (before->finish_tick < 0 && after->finish_tick >= 0)
+      // (a tee that finishes again keeps the tick of its last finish till then)
+      if (after->finish_tick >= 0 && after->finish_tick != before->finish_tick)
         generate_finish_events(game, (int)world_index, ddnet_engine_tick(current), player,
                                (float)after->finish_time_ticks / (float)GAME_TICK_SPEED);
     }
