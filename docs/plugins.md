@@ -50,6 +50,17 @@ where the project is saved or whether it has unsaved changes. A headless editor
 opens it with `--project`, which is how a plugin hands a starting point to
 another machine: the world it gets there at the same tick is the same world.
 
+## Opening projects (plugin ABI 9)
+
+`open_project(path)` opens a project the way File > Open does, at the start of
+the next frame: with unsaved changes the editor asks first, and opens nothing
+if that is cancelled. It returns false in a headless editor. A plugin that
+handed a project to another machine can open it again here.
+
+`get_track_world_state_at(track, tick)` is `get_world_state_at` for the group
+that holds `track`, whichever group is active: the tick is global, and the
+world is an owned copy to release with `destroy_world`.
+
 ## Layout
 
 A plugin is a directory inside `plugins/`, holding its library, its manifest,

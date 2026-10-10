@@ -188,6 +188,17 @@ struct tas_api_t {
   // has unsaved changes. A headless editor opens it with --project. False
   // without a level, or when the file could not be written.
   bool (*save_project_snapshot)(const char *path);
+
+  // The world of the group that holds `track_index`, at a global tick: what
+  // get_world_state_at gives when that group is the active one. Owned copy;
+  // release it with destroy_world. NULL without a level or such a track.
+  ft_world *(*get_track_world_state_at)(int track_index, int tick);
+
+  // Opens the project at `path` as File > Open does, at the start of the next
+  // frame: with unsaved changes the editor asks first, and opens nothing if
+  // that is cancelled. False when the editor cannot open one (headless), or
+  // without a path.
+  bool (*open_project)(const char *path);
 };
 
 // A plugin's name, author, version and description come from the manifest
@@ -207,7 +218,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 8u
+#define FRAMETEE_PLUGIN_ABI_VERSION 9u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

@@ -4,6 +4,7 @@
 #include "../scripting/script_engine.h"
 #include "../user_interface/timeline/timeline_commands.h"
 #include "../user_interface/timeline/timeline_model.h"
+#include "../user_interface/user_interface.h"
 #include "renderer/renderer.h"
 #include <engine/input_record.h>
 #include <limits.h>
@@ -102,6 +103,19 @@ static ft_world *api_get_world_state_at(int tick) {
   game_host_t *host = &g_ui_handler_for_api->gfx_handler->game_host;
   ft_world *copy = gh_world_create(host, g_ui_handler_for_api->gfx_handler->level, gh_world_player_count(host, world),
                                    ts->active_group_index);
+  if (copy) gh_world_copy(host, copy, world);
+  return copy;
+}
+
+static ft_world *api_get_track_world_state_at(int track_index, int tick) {
+  timeline_state_t *ts = &g_ui_handler_for_api->timeline;
+  if (!g_ui_handler_for_api->gfx_handler->level || track_index < 0 || track_index >= ts->player_track_count) return NULL;
+  const int group_index = model_track_group_index(ts, track_index);
+  if (group_index < 0 || group_index >= ts->group_count) return NULL;
+  const ft_world *world = model_group_world_at_tick(ts, group_index, tick);
+  if (!world) return NULL;
+  game_host_t *host = &g_ui_handler_for_api->gfx_handler->game_host;
+  ft_world *copy = gh_world_create(host, g_ui_handler_for_api->gfx_handler->level, gh_world_player_count(host, world), group_index);
   if (copy) gh_world_copy(host, copy, world);
   return copy;
 }
@@ -293,6 +307,13 @@ static char s_bulk_edit_description[64] = {0};
 
 static bool api_save_project_snapshot(const char *path) {
   return path && path[0] && save_project_snapshot(g_ui_handler_for_api, path);
+}
+
+static bool api_open_project(const char *path) {
+  extern bool g_is_headless;
+  if (g_is_headless || !path || !path[0]) return false;
+  ui_request_open_project(g_ui_handler_for_api, path);
+  return true;
 }
 
 static void api_set_undo_suppressed(bool suppressed) {
@@ -596,5 +617,7 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .end_bulk_edit = api_end_bulk_edit,
       .set_undo_suppressed = api_set_undo_suppressed,
       .save_project_snapshot = api_save_project_snapshot,
+      .get_track_world_state_at = api_get_track_world_state_at,
+      .open_project = api_open_project,
   };
 }
