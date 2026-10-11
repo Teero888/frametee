@@ -734,13 +734,19 @@ typedef struct ft_entity_class {
  * Render tab with one value for its own viewport and another for rendered
  * video, and applies whichever set is being drawn. */
 #define FT_SETTING_RENDER (1u << 0)
+/* A setting the game edits in a UI of its own: the engine keeps it in the
+ * config and hands it back on load, but draws no control for it. */
+#define FT_SETTING_HIDDEN (1u << 1)
 
+/* A STRING setting's value is the game's: setting_get hands out a pointer that
+ * stays valid until the next setting_set or the game is destroyed, and
+ * setting_set copies the text it is given. */
 typedef struct ft_setting_desc {
   const char *id; /* stable; used as the config key */
   const char *display_name;
   const char *description; /* tooltip, may be NULL */
   const char *group;       /* optional heading, e.g. "Rendering" */
-  ft_value_kind kind;      /* BOOL, INT or FLOAT */
+  ft_value_kind kind;      /* BOOL, INT, FLOAT or STRING */
   double min_value, max_value;
   uint32_t flags; /* FT_SETTING_* */
 } ft_setting_desc;
@@ -1409,6 +1415,13 @@ typedef struct ft_engine_api {
    * `description`. False for a demo's playback snippet. */
   bool (*snippet_set_inputs)(int32_t snippet_id, int32_t start_tick, const void *records, uint32_t count,
                              const char *description);
+
+  /* Shows a directory in the system's file manager. False when that could not
+   * be started. */
+  bool (*open_path)(const char *path);
+  /* The game changed a setting itself, in a window of its own: the engine
+   * saves its config the way it does after a change in the settings menu. */
+  void (*settings_changed)(void);
 } ft_engine_api;
 
 /* The layer a 3D triangle names when it carries no texture. */

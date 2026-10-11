@@ -10,10 +10,13 @@
 #include <direct.h>
 #include <wchar.h>
 #include <windows.h>
+#include <shellapi.h>
 #else
 #include <dirent.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #else
@@ -79,6 +82,32 @@ bool fs_get_config_subdir(const char *name, char *out_path, size_t size) {
   }
   fs_mkdir(out_path);
   return true;
+}
+
+bool fs_open_in_file_manager(const char *path) {
+  if (!path || !*path) return false;
+#ifdef _WIN32
+  return (INT_PTR)ShellExecuteA(NULL, "open", path, NULL, NULL, SW_SHOWNORMAL) > 32;
+#else
+#ifdef __APPLE__
+  const char *opener = "open";
+#else
+  const char *opener = "xdg-open";
+#endif
+  // Forked twice: the opener ends up a child of init, so nothing here has to wait for it.
+  const pid_t child = fork();
+  if (child < 0) return false;
+  if (child == 0) {
+    setsid();
+    if (fork() == 0) {
+      execlp(opener, opener, path, (char *)NULL);
+      _exit(127);
+    }
+    _exit(0);
+  }
+  int status = 0;
+  return waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
 }
 
 bool fs_get_executable_dir(char *out_path, size_t size) {

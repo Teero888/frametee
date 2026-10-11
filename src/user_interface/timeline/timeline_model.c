@@ -1109,6 +1109,12 @@ void model_advance_tick(timeline_state_t *ts, int steps) {
             engine_input_reset_triggers(model_host(ts), &sampled_input);
           }
           track->current_input = sampled_input;
+        } else if (steps != 0) {
+          // The playhead moved without taking a tick (rewinding, or going over
+          // the take again): a one-shot press waiting for the next tick taken
+          // belongs to a moment that is gone, and would otherwise turn up
+          // wherever recording goes on, and in every prediction until then.
+          engine_input_reset_triggers(model_host(ts), &track->current_input);
         }
       }
     }

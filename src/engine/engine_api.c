@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <system/config.h>
 #include <system/file_dialog.h>
 #include <system/fs.h>
 #include <user_interface/starting_state.h>
@@ -708,6 +709,10 @@ static bool api_snippet_input(int32_t snippet_id, int32_t tick, void *out_record
   return true;
 }
 
+static void api_settings_changed(void) {
+  if (g_engine) config_save(&g_engine->user_interface);
+}
+
 static bool api_snippet_set_inputs(int32_t snippet_id, int32_t start_tick, const void *records, uint32_t count,
                                    const char *description) {
   int track = -1;
@@ -1025,6 +1030,8 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .snippet_info = api_snippet_info,
       .snippet_input = api_snippet_input,
       .snippet_set_inputs = api_snippet_set_inputs,
+      .open_path = fs_open_in_file_manager,
+      .settings_changed = api_settings_changed,
   };
   return &api;
 }

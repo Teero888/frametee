@@ -181,8 +181,8 @@ static int collect_setting_groups(game_host_t *host, const char *out[], int max)
   int found = 0;
   for (unsigned i = 0; i < count && found < max; ++i) {
     const ft_setting_desc *desc = gh_setting_desc(host, i);
-    // Render settings live in the Render tab, with a value for video too.
-    if (!desc || render_setting_is_layer(desc)) continue;
+    // Render settings live in the Render tab, with a value for video too; hidden ones in the game's own UI.
+    if (!desc || render_setting_is_layer(desc) || (desc->flags & FT_SETTING_HIDDEN)) continue;
     const char *group = setting_group_name(desc);
     bool seen = false;
     for (int g = 0; g < found; ++g)
@@ -201,7 +201,7 @@ static void render_game_setting_group(ui_handler_t *ui, const char *group) {
   for (unsigned i = 0; i < count; ++i) {
     const ft_setting_desc *desc = gh_setting_desc(host, i);
     ft_value value;
-    if (!desc || render_setting_is_layer(desc) || !gh_setting_get(host, i, &value)) continue;
+    if (!desc || render_setting_is_layer(desc) || (desc->flags & FT_SETTING_HIDDEN) || !gh_setting_get(host, i, &value)) continue;
     if (strcmp(setting_group_name(desc), group) != 0) continue;
 
     const char *label = desc->display_name ? desc->display_name : desc->id;
@@ -221,6 +221,18 @@ static void render_game_setting_group(ui_handler_t *ui, const char *group) {
       changed = igDragFloat(label, &v, 0.02f, (float)desc->min_value, (float)desc->max_value, "%.2f", 0);
       value.as.f = v;
       break;
+    }
+    case FT_VALUE_STRING: {
+      char text[256];
+      snprintf(text, sizeof(text), "%s", value.as.s ? value.as.s : "");
+      changed = igInputText(label, text, sizeof(text), ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL);
+      value.as.s = text;
+      if (desc->description && igIsItemHovered(0)) igSetTooltip("%s", desc->description);
+      if (changed) {
+        gh_setting_set(host, i, &value);
+        config_save(ui);
+      }
+      continue;
     }
     default:
       break;

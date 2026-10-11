@@ -527,6 +527,10 @@ void config_load(ui_handler_t *ui) {
         else if (stored.type == TOML_INT64) value.as.f = (double)stored.u.int64;
         else continue;
         break;
+      case FT_VALUE_STRING:
+        if (stored.type != TOML_STRING || !stored.u.str.ptr) continue;
+        value.as.s = stored.u.str.ptr;
+        break;
       default:
         continue;
       }
@@ -759,7 +763,9 @@ void config_save(ui_handler_t *ui) {
         // values; the config keeps the viewport's.
         if (render_setting_is_layer(desc) && ui->render.applied != RENDER_TARGET_VIEWPORT)
           render_profile_get(&ui->render.viewport, desc->id, &value);
-        if (value.kind != FT_VALUE_BOOL && value.kind != FT_VALUE_INT && value.kind != FT_VALUE_FLOAT) continue;
+        if (value.kind != FT_VALUE_BOOL && value.kind != FT_VALUE_INT && value.kind != FT_VALUE_FLOAT &&
+            value.kind != FT_VALUE_STRING)
+          continue;
         write_toml_key(fp, desc->id);
         fputs(" = ", fp);
         switch (value.kind) {
@@ -771,6 +777,10 @@ void config_save(ui_handler_t *ui) {
           break;
         case FT_VALUE_FLOAT:
           fprintf(fp, "%.17g\n", value.as.f);
+          break;
+        case FT_VALUE_STRING:
+          write_toml_string(fp, value.as.s);
+          fputc('\n', fp);
           break;
         default:
           break;

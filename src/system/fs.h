@@ -36,6 +36,13 @@ bool fs_get_config_dir(char *out_path, size_t size);
 bool fs_get_config_subdir(const char *name, char *out_path, size_t size);
 
 /**
+ * @brief Shows a directory (or opens a file) in the system's file manager.
+ *
+ * Returns false when the file manager could not be started.
+ */
+bool fs_open_in_file_manager(const char *path);
+
+/**
  * @brief Gets the directory containing the running executable.
  *
  * Returns true if successful and writes an absolute UTF-8 path without a
