@@ -3,6 +3,8 @@
 #include "dd_internal.h"
 #include "dd_profile.h"
 
+#include <cJSON.h>
+#include <curl/curl.h>
 #include <frametee/icons.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -189,6 +191,103 @@ static bool packed_hsl_picker(const char *label, uint32_t *packed) {
   return changed;
 }
 
+// --- a player's look from ddstats.tw -----------------------------------------
+
+typedef struct {
+  char *data;
+  size_t size, capacity;
+} http_body_t;
+
+static size_t append_body(void *data, size_t size, size_t count, void *user) {
+  http_body_t *body = user;
+  const size_t length = size * count;
+  if (body->size + length + 1 > body->capacity) {
+    size_t capacity = body->capacity ? body->capacity : 64 * 1024;
+    while (capacity < body->size + length + 1)
+      capacity *= 2;
+    char *grown = realloc(body->data, capacity);
+    if (!grown) return 0;
+    body->data = grown;
+    body->capacity = capacity;
+  }
+  memcpy(body->data + body->size, data, length);
+  body->size += length;
+  body->data[body->size] = '\0';
+  return length;
+}
+
+// The clan, skin and colours of the player called `profile->name`, as its ddstats.tw profile
+// has them (the look it plays with most), into `profile`. No colours there means the player
+// plays the skin as it comes. `status` says how it went.
+static bool take_ddstats_look(ft_game *game, dd_player_profile_t *profile, char *status, size_t status_size) {
+  CURL *curl = curl_easy_init();
+  if (!curl) {
+    snprintf(status, status_size, "Could not start a download.");
+    return false;
+  }
+  char *encoded = curl_easy_escape(curl, profile->name, 0);
+  if (!encoded) {
+    curl_easy_cleanup(curl);
+    snprintf(status, status_size, "Could not look up '%s'.", profile->name);
+    return false;
+  }
+  char url[512];
+  snprintf(url, sizeof(url), "https://ddstats.tw/player/json?player=%s", encoded);
+  curl_free(encoded);
+
+  http_body_t body = {0};
+  char curl_error[CURL_ERROR_SIZE] = {0};
+  curl_easy_setopt(curl, CURLOPT_URL, url);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_body);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_error);
+  curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, ""); // the profile is half a megabyte, a fifth of it compressed
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "FrameTee DDNet player info");
+  const CURLcode result = curl_easy_perform(curl);
+  long response = 0;
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
+  curl_easy_cleanup(curl);
+
+  bool taken = false;
+  cJSON *root = NULL;
+  if (result != CURLE_OK) {
+    const char *detail = curl_error[0] ? curl_error : curl_easy_strerror(result);
+    dd_log(game, FT_LOG_WARN, "Could not look up '%s' on ddstats.tw: %s.", profile->name, detail);
+    snprintf(status, status_size, "Could not reach ddstats.tw.");
+  } else if (response == 404) {
+    snprintf(status, status_size, "ddstats.tw does not know '%s'.", profile->name);
+  } else if (response != 200 || !body.data || !(root = cJSON_Parse(body.data))) {
+    dd_log(game, FT_LOG_WARN, "ddstats.tw answered the look-up of '%s' with HTTP %ld.", profile->name, response);
+    snprintf(status, status_size, "ddstats.tw gave no answer for '%s'.", profile->name);
+  } else {
+    const cJSON *player = cJSON_GetObjectItemCaseSensitive(root, "profile");
+    const cJSON *skin = cJSON_GetObjectItemCaseSensitive(player, "skin_name");
+    const cJSON *clan = cJSON_GetObjectItemCaseSensitive(player, "clan");
+    const cJSON *body_color = cJSON_GetObjectItemCaseSensitive(player, "skin_color_body");
+    const cJSON *feet_color = cJSON_GetObjectItemCaseSensitive(player, "skin_color_feet");
+    if (!cJSON_IsString(skin) || !skin->valuestring[0]) {
+      snprintf(status, status_size, "ddstats.tw knows no look of '%s'.", profile->name);
+    } else {
+      snprintf(profile->skin, sizeof(profile->skin), "%s", skin->valuestring);
+      snprintf(profile->clan, sizeof(profile->clan), "%s", cJSON_IsString(clan) ? clan->valuestring : "");
+      profile->use_custom_color = cJSON_IsNumber(body_color) && cJSON_IsNumber(feet_color);
+      if (profile->use_custom_color) {
+        profile->color_body = (uint32_t)body_color->valuedouble & 0xFFFFFFu;
+        profile->color_feet = (uint32_t)feet_color->valuedouble & 0xFFFFFFu;
+      }
+      snprintf(status, status_size, "Took the look of '%s' from ddstats.tw.", profile->name);
+      taken = true;
+    }
+  }
+  cJSON_Delete(root);
+  free(body.data);
+  return taken;
+}
+
 // --- the panel ---------------------------------------------------------------
 
 // Which of the editor's worlds the selected track lives in. The editor numbers
@@ -286,6 +385,27 @@ void dd_player_panel_render(ft_game *game, const ft_ui_frame *frame) {
   igSameLine(0.f, 8.f);
   if (igButton(ICON_FA_IMAGE " Browse", (ImVec2){button_width, 0.f})) game->show_skin_browser = true;
   if (igIsItemHovered(0)) igSetTooltip("Pick a skin from the ones already downloaded");
+  igSameLine(0.f, 8.f);
+  igBeginDisabled(!profile.name[0]);
+  if (igButton(ICON_FA_CIRCLE_USER " From ddstats", (ImVec2){0.f, 0.f})) {
+    panel->fetch_failed = !take_ddstats_look(game, &profile, panel->fetch_status, sizeof(panel->fetch_status));
+    if (!panel->fetch_failed) {
+      // The skin too, unless it is here already.
+      char path[1024];
+      if (!dd_gfx_find_skin_file(game, profile.skin, path, sizeof(path))) {
+        if (dd_skin_fetch(game, profile.skin, path, sizeof(path))) {
+          dd_gfx_load_skin_path(game, profile.skin, path);
+        } else {
+          panel->fetch_failed = true;
+          snprintf(panel->fetch_status, sizeof(panel->fetch_status), "Took the look of '%s' from ddstats.tw, but could not fetch its skin '%s'.",
+                   profile.name, profile.skin);
+        }
+      }
+      panel->preview_valid = false;
+      panel->preview_skin[0] = '\0';
+    }
+  }
+  igEndDisabled();
 
   if (panel->fetch_status[0]) {
     if (panel->fetch_failed) igTextColored((ImVec4){1.f, .45f, .35f, 1.f}, "%s", panel->fetch_status);

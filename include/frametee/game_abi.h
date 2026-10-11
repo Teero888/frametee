@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 29u
+#define FT_GAME_ABI_VERSION 30u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -805,6 +805,10 @@ typedef struct ft_timeline_world_info {
   uint32_t player_count;
   /* Engine-owned, valid until the timeline is mutated. */
   const char *name;
+  /* Changes whenever the world's simulated ticks may have changed (an edit, a
+   * take being recorded), so a game can keep what it worked out from them
+   * until then. */
+  uint64_t physics_revision;
 } ft_timeline_world_info;
 
 typedef struct ft_directory_entry {

@@ -90,6 +90,9 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra, bool 
 
   ft_engine_state base_state;
   engine_api_fill_state(&base_state);
+  // The game's once-a-frame update, before anything of the frame is drawn: what it asks of the
+  // timeline now cannot invalidate the worlds the passes below hand it.
+  gh_update(&handler->game_host, &base_state);
 
   typedef struct {
     const ft_world *previous;

@@ -647,6 +647,7 @@ typedef struct {
   bool render_weapons;
   bool render_particles;
   bool render_pickups;
+  bool render_cursor; // crosshairs at all; the two below say on whom
   bool render_cursor_follow;
   bool render_cursor_all; // a crosshair on every player, not only the followed one
   bool render_chat;
@@ -678,6 +679,9 @@ typedef struct {
   int key_press_size;
   bool center_dot;
   float cursor_scale;
+  // The race HUD (dd_race_hud.c): DDNet's timer at the top, and under it the checkpoint splits.
+  bool render_timer;
+  bool render_splits;
 } dd_settings_t;
 
 typedef struct {
@@ -699,6 +703,9 @@ struct ft_game {
   // it, by world index: what a merged chat shows of a player of another world.
   uint8_t (*seen_teams)[DDNET_MAX_CLIENTS];
   int seen_team_worlds;
+  // By world index: the fastest each world's tees were at every checkpoint (dd_race_hud.c).
+  struct dd_race_splits_t *race_splits;
+  int race_split_worlds;
   bool headless;
   // Worlds stepped while this is set make their effects whatever the engine
   // presents (a demo export reads them from the worlds it asks the timeline for).
@@ -908,6 +915,13 @@ const ft_sprite_rect *dd_sprite_rect(ft_game *game, ft_atlas *atlas, uint32_t in
 
 void dd_render(ft_game *game, const ft_render_frame *frame);
 void dd_render_world_overlays(ft_game *game, const ft_render_frame *frame);
+// Screen-space text with DDNet's outline: `x`, `y` (the top of the line) and `size` in pixels.
+void dd_draw_text_screen(ft_game *game, float x, float y, float size, ft_color color, const char *text);
+// The race HUD: the timer and the checkpoint splits. The update, before a frame is drawn, takes
+// the other worlds' splits from the timeline; the render draws the active world's HUD.
+void dd_race_hud_update(ft_game *game, const ft_engine_state *state);
+void dd_race_hud_render(ft_game *game, const ft_render_frame *frame);
+void dd_race_hud_cleanup(ft_game *game);
 void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame);
 void dd_render_doors(ft_game *game, const ft_render_frame *frame);
 // The player of the frame's world that the world is seen as, DDNet's local or

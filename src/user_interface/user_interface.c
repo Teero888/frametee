@@ -84,24 +84,11 @@ void ui_render_game_snippet_menu(ui_handler_t *ui, int snippet_id) {
   gh_ui(&ui->gfx_handler->game_host, &frame);
 }
 
-// Where project dialogs start: <config dir>/projects, made on first use. Empty when there is no
-// config dir, which leaves the choice to the dialog.
-static void projects_dir(char *out, size_t size) {
-  char config_dir[1024];
-  out[0] = '\0';
-  if (!fs_get_config_dir(config_dir, sizeof(config_dir))) return;
-  fs_mkdir(config_dir);
-  if (snprintf(out, size, "%s%cprojects", config_dir, PATH_SEP) >= (int)size) {
-    out[0] = '\0';
-    return;
-  }
-  fs_mkdir(out);
-}
-
-// A dialog for a project file; `save` asks where to write one.
+// A dialog for a project file; `save` asks where to write one. It starts in <config dir>/projects,
+// or where the dialog likes when there is no config dir.
 static void open_project_dialog(ui_handler_t *ui, bool save, file_dialog_done_fn done) {
   char dir[1024], name[256];
-  projects_dir(dir, sizeof(dir));
+  fs_get_config_subdir("projects", dir, sizeof(dir));
   project_default_file_name(ui, name, sizeof(name));
   const file_dialog_t dialog = {
       .save = save, .filter_name = "TAS Project", .filter_ext = "tasp", .default_dir = dir[0] ? dir : NULL, .default_name = name};

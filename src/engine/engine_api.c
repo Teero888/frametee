@@ -853,7 +853,8 @@ static bool api_timeline_world_info(uint32_t world_index, ft_timeline_world_info
                                   .world_index = (int32_t)world_index,
                                   .start_offset = timeline->groups[world_index]->start_offset,
                                   .player_count = (uint32_t)model_group_track_count(timeline, (int)world_index),
-                                  .name = timeline->groups[world_index]->name};
+                                  .name = timeline->groups[world_index]->name,
+                                  .physics_revision = timeline->groups[world_index]->physics_revision};
   return true;
 }
 

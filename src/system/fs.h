@@ -28,6 +28,14 @@ FILE *fs_open(const char *path, const char *mode);
 bool fs_get_config_dir(char *out_path, size_t size);
 
 /**
+ * @brief Gets <config dir>/<name>, such as the directory projects or videos go
+ * to by default, and makes it (and the config directory) on first use.
+ *
+ * Returns false, with out_path empty, when there is no config directory.
+ */
+bool fs_get_config_subdir(const char *name, char *out_path, size_t size);
+
+/**
  * @brief Gets the directory containing the running executable.
  *
  * Returns true if successful and writes an absolute UTF-8 path without a

@@ -77,6 +77,7 @@ add_library(ddnet_game MODULE
     dd_imgui.c
     dd_skin_browser.c
     dd_player_panel.c
+    dd_race_hud.c
     dd_profile.c
     dd_events.c
     dd_audio.c

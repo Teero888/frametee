@@ -1593,6 +1593,7 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
                                    .render_weapons = true,
                                    .render_particles = true,
                                    .render_pickups = true,
+                                   .render_cursor = true,
                                    .render_cursor_follow = true,
                                    .render_chat = true,
                                    .chat_font_size = 60,
@@ -1634,6 +1635,7 @@ static void ddnet_destroy(ft_game *game) {
     dd_particles_cleanup(&game->particles[i]);
   free(game->particles);
   free(game->seen_teams);
+  dd_race_hud_cleanup(game);
   dd_audio_unload(game);
   free(game);
 }
@@ -1809,6 +1811,7 @@ static const ft_game_module module = {
     .recording_events = dd_recording_events,
     .create = ddnet_create,
     .destroy = ddnet_destroy,
+    .update = dd_race_hud_update,
 
     .level_load_path = ddnet_level_load_path,
     .level_load_memory = ddnet_level_load_memory,
@@ -1898,6 +1901,7 @@ enum ddnet_setting {
   SET_RENDER_WEAPONS,
   SET_RENDER_PARTICLES,
   SET_RENDER_PICKUPS,
+  SET_RENDER_CURSOR,
   SET_CURSOR_SCALE,
   SET_CURSOR_FOLLOW,
   SET_CENTER_DOT,
@@ -1923,6 +1927,8 @@ enum ddnet_setting {
   SET_CURSOR_ALL,
   SET_SHOW_KEY_PRESSES,
   SET_KEY_PRESS_SIZE,
+  SET_RENDER_TIMER,
+  SET_RENDER_SPLITS,
   SET_COUNT
 };
 
@@ -1941,12 +1947,18 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_RENDER_WEAPONS] = {"render_weapons", "Weapons and hooks", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_PARTICLES] = {"render_particles", "Particles", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_PICKUPS] = {"render_pickups", "Pickups", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_RENDER_CURSOR] = {"render_cursor", "Show crosshairs", NULL, "Crosshair", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CURSOR_SCALE] = {"cursor_scale", "Crosshair scale", NULL, "Crosshair", FT_VALUE_FLOAT, 0.1, 2.0, FT_SETTING_RENDER},
     [SET_CURSOR_FOLLOW] = {"cursor_follow", "Crosshair in follow camera", NULL, "Crosshair", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CURSOR_ALL] = {"cursor_all", "Crosshairs of every player",
                         "Not only on the player the camera follows (the game's follow camera, or the camera animation's characters)",
                         "Crosshair", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CENTER_DOT] = {"center_dot", "Show center dot", "Marks the tee's exact position", "Crosshair", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_RENDER_TIMER] = {"render_timer", "Race timer", NULL, "HUD", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_RENDER_SPLITS] = {"render_splits", "Checkpoint splits",
+                           "Under the timer after a checkpoint or the finish: how far the tee is behind the fastest other group "
+                           "there, or its own time where no other group is faster",
+                           "HUD", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_CHAT] = {"render_chat", "Show chat", NULL, "Chat", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CHAT_FONT_SIZE] = {"chat_font_size", "Chat font size", NULL, "Chat", FT_VALUE_INT, 10, 100, FT_SETTING_RENDER},
     [SET_CHAT_WIDTH] = {"chat_width", "Chat width", NULL, "Chat", FT_VALUE_INT, 140, 400, FT_SETTING_RENDER},
@@ -2001,6 +2013,15 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
     return true;
   case SET_RENDER_PICKUPS:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_pickups};
+    return true;
+  case SET_RENDER_CURSOR:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_cursor};
+    return true;
+  case SET_RENDER_TIMER:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_timer};
+    return true;
+  case SET_RENDER_SPLITS:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_splits};
     return true;
   case SET_CURSOR_SCALE:
     *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = s->cursor_scale};
@@ -2108,6 +2129,15 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
     return true;
   case SET_RENDER_PICKUPS:
     s->render_pickups = value->as.b;
+    return true;
+  case SET_RENDER_CURSOR:
+    s->render_cursor = value->as.b;
+    return true;
+  case SET_RENDER_TIMER:
+    s->render_timer = value->as.b;
+    return true;
+  case SET_RENDER_SPLITS:
+    s->render_splits = value->as.b;
     return true;
   case SET_CURSOR_SCALE:
     s->cursor_scale = (float)value->as.f;

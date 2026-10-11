@@ -28,7 +28,7 @@ static float pixels_to_world(ft_game *game, float pixels) {
 
 // Screen-space text: `size` is already in pixels, so it is also the size DDNet
 // would have baked the glyph at, and the outline is DefaultTextOutlineColor.
-static void draw_text_screen(ft_game *game, float x, float y, float size, ft_color color, const char *text) {
+void dd_draw_text_screen(ft_game *game, float x, float y, float size, ft_color color, const char *text) {
   if (!text || !text[0]) return;
   dd_text_draw_outlined(game, DD_Z_OVERLAYS, game->engine->screen_to_world((ft_vec2){x, y}),
                         pixels_to_world(game, size), color, (ft_color){0.f, 0.f, 0.f, 0.3f * color.a}, size, text);
@@ -601,14 +601,14 @@ static void render_chat(ft_game *game, const ft_render_frame *frame) {
     if (from_player) chat_draw_tee(game, frame, &m, messages[i].world, chat->client_id, y, scale, blend);
 
     const float text_y = y + m.padding_y / 2.f;
-    draw_text_screen(game, (text_left + tee_gap) * scale, text_y * scale, m.font_size * scale, name_color, prefix);
+    dd_draw_text_screen(game, (text_left + tee_gap) * scale, text_y * scale, m.font_size * scale, name_color, prefix);
     for (int row = 0; row < rows; ++row) {
       char buffer[256];
       const int n = lengths[row] < sizeof(buffer) ? lengths[row] : (int)sizeof(buffer) - 1;
       memcpy(buffer, chat->message + starts[row], (size_t)n);
       buffer[n] = '\0';
-      draw_text_screen(game, message_left * scale, (text_y + (float)row * m.font_size) * scale, m.font_size * scale,
-                       text_color, buffer);
+      dd_draw_text_screen(game, message_left * scale, (text_y + (float)row * m.font_size) * scale, m.font_size * scale,
+                          text_color, buffer);
     }
   }
 }
@@ -651,6 +651,7 @@ void dd_render_world_overlays(ft_game *game, const ft_render_frame *frame) {
   render_nameplates(game, frame);
   render_freeze_bars(game, frame);
   render_chat(game, frame);
+  dd_race_hud_render(game, frame);
   if (frame->last_world || frame->active) dd_skins_flush_overlay(game);
 }
 

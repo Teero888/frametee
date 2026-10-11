@@ -148,7 +148,9 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   out->inactive = dd_player_inactive(world, index);
   // CPlayers::RenderPlayer: below the drawn tee
   out->in_air = !world->level || !ddnet_collision_check_point(&world->level->collision, pos[0] * PX_PER_TILE, pos[1] * PX_PER_TILE + 16.0f);
-  out->attack_ticks_passed = (world->core.tick - chr->attack_tick) + intra;
+  // An attack tick of 0 is what a tee starts the world with, not an attack: shown as one long past,
+  // or the weapon would fire on the first tick.
+  out->attack_ticks_passed = chr->attack_tick == 0 ? 1e6f : (float)(world->core.tick - chr->attack_tick) + intra;
   const float last_attack_time = out->attack_ticks_passed / (float)GAME_TICK_SPEED;
 
   if (out->in_air) {
@@ -1016,7 +1018,7 @@ static uint64_t frame_followed_players(const ft_render_frame *frame) {
 // follow camera is locked to it (only in the focused world), the camera animation's characters,
 // or, if asked, everyone.
 static void render_cursor(ft_game *game, const ft_render_frame *frame) {
-  if (!game->gfx.cursor || !frame->world) return;
+  if (!game->settings.render_cursor || !game->gfx.cursor || !frame->world) return;
   const ft_world *world = frame->world;
   const ft_world *previous = frame->previous_world;
   const int selected = frame->active ? frame->selected_player : -1;

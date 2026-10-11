@@ -11,6 +11,7 @@
 #include <string.h>
 #include <strings.h>
 #include <system/file_dialog.h>
+#include <system/fs.h>
 #include <system/include_cimgui.h>
 #include <user_interface/camera/camera_window.h>
 #include <user_interface/user_interface.h>
@@ -430,10 +431,13 @@ static void render_path_chosen(void *user, const char *path) {
     snprintf(job->status, sizeof(job->status), "Invalid settings or encoder unavailable");
 }
 
+// The dialog starts in <config dir>/videos, like the project dialogs in <config dir>/projects.
 static void start_render(ui_handler_t *ui) {
-  char suggested[256];
+  char suggested[256], dir[1024];
   default_video_name(ui, suggested, sizeof(suggested));
-  const file_dialog_t dialog = {.save = true, .filter_name = "MP4 Video", .filter_ext = "mp4", .default_name = suggested};
+  fs_get_config_subdir("videos", dir, sizeof(dir));
+  const file_dialog_t dialog = {
+      .save = true, .filter_name = "MP4 Video", .filter_ext = "mp4", .default_dir = dir[0] ? dir : NULL, .default_name = suggested};
   file_dialog_open(&dialog, render_path_chosen, ui);
 }
 

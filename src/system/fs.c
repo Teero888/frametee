@@ -66,6 +66,21 @@ bool fs_get_config_dir(char *out_path, size_t size) {
   return false;
 }
 
+bool fs_get_config_subdir(const char *name, char *out_path, size_t size) {
+  char config_dir[1024];
+  if (!out_path || size == 0) return false;
+  out_path[0] = '\0';
+  if (!fs_get_config_dir(config_dir, sizeof(config_dir))) return false;
+  fs_mkdir(config_dir);
+  const int needed = snprintf(out_path, size, "%s%c%s", config_dir, PATH_SEP, name);
+  if (needed < 0 || (size_t)needed >= size) {
+    out_path[0] = '\0';
+    return false;
+  }
+  fs_mkdir(out_path);
+  return true;
+}
+
 bool fs_get_executable_dir(char *out_path, size_t size) {
   if (!out_path || size == 0) return false;
   out_path[0] = '\0';
