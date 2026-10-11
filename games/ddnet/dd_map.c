@@ -1,6 +1,6 @@
 // Level rendering for the DDNet module.
 //
-// The tile layers become textures, the entities sheet becomes a texture array,
+// The tile layers become textures, the entities sheet (dd_assets.c) becomes a texture array,
 // and one quad drawn with this game's own shaders samples them. All of it used
 // to sit in the engine's graphics backend, which meant the editor had to know
 // DDNet's layer encoding to draw anything at all.
@@ -46,37 +46,20 @@ static ft_texture *layer_texture(ft_game *game, uint8_t *const planes[3], uint32
   return texture;
 }
 
-// Slices the entities sheet into one array layer per tile index.
-static ft_texture *entities_array(ft_game *game) {
-  char path[1024];
-  game->engine->resolve_data_path("textures/ddnet.png", path, sizeof(path));
-
-  void *file = NULL;
-  size_t size = 0;
-  if (!game->engine->read_file(path, &file, &size)) {
-    dd_log(game, FT_LOG_ERROR, "Missing entities sheet '%s'.", path);
-    return NULL;
-  }
-
-  int w = 0, h = 0, channels = 0;
-  unsigned char *pixels = dd_decode_png(file, size, &w, &h, &channels);
-  game->engine->free_file_data(file);
-  if (!pixels) return NULL;
-
-  const uint32_t tile_w = (uint32_t)w / 16;
-  const uint32_t tile_h = (uint32_t)h / 16;
+// Slices an entities sheet into one array layer per tile index.
+ft_texture *dd_map_entities_texture(ft_game *game, const uint8_t *pixels, int width, int height) {
+  const uint32_t tile_w = (uint32_t)width / 16;
+  const uint32_t tile_h = (uint32_t)height / 16;
+  if (!pixels || tile_w == 0 || tile_h == 0) return NULL;
   const size_t layer_bytes = (size_t)tile_w * tile_h * 4;
   uint8_t *layers = malloc(layer_bytes * 256);
-  if (!layers) {
-    dd_free_png(pixels);
-    return NULL;
-  }
+  if (!layers) return NULL;
 
   for (uint32_t index = 0; index < 256; ++index) {
     const uint32_t tx = (index % 16) * tile_w;
     const uint32_t ty = (index / 16) * tile_h;
     for (uint32_t y = 0; y < tile_h; ++y) {
-      memcpy(layers + layer_bytes * index + (size_t)y * tile_w * 4, pixels + (((size_t)(ty + y) * (uint32_t)w) + tx) * 4,
+      memcpy(layers + layer_bytes * index + (size_t)y * tile_w * 4, pixels + (((size_t)(ty + y) * (uint32_t)width) + tx) * 4,
              (size_t)tile_w * 4);
     }
   }
@@ -91,7 +74,6 @@ static ft_texture *entities_array(ft_game *game) {
                                 .linear_filter = true};
   ft_texture *texture = game->engine->texture_create(&desc);
   free(layers);
-  dd_free_png(pixels);
   return texture;
 }
 
@@ -157,7 +139,7 @@ void dd_map_create(ft_game *game, ft_level *level) {
   dd_map_design_create(game, level);
   if (!create_map_pipeline(game)) return;
 
-  if (!game->gfx.entities) game->gfx.entities = entities_array(game);
+  if (!game->gfx.entities) dd_assets_load_type(game, DD_ASSET_ENTITIES);
 
   const map_data_t *map = &level->map;
   uint8_t *const planes[3][3] = {

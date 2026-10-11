@@ -208,6 +208,17 @@ enum { DD_FREEZE_FULL_LEFT = 0,
        DD_FREEZE_MIRRORED = 4,
        DD_FREEZE_SPRITE_COUNT = 8 };
 
+// The kinds of sheet DDNet's assets come in, in the order of its asset settings (dd_assets.c).
+typedef enum dd_asset_type {
+  DD_ASSET_ENTITIES = 0,
+  DD_ASSET_GAME,
+  DD_ASSET_EMOTICONS,
+  DD_ASSET_PARTICLES,
+  DD_ASSET_HUD,
+  DD_ASSET_EXTRAS,
+  DD_ASSET_TYPE_COUNT
+} dd_asset_type_t;
+
 // The particle system tags a sprite with which sheet it came from by offsetting
 // the index, the same way the engine's renderer used to.
 #define PARTICLE_SPRITE_OFFSET 1000
@@ -529,12 +540,7 @@ typedef struct {
 typedef struct {
   bool ready;
 
-  ft_texture *gameskin_texture;
-  ft_texture *particles_texture;
-  ft_texture *extras_texture;
-  ft_texture *emoticons_texture;
   ft_texture *speedup_arrow_texture;
-  ft_texture *freeze_bar_texture;
   ft_texture *key_arrow_texture;
   ft_atlas *gameskin;
   ft_atlas *particles;
@@ -715,6 +721,9 @@ struct ft_game {
   // pointer so this header stays free of the browser's own types.
   struct dd_skin_browser_t *skin_browser;
   struct dd_player_panel_t *player_panel;
+  // DDNet's assets and the window choosing them (dd_assets.c).
+  struct dd_assets_t *assets;
+  bool show_assets;
   bool show_skin_browser;
   bool show_events;
   bool auto_finish_events;
@@ -954,6 +963,24 @@ void dd_map_design_create(ft_game *game, ft_level *level);
 void dd_map_design_destroy(ft_game *game, ft_level *level);
 void dd_map_design_render(ft_game *game, const ft_render_frame *frame);
 void dd_map_render(ft_game *game, const ft_render_frame *frame);
+
+// The sheets of DDNet's assets (dd_assets.c): made from the selection at once
+// while the resources are created, and swapped once a frame, before anything
+// is drawn, when the selection changed. The settings are the selection as the
+// config keeps it: a pack per type, and the parts taken from other packs.
+void dd_assets_load(ft_game *game);
+void dd_assets_load_type(ft_game *game, int type);
+void dd_assets_update(ft_game *game);
+const char *dd_assets_setting(ft_game *game, int type, bool mix);
+void dd_assets_set_setting(ft_game *game, int type, bool mix, const char *value);
+void dd_assets_release_gpu(ft_game *game);
+void dd_assets_cleanup(ft_game *game);
+void dd_assets_window_render(ft_game *game);
+// Makes what draws from a sheet draw from these pixels, a sheet of `type` the
+// size of any pack of it. Only where no frame is being drawn.
+bool dd_gfx_install_sheet(ft_game *game, int type, const uint8_t *pixels, int width, int height);
+// The entities sheet as a texture array of its 256 tiles.
+ft_texture *dd_map_entities_texture(ft_game *game, const uint8_t *pixels, int width, int height);
 
 // PNG decoding lives with the other graphics code so only one translation unit
 // instantiates stb_image.

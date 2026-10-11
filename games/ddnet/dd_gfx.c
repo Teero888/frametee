@@ -179,38 +179,14 @@ static ft_texture *load_sheet(ft_game *game, const char *relative, uint32_t *out
 // left, which the engine's sprite path cannot express, so the sheet built here
 // carries a horizontally mirrored copy of each cell after the four originals.
 #define DD_HUD_GRID 16u
-static bool load_freeze_bar_sheet(ft_game *game) {
+static ft_texture *freeze_bar_sheet(ft_game *game, const uint8_t *pixels, int w, int h) {
   dd_gfx_t *gfx = &game->gfx;
-  char path[1024];
-  game->engine->resolve_data_path("textures/hud.png", path, sizeof(path));
-
-  void *file = NULL;
-  size_t size = 0;
-  if (!game->engine->read_file(path, &file, &size)) {
-    dd_log(game, FT_LOG_ERROR, "Missing asset '%s'.", path);
-    return false;
-  }
-  int w = 0, h = 0, channels = 0;
-  unsigned char *pixels = dd_decode_png(file, size, &w, &h, &channels);
-  game->engine->free_file_data(file);
-  if (!pixels) {
-    dd_log(game, FT_LOG_ERROR, "Could not decode '%s'.", path);
-    return false;
-  }
-  if (w < (int)DD_HUD_GRID || h < (int)DD_HUD_GRID) {
-    dd_free_png(pixels);
-    dd_log(game, FT_LOG_ERROR, "'%s' is too small to hold a %ux%u sprite grid.", path, DD_HUD_GRID, DD_HUD_GRID);
-    return false;
-  }
-
+  if (w < (int)DD_HUD_GRID || h < (int)DD_HUD_GRID) return NULL;
   const uint32_t cell_w = (uint32_t)w / DD_HUD_GRID;
   const uint32_t cell_h = (uint32_t)h / DD_HUD_GRID;
   const uint32_t sheet_w = cell_w * DD_FREEZE_SPRITE_COUNT;
   unsigned char *sheet = calloc((size_t)sheet_w * cell_h, 4u);
-  if (!sheet) {
-    dd_free_png(pixels);
-    return false;
-  }
+  if (!sheet) return NULL;
   for (uint32_t sprite = 0; sprite < 4u; ++sprite) {
     const uint32_t src_x = sprite * cell_w;
     const uint32_t src_y = 2u * cell_h;
@@ -223,7 +199,6 @@ static bool load_freeze_bar_sheet(ft_game *game) {
         memcpy(mirror + (size_t)x * 4u, src + (size_t)(cell_w - 1u - x) * 4u, 4u);
     }
   }
-  dd_free_png(pixels);
 
   for (uint32_t sprite = 0; sprite < DD_FREEZE_SPRITE_COUNT; ++sprite)
     gfx->freeze_bar_rects[sprite] = (ft_sprite_rect){sprite * cell_w, 0u, cell_w, cell_h};
@@ -236,9 +211,9 @@ static bool load_freeze_bar_sheet(ft_game *game) {
                                 .format = FT_TEXTURE_RGBA8,
                                 .mipmaps = true,
                                 .linear_filter = true};
-  gfx->freeze_bar_texture = game->engine->texture_create(&desc);
+  ft_texture *texture = game->engine->texture_create(&desc);
   free(sheet);
-  return gfx->freeze_bar_texture != NULL;
+  return texture;
 }
 
 static ft_atlas *make_atlas(ft_game *game, ft_texture *texture, const ft_sprite_rect *rects, uint32_t count, uint32_t max_instances) {
@@ -249,6 +224,86 @@ static ft_atlas *make_atlas(ft_game *game, ft_texture *texture, const ft_sprite_
                         .sprite_count = count,
                         .max_instances_per_frame = max_instances};
   return game->engine->atlas_create(&desc);
+}
+
+static ft_texture *sheet_texture(ft_game *game, const uint8_t *pixels, int w, int h) {
+  const ft_texture_desc desc = {.struct_size = sizeof(desc),
+                                .pixels = pixels,
+                                .width = (uint32_t)w,
+                                .height = (uint32_t)h,
+                                .layers = 1,
+                                .format = FT_TEXTURE_RGBA8,
+                                .mipmaps = true,
+                                .linear_filter = true};
+  return game->engine->texture_create(&desc);
+}
+
+// The sprite tables are in the pixels of the module's own sheets; a pack of
+// another size has its sprites at the same place on its grid.
+static void scale_rects(const ft_sprite_rect *from, ft_sprite_rect *to, uint32_t count, int w, int h, int default_w,
+                        int default_h) {
+  for (uint32_t i = 0; i < count; ++i)
+    to[i] = (ft_sprite_rect){(uint32_t)((uint64_t)from[i].x * (uint32_t)w / (uint32_t)default_w),
+                             (uint32_t)((uint64_t)from[i].y * (uint32_t)h / (uint32_t)default_h),
+                             (uint32_t)((uint64_t)from[i].w * (uint32_t)w / (uint32_t)default_w),
+                             (uint32_t)((uint64_t)from[i].h * (uint32_t)h / (uint32_t)default_h)};
+}
+
+// Replaces an atlas with one cut from `texture`. The atlas copies what it
+// needs, so the texture goes with it. The old atlas is destroyed first: there
+// are only so many.
+static bool replace_atlas(ft_game *game, ft_atlas **atlas, ft_texture *texture, const ft_sprite_rect *rects, uint32_t count,
+                          uint32_t max_instances) {
+  if (*atlas) game->engine->atlas_destroy(*atlas);
+  *atlas = make_atlas(game, texture, rects, count, max_instances);
+  return *atlas != NULL;
+}
+
+bool dd_gfx_install_sheet(ft_game *game, int type, const uint8_t *pixels, int width, int height) {
+  dd_gfx_t *gfx = &game->gfx;
+  if (game->headless || !pixels || width <= 0 || height <= 0) return false;
+  if (type == DD_ASSET_ENTITIES) {
+    ft_texture *texture = dd_map_entities_texture(game, pixels, width, height);
+    if (!texture) return false;
+    if (gfx->entities) game->engine->texture_destroy(gfx->entities);
+    gfx->entities = texture;
+    return true;
+  }
+
+  ft_texture *texture = type == DD_ASSET_HUD ? freeze_bar_sheet(game, pixels, width, height) : sheet_texture(game, pixels, width, height);
+  if (!texture) {
+    dd_log(game, FT_LOG_ERROR, "Could not create a %dx%d sheet texture.", width, height);
+    return false;
+  }
+  bool ok = false;
+  switch (type) {
+  case DD_ASSET_GAME:
+    scale_rects(gameskin_rects, gfx->gameskin_rects, GAMESKIN_SPRITE_COUNT, width, height, 1024, 512);
+    scale_rects(cursor_rects, gfx->cursor_rects, CURSOR_SPRITE_COUNT, width, height, 1024, 512);
+    ok = replace_atlas(game, &gfx->gameskin, texture, gfx->gameskin_rects, GAMESKIN_SPRITE_COUNT, 200000);
+    // One crosshair at a time, so a tiny instance ring is plenty.
+    ok = replace_atlas(game, &gfx->cursor, texture, gfx->cursor_rects, CURSOR_SPRITE_COUNT, 8) && ok;
+    break;
+  case DD_ASSET_PARTICLES:
+    scale_rects(particle_rects, gfx->particle_rects, PARTICLE_SPRITE_COUNT, width, height, 512, 512);
+    ok = replace_atlas(game, &gfx->particles, texture, gfx->particle_rects, PARTICLE_SPRITE_COUNT, 200000);
+    break;
+  case DD_ASSET_EXTRAS:
+    scale_rects(extra_rects, gfx->extra_rects, EXTRA_SPRITE_COUNT, width, height, 512, 512);
+    ok = replace_atlas(game, &gfx->extras, texture, gfx->extra_rects, EXTRA_SPRITE_COUNT, 200000);
+    break;
+  case DD_ASSET_EMOTICONS:
+    scale_rects(emoticon_rects, gfx->emoticon_rects, DD_EMOTICON_COUNT, width, height, 512, 512);
+    ok = replace_atlas(game, &gfx->emoticons, texture, gfx->emoticon_rects, DD_EMOTICON_COUNT, 4096);
+    break;
+  case DD_ASSET_HUD:
+    ok = replace_atlas(game, &gfx->freeze_bar, texture, gfx->freeze_bar_rects, DD_FREEZE_SPRITE_COUNT, 4096);
+    break;
+  default:
+    break;
+  }
+  game->engine->texture_destroy(texture);
+  return ok;
 }
 
 // The tee pipeline. Attribute locations mirror data/games/ddnet/shaders/skin.vert;
@@ -311,31 +366,15 @@ bool dd_gfx_create(ft_game *game) {
   dd_gfx_t *gfx = &game->gfx;
   if (gfx->ready) return true;
 
-  memcpy(gfx->gameskin_rects, gameskin_rects, sizeof(gameskin_rects));
-  memcpy(gfx->cursor_rects, cursor_rects, sizeof(cursor_rects));
-  memcpy(gfx->particle_rects, particle_rects, sizeof(particle_rects));
-  memcpy(gfx->extra_rects, extra_rects, sizeof(extra_rects));
-  memcpy(gfx->emoticon_rects, emoticon_rects, sizeof(emoticon_rects));
   gfx->speedup_arrow_rect = (ft_sprite_rect){0, 0, 64, 64};
   gfx->key_arrow_rect = (ft_sprite_rect){0, 0, 48, 50};
 
-  gfx->gameskin_texture = load_sheet(game, "textures/game.png", NULL, NULL);
-  gfx->particles_texture = load_sheet(game, "textures/particles.png", NULL, NULL);
-  gfx->extras_texture = load_sheet(game, "textures/extras.png", NULL, NULL);
-  gfx->emoticons_texture = load_sheet(game, "textures/emoticons.png", NULL, NULL);
   gfx->speedup_arrow_texture = load_sheet(game, "textures/speed_arrow.png", NULL, NULL);
   gfx->key_arrow_texture = load_sheet(game, "textures/arrow.png", NULL, NULL);
-  load_freeze_bar_sheet(game);
-
-  gfx->gameskin = make_atlas(game, gfx->gameskin_texture, gfx->gameskin_rects, GAMESKIN_SPRITE_COUNT, 200000);
-  gfx->particles = make_atlas(game, gfx->particles_texture, gfx->particle_rects, PARTICLE_SPRITE_COUNT, 200000);
-  gfx->extras = make_atlas(game, gfx->extras_texture, gfx->extra_rects, EXTRA_SPRITE_COUNT, 200000);
-  gfx->emoticons = make_atlas(game, gfx->emoticons_texture, gfx->emoticon_rects, DD_EMOTICON_COUNT, 4096);
   gfx->speedup_arrow = make_atlas(game, gfx->speedup_arrow_texture, &gfx->speedup_arrow_rect, 1, 65536);
-  gfx->freeze_bar = make_atlas(game, gfx->freeze_bar_texture, gfx->freeze_bar_rects, DD_FREEZE_SPRITE_COUNT, 4096);
   gfx->key_arrow = make_atlas(game, gfx->key_arrow_texture, &gfx->key_arrow_rect, 1, 4096);
-  // One crosshair at a time, so a tiny instance ring is plenty.
-  gfx->cursor = make_atlas(game, gfx->gameskin_texture, gfx->cursor_rects, CURSOR_SPRITE_COUNT, 8);
+  // The sheets DDNet's assets are drawn with: the ones chosen, or the module's own.
+  dd_assets_load(game);
   if (!gfx->gameskin) {
     dd_log(game, FT_LOG_ERROR, "Sprite sheets unavailable; tees will not be drawn.");
     return false;
@@ -759,13 +798,15 @@ bool dd_gfx_render_skin_preview(ft_game *game, const char *name, const char *pat
 
 // --- draw helpers ------------------------------------------------------------
 
+// In the module's own sheets' pixels whatever pack is shown: DDNet sizes a
+// sprite by its cells on the grid, never by the pixels a pack gives them.
 const ft_sprite_rect *dd_sprite_rect(ft_game *game, ft_atlas *atlas, uint32_t index) {
   const dd_gfx_t *gfx = &game->gfx;
-  if (atlas == gfx->gameskin && index < GAMESKIN_SPRITE_COUNT) return &gfx->gameskin_rects[index];
-  if (atlas == gfx->particles && index < PARTICLE_SPRITE_COUNT) return &gfx->particle_rects[index];
-  if (atlas == gfx->extras && index < EXTRA_SPRITE_COUNT) return &gfx->extra_rects[index];
-  if (atlas == gfx->cursor && index < CURSOR_SPRITE_COUNT) return &gfx->cursor_rects[index];
-  if (atlas == gfx->emoticons && index < DD_EMOTICON_COUNT) return &gfx->emoticon_rects[index];
+  if (atlas == gfx->gameskin && index < GAMESKIN_SPRITE_COUNT) return &gameskin_rects[index];
+  if (atlas == gfx->particles && index < PARTICLE_SPRITE_COUNT) return &particle_rects[index];
+  if (atlas == gfx->extras && index < EXTRA_SPRITE_COUNT) return &extra_rects[index];
+  if (atlas == gfx->cursor && index < CURSOR_SPRITE_COUNT) return &cursor_rects[index];
+  if (atlas == gfx->emoticons && index < DD_EMOTICON_COUNT) return &emoticon_rects[index];
   if (atlas == gfx->speedup_arrow && index == 0) return &gfx->speedup_arrow_rect;
   if (atlas == gfx->freeze_bar && index < DD_FREEZE_SPRITE_COUNT) return &gfx->freeze_bar_rects[index];
   if (atlas == gfx->key_arrow && index == 0) return &gfx->key_arrow_rect;

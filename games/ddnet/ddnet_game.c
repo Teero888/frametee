@@ -1626,6 +1626,12 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
   return game;
 }
 
+// Once a frame, before anything of it is drawn.
+static void ddnet_update(ft_game *game, const ft_engine_state *state) {
+  dd_assets_update(game);
+  dd_race_hud_update(game, state);
+}
+
 static void ddnet_destroy(ft_game *game) {
   if (!game) return;
   dd_player_panel_cleanup(game);
@@ -1636,6 +1642,7 @@ static void ddnet_destroy(ft_game *game) {
   free(game->particles);
   free(game->seen_teams);
   dd_race_hud_cleanup(game);
+  dd_assets_cleanup(game);
   dd_audio_unload(game);
   free(game);
 }
@@ -1647,6 +1654,7 @@ static void ddnet_resources_destroy(ft_game *game) {
   // before releasing browser/map ImGui descriptors which may have appeared in
   // the preceding frame.
   dd_gfx_destroy(game);
+  dd_assets_release_gpu(game);
   dd_player_panel_cleanup(game);
   dd_skin_browser_cleanup(game);
 }
@@ -1691,6 +1699,7 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
     if (igBeginMenu("DDNet", true)) {
       ddnet_map_settings_menu(game);
       igSeparator();
+      igMenuItem_BoolPtr("Assets", NULL, &game->show_assets, true);
       igMenuItem_BoolPtr("Skin Browser", NULL, &game->show_skin_browser, true);
       igMenuItem_BoolPtr("Timeline Events", NULL, &game->show_events, true);
       if (igMenuItem_Bool("Export Demo...", NULL, false, game->current_level != NULL)) dd_export_window_open(game);
@@ -1714,6 +1723,7 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
   case FT_UI_PANELS:
     dd_player_panel_render(game, frame);
     if (game->show_skin_browser) dd_skin_browser_render(game, frame);
+    if (game->show_assets) dd_assets_window_render(game);
     dd_events_render(game, frame);
     dd_export_window_render(game);
     dd_ghost_export_window_render(game);
@@ -1811,7 +1821,7 @@ static const ft_game_module module = {
     .recording_events = dd_recording_events,
     .create = ddnet_create,
     .destroy = ddnet_destroy,
-    .update = dd_race_hud_update,
+    .update = ddnet_update,
 
     .level_load_path = ddnet_level_load_path,
     .level_load_memory = ddnet_level_load_memory,
@@ -1929,7 +1939,10 @@ enum ddnet_setting {
   SET_KEY_PRESS_SIZE,
   SET_RENDER_TIMER,
   SET_RENDER_SPLITS,
-  SET_COUNT
+  // DDNet's assets (dd_assets.c): a pack per type, then the parts mixed in from others.
+  SET_ASSET_FIRST,
+  SET_ASSET_MIX_FIRST = SET_ASSET_FIRST + DD_ASSET_TYPE_COUNT,
+  SET_COUNT = SET_ASSET_MIX_FIRST + DD_ASSET_TYPE_COUNT
 };
 
 static const ft_setting_desc ddnet_settings[SET_COUNT] = {
@@ -1978,6 +1991,19 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_SHOW_KEY_PRESSES] = {"show_key_presses", "Show players' key presses", NULL, "Key presses", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_KEY_PRESS_SIZE] = {"key_press_size", "Size of key press icons", NULL, "Key presses", FT_VALUE_INT, -50, 100, FT_SETTING_RENDER},
     [SET_AUTO_FINISH_EVENTS] = {"auto_finish_events", "Generate finish events while recording", NULL, "Timeline events", FT_VALUE_BOOL, 0, 0, 0},
+    // Chosen in the Assets window (dd_assets_window.c).
+    [SET_ASSET_FIRST + DD_ASSET_ENTITIES] = {"asset_entities", "Entities", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_FIRST + DD_ASSET_GAME] = {"asset_game", "Game", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_FIRST + DD_ASSET_EMOTICONS] = {"asset_emoticons", "Emoticons", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_FIRST + DD_ASSET_PARTICLES] = {"asset_particles", "Particles", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_FIRST + DD_ASSET_HUD] = {"asset_hud", "HUD", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_FIRST + DD_ASSET_EXTRAS] = {"asset_extras", "Extras", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_MIX_FIRST + DD_ASSET_ENTITIES] = {"asset_entities_mix", "Entities mix", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_MIX_FIRST + DD_ASSET_GAME] = {"asset_game_mix", "Game mix", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_MIX_FIRST + DD_ASSET_EMOTICONS] = {"asset_emoticons_mix", "Emoticons mix", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_MIX_FIRST + DD_ASSET_PARTICLES] = {"asset_particles_mix", "Particles mix", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_MIX_FIRST + DD_ASSET_HUD] = {"asset_hud_mix", "HUD mix", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
+    [SET_ASSET_MIX_FIRST + DD_ASSET_EXTRAS] = {"asset_extras_mix", "Extras mix", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
 };
 
 static uint32_t ddnet_setting_count(ft_game *game) {
@@ -1992,6 +2018,12 @@ static const ft_setting_desc *ddnet_setting_desc(ft_game *game, uint32_t index) 
 
 static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
   const dd_settings_t *s = &game->settings;
+  if (index >= SET_ASSET_FIRST && index < SET_COUNT) {
+    const bool mix = index >= SET_ASSET_MIX_FIRST;
+    *out = (ft_value){.kind = FT_VALUE_STRING,
+                      .as.s = dd_assets_setting(game, (int)(index - (mix ? SET_ASSET_MIX_FIRST : SET_ASSET_FIRST)), mix)};
+    return true;
+  }
   switch (index) {
   case SET_ENTITIES_VIEW:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->entities_view};
@@ -2108,6 +2140,12 @@ static int64_t clamp_setting(int64_t value, int64_t low, int64_t high) {
 
 static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *value) {
   dd_settings_t *s = &game->settings;
+  if (index >= SET_ASSET_FIRST && index < SET_COUNT) {
+    if (value->kind != FT_VALUE_STRING) return false;
+    const bool mix = index >= SET_ASSET_MIX_FIRST;
+    dd_assets_set_setting(game, (int)(index - (mix ? SET_ASSET_MIX_FIRST : SET_ASSET_FIRST)), mix, value->as.s);
+    return true;
+  }
   switch (index) {
   case SET_ENTITIES_VIEW:
     s->entities_view = value->as.b;
