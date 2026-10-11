@@ -31,10 +31,11 @@ static void scripted_input(const tas_api_t *api, void *record, int tick) {
   api->input_set_vec2(record, api->input_field_index("target"), (ft_vec2){(float)(tick % 200 - 100), -60.f});
 }
 
-// How often the first tee shoots its gun while its record's fire counter goes through `runs` (pairs
-// of value and ticks, ended by a zero length): a shot shows as the reload timer going up.
+// How often the first tee shoots its gun while its record goes through `runs` (fire held, a press
+// on the run's first tick, and ticks; ended by a zero length): a shot shows as the reload timer
+// going up.
 static int gun_shots(const tas_api_t *api, const ft_world *initial, void *inputs, uint32_t record_size, int players,
-                     const int (*runs)[2]) {
+                     const int (*runs)[3]) {
   ft_world *world = api->clone_world(initial);
   if (!world) return -1;
   for (int p = 0; p < players; ++p) api->input_default((char *)inputs + (size_t)p * record_size);
@@ -42,9 +43,10 @@ static int gun_shots(const tas_api_t *api, const ft_world *initial, void *inputs
   record->m_TargetX = 100;
   record->m_TargetY = 0;
   int shots = 0, reload = 0;
-  for (int run = 0; runs[run][1] > 0; ++run) {
-    for (int tick = 0; tick < runs[run][1]; ++tick) {
+  for (int run = 0; runs[run][2] > 0; ++run) {
+    for (int tick = 0; tick < runs[run][2]; ++tick) {
       record->m_Fire = (uint8_t)runs[run][0];
+      set_flag_fire_press(record, tick == 0 && runs[run][1]);
       if (!api->step_world(world, inputs, (uint32_t)players)) {
         api->destroy_world(world);
         return -1;
@@ -94,41 +96,37 @@ FT_API int plugin_cli(void *data, int argc, const char **argv) {
   CHECK(inputs);
   for (int p = 0; p < players; ++p) api->input_default((char *)inputs + (size_t)p * record_size);
 
-  // Fire is a counter whose low bit is the button, and the physics counts every value between two
-  // ticks' counters as presses and releases: pressing or letting go only ever steps it up, so a
-  // release is +1 from odd and nothing from even. Lowering it would fire.
+  // Fire is the button held, and a press holding does not show is a field of its own.
   {
     dd_input_t *record = inputs;
-    const int fire = api->input_field_index("fire");
-    const uint8_t start = record->m_Fire;
-    api->input_set(record, fire, 0);
-    CHECK(record->m_Fire == start);
+    const int fire = api->input_field_index("fire"), press = api->input_field_index("fire_press");
+    CHECK(fire >= 0 && press >= 0);
+    CHECK(api->input_get(record, fire) == 0 && api->input_get(record, press) == 0);
     api->input_set(record, fire, 1);
-    CHECK(record->m_Fire == start + 1 && api->input_get(record, fire) == 1);
-    api->input_set(record, fire, 1);
-    CHECK(record->m_Fire == start + 1);
+    CHECK(record->m_Fire == 1 && api->input_get(record, fire) == 1 && api->input_get(record, press) == 0);
+    api->input_set(record, press, 1);
+    CHECK(get_flag_fire_press(record) && api->input_get(record, press) == 1 && record->m_Fire == 1);
     api->input_set(record, fire, 0);
-    CHECK(record->m_Fire == start + 2 && api->input_get(record, fire) == 0);
-    api->input_set(record, fire, 0);
-    CHECK(record->m_Fire == start + 2);
-    record->m_Fire = 63;
-    api->input_set(record, fire, 0);
-    CHECK(record->m_Fire == 0);
+    CHECK(record->m_Fire == 0 && api->input_get(record, press) == 1);
     api->input_default(record);
+    CHECK(!get_flag_fire_press(record));
   }
 
-  // The record only says whether fire is held, as its lane shows; the counter itself may jump or
-  // drop where inputs made apart meet (a take recorded on after rewinding, a snippet boundary, an
-  // edited tick). The tee shoots when the button goes down, and only then.
+  // The physics gets DDNet's counter of presses and releases, made from held and pressed: the tee
+  // shoots where the button goes down, and where a press holding does not show is recorded.
   {
-    static const int held_then_let_go[][2] = {{0, 5}, {1, 30}, {0, 30}, {0, 0}};
-    static const int jump_while_held[][2] = {{0, 5}, {1, 30}, {5, 30}, {0, 0}};
-    static const int drop_while_released[][2] = {{0, 5}, {1, 10}, {2, 20}, {0, 20}, {0, 0}};
-    static const int pressed_twice[][2] = {{0, 5}, {1, 30}, {2, 30}, {3, 30}, {0, 0}};
+    static const int held_then_let_go[][3] = {{0, 0, 5}, {1, 0, 30}, {0, 0, 30}, {0, 0, 0}};
+    static const int tapped_between_ticks[][3] = {{0, 0, 5}, {0, 1, 30}, {0, 0, 0}};
+    static const int pressed_again_while_held[][3] = {{0, 0, 5}, {1, 0, 30}, {1, 1, 30}, {0, 0, 0}};
+    static const int tapped_while_letting_go[][3] = {{0, 0, 5}, {1, 0, 30}, {0, 1, 30}, {0, 0, 0}};
+    static const int pressed_going_down[][3] = {{0, 0, 5}, {1, 1, 30}, {0, 0, 30}, {0, 0, 0}};
+    static const int tapped_three_times[][3] = {{0, 0, 5}, {0, 1, 20}, {0, 1, 20}, {0, 1, 20}, {0, 0, 0}};
     CHECK(gun_shots(api, initial, inputs, record_size, players, held_then_let_go) == 1);
-    CHECK(gun_shots(api, initial, inputs, record_size, players, jump_while_held) == 1);
-    CHECK(gun_shots(api, initial, inputs, record_size, players, drop_while_released) == 1);
-    CHECK(gun_shots(api, initial, inputs, record_size, players, pressed_twice) == 2);
+    CHECK(gun_shots(api, initial, inputs, record_size, players, tapped_between_ticks) == 1);
+    CHECK(gun_shots(api, initial, inputs, record_size, players, pressed_again_while_held) == 2);
+    CHECK(gun_shots(api, initial, inputs, record_size, players, tapped_while_letting_go) == 2);
+    CHECK(gun_shots(api, initial, inputs, record_size, players, pressed_going_down) == 1);
+    CHECK(gun_shots(api, initial, inputs, record_size, players, tapped_three_times) == 3);
   }
 
   // Two clones, stepped alike, stay alike.

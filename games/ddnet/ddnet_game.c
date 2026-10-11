@@ -30,6 +30,7 @@ enum ddnet_input_field {
   IN_TARGET,
   IN_JUMP,
   IN_FIRE,
+  IN_FIRE_PRESS,
   IN_HOOK,
   IN_WEAPON,
   IN_KILL,
@@ -89,10 +90,17 @@ static const ft_input_field input_fields[IN_COUNT] = {
                  .color = {0.4f, 1.0f, 0.5f, 1.0f}},
     [IN_FIRE] = {.id = "fire",
                  .display_name = "Fire",
-                 .description = "Counts weapon triggers; the physics fires on odd values",
+                 .description = "The fire button is held",
                  .kind = FT_INPUT_BOOL,
                  .flags = FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_LATCHED,
                  .color = {1.0f, 0.5f, 0.35f, 1.0f}},
+    [IN_FIRE_PRESS] = {.id = "fire_press",
+                       .display_name = "Fire press",
+                       .description = "The fire button went down during this tick. Fire going on is a press too, so this only "
+                                      "adds the presses Fire does not show: a tap between two ticks, or pressing again while held",
+                       .kind = FT_INPUT_BOOL,
+                       .flags = FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_TRIGGER,
+                       .color = {1.0f, 0.75f, 0.6f, 1.0f}},
     [IN_HOOK] = {.id = "hook",
                  .display_name = "Hook",
                  .kind = FT_INPUT_BOOL,
@@ -169,6 +177,16 @@ static const ft_input_control input_controls[] = {
     {.id = "right", .display_name = "Move Right", .category = "DDNet", .default_binding = "D", .field = IN_DIRECTION, .value = 1, .flags = FT_CONTROL_ADD},
     {.id = "jump", .display_name = "Jump", .category = "DDNet", .default_binding = "Space", .field = IN_JUMP, .value = 1},
     {.id = "fire", .display_name = "Fire Weapon", .category = "DDNet", .default_binding = "MouseLeft", .field = IN_FIRE, .value = 1},
+    // On the same button as Fire Weapon: every press is recorded on the tick it happens on, also one
+    // let go of again before that tick is recorded, which holding alone would miss.
+    {.id = "fire_press",
+     .display_name = "Fire Press",
+     .description = "Records every press of the fire button, also a tap shorter than a tick. Bind it like Fire Weapon.",
+     .category = "DDNet",
+     .default_binding = "MouseLeft",
+     .field = IN_FIRE_PRESS,
+     .value = 1,
+     .flags = FT_CONTROL_PRESSED},
     {.id = "hook", .display_name = "Hook", .category = "DDNet", .default_binding = "MouseRight", .field = IN_HOOK, .value = 1},
     {.id = "hammer", .display_name = "Switch to Hammer", .category = "DDNet", .default_binding = "1", .field = IN_WEAPON, .value = 0, .flags = FT_CONTROL_PRESSED},
     {.id = "gun", .display_name = "Switch to Gun", .category = "DDNet", .default_binding = "2", .field = IN_WEAPON, .value = 1, .flags = FT_CONTROL_PRESSED},
@@ -178,65 +196,10 @@ static const ft_input_control input_controls[] = {
     {.id = "kill", .display_name = "Kill", .category = "DDNet", .default_binding = "K", .field = IN_KILL, .value = 1, .flags = FT_CONTROL_PRESSED},
 };
 
-// The record keeps the layout of the one before the fields after IN_TELE_OUT:
-// they took bytes that were padding (and flags that were never set).
+// The layout projects store records in.
 _Static_assert(sizeof(dd_input_t) == 16 && _Alignof(dd_input_t) == 8 && offsetof(dd_input_t, m_Flags) == 12 &&
                    offsetof(dd_input_t, m_Team) == 14 && offsetof(dd_input_t, m_PlayerFlags) == 15,
                "dd_input_t must keep the layout projects store");
-
-// The schema before the fields after IN_TELE_OUT were added, when the
-// teleporter exit was internal. Its records are this schema's records with
-// nothing set in the bytes the new fields took (see dd_input_t).
-static const ft_input_field input_fields_v1[IN_TELE_OUT + 1] = {
-    [IN_DIRECTION] = {.id = "direction",
-                      .display_name = "Direction",
-                      .description = "-1 left, 0 still, 1 right",
-                      .kind = FT_INPUT_INT,
-                      .flags = FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_MIRROR_X,
-                      .min_value = -1,
-                      .max_value = 1},
-    [IN_TARGET] = {.id = "target",
-                   .display_name = "Aim",
-                   .kind = FT_INPUT_VEC2,
-                   .flags = FT_INPUT_FLAG_MIRROR_X | FT_INPUT_FLAG_MIRROR_Y | FT_INPUT_FLAG_RECORDING_CURSOR,
-                   .min_float = -1000.f,
-                   .max_float = 1000.f},
-    [IN_JUMP] = {.id = "jump", .display_name = "Jump", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_TIMELINE_LANE},
-    [IN_FIRE] = {.id = "fire", .display_name = "Fire", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_LATCHED},
-    [IN_HOOK] = {.id = "hook", .display_name = "Hook", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_TIMELINE_LANE},
-    [IN_WEAPON] = {.id = "weapon",
-                   .display_name = "Weapon",
-                   .kind = FT_INPUT_ENUM,
-                   .flags = FT_INPUT_FLAG_TIMELINE_LANE,
-                   .min_value = 0,
-                   .max_value = DDNET_NUM_WEAPONS - 1,
-                   .enum_labels = weapon_labels,
-                   .enum_count = (uint32_t)(sizeof(weapon_labels) / sizeof(weapon_labels[0]))},
-    [IN_KILL] = {.id = "kill", .display_name = "Kill", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_TIMELINE_LANE | FT_INPUT_FLAG_TRIGGER},
-    [IN_EYES] = {.id = "eyes",
-                 .display_name = "Eyes",
-                 .kind = FT_INPUT_ENUM,
-                 .flags = FT_INPUT_FLAG_EDITOR_HIDDEN,
-                 .min_value = 0,
-                 .max_value = NUM_EYES - 1,
-                 .enum_labels = eye_labels,
-                 .enum_count = (uint32_t)(sizeof(eye_labels) / sizeof(eye_labels[0]))},
-    [IN_EMOTE] = {.id = "emote", .display_name = "Emoticon", .kind = FT_INPUT_INT, .flags = FT_INPUT_FLAG_EDITOR_HIDDEN, .max_value = 15},
-    [IN_SIT] = {.id = "sit", .display_name = "Sit", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_EDITOR_HIDDEN},
-    [IN_TELE_OUT] = {.id = "tele_out", .display_name = "Tele out", .kind = FT_INPUT_INT, .flags = FT_INPUT_FLAG_INTERNAL, .max_value = 255},
-};
-
-static const ft_input_schema input_schema_v1 = {
-    .struct_size = sizeof(ft_input_schema),
-    .record_size = sizeof(dd_input_t),
-    .record_align = _Alignof(dd_input_t),
-    .fields = input_fields_v1,
-    .field_count = IN_TELE_OUT + 1,
-    .controls = input_controls,
-    .control_count = (uint32_t)(sizeof(input_controls) / sizeof(input_controls[0])),
-};
-
-static const ft_input_schema *const legacy_input_schemas[] = {&input_schema_v1};
 
 static const ft_input_schema input_schema = {
     .struct_size = sizeof(ft_input_schema),
@@ -246,8 +209,6 @@ static const ft_input_schema input_schema = {
     .field_count = IN_COUNT,
     .controls = input_controls,
     .control_count = (uint32_t)(sizeof(input_controls) / sizeof(input_controls[0])),
-    .legacy_schemas = legacy_input_schemas,
-    .legacy_schema_count = (uint32_t)(sizeof(legacy_input_schemas) / sizeof(legacy_input_schemas[0])),
 };
 
 enum { LINKED_AIM_AT_SOURCE = 0 };
@@ -281,6 +242,8 @@ static int64_t ddnet_input_get(ft_game *game, const void *record, uint32_t field
     return in->m_Jump != 0;
   case IN_FIRE:
     return (in->m_Fire & 1) != 0;
+  case IN_FIRE_PRESS:
+    return get_flag_fire_press(in) != 0;
   case IN_HOOK:
     return in->m_Hook != 0;
   case IN_WEAPON:
@@ -325,13 +288,11 @@ static void ddnet_input_set(ft_game *game, void *record, uint32_t field, int64_t
   case IN_JUMP:
     in->m_Jump = value ? 1 : 0;
     break;
-  // Fire is a counter in the protocol whose low bit is the button. The physics
-  // counts the presses between two ticks by stepping up from one value to the
-  // other, wrapping at 64 (count_input), so the counter may only go up: a press
-  // or a release moves it on to the next odd or even value, and lowering it
-  // would count as presses. Letting go is DDNet's own reset, +1 when odd.
   case IN_FIRE:
-    if ((in->m_Fire & 1) != (value != 0)) in->m_Fire = (uint8_t)((in->m_Fire + 1) & 0x3f);
+    in->m_Fire = value ? 1 : 0;
+    break;
+  case IN_FIRE_PRESS:
+    set_flag_fire_press(in, value != 0);
     break;
   case IN_HOOK:
     in->m_Hook = value ? 1 : 0;
@@ -401,7 +362,8 @@ static void ddnet_input_describe(ft_game *game, const void *record, char *out, s
   (void)game;
   const dd_input_t *in = record;
   const char *dir = in->m_Direction < 0 ? "<" : (in->m_Direction > 0 ? ">" : "-");
-  snprintf(out, out_size, "%s%s%s%s %s", dir, in->m_Jump ? " jump" : "", (in->m_Fire & 1) ? " fire" : "", in->m_Hook ? " hook" : "",
+  snprintf(out, out_size, "%s%s%s%s%s %s", dir, in->m_Jump ? " jump" : "", (in->m_Fire & 1) ? " fire" : "",
+           get_flag_fire_press(in) ? " press" : "", in->m_Hook ? " hook" : "",
            in->m_WantedWeapon < DDNET_NUM_WEAPONS ? weapon_labels[in->m_WantedWeapon] : "?");
 }
 
@@ -1376,7 +1338,7 @@ void dd_world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
   }
   dst->replay_recording = src->replay_recording;
   dst->replay_tick = src->replay_tick;
-  dst->replay_clients = src->replay_clients;
+  memcpy(dst->replay_clients, src->replay_clients, sizeof(dst->replay_clients));
   dd_replay_copy(dst, src);
   dst->physics_particle_event_count =
       copy_effect_events((void **)&dst->physics_particle_events, &dst->physics_particle_event_capacity,
@@ -1557,7 +1519,7 @@ static bool dd_world_deserialize(ft_game *game, ft_world *world, const void *dat
   // are the stored ones at the spawn of a new world.
   dd_replay_free(world);
   world->replay_recording = NULL;
-  world->replay_clients = 0;
+  memset(world->replay_clients, 0, sizeof(world->replay_clients));
   ft_level *level = world->level;
   ddnet_world_copy(&world->core, &level->prototype);
   world->player_count = 0;

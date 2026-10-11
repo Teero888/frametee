@@ -114,7 +114,7 @@ static bool field_equal(const dd_input_t *left, const dd_input_t *right, int fie
   case DD_IN_JUMP:
     return left->m_Jump == right->m_Jump;
   case DD_IN_FIRE:
-    return left->m_Fire == right->m_Fire;
+    return (left->m_Fire & 1) == (right->m_Fire & 1) && !get_flag_fire_press(left) == !get_flag_fire_press(right);
   case DD_IN_HOOK:
     return left->m_Hook == right->m_Hook;
   case DD_IN_WEAPON:
@@ -142,6 +142,7 @@ static void copy_field(dd_input_t *destination, const dd_input_t *source, int fi
     break;
   case DD_IN_FIRE:
     destination->m_Fire = source->m_Fire;
+    set_flag_fire_press(destination, get_flag_fire_press(source));
     break;
   case DD_IN_HOOK:
     destination->m_Hook = source->m_Hook;
@@ -291,7 +292,7 @@ static uint64_t fast_clean_ddnet_fields(clean_job_t *job) {
   uint64_t changed = 0;
   for (uint32_t row = 0; row < job->context->frame->record_count; ++row) {
     dd_input_t *input = clean_cell(job->context, (int)row);
-    if (field_selected(job, DD_IN_TARGET) && !input->m_Hook && !(input->m_Fire & 1) &&
+    if (field_selected(job, DD_IN_TARGET) && !input->m_Hook && !dd_input_fire_active(input) &&
         !field_equal(input, job->defaults, DD_IN_TARGET)) {
       copy_field(input, job->defaults, DD_IN_TARGET);
       mark_fast_change(job, (int)row, DD_IN_TARGET);
@@ -391,7 +392,7 @@ static void clean_quiet_weapon_ranges(clean_job_t *job) {
   int row = (int)job->context->frame->record_count - 1;
   while (row >= 0) {
     dd_input_t *input = clean_cell(job->context, row);
-    while (row >= 0 && ((input->m_Fire & 1) || row_change_count(job, row, DD_IN_WEAPON) == 0)) {
+    while (row >= 0 && (dd_input_fire_active(input) || row_change_count(job, row, DD_IN_WEAPON) == 0)) {
       --row;
       if (row >= 0) input = clean_cell(job->context, row);
     }
@@ -399,7 +400,7 @@ static void clean_quiet_weapon_ranges(clean_job_t *job) {
     const int last = row;
     while (row > 0) {
       const dd_input_t *previous = clean_cell(job->context, row - 1);
-      if ((previous->m_Fire & 1) || row_change_count(job, row - 1, DD_IN_WEAPON) == 0) break;
+      if (dd_input_fire_active(previous) || row_change_count(job, row - 1, DD_IN_WEAPON) == 0) break;
       --row;
     }
     clean_range(job, row, last, DD_IN_WEAPON);
@@ -547,8 +548,9 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
   for (uint32_t row = 1; row + 1 < count; ++row) {
     const dd_input_t *previous = (const dd_input_t *)((unsigned char *)records + (size_t)(row - 1) * frame->record_stride);
     const dd_input_t *current = (const dd_input_t *)((unsigned char *)records + (size_t)row * frame->record_stride);
-    // A shot is the button going down, as the physics sees it (ddnet_input_from_record).
-    const bool fire = (current->m_Fire & 1) && !(previous->m_Fire & 1);
+    // A shot is the button going down, as the physics sees it (ddnet_input_from_record): held
+    // where it was not, or pressed during the tick.
+    const bool fire = ((current->m_Fire & 1) && !(previous->m_Fire & 1)) || get_flag_fire_press(current);
     const bool hook = current->m_Hook && !previous->m_Hook;
     if (fire || hook) {
       anchors[row] = true;
@@ -570,7 +572,7 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
       const dd_input_t *current = (const dd_input_t *)((unsigned char *)records + (size_t)row * frame->record_stride);
       const bool fired = attack_ticks[row + 1] != attack_ticks[row];
       const bool hooked = hook_states[row] == DDNET_HOOK_IDLE && hook_states[row + 1] != DDNET_HOOK_IDLE;
-      const bool jetpack_active = jetpacks[row] && (current->m_Fire & 1);
+      const bool jetpack_active = jetpacks[row] && dd_input_fire_active(current);
       if ((fired || hooked || jetpack_active) && !anchors[row]) {
         anchors[row] = true;
         ++runtime->anchors;

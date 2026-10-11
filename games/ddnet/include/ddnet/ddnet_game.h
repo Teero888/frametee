@@ -43,8 +43,9 @@ typedef struct __attribute__((aligned(8))) dd_input {
   int16_t m_TargetX;  // aim, relative to the tee
   int16_t m_TargetY;
   uint8_t m_Jump;
-  // A counter like DDNet's: the low bit is "held", and every press and release
-  // counts it up (the editor toggles the low bit).
+  // 1 while the fire button is held. A press that holding does not show (a tap
+  // between two ticks, pressing again while held) is FLAG_FIRE_PRESS. DDNet's
+  // counter of presses and releases is made from the two (ddnet_input_from_record).
   uint8_t m_Fire;
   uint8_t m_Hook;
   uint8_t m_WantedWeapon; // DDNET_WEAPON_*, switched to as soon as the tee has it
@@ -65,6 +66,7 @@ enum {
   FLAG_EYESTATE = 7 << 7,   // bits 7..9
   FLAG_EMOTE_TRIGGER = 1 << 10,
   FLAG_EMOTE_INDEX = 15 << 11, // bits 11..14
+  FLAG_FIRE_PRESS = 1 << 15,   // the fire button went down during the tick (see m_Fire)
 };
 
 // What a record does to the lock of the player's team while it says so.
@@ -87,7 +89,11 @@ DD_INPUT_FLAG_ACCESSORS(kill, FLAG_KILL)
 DD_INPUT_FLAG_ACCESSORS(spec, FLAG_SPEC)
 DD_INPUT_FLAG_ACCESSORS(sit, FLAG_SIT)
 DD_INPUT_FLAG_ACCESSORS(emote_trigger, FLAG_EMOTE_TRIGGER)
+DD_INPUT_FLAG_ACCESSORS(fire_press, FLAG_FIRE_PRESS)
 #undef DD_INPUT_FLAG_ACCESSORS
+
+// Whether fire does anything on the tick of a record: held, or pressed during the tick.
+static inline bool dd_input_fire_active(const dd_input_t *p) { return (p->m_Fire & 1) || get_flag_fire_press(p); }
 
 static inline uint8_t get_flag_eye_state(const dd_input_t *p) { return (uint8_t)((p->m_Flags & FLAG_EYESTATE) >> 7); }
 static inline void set_flag_eye_state(dd_input_t *p, uint8_t state) {
@@ -138,14 +144,19 @@ static inline void ddnet_input_from_record(const dd_input_t *record, ddnet_input
   out->target_x = record->m_TargetX;
   out->target_y = record->m_TargetY;
   out->jump = record->m_Jump != 0;
-  // Fire is a counter whose low bit is the button, and the physics counts
-  // every value between two ticks' counters as presses and releases. A record
-  // only says whether the button is down, as its lane shows: where inputs made
-  // apart meet (a take recorded on after rewinding, a snippet boundary, an
-  // edited tick) its counter can jump or drop, which would count as presses.
-  // So the counter goes on from the tick before's, one step when the button
-  // changes, and the tee shoots when it goes down and only then.
-  if ((out->fire & 1) != (record->m_Fire & 1)) out->fire = (out->fire + 1) & 0x3f;
+  // DDNet's fire is a counter of presses and releases, and the physics only
+  // asks two things of it: whether the button is down (the low bit) and whether
+  // it went down since the tick before (any press between the two counters). A
+  // record says just that, held and pressed, and the counter goes on from the
+  // tick before's by the steps that give it: one for the button changing, two
+  // more for a press the change does not make (down and up again, or up and
+  // down again). Going on from the tick before, it cannot jump where inputs made
+  // apart meet (a snippet boundary, an edited tick, a take recorded after
+  // rewinding), so the tee shoots exactly where the records say.
+  const bool was_held = out->fire & 1, held = record->m_Fire & 1;
+  int fire_steps = was_held != held;
+  if (get_flag_fire_press(record) && !(held && !was_held)) fire_steps += 2;
+  out->fire = (out->fire + fire_steps) & 0x3f;
   out->hook = record->m_Hook != 0;
   out->player_flags = record->m_PlayerFlags & DD_PHYSICS_PLAYER_FLAGS;
   // DDNet's client sends the weapon it wants on every tick, as a number one
@@ -238,10 +249,10 @@ struct ft_world {
   // the recording tick it shows; NULL when no player replays one.
   const struct ft_recording *replay_recording;
   int replay_tick;
-  // The recording's clients this world replays, one bit each: what belongs to
-  // anyone else (their shots, their events) is left out. All bits when every
-  // player of the recording is imported.
-  uint64_t replay_clients;
+  // The recording's clients this world replays, one bit each (DDNet has up to
+  // 128): what belongs to anyone else (their shots, their events) is left out.
+  // All bits when every player of the recording is imported.
+  uint64_t replay_clients[2];
   // Per player, how replaying a recording left it (see dd_recording.c); NULL
   // until a player of this world first replays one.
   struct dd_replay_slot *replay_slots;

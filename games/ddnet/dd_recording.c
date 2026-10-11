@@ -480,13 +480,15 @@ static int world_player_of_cid(const ft_recording *recording, int cid, const ft_
   return -1;
 }
 
+static bool replays_client(const ft_world *world, int cid) { return (world->replay_clients[cid / 64] >> (cid % 64)) & 1u; }
+
 // Whether something of the replayed recording belonging to `owner` is shown in this world: what
 // belongs to an imported player or to the map (turrets, doors). What belongs to a player the demo
 // does not show (or cannot be told) is shown only with the whole recording imported.
 static bool owner_shown(const ft_world *world, int owner) {
   if (owner == DD_STATE_OWNER_WORLD) return true;
-  if (owner < 0 || owner >= DD_STATE_MAX_CLIENTS) return world->replay_clients == UINT64_MAX;
-  return (world->replay_clients >> owner) & 1u;
+  if (owner < 0 || owner >= DD_STATE_MAX_CLIENTS) return world->replay_clients[0] == UINT64_MAX && world->replay_clients[1] == UINT64_MAX;
+  return replays_client(world, owner);
 }
 
 // A hammer's impact belongs to the tee it hits as well as the one that swung.
@@ -762,7 +764,7 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
                           uint32_t player_count) {
   const int count = world->player_count;
   world->replay_recording = NULL;
-  world->replay_clients = 0;
+  memset(world->replay_clients, 0, sizeof(world->replay_clients));
   int replayed_players = 0;
   for (int i = 0; i < count; ++i) {
     struct dd_replay_slot *slot = i < slot_count ? &slots[i] : NULL;
@@ -810,19 +812,19 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
     // The world around the recording is the recording player's, or else anyone's.
     if (!world->replay_recording || cid == recording->local_cid) {
       if (world->replay_recording != recording) {
-        world->replay_clients = 0;
+        memset(world->replay_clients, 0, sizeof(world->replay_clients));
         replayed_players = 0;
       }
       world->replay_recording = recording;
       world->replay_tick = pb->tick;
     }
-    if (world->replay_recording == recording && !((world->replay_clients >> cid) & 1u)) {
-      world->replay_clients |= UINT64_C(1) << cid;
+    if (world->replay_recording == recording && !replays_client(world, cid)) {
+      world->replay_clients[cid / 64] |= UINT64_C(1) << (cid % 64);
       ++replayed_players;
     }
   }
   if (world->replay_recording && replayed_players >= ((const ft_recording *)world->replay_recording)->player_count)
-    world->replay_clients = UINT64_MAX;
+    memset(world->replay_clients, 0xff, sizeof(world->replay_clients));
 }
 
 // What a player does on the tick about to be stepped (with the effects of the build the world steps
@@ -895,7 +897,7 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
   if (any_replayed) show_recorded(world, slots, slot_count, playback, player_count);
   else {
     world->replay_recording = NULL;
-    world->replay_clients = 0;
+    memset(world->replay_clients, 0, sizeof(world->replay_clients));
   }
   if (world->replay_recording)
     emit_events(world, (ft_recording *)world->replay_recording, world->replay_tick, playback, player_count, effects_bound);
