@@ -1327,10 +1327,74 @@ static void render_scrollbar(ui_handler_t *ui, const layout_t *l, float top, flo
   igEndChild();
 }
 
+// The view follows the playhead as the timeline's does (timeline.c): the band
+// at either edge of the lanes it is kept out of, and that a held playhead, key
+// or export bracket scrolls the view from.
+static float follow_margin(const layout_t *l) { return (l->x1 - l->x0) / 12.f; }
+
+// Keeps the playhead in view by scrolling along with it once it reaches a
+// margin. While playing it is only followed out of view, so a view panned away
+// from a playing playhead stays put; one moved on purpose (a transport button,
+// the time field, the Render tab) is brought back into view from wherever it was.
+static void follow_playhead(ui_handler_t *ui, const layout_t *l) {
+  camera_editor_t *ed = &ui->camera_editor;
+  static double last_playhead = NAN;
+  const double playhead = ed->playhead, previous = last_playhead;
+  last_playhead = playhead;
+  if (!ui->follow_playhead || g_drag.mode != DRAG_NONE || playhead == previous || ed->pixels_per_second <= 0.f) return;
+  const double visible = (l->x1 - l->x0) / ed->pixels_per_second;
+  const double margin = follow_margin(l) / ed->pixels_per_second;
+  const double low = ed->view_start + margin, high = ed->view_start + visible - margin;
+  if (playhead >= low && playhead <= high) return;
+  const bool was_in_view = previous >= ed->view_start && previous <= ed->view_start + visible;
+  if (ed->playing && !was_in_view) return;
+  ed->view_start = fmax(view_minimum(&ui->camera_timeline), playhead > high ? playhead - (visible - margin) : playhead - margin);
+}
+
+// Whether the mouse is holding something it moves along time: the playhead,
+// a key, an export bracket.
+static bool dragging_along_time(void) {
+  if (!igIsMouseDown_Nil(ImGuiMouseButton_Left)) return false;
+  return g_drag.mode == DRAG_SCRUB || g_drag.mode == DRAG_RANGE_START || g_drag.mode == DRAG_RANGE_END ||
+         (g_drag.mode == DRAG_KEY && igIsMouseDragging(ImGuiMouseButton_Left, 2.f));
+}
+
+// What is held inside a margin scrolls the view that way, the faster the
+// deeper it is held, so it can be dragged along the whole camera timeline.
+// Runs before the drag puts what it holds under the mouse in the moved view.
+static void scroll_with_drag(ui_handler_t *ui, const layout_t *l) {
+  camera_editor_t *ed = &ui->camera_editor;
+  if (!dragging_along_time()) return;
+  const float margin = follow_margin(l);
+  const float mouse_x = igGetIO_Nil()->MousePos.x;
+  float depth = 0.f; // -1..1 at the edges, more past them
+  if (mouse_x > l->x1 - margin) depth = (mouse_x - (l->x1 - margin)) / margin;
+  else if (mouse_x < l->x0 + margin) depth = (mouse_x - (l->x0 + margin)) / margin;
+  if (depth == 0.f) return;
+  depth = fmaxf(-2.f, fminf(2.f, depth));
+  const double pixels_per_second = 1500.0 * gfx_get_ui_scale();
+  ed->view_start += depth * pixels_per_second * igGetIO_Nil()->DeltaTime / ed->pixels_per_second;
+  ed->view_start = fmax(view_minimum(&ui->camera_timeline), ed->view_start);
+}
+
+// While something is held along time, the margins it scrolls the view from show faintly.
+static void draw_follow_margins(ui_handler_t *ui, ImDrawList *draw, const layout_t *l) {
+  if (!dragging_along_time()) return;
+  const float margin = follow_margin(l);
+  const ImU32 edge = igGetColorU32_Col(ImGuiCol_SeparatorActive, 0.14f);
+  const ImU32 inner = igGetColorU32_Col(ImGuiCol_SeparatorActive, 0.f);
+  if (ui->camera_editor.view_start > view_minimum(&ui->camera_timeline))
+    ImDrawList_AddRectFilledMultiColor(draw, (ImVec2){l->x0, l->ruler_top}, (ImVec2){l->x0 + margin, l->bottom}, edge, inner, inner,
+                                       edge);
+  ImDrawList_AddRectFilledMultiColor(draw, (ImVec2){l->x1 - margin, l->ruler_top}, (ImVec2){l->x1, l->bottom}, inner, edge, edge,
+                                     inner);
+}
+
 static void handle_input(ui_handler_t *ui, layout_t *l) {
   camera_editor_t *ed = &ui->camera_editor;
   ImGuiIO *io = igGetIO_Nil();
   const float scale = gfx_get_ui_scale();
+  scroll_with_drag(ui, l);
   igSetCursorScreenPos((ImVec2){l->x0, l->ruler_top});
   igInvisibleButton("##camera_lanes", (ImVec2){fmaxf(1.f, l->x1 - l->x0), fmaxf(1.f, l->bottom - l->ruler_top)},
                     ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
@@ -1390,11 +1454,14 @@ static void handle_input(ui_handler_t *ui, layout_t *l) {
     igSetTooltip("Drag to set where the export %s", on_range_end ? "ends" : "starts");
 
   if (igIsItemActive()) {
-    const double snapped = input_shift_down() ? mouse_time : snap_to_frame(ui, mouse_time);
+    // What is held stops at the edge it is held against while the view
+    // scrolls on under it, rather than running off out of sight.
+    const double held_time = time_of(ed, l, fminf(fmaxf(mouse.x, l->x0), l->x1));
+    const double snapped = input_shift_down() ? held_time : snap_to_frame(ui, held_time);
     switch (g_drag.mode) {
     case DRAG_SCRUB: set_playhead(ui, snapped); break;
     case DRAG_KEY:
-      if (igIsMouseDragging(ImGuiMouseButton_Left, 2.f)) drag_key(ui, l, mouse, mouse_time);
+      if (igIsMouseDragging(ImGuiMouseButton_Left, 2.f)) drag_key(ui, l, mouse, held_time);
       break;
     case DRAG_HANDLE:
       if (igIsMouseDragging(ImGuiMouseButton_Left, 1.f)) drag_handle(ui, l, mouse);
@@ -1756,6 +1823,11 @@ static void render_controls(ui_handler_t *ui) {
   const float scale = gfx_get_ui_scale();
   camera_editor_transport(ui);
 
+  // (the timeline's own switch: one setting for both)
+  igSameLine(0, 8.f * scale);
+  if (toggle_button(ICON_FA_ARROWS_TO_DOT "##camera_follow", ui->follow_playhead, "Follow playhead"))
+    ui->follow_playhead = !ui->follow_playhead;
+
   igSameLine(0, 16.f * scale);
   char label[96], tip[192];
   snprintf(label, sizeof(label), "%s Look through", ed->look_through ? ICON_FA_EYE : ICON_FA_EYE_SLASH);
@@ -1872,6 +1944,7 @@ void camera_window_render(ui_handler_t *ui) {
     graph_fit(ui, &l);
   }
 
+  follow_playhead(ui, &l);
   handle_input(ui, &l);
 
   // In the graph editor the label column lists the channels to pick from.
@@ -1921,6 +1994,7 @@ void camera_window_render(ui_handler_t *ui) {
   draw_seconds_ruler(ui, draw, &l);
   draw_game_ruler(ui, draw, &l);
   draw_range(ui, draw, &l, false);
+  draw_follow_margins(ui, draw, &l);
   const float playhead_x = x_of(ed, &l, ed->playhead);
   ImDrawList_AddLine(draw, (ImVec2){playhead_x, l.ruler_top}, (ImVec2){playhead_x, l.bottom}, PLAYHEAD_COLOR, 2.f * scale);
   ImDrawList_AddTriangleFilled(draw, (ImVec2){playhead_x - 7.f * scale, l.ruler_top}, (ImVec2){playhead_x + 7.f * scale, l.ruler_top},
