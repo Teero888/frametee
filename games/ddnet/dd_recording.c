@@ -887,11 +887,15 @@ void dd_recording_world_step(ft_game *game, ft_world *world, const void *inputs,
   }
 
   world->replay_muted = any_replayed;
+  // (from where the shots really are)
+  if (events) ddnet_world_entities_current(world);
   emit_bullet_trails(&world->core);
   if (events)
     ddnet_ev_world_tick(&world->core);
-  else
+  else {
     ddnet_world_tick(&world->core);
+    world->entities_stale = true;
+  }
   world->replay_muted = false;
 
   if (any_replayed) show_recorded(world, slots, slot_count, playback, player_count);

@@ -671,6 +671,7 @@ static float race_time(const ft_world *world, int client_id) {
 
 static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t entity_class, int32_t entity, uint32_t prop, ft_value *out) {
   (void)game;
+  ddnet_world_entities_current(world);
   if (entity_class == DD_CLASS_PROJECTILE) return projectile_prop_get(world, entity, prop, out);
   if (entity_class == DD_CLASS_LASER) return laser_prop_get(world, entity, prop, out);
   if (entity_class == DD_CLASS_HOOK) return hook_prop_get(world, entity, prop, out);
@@ -946,6 +947,7 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
 static int32_t ddnet_entity_count(ft_game *game, const ft_world *world, uint32_t entity_class) {
   (void)game;
   if (!world) return 0;
+  ddnet_world_entities_current(world);
   switch (entity_class) {
   case DD_CLASS_PLAYER:
     return world->player_count;
@@ -1324,6 +1326,7 @@ void dd_world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
   // what changed since the two were the same), which is what keeps the engine's
   // constant snapshotting affordable.
   ddnet_world_copy(&dst->core, &src->core);
+  dst->entities_stale = src->entities_stale;
   // (only the players and client ids that src has)
   const int clients = src->core.num_clients;
   if (!dd_world_reserve(dst, clients, src->player_count)) {

@@ -627,6 +627,7 @@ static float owned_alpha(ft_game *game, const ft_world *world, int viewer_player
 }
 
 static void render_projectiles_and_lasers(ft_game *game, const ft_render_frame *frame, const ft_world *world, float intra) {
+  ddnet_world_entities_current(world);
   const ddnet_world_t *core = &world->core;
   const int tick = core->tick;
   const int team = dd_view_team(frame);

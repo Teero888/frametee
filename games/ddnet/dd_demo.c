@@ -249,6 +249,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
                        const int *client_options, const ft_world *prev_world, const ft_world *current_world, bool include_static,
                        const ddnet_vec2_t *active_positions, int active_pos_count, int demo_tick, int tick_delta, int *next_item_id) {
   (void)client_options;
+  ddnet_world_entities_current(current_world);
   const ddnet_world_t *cur = &current_world->core;
   const ft_level *level = game->current_level;
   int first_exported_local = -1;

@@ -260,9 +260,25 @@ struct ft_world {
   // While the physics steps: effects raised by replayed players are dropped,
   // the recording brings its own.
   bool replay_muted;
+  // A step without effects leaves some bullets and laser walls behind until
+  // they matter (see ddnet_world_sync); ddnet_world_entities_current brings
+  // them up to date before anything reads them.
+  bool entities_stale;
 };
 
+// Brings a world's entities up to date for reading them (its projectiles and
+// lasers, world->core.entities): the optimized physics moves bullets and laser
+// walls that no tee is near only when they matter, and a world stepped without
+// effects has them where they were then. Changes nothing the world will do.
+static inline void ddnet_world_entities_current(const ft_world *world) {
+  if (!world || !world->entities_stale) return;
+  ft_world *current = (ft_world *)world;
+  ddnet_world_sync(&current->core);
+  current->entities_stale = false;
+}
+
 // Reads a world handed over by the engine, e.g. from tas_api_t::get_world_state_at.
+// Its entities as they are: see ddnet_world_entities_current.
 static inline const ddnet_world_t *ddnet_world(const ft_world *world) { return world ? &world->core : 0; }
 static inline ddnet_world_t *ddnet_world_mut(ft_world *world) { return world ? &world->core : 0; }
 
