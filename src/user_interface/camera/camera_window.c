@@ -166,12 +166,32 @@ static void easy_ease(ui_handler_t *ui, camera_channel_t channel, int index) {
   if (opened) edit_end(ui);
 }
 
+// The Render tab plays the video it renders: the export range, from its
+// start to its last frame (the range is inclusive, see
+// video_export_frame_count), and no further.
+static bool render_range(ui_handler_t *ui, double *first, double *last) {
+  if (!ui->render.preview) return false;
+  double end;
+  camera_editor_export_range(ui, first, &end);
+  if (!(end > *first)) return false;
+  const double fps = frame_rate(ui);
+  *last = *first + floor((end - *first) * fps + 1e-9) / fps;
+  return true;
+}
+
 static void toggle_play(ui_handler_t *ui) {
   camera_editor_t *ed = &ui->camera_editor;
   double start, end;
   camera_editor_export_range(ui, &start, &end);
   ed->playing = !ed->playing;
-  if (ed->playing && end > start && ed->playhead >= end - half_frame(ui)) set_playhead(ui, start);
+  if (!ed->playing) return;
+  double first, last;
+  if (render_range(ui, &first, &last)) {
+    // (from its start again at its end, or outside it)
+    if (ed->playhead < first - half_frame(ui) || ed->playhead >= last - half_frame(ui)) set_playhead(ui, first);
+  } else if (end > start && ed->playhead >= end - half_frame(ui)) {
+    set_playhead(ui, start);
+  }
 }
 
 static void step_frames(ui_handler_t *ui, int frames) {
@@ -257,7 +277,14 @@ void camera_editor_update(ui_handler_t *ui) {
                               camera_game_tick(&ui->camera_timeline, ed->playhead, tps));
     const int affordable = model_playback_affordable_ticks();
     if (ticks > affordable) step *= affordable / ticks;
-    set_playhead(ui, ed->playhead + step);
+    double next = ed->playhead + step;
+    double first, last;
+    if (render_range(ui, &first, &last) && next >= last) {
+      // Stops on the video's last frame (one dragged past it stays where it is).
+      if (ed->playhead <= last) next = last;
+      ed->playing = false;
+    }
+    set_playhead(ui, next);
   }
   // The path drawn in the level needs the characters' positions all along it,
   // and so does a chase, for which way they are heading.
