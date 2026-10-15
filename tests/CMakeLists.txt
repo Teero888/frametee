@@ -1,4 +1,4 @@
-add_executable(input_test input.c ../src/system/input.c)
+add_executable(input_test input.c ../src/system/input.c ../src/system/raw_mouse.c)
 target_include_directories(input_test PRIVATE ../src ../include ../libs/cimgui
     $<TARGET_PROPERTY:${GLFW_LINK_TARGET},INTERFACE_INCLUDE_DIRECTORIES>)
 target_compile_definitions(input_test PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS=1)

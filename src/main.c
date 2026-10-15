@@ -795,6 +795,7 @@ int main(int argc, char **argv) {
     input_set_blocked(dialog_up);
     const bool capture_recording_cursor =
         handler.user_interface.timeline.recording && engine_input_cursor_field() >= 0 && !dialog_up;
+    input_set_mouse_captured(capture_recording_cursor);
     if (capture_recording_cursor) {
       glfwSetInputMode(handler.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
       io->ConfigFlags |= ImGuiConfigFlags_NoMouse;

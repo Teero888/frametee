@@ -1,5 +1,6 @@
 #include "input.h"
 #include "input_repeat.h"
+#include "raw_mouse.h"
 #include <GLFW/glfw3.h>
 #include <math.h>
 #include <string.h>
@@ -14,6 +15,8 @@ typedef struct {
   bool focused;
   // Set while a file dialog is up: everything reads as idle, as if another window had focus.
   bool blocked;
+  // The cursor is captured (recording), see input_set_mouse_captured().
+  bool mouse_captured;
 
   unsigned char keys[KEY_COUNT];
   unsigned char keys_prev[KEY_COUNT];
@@ -326,8 +329,6 @@ void input_init(GLFWwindow *window) {
   glfwSetInputMode(window, GLFW_STICKY_KEYS, GLFW_TRUE);
   glfwSetInputMode(window, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
 
-  if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
-
   // Seeded from the real cursor, or the first event to arrive would report a move all the way from
   // the origin.
   glfwGetCursorPos(window, &g_input.cursor_x, &g_input.cursor_y);
@@ -337,8 +338,21 @@ void input_init(GLFWwindow *window) {
 }
 
 void input_shutdown(void) {
+  raw_mouse_stop();
   input_repeat_shutdown();
   memset(&g_input, 0, sizeof(g_input));
+}
+
+void input_set_mouse_captured(bool captured) {
+  if (!g_input.window || captured == g_input.mouse_captured) return;
+  g_input.mouse_captured = captured;
+  if (!captured) {
+    raw_mouse_stop();
+    return;
+  }
+  // Raw motion, unaccelerated: from a reader of its own where the platform has one (see raw_mouse.h),
+  // else GLFW's, which it only uses while the cursor is disabled anyway.
+  if (!raw_mouse_start() && glfwRawMouseMotionSupported()) glfwSetInputMode(g_input.window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
 }
 
 void input_accumulate_mouse_pos(double x, double y, double *out_dx, double *out_dy) {

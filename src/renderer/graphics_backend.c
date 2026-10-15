@@ -8,6 +8,7 @@
 #include <system/config.h>
 #include <system/fs.h>
 #include <system/input.h>
+#include <system/raw_mouse.h>
 #include <user_interface/snippet_editor.h>
 #include <user_interface/timeline/timeline_interaction.h>
 #include <user_interface/timeline/timeline_model.h>
@@ -127,18 +128,8 @@ static void flush_imgui_mouse_pos(void) {
   ImGui_ImplGlfw_CursorPosCallback((void *)g_imgui_mouse.window, g_imgui_mouse.x, g_imgui_mouse.y);
 }
 
-static void cursor_position_callback(GLFWwindow *window, double xpos, double ypos) {
-  gfx_handler_t *handler = glfwGetWindowUserPointer(window);
-  if (!handler) return;
-
-  g_imgui_mouse.window = window;
-  g_imgui_mouse.x = xpos;
-  g_imgui_mouse.y = ypos;
-  g_imgui_mouse.pending = true;
-
-  double diff_x, diff_y;
-  input_accumulate_mouse_pos(xpos, ypos, &diff_x, &diff_y);
-
+// Mouse motion into the aim being recorded: scaled by the sensitivity, kept within reach.
+static void add_recording_aim(gfx_handler_t *handler, double diff_x, double diff_y) {
   if (!handler->user_interface.timeline.recording || engine_input_cursor_field() < 0) return;
   // Over a take the aim is the take's: moving the mouse there would show for a frame and snap back.
   if (interaction_cursor_held_by_take(&handler->user_interface.timeline)) return;
@@ -161,6 +152,21 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   if ((int)handler->user_interface.recording_mouse_pos[0] == 0 && (int)handler->user_interface.recording_mouse_pos[1] == 0) {
     handler->user_interface.recording_mouse_pos[0] = 1;
   }
+}
+
+static void cursor_position_callback(GLFWwindow *window, double xpos, double ypos) {
+  gfx_handler_t *handler = glfwGetWindowUserPointer(window);
+  if (!handler) return;
+
+  g_imgui_mouse.window = window;
+  g_imgui_mouse.x = xpos;
+  g_imgui_mouse.y = ypos;
+  g_imgui_mouse.pending = true;
+
+  double diff_x, diff_y;
+  input_accumulate_mouse_pos(xpos, ypos, &diff_x, &diff_y);
+  // (the raw motion read on its own thread is the aim's then, see gfx_begin_frame())
+  if (!raw_mouse_running()) add_recording_aim(handler, diff_x, diff_y);
 }
 
 static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) {
@@ -450,6 +456,12 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
   glfwPollEvents();
   input_new_frame();
+  if (raw_mouse_running()) {
+    double dx, dy;
+    raw_mouse_take(&dx, &dy);
+    // (it is the mouse's motion whichever window has it)
+    if (glfwGetWindowAttrib(handler->window, GLFW_FOCUSED)) add_recording_aim(handler, dx, dy);
+  }
 
   if (glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
     ImGui_ImplGlfw_Sleep(10);

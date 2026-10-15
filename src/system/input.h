@@ -36,6 +36,10 @@ void input_new_frame(void);
 // While blocked (a file dialog is up), from the next input_new_frame() on, every key, button, wheel
 // notch and motion reads as idle, as if another window had focus.
 void input_set_blocked(bool blocked);
+// Whether the cursor is captured (disabled) for recording, which is when the aim is taken from the
+// mouse's raw motion: on Windows raw_mouse_take() has it, elsewhere the cursor callback (GLFW's raw
+// motion).
+void input_set_mouse_captured(bool captured);
 
 // Fed from the GLFW callbacks, which see every event even between frames.
 void input_accumulate_mouse_pos(double x, double y, double *out_dx, double *out_dy);
