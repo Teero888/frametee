@@ -629,7 +629,8 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   if (keybinds_is_action_pressed(kb, ACTION_SAVE_PROJECT, false)) ui_quick_save(ui);
   if (keybinds_is_action_pressed(kb, ACTION_SAVE_PROJECT_AS, false)) ui_save_project_as(ui);
   if (keybinds_is_action_pressed(kb, ACTION_OPEN_PROJECT, false)) ui_request_open_project(ui, NULL);
-  if (keybinds_is_action_pressed(kb, ACTION_OPEN_CONTROLS, false)) ui->keybinds.show_settings_window = true;
+  // (with the interface, which Tab may have taken down)
+  if (keybinds_is_action_pressed(kb, ACTION_OPEN_CONTROLS, false)) ui->keybinds.show_settings_window = ui->show_ui = true;
 
   if (cmd) {
     undo_manager_register_command(&ui->undo_manager, cmd);

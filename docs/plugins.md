@@ -204,17 +204,16 @@ time. `ui_visible` is the field that changes most: it is false while the user
 has the editor's interface down (Tab), which is the request to see the level
 with nothing over it. Plugins are still updated every frame while it is false --
 a search, a recording or a world overlay is the work the screen is being cleared
-to show -- so what belongs behind the test is a plugin's panels:
+to show. The editor keeps the windows and menu bar entries a plugin begins
+meanwhile off the screen (popups and tooltips stay, being answers to something
+just done; a docked window stays docked), so the test only spares drawing what
+nobody sees:
 
 ```c
 if (state->show_window && state->context->ui_visible) {
   igBegin(...);
 }
 ```
-
-Menu bar entries need no test, because the menu bar itself stays up. Nothing
-enforces this: the editor cannot tell which windows came from which plugin, so a
-plugin that ignores the flag simply keeps drawing over a cleared screen.
 
 One constraint deserves its own note, because breaking it hangs the editor
 rather than failing: **do not start or join threads while your library is

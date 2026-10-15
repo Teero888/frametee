@@ -625,9 +625,13 @@ static void restore_default_panels(ui_handler_t *ui, ImGuiID dockspace_id) {
   ui->select_timeline_tab = true;
 }
 
+// The dockspace the panels live in. Its ID is taken outside any window of ours, as setup_docking
+// always has, so it is the same wherever it is asked for at that level.
+static ImGuiID main_dockspace(void) { return igGetID_Str("MainDockSpace"); }
+
 // docking setup
 void setup_docking(ui_handler_t *ui) {
-  ImGuiID main_dockspace_id = igGetID_Str("MainDockSpace");
+  ImGuiID main_dockspace_id = main_dockspace();
 
   // Ensure the dockspace covers the entire viewport initially
   ImGuiViewport *viewport = igGetMainViewport();
@@ -2338,13 +2342,12 @@ void ui_render(ui_handler_t *ui) {
     }
   }
 
-  // A settings dialog rather than a workspace panel, so Tab does not drop it:
-  // the menu that opens it is still there with the interface down.
-  keybinds_render_settings_window(ui);
+  // Tab drops this one too, like any window; its shortcut brings the interface back.
+  if (ui->show_ui) keybinds_render_settings_window(ui);
   render_quit_prompt(ui);
 
-  // Not a panel: the prompt answers the File menu, which is still there with
-  // the interface down.
+  // Not a panel: the prompt answers something just asked for, a shortcut or closing the window, with
+  // the interface down as much as up.
   render_unsaved_prompt(ui);
   recording_import_render(ui);
 
@@ -2474,6 +2477,10 @@ void ui_begin_frame(ui_handler_t *ui) {
   if (ui->show_ui) {
     render_menu_bar(ui);
     setup_docking(ui);
+  } else {
+    // Kept alive though, so a docked window something still begins (a plugin's) stays docked, and
+    // hidden, rather than coming loose of a dockspace that is gone.
+    igDockSpace(main_dockspace(), (ImVec2){0.0f, 0.0f}, ImGuiDockNodeFlags_KeepAliveOnly, NULL);
   }
   // Resolve the docked content rectangle before the camera and Vulkan render
   // target use it. The later Begin appends the image to this same window;

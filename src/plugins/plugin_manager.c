@@ -721,7 +721,24 @@ void plugin_manager_on_game_changed(plugin_manager_t *manager) {
   }
 }
 
+// With the interface down (Tab) a plugin's windows and menu bar entries go too, whether or not the
+// plugin looks at tas_context_t::ui_visible: every window first begun during the plugins' update
+// this frame is kept off the screen, and so out of reach of the mouse. Popups and tooltips stay,
+// being answers to something just done, as do windows the editor had already begun this frame (the
+// viewport, which a plugin may draw into).
+static void hide_windows_begun_since(int begin_order) {
+  ImGuiContext *g = igGetCurrentContext();
+  for (int i = 0; i < g->Windows.Size; ++i) {
+    ImGuiWindow *window = g->Windows.Data[i];
+    if (window->LastFrameActive != g->FrameCount || window->BeginOrderWithinContext < begin_order) continue;
+    if (window->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip)) continue;
+    window->Hidden = true;
+  }
+}
+
 void plugin_manager_update_all(plugin_manager_t *manager) {
+  const bool hide = manager->context && !manager->context->is_headless && !manager->context->ui_visible;
+  const int begin_order = hide ? igGetCurrentContext()->WindowsActiveCount : 0;
   for (int i = 0; i < manager->count; ++i) {
     if (manager->plugins[i].status == PLUGIN_STATUS_LOADED && manager->plugins[i].update && manager->plugins[i].data) {
       g_running_plugin = manager->plugins[i].handle;
@@ -729,6 +746,7 @@ void plugin_manager_update_all(plugin_manager_t *manager) {
       g_running_plugin = NULL;
     }
   }
+  if (hide) hide_windows_begun_since(begin_order);
 }
 
 void plugin_manager_shutdown(plugin_manager_t *manager) {

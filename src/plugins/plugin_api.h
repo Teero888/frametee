@@ -39,9 +39,9 @@ struct tas_context_t {
   // False while the editor's interface is down (Tab), which is how a user asks
   // for the level with nothing over it. A plugin is still updated every frame
   // while it is false -- searches, recordings and world overlays are the work
-  // the editor is being cleared to show -- so what belongs behind this test is
-  // the plugin's panels, exactly what the editor and the games drop from the
-  // same gesture. Menu bar entries stay: the menu bar itself does.
+  // the editor is being cleared to show. The editor keeps whatever windows and
+  // menu bar entries the plugin begins meanwhile off the screen (its popups and
+  // tooltips stay), so the test is only there to skip drawing what nobody sees.
   //
   // Live, and read through the context pointer the plugin was handed: check it
   // in plugin_update rather than copying it in plugin_init.
