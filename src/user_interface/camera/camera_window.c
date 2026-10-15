@@ -587,9 +587,8 @@ bool camera_editor_viewport_overlay(ui_handler_t *ui, float origin_x, float orig
   bool took_mouse = g_viewport_grab.kind != GRAB_NONE;
   if (hovered && g_viewport_grab.kind == GRAB_NONE && hover.kind != GRAB_NONE) {
     const bool pinned = hover.kind != GRAB_HANDLE && hover.factor < 0.05f;
-    igSetTooltip(hover.kind == GRAB_HANDLE ? "Drag to bend the path. Alt: move this side only"
-                 : pinned                  ? "Follow and Aim hold this point on the character here"
-                                           : "Click to select, drag to move the key");
+    // (why it does not move when dragged)
+    if (pinned) igSetTooltip("Follow and Aim hold this point on the character here");
     if (igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
       select_key(ui, CAMERA_CHANNEL_POSE, hover.key);
       took_mouse = true;
@@ -602,7 +601,6 @@ bool camera_editor_viewport_overlay(ui_handler_t *ui, float origin_x, float orig
   } else if (path_time >= 0.0) {
     const double time = input_shift_down() ? path_time : snap_to_frame(ui, path_time);
     ImDrawList_AddCircleFilled(draw, path_at, 5.f * scale, IM_COL32(255, 255, 255, 200), 12);
-    igSetTooltip("Click to add a camera key at %.2fs", time);
     if (igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
       add_key(ui, CAMERA_CHANNEL_POSE, time, 0.f, false);
       took_mouse = true;
@@ -1323,7 +1321,6 @@ static void empty_menu(ui_handler_t *ui) {
       camera_even_speed(&ui->camera_timeline);
       if (opened) edit_end(ui);
     }
-    if (igIsItemHovered(0)) igSetTooltip("Retime the keys inside each shot so the camera moves at one speed");
   }
 }
 
@@ -1585,8 +1582,6 @@ static void handle_input(ui_handler_t *ui, layout_t *l) {
       g_drag.mode = DRAG_SCRUB;
     }
   }
-  if (hovered && g_drag.mode == DRAG_NONE && (on_range_start || on_range_end))
-    igSetTooltip("Drag to set where the export %s", on_range_end ? "ends" : "starts");
 
   if (igIsItemActive()) {
     // What is held stops at the edge it is held against while the view
@@ -1696,7 +1691,6 @@ static void inspect_timing(ui_handler_t *ui, camera_channel_t channel, int index
   char label[64];
   snprintf(label, sizeof(label), "Easy ease (%s)", binding_text(ui, ACTION_CAMERA_EASY_EASE));
   if (igButton(label, (ImVec2){0, 0})) easy_ease(ui, channel, index);
-  if (igIsItemHovered(0)) igSetTooltip("Arrive and leave at rest");
 }
 
 static void inspect_pose(ui_handler_t *ui, int index) {
@@ -1731,7 +1725,6 @@ static void inspect_pose(ui_handler_t *ui, int index) {
       if (opened) edit_end(ui);
     }
   }
-  if (igIsItemHovered(0)) igSetTooltip("Replace this key with what the viewport shows");
 
   igSeparatorText("Path");
   int mode = key->spatial.mode;
@@ -1749,7 +1742,6 @@ static void inspect_pose(ui_handler_t *ui, int index) {
     memset(key->spatial.target_out, 0, sizeof(key->spatial.target_out));
     if (opened) edit_end(ui);
   }
-  if (igIsItemHovered(0)) igSetTooltip("A sharp corner: the path runs straight into and out of this key");
   igTextDisabled(ui->camera_editor.look_through ? "Turn off Look through to drag path handles in the viewport."
                                                 : "Drag the blue handles in the viewport; Alt moves one side.");
 }
@@ -1804,20 +1796,12 @@ static void inspect_target(ui_handler_t *ui) {
     }
     igEndCombo();
   }
-  if (igIsItemHovered(0))
-    igSetTooltip("Follow and Aim track the middle of the box around the focus and every character ticked here.\n"
-                 "Without Focus cuts the first one ticked is the focus; with none either, the selected track is.");
   if (is_3d) igDragFloat3("Offset", camera->subject_offset, 0.02f, 0.f, 0.f, "%.2f", 0);
   else igDragFloat2("Offset", camera->subject_offset, 0.02f, 0.f, 0.f, "%.2f", 0);
   track_item(ui, "Edit target offset");
-  if (igIsItemHovered(0)) igSetTooltip("Added to the characters' middle, e.g. to aim at the head");
   if (is_3d) {
     static const char *styles[CAMERA_FOLLOW_COUNT] = {"Fixed offset", "Behind", "Game camera"};
     combo_edit(ui, "Follow style", &camera->follow_style, styles, CAMERA_FOLLOW_COUNT, "Change follow style");
-    if (igIsItemHovered(0))
-      igSetTooltip("Fixed offset: the keyed offset stays put in the world, circling nothing.\n"
-                   "Behind: the keyed offset turns with the way the characters head, like a chase camera.\n"
-                   "Game camera: follows the way the game's own camera does, e.g. TMUF's race camera.");
   }
   if (!is_3d) {
     bool fit = camera->fit_subjects;
@@ -1826,7 +1810,6 @@ static void inspect_target(ui_handler_t *ui) {
       camera->fit_subjects = fit;
       if (opened) edit_end(ui);
     }
-    if (igIsItemHovered(0)) igSetTooltip("While following, zoom out as far as needed to keep every character in view");
     if (camera->fit_subjects) {
       float fill = camera->fit_fill * 100.f;
       if (igSliderFloat("Fill", &fill, 20.f, 95.f, "%.0f%% of view", ImGuiSliderFlags_AlwaysClamp)) camera->fit_fill = fill / 100.f;
@@ -1940,11 +1923,12 @@ static void render_inspector(ui_handler_t *ui, float width, float height) {
 
 // Controls
 
+// `tooltip` only for a button that shows nothing but an icon; NULL otherwise.
 static bool toggle_button(const char *label, bool active, const char *tooltip) {
   ui_toggle_style_push(active);
   const bool pressed = igButton(label, (ImVec2){0, 0});
   ui_toggle_style_pop();
-  if (igIsItemHovered(0)) igSetTooltip("%s", tooltip);
+  if (tooltip && igIsItemHovered(0)) igSetTooltip("%s", tooltip);
   return pressed;
 }
 
@@ -1979,27 +1963,23 @@ static void render_controls(ui_handler_t *ui) {
     ui->follow_playhead = !ui->follow_playhead;
 
   igSameLine(0, 16.f * scale);
-  char label[96], tip[192];
+  char label[96];
   snprintf(label, sizeof(label), "%s Look through", ed->look_through ? ICON_FA_EYE : ICON_FA_EYE_SLASH);
-  snprintf(tip, sizeof(tip), "Look through the camera (%s)\nOff: a free view with the path and its handles in the level",
-           binding_text(ui, ACTION_CAMERA_LOOK_THROUGH));
-  if (toggle_button(label, ed->look_through, tip)) set_look_through(ui, !ed->look_through);
+  if (toggle_button(label, ed->look_through, NULL)) set_look_through(ui, !ed->look_through);
   igSameLine(0, 8.f * scale);
   snprintf(label, sizeof(label), "%s Key view (%s)", ICON_FA_KEY, binding_text(ui, ACTION_CAMERA_INSERT_KEY));
   if (igButton(label, (ImVec2){0, 0})) key_current_view(ui);
-  if (igIsItemHovered(0)) igSetTooltip("Key what the viewport shows at the playhead, or update the key there");
 
   igSameLine(0, 16.f * scale);
-  if (toggle_button("Keys", !ed->graph_mode, "Key lanes for every channel")) ed->graph_mode = false;
+  if (toggle_button("Keys", !ed->graph_mode, NULL)) ed->graph_mode = false;
   igSameLine(0, 2.f * scale);
   snprintf(label, sizeof(label), "%s Graph", ICON_FA_CHART_LINE);
-  if (toggle_button(label, ed->graph_mode, "Curve editor for one channel, with ease handles")) ed->graph_mode = true;
+  if (toggle_button(label, ed->graph_mode, NULL)) ed->graph_mode = true;
 
   igSameLine(0, 16.f * scale);
   igSetNextItemWidth(90.f * scale);
   igDragFloat("##camera_zoom", &ed->pixels_per_second, 1.f, (float)MIN_PIXELS_PER_SECOND, (float)MAX_PIXELS_PER_SECOND,
               "%.0f px/s", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
-  if (igIsItemHovered(0)) igSetTooltip("Zoom (Ctrl+wheel over the lanes)");
 
   igSameLine(0, 16.f * scale);
   igTextDisabled("Game tick %.2f", camera_game_tick(&ui->camera_timeline, ed->playhead, ticks_per_second(ui)));
@@ -2114,7 +2094,6 @@ void camera_window_render(ui_handler_t *ui) {
         ed->selected_channel = l.lanes[i].channel;
         ed->selected_key = -1;
       }
-      if (igIsItemHovered(0)) igSetTooltip("Show %s in the graph", CHANNEL_NAMES[l.lanes[i].channel]);
       igPopID();
     }
 
