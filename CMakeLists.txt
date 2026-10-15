@@ -129,13 +129,18 @@ find_package(Vulkan REQUIRED)
 # Try to find an existing glfw3 installation first; fall back to fetching it if unavailable.
 # 3.4 is a hard minimum: raylib (games/example_platformer) uses GLFW 3.4-only API
 # such as GLFW_MOUSE_PASSTHROUGH and glfwGetPlatform.
-find_package(glfw3 3.4 CONFIG QUIET)
-if(NOT glfw3_FOUND)
-    find_package(glfw3 3.4 QUIET)
+# On Windows it is always the fetched one, with its event loop changed by
+# cmake/glfw/patch_win32_mouse_motion.cmake: stock GLFW's loop does not end while a
+# mouse polling at 4-8 kHz moves, which stalls the whole editor.
+if(NOT WIN32)
+    find_package(glfw3 3.4 CONFIG QUIET)
+    if(NOT glfw3_FOUND)
+        find_package(glfw3 3.4 QUIET)
+    endif()
 endif()
 
 if(NOT glfw3_FOUND)
-    message(STATUS "glfw3 >= 3.4 not found via CMake package registry, fetching from source")
+    message(STATUS "Fetching GLFW 3.4")
     include(FetchContent)
     set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -143,11 +148,14 @@ if(NOT glfw3_FOUND)
     set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
     # GLFW 3.4 defaults to both Wayland and X11 on Linux. Keep both backends
     # so one binary works in either session; do not force Wayland off here.
+    # (the release archive rather than a clone: the patch is done by CMake, so
+    # nothing but CMake is needed to fetch and patch it)
     FetchContent_Declare(
         glfw
-        GIT_REPOSITORY https://github.com/glfw/glfw.git
-        GIT_TAG 3.4
-        GIT_SHALLOW TRUE
+        URL https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip
+        URL_HASH SHA256=b5ec004b2712fd08e8861dc271428f048775200a2df719ccf575143ba749a3e9
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/glfw/patch_win32_mouse_motion.cmake
     )
     FetchContent_MakeAvailable(glfw)
     # the fetched library is static and ends up inside loadable game modules

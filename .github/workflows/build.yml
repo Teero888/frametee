@@ -168,7 +168,6 @@ jobs:
           ninja:p
           pkgconf:p
           zlib:p
-          glfw:p
           vulkan-headers:p
           vulkan-loader:p
           glslang:p

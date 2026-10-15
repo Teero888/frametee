@@ -1054,10 +1054,20 @@ static void save_window_geometry(GLFWwindow *window) {
   fclose(fp);
 }
 
+#ifdef _WIN32
+// Only the GLFW with cmake/glfw's change to its Windows event loop defines this (without the change,
+// a mouse polling at 4-8 kHz stalls the editor). Read below, so a build with any other GLFW does
+// not link.
+extern const int frametee_glfw_win32_mouse_motion_patch;
+#endif
+
 // initialization and cleanup
 static int init_window(gfx_handler_t *handler) {
   glfwSetErrorCallback(glfw_error_callback);
   if (!glfwInit()) return 1;
+#ifdef _WIN32
+  if (!frametee_glfw_win32_mouse_motion_patch) log_warn("GLFW", "Built without its Windows event loop change.");
+#endif
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
