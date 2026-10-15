@@ -908,6 +908,15 @@ static void render_playback_snippet(timeline_state_t *ts, player_track_t *track,
   ImDrawList_AddRect(draw_list, min, max, border, rounding, ImDrawFlags_RoundCornersAll, (is_selected ? 2.f : 1.f) * dpi);
 }
 
+// A snippet whose inputs the tick under the playhead uses, enabled or not, a shade lighter: where
+// one ends is where recording can start without a gap.
+static void highlight_under_playhead(timeline_state_t *ts, const player_track_t *track, const input_snippet_t *snippet,
+                                     ImDrawList *draw_list, ImVec2 min, ImVec2 max) {
+  const int tick = model_group_playhead_tick(ts, track->group_index);
+  if (tick < snippet->start_tick || tick >= snippet->end_tick) return;
+  ImDrawList_AddRectFilled(draw_list, min, max, IM_COL32(255, 255, 255, 30), 4.0f * gfx_get_ui_scale(), ImDrawFlags_RoundCornersAll);
+}
+
 static void render_input_snippet(timeline_state_t *ts, player_track_t *track, input_snippet_t *snippet, ImDrawList *draw_list, ImRect timeline_bb,
                                  float track_top, bool is_recording_snippet) {
   float dpi_scale = gfx_get_ui_scale();
@@ -938,6 +947,7 @@ static void render_input_snippet(timeline_state_t *ts, player_track_t *track, in
   };
   if (!is_recording_snippet && snippet_is_playback(snippet)) {
     render_playback_snippet(ts, track, snippet, draw_list, min, max, start_x, is_selected);
+    highlight_under_playhead(ts, track, snippet, draw_list, min, max);
     return;
   }
 
@@ -953,6 +963,7 @@ static void render_input_snippet(timeline_state_t *ts, player_track_t *track, in
   }
 
   ImDrawList_AddRectFilled(draw_list, min, max, color, 4.0f * dpi_scale, ImDrawFlags_RoundCornersAll);
+  if (!is_recording_snippet) highlight_under_playhead(ts, track, snippet, draw_list, min, max);
   ImDrawList_AddRect(draw_list, min, max,
                      is_selected ? igGetColorU32_Vec4(selected_border) : igGetColorU32_Col(ImGuiCol_Border, 0.6f), 4.0f * dpi_scale,
                      ImDrawFlags_RoundCornersAll, (is_selected ? 2.0f : 1.0f) * dpi_scale);
