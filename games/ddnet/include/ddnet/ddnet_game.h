@@ -309,6 +309,13 @@ static inline const ddnet_character_t *ddnet_player_character(const ft_world *wo
   return ddnet_player_character_mut((ft_world *)world, player);
 }
 
+// Gives a tee a weapon or takes it away. A weapon only fires with ammo, and a
+// DDNet tee has endless ammo (-1) in every weapon it has, as a pickup gives it.
+static inline void ddnet_set_weapon_got(ddnet_character_core_t *core, int weapon, bool got) {
+  core->weapons[weapon].got = got;
+  core->weapons[weapon].ammo = got ? -1 : 0;
+}
+
 // Whether a step of the world calls its effect callbacks (core.sound and so
 // on), which takes the event build of the physics (ddnet_ev_*).
 static inline bool ddnet_step_events(const ft_world *world) {

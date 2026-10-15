@@ -858,7 +858,7 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   case PROP_ACTIVE_WEAPON:
     if (value->as.i < 0 || value->as.i >= DDNET_NUM_WEAPONS) return false;
     c->active_weapon = (int)value->as.i;
-    c->weapons[value->as.i].got = true;
+    ddnet_set_weapon_got(c, (int)value->as.i, true);
     break;
   case PROP_HEALTH:
     chr->health = (int)value->as.i;
@@ -874,7 +874,7 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   case PROP_HAS_LASER:
   case PROP_HAS_NINJA: {
     const int weapon = (int)prop - (PROP_HAS_SHOTGUN - 2);
-    c->weapons[weapon].got = value->as.b;
+    ddnet_set_weapon_got(c, weapon, value->as.b);
     // A tee cannot hold a weapon it does not have; fall back to the hammer,
     // which every tee keeps.
     if (!value->as.b && c->active_weapon == weapon) c->active_weapon = DDNET_WEAPON_HAMMER;

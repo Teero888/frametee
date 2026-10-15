@@ -239,7 +239,7 @@ static inline void dd_character_state_read(ft_world *world, int player, const vo
   chr->health = s.tee.health;
   chr->armor = s.tee.armor;
   for (int w = 0; w < DDNET_NUM_WEAPONS; ++w)
-    c->weapons[w].got = s.tee.weapons_got[w] != 0;
+    ddnet_set_weapon_got(c, w, s.tee.weapons_got[w] != 0);
   c->deep_frozen = s.tee.deep_frozen;
   c->live_frozen = s.tee.live_frozen;
   c->endless_jump = s.tee.endless_jump;

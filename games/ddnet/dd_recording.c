@@ -596,12 +596,14 @@ static void apply_state(ft_world *world, int client_id, ddnet_character_t *chr, 
     core->has_telegun_gun = (f & DD_CHARACTERFLAG_TELEGUN_GUN) != 0;
     core->has_telegun_grenade = (f & DD_CHARACTERFLAG_TELEGUN_GRENADE) != 0;
     core->has_telegun_laser = (f & DD_CHARACTERFLAG_TELEGUN_LASER) != 0;
-    core->weapons[DDNET_WEAPON_HAMMER].got = (f & DD_CHARACTERFLAG_WEAPON_HAMMER) != 0;
-    core->weapons[DDNET_WEAPON_GUN].got = (f & DD_CHARACTERFLAG_WEAPON_GUN) != 0;
-    core->weapons[DDNET_WEAPON_SHOTGUN].got = (f & DD_CHARACTERFLAG_WEAPON_SHOTGUN) != 0;
-    core->weapons[DDNET_WEAPON_GRENADE].got = (f & DD_CHARACTERFLAG_WEAPON_GRENADE) != 0;
-    core->weapons[DDNET_WEAPON_LASER].got = (f & DD_CHARACTERFLAG_WEAPON_LASER) != 0;
-    core->weapons[DDNET_WEAPON_NINJA].got = (f & DD_CHARACTERFLAG_WEAPON_NINJA) != 0;
+    // A DDNet server sends ammo 0 while frozen and, to a client, for everyone else's tee, but its
+    // weapons never run out.
+    ddnet_set_weapon_got(core, DDNET_WEAPON_HAMMER, (f & DD_CHARACTERFLAG_WEAPON_HAMMER) != 0);
+    ddnet_set_weapon_got(core, DDNET_WEAPON_GUN, (f & DD_CHARACTERFLAG_WEAPON_GUN) != 0);
+    ddnet_set_weapon_got(core, DDNET_WEAPON_SHOTGUN, (f & DD_CHARACTERFLAG_WEAPON_SHOTGUN) != 0);
+    ddnet_set_weapon_got(core, DDNET_WEAPON_GRENADE, (f & DD_CHARACTERFLAG_WEAPON_GRENADE) != 0);
+    ddnet_set_weapon_got(core, DDNET_WEAPON_LASER, (f & DD_CHARACTERFLAG_WEAPON_LASER) != 0);
+    ddnet_set_weapon_got(core, DDNET_WEAPON_NINJA, (f & DD_CHARACTERFLAG_WEAPON_NINJA) != 0);
     core->ninja.activation_tick = c->ninja_activation_tick + offset;
     chr->tele_checkpoint = c->tele_checkpoint > 0 ? c->tele_checkpoint : 0;
   } else {
