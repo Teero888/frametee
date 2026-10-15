@@ -111,6 +111,19 @@ static ft_vec2 world_aim(ft_game *game, const ft_render_frame *frame, const ft_w
   return (ft_vec2){(float)first->m_TargetX, (float)first->m_TargetY};
 }
 
+// While recording, the selected player aims where the mouse is now, as DDNet draws its own tee and
+// crosshair: the input the tick under the playhead is being recorded with. Drawn from the worlds
+// instead, the aim would be the one of the tick before, a tick or two behind the mouse.
+static bool live_aim(ft_game *game, const ft_render_frame *frame, int player, ft_vec2 *out) {
+  if (!frame->state.recording || !frame->active || player != frame->selected_player || !game->engine->get_player_input)
+    return false;
+  input_record_bytes_t live;
+  if (!game->engine->get_player_input(frame->state.selected_player, frame->tick, &live)) return false;
+  const dd_input_t *input = (const dd_input_t *)&live;
+  *out = (ft_vec2){(float)input->m_TargetX, (float)input->m_TargetY};
+  return true;
+}
+
 static const ft_player_setup *setup_for(const ft_render_frame *frame, int index) {
   if (index < 0 || (uint32_t)index >= frame->player_setup_count) return NULL;
   return &frame->player_setups[index];
@@ -202,10 +215,16 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   if (core->active_weapon == DDNET_WEAPON_HAMMER) dd_anim_state_add(&out->anim, &anim_hammer_swing, last_attack_time * 5.f, 1.0f);
   if (core->active_weapon == DDNET_WEAPON_NINJA) dd_anim_state_add(&out->anim, &anim_ninja_swing, last_attack_time * 2.f, 1.0f);
 
-  const ft_vec2 aim = world_aim(game, frame, world, index, chr);
-  const ft_vec2 prev_aim = prev_chr != chr ? world_aim(game, frame, prev_world, index, prev_chr) : aim;
-  out->dir[0] = lint2(prev_aim.x, aim.x, intra);
-  out->dir[1] = lint2(prev_aim.y, aim.y, intra);
+  ft_vec2 live;
+  if (live_aim(game, frame, index, &live)) {
+    out->dir[0] = live.x;
+    out->dir[1] = live.y;
+  } else {
+    const ft_vec2 aim = world_aim(game, frame, world, index, chr);
+    const ft_vec2 prev_aim = prev_chr != chr ? world_aim(game, frame, prev_world, index, prev_chr) : aim;
+    out->dir[0] = lint2(prev_aim.x, aim.x, intra);
+    out->dir[1] = lint2(prev_aim.y, aim.y, intra);
+  }
   glm_vec2_normalize(out->dir);
   out->aim_angle = atan2f(-out->dir[1], out->dir[0]);
 
@@ -1070,26 +1089,14 @@ static void render_cursor(ft_game *game, const ft_render_frame *frame) {
     // from the input each world was stepped with, which is the timeline's input
     // of the tick before it. Asking the timeline for this tick and the one before
     // put the crosshair a tick ahead of the weapon.
-    ft_vec2 aim = world_aim(game, frame, world, player, chr);
-    if (!(is_selected && frame->state.recording)) {
+    // (the player being recorded: where the mouse is now, like its tee)
+    ft_vec2 aim;
+    if (!live_aim(game, frame, player, &aim)) {
+      aim = world_aim(game, frame, world, player, chr);
       const ddnet_character_t *prev = previous ? ddnet_player_character(previous, player) : NULL;
       const ft_vec2 from = prev ? world_aim(game, frame, previous, player, prev) : aim;
       aim.x = lint2(from.x, aim.x, frame->alpha);
       aim.y = lint2(from.y, aim.y, frame->alpha);
-    } else {
-      // While recording, get_player_input hands back the live input for the tick
-      // under the playhead, so the crosshair tracks the mouse directly.
-      input_record_bytes_t previous_input, current;
-      // (the start has no tick before it: there the aim holds still)
-      const bool have_prev =
-          game->engine->get_player_input(frame->state.selected_player, frame->tick > 0 ? frame->tick - 1 : frame->tick, &previous_input);
-      const bool have_cur = game->engine->get_player_input(frame->state.selected_player, frame->tick, &current);
-      if (have_cur) {
-        const dd_input_t *cur = (const dd_input_t *)&current;
-        const dd_input_t *prev = have_prev ? (const dd_input_t *)&previous_input : cur;
-        aim.x = lint2((float)prev->m_TargetX, (float)cur->m_TargetX, frame->alpha);
-        aim.y = lint2((float)prev->m_TargetY, (float)cur->m_TargetY, frame->alpha);
-      }
     }
     draw_crosshair(game, frame, chr, aim);
   }

@@ -24,6 +24,11 @@ typedef struct {
   // binds behave like every other application on the desktop instead of at a rate invented here.
   unsigned char keys_repeat[KEY_COUNT];
   unsigned char pending_repeat[KEY_COUNT];
+  // Pressed since the previous frame, from the callbacks: a key pressed and released between two
+  // polls is still down for one frame. (GLFW's sticky keys do that too, but they also hold back
+  // every release until the next poll, a frame of delay on letting go of anything.)
+  unsigned char pending_press[KEY_COUNT];
+  unsigned char pending_button_press[BUTTON_COUNT];
 
   unsigned char buttons[BUTTON_COUNT];
   unsigned char buttons_prev[BUTTON_COUNT];
@@ -324,10 +329,7 @@ void input_init(GLFWwindow *window) {
   }
 
   // Polling alone drops a key that is pressed and released between two frames, which is easy to do
-  // with a quick tap while the frame time is long. Sticky mode holds the press until it has been
-  // read once, so a poll can never miss it.
-  glfwSetInputMode(window, GLFW_STICKY_KEYS, GLFW_TRUE);
-  glfwSetInputMode(window, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
+  // with a quick tap while the frame time is long: the callbacks note presses, see pending_press.
 
   // Seeded from the real cursor, or the first event to arrive would report a move all the way from
   // the origin.
@@ -368,6 +370,14 @@ void input_accumulate_mouse_pos(double x, double y, double *out_dx, double *out_
   if (out_dy) *out_dy = dy;
 }
 
+void input_accumulate_key_press(int glfw_key) {
+  if (glfw_key >= 0 && glfw_key <= GLFW_KEY_LAST) g_input.pending_press[glfw_key] = 1;
+}
+
+void input_accumulate_button_press(int glfw_button) {
+  if (glfw_button >= 0 && glfw_button <= GLFW_MOUSE_BUTTON_LAST) g_input.pending_button_press[glfw_button] = 1;
+}
+
 void input_accumulate_scroll(double x, double y) {
   (void)x;
   g_input.pending_scroll_y += y;
@@ -406,11 +416,12 @@ void input_new_frame(void) {
   memcpy(g_input.keys_prev, g_input.keys, sizeof(g_input.keys));
   memcpy(g_input.buttons_prev, g_input.buttons, sizeof(g_input.buttons));
 
-  // Polled even while blocked, to drain sticky presses.
   for (int i = 0; i < g_input.poll_key_count; ++i) {
     int key = g_input.poll_keys[i];
-    g_input.keys[key] = glfwGetKey(g_input.window, key) == GLFW_PRESS && !g_input.blocked ? 1 : 0;
+    const bool down = glfwGetKey(g_input.window, key) == GLFW_PRESS || g_input.pending_press[key];
+    g_input.keys[key] = down && !g_input.blocked ? 1 : 0;
   }
+  memset(g_input.pending_press, 0, sizeof(g_input.pending_press));
 
   if (g_input.blocked) memset(g_input.keys_repeat, 0, sizeof(g_input.keys_repeat));
   else memcpy(g_input.keys_repeat, g_input.pending_repeat, sizeof(g_input.keys_repeat));
@@ -418,8 +429,8 @@ void input_new_frame(void) {
   const bool live = focused && !g_input.blocked;
 
   for (int button = 0; button <= GLFW_MOUSE_BUTTON_LAST; ++button) {
-    // Poll even when unfocused to drain sticky presses, but never repeat them.
-    const bool down = glfwGetMouseButton(g_input.window, button) == GLFW_PRESS;
+    const bool down = glfwGetMouseButton(g_input.window, button) == GLFW_PRESS || g_input.pending_button_press[button];
+    g_input.pending_button_press[button] = 0;
     g_input.buttons[button] = down && live;
     g_input.buttons_repeat[button] = 0;
     if (!g_input.buttons[button]) {

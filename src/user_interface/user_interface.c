@@ -2276,13 +2276,7 @@ static void render_file_dialog_note(void) {
   ImDrawList_AddText_Vec2(draw, pos, IM_COL32(255, 255, 255, 255), text, NULL);
 }
 
-void ui_render(ui_handler_t *ui) {
-  if (g_interface_size_changed) {
-    g_interface_size_changed = false;
-    ui_apply_interface_size();
-  }
-  // A dialog's answer acts like the click that asked for it, before anything else this frame.
-  file_dialog_update();
+void ui_update(ui_handler_t *ui) {
   // Before anything simulates this frame, so a recording that just finished opening is replayed
   // by every world at once.
   recordings_update(&ui->timeline);
@@ -2293,6 +2287,15 @@ void ui_render(ui_handler_t *ui) {
   interaction_handle_playback_and_shortcuts(&ui->timeline);
   // After the timeline's playback, so a camera that owns the clock has the last word on the tick.
   camera_editor_update(ui);
+}
+
+void ui_render(ui_handler_t *ui) {
+  if (g_interface_size_changed) {
+    g_interface_size_changed = false;
+    ui_apply_interface_size();
+  }
+  // A dialog's answer acts like the click that asked for it, before anything else this frame.
+  file_dialog_update();
   // Read by plugins for the same reason the panels below are gated: see
   // tas_context_t::ui_visible. Set before the update that reads it.
   ui->plugin_context.ui_visible = ui->show_ui;

@@ -175,30 +175,17 @@ static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) 
   ImGui_ImplGlfw_ScrollCallback((void *)window, xoffset, yoffset);
 }
 
-static bool either_key_down(GLFWwindow *window, int left, int right) {
-  return glfwGetKey(window, left) == GLFW_PRESS || glfwGetKey(window, right) == GLFW_PRESS;
-}
-
 static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods) {
-  // Down/up state is polled; only the OS repeat timing has to come from events.
+  // Down/up state is polled; the OS repeat timing, and presses too short for a poll to see, come from
+  // events.
   if (action == GLFW_REPEAT) input_accumulate_key_repeat(key);
+  if (action == GLFW_PRESS) input_accumulate_key_press(key);
   flush_imgui_mouse_pos();
   ImGui_ImplGlfw_KeyCallback((void *)window, key, scancode, action, mods);
-
-  // The backend reads the modifiers with glfwGetKey, which under sticky keys still reports a
-  // modifier as pressed while its own release is being delivered. Imgui then kept Ctrl held after
-  // Ctrl+S until the next key or click, and panels would not scroll with the wheel meanwhile. That
-  // read used up the sticky state, so reading again gets the real one.
-  if (action == GLFW_RELEASE) {
-    ImGuiIO *io = igGetIO_Nil();
-    ImGuiIO_AddKeyEvent(io, ImGuiMod_Ctrl, either_key_down(window, GLFW_KEY_LEFT_CONTROL, GLFW_KEY_RIGHT_CONTROL));
-    ImGuiIO_AddKeyEvent(io, ImGuiMod_Shift, either_key_down(window, GLFW_KEY_LEFT_SHIFT, GLFW_KEY_RIGHT_SHIFT));
-    ImGuiIO_AddKeyEvent(io, ImGuiMod_Alt, either_key_down(window, GLFW_KEY_LEFT_ALT, GLFW_KEY_RIGHT_ALT));
-    ImGuiIO_AddKeyEvent(io, ImGuiMod_Super, either_key_down(window, GLFW_KEY_LEFT_SUPER, GLFW_KEY_RIGHT_SUPER));
-  }
 }
 
 static void mouse_button_callback(GLFWwindow *window, int button, int action, int mods) {
+  if (action == GLFW_PRESS) input_accumulate_button_press(button);
   flush_imgui_mouse_pos();
   ImGui_ImplGlfw_MouseButtonCallback((void *)window, button, action, mods);
 }
@@ -447,6 +434,27 @@ int init_gfx_handler(gfx_handler_t *handler) {
   return 0;
 }
 
+// With vsync, FIFO. Without, a mode that never waits for the display: immediate where the surface
+// has it, else mailbox (no tearing, the newest frame shown), and only then FIFO, which every surface
+// has. Going straight from immediate to FIFO made "vsync off" vsync after all, with its frame or two
+// of input delay, wherever there is no immediate (often under Wayland).
+static VkPresentModeKHR choose_present_mode(gfx_handler_t *handler, VkSurfaceKHR surface) {
+  if (handler->user_interface.vsync) return VK_PRESENT_MODE_FIFO_KHR;
+  const VkPresentModeKHR modes[] = {VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_KHR};
+  return ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, surface, modes, ARRAYSIZE(modes));
+}
+
+// This frame's keys, buttons and wheel, and the raw motion read off the main thread (see raw_mouse.h).
+static void read_input(gfx_handler_t *handler) {
+  input_new_frame();
+  if (raw_mouse_running()) {
+    double dx, dy;
+    raw_mouse_take(&dx, &dy);
+    // (it is the mouse's motion whichever window has it)
+    if (glfwGetWindowAttrib(handler->window, GLFW_FOCUSED)) add_recording_aim(handler, dx, dy);
+  }
+}
+
 int gfx_begin_frame(gfx_handler_t *handler) {
   if (glfwWindowShouldClose(handler->window)) {
     // A background render outlives the editor; the user is asked first.
@@ -455,15 +463,9 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   }
 
   glfwPollEvents();
-  input_new_frame();
-  if (raw_mouse_running()) {
-    double dx, dy;
-    raw_mouse_take(&dx, &dy);
-    // (it is the mouse's motion whichever window has it)
-    if (glfwGetWindowAttrib(handler->window, GLFW_FOCUSED)) add_recording_aim(handler, dx, dy);
-  }
 
   if (glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
+    read_input(handler);
     ImGui_ImplGlfw_Sleep(10);
     return FRAME_SKIP;
   }
@@ -476,13 +478,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
     renderer_frame_completed(handler);
 
     // Update Present Mode based on settings
-    VkPresentModeKHR present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
-    if (handler->user_interface.vsync) {
-      present_mode = VK_PRESENT_MODE_FIFO_KHR;
-    }
-    VkPresentModeKHR present_modes[] = {present_mode};
-    handler->g_main_window_data.PresentMode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, handler->g_main_window_data.Surface,
-                                                                                  &present_modes[0], ARRAYSIZE(present_modes));
+    handler->g_main_window_data.PresentMode = choose_present_mode(handler, handler->g_main_window_data.Surface);
 
     ImGui_ImplVulkan_SetMinImageCount(handler->g_min_image_count);
     ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, &handler->g_main_window_data,
@@ -505,10 +501,21 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
     handler->g_swap_chain_rebuild = true;
+    read_input(handler);
     // Skip this frame if the swapchain is invalid
     return FRAME_SKIP;
   }
   check_vk_result(err);
+  // The acquired image's last frame has to be done before its command buffer is used again.
+  ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
+  err = vkWaitForFences(handler->g_device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
+  check_vk_result(err);
+
+  // The input of the frame is read only now, after every wait for the GPU and the swapchain (with
+  // vsync up to a refresh): read before them, it would be that much older by the time the frame
+  // uses it.
+  glfwPollEvents();
+  read_input(handler);
 
   // Layout first: the viewport excludes the actual menu/tab bars and panels,
   // whose sizes depend on docking and UI scale, not a fixed pixel allowance.
@@ -530,9 +537,6 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   }
 
   // Begin Command Buffer
-  ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
-  err = vkWaitForFences(handler->g_device, 1, &fd->Fence, VK_TRUE, UINT64_MAX);
-  check_vk_result(err);
   err = vkResetFences(handler->g_device, 1, &fd->Fence);
   check_vk_result(err);
 
@@ -1985,17 +1989,7 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
   wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(handler->g_physical_device, wd->Surface, request_surface_image_format,
                                                             (size_t)ARRAYSIZE(request_surface_image_format), request_surface_color_space);
 
-  // vsync present mode
-  VkPresentModeKHR present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
-  if (handler->user_interface.vsync) {
-    present_mode = VK_PRESENT_MODE_FIFO_KHR;
-  }
-  VkPresentModeKHR present_modes[] = {present_mode, VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR};
-  VkPresentModeKHR selected_mode = ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, wd->Surface, present_modes, ARRAYSIZE(present_modes));
-  if ((int)selected_mode == -1) {
-    selected_mode = VK_PRESENT_MODE_FIFO_KHR;
-  }
-  wd->PresentMode = selected_mode;
+  wd->PresentMode = choose_present_mode(handler, wd->Surface);
 
   assert(handler->g_min_image_count >= 2);
   ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, wd, handler->g_queue_family,

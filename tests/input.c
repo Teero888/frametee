@@ -306,7 +306,37 @@ static void blocked_while_dialog(void) {
   assert(input_key_pressed(GLFW_KEY_D, false) && input_mouse_pressed(GLFW_MOUSE_BUTTON_LEFT, false));
 }
 
+// A press too short for any poll to see is down for one frame; a release counts at the first poll
+// after it, not one frame later (as with GLFW's sticky keys).
+static void taps_and_releases(void) {
+  reset();
+  input_accumulate_key_press(GLFW_KEY_A); // and released again before the frame
+  frame(0.0);
+  assert(input_key_pressed(GLFW_KEY_A, false) && input_key_down(GLFW_KEY_A));
+  frame(0.01);
+  assert(!input_key_down(GLFW_KEY_A));
+  keys[GLFW_KEY_A] = GLFW_PRESS;
+  input_accumulate_key_press(GLFW_KEY_A);
+  frame(0.02);
+  assert(input_key_pressed(GLFW_KEY_A, false));
+  keys[GLFW_KEY_A] = GLFW_RELEASE;
+  frame(0.03);
+  assert(!input_key_down(GLFW_KEY_A));
+
+  input_accumulate_button_press(GLFW_MOUSE_BUTTON_LEFT);
+  frame(0.04);
+  assert(input_mouse_pressed(GLFW_MOUSE_BUTTON_LEFT, false));
+  frame(0.05);
+  assert(!input_mouse_down(GLFW_MOUSE_BUTTON_LEFT));
+  buttons[GLFW_MOUSE_BUTTON_LEFT] = GLFW_PRESS;
+  frame(0.06);
+  buttons[GLFW_MOUSE_BUTTON_LEFT] = GLFW_RELEASE;
+  frame(0.07);
+  assert(!input_mouse_down(GLFW_MOUSE_BUTTON_LEFT));
+}
+
 int main(void) {
+  taps_and_releases();
   mouse_repeat();
   repeat_settings();
   focus_and_stalls();

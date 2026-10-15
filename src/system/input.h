@@ -46,6 +46,9 @@ void input_accumulate_mouse_pos(double x, double y, double *out_dx, double *out_
 void input_accumulate_scroll(double x, double y);
 // Called for GLFW_REPEAT, so held binds repeat at the delay and rate configured in the OS.
 void input_accumulate_key_repeat(int glfw_key);
+// Called for GLFW_PRESS, so a press released again before the next frame still counts once.
+void input_accumulate_key_press(int glfw_key);
+void input_accumulate_button_press(int glfw_button);
 
 // GLFW keycodes / GLFW mouse buttons.
 bool input_key_down(int glfw_key);

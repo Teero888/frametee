@@ -705,6 +705,7 @@ int main(int argc, char **argv) {
     int frame_result = gfx_begin_frame(&handler);
     if (frame_result == FRAME_EXIT) break;
     if (frame_result == FRAME_SKIP) continue;
+    ui_update(&handler.user_interface);
 
     timeline_state_t *timeline = &handler.user_interface.timeline;
     // (tests: FRAMETEE_TEST_TICK shows that tick of the timeline in a screenshot;

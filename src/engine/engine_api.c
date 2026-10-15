@@ -663,8 +663,10 @@ static bool api_get_player_input(int32_t player, int32_t tick, void *out_record)
 
   // While recording, the tick under the playhead is still being authored: the
   // committed snippets do not have it yet, but the live input does. Handing back
-  // a stale value here makes cursor-directed controls lag the mouse.
-  if (ts->recording && tick >= ts->current_tick) {
+  // a stale value here makes cursor-directed controls lag the mouse. (`tick` is
+  // the track's own, its group's: compared with the global playhead, a group
+  // that starts later never reached it.)
+  if (ts->recording && tick >= model_group_playhead_tick(ts, model_track_group_index(ts, player))) {
     memcpy(out_record, ts->player_tracks[player].current_input.bytes, game_input_size(&g_engine->game_host));
     return true;
   }
