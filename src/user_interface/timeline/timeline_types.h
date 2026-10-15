@@ -158,6 +158,9 @@ struct player_track_t {
   starting_config_t starting_config;
   char name[MAX_TRACK_NAME];
   int group_index;
+  // Which track this is while the editor runs, never saved: whatever names a track by its place
+  // (the camera's characters) finds it again by this after undo puts tracks back.
+  uint32_t uid;
   // A linked track is authored alongside the one being recorded, like a DDNet
   // dummy: it copies the fields in linked_copy_fields from its source (while
   // copying is on) and takes what its linked key binds and the game's linked

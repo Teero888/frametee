@@ -135,10 +135,12 @@ static void format_race_time(float seconds, char *out, size_t size) {
     snprintf(out, size, "%02lld.%02lld", centisecs % 6000 / 100, centisecs % 100);
 }
 
-// The tee the HUD is about: the one the camera's animation follows, else the selected one, else
-// the first that is in the game.
+// The tee the HUD is about: the frame's focus, else the one the camera's animation follows, else
+// the selected one, else the first that is in the game.
 static int hud_player(const ft_render_frame *frame) {
   const ft_world *world = frame->world;
+  const int focus = dd_focus_player(frame);
+  if (focus >= 0) return focus;
   const bool covers = frame->struct_size >= offsetof(ft_render_frame, camera_animated) + sizeof(frame->camera_animated);
   if (covers && frame->camera_animated)
     for (int player = 0; player < world->player_count && player < 64; ++player)

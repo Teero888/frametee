@@ -87,7 +87,7 @@ render_profile_t *render_video_profile(ui_handler_t *ui) {
     // A first video looks like the viewport, without the editor's overlays.
     state->video = state->viewport;
     for (int layer = 0; layer < RENDER_LAYER_COUNT; ++layer) state->video.layers[layer] = false;
-    state->video.focus = RENDER_FOCUS_SELECTED;
+    state->video.focus = RENDER_FOCUS_CAMERA;
     state->video.valid = true;
   }
   return &state->video;
@@ -173,10 +173,6 @@ float render_group_volume(ui_handler_t *ui, int group_index) {
   return volume < 0.f ? 0.f : volume > 1.f ? 1.f : volume;
 }
 
-int render_focus_group(ui_handler_t *ui, bool *out_merged) {
-  const timeline_state_t *ts = &ui->timeline;
-  const int focus = ui->render.applied == RENDER_TARGET_VIDEO ? render_video_profile(ui)->focus : RENDER_FOCUS_SELECTED;
-  if (out_merged) *out_merged = focus == RENDER_FOCUS_MERGED;
-  // A group removed since it was chosen falls back to the editor's.
-  return focus >= 0 && focus < ts->group_count ? focus : ts->active_group_index;
+bool render_merged_chat(ui_handler_t *ui) {
+  return ui->render.applied == RENDER_TARGET_VIDEO && render_video_profile(ui)->focus == RENDER_FOCUS_MERGED;
 }

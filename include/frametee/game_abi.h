@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 30u
+#define FT_GAME_ABI_VERSION 31u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -1496,6 +1496,13 @@ typedef struct ft_render_frame {
    * camera's crosshair on the selected player, does not apply. Read only when
    * struct_size covers it. */
   bool camera_animated;
+  /* The player of this world the frame is about: whose HUD it shows, whose
+   * view of the world (such as which team's tees show) and whose crosshair.
+   * While the camera animation directs the view it is the player the
+   * animation is about at this moment, otherwise the selected one. -1 when
+   * that player lives in another world (`active` is then false). Read only
+   * when struct_size covers it. */
+  int32_t focus_player;
 } ft_render_frame;
 
 /* Everything a game needs to place the camera for a frame. */

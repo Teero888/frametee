@@ -33,9 +33,18 @@ static void tile_pos(ddnet_vec2_t v, vec2 out) {
 
 static uint64_t frame_followed_players(const ft_render_frame *frame);
 
+int dd_focus_player(const ft_render_frame *frame) {
+  const bool covers = frame->struct_size >= offsetof(ft_render_frame, focus_player) + sizeof(frame->focus_player);
+  return covers && frame->world && frame->focus_player >= 0 && frame->focus_player < frame->world->player_count
+             ? frame->focus_player
+             : -1;
+}
+
 int dd_view_player(const ft_render_frame *frame) {
   if (!frame || !frame->world) return -1;
   const int count = frame->world->player_count;
+  const int focus = dd_focus_player(frame);
+  if (focus >= 0) return focus;
   if (frame->selected_player >= 0 && frame->selected_player < count) return frame->selected_player;
   const uint64_t followed = frame_followed_players(frame);
   for (int player = 0; player < count && player < 64; ++player)

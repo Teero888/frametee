@@ -166,6 +166,12 @@ static bool write_camera_timeline(byte_buffer_t *buffer, const camera_timeline_t
       if (!write_camera_keys_header(buffer, key->time, key->interp, &key->ease) || !buffer_f32(buffer, key->value)) return false;
     }
   }
+  // Version 30: who the shot is about.
+  if (!buffer_u32(buffer, (uint32_t)camera->focus_count)) return false;
+  for (int i = 0; i < camera->focus_count; ++i) {
+    const camera_focus_key_t *key = &camera->focus_keys[i];
+    if (!write_camera_keys_header(buffer, key->time, key->interp, &key->ease) || !buffer_i32(buffer, key->track)) return false;
+  }
   return true;
 }
 
@@ -261,6 +267,18 @@ static bool read_camera_timeline(byte_reader_t *reader, camera_timeline_t *camer
     }
   }
   if (version == 21) camera_pose_eases_from_absolute(camera);
+  if (version < 30) return true;
+  if (!reader_u32(reader, &count) || count > CAMERA_MAX_FOCUS_KEYS) return false;
+  camera->focus_count = (int)count;
+  for (int i = 0; i < camera->focus_count; ++i) {
+    camera_focus_key_t *key = &camera->focus_keys[i];
+    if (!read_camera_key_header(reader, version, i ? camera->focus_keys[i - 1].time : 0.0, i, &key->time, &key->interp,
+                                &key->ease) ||
+        !reader_i32(reader, &key->track))
+      return false;
+    key->interp = CAMERA_INTERP_HOLD;
+    if (key->track < 0) key->track = -1;
+  }
   return true;
 }
 
@@ -302,8 +320,8 @@ static bool write_render_video(byte_buffer_t *buffer, ui_handler_t *ui) {
   if (!buffer_u32(buffer, (uint32_t)(sizeof(fields) / sizeof(fields[0])))) return false;
   for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i)
     if (!buffer_i32(buffer, fields[i])) return false;
-  // Version 26: the group the video is about, and how opaque each group is drawn.
-  if (!buffer_i32(buffer, profile->valid ? profile->focus : RENDER_FOCUS_SELECTED) || !buffer_u32(buffer, (uint32_t)ts->group_count))
+  // Version 26: what the video is about, and how opaque each group is drawn.
+  if (!buffer_i32(buffer, profile->valid ? profile->focus : RENDER_FOCUS_CAMERA) || !buffer_u32(buffer, (uint32_t)ts->group_count))
     return false;
   for (int g = 0; g < ts->group_count; ++g)
     if (!buffer_f32(buffer, ts->groups[g]->opacity) || !buffer_f32(buffer, ts->groups[g]->video_opacity)) return false;
@@ -379,11 +397,12 @@ static bool read_render_video(byte_reader_t *reader, project_document_t *documen
       o->hardware < 0 || o->hardware > 1)
     video_export_defaults(o);
   document->has_video_options = true;
-  profile->focus = RENDER_FOCUS_SELECTED;
+  profile->focus = RENDER_FOCUS_CAMERA;
   if (version < 26) return true;
   int32_t focus;
   if (!reader_i32(reader, &focus) || !reader_u32(reader, &count) || count > PROJECT_MAX_GROUPS) return false;
-  if (focus >= RENDER_FOCUS_MERGED) profile->focus = focus;
+  // Before version 30 a video could name a group; the camera's focus decides that now.
+  if (focus == RENDER_FOCUS_MERGED) profile->focus = focus;
   document->group_opacities = count ? malloc(sizeof(float) * 2 * count) : NULL;
   if (count && !document->group_opacities) return false;
   document->group_opacity_count = count;
@@ -1485,8 +1504,10 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
       player_track_t *destination = model_add_new_track(timeline, 1);
       if (!destination) return false;
       const int destination_group = destination->group_index;
+      const uint32_t uid = destination->uid;
       *destination = *source;
       destination->group_index = destination_group;
+      destination->uid = uid;
       destination->recording_snippets = NULL;
       destination->recording_snippet_count = 0;
       destination->recording_snippet_capacity = 0;
@@ -1783,8 +1804,10 @@ bool import_project_as_group(ui_handler_t *ui, const char *path) {
       player_track_t *to = model_add_new_track(timeline, 1);
       if (!to) goto done;
       const int preserved_group = to->group_index;
+      const uint32_t uid = to->uid;
       *to = *from;
       to->group_index = preserved_group;
+      to->uid = uid;
       to->recording_snippets = NULL;
       to->recording_snippet_count = 0;
       to->recording_snippet_capacity = 0;

@@ -28,16 +28,16 @@ typedef struct render_setting_value_t {
   ft_value value;
 } render_setting_value_t;
 
-// Which group a frame is about: whose HUD, chat and pickups it shows. A group index, or one of these.
-enum { RENDER_FOCUS_SELECTED = -1, // the group selected in the editor
-       RENDER_FOCUS_MERGED = -2 }; // the selected group, with every group's chat together
+// Whose HUD, chat and pickups a video shows: always the camera's focus (see camera_rig_focus_track).
+enum { RENDER_FOCUS_CAMERA = -1, // the focus's group
+       RENDER_FOCUS_MERGED = -2 }; // the focus's group, with every group's chat together
 
 typedef struct render_profile_t {
   bool valid;
   int setting_count;
   render_setting_value_t settings[RENDER_PROFILE_MAX_SETTINGS];
   bool layers[RENDER_LAYER_COUNT];
-  int focus; // RENDER_FOCUS_* or a group index; only the video's is used
+  int focus; // RENDER_FOCUS_*; only the video's is used
 } render_profile_t;
 
 typedef enum render_target_t { RENDER_TARGET_VIEWPORT = 0, RENDER_TARGET_VIDEO } render_target_t;
@@ -80,8 +80,7 @@ bool render_group_visible(struct ui_handler_t *ui, int group_index);
 float render_group_opacity(struct ui_handler_t *ui, int group_index);
 // How loud a group is heard where it is drawn now: its volume, 0 while hidden.
 float render_group_volume(struct ui_handler_t *ui, int group_index);
-// The group what is being rendered now is about, and whether every group's chat shows together.
-// The viewport follows the editor's selection; video has its own choice.
-int render_focus_group(struct ui_handler_t *ui, bool *out_merged);
+// Whether what is being rendered now shows every group's chat together: a video can.
+bool render_merged_chat(struct ui_handler_t *ui);
 
 #endif

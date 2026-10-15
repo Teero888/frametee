@@ -24,9 +24,10 @@ static const char *INTERP_NAMES[CAMERA_CHANNEL_COUNT][CAMERA_INTERP_COUNT] = {
     [CAMERA_CHANNEL_POSE] = {"Smooth", "Linear (constant speed)", "Cut (hold)"},
     [CAMERA_CHANNEL_FOLLOW] = {"Smooth", "Linear", "Hold"},
     [CAMERA_CHANNEL_AIM] = {"Smooth", "Linear", "Hold"},
+    [CAMERA_CHANNEL_FOCUS] = {"Cut", "Cut", "Cut"},
 };
 static const char *HANDLE_NAMES[CAMERA_HANDLE_COUNT] = {"Auto", "Aligned", "Free (corner)"};
-static const char *CHANNEL_NAMES[CAMERA_CHANNEL_COUNT] = {"Game time", "Camera", "Follow", "Aim"};
+static const char *CHANNEL_NAMES[CAMERA_CHANNEL_COUNT] = {"Game time", "Camera", "Follow", "Aim", "Focus"};
 
 static const float DEGREES_PER_RADIAN = 57.29577951308232f;
 static const double MIN_PIXELS_PER_SECOND = 4.0, MAX_PIXELS_PER_SECOND = 4000.0;
@@ -157,6 +158,47 @@ static void delete_key(ui_handler_t *ui, camera_channel_t channel, int index) {
   camera_delete_key(&ui->camera_timeline, channel, index);
   if (opened) edit_end(ui);
   clamp_selection(ui);
+}
+
+// The shot is about `track` from `time` on.
+static void cut_to(ui_handler_t *ui, double time, int track) {
+  const bool opened = edit_begin(ui, "Cut camera focus");
+  const int index = camera_insert_focus_key(&ui->camera_timeline, time, track);
+  if (opened) edit_end(ui);
+  if (index >= 0) select_key(ui, CAMERA_CHANNEL_FOCUS, index);
+}
+
+static void set_focus(ui_handler_t *ui, int index, int track) {
+  if (index < 0 || index >= ui->camera_timeline.focus_count || ui->camera_timeline.focus_keys[index].track == track) return;
+  const bool opened = edit_begin(ui, "Change camera focus");
+  ui->camera_timeline.focus_keys[index].track = track;
+  if (opened) edit_end(ui);
+}
+
+static const char *track_name(ui_handler_t *ui, int track) {
+  const timeline_state_t *ts = &ui->timeline;
+  return track >= 0 && track < ts->player_track_count ? ts->player_tracks[track].name : "No one";
+}
+
+static ImVec4 track_color(ui_handler_t *ui, int track) {
+  const timeline_state_t *ts = &ui->timeline;
+  const int group = track >= 0 && track < ts->player_track_count ? ts->player_tracks[track].group_index : -1;
+  if (group < 0 || group >= ts->group_count) return igGetStyle()->Colors[ImGuiCol_TextDisabled];
+  const float *color = ts->groups[group]->color;
+  return (ImVec4){color[0], color[1], color[2], 1.f};
+}
+
+// Every track, each marked with its group's colour, as menu items. Returns the one picked, or -2.
+static int track_menu_items(ui_handler_t *ui, int current) {
+  int picked = -2;
+  for (int i = 0; i < ui->timeline.player_track_count; ++i) {
+    igPushID_Int(i);
+    igTextColored(track_color(ui, i), ICON_FA_CIRCLE);
+    igSameLine(0.f, 6.f * gfx_get_ui_scale());
+    if (igMenuItem_Bool(track_name(ui, i), NULL, i == current, true)) picked = i;
+    igPopID();
+  }
+  return picked;
 }
 
 static void easy_ease(ui_handler_t *ui, camera_channel_t channel, int index) {
@@ -366,6 +408,13 @@ typedef struct viewport_grab_t {
 } viewport_grab_t;
 
 static viewport_grab_t g_viewport_grab;
+
+// ImDrawList_AddLine draws half a pixel right of and below the points it is given (it adds 0.5,
+// for crisp lines on whole pixels), while filled shapes are drawn where they are given. Lines that
+// meet a key, a handle or the playhead take that half pixel back, so they run through its middle.
+static void centered_line(ImDrawList *draw, ImVec2 a, ImVec2 b, ImU32 color, float thickness) {
+  ImDrawList_AddLine(draw, (ImVec2){a.x - 0.5f, a.y - 0.5f}, (ImVec2){b.x - 0.5f, b.y - 0.5f}, color, thickness);
+}
 static int add_key(ui_handler_t *ui, camera_channel_t channel, double time, float value, bool value_given);
 
 static bool project_point(gfx_handler_t *h, const float world[3], ImVec2 origin, ImVec2 *out) {
@@ -457,7 +506,7 @@ bool camera_editor_viewport_overlay(ui_handler_t *ui, float origin_x, float orig
     if (is_3d && is_selected) {
       ImVec2 target;
       if (project_point(h, shown.target, origin, &target)) {
-        ImDrawList_AddLine(draw, at, target, IM_COL32(255, 206, 84, 120), 1.f * scale);
+        centered_line(draw, at, target, IM_COL32(255, 206, 84, 120), 1.f * scale);
         ImDrawList_AddQuadFilled(draw, (ImVec2){target.x, target.y - 6.f * scale}, (ImVec2){target.x + 6.f * scale, target.y},
                                  (ImVec2){target.x, target.y + 6.f * scale}, (ImVec2){target.x - 6.f * scale, target.y},
                                  SELECTED_COLOR);
@@ -498,7 +547,7 @@ bool camera_editor_viewport_overlay(ui_handler_t *ui, float origin_x, float orig
         ImVec2 from, to;
         if (!project_point(h, base, origin, &from) || !project_point(h, tip, origin, &to)) continue;
         const ImU32 color = point == 0 || !is_3d ? HANDLE_COLOR : IM_COL32(120, 200, 255, 140);
-        ImDrawList_AddLine(draw, from, to, color, 1.5f * scale);
+        centered_line(draw, from, to, color, 1.5f * scale);
         ImDrawList_AddCircleFilled(draw, to, 4.5f * scale, color, 12);
         const float d = hypotf(io->MousePos.x - to.x, io->MousePos.y - to.y);
         if (d < hover_distance) {
@@ -691,15 +740,31 @@ static bool graph_handle(ui_handler_t *ui, const layout_t *l, int index, int sid
 
 // Drawing
 
+// A square key with the dark rim the other keys have, and for a hold the step it makes out of its
+// right side, flush with its top. Polygons, like the other keys, so it sits exactly where it is put.
+static void draw_square_key(ImDrawList *draw, ImVec2 at, float half, ImU32 color, bool step, float scale) {
+  const ImU32 rim = IM_COL32(0, 0, 0, 170);
+  const float left = at.x - half, top = at.y - half, right = at.x + half, bottom = at.y + half;
+  const float step_right = right + 5.f * scale, step_bottom = top + 2.f * scale;
+  const ImVec2 square[4] = {{left, top}, {right, top}, {right, bottom}, {left, bottom}};
+  ImDrawList_AddConvexPolyFilled(draw, square, 4, color);
+  if (!step) {
+    ImDrawList_AddPolyline(draw, square, 4, rim, ImDrawFlags_Closed, 1.f);
+    return;
+  }
+  // (overlapping the square, so no seam shows where the two meet)
+  const ImVec2 tab[4] = {{right - 1.f, top}, {step_right, top}, {step_right, step_bottom}, {right - 1.f, step_bottom}};
+  ImDrawList_AddConvexPolyFilled(draw, tab, 4, color);
+  const ImVec2 outline[6] = {{left, top}, {step_right, top}, {step_right, step_bottom}, {right, step_bottom}, {right, bottom}, {left, bottom}};
+  ImDrawList_AddPolyline(draw, outline, 6, rim, ImDrawFlags_Closed, 1.f);
+}
+
 static void draw_key(ImDrawList *draw, ImVec2 at, int interp, int handle_mode, bool selected, float scale) {
   const float r = (selected ? 7.5f : 6.f) * scale;
   const ImU32 color = selected ? SELECTED_COLOR : KEY_COLOR;
   const ImU32 outline = IM_COL32(0, 0, 0, 170);
   if (interp == CAMERA_INTERP_HOLD) {
-    // A hold: a square with the step it makes drawn out of its right side.
-    const float s = r * 0.8f;
-    ImDrawList_AddRectFilled(draw, (ImVec2){at.x - s, at.y - s}, (ImVec2){at.x + s, at.y + s}, color, 0.f, 0);
-    ImDrawList_AddLine(draw, (ImVec2){at.x + s, at.y - s}, (ImVec2){at.x + s + 5.f * scale, at.y - s}, color, 2.f * scale);
+    draw_square_key(draw, at, r * 0.8f, color, true, scale);
   } else if (interp == CAMERA_INTERP_LINEAR) {
     ImDrawList_AddTriangleFilled(draw, (ImVec2){at.x - r, at.y + r * 0.8f}, (ImVec2){at.x + r, at.y + r * 0.8f},
                                  (ImVec2){at.x, at.y - r}, color);
@@ -743,7 +808,7 @@ static void draw_seconds_ruler(ui_handler_t *ui, ImDrawList *draw, const layout_
   if (ed->pixels_per_second / fps >= 6.0)
     for (double f = ceil(t0 * fps); f <= t1 * fps; f += 1.0) {
       const float x = x_of(ed, l, f / fps);
-      ImDrawList_AddLine(draw, (ImVec2){x, bottom - 4.f * scale}, (ImVec2){x, bottom}, minor, 1.f);
+      centered_line(draw, (ImVec2){x, bottom - 4.f * scale}, (ImVec2){x, bottom}, minor, 1.f);
     }
   // Labels at least a label and a gap apart.
   const double steps[] = {1.0 / fps, 2.0 / fps, 5.0 / fps, 10.0 / fps, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800};
@@ -759,7 +824,7 @@ static void draw_seconds_ruler(ui_handler_t *ui, ImDrawList *draw, const layout_
     if (frame != 0 && frame < (int)llround(fps)) snprintf(label, sizeof(label), "+%df", frame);
     else if (whole >= 60.0) snprintf(label, sizeof(label), "%d:%02d", (int)whole / 60, (int)whole % 60);
     else snprintf(label, sizeof(label), "%ds", (int)whole);
-    ImDrawList_AddLine(draw, (ImVec2){x, bottom - 8.f * scale}, (ImVec2){x, bottom}, major, 1.f);
+    centered_line(draw, (ImVec2){x, bottom - 8.f * scale}, (ImVec2){x, bottom}, major, 1.f);
     ImDrawList_AddText_Vec2(draw, (ImVec2){x + 4.f * scale, top + 0.5f * (bottom - top - igGetTextLineHeight()) - 2.f * scale},
                             frame ? major : text, label, NULL);
   }
@@ -789,7 +854,7 @@ static void draw_game_ruler(ui_handler_t *ui, ImDrawList *draw, const layout_t *
     if (a != b) {
       // A mark where the remap crosses a multiple of the step, either way.
       const double crossed = (b > a ? b : a) * step;
-      ImDrawList_AddLine(draw, (ImVec2){x, bottom - 6.f * scale}, (ImVec2){x, bottom}, tick_color, 1.f);
+      centered_line(draw, (ImVec2){x, bottom - 6.f * scale}, (ImVec2){x, bottom}, tick_color, 1.f);
       char label[32];
       snprintf(label, sizeof(label), "%.0f", crossed);
       if (x >= free_from && crossed >= 0.0) {
@@ -816,12 +881,14 @@ static void draw_range(ui_handler_t *ui, ImDrawList *draw, const layout_t *l, bo
       ImDrawList_AddRectFilled(draw, (ImVec2){fmaxf(right, l->x0), l->ruler_bottom}, (ImVec2){l->x1, l->bottom}, outside, 0.f, 0);
     return;
   }
+  // A bar along the top with a bracket at each end, through the range's start and end.
   const float bar = l->ruler_top + 1.5f * scale;
-  ImDrawList_AddLine(draw, (ImVec2){left, bar}, (ImVec2){right, bar}, RANGE_COLOR, 3.f * scale);
+  centered_line(draw, (ImVec2){left, bar}, (ImVec2){right, bar}, RANGE_COLOR, 3.f * scale);
   for (int side = 0; side < 2; ++side) {
     const float x = side ? right : left, inward = side ? -5.f * scale : 5.f * scale;
-    ImDrawList_AddLine(draw, (ImVec2){x, l->ruler_top}, (ImVec2){x, l->ruler_split}, RANGE_COLOR, 2.f * scale);
-    ImDrawList_AddLine(draw, (ImVec2){x, l->ruler_split - 1.f}, (ImVec2){x + inward, l->ruler_split - 1.f}, RANGE_COLOR, 2.f * scale);
+    centered_line(draw, (ImVec2){x, l->ruler_top}, (ImVec2){x, l->ruler_split}, RANGE_COLOR, 2.f * scale);
+    centered_line(draw, (ImVec2){x, l->ruler_split - 1.f * scale}, (ImVec2){x + inward, l->ruler_split - 1.f * scale}, RANGE_COLOR,
+                  2.f * scale);
   }
 }
 
@@ -871,12 +938,17 @@ static void draw_time_lane(ui_handler_t *ui, ImDrawList *draw, const layout_t *l
     const double speed = game_speed(ui, time_of(ed, l, next_x), dt);
     if (is_jump(speed)) {
       ImDrawList_AddRectFilled(draw, (ImVec2){x, top}, (ImVec2){next_x, bottom}, previous, 0.f, 0);
-      ImDrawList_AddLine(draw, (ImVec2){next_x, top}, (ImVec2){next_x, bottom}, IM_COL32(240, 240, 240, 255), 2.f * scale);
       continue;
     }
     const ImU32 color = speed_color(speed);
     ImDrawList_AddRectFilledMultiColor(draw, (ImVec2){x, top}, (ImVec2){next_x, bottom}, previous, color, color, previous);
     previous = color;
+  }
+  // A hold jumps the game at the next key: marked through that key.
+  for (int i = 0; i + 1 < camera->time_count; ++i) {
+    if (camera->time_keys[i].interp != CAMERA_INTERP_HOLD) continue;
+    const float x = x_of(ed, l, camera->time_keys[i + 1].time);
+    centered_line(draw, (ImVec2){x, top}, (ImVec2){x, bottom}, IM_COL32(240, 240, 240, 255), 2.f * scale);
   }
   for (int i = 0; i < camera->time_count; ++i)
     draw_key(draw, lane_key_position(ui, l, lane, i), camera->time_keys[i].interp, camera->time_keys[i].ease.mode,
@@ -893,9 +965,9 @@ static void draw_pose_lane(ui_handler_t *ui, ImDrawList *draw, const layout_t *l
     const camera_pose_key_t *a = &camera->pose_keys[i], *b = &camera->pose_keys[i + 1];
     const float xa = x_of(ed, l, a->time), xb = x_of(ed, l, b->time);
     if (a->interp == CAMERA_INTERP_HOLD) {
-      ImDrawList_AddLine(draw, (ImVec2){xa, middle}, (ImVec2){xb, middle}, igGetColorU32_Col(ImGuiCol_TextDisabled, 0.4f), 1.f);
-      ImDrawList_AddLine(draw, (ImVec2){xb, lane->top + 4.f * scale}, (ImVec2){xb, lane->bottom - 4.f * scale},
-                         IM_COL32(255, 255, 255, 140), 1.f);
+      centered_line(draw, (ImVec2){xa, middle}, (ImVec2){xb, middle}, igGetColorU32_Col(ImGuiCol_TextDisabled, 0.4f), 1.f);
+      centered_line(draw, (ImVec2){xb, lane->top + 4.f * scale}, (ImVec2){xb, lane->bottom - 4.f * scale},
+                    IM_COL32(255, 255, 255, 140), 1.f);
     } else {
       ImDrawList_AddRectFilled(draw, (ImVec2){xa, middle - 4.f * scale}, (ImVec2){xb, middle + 4.f * scale},
                                IM_COL32(64, 128, 196, 200), 3.f * scale, 0);
@@ -929,13 +1001,59 @@ static void draw_influence_lane(ui_handler_t *ui, ImDrawList *draw, const layout
     const float y = value_y(lane, value);
     if (value > 0.f)
       ImDrawList_AddRectFilled(draw, (ImVec2){x, y}, (ImVec2){fminf(x + step, l->x1), value_y(lane, 0.f)}, fill, 0.f, 0);
-    if (x > l->x0) ImDrawList_AddLine(draw, (ImVec2){x - step, previous_y}, (ImVec2){x, y}, line, 1.5f * scale);
+    if (x > l->x0) centered_line(draw, (ImVec2){x - step, previous_y}, (ImVec2){x, y}, line, 1.5f * scale);
     previous_y = y;
   }
   const camera_influence_key_t *keys = follow ? camera->follow_keys : camera->aim_keys;
   for (int i = 0; i < camera_channel_count(camera, lane->channel); ++i)
     draw_key(draw, lane_key_position(ui, l, lane, i), keys[i].interp, keys[i].ease.mode,
              ed->selected_channel == lane->channel && ed->selected_key == i, scale);
+}
+
+// A bar for each stretch the shot is about one character, in its group's colour and named. The
+// first key's character also covers what comes before it, drawn fainter.
+static void draw_focus_lane(ui_handler_t *ui, ImDrawList *draw, const layout_t *l, const lane_t *lane) {
+  const camera_editor_t *ed = &ui->camera_editor;
+  const camera_timeline_t *camera = &ui->camera_timeline;
+  const float scale = gfx_get_ui_scale();
+  const float middle = 0.5f * (lane->top + lane->bottom);
+  const float half = 0.5f * igGetTextLineHeight() + 3.f * scale;
+  if (camera->focus_count == 0) {
+    char hint[160];
+    const int track = camera_rig_focus_track(ui->gfx_handler, ed->playhead);
+    if (track >= 0)
+      snprintf(hint, sizeof(hint), "No cuts, so the camera is about %s. Right-click to cut to a character.", track_name(ui, track));
+    else
+      snprintf(hint, sizeof(hint), "No cuts. Right-click to cut to a character.");
+    ImDrawList_AddText_Vec2(draw, (ImVec2){l->x0 + 10.f * scale, middle - igGetTextLineHeight() * 0.5f},
+                            igGetColorU32_Col(ImGuiCol_TextDisabled, 1.f), hint, NULL);
+    return;
+  }
+  for (int i = 0; i < camera->focus_count; ++i) {
+    const int track = camera->focus_keys[i].track;
+    const ImVec4 color = track_color(ui, track);
+    const float xa = x_of(ed, l, camera->focus_keys[i].time);
+    const float xb = i + 1 < camera->focus_count ? x_of(ed, l, camera->focus_keys[i + 1].time) : l->x1;
+    if (i == 0 && camera->focus_keys[0].time > 0.0)
+      ImDrawList_AddRectFilled(draw, (ImVec2){x_of(ed, l, 0.0), middle - half}, (ImVec2){xa - 1.f * scale, middle + half},
+                               igGetColorU32_Vec4((ImVec4){color.x, color.y, color.z, 0.18f}), 3.f * scale, 0);
+    if (xb <= l->x0 || xa >= l->x1) continue;
+    ImDrawList_AddRectFilled(draw, (ImVec2){xa, middle - half}, (ImVec2){xb - 1.f * scale, middle + half},
+                             igGetColorU32_Vec4((ImVec4){color.x, color.y, color.z, 0.45f}), 3.f * scale, 0);
+    // The name starts clear of the cut's key, and stays in sight while the stretch's start is scrolled off.
+    const float text_x = fmaxf(xa + 12.f * scale, l->x0 + 4.f * scale);
+    ImDrawList_PushClipRect(draw, (ImVec2){text_x, lane->top}, (ImVec2){xb - 4.f * scale, lane->bottom}, true);
+    ImDrawList_AddText_Vec2(draw, (ImVec2){text_x, middle - igGetTextLineHeight() * 0.5f},
+                            igGetColorU32_Col(track >= 0 ? ImGuiCol_Text : ImGuiCol_TextDisabled, 1.f), track_name(ui, track),
+                            NULL);
+    ImDrawList_PopClipRect(draw);
+  }
+  // Every key here is a cut, so a plain square: the hold key's step would only run into the name.
+  for (int i = 0; i < camera->focus_count; ++i) {
+    const bool selected = ed->selected_channel == CAMERA_CHANNEL_FOCUS && ed->selected_key == i;
+    draw_square_key(draw, lane_key_position(ui, l, lane, i), (selected ? 6.f : 4.8f) * scale, selected ? SELECTED_COLOR : KEY_COLOR,
+                    false, scale);
+  }
 }
 
 static void lane_value_text(ui_handler_t *ui, camera_channel_t channel, char *out, size_t size) {
@@ -946,6 +1064,7 @@ static void lane_value_text(ui_handler_t *ui, camera_channel_t channel, char *ou
   case CAMERA_CHANNEL_POSE: snprintf(out, size, "%d keys", camera->pose_count); break;
   case CAMERA_CHANNEL_FOLLOW: snprintf(out, size, "%.0f%%", camera_eval_follow(camera, playhead) * 100.f); break;
   case CAMERA_CHANNEL_AIM: snprintf(out, size, "%.0f%%", camera_eval_aim(camera, playhead) * 100.f); break;
+  case CAMERA_CHANNEL_FOCUS: snprintf(out, size, "%.14s", track_name(ui, camera_rig_focus_track(ui->gfx_handler, playhead))); break;
   default: out[0] = '\0'; break;
   }
 }
@@ -1011,7 +1130,7 @@ static void draw_graph(ui_handler_t *ui, ImDrawList *draw, const layout_t *l) {
   const double grid = nice_value_step(l->graph_high - l->graph_low, 4);
   for (double v = ceil(l->graph_low / grid) * grid; v <= l->graph_high; v += grid) {
     const float y = graph_y(l, v);
-    ImDrawList_AddLine(draw, (ImVec2){l->x0, y}, (ImVec2){l->x1, y}, igGetColorU32_Col(ImGuiCol_TextDisabled, 0.18f), 1.f);
+    centered_line(draw, (ImVec2){l->x0, y}, (ImVec2){l->x1, y}, igGetColorU32_Col(ImGuiCol_TextDisabled, 0.18f), 1.f);
     char label[32];
     if (channel == CAMERA_CHANNEL_FOLLOW || channel == CAMERA_CHANNEL_AIM) snprintf(label, sizeof(label), "%.0f%%", v * 100.0);
     else snprintf(label, sizeof(label), "%g", fabs(v) < grid * 1e-6 ? 0.0 : v);
@@ -1021,8 +1140,8 @@ static void draw_graph(ui_handler_t *ui, ImDrawList *draw, const layout_t *l) {
 
   // Game time runs at 1x along this line.
   if (channel == CAMERA_CHANNEL_TIME)
-    ImDrawList_AddLine(draw, (ImVec2){l->x0, graph_y(l, time_of(ed, l, l->x0) * tps)},
-                       (ImVec2){l->x1, graph_y(l, time_of(ed, l, l->x1) * tps)}, igGetColorU32_Col(ImGuiCol_TextDisabled, 0.35f), 1.f);
+    centered_line(draw, (ImVec2){l->x0, graph_y(l, time_of(ed, l, l->x0) * tps)},
+                  (ImVec2){l->x1, graph_y(l, time_of(ed, l, l->x1) * tps)}, igGetColorU32_Col(ImGuiCol_TextDisabled, 0.35f), 1.f);
 
   // The curve, and for the camera its speed along the path underneath, as
   // After Effects' speed graph shows it.
@@ -1045,8 +1164,8 @@ static void draw_graph(ui_handler_t *ui, ImDrawList *draw, const layout_t *l) {
     }
     const float base = l->graph_bottom - 4.f * scale, height = (l->graph_bottom - l->graph_top) * 0.3f;
     for (int i = 2; i < count; ++i)
-      ImDrawList_AddLine(draw, (ImVec2){points[i - 1].x, base - speeds[i - 1] / top_speed * height},
-                         (ImVec2){points[i].x, base - speeds[i] / top_speed * height}, IM_COL32(255, 170, 90, 150), 1.5f * scale);
+      centered_line(draw, (ImVec2){points[i - 1].x, base - speeds[i - 1] / top_speed * height},
+                    (ImVec2){points[i].x, base - speeds[i] / top_speed * height}, IM_COL32(255, 170, 90, 150), 1.5f * scale);
     ImDrawList_AddText_Vec2(draw, (ImVec2){l->x1 - text_width("speed") - 6.f * scale, base - height - igGetTextLineHeight()},
                             IM_COL32(255, 170, 90, 200), "speed", NULL);
   }
@@ -1060,7 +1179,7 @@ static void draw_graph(ui_handler_t *ui, ImDrawList *draw, const layout_t *l) {
       double time, value;
       if (!graph_handle(ui, l, selected, side, &time, &value)) continue;
       const ImVec2 tip = {x_of(ed, l, time), graph_y(l, value)};
-      ImDrawList_AddLine(draw, at, tip, HANDLE_COLOR, 1.5f * scale);
+      centered_line(draw, at, tip, HANDLE_COLOR, 1.5f * scale);
       ImDrawList_AddCircleFilled(draw, tip, 5.f * scale, HANDLE_COLOR, 12);
     }
   }
@@ -1127,6 +1246,7 @@ static int add_key(ui_handler_t *ui, camera_channel_t channel, double time, floa
     if (!value_given) value = (float)camera_curve_value(camera, channel, time, tps, NULL);
     index = camera_insert_influence_key(camera, channel, time, value, CAMERA_INTERP_SMOOTH);
     break;
+  case CAMERA_CHANNEL_FOCUS: index = camera_insert_focus_key(camera, time, camera_rig_focus_track(ui->gfx_handler, time)); break;
   default: break;
   }
   if (opened) edit_end(ui);
@@ -1144,6 +1264,15 @@ static void key_menu(ui_handler_t *ui) {
   const double tps = ticks_per_second(ui);
   const camera_channel_t channel = g_menu_channel;
   const int key = g_menu_key;
+  if (channel == CAMERA_CHANNEL_FOCUS) {
+    igTextDisabled("About");
+    const int picked = track_menu_items(ui, camera->focus_keys[key].track);
+    if (picked >= 0) set_focus(ui, key, picked);
+    igSeparator();
+    if (igMenuItem_Bool("Move playhead here", NULL, false, true)) set_playhead(ui, camera->focus_keys[key].time);
+    if (igMenuItem_Bool("Delete cut", NULL, false, true)) delete_key(ui, channel, key);
+    return;
+  }
   int *interp = camera_channel_key_interp(camera, channel, key);
   igTextDisabled("Into the next key");
   for (int i = 0; i < CAMERA_INTERP_COUNT; ++i)
@@ -1175,6 +1304,12 @@ static void key_menu(ui_handler_t *ui) {
 }
 
 static void empty_menu(ui_handler_t *ui) {
+  if (g_menu_channel == CAMERA_CHANNEL_FOCUS) {
+    igTextDisabled("Cut to");
+    const int picked = track_menu_items(ui, -1);
+    if (picked >= 0) cut_to(ui, g_menu_time, picked);
+    return;
+  }
   char label[64];
   snprintf(label, sizeof(label), "Add %s key here", CHANNEL_NAMES[g_menu_channel]);
   if (igMenuItem_Bool(label, NULL, false, true)) add_key(ui, g_menu_channel, g_menu_time, g_menu_value, true);
@@ -1641,7 +1776,7 @@ static void inspect_target(ui_handler_t *ui) {
   if (shown == 0) snprintf(preview, sizeof(preview), "None");
   else if (shown == 1) snprintf(preview, sizeof(preview), "%s", ts->player_tracks[first_shown].name);
   else snprintf(preview, sizeof(preview), "%d characters", shown);
-  if (igBeginCombo("Characters", preview, 0)) {
+  if (igBeginCombo("Also in frame", preview, 0)) {
     for (int i = 0; i < ts->player_track_count; ++i) {
       igPushID_Int(i);
       bool tracked = is_subject(camera, i);
@@ -1669,7 +1804,9 @@ static void inspect_target(ui_handler_t *ui) {
     }
     igEndCombo();
   }
-  if (igIsItemHovered(0)) igSetTooltip("Follow and Aim track the middle of the box around every character ticked here");
+  if (igIsItemHovered(0))
+    igSetTooltip("Follow and Aim track the middle of the box around the focus and every character ticked here.\n"
+                 "Without Focus cuts the first one ticked is the focus; with none either, the selected track is.");
   if (is_3d) igDragFloat3("Offset", camera->subject_offset, 0.02f, 0.f, 0.f, "%.2f", 0);
   else igDragFloat2("Offset", camera->subject_offset, 0.02f, 0.f, 0.f, "%.2f", 0);
   track_item(ui, "Edit target offset");
@@ -1723,6 +1860,16 @@ static void inspect_key(ui_handler_t *ui) {
     track_item(ui, "Edit game time");
     break;
   case CAMERA_CHANNEL_POSE: inspect_pose(ui, key); break;
+  case CAMERA_CHANNEL_FOCUS: {
+    const int track = camera->focus_keys[key].track;
+    if (igBeginCombo("About", track_name(ui, track), 0)) {
+      const int picked = track_menu_items(ui, track);
+      if (picked >= 0) set_focus(ui, key, picked);
+      igEndCombo();
+    }
+    igTextDisabled("Whose HUD the video shows from here, and whom Follow and Aim track.");
+    break;
+  }
   case CAMERA_CHANNEL_FOLLOW:
   case CAMERA_CHANNEL_AIM: {
     camera_influence_key_t *influence = channel == CAMERA_CHANNEL_FOLLOW ? &camera->follow_keys[key] : &camera->aim_keys[key];
@@ -1735,7 +1882,7 @@ static void inspect_key(ui_handler_t *ui) {
   }
   default: break;
   }
-  inspect_timing(ui, channel, key);
+  if (channel != CAMERA_CHANNEL_FOCUS) inspect_timing(ui, channel, key);
   igSpacing();
   if (igButton("Move playhead here", (ImVec2){0, 0})) set_playhead(ui, camera_channel_key_time(camera, channel, key));
   igSameLine(0.f, 8.f * gfx_get_ui_scale());
@@ -1765,7 +1912,8 @@ static void inspect_camera(ui_handler_t *ui) {
   }
   igTextDisabled("Render > Export MP4 renders this span.");
 
-  igSeparatorText("Follow and Aim target");
+  igSeparatorText("Characters");
+  igTextDisabled("The Focus lane says who each shot is about.");
   inspect_target(ui);
 
   igSeparatorText("Shortcuts");
@@ -1781,8 +1929,10 @@ static void render_inspector(ui_handler_t *ui, float width, float height) {
   igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){10.f * scale, 8.f * scale});
   igBeginChild_Str("##camera_inspector", (ImVec2){width, height}, true, 0);
   igPushItemWidth(-110.f * scale);
+  igPushTextWrapPos(0.f); // hints wrap at the panel's edge
   if (ui->camera_editor.selected_key >= 0) inspect_key(ui);
   else inspect_camera(ui);
+  igPopTextWrapPos();
   igPopItemWidth();
   igEndChild();
   igPopStyleVar(1);
@@ -1897,6 +2047,11 @@ void camera_window_render(ui_handler_t *ui) {
   const float line = igGetTextLineHeight();
   const bool is_3d = game_is_3d(&ui->gfx_handler->game_host);
   if (!is_3d && ed->selected_channel == CAMERA_CHANNEL_AIM) ed->selected_channel = CAMERA_CHANNEL_POSE;
+  // Focus is a choice, not a curve: the graph editor has nothing to show for it.
+  if (ed->graph_mode && ed->selected_channel == CAMERA_CHANNEL_FOCUS) {
+    ed->selected_channel = CAMERA_CHANNEL_POSE;
+    ed->selected_key = -1;
+  }
   const ImVec2 origin = igGetCursorScreenPos();
   const ImVec2 avail = igGetContentRegionAvail();
   const float inspector_width = fminf(380.f * scale, fmaxf(260.f * scale, avail.x * 0.3f));
@@ -1919,10 +2074,12 @@ void camera_window_render(ui_handler_t *ui) {
   l.ruler_bottom = l.ruler_split + line + 8.f * scale;
 
   const float lane_height = fmaxf(2.f * line + 20.f * scale, 46.f * scale);
-  const camera_channel_t order[] = {CAMERA_CHANNEL_TIME, CAMERA_CHANNEL_POSE, CAMERA_CHANNEL_FOLLOW, CAMERA_CHANNEL_AIM};
+  const camera_channel_t order[] = {CAMERA_CHANNEL_TIME, CAMERA_CHANNEL_POSE, CAMERA_CHANNEL_FOCUS, CAMERA_CHANNEL_FOLLOW,
+                                    CAMERA_CHANNEL_AIM};
   float y = l.ruler_bottom;
   for (int i = 0; i < CAMERA_CHANNEL_COUNT; ++i) {
     if (order[i] == CAMERA_CHANNEL_AIM && !is_3d) continue;
+    if (order[i] == CAMERA_CHANNEL_FOCUS && ed->graph_mode) continue;
     l.lanes[l.lane_count++] = (lane_t){order[i], y, y + lane_height};
     y += lane_height;
   }
@@ -1988,6 +2145,7 @@ void camera_window_render(ui_handler_t *ui) {
       const lane_t *lane = &l.lanes[i];
       if (lane->channel == CAMERA_CHANNEL_TIME) draw_time_lane(ui, draw, &l, lane);
       else if (lane->channel == CAMERA_CHANNEL_POSE) draw_pose_lane(ui, draw, &l, lane);
+      else if (lane->channel == CAMERA_CHANNEL_FOCUS) draw_focus_lane(ui, draw, &l, lane);
       else draw_influence_lane(ui, draw, &l, lane);
     }
   }
@@ -1996,7 +2154,7 @@ void camera_window_render(ui_handler_t *ui) {
   draw_range(ui, draw, &l, false);
   draw_follow_margins(ui, draw, &l);
   const float playhead_x = x_of(ed, &l, ed->playhead);
-  ImDrawList_AddLine(draw, (ImVec2){playhead_x, l.ruler_top}, (ImVec2){playhead_x, l.bottom}, PLAYHEAD_COLOR, 2.f * scale);
+  centered_line(draw, (ImVec2){playhead_x, l.ruler_top}, (ImVec2){playhead_x, l.bottom}, PLAYHEAD_COLOR, 2.f * scale);
   ImDrawList_AddTriangleFilled(draw, (ImVec2){playhead_x - 7.f * scale, l.ruler_top}, (ImVec2){playhead_x + 7.f * scale, l.ruler_top},
                                (ImVec2){playhead_x, l.ruler_top + 9.f * scale}, PLAYHEAD_COLOR);
   ImDrawList_PopClipRect(draw);

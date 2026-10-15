@@ -264,6 +264,43 @@ static void timing(void) {
   near(camera_game_tick(&camera, 0.5, TPS), 12.5);
 }
 
+// Who the shot is about changes in cuts: each Focus key holds until the next.
+static void focus(void) {
+  camera_timeline_t camera;
+  camera_timeline_default(&camera);
+  assert(camera.subject_count == 0);
+  assert(camera_focus_key_track(&camera, 1.0) == -1);
+
+  // Cuts to track 2 at 1s and to track 0 at 3s. The first also covers what comes before it.
+  assert(camera_insert_focus_key(&camera, 3.0, 0) == 0);
+  assert(camera_insert_focus_key(&camera, 1.0, 2) == 0);
+  assert(camera_focus_key_track(&camera, 0.0) == 2);
+  assert(camera_focus_key_track(&camera, 1.0) == 2);
+  assert(camera_focus_key_track(&camera, 2.999) == 2);
+  assert(camera_focus_key_track(&camera, 3.0) == 0);
+  assert(camera_focus_key_track(&camera, 100.0) == 0);
+  near(camera_curve_value(&camera, CAMERA_CHANNEL_FOCUS, 2.0, TPS, NULL), 2.0);
+
+  // A cut has nothing to ease and stays a cut.
+  assert(camera.focus_keys[0].interp == CAMERA_INTERP_HOLD);
+  assert(!camera_channel_key_ease(&camera, CAMERA_CHANNEL_FOCUS, 0));
+  camera_easy_ease(&camera, CAMERA_CHANNEL_FOCUS, 0);
+  assert(camera.focus_keys[0].interp == CAMERA_INTERP_HOLD);
+
+  // Moved, rippled and replaced like any other key.
+  assert(camera_move_key(&camera, CAMERA_CHANNEL_FOCUS, 1, 0.5) == 0);
+  assert(camera_focus_key_track(&camera, 0.75) == 0);
+  assert(camera_focus_key_track(&camera, 2.0) == 2);
+  camera_ripple(&camera, 0.8, 1.0);
+  assert(camera_focus_key_track(&camera, 1.5) == 0);
+  near(camera_last_key_time(&camera), 2.0);
+  assert(camera_insert_focus_key(&camera, 2.0, 5) == 1 && camera.focus_count == 2);
+  assert(camera_focus_key_track(&camera, 9.0) == 5);
+  assert(camera_insert_focus_key(&camera, 4.0, -7) == 2 && camera.focus_keys[2].track == -1);
+  camera_delete_key(&camera, CAMERA_CHANNEL_FOCUS, 2);
+  assert(camera.focus_count == 2);
+}
+
 int main(void) {
   timing();
   handles();
@@ -271,5 +308,6 @@ int main(void) {
   pose();
   influence();
   editing();
+  focus();
   return 0;
 }

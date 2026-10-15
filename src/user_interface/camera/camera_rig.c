@@ -81,7 +81,65 @@ static bool track_position(gfx_handler_t *h, int track, double game_tick, float 
   return true;
 }
 
-// Every tracked character's position over a span of ticks, simulated a slice
+// Who the camera is about. The Focus keys say who the shot is about; the
+// extra characters are kept in frame beside it, and without Focus keys the
+// first of them is the focus. With no one named anywhere the camera is about
+// whoever is selected in the editor.
+
+static int existing_track(const timeline_state_t *ts, int track) {
+  return track >= 0 && track < ts->player_track_count ? track : -1;
+}
+
+int camera_rig_focus_track(gfx_handler_t *h, double seconds) {
+  const timeline_state_t *ts = &h->user_interface.timeline;
+  const camera_timeline_t *camera = &h->user_interface.camera_timeline;
+  int track = existing_track(ts, camera_focus_key_track(camera, seconds));
+  for (int s = 0; track < 0 && s < camera->subject_count; ++s) track = existing_track(ts, camera->subject_tracks[s]);
+  return track >= 0 ? track : existing_track(ts, ts->selected_player_track_index);
+}
+
+static int add_track(int *tracks, int count, int max, int track) {
+  if (track < 0 || count >= max) return count;
+  for (int i = 0; i < count; ++i)
+    if (tracks[i] == track) return count;
+  tracks[count] = track;
+  return count + 1;
+}
+
+int camera_rig_framed_tracks(gfx_handler_t *h, double seconds, int out[CAMERA_MAX_FRAMED]) {
+  const timeline_state_t *ts = &h->user_interface.timeline;
+  const camera_timeline_t *camera = &h->user_interface.camera_timeline;
+  int count = add_track(out, 0, CAMERA_MAX_FRAMED, existing_track(ts, camera_focus_key_track(camera, seconds)));
+  for (int s = 0; s < camera->subject_count; ++s)
+    count = add_track(out, count, CAMERA_MAX_FRAMED, existing_track(ts, camera->subject_tracks[s]));
+  if (count == 0) count = add_track(out, 0, CAMERA_MAX_FRAMED, existing_track(ts, ts->selected_player_track_index));
+  return count;
+}
+
+// Every character the camera frames at some moment, whose paths are walked.
+enum { MAX_PATHS = 32 };
+
+static int framed_anywhere(gfx_handler_t *h, int out[MAX_PATHS]) {
+  const timeline_state_t *ts = &h->user_interface.timeline;
+  const camera_timeline_t *camera = &h->user_interface.camera_timeline;
+  int count = 0;
+  bool nobody_somewhere = camera->focus_count == 0;
+  for (int i = 0; i < camera->focus_count; ++i) {
+    const int track = existing_track(ts, camera->focus_keys[i].track);
+    nobody_somewhere = nobody_somewhere || track < 0;
+    count = add_track(out, count, MAX_PATHS, track);
+  }
+  int subjects = 0;
+  for (int s = 0; s < camera->subject_count; ++s) {
+    const int track = existing_track(ts, camera->subject_tracks[s]);
+    subjects += track >= 0;
+    count = add_track(out, count, MAX_PATHS, track);
+  }
+  if (nobody_somewhere && subjects == 0) count = add_track(out, count, MAX_PATHS, existing_track(ts, ts->selected_player_track_index));
+  return count;
+}
+
+// Every framed character's position over a span of ticks, simulated a slice
 // per frame off to the side, so the camera's real path can be drawn while
 // the game sits at the playhead.
 typedef struct character_path_t {
@@ -93,7 +151,7 @@ typedef struct character_path_t {
   model_position_sampler_t *sampler;
 } character_path_t;
 
-static character_path_t g_paths[CAMERA_MAX_SUBJECTS];
+static character_path_t g_paths[MAX_PATHS];
 static int g_generation = 1;
 
 static void path_reset(gfx_handler_t *h, character_path_t *path) {
@@ -109,20 +167,35 @@ enum { MAX_PATH_TICKS = 60000, TICKS_PER_SLICE = 32 };
 // has no frame to keep smooth and walks them in one go.
 static double g_path_budget = 0.002;
 
+static bool path_in_use(const character_path_t *path) { return path->positions || path->sampler; }
+
+// The walked path of `track`, or NULL.
+static character_path_t *track_path(int track) {
+  for (int s = 0; s < MAX_PATHS; ++s)
+    if (path_in_use(&g_paths[s]) && g_paths[s].track == track) return &g_paths[s];
+  return NULL;
+}
+
 void camera_rig_update_paths(gfx_handler_t *h, int first_tick, int last_tick) {
   timeline_state_t *ts = &h->user_interface.timeline;
-  const camera_timeline_t *camera = &h->user_interface.camera_timeline;
   first_tick = first_tick < 0 ? 0 : first_tick;
   if (last_tick - first_tick > MAX_PATH_TICKS) last_tick = first_tick + MAX_PATH_TICKS;
   const int wanted = last_tick - first_tick + 1;
   const double deadline = glfwGetTime() + g_path_budget;
-  for (int s = 0; s < CAMERA_MAX_SUBJECTS; ++s) {
-    character_path_t *path = &g_paths[s];
-    const int track = s < camera->subject_count ? camera->subject_tracks[s] : -1;
-    if (track < 0 || track >= ts->player_track_count) {
-      if (path->positions || path->sampler) path_reset(h, path);
-      continue;
-    }
+  int tracks[MAX_PATHS];
+  const int track_count = framed_anywhere(h, tracks);
+  // A path keeps its slot while its character is still framed, and what it walked with it.
+  for (int s = 0; s < MAX_PATHS; ++s) {
+    bool framed = false;
+    for (int i = 0; i < track_count && !framed; ++i) framed = tracks[i] == g_paths[s].track;
+    if (path_in_use(&g_paths[s]) && !framed) path_reset(h, &g_paths[s]);
+  }
+  for (int i = 0; i < track_count; ++i) {
+    const int track = tracks[i];
+    character_path_t *path = track_path(track);
+    for (int s = 0; !path && s < MAX_PATHS; ++s)
+      if (!path_in_use(&g_paths[s])) path = &g_paths[s];
+    if (!path) break;
     const int group = model_track_group_index(ts, track);
     if (group < 0) continue;
     const int offset = ts->groups[group]->start_offset;
@@ -168,31 +241,36 @@ void camera_rig_update_paths(gfx_handler_t *h, int first_tick, int last_tick) {
   }
 }
 
-static bool cached_position(int slot, double tick, float out[3]) {
-  const character_path_t *path = &g_paths[slot];
-  const double local = tick - path->first_tick;
-  if (!path->positions || local < 0.0 || local > path->filled - 1) return false;
+static bool cached_position(int track, double tick, float out[3]) {
+  const character_path_t *path = track_path(track);
+  const double local = path ? tick - path->first_tick : -1.0;
+  if (!path || !path->positions || local < 0.0 || local > path->filled - 1) return false;
   const int below = (int)floor(local), above = below + 1 < path->filled ? below + 1 : below;
   const float t = (float)(local - below);
   for (int i = 0; i < 3; ++i) out[i] = lerpf(path->positions[below][i], path->positions[above][i], t);
   return true;
 }
 
-// The middle of the box around every tracked character, plus the offset, and
+// The middle of the box around the framed characters, plus the offset, and
 // the box's half size. From the drawn worlds, or from the walked paths.
 typedef struct subject_t {
   float center[3], half[3];
   bool valid;
 } subject_t;
 
-static subject_t subject_at(gfx_handler_t *h, double game_tick, bool from_paths) {
+typedef struct framed_t {
+  int tracks[CAMERA_MAX_FRAMED];
+  int count;
+} framed_t;
+
+static subject_t subject_at(gfx_handler_t *h, const framed_t *framed, double game_tick, bool from_paths) {
   const camera_timeline_t *camera = &h->user_interface.camera_timeline;
   subject_t out = {{0}, {0}, false};
   float low[3] = {INFINITY, INFINITY, INFINITY}, high[3] = {-INFINITY, -INFINITY, -INFINITY};
-  for (int s = 0; s < camera->subject_count && s < CAMERA_MAX_SUBJECTS; ++s) {
+  for (int s = 0; s < framed->count; ++s) {
     float position[3];
-    const bool known = from_paths ? cached_position(s, game_tick, position)
-                                  : track_position(h, camera->subject_tracks[s], game_tick, position);
+    const bool known = from_paths ? cached_position(framed->tracks[s], game_tick, position)
+                                  : track_position(h, framed->tracks[s], game_tick, position);
     if (!known) {
       // A path still being walked has no answer yet; the drawn world always does.
       if (from_paths) return out;
@@ -210,12 +288,6 @@ static subject_t subject_at(gfx_handler_t *h, double game_tick, bool from_paths)
     out.half[i] = 0.5f * (high[i] - low[i]);
   }
   return out;
-}
-
-bool camera_rig_subject(gfx_handler_t *h, double game_tick, float out[3]) {
-  const subject_t subject = subject_at(h, game_tick, false);
-  if (subject.valid) memcpy(out, subject.center, sizeof(subject.center));
-  return subject.valid;
 }
 
 // Follow and Aim for one moment: the subject, and how strongly each applies.
@@ -250,15 +322,16 @@ static float fit_zoom(gfx_handler_t *h, const float half[3], float fill) {
 // Which way the characters are heading on the ground, as a yaw from +Z, from
 // where the walked paths put them a moment before and after. A wider window
 // is tried while they stand still; false if they never move near here.
-static bool subject_heading(gfx_handler_t *h, double tick, float *yaw) {
+static bool subject_heading(gfx_handler_t *h, const framed_t *framed, double tick, float *yaw) {
   const double tps = camera_rig_ticks_per_second(h);
   const float least = fmaxf(0.05f, game_units_per_tile(&h->game_host) * 0.25f);
   const double windows[] = {0.25, 0.5, 1.0, 2.0};
   for (size_t w = 0; w < sizeof(windows) / sizeof(windows[0]); ++w) {
-    subject_t before = subject_at(h, tick - windows[w] * tps, true), after = subject_at(h, tick + windows[w] * tps, true);
+    subject_t before = subject_at(h, framed, tick - windows[w] * tps, true);
+    subject_t after = subject_at(h, framed, tick + windows[w] * tps, true);
     // Near the ends of the walked span, one side is where they are now.
-    if (!before.valid) before = subject_at(h, tick, true);
-    if (!after.valid) after = subject_at(h, tick, true);
+    if (!before.valid) before = subject_at(h, framed, tick, true);
+    if (!after.valid) after = subject_at(h, framed, tick, true);
     if (!before.valid || !after.valid) return false;
     const float dx = after.center[0] - before.center[0], dz = after.center[2] - before.center[2];
     if (dx * dx + dz * dz >= least * least) {
@@ -269,19 +342,16 @@ static bool subject_heading(gfx_handler_t *h, double tick, float *yaw) {
   return false;
 }
 
-// The game's own follow camera on the first character: the first mode it
-// directs itself. False when it has none or declines.
-static bool game_follow_camera(gfx_handler_t *h, double tick, float eye[3], float target[3]) {
+// The game's own follow camera on `track`: the first mode it directs itself.
+// False when it has none or declines.
+static bool game_follow_camera(gfx_handler_t *h, int track, double tick, float eye[3], float target[3]) {
   timeline_state_t *ts = &h->user_interface.timeline;
-  const camera_timeline_t *camera = &h->user_interface.camera_timeline;
   game_host_t *host = &h->game_host;
-  if (camera->subject_count <= 0) return false;
   int mode = -1;
   for (unsigned i = 0; i < game_camera_mode_count(host) && mode < 0; ++i) {
     const ft_camera_mode *candidate = game_camera_mode(host, i);
     if (candidate && (candidate->flags & FT_CAMERA_MODE_DIRECTED)) mode = (int)i;
   }
-  const int track = camera->subject_tracks[0];
   const int group = model_track_group_index(ts, track);
   if (mode < 0 || group < 0) return false;
   const int current_tick = (int)ceil(fmax(0.0, tick));
@@ -314,7 +384,9 @@ static rig_constraints_t constraints_at(gfx_handler_t *h, double seconds, bool f
   if (known) *known = true;
   if (out.follow <= 0.f && out.aim <= 0.f) return out;
   const double tick = camera_game_tick(camera, seconds, camera_rig_ticks_per_second(h));
-  const subject_t subject = subject_at(h, tick, from_paths);
+  framed_t framed;
+  framed.count = camera_rig_framed_tracks(h, seconds, framed.tracks);
+  const subject_t subject = subject_at(h, &framed, tick, from_paths);
   if (!subject.valid) {
     if (known) *known = false;
     out.follow = out.aim = 0.f;
@@ -326,9 +398,9 @@ static rig_constraints_t constraints_at(gfx_handler_t *h, double seconds, bool f
   // The game's camera keeps state from frame to frame and can only be asked
   // in order, so the drawn path stands in with the chase it most resembles.
   if (camera->follow_style == CAMERA_FOLLOW_GAME && !from_paths)
-    out.game = game_follow_camera(h, tick, out.game_eye, out.game_target);
+    out.game = game_follow_camera(h, camera_rig_focus_track(h, seconds), tick, out.game_eye, out.game_target);
   float yaw;
-  if (!out.game && subject_heading(h, tick, &yaw)) out.turn = yaw;
+  if (!out.game && subject_heading(h, &framed, tick, &yaw)) out.turn = yaw;
   return out;
 }
 
@@ -752,11 +824,15 @@ static void refresh_path_cache(gfx_handler_t *h) {
   hash = hash_bytes(hash, camera->pose_keys, sizeof(camera->pose_keys[0]) * (size_t)camera->pose_count);
   hash = hash_bytes(hash, camera->follow_keys, sizeof(camera->follow_keys[0]) * (size_t)camera->follow_count);
   hash = hash_bytes(hash, camera->aim_keys, sizeof(camera->aim_keys[0]) * (size_t)camera->aim_count);
-  const int counts[4] = {camera->time_count, camera->pose_count, camera->follow_count, camera->aim_count};
+  hash = hash_bytes(hash, camera->focus_keys, sizeof(camera->focus_keys[0]) * (size_t)camera->focus_count);
+  const int counts[5] = {camera->time_count, camera->pose_count, camera->follow_count, camera->aim_count, camera->focus_count};
   hash = hash_bytes(hash, counts, sizeof(counts));
   if (camera_rig_constrained(camera)) {
+    // (the selection stands in where no one is named)
+    hash = hash_bytes(hash, &h->user_interface.timeline.selected_player_track_index, sizeof(int));
     hash = hash_bytes(hash, &g_generation, sizeof(g_generation));
-    for (int s = 0; s < CAMERA_MAX_SUBJECTS; ++s) {
+    for (int s = 0; s < MAX_PATHS; ++s) {
+      hash = hash_bytes(hash, &g_paths[s].track, sizeof(g_paths[s].track));
       hash = hash_bytes(hash, &g_paths[s].filled, sizeof(g_paths[s].filled));
       hash = hash_bytes(hash, &g_paths[s].revision, sizeof(g_paths[s].revision));
       hash = hash_bytes(hash, &g_paths[s].first_tick, sizeof(g_paths[s].first_tick));

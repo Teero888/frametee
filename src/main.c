@@ -58,14 +58,15 @@ static void free_cli_args(const char **argv, char **copies, int count) {
 // Walks the game through one frame of rendering: every visible world, in every
 // pass, with the interpolation the playhead is currently between. The engine
 // supplies the schedule and the draw services; the game supplies the picture.
-// Players of a group the camera's animation follows, bit per player, while it directs what is drawn.
-static uint64_t followed_players(ui_handler_t *ui, int group_index, bool export_frame) {
-  const camera_timeline_t *camera = &ui->camera_timeline;
-  if ((!export_frame && !camera_editor_drives_view(ui)) || !camera_rig_constrained(camera)) return 0;
+// Players of a group the camera's animation follows at `seconds`, bit per player, while it directs what is drawn.
+static uint64_t followed_players(ui_handler_t *ui, int group_index, bool camera_animated, double seconds) {
+  if (!camera_animated || !camera_rig_constrained(&ui->camera_timeline)) return 0;
+  int framed[CAMERA_MAX_FRAMED];
+  const int count = camera_rig_framed_tracks(ui->gfx_handler, seconds, framed);
   uint64_t players = 0;
-  for (int s = 0; s < camera->subject_count && s < CAMERA_MAX_SUBJECTS; ++s) {
-    const int track = camera->subject_tracks[s];
-    if (track < 0 || track >= ui->timeline.player_track_count || model_track_group_index(&ui->timeline, track) != group_index) continue;
+  for (int s = 0; s < count; ++s) {
+    const int track = framed[s];
+    if (model_track_group_index(&ui->timeline, track) != group_index) continue;
     const int local = model_group_local_track_index(&ui->timeline, track);
     if (local >= 0 && local < 64) players |= UINT64_C(1) << local;
   }
@@ -79,14 +80,20 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra, bool 
   ui_player_setups_prepare(ui);
 
   static const ft_render_pass passes[] = {FT_PASS_LEVEL_BACKGROUND, FT_PASS_ENTITIES, FT_PASS_LEVEL_FOREGROUND, FT_PASS_OVERLAY};
-  bool merged_events = false;
-  const int focus_group = render_focus_group(ui, &merged_events);
+  const bool merged_events = render_merged_chat(ui);
   const int selected_track = ts->selected_player_track_index;
   const int selected_group = model_track_group_index(ts, selected_track);
   const int selected_local = selected_group >= 0 ? model_group_local_track_index(ts, selected_track) : -1;
   // The Camera tab's animation directs the view: in a video when it has keys, in the viewport while
   // looking through it.
   const bool camera_animated = export_frame ? ui->camera_timeline.pose_count > 0 : camera_editor_drives_view(ui);
+  const double camera_seconds = export_frame ? ui->video_job.sample_time : ui->camera_editor.playhead;
+  // Whose HUD, chat and pickups the frame shows: who the camera's shot is about while it directs the
+  // view, otherwise the selected player of the group selected in the editor.
+  const int focus_track = camera_animated ? camera_rig_focus_track(handler, camera_seconds) : -1;
+  const int focus_group = focus_track >= 0 ? model_track_group_index(ts, focus_track) : ts->active_group_index;
+  const int focus_local = focus_track >= 0 ? model_group_local_track_index(ts, focus_track)
+                                           : (selected_group == focus_group ? selected_local : -1);
 
   ft_engine_state base_state;
   engine_api_fill_state(&base_state);
@@ -159,13 +166,14 @@ static void render_game_passes(struct gfx_handler_t *handler, float intra, bool 
       frame.world_count = ts->group_count;
       frame.active = !per_world || group_index == focus_group;
       frame.merge_world_events = merged_events;
-      frame.followed_players = per_world ? followed_players(ui, group_index, export_frame) : 0;
+      frame.followed_players = per_world ? followed_players(ui, group_index, camera_animated, camera_seconds) : 0;
       frame.first_world = (group_index == first_visible_group);
       frame.last_world = (group_index == last_visible_group);
       frame.selected_player = per_world && group_index == selected_group ? selected_local : -1;
       // Hiding the highlight leaves the selection: its crosshair still shows.
       frame.highlight_selected = render_layer_enabled(ui, RENDER_LAYER_SELECTION);
       frame.camera_animated = camera_animated;
+      frame.focus_player = per_world && group_index == focus_group ? focus_local : -1;
       if (per_world) {
         const float *color = ts->groups[group_index]->color;
         frame.accent = (ft_color){color[0], color[1], color[2], color[3]};

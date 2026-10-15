@@ -658,6 +658,8 @@ bool model_trim_snippet(timeline_state_t *ts, input_snippet_t *snippet, int new_
   return true;
 }
 
+static uint32_t s_track_uid;
+
 static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, int num) {
   if (num <= 0) return NULL;
   if (group_index < 0 || group_index >= ts->group_count) return NULL;
@@ -683,6 +685,9 @@ static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, 
     camera_timeline_t *camera = &ts->ui->camera_timeline;
     for (int i = 0; i < camera->subject_count; ++i)
       if (camera->subject_tracks[i] >= insert_index && camera->subject_tracks[i] < ts->player_track_count) camera->subject_tracks[i] += num;
+    for (int i = 0; i < camera->focus_count; ++i)
+      if (camera->focus_keys[i].track >= insert_index && camera->focus_keys[i].track < ts->player_track_count)
+        camera->focus_keys[i].track += num;
   }
 
   // Realloc/memmove changes the address of inline string storage.
@@ -696,6 +701,7 @@ static player_track_t *insert_track_rows(timeline_state_t *ts, int group_index, 
     // A fresh track carries no profile. The game fills one in the first time
     // its panel is used, and reads "none" as its own defaults until then.
     new_track->group_index = group_index;
+    new_track->uid = ++s_track_uid;
     new_track->linked_source_player = -1; // whichever tee is being controlled
     // Copies what can be authored, but not one-shot requests: a kill pressed
     // for the controlled tee should not kill every linked one too. Nor the
@@ -774,6 +780,12 @@ void model_remove_track_logic(timeline_state_t *ts, int track_index) {
       camera->subject_tracks[kept++] = track > track_index ? track - 1 : track;
     }
     camera->subject_count = kept;
+    // A cut to it stays a cut, to nobody: the shot falls back there as if it had no focus.
+    for (int i = 0; i < camera->focus_count; ++i) {
+      int *track = &camera->focus_keys[i].track;
+      if (*track == track_index) *track = -1;
+      else if (*track > track_index) --*track;
+    }
   }
 
   int group_index = model_track_group_index(ts, track_index);
@@ -1613,6 +1625,7 @@ player_track_t *model_clone_track_to_group(timeline_state_t *ts, int track_index
 
   int new_index = (int)(new_track - ts->player_tracks);
   // model_add_new_track created the corresponding character and a pointer-free default row.
+  copy.uid = new_track->uid;
   *new_track = copy;
   model_rebind_starting_strings(&new_track->starting_config);
   if (out_track_index) *out_track_index = new_index;

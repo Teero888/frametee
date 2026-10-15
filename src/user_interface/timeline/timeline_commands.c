@@ -337,9 +337,59 @@ void commands_free_timeline_data_snapshot(timeline_data_snapshot_t *snapshot) {
   free(snapshot);
 }
 
+// The camera names its characters and focus by track index. A snapshot takes every track down and
+// builds the ones it holds again, so they are found again by identity rather than by place.
+typedef struct camera_track_refs_t {
+  bool owned;
+  uint32_t subjects[CAMERA_MAX_SUBJECTS];
+  uint32_t focus[CAMERA_MAX_FOCUS_KEYS];
+} camera_track_refs_t;
+
+static uint32_t track_uid(const timeline_state_t *ts, int track) {
+  return track >= 0 && track < ts->player_track_count ? ts->player_tracks[track].uid : 0;
+}
+
+static int track_with_uid(const timeline_state_t *ts, uint32_t uid) {
+  for (int i = 0; uid && i < ts->player_track_count; ++i)
+    if (ts->player_tracks[i].uid == uid) return i;
+  return -1;
+}
+
+static void camera_refs_capture(const timeline_state_t *ts, camera_track_refs_t *refs) {
+  refs->owned = ts->ui && &ts->ui->timeline == ts;
+  if (!refs->owned) return;
+  const camera_timeline_t *camera = &ts->ui->camera_timeline;
+  for (int i = 0; i < camera->subject_count; ++i)
+    refs->subjects[i] = track_uid(ts, camera->subject_tracks[i]);
+  for (int i = 0; i < camera->focus_count; ++i)
+    refs->focus[i] = track_uid(ts, camera->focus_keys[i].track);
+}
+
+// Characters whose track is gone are dropped, and a cut to one goes to nobody.
+static void camera_refs_restore(timeline_state_t *ts, const camera_track_refs_t *refs) {
+  if (!refs->owned) return;
+  camera_timeline_t *camera = &ts->ui->camera_timeline;
+  int kept = 0;
+  for (int i = 0; i < camera->subject_count; ++i) {
+    const int track = track_with_uid(ts, refs->subjects[i]);
+    if (track >= 0) camera->subject_tracks[kept++] = track;
+  }
+  camera->subject_count = kept;
+  for (int i = 0; i < camera->focus_count; ++i)
+    camera->focus_keys[i].track = track_with_uid(ts, refs->focus[i]);
+}
+
+static void rebuild_from_snapshot(timeline_state_t *ts, const timeline_data_snapshot_t *snapshot);
+
 static void apply_timeline_data_snapshot(timeline_state_t *ts, const timeline_data_snapshot_t *snapshot) {
   if (!ts || !snapshot || ts->recording || snapshot->group_count <= 0) return;
+  camera_track_refs_t refs;
+  camera_refs_capture(ts, &refs);
+  rebuild_from_snapshot(ts, snapshot);
+  camera_refs_restore(ts, &refs);
+}
 
+static void rebuild_from_snapshot(timeline_state_t *ts, const timeline_data_snapshot_t *snapshot) {
   interaction_clear_selection(ts);
   ts->drag_state.active = false;
   ts->trim_state.active = false;

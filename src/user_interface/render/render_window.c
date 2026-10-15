@@ -212,39 +212,23 @@ static void editor_layers(ui_handler_t *ui, const layer_list_t *list) {
   }
 }
 
-// What the video is about: the Focus row, a picker as wide as both columns.
-static void focus_row(ui_handler_t *ui, const layer_list_t *list) {
-  timeline_state_t *ts = &ui->timeline;
+// Whether the video shows every group's chat together. Whose HUD and chat it shows is the Camera
+// tab's Focus; the viewport shows the selected group's own.
+static void merged_chat_row(ui_handler_t *ui, const layer_list_t *list) {
   render_profile_t *video = render_video_profile(ui);
   const float top = igGetCursorScreenPos().y;
-  row_begin(list, "Focus", "Whose chat, HUD and pickups the video shows. The viewport follows the group selected in the editor.",
+  row_begin(list, "Every group's chat",
+            "The focused character's HUD with every group's chat together. Who is focused is the Camera tab's Focus.",
             NULL);
-  row_column(list, RENDER_TARGET_VIEWPORT, top);
-  char preview[160];
-  if (video->focus == RENDER_FOCUS_MERGED) snprintf(preview, sizeof(preview), "All groups (merged chat)");
-  else if (video->focus >= 0 && video->focus < ts->group_count) snprintf(preview, sizeof(preview), "%s", ts->groups[video->focus]->name);
-  else snprintf(preview, sizeof(preview), "Selected group");
-  igSetNextItemWidth(column_x(list, RENDER_TARGET_VIDEO) + list->column_width - column_x(list, RENDER_TARGET_VIEWPORT));
-  if (igBeginCombo("##focus", preview, 0)) {
-    int chosen = video->focus;
-    if (igSelectable_Bool("Selected group", video->focus == RENDER_FOCUS_SELECTED, 0, (ImVec2){0, 0})) chosen = RENDER_FOCUS_SELECTED;
-    igSetItemTooltip("Follows the group selected in the editor");
-    for (int g = 0; g < ts->group_count; ++g) {
-      igPushID_Int(g);
-      const float *color = ts->groups[g]->color;
-      igTextColored((ImVec4){color[0], color[1], color[2], 1.f}, ICON_FA_CIRCLE);
-      igSameLine(0.f, 6.f * gfx_get_ui_scale());
-      if (igSelectable_Bool(ts->groups[g]->name, video->focus == g, 0, (ImVec2){0, 0})) chosen = g;
-      igPopID();
-    }
-    if (igSelectable_Bool("All groups (merged chat)", video->focus == RENDER_FOCUS_MERGED, 0, (ImVec2){0, 0}))
-      chosen = RENDER_FOCUS_MERGED;
-    igSetItemTooltip("The selected group's HUD, with every group's chat together");
-    if (chosen != video->focus) {
-      video->focus = chosen;
-      ui_mark_unsaved(ui);
-    }
-    igEndCombo();
+  const float dash = igCalcTextSize("-", NULL, false, 0.f).x;
+  igSetCursorScreenPos((ImVec2){column_x(list, RENDER_TARGET_VIEWPORT) + 0.5f * (list->column_width - dash),
+                                top + 0.5f * (list->row_height - igGetTextLineHeight())});
+  igTextDisabled("-");
+  row_column(list, RENDER_TARGET_VIDEO, top);
+  const bool merged = video->focus == RENDER_FOCUS_MERGED;
+  if (toggle_pill("##merged_chat", merged, ICON_FA_VIDEO, ICON_FA_VIDEO_SLASH, VIDEO_ON, list->column_width)) {
+    video->focus = merged ? RENDER_FOCUS_CAMERA : RENDER_FOCUS_MERGED;
+    ui_mark_unsaved(ui);
   }
   row_end(list, top);
 }
@@ -263,7 +247,7 @@ static bool opacity_drag(const char *id, float *opacity, bool shown, float width
 static void group_layers(ui_handler_t *ui, const layer_list_t *list) {
   timeline_state_t *ts = &ui->timeline;
   if (!section("Groups")) return;
-  focus_row(ui, list);
+  merged_chat_row(ui, list);
   const float scale = gfx_get_ui_scale();
   for (int g = 0; g < ts->group_count; ++g) {
     timeline_group_t *group = ts->groups[g];

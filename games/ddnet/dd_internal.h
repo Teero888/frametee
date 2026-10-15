@@ -933,9 +933,11 @@ void dd_race_hud_render(ft_game *game, const ft_render_frame *frame);
 void dd_race_hud_cleanup(ft_game *game);
 void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame);
 void dd_render_doors(ft_game *game, const ft_render_frame *frame);
+// The player the frame is about (ft_render_frame.focus_player), or -1.
+int dd_focus_player(const ft_render_frame *frame);
 // The player of the frame's world that the world is seen as, DDNet's local or
-// spectated player: the selected one, or else the first one the camera animation
-// follows; -1 for none.
+// spectated player: the frame's focus, else the selected one, else the first one
+// the camera animation follows; -1 for none.
 int dd_view_player(const ft_render_frame *frame);
 // The team whose switch states a frame shows: the one of the tee it follows (team 0 without one).
 int dd_view_team(const ft_render_frame *frame);

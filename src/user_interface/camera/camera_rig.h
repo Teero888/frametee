@@ -9,8 +9,15 @@ struct gfx_handler_t;
 // game, the viewport camera, and the path drawn over the level.
 
 double camera_rig_ticks_per_second(struct gfx_handler_t *h);
-// The subject's position plus its offset, at a fractional game tick.
-bool camera_rig_subject(struct gfx_handler_t *h, double game_tick, float out[3]);
+
+enum { CAMERA_MAX_FRAMED = CAMERA_MAX_SUBJECTS + 1 };
+// Who the shot is about at `seconds`, as a player track: whose HUD a video
+// shows. The Focus keys' track, else the first extra character, else the
+// editor's selection; -1 when there is none.
+int camera_rig_focus_track(struct gfx_handler_t *h, double seconds);
+// The characters Follow and Aim frame at `seconds`: the Focus keys' track and
+// the extra characters, or the selection when neither names anyone.
+int camera_rig_framed_tracks(struct gfx_handler_t *h, double seconds, int out[CAMERA_MAX_FRAMED]);
 // The camera at `seconds` with Follow and Aim applied. False without pose keys.
 bool camera_rig_evaluate(struct gfx_handler_t *h, double seconds, camera_pose_t *out);
 // Points the viewport through `pose` for this frame.

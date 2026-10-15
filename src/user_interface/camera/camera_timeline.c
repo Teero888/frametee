@@ -16,8 +16,8 @@
 #define MIN_SEGMENT_LENGTH 1e-4
 
 void camera_timeline_default(camera_timeline_t *camera) {
+  // Nobody chosen: the camera is about whoever is selected in the editor.
   memset(camera, 0, sizeof(*camera));
-  camera->subject_count = 1;
   camera->fit_fill = 0.7f;
 }
 
@@ -40,6 +40,9 @@ static key_array_t channel_array(const camera_timeline_t *const_camera, camera_c
   case CAMERA_CHANNEL_FOLLOW:
     return (key_array_t){(char *)camera->follow_keys, &camera->follow_count, CAMERA_MAX_INFLUENCE_KEYS,
                          sizeof(camera_influence_key_t)};
+  case CAMERA_CHANNEL_FOCUS:
+    return (key_array_t){(char *)camera->focus_keys, &camera->focus_count, CAMERA_MAX_FOCUS_KEYS,
+                         sizeof(camera_focus_key_t)};
   case CAMERA_CHANNEL_AIM:
   default:
     return (key_array_t){(char *)camera->aim_keys, &camera->aim_count, CAMERA_MAX_INFLUENCE_KEYS,
@@ -92,6 +95,7 @@ int *camera_channel_key_interp(camera_timeline_t *camera, camera_channel_t chann
 
 camera_ease_t *camera_channel_key_ease(camera_timeline_t *camera, camera_channel_t channel, int index) {
   key_array_t array = channel_array(camera, channel);
+  if (channel == CAMERA_CHANNEL_FOCUS) return NULL; // a cut has nothing to ease
   return index >= 0 && index < *array.count ? &slot_head(array, index)->ease : NULL;
 }
 
@@ -128,6 +132,16 @@ int camera_insert_influence_key(camera_timeline_t *camera, camera_channel_t chan
   return array_insert(channel_array(camera, channel), &key);
 }
 
+int camera_insert_focus_key(camera_timeline_t *camera, double time, int track) {
+  time = fmax(0.0, time);
+  camera_focus_key_t key;
+  memset(&key, 0, sizeof(key));
+  key.time = time;
+  key.interp = CAMERA_INTERP_HOLD;
+  key.track = track < 0 ? -1 : track;
+  return array_insert(channel_array(camera, CAMERA_CHANNEL_FOCUS), &key);
+}
+
 void camera_delete_key(camera_timeline_t *camera, camera_channel_t channel, int index) {
   key_array_t array = channel_array(camera, channel);
   if (index < 0 || index >= *array.count) return;
@@ -146,6 +160,7 @@ int camera_move_key(camera_timeline_t *camera, camera_channel_t channel, int ind
     camera_pose_key_t pose;
     camera_time_key_t time;
     camera_influence_key_t influence;
+    camera_focus_key_t focus;
   } moved;
   memcpy(&moved, slot(array, index), array.size);
   moved.pose.time = time; // the common first member
@@ -425,6 +440,7 @@ static double key_value(curve_t *curve, int index) {
   case CAMERA_CHANNEL_TIME: return curve->camera->time_keys[index].game_tick;
   case CAMERA_CHANNEL_FOLLOW: return curve->camera->follow_keys[index].value;
   case CAMERA_CHANNEL_AIM: return curve->camera->aim_keys[index].value;
+  case CAMERA_CHANNEL_FOCUS: return curve->camera->focus_keys[index].track;
   case CAMERA_CHANNEL_POSE:
   default: {
     if (curve->distances) return curve->distances[index];
@@ -802,6 +818,7 @@ double camera_curve_key_value(const camera_timeline_t *camera, camera_channel_t 
 double camera_curve_value(const camera_timeline_t *camera, camera_channel_t channel, double seconds, double tps,
                           const double *distances) {
   if (channel == CAMERA_CHANNEL_TIME) return camera_game_tick(camera, seconds, tps);
+  if (channel == CAMERA_CHANNEL_FOCUS) return camera_focus_key_track(camera, seconds);
   curve_t curve = curve_for(camera, channel, tps, distances);
   if (curve.count == 0) return 0.0;
   if (seconds <= slot_time(curve.array, 0)) return key_value(&curve, 0);
@@ -830,4 +847,18 @@ float camera_eval_follow(const camera_timeline_t *camera, double seconds) {
 
 float camera_eval_aim(const camera_timeline_t *camera, double seconds) {
   return eval_influence(camera, CAMERA_CHANNEL_AIM, seconds);
+}
+
+// Focus
+
+int camera_focus_key_track(const camera_timeline_t *camera, double seconds) {
+  if (camera->focus_count == 0) return -1;
+  // The last key at or before `seconds`; the first key also covers what comes before it.
+  int low = 0, high = camera->focus_count;
+  while (high - low > 1) {
+    const int middle = (low + high) / 2;
+    if (camera->focus_keys[middle].time <= seconds + KEY_EPSILON) low = middle;
+    else high = middle;
+  }
+  return camera->focus_keys[low].track;
 }

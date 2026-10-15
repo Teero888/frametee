@@ -13,12 +13,15 @@
 // path: a bezier through the keys whose handles shape the route. When it gets
 // there is a temporal curve: the distance travelled along that path over time,
 // with ease handles at each key. Game time, Follow and Aim are plain curves of
-// value over time with the same ease handles.
+// value over time with the same ease handles. Who the shot is about is not a
+// curve but a choice that changes in cuts: the Focus keys, each holding until
+// the next, the way a spectator switches whom they watch.
 
 enum {
   CAMERA_MAX_POSE_KEYS = 256,
   CAMERA_MAX_TIME_KEYS = 128,
   CAMERA_MAX_INFLUENCE_KEYS = 64,
+  CAMERA_MAX_FOCUS_KEYS = 128,
   CAMERA_MAX_SUBJECTS = 16,
 };
 
@@ -93,6 +96,16 @@ typedef struct camera_influence_key_t {
   float value; // 0..1
 } camera_influence_key_t;
 
+// From here on the shot is about `track`, a player track index: whose HUD it
+// shows and whom Follow and Aim track. Always a cut (CAMERA_INTERP_HOLD), and
+// its ease is unused; both are there so it shares the other keys' head.
+typedef struct camera_focus_key_t {
+  double time;
+  int interp;
+  camera_ease_t ease;
+  int track; // -1: nobody, which falls back as if there were no key
+} camera_focus_key_t;
+
 // How Follow places the camera around the characters in 3D.
 typedef enum camera_follow_style_t {
   CAMERA_FOLLOW_FIXED = 0,  // the keyed offset, fixed in the world: an orbit around them
@@ -106,6 +119,7 @@ typedef enum camera_channel_t {
   CAMERA_CHANNEL_POSE,
   CAMERA_CHANNEL_FOLLOW,
   CAMERA_CHANNEL_AIM,
+  CAMERA_CHANNEL_FOCUS,
   CAMERA_CHANNEL_COUNT
 } camera_channel_t;
 
@@ -114,8 +128,9 @@ typedef struct camera_timeline_t {
   bool range_set;
   double range_start, range_end;
 
-  // The characters Follow and Aim track, as player track indices. Several
-  // are tracked through the middle of the box around them.
+  // Characters Follow and Aim keep in frame besides the focus, as player track
+  // indices: they are tracked through the middle of the box around them all.
+  // Without Focus keys the first of them is the focus.
   int subject_tracks[CAMERA_MAX_SUBJECTS];
   int subject_count;
   float subject_offset[3];
@@ -139,6 +154,8 @@ typedef struct camera_timeline_t {
   int follow_count;
   camera_influence_key_t aim_keys[CAMERA_MAX_INFLUENCE_KEYS];
   int aim_count;
+  camera_focus_key_t focus_keys[CAMERA_MAX_FOCUS_KEYS];
+  int focus_count;
 } camera_timeline_t;
 
 void camera_timeline_default(camera_timeline_t *camera);
@@ -155,6 +172,9 @@ bool camera_seconds_for_game_tick(const camera_timeline_t *camera, double game_t
 camera_pose_t camera_eval_pose(const camera_timeline_t *camera, double seconds);
 float camera_eval_follow(const camera_timeline_t *camera, double seconds);
 float camera_eval_aim(const camera_timeline_t *camera, double seconds);
+// The track the Focus keys name at `seconds`: the last key's at or before it,
+// the first key's before that. -1 without keys.
+int camera_focus_key_track(const camera_timeline_t *camera, double seconds);
 
 // Every channel as a curve of one value over time, for the graph editor. For
 // the pose that value is the distance travelled along the path, measured from
@@ -165,6 +185,8 @@ double camera_curve_value(const camera_timeline_t *camera, camera_channel_t chan
                           const double *distances);
 double camera_curve_key_value(const camera_timeline_t *camera, camera_channel_t channel, int index,
                               const double *distances);
+// (Focus keys have no curve: for them these give the track, and the ease
+// functions below do nothing.)
 // The handles a key uses, whether computed or the user's.
 camera_ease_t camera_curve_key_ease(const camera_timeline_t *camera, camera_channel_t channel, int index, double tps);
 // Shapes one side of a key's ease (side < 0: in, > 0: out). An auto key is
@@ -203,6 +225,7 @@ int camera_insert_time_key(camera_timeline_t *camera, double time, double game_t
 int camera_insert_pose_key(camera_timeline_t *camera, double time, const camera_pose_t *pose, int interp);
 int camera_insert_influence_key(camera_timeline_t *camera, camera_channel_t channel, double time, float value,
                                 int interp);
+int camera_insert_focus_key(camera_timeline_t *camera, double time, int track);
 void camera_delete_key(camera_timeline_t *camera, camera_channel_t channel, int index);
 // Retimes a key, keeping the channel sorted. Returns its new index. A key
 // cannot land on another key's time.
