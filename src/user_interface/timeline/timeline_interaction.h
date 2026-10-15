@@ -31,6 +31,9 @@ bool interaction_track_is_linked(const timeline_state_t *ts, int track_index);
 void interaction_calculate_drag_destination(timeline_state_t *ts, ImRect timeline_bb, int *out_snapped_tick, int *out_base_track);
 void interaction_update_recording_input(ui_handler_t *ui);
 void interaction_update_mouse(timeline_state_t *ts);
+// While recording, whether the aim belongs to the take the playhead is inside: the ticks it holds
+// replay their own aim, and the mouse only takes over past its end.
+bool interaction_cursor_held_by_take(const timeline_state_t *ts);
 
 input_record_t interaction_predict_input(ui_handler_t *ui, const ft_world *world, int track_idx);
 

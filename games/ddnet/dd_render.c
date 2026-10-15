@@ -94,6 +94,23 @@ typedef struct {
   uint8_t bytes[64];
 } input_record_bytes_t;
 
+// The aim a world shows for player `player`: the input it was stepped into its tick with. The
+// start of a world was stepped into by nothing and holds the default aim, so it shows the aim its
+// first step is taken with instead: the tee does not swing round to the default as the playhead
+// leaves the start or comes back to it.
+static ft_vec2 world_aim(ft_game *game, const ft_render_frame *frame, const ft_world *world, int player,
+                         const ddnet_character_t *chr) {
+  const ft_vec2 stepped = {(float)chr->core.input.target_x, (float)chr->core.input.target_y};
+  const ft_engine_api *engine = game->engine;
+  if (world->core.tick != 0 || frame->world_index < 0 || !engine->timeline_player_track || !engine->get_player_input)
+    return stepped;
+  const int32_t track = engine->timeline_player_track((uint32_t)frame->world_index, (uint32_t)player);
+  input_record_bytes_t record;
+  if (track < 0 || !engine->get_player_input(track, 0, &record)) return stepped;
+  const dd_input_t *first = (const dd_input_t *)&record;
+  return (ft_vec2){(float)first->m_TargetX, (float)first->m_TargetY};
+}
+
 static const ft_player_setup *setup_for(const ft_render_frame *frame, int index) {
   if (index < 0 || (uint32_t)index >= frame->player_setup_count) return NULL;
   return &frame->player_setups[index];
@@ -185,8 +202,10 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   if (core->active_weapon == DDNET_WEAPON_HAMMER) dd_anim_state_add(&out->anim, &anim_hammer_swing, last_attack_time * 5.f, 1.0f);
   if (core->active_weapon == DDNET_WEAPON_NINJA) dd_anim_state_add(&out->anim, &anim_ninja_swing, last_attack_time * 2.f, 1.0f);
 
-  out->dir[0] = lint2((float)prev_chr->core.input.target_x, (float)core->input.target_x, intra);
-  out->dir[1] = lint2((float)prev_chr->core.input.target_y, (float)core->input.target_y, intra);
+  const ft_vec2 aim = world_aim(game, frame, world, index, chr);
+  const ft_vec2 prev_aim = prev_chr != chr ? world_aim(game, frame, prev_world, index, prev_chr) : aim;
+  out->dir[0] = lint2(prev_aim.x, aim.x, intra);
+  out->dir[1] = lint2(prev_aim.y, aim.y, intra);
   glm_vec2_normalize(out->dir);
   out->aim_angle = atan2f(-out->dir[1], out->dir[0]);
 
@@ -1051,17 +1070,19 @@ static void render_cursor(ft_game *game, const ft_render_frame *frame) {
     // from the input each world was stepped with, which is the timeline's input
     // of the tick before it. Asking the timeline for this tick and the one before
     // put the crosshair a tick ahead of the weapon.
-    ft_vec2 aim = {(float)chr->core.input.target_x, (float)chr->core.input.target_y};
+    ft_vec2 aim = world_aim(game, frame, world, player, chr);
     if (!(is_selected && frame->state.recording)) {
       const ddnet_character_t *prev = previous ? ddnet_player_character(previous, player) : NULL;
-      if (!prev) prev = chr;
-      aim.x = lint2((float)prev->core.input.target_x, (float)chr->core.input.target_x, frame->alpha);
-      aim.y = lint2((float)prev->core.input.target_y, (float)chr->core.input.target_y, frame->alpha);
+      const ft_vec2 from = prev ? world_aim(game, frame, previous, player, prev) : aim;
+      aim.x = lint2(from.x, aim.x, frame->alpha);
+      aim.y = lint2(from.y, aim.y, frame->alpha);
     } else {
       // While recording, get_player_input hands back the live input for the tick
       // under the playhead, so the crosshair tracks the mouse directly.
       input_record_bytes_t previous_input, current;
-      const bool have_prev = game->engine->get_player_input(frame->state.selected_player, frame->tick - 1, &previous_input);
+      // (the start has no tick before it: there the aim holds still)
+      const bool have_prev =
+          game->engine->get_player_input(frame->state.selected_player, frame->tick > 0 ? frame->tick - 1 : frame->tick, &previous_input);
       const bool have_cur = game->engine->get_player_input(frame->state.selected_player, frame->tick, &current);
       if (have_cur) {
         const dd_input_t *cur = (const dd_input_t *)&current;

@@ -61,6 +61,19 @@ static void reset_field(game_host_t *host, const ft_input_field *field, uint32_t
 }
 
 // Every field of the schema (bit i = field i).
+// Cursor-driven fields are marked explicitly in the game schema. No field
+// name ("aim", "target", etc.) is special to the engine anymore.
+static void write_recording_cursor(ui_handler_t *ui, input_record_t *input) {
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const ft_input_schema *schema = game_input_schema(host);
+  for (uint32_t field = 0; schema && field < schema->field_count; ++field) {
+    if ((schema->fields[field].flags & FT_INPUT_FLAG_RECORDING_CURSOR) == 0) continue;
+    ft_vec2 cursor = {ui->recording_mouse_pos[0], ui->recording_mouse_pos[1]};
+    if (cursor.x == 0.f && cursor.y == 0.f) cursor.x = 1.f;
+    engine_input_set_vec2(host, input, (int)field, cursor);
+  }
+}
+
 static uint64_t all_fields(const ft_input_schema *schema) {
   return schema->field_count >= 64 ? ~UINT64_C(0) : (UINT64_C(1) << schema->field_count) - 1;
 }
@@ -210,17 +223,21 @@ void interaction_apply_linked_inputs(ui_handler_t *ui) {
   free(before);
 }
 
+bool interaction_cursor_held_by_take(const timeline_state_t *ts) {
+  if (!ts->recording) return false;
+  const int track_index = ts->selected_player_track_index;
+  if (track_index < 0 || track_index >= ts->player_track_count) return false;
+  const player_track_t *track = &ts->player_tracks[track_index];
+  if (track->recording_snippet_count <= 0) return false;
+  const input_snippet_t *take = &track->recording_snippets[track->recording_snippet_count - 1];
+  return model_group_playhead_tick(ts, track->group_index) < take->end_tick;
+}
+
 void interaction_update_mouse(timeline_state_t *ts) {
   int track_index = ts->selected_player_track_index;
   if (track_index < 0 || track_index >= ts->player_track_count) return;
-
-  if (ts->recording) {
-    player_track_t *track = &ts->player_tracks[track_index];
-    if (track->recording_snippet_count <= 0) return;
-    input_snippet_t *active_rec_snip = &track->recording_snippets[track->recording_snippet_count - 1];
-    // Ticks past the recorded end are being recorded right now, those follow the physical mouse.
-    if (model_group_playhead_tick(ts, track->group_index) >= active_rec_snip->end_tick) return;
-  }
+  // Ticks past the recorded end are being recorded right now, those follow the physical mouse.
+  if (ts->recording && !interaction_cursor_held_by_take(ts)) return;
 
   float speed_scale = ts->is_reversing ? 2.0f : 1.0f;
   float intra = fminf((igGetTime() - ts->last_update_time) / (1.f / (ts->playback_speed * speed_scale)), 1.f);
@@ -229,12 +246,17 @@ void interaction_update_mouse(timeline_state_t *ts) {
   game_host_t *host = &ts->ui->gfx_handler->game_host;
   const int aim_field = engine_input_cursor_field();
   if (aim_field < 0) return;
-  const input_record_t previous = model_get_input_at_tick(ts, track_index, group_tick - 1);
+  // The start has no tick before it, whose default aim the cursor would slide to while rewinding
+  // against the start: there it holds the start's own aim.
+  const input_record_t previous = model_get_input_at_tick(ts, track_index, group_tick > 0 ? group_tick - 1 : group_tick);
   const input_record_t current = model_get_input_at_tick(ts, track_index, group_tick);
   const ft_vec2 from = engine_input_get_vec2(host, &previous, aim_field);
   const ft_vec2 to = engine_input_get_vec2(host, &current, aim_field);
   ts->ui->recording_mouse_pos[0] = glm_lerp(from.x, to.x, intra);
   ts->ui->recording_mouse_pos[1] = glm_lerp(from.y, to.y, intra);
+  // The live input the tick under the playhead is drawn from takes it in the same frame, rather than
+  // the aim it was given at the start of the frame.
+  if (ts->recording) write_recording_cursor(ts->ui, &ts->player_tracks[track_index].current_input);
 }
 
 // Main Interaction Handlers
@@ -281,7 +303,8 @@ void interaction_handle_playback_and_shortcuts(timeline_state_t *ts) {
     }
   }
 
-  if (ts->is_playing || ts->is_reversing) interaction_update_mouse(ts);
+  // (paused inside a take too: the aim stays the take's)
+  if (ts->is_playing || ts->is_reversing || interaction_cursor_held_by_take(ts)) interaction_update_mouse(ts);
 
   // Abort recording
   if (input_key_pressed(GLFW_KEY_ESCAPE, false) && ts->recording) {
@@ -1273,15 +1296,7 @@ void interaction_update_recording_input(ui_handler_t *ui) {
     }
   }
   engine_input_copy_fields(host, &rebuilt, input, all_fields(schema));
-
-  // Cursor-driven fields are marked explicitly in the game schema. No field
-  // name ("aim", "target", etc.) is special to the engine anymore.
-  for (uint32_t field = 0; field < schema->field_count; ++field) {
-    if ((schema->fields[field].flags & FT_INPUT_FLAG_RECORDING_CURSOR) == 0) continue;
-    ft_vec2 cursor = {ui->recording_mouse_pos[0], ui->recording_mouse_pos[1]};
-    if (cursor.x == 0.f && cursor.y == 0.f) cursor.x = 1.f;
-    engine_input_set_vec2(host, input, (int)field, cursor);
-  }
+  write_recording_cursor(ui, input);
 }
 
 input_record_t interaction_predict_input(ui_handler_t *ui, const ft_world *world, int track_idx) {

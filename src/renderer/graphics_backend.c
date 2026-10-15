@@ -9,6 +9,7 @@
 #include <system/fs.h>
 #include <system/input.h>
 #include <user_interface/snippet_editor.h>
+#include <user_interface/timeline/timeline_interaction.h>
 #include <user_interface/timeline/timeline_model.h>
 #include <user_interface/user_interface.h>
 
@@ -139,6 +140,8 @@ static void cursor_position_callback(GLFWwindow *window, double xpos, double ypo
   input_accumulate_mouse_pos(xpos, ypos, &diff_x, &diff_y);
 
   if (!handler->user_interface.timeline.recording || engine_input_cursor_field() < 0) return;
+  // Over a take the aim is the take's: moving the mouse there would show for a frame and snap back.
+  if (interaction_cursor_held_by_take(&handler->user_interface.timeline)) return;
 
   float sens = handler->user_interface.mouse_sens * 0.01f;
   handler->user_interface.recording_mouse_pos[0] += diff_x * sens;
