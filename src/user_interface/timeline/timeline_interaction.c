@@ -975,6 +975,7 @@ void interaction_toggle_recording(timeline_state_t *ts) {
 
   if (ts->recording) {
     ts->recording_snippets.count = 0;
+    ts->recording_start_tick = ts->current_tick;
     bool any_recording_started = false;
 
     for (int i = 0; i < ts->player_track_count; ++i) {
@@ -1022,6 +1023,8 @@ void interaction_cancel_recording(timeline_state_t *ts) {
   }
   model_clear_all_recording_buffers(ts);
   ts->recording_snippets.count = 0;
+  // Back to where the recording started, as if it never had.
+  model_move_playhead(ts, imax(ts->recording_start_tick, model_get_min_global_tick(ts)));
   if (!first_take) {
     model_recalc_physics(ts, 0);
     return;

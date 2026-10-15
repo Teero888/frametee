@@ -300,6 +300,7 @@ struct timeline_state {
   int playback_speed;
   double last_update_time;
   bool recording;
+  int recording_start_tick; // where the playhead was when the recording started, for discarding it
   bool is_reversing;
   bool linked_copy_input;
 

@@ -2042,7 +2042,7 @@ static void render_controls(ui_handler_t *ui) {
   snprintf(label, sizeof(label), "%s Look through", ed->look_through ? ICON_FA_EYE : ICON_FA_EYE_SLASH);
   if (toggle_button(label, ed->look_through, NULL)) set_look_through(ui, !ed->look_through);
   igSameLine(0, 8.f * scale);
-  snprintf(label, sizeof(label), "%s Key view (%s)", ICON_FA_KEY, binding_text(ui, ACTION_CAMERA_INSERT_KEY));
+  snprintf(label, sizeof(label), "%s Key view", ICON_FA_KEY);
   if (igButton(label, (ImVec2){0, 0})) key_current_view(ui);
 
   igSameLine(0, 16.f * scale);
