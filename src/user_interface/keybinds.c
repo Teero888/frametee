@@ -305,6 +305,8 @@ void keybinds_init(keybind_manager_t *manager) {
   // Listed with the game's linked inputs by keybinds_bind_game, and not at all for a game without
   // them, where it does nothing.
   set_action_info(manager, ACTION_TOGGLE_LINKED_COPY, "toggle_linked_copy", "Toggle Linked Input Copy", "");
+  set_action_info(manager, ACTION_ENABLE_LINKED_COPY, "enable_linked_copy", "Enable Linked Input Copy", "");
+  set_action_info(manager, ACTION_DISABLE_LINKED_COPY, "disable_linked_copy", "Disable Linked Input Copy", "");
   set_action_info(manager, ACTION_RELEASE_LINKED_KEYS, "reset_linked_inputs", "Reset Linked Inputs", "");
   set_action_info(manager, ACTION_ZOOM_IN, "zoom_in", "Zoom in", "Camera");
   set_action_info(manager, ACTION_ZOOM_OUT, "zoom_out", "Zoom out", "Camera");
@@ -447,8 +449,10 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
   manager->game_action_count = 0;
   manager->linked_action_count = 0;
   manager->action_count = ACTION_ENGINE_COUNT;
-  manager->action_infos[ACTION_TOGGLE_LINKED_COPY].category[0] = '\0';
-  manager->action_infos[ACTION_RELEASE_LINKED_KEYS].category[0] = '\0';
+  static const action_t linked_engine_actions[] = {ACTION_TOGGLE_LINKED_COPY, ACTION_ENABLE_LINKED_COPY,
+                                                   ACTION_DISABLE_LINKED_COPY, ACTION_RELEASE_LINKED_KEYS};
+  for (size_t i = 0; i < sizeof(linked_engine_actions) / sizeof(linked_engine_actions[0]); ++i)
+    manager->action_infos[linked_engine_actions[i]].category[0] = '\0';
   if (!host || !game_host_ready(host)) return;
 
   const ft_input_schema *schema = game_input_schema(host);
@@ -471,8 +475,8 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
 
   char category[64];
   snprintf(category, sizeof(category), "%s Linked Inputs", host->module->info.display_name);
-  snprintf(manager->action_infos[ACTION_TOGGLE_LINKED_COPY].category, sizeof(manager->action_infos[0].category), "%s", category);
-  snprintf(manager->action_infos[ACTION_RELEASE_LINKED_KEYS].category, sizeof(manager->action_infos[0].category), "%s", category);
+  for (size_t i = 0; i < sizeof(linked_engine_actions) / sizeof(linked_engine_actions[0]); ++i)
+    snprintf(manager->action_infos[linked_engine_actions[i]].category, sizeof(manager->action_infos[0].category), "%s", category);
 
   for (unsigned i = 0; i < count; ++i) {
     const ft_input_control *control = &schema->controls[i];
@@ -585,9 +589,10 @@ void keybinds_process_inputs(ui_handler_t *ui) {
   if (keybinds_is_action_pressed(kb, ACTION_DEC_TPS, true)) {
     ts->gui_playback_speed = imax(ts->gui_playback_speed - 1, 1);
   }
-  if (game_has_cap(&ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS) &&
-      keybinds_is_action_pressed(kb, ACTION_TOGGLE_LINKED_COPY, false)) {
-    ts->linked_copy_input ^= 1;
+  if (game_has_cap(&ui->gfx_handler->game_host, FT_CAP_LINKED_INPUTS)) {
+    if (keybinds_is_action_pressed(kb, ACTION_TOGGLE_LINKED_COPY, false)) ts->linked_copy_input ^= 1;
+    if (keybinds_is_action_pressed(kb, ACTION_ENABLE_LINKED_COPY, false)) ts->linked_copy_input = true;
+    if (keybinds_is_action_pressed(kb, ACTION_DISABLE_LINKED_COPY, false)) ts->linked_copy_input = false;
   }
   if (keybinds_is_action_pressed(kb, ACTION_RELEASE_LINKED_KEYS, false)) interaction_release_linked_keys(ts);
 
@@ -704,7 +709,11 @@ static void render_keybind_entry(ui_handler_t *ui, keybind_manager_t *manager, a
 
 // Sections are listed in the order of their first action. The engine's actions filed with the
 // game's linked inputs head that section's rows but leave it after the game's own controls.
-static bool opens_section(int action) { return action != ACTION_TOGGLE_LINKED_COPY && action != ACTION_RELEASE_LINKED_KEYS; }
+// The engine's linked-input actions join the game's linked inputs section rather than opening one.
+static bool opens_section(int action) {
+  return action != ACTION_TOGGLE_LINKED_COPY && action != ACTION_ENABLE_LINKED_COPY && action != ACTION_DISABLE_LINKED_COPY &&
+         action != ACTION_RELEASE_LINKED_KEYS;
+}
 
 void keybinds_render_settings_window(ui_handler_t *ui) {
   keybind_manager_t *manager = &ui->keybinds;
