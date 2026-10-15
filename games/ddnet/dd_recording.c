@@ -760,6 +760,52 @@ static void emit_bullet_trails(ddnet_world_t *core) {
   }
 }
 
+// The order the tees tick in decides whose hook is the stronger, DDNet's strong/weak, and on a server
+// it comes from who (re)spawned last, which a world made from tracks cannot know. So the replayed
+// tees of a recording take, among the places they hold in it, the order the recording has them in:
+// a simulated tee next to them, a player going on from its recording and an export then meet them as
+// the server had them. Simulated tees keep their places. A replayed tee the recording does not show
+// at this tick goes to the back, as on a server, where a tee that is not in the game is not in the
+// order at all (it is out of everyone's way meanwhile, see apply_absent). `rank_recording[client]` is
+// the recording a tee's `rank` (its recorded strong/weak id) is from, NULL for tees that have none.
+static void order_as_recorded(ddnet_world_t *core, const ft_recording *const *rank_recording, const int *rank,
+                              const bool *absent) {
+  int order[DDNET_MAX_CLIENTS], count = 0, absent_order[DDNET_MAX_CLIENTS], absent_count = 0;
+  bool moved = false;
+  for (int id = core->first_entity[DDNET_ENTTYPE_CHARACTER]; id != -1 && count + absent_count < DDNET_MAX_CLIENTS;
+       id = core->characters[id].link.next) {
+    if (absent[id]) absent_order[absent_count++] = id;
+    else {
+      moved |= absent_count > 0;
+      order[count++] = id;
+    }
+  }
+  for (int i = 0; i < absent_count; ++i)
+    order[count + i] = absent_order[i];
+  for (int a = 0; a < count; ++a) {
+    const ft_recording *recording = rank_recording[order[a]];
+    if (!recording) continue;
+    int strongest = a;
+    for (int b = a + 1; b < count; ++b)
+      if (rank_recording[order[b]] == recording && rank[order[b]] < rank[order[strongest]]) strongest = b;
+    if (strongest == a) continue;
+    const int id = order[a];
+    order[a] = order[strongest];
+    order[strongest] = id;
+    moved = true;
+  }
+  if (!moved) return;
+  count += absent_count;
+  core->first_entity[DDNET_ENTTYPE_CHARACTER] = order[0];
+  for (int i = 0; i < count; ++i) {
+    ddnet_character_t *chr = &core->characters[order[i]];
+    chr->link.prev = i > 0 ? order[i - 1] : -1;
+    chr->link.next = i + 1 < count ? order[i + 1] : -1;
+    // (as the physics numbers them after a tick, so that what is exported now has it too)
+    chr->strong_weak_id = i;
+  }
+}
+
 // Puts the replaying players where the recording shows them at their tick, and remembers which
 // recording the world around them comes from.
 static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slot_count, const ft_player_playback *playback,
@@ -768,6 +814,9 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
   world->replay_recording = NULL;
   memset(world->replay_clients, 0, sizeof(world->replay_clients));
   int replayed_players = 0;
+  const ft_recording *rank_recording[DDNET_MAX_CLIENTS] = {NULL};
+  int rank[DDNET_MAX_CLIENTS];
+  bool absent[DDNET_MAX_CLIENTS] = {false};
   for (int i = 0; i < count; ++i) {
     struct dd_replay_slot *slot = i < slot_count ? &slots[i] : NULL;
     const ft_player_playback *pb = slot ? playback_of(playback, player_count, i) : NULL;
@@ -790,11 +839,13 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
       // nothing to put anywhere
     } else if (c.quality == DD_QUALITY_NONE && paused_of(pb, &paused_x, &paused_y)) {
       apply_absent(world, client_id, chr, world_pos(paused_x, paused_y));
+      absent[client_id] = true;
       slot->mode = REPLAY_PAUSED;
       slot->x = chr->pos.x;
       slot->y = chr->pos.y;
     } else if (c.quality == DD_QUALITY_NONE) {
       apply_absent(world, client_id, chr, (ddnet_vec2_t){slot->x, slot->y});
+      absent[client_id] = true;
       slot->mode = REPLAY_ABSENT;
     } else {
       const int hooked = c.hooked_player >= 0 ? world_player_of_cid(recording, c.hooked_player, playback, player_count) : -1;
@@ -807,6 +858,11 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
       slot->mode = REPLAY_PRESENT;
       slot->jumped = (uint8_t)c.jumped;
       remember_flags(slot, chr);
+      // (only DDNet's servers send it)
+      if (c.has_ddnet_info) {
+        rank_recording[client_id] = recording;
+        rank[client_id] = c.strong_weak_id;
+      }
       if (air_jump && world->core.particle)
         world->core.particle(chr->pos, DDNET_PARTICLE_AIR_JUMP, client_id, world->core.user_data);
     }
@@ -827,6 +883,7 @@ static void show_recorded(ft_world *world, struct dd_replay_slot *slots, int slo
   }
   if (world->replay_recording && replayed_players >= ((const ft_recording *)world->replay_recording)->player_count)
     memset(world->replay_clients, 0xff, sizeof(world->replay_clients));
+  order_as_recorded(&world->core, rank_recording, rank, absent);
 }
 
 // What a player does on the tick about to be stepped (with the effects of the build the world steps
