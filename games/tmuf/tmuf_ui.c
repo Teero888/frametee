@@ -354,6 +354,10 @@ static icon_ref sub_icon(splash_state *s, const char *sub) {
   return (icon_ref){NULL, {0, 0}, {1, 1}};
 }
 
+// The start screen's sizes, given for the editor's 19 px text and following the text from there, so
+// the layout keeps its proportions at every interface size.
+static float px(float value) { return value * igGetFontSize() / 19.f; }
+
 // a tab button, DDNet's map browser's look
 static bool tab_button(const char *label, icon_ref icon, bool active, float width, float height) {
   igPushID_Str(label);
@@ -364,16 +368,19 @@ static bool tab_button(const char *label, icon_ref icon, bool active, float widt
   const ImVec2 end = {at.x + width, at.y + height};
   const ImU32 bg = active ? IM_COL32(32, 52, 85, 245) : hovered ? IM_COL32(30, 40, 58, 220) : IM_COL32(20, 24, 34, 180);
   const ImU32 border = active ? IM_COL32(90, 175, 255, 255) : IM_COL32(50, 60, 80, 150);
-  ImDrawList_AddRectFilled(dl, at, end, bg, 6.f, 0);
-  ImDrawList_AddRect(dl, at, end, border, 6.f, 0, active ? 1.5f : 1.f);
+  ImDrawList_AddRectFilled(dl, at, end, bg, px(6.f), 0);
+  ImDrawList_AddRect(dl, at, end, border, px(6.f), 0, active ? 1.5f : 1.f);
   const ImVec2 ts = igCalcTextSize(label, NULL, false, -1.f);
-  const float size = height - 8.f, gap = icon.ref ? size + 8.f : 0.f;
-  const float x = at.x + (width - ts.x - gap) * 0.5f;
+  const float inset = px(4.f), size = height - inset * 2.f, gap = icon.ref ? size + px(8.f) : 0.f;
+  // centred, or from the left edge when it doesn't fit, cut off at the right one
+  const float x = at.x + fmaxf((width - ts.x - gap) * 0.5f, inset);
+  ImDrawList_PushClipRect(dl, at, end, true);
   if (icon.ref)
-    ImDrawList_AddImageRounded(dl, *icon.ref, (ImVec2){x, at.y + 4.f}, (ImVec2){x + size, at.y + 4.f + size}, icon.uv0,
-                               icon.uv1, 0xffffffff, 3.f, 0);
+    ImDrawList_AddImageRounded(dl, *icon.ref, (ImVec2){x, at.y + inset}, (ImVec2){x + size, at.y + inset + size},
+                               icon.uv0, icon.uv1, 0xffffffff, px(3.f), 0);
   ImDrawList_AddText_Vec2(dl, (ImVec2){x + gap, at.y + (height - ts.y) * 0.5f},
                           active ? IM_COL32(240, 245, 255, 255) : IM_COL32(160, 175, 200, 255), label, NULL);
+  ImDrawList_PopClipRect(dl);
   igPopID();
   return clicked;
 }
@@ -388,40 +395,42 @@ static bool card(const ft_engine_api *engine, splash_state *s, track_entry *e, f
     s->budget--;
     read_header(engine, e);
   }
-  const float thumb_h = width, text_h = 62.f, total_h = thumb_h + text_h;
+  // three lines of text under the thumbnail
+  const float pad = px(8.f), top = px(5.f), line = igGetTextLineHeight();
+  const float thumb_h = width, text_h = top * 2.f + line * 3.f, total_h = thumb_h + text_h, rounding = px(8.f);
   const ImVec2 at = igGetCursorScreenPos();
   const bool clicked = igInvisibleButton("##card", (ImVec2){width, total_h}, 0);
   const bool hovered = igIsItemHovered(0);
   ImDrawList *dl = igGetWindowDrawList();
   const ImVec2 end = {at.x + width, at.y + total_h};
-  ImDrawList_AddRectFilled(dl, at, end, hovered ? IM_COL32(35, 46, 68, 245) : IM_COL32(22, 26, 36, 230), 8.f, 0);
+  ImDrawList_AddRectFilled(dl, at, end, hovered ? IM_COL32(35, 46, 68, 245) : IM_COL32(22, 26, 36, 230), rounding, 0);
   const ImVec2 thumb_end = {at.x + width, at.y + thumb_h};
   if (!e->title[0]) snprintf(e->title, sizeof e->title, "%s", e->name);
   if (e->thumb_ref)
-    ImDrawList_AddImageRounded(dl, *e->thumb_ref, at, thumb_end, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xffffffff, 8.f,
+    ImDrawList_AddImageRounded(dl, *e->thumb_ref, at, thumb_end, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xffffffff, rounding,
                                ImDrawFlags_RoundCornersTop);
   else {
-    ImDrawList_AddRectFilled(dl, at, thumb_end, IM_COL32(18, 22, 30, 240), 8.f, ImDrawFlags_RoundCornersTop);
+    ImDrawList_AddRectFilled(dl, at, thumb_end, IM_COL32(18, 22, 30, 240), rounding, ImDrawFlags_RoundCornersTop);
     const ImVec2 ts = igCalcTextSize(ICON_FA_FLAG_CHECKERED, NULL, false, -1.f);
     ImDrawList_AddText_Vec2(dl, (ImVec2){at.x + (width - ts.x) * 0.5f, at.y + (thumb_h - ts.y) * 0.5f},
                             IM_COL32(120, 130, 150, 255), ICON_FA_FLAG_CHECKERED, NULL);
   }
   ImDrawList_PushClipRect(dl, at, end, true);
-  ImDrawList_AddText_Vec2(dl, (ImVec2){at.x + 8.f, thumb_end.y + 5.f}, IM_COL32(235, 240, 250, 255), e->title, NULL);
-  char line[160];
-  const float x = at.x + 8.f;
-  snprintf(line, sizeof line, "%s", e->environment);
-  ImDrawList_AddText_Vec2(dl, (ImVec2){x, thumb_end.y + 23.f}, IM_COL32(140, 160, 195, 255), line, NULL);
+  const float x = at.x + pad;
+  ImDrawList_AddText_Vec2(dl, (ImVec2){x, thumb_end.y + top}, IM_COL32(235, 240, 250, 255), e->title, NULL);
+  char text[160];
+  snprintf(text, sizeof text, "%s", e->environment);
+  ImDrawList_AddText_Vec2(dl, (ImVec2){x, thumb_end.y + top + line}, IM_COL32(140, 160, 195, 255), text, NULL);
   // the author's time, or score in stunts
   char t[32] = "";
   const bool stunts = e->play_mode == 5;
   if (stunts) snprintf(t, sizeof t, "%u pts", e->author_score);
   else if (e->author_time && e->author_time != 0xffffffffu) time_text(t, sizeof t, e->author_time);
-  snprintf(line, sizeof line, ICON_FA_USER " %s%s%s", e->author,
+  snprintf(text, sizeof text, ICON_FA_USER " %s%s%s", e->author,
            !t[0] ? "" : stunts ? "   " ICON_FA_TROPHY " " : "   " ICON_FA_STOPWATCH " ", t);
-  ImDrawList_AddText_Vec2(dl, (ImVec2){at.x + 8.f, thumb_end.y + 41.f}, IM_COL32(140, 160, 195, 255), line, NULL);
+  ImDrawList_AddText_Vec2(dl, (ImVec2){x, thumb_end.y + top + line * 2.f}, IM_COL32(140, 160, 195, 255), text, NULL);
   ImDrawList_PopClipRect(dl);
-  ImDrawList_AddRect(dl, at, end, hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140), 8.f, 0,
+  ImDrawList_AddRect(dl, at, end, hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140), rounding, 0,
                      hovered ? 1.8f : 1.f);
   return clicked;
 }
@@ -457,7 +466,7 @@ static void missing_data(const ft_engine_api *engine, splash_state *s) {
   engine->resolve_data_path("README.txt", readme, sizeof readme);
   igTextColored((ImVec4){1.f, 0.75f, 0.3f, 1.f}, ICON_FA_TRIANGLE_EXCLAMATION " TrackMania United Forever's game files are missing");
   igSpacing();
-  igPushTextWrapPos(igGetCursorPosX() + fminf(igGetContentRegionAvail().x, 640.f));
+  igPushTextWrapPos(igGetCursorPosX() + fminf(igGetContentRegionAvail().x, px(640.f)));
   igTextWrapped("FrameTee doesn't include the game's files. Install TrackMania United Forever in Steam, or copy "
                 "the Packs and GameData directories from a "
                 "TrackMania United Forever installation (version 2.11.26) into this directory:");
@@ -522,13 +531,14 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
   int shown = 0;
   for (int t = 0; t < TAB_COUNT; t++)
     shown += present[t];
-  const float tab_w = fmaxf(110.f, (avail.x - 12.f * (float)(shown - 1)) / (float)(shown ? shown : 1));
+  const float tab_gap = px(12.f);
+  const float tab_w = fmaxf(1.f, (avail.x - tab_gap * (float)(shown - 1)) / (float)(shown ? shown : 1));
   bool first = true;
   for (int t = 0; t < TAB_COUNT; t++) {
     if (!present[t]) continue;
-    if (!first) igSameLine(0, 12.f);
+    if (!first) igSameLine(0, tab_gap);
     first = false;
-    if (tab_button(tab_names[t], tab_icon(s, t), s->tab == t, tab_w, 44.f) && s->tab != t) {
+    if (tab_button(tab_names[t], tab_icon(s, t), s->tab == t, tab_w, px(44.f)) && s->tab != t) {
       s->tab = t;
       s->sub[0] = 0;
     }
@@ -558,10 +568,11 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
     sub_found = sub_found || strcmp(subs[k], s->sub) == 0;
   if (sub_count && !sub_found) snprintf(s->sub, sizeof s->sub, "%s", subs[0]);
   if (sub_count > 1) {
-    const float sub_w = fmaxf(90.f, fminf(150.f, (avail.x - 6.f * (float)(sub_count - 1)) / (float)sub_count));
+    const float sub_gap = px(6.f);
+    const float sub_w = fmaxf(1.f, fminf(px(150.f), (avail.x - sub_gap * (float)(sub_count - 1)) / (float)sub_count));
     for (int k = 0; k < sub_count; k++) {
-      if (k) igSameLine(0, 6.f);
-      if (tab_button(subs[k], sub_icon(s, subs[k]), strcmp(subs[k], s->sub) == 0, sub_w, 32.f))
+      if (k) igSameLine(0, sub_gap);
+      if (tab_button(subs[k], sub_icon(s, subs[k]), strcmp(subs[k], s->sub) == 0, sub_w, px(32.f)))
         snprintf(s->sub, sizeof s->sub, "%s", subs[k]);
     }
     igSpacing();
@@ -569,11 +580,13 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
 
   // search and open
   const char *open_label = ICON_FA_FOLDER_OPEN " Open a file...";
-  const float open_w = igCalcTextSize(open_label, NULL, false, -1.f).x + 24.f;
-  igSetNextItemWidth(fmaxf(120.f, avail.x - open_w - 12.f));
+  const float open_w = igCalcTextSize(open_label, NULL, false, -1.f).x + igGetStyle()->FramePadding.x * 2.f;
+  // the button below the search when they don't fit side by side
+  const bool open_beside = avail.x - open_w - px(12.f) >= px(120.f);
+  igSetNextItemWidth(open_beside ? avail.x - open_w - px(12.f) : avail.x);
   igInputTextWithHint("##tmuf_search", ICON_FA_MAGNIFYING_GLASS " Search tracks...", s->search, sizeof s->search, 0,
                       NULL, NULL);
-  igSameLine(0, 12.f);
+  if (open_beside) igSameLine(0, px(12.f));
   if (igButton(open_label, (ImVec2){open_w, 0}) && engine->open_file_dialog)
     engine->open_file_dialog("TrackMania challenge or replay", "Gbx", level_chosen, (void *)engine);
   igSpacing();
@@ -581,7 +594,7 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
   // the cards, by series
   if (igBeginChild_Str("tmuf_tracks", (ImVec2){0, 0}, false, 0)) {
     const float grid_w = igGetContentRegionAvail().x;
-    const float margin = 10.f, want = 170.f;
+    const float margin = px(10.f), want = px(170.f);
     int columns = (int)((grid_w + margin) / (want + margin));
     if (columns < 1) columns = 1;
     const float card_w = (grid_w - margin * (float)(columns - 1)) / (float)columns;
@@ -598,15 +611,15 @@ void tm_splash(const ft_engine_api *engine, void **context, const ft_ui_frame *f
           header = true;
           if (series < SERIES_COUNT) {
             const ImVec2 at = igGetCursorScreenPos();
-            const float size = 30.f, line = igGetTextLineHeight();
+            const float size = px(30.f), line = igGetTextLineHeight();
             const icon_ref flag = series_icon(s, series);
             if (flag.ref)
               ImDrawList_AddImage(igGetWindowDrawList(), *flag.ref, at, (ImVec2){at.x + size, at.y + size}, flag.uv0,
                                   flag.uv1, 0xffffffff);
             else
-              ImDrawList_AddRectFilled(igGetWindowDrawList(), at, (ImVec2){at.x + 4.f, at.y + size},
+              ImDrawList_AddRectFilled(igGetWindowDrawList(), at, (ImVec2){at.x + px(4.f), at.y + size},
                                        series_colours[series == 4 ? SERIES_COUNT : series], 1.f, 0);
-            igSetCursorScreenPos((ImVec2){at.x + size + 8.f, at.y + (size - line) * 0.5f});
+            igSetCursorScreenPos((ImVec2){at.x + size + px(8.f), at.y + (size - line) * 0.5f});
             igText("%s", series_names[series]);
             igSetCursorScreenPos((ImVec2){at.x, at.y + size + igGetStyle()->ItemSpacing.y});
           } else if (s->tab == TAB_OTHER) {

@@ -40,6 +40,13 @@
 
 static const char *LOG_SOURCE = "UI";
 
+// The text's size at an interface scale of 1.
+#define UI_FONT_SIZE 19.f
+static void ui_apply_interface_size(void);
+// Set by the Interface Size setting, applied at the start of the next frame: the style it rebuilds
+// would otherwise be restored by the menus still open around the setting as they close.
+static bool g_interface_size_changed = false;
+
 // The name a Save As dialog starts with, derived from the active level.
 static void project_default_file_name(ui_handler_t *ui, char *out, size_t out_size) {
   const char *level_name = (ui->loaded_level_name[0] != '\0') ? ui->loaded_level_name : "unnamed_level";
@@ -399,6 +406,19 @@ void render_menu_bar(ui_handler_t *ui) {
         if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("0 = Unlimited");
         if (igDragFloat("LOD Bias", &ui->lod_bias, 0.1f, -5.0f, 5.0f, "%.1f", 0)) {
           ui->gfx_handler->renderer.lod_bias = ui->lod_bias;
+          config_save(ui);
+        }
+        // Taken when let go: the menu it sits in grows with the interface, which would pull the
+        // slider out from under the pointer while dragging.
+        static float interface_size;
+        static bool editing_interface_size = false;
+        if (!editing_interface_size) interface_size = gfx_get_ui_size() * 100.f;
+        igSliderFloat("Interface Size", &interface_size, GFX_UI_SIZE_MIN * 100.f, GFX_UI_SIZE_MAX * 100.f, "%.0f%%",
+                      ImGuiSliderFlags_AlwaysClamp);
+        editing_interface_size = igIsItemActive();
+        if (igIsItemDeactivatedAfterEdit()) {
+          gfx_set_ui_size(interface_size / 100.f);
+          g_interface_size_changed = true;
           config_save(ui);
         }
         if (igColorEdit3("Background Color", ui->bg_color, ImGuiColorEditFlags_NoInputs)) config_save(ui);
@@ -1465,13 +1485,32 @@ static void ui_apply_theme(void) {
   colors[ImGuiCol_DockingPreview] = (ImVec4){0.16f, 0.45f, 0.85f, 0.70f};
 }
 
+static void ui_apply_interface_size(void) {
+  extern bool g_is_headless;
+  // Headless there is no screen to fit, only the theme.
+  if (g_is_headless) {
+    ui_apply_theme();
+    return;
+  }
+  // As the editor has always built it: ImGui's sizes at the automatic scale and the theme over
+  // them. The user's size then goes over all of it, and the text follows from the next frame on.
+  ImGuiStyle *style = igGetStyle();
+  ImGuiStyle *fresh = ImGuiStyle_ImGuiStyle();
+  ImGuiStyle_ScaleAllSizes(fresh, gfx_get_auto_ui_scale() * 0.5f);
+  *style = *fresh;
+  ImGuiStyle_destroy(fresh);
+  ui_apply_theme();
+  if (gfx_get_ui_size() != 1.f) ImGuiStyle_ScaleAllSizes(style, gfx_get_ui_size());
+  style->FontSizeBase = style->_NextFrameFontSizeBase = UI_FONT_SIZE * gfx_get_ui_scale();
+}
+
 void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   extern bool g_is_headless;
   if (!g_is_headless) {
     ImGuiIO *io = igGetIO_Nil();
     ImFontAtlas *atlas = io->Fonts;
     const float scale = gfx_get_ui_scale();
-    ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/Roboto-SemiBold.ttf", 19.f * scale, NULL, NULL);
+    ui->font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "data/fonts/Roboto-SemiBold.ttf", UI_FONT_SIZE * scale, NULL, NULL);
 
     static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
     ImFontConfig *icons_config = ImFontConfig_ImFontConfig();
@@ -1486,7 +1525,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
     ImFontConfig_destroy(icon_cfg);
   }
 
-  ui_apply_theme();
+  ui_apply_interface_size();
 
   ui->gfx_handler = gfx_handler;
   camera_timeline_default(&ui->camera_timeline);
@@ -1687,6 +1726,9 @@ static void render_unsaved_prompt(ui_handler_t *ui) {
 
 // --- splash: choosing a game -------------------------------------------------
 
+// The splash screen's sizes, given at a scale of 1 and following the text from there.
+static float splash_px(float value) { return value * gfx_get_ui_scale(); }
+
 // Thumbnails are loaded once per game and kept for the session. Cached here
 // rather than in the host because they are purely a UI concern.
 typedef struct {
@@ -1805,8 +1847,8 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
   // A grid of whole-card click targets drawn straight to the draw list, with no
   // nested buttons.
   const ImVec2 grid_avail = igGetContentRegionAvail();
-  const float card_width = 320.0f;
-  const float card_margin = 5.0f;
+  const float card_width = splash_px(320.0f);
+  const float card_margin = splash_px(5.0f);
   int columns = (int)(grid_avail.x / (card_width + card_margin * 2.0f));
   if (columns < 1) columns = 1;
 
@@ -1835,8 +1877,8 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
       const float aspect = family ? thumbnail_aspect(g_family_thumbnails, opens) : thumbnail_aspect(g_game_thumbnails, i);
 
       const ImVec2 cursor_pos = igGetCursorScreenPos();
-      float actual_card_w = igGetColumnWidth(-1) - 4.0f;
-      if (actual_card_w < 110.0f) actual_card_w = card_width;
+      float actual_card_w = igGetColumnWidth(-1) - splash_px(4.0f);
+      if (actual_card_w < splash_px(110.0f)) actual_card_w = card_width;
       const float actual_thumb_h = actual_card_w * aspect;
       const float total_item_h = actual_thumb_h;
 
@@ -1848,16 +1890,16 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
       const bool hovered = igIsItemHovered(0);
 
       const ImU32 bg_color = hovered ? IM_COL32(35, 46, 68, 245) : IM_COL32(22, 26, 36, 230);
-      ImDrawList_AddRectFilled(draw_list, card_min, card_max, bg_color, 8.0f, ImDrawFlags_None);
+      ImDrawList_AddRectFilled(draw_list, card_min, card_max, bg_color, splash_px(8.0f), ImDrawFlags_None);
 
       const ImVec2 thumb_min = card_min;
       const ImVec2 thumb_max = {card_min.x + actual_card_w, card_min.y + actual_thumb_h};
       if (thumbnail) {
-        ImDrawList_AddImageRounded(draw_list, *thumbnail, thumb_min, thumb_max, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xFFFFFFFF, 8.0f,
+        ImDrawList_AddImageRounded(draw_list, *thumbnail, thumb_min, thumb_max, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xFFFFFFFF, splash_px(8.0f),
                                    ImDrawFlags_RoundCornersAll);
       } else {
         // Without an image the card still says what it is.
-        ImDrawList_AddRectFilled(draw_list, thumb_min, thumb_max, IM_COL32(18, 22, 30, 240), 8.0f, ImDrawFlags_RoundCornersAll);
+        ImDrawList_AddRectFilled(draw_list, thumb_min, thumb_max, IM_COL32(18, 22, 30, 240), splash_px(8.0f), ImDrawFlags_RoundCornersAll);
         const char *name = family ? family : slot->module->info.display_name;
         const ImVec2 txt_sz = igCalcTextSize(name, NULL, false, -1.0f);
         const ImVec2 txt_pos = {thumb_min.x + actual_card_w * 0.5f - txt_sz.x * 0.5f,
@@ -1868,7 +1910,7 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
       // Only the hovered card stands out: the game browsed last is not a
       // choice still in effect here.
       const ImU32 border_color = hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140);
-      ImDrawList_AddRect(draw_list, card_min, card_max, border_color, 8.0f, ImDrawFlags_None, hovered ? 1.8f : 1.0f);
+      ImDrawList_AddRect(draw_list, card_min, card_max, border_color, splash_px(8.0f), ImDrawFlags_None, hovered ? 1.8f : 1.0f);
 
       if (clicked) chosen = game_host_browse(host, opens);
       igPopID();
@@ -1915,9 +1957,9 @@ static void render_splash_family_switcher(ui_handler_t *ui) {
       members[j - 1] = t;
     }
 
-  const float gap = 10.0f;
+  const float gap = splash_px(10.0f);
   float card_w = (igGetContentRegionAvail().x - gap * (float)(count - 1)) / (float)count;
-  if (card_w > 240.0f) card_w = 240.0f;
+  if (card_w > splash_px(240.0f)) card_w = splash_px(240.0f);
   ImDrawList *draw_list = igGetWindowDrawList();
   for (int m = 0; m < count; ++m) {
     const int i = members[m];
@@ -1934,10 +1976,10 @@ static void render_splash_family_switcher(ui_handler_t *ui) {
     const bool current = i == browsed;
     if (thumbnail) {
       const ImU32 tint = current || hovered ? 0xFFFFFFFF : IM_COL32(255, 255, 255, 150);
-      ImDrawList_AddImageRounded(draw_list, *thumbnail, min, max, (ImVec2){0, 0}, (ImVec2){1, 1}, tint, 6.0f,
+      ImDrawList_AddImageRounded(draw_list, *thumbnail, min, max, (ImVec2){0, 0}, (ImVec2){1, 1}, tint, splash_px(6.0f),
                                  ImDrawFlags_RoundCornersAll);
     } else {
-      ImDrawList_AddRectFilled(draw_list, min, max, IM_COL32(18, 22, 30, 240), 6.0f, ImDrawFlags_RoundCornersAll);
+      ImDrawList_AddRectFilled(draw_list, min, max, IM_COL32(18, 22, 30, 240), splash_px(6.0f), ImDrawFlags_RoundCornersAll);
       const char *name = slot->module->info.family_member ? slot->module->info.family_member
                                                           : slot->module->info.display_name;
       const ImVec2 size = igCalcTextSize(name, NULL, false, -1.0f);
@@ -1945,7 +1987,7 @@ static void render_splash_family_switcher(ui_handler_t *ui) {
                               IM_COL32(200, 210, 225, 255), name, NULL);
     }
     const ImU32 border = current ? IM_COL32(120, 200, 255, 255) : hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140);
-    ImDrawList_AddRect(draw_list, min, max, border, 6.0f, ImDrawFlags_None, current ? 2.5f : hovered ? 1.8f : 1.0f);
+    ImDrawList_AddRect(draw_list, min, max, border, splash_px(6.0f), ImDrawFlags_None, current ? 2.5f : hovered ? 1.8f : 1.0f);
     if (clicked && !current && game_host_browse(host, i)) family_remember(family, i);
     igPopID();
   }
@@ -1966,8 +2008,8 @@ static void render_splash_variant_selector(game_host_t *host) {
 
   igAlignTextToFramePadding();
   igTextDisabled("Game mode");
-  igSameLine(0.0f, 10.0f);
-  igSetNextItemWidth(220.0f);
+  igSameLine(0.0f, splash_px(10.0f));
+  igSetNextItemWidth(splash_px(220.0f));
   if (igBeginCombo("##SplashGameMode", current_variant->display_name, 0)) {
     for (uint32_t i = 0; i < module->constraints.variant_count; ++i) {
       const ft_game_variant *variant = &module->constraints.variants[i];
@@ -2040,21 +2082,24 @@ static void render_splash_screen(ui_handler_t *ui) {
   center.y = viewport->WorkPos.y + viewport->WorkSize.y * 0.5f;
   igSetNextWindowPos(center, ImGuiCond_Always, (ImVec2){0.5f, 0.5f});
 
+  // Never past the screen, which a large interface size would otherwise take it.
   float win_w = viewport->WorkSize.x * 0.88f;
-  if (win_w < 920.0f) win_w = 920.0f;
-  if (win_w > 1220.0f) win_w = 1220.0f;
+  if (win_w < splash_px(920.0f)) win_w = splash_px(920.0f);
+  if (win_w > splash_px(1220.0f)) win_w = splash_px(1220.0f);
+  if (win_w > viewport->WorkSize.x) win_w = viewport->WorkSize.x;
 
   float win_h = viewport->WorkSize.y * 0.86f;
-  if (win_h < 660.0f) win_h = 660.0f;
-  if (win_h > 780.0f) win_h = 780.0f;
+  if (win_h < splash_px(660.0f)) win_h = splash_px(660.0f);
+  if (win_h > splash_px(780.0f)) win_h = splash_px(780.0f);
+  if (win_h > viewport->WorkSize.y) win_h = viewport->WorkSize.y;
 
   igSetNextWindowSize((ImVec2){win_w, win_h}, ImGuiCond_Always);
 
   ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize;
 
-  igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){24.0f, 24.0f});
-  igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){14.0f, 14.0f});
-  igPushStyleVar_Float(ImGuiStyleVar_WindowRounding, 12.0f);
+  igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){splash_px(24.0f), splash_px(24.0f)});
+  igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){splash_px(14.0f), splash_px(14.0f)});
+  igPushStyleVar_Float(ImGuiStyleVar_WindowRounding, splash_px(12.0f));
   igPushStyleVar_Float(ImGuiStyleVar_WindowBorderSize, 1.5f);
 
   if (igBeginPopupModal("Splash Screen", NULL, window_flags)) {
@@ -2062,13 +2107,13 @@ static void render_splash_screen(ui_handler_t *ui) {
       ui_splash_open(ui, g_splash_pick.action, g_splash_pick.path);
       g_splash_pick.action = UI_PENDING_NONE;
     }
-    float sidebar_w = 250.0f;
+    float sidebar_w = splash_px(250.0f);
 
     // Left sidebar column
     igBeginChild_Str("SplashSidebar", (ImVec2){sidebar_w, 0}, false, ImGuiWindowFlags_NoScrollbar);
     {
       igSpacing();
-      igPushFont(ui->font, 48.0f);
+      igPushFont(ui->font, splash_px(48.0f));
       igTextColored((ImVec4){0.35f, 0.75f, 1.00f, 1.00f}, "%s", "FrameTee");
       igPopFont();
       igTextDisabled("A TAS Engine and Editor");
@@ -2078,10 +2123,10 @@ static void render_splash_screen(ui_handler_t *ui) {
       igSpacing();
 
       igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.10f, 0.5f});
-      igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f);
+      igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, splash_px(6.0f));
 
-      const float btn_w = -1.0f;
-      if (ui->splash_stage == SPLASH_STAGE_START && igButton(ICON_FA_ARROW_LEFT "  Games", (ImVec2){btn_w, 42}))
+      const float btn_w = -1.0f, btn_h = splash_px(42.0f);
+      if (ui->splash_stage == SPLASH_STAGE_START && igButton(ICON_FA_ARROW_LEFT "  Games", (ImVec2){btn_w, btn_h}))
         ui->splash_stage = SPLASH_STAGE_GAME;
 
       const ft_game_module *level_game = game_host_browsed_module(&ui->gfx_handler->game_host);
@@ -2090,7 +2135,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         char extension[32], level_label[64];
         level_extension_label(level_ext, extension, sizeof(extension));
         snprintf(level_label, sizeof(level_label), ICON_FA_MAP "  Load Local %s", extension);
-        if (igButton(level_label, (ImVec2){btn_w, 42})) {
+        if (igButton(level_label, (ImVec2){btn_w, btn_h})) {
           // The open is deferred until the next frame, after any unsaved-work prompt.
           const file_dialog_t dialog = {.filter_name = level_game->constraints.level_filter_name, .filter_ext = level_ext};
           file_dialog_open(&dialog, splash_level_chosen, ui);
@@ -2101,7 +2146,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         const char *kind = level_game->constraints.recording_filter_name ? level_game->constraints.recording_filter_name : "Recording";
         char recording_label[64];
         snprintf(recording_label, sizeof(recording_label), ICON_FA_FILM "  Load %s", kind);
-        if (igButton(recording_label, (ImVec2){btn_w, 42})) {
+        if (igButton(recording_label, (ImVec2){btn_w, btn_h})) {
           // Like a level: opened next frame, after any unsaved-work prompt, as a new project.
           const file_dialog_t dialog = {
               .filter_name = kind,
@@ -2110,7 +2155,7 @@ static void render_splash_screen(ui_handler_t *ui) {
         }
       }
 
-      if (igButton(ICON_FA_FOLDER_OPEN "  Load Project", (ImVec2){btn_w, 42})) open_project_dialog(ui, false, splash_project_chosen);
+      if (igButton(ICON_FA_FOLDER_OPEN "  Load Project", (ImVec2){btn_w, btn_h})) open_project_dialog(ui, false, splash_project_chosen);
 
       igPopStyleVar(2);
 
@@ -2123,13 +2168,13 @@ static void render_splash_screen(ui_handler_t *ui) {
         igSpacing();
 
         igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, 1.0f);
-        igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 5.0f);
+        igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, splash_px(5.0f));
         igPushStyleColor_Vec4(ImGuiCol_Button, (ImVec4){0.12f, 0.14f, 0.18f, 0.60f});
         igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.22f, 0.28f, 0.38f, 0.85f});
         igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.0f, 0.5f});
 
         igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){0.0f, 0.0f});
-        igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){0.0f, 6.0f});
+        igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){0.0f, splash_px(6.0f)});
         if (igBeginChild_Str("RecentProjectsList", (ImVec2){0.0f, 0.0f}, false, ImGuiWindowFlags_None)) {
           for (int i = 0; i < ui->num_recent_projects; i++) {
             const char *path = ui->recent_projects[i];
@@ -2143,13 +2188,13 @@ static void render_splash_screen(ui_handler_t *ui) {
 
             // Projects in different folders can share a file name, so the label alone is no ID.
             igPushID_Int(i);
-            const bool clicked = igButton(item_lbl, (ImVec2){-1.0f, 32.0f});
+            const bool clicked = igButton(item_lbl, (ImVec2){-1.0f, splash_px(32.0f)});
             igPopID();
             if (clicked) ui_splash_open(ui, UI_PENDING_OPEN_PROJECT, path);
             if (igIsItemHovered(ImGuiHoveredFlags_None)) {
-              igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){8.0f, 6.0f});
+              igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, (ImVec2){splash_px(8.0f), splash_px(6.0f)});
               if (igBeginTooltip()) {
-                igPushTextWrapPos(380.0f);
+                igPushTextWrapPos(splash_px(380.0f));
                 igTextUnformatted(path, NULL);
                 igPopTextWrapPos();
                 igEndTooltip();
@@ -2167,7 +2212,7 @@ static void render_splash_screen(ui_handler_t *ui) {
     }
     igEndChild();
 
-    igSameLine(0, 18.0f);
+    igSameLine(0, splash_px(18.0f));
 
     // Right main panel: the game picker first, then whatever the chosen game
     // wants a run to start from.
@@ -2228,6 +2273,10 @@ static void render_file_dialog_note(void) {
 }
 
 void ui_render(ui_handler_t *ui) {
+  if (g_interface_size_changed) {
+    g_interface_size_changed = false;
+    ui_apply_interface_size();
+  }
   // A dialog's answer acts like the click that asked for it, before anything else this frame.
   file_dialog_update();
   // Before anything simulates this frame, so a recording that just finished opening is replayed

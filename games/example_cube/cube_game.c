@@ -328,7 +328,9 @@ static void splash(const ft_engine_api *engine, void **context, const ft_ui_fram
   igSeparator();
   igSpacing();
 
-  if (igButton("Start cube arena", (ImVec2){220.f, 48.f}) && engine && engine->request_level)
+  // (sized for the editor's 19 px text, and growing with it)
+  const float scale = igGetFontSize() / 19.f;
+  if (igButton("Start cube arena", (ImVec2){220.f * scale, 48.f * scale}) && engine && engine->request_level)
     engine->request_level("builtin:cube-arena");
 }
 

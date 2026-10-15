@@ -53,7 +53,15 @@ int gfx_begin_frame(gfx_handler_t *handler);
 bool gfx_end_frame(gfx_handler_t *handler);
 void gfx_cleanup(gfx_handler_t *handler);
 void gfx_toggle_fullscreen(gfx_handler_t *handler);
+// The interface's scale: the automatic one, worked out from the monitor, times the size the user
+// chose (1 for as worked out).
 float gfx_get_ui_scale(void);
+float gfx_get_auto_ui_scale(void);
+#define GFX_UI_SIZE_MIN 0.5f
+#define GFX_UI_SIZE_MAX 3.0f
+float gfx_get_ui_size(void);
+// The style and text follow once the user interface rebuilds them.
+void gfx_set_ui_size(float size);
 void gfx_retire_imgui_texture(gfx_handler_t *handler, uint64_t texture_id);
 
 // Render one game frame at an output resolution independent of the editor

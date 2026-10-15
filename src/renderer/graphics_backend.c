@@ -1305,7 +1305,10 @@ void ayu_dark(void) {
 }
 */
 
-float gfx_get_ui_scale(void) {
+// How much larger than the automatic size the user wants the interface, 1 for as worked out.
+static float g_ui_size = 1.f;
+
+float gfx_get_auto_ui_scale(void) {
   extern bool g_is_headless;
   if (g_is_headless) return 1.0f;
 
@@ -1329,7 +1332,23 @@ float gfx_get_ui_scale(void) {
   glfwGetMonitorWorkarea(mon, &p0, &p1, &width_px, &height_px);
   float dia_px = sqrtf(width_px * width_px + height_px * height_px);
   dpi = dia_px / dia_inch;
+  // A monitor that reports no physical size (some projectors and virtual displays) gives no
+  // answer at all; the user's size is what sets it then.
+  if (!isfinite(dpi) || dpi <= 0.f) dpi = 1.f;
   return dpi;
+}
+
+float gfx_get_ui_scale(void) {
+  extern bool g_is_headless;
+  if (g_is_headless) return 1.0f;
+  return gfx_get_auto_ui_scale() * g_ui_size;
+}
+
+float gfx_get_ui_size(void) { return g_ui_size; }
+
+void gfx_set_ui_size(float size) {
+  if (!isfinite(size)) return;
+  g_ui_size = size < GFX_UI_SIZE_MIN ? GFX_UI_SIZE_MIN : size > GFX_UI_SIZE_MAX ? GFX_UI_SIZE_MAX : size;
 }
 
 static int init_imgui(gfx_handler_t *handler) {
@@ -1354,9 +1373,6 @@ static int init_imgui(gfx_handler_t *handler) {
   io->ConfigWindowsMoveFromTitleBarOnly = true;
   // Set per frame in gfx_begin_frame(); see imgui_queue_needs_trickling().
   io->ConfigInputTrickleEventQueue = true;
-
-  ImGuiStyle *style = igGetStyle();
-  ImGuiStyle_ScaleAllSizes(style, gfx_get_ui_scale() * 0.5);
 
   // The backend installs no callbacks of its own: every GLFW event goes to the callbacks above,
   // which pass it on to the backend once they have put the mouse position in front of it. That keeps

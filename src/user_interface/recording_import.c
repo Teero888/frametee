@@ -412,7 +412,7 @@ static void render_header(ui_handler_t *ui, const char *name, const char *detail
   const float left = igGetCursorPosX();
   ImDrawList_AddRectFilled(draw, at, (ImVec2){at.x + tile, at.y + tile}, igGetColorU32_Vec4((ImVec4){accent.x, accent.y, accent.z, 0.18f}),
                            px(8.f), 0);
-  igPushFont(ui->font, 20.f);
+  igPushFont(ui->font, px(20.f));
   const ImVec2 icon = igCalcTextSize(ICON_FA_FILM, NULL, false, -1.f);
   ImDrawList_AddText_Vec2(draw, (ImVec2){at.x + (tile - icon.x) * 0.5f, at.y + (tile - icon.y) * 0.5f}, igGetColorU32_Vec4(accent), ICON_FA_FILM,
                           NULL);
@@ -424,7 +424,7 @@ static void render_header(ui_handler_t *ui, const char *name, const char *detail
   const float block_h = title_h + (details ? igGetStyle()->ItemSpacing.y * 0.5f + details_h : 0.f);
   igSetCursorPos((ImVec2){text_x, igGetCursorPosY() + fmaxf(0.f, (tile - block_h) * 0.5f)});
   igPushTextWrapPos(0.f); // the window's content edge
-  igPushFont(ui->font, 20.f);
+  igPushFont(ui->font, px(20.f));
   igTextWrapped("%s", name);
   igPopFont();
   if (details) {

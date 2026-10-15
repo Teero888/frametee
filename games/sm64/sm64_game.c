@@ -1174,19 +1174,23 @@ static void open_folder(const char *path) {
 static const ImVec4 kHeading = {0.85f, 0.90f, 1.00f, 1.00f};
 static const ImVec4 kWarning = {1.00f, 0.78f, 0.35f, 1.00f};
 
+// The start screen's sizes, given for the editor's 19 px text and following the text from there, so
+// the layout keeps its proportions at every interface size.
+static float px(float value) { return value * igGetFontSize() / 19.f; }
+
 // The folder, its path selectable, with buttons to open it or copy the path.
 static void folder_row(struct rom_list *list) {
   igSetNextItemWidth(-1.f);
   igInputText("##rom_folder", list->directory, sizeof(list->directory), ImGuiInputTextFlags_ReadOnly, NULL, NULL);
-  if (igButton(ICON_FA_FOLDER_OPEN "  Open folder", (ImVec2){0.f, 32.f})) open_folder(list->directory);
-  igSameLine(0.f, 8.f);
-  if (igButton(ICON_FA_COPY "  Copy path", (ImVec2){0.f, 32.f})) {
+  if (igButton(ICON_FA_FOLDER_OPEN "  Open folder", (ImVec2){0.f, px(32.f)})) open_folder(list->directory);
+  igSameLine(0.f, px(8.f));
+  if (igButton(ICON_FA_COPY "  Copy path", (ImVec2){0.f, px(32.f)})) {
     igSetClipboardText(list->directory);
     list->copied = true;
     list->copied_at = igGetTime();
   }
   if (list->copied && igGetTime() - list->copied_at < 2.0) {
-    igSameLine(0.f, 10.f);
+    igSameLine(0.f, px(10.f));
     igAlignTextToFramePadding();
     igTextDisabled("Copied");
   }
@@ -1208,7 +1212,8 @@ static void splash(const ft_engine_api *engine, void **context, const ft_ui_fram
   }
 
   // What this is.
-  igPushFont(NULL, 30.f);
+  // (a size before the screen's DPI scale, which the font applies on top)
+  igPushFont(NULL, igGetStyle()->FontSizeBase * 30.f / 19.f);
   igTextUnformatted(SM64_GAME_NAME, NULL);
   igPopFont();
   igPushStyleColor_Vec4(ImGuiCol_Text, *igGetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -1228,14 +1233,14 @@ static void splash(const ft_engine_api *engine, void **context, const ft_ui_fram
   if (own > 0) {
     igTextDisabled("Start a new project from power-on:");
     igPushStyleVar_Vec2(ImGuiStyleVar_ButtonTextAlign, (ImVec2){0.03f, 0.5f});
-    igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.f);
+    igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, px(6.f));
     for (int i = 0; i < list->count; ++i) {
       const struct rom *rom = &list->roms[i];
       if (rom->version != version()) continue;
       char label[300];
       snprintf(label, sizeof(label), ICON_FA_PLAY "   %s", rom->name);
       igPushID_Int(i);
-      if (igButton(label, (ImVec2){-1.f, 44.f}) && engine->request_level) engine->request_level(rom->path);
+      if (igButton(label, (ImVec2){-1.f, px(44.f)}) && engine->request_level) engine->request_level(rom->path);
       igPopID();
       if (igIsItemHovered(ImGuiHoveredFlags_DelayShort)) igSetTooltip("%s", rom->path);
     }
@@ -1253,7 +1258,7 @@ static void splash(const ft_engine_api *engine, void **context, const ft_ui_fram
     igSpacing();
     igTextColored(kHeading, "%s", "Other ROMs in the folder");
     igTextDisabled("%s", "Switch to their version at the top to open them.");
-    igPushStyleVar_Vec2(ImGuiStyleVar_CellPadding, (ImVec2){8.f, 4.f});
+    igPushStyleVar_Vec2(ImGuiStyleVar_CellPadding, (ImVec2){px(8.f), px(4.f)});
     if (igBeginTable("##other_roms", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg,
                      (ImVec2){0.f, 0.f}, 0.f)) {
       igTableSetupColumn("ROM", ImGuiTableColumnFlags_WidthStretch, 0.6f, 0);

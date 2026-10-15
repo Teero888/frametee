@@ -465,6 +465,10 @@ void config_load(ui_handler_t *ui) {
       ui->lod_bias = (float)lod_bias.u.fp64;
     }
 
+    toml_datum_t interface_size = toml_get(graphics_settings, "interface_size");
+    if (interface_size.type == TOML_FP64) gfx_set_ui_size((float)interface_size.u.fp64);
+    else if (interface_size.type == TOML_INT64) gfx_set_ui_size((float)interface_size.u.int64);
+
     toml_datum_t bg_color = toml_get(graphics_settings, "bg_color");
     if (bg_color.type == TOML_ARRAY && bg_color.u.arr.size == 3) {
       for (int i = 0; i < 3; ++i) {
@@ -707,6 +711,7 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "show_fps = %s\n", ui->show_fps ? "true" : "false");
   fprintf(fp, "fps_limit = %d\n", ui->fps_limit);
   fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
+  fprintf(fp, "interface_size = %.2f\n", gfx_get_ui_size());
   fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);
 
   fprintf(fp, "\n[audio]\n");

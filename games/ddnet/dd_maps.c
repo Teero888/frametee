@@ -924,6 +924,38 @@ static int cmp_items_ptr(const void *a, const void *b) {
   return g_current_sort_descending ? -res : res;
 }
 
+// The browser's sizes, given for the editor's 19 px text and following the text from there, so the
+// layout keeps its proportions at every interface size.
+static float px(float value) { return value * igGetFontSize() / 19.f; }
+
+// The width a combo needs to show its widest choice whole.
+static float combo_width(const char *const *items, int count) {
+  float widest = 0.f;
+  for (int i = 0; i < count; i++)
+    widest = fmaxf(widest, igCalcTextSize(items[i], NULL, true, -1.f).x);
+  return widest + igGetStyle()->FramePadding.x * 2.f + igGetFrameHeight();
+}
+
+// Puts the next control beside the last one when it fits whole before `right`, on a new line
+// otherwise.
+static void place_next(float right, float width) {
+  if (igGetItemRectMax().x + px(12.f) + width <= right) igSameLine(0, px(12.f));
+}
+
+static bool filter_combo(float right, const char *label, int *index, const char *const *items, int count, int popup_items) {
+  const float width = combo_width(items, count);
+  place_next(right, width + igGetStyle()->ItemInnerSpacing.x + igCalcTextSize(label, NULL, true, -1.f).x);
+  igSetNextItemWidth(width);
+  return igCombo_Str_arr(label, index, items, count, popup_items);
+}
+
+// One line of a card's text, cut short with an ellipsis where the card ends.
+static void card_text(ImDrawList *draw_list, ImVec2 at, float right, ImU32 colour, const char *text) {
+  igPushStyleColor_U32(ImGuiCol_Text, colour);
+  igRenderTextEllipsis(draw_list, at, (ImVec2){right, at.y + igGetTextLineHeight()}, right, text, NULL, NULL);
+  igPopStyleColor(1);
+}
+
 // Helper to draw custom tab button displaying ONLY the PNG icon (preserving 2:1 aspect ratio)
 static bool render_custom_tab_icon_only(int tab_index, int active_tab, ImTextureRef *icon_tex, const char *fallback_text, float btn_w) {
   igPushID_Int(tab_index);
@@ -934,37 +966,38 @@ static bool render_custom_tab_icon_only(int tab_index, int active_tab, ImTexture
 
   igPushStyleColor_Vec4(ImGuiCol_Button, is_active ? (ImVec4){0.13f, 0.20f, 0.32f, 1.0f} : (ImVec4){0.08f, 0.10f, 0.14f, 0.7f});
   igPushStyleColor_Vec4(ImGuiCol_ButtonHovered, (ImVec4){0.18f, 0.28f, 0.44f, 1.0f});
-  igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, 6.0f);
+  const float btn_h = px(40.0f), rounding = px(6.0f);
+  igPushStyleVar_Float(ImGuiStyleVar_FrameRounding, rounding);
   igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, is_active ? 1.5f : 1.0f);
 
   ImVec2 cursor_pos = igGetCursorScreenPos();
 
-  bool clicked = igButton("##tab_btn", (ImVec2){btn_w, 40.0f});
+  bool clicked = igButton("##tab_btn", (ImVec2){btn_w, btn_h});
 
   ImDrawList *draw_list = igGetWindowDrawList();
   ImVec2 p_min = cursor_pos;
-  ImVec2 p_max = {cursor_pos.x + btn_w, cursor_pos.y + 40.0f};
+  ImVec2 p_max = {cursor_pos.x + btn_w, cursor_pos.y + btn_h};
 
-  ImDrawList_AddRectFilled(draw_list, p_min, p_max, bg_col, 6.0f, ImDrawFlags_None);
-  ImDrawList_AddRect(draw_list, p_min, p_max, border_col, 6.0f, ImDrawFlags_None, is_active ? 1.5f : 1.0f);
+  ImDrawList_AddRectFilled(draw_list, p_min, p_max, bg_col, rounding, ImDrawFlags_None);
+  ImDrawList_AddRect(draw_list, p_min, p_max, border_col, rounding, ImDrawFlags_None, is_active ? 1.5f : 1.0f);
 
   // Preserve 2:1 PNG aspect ratio (128x64 -> 60x30)
-  float icon_h = 30.0f;
-  float icon_w = icon_h * 2.0f; // 60.0f
+  float icon_h = px(30.0f);
+  float icon_w = icon_h * 2.0f;
 
-  if (icon_w > btn_w - 12.0f) {
-    icon_w = btn_w - 12.0f;
+  if (icon_w > btn_w - px(12.0f)) {
+    icon_w = fmaxf(btn_w - px(12.0f), 0.f);
     icon_h = icon_w * 0.5f;
   }
 
   float start_x = p_min.x + (btn_w - icon_w) * 0.5f;
-  float start_y = p_min.y + (40.0f - icon_h) * 0.5f;
+  float start_y = p_min.y + (btn_h - icon_h) * 0.5f;
 
   if (icon_tex) {
     ImDrawList_AddImage(draw_list, *icon_tex, (ImVec2){start_x, start_y}, (ImVec2){start_x + icon_w, start_y + icon_h}, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xFFFFFFFF);
   } else {
     ImVec2 txt_sz = igCalcTextSize(fallback_text, NULL, false, -1.0f);
-    ImVec2 txt_pos = {p_min.x + (btn_w - txt_sz.x) * 0.5f, p_min.y + (40.0f - txt_sz.y) * 0.5f};
+    ImVec2 txt_pos = {p_min.x + (btn_w - txt_sz.x) * 0.5f, p_min.y + (btn_h - txt_sz.y) * 0.5f};
     ImU32 txt_col = is_active ? IM_COL32(240, 245, 255, 255) : IM_COL32(160, 175, 200, 255);
     ImDrawList_AddText_Vec2(draw_list, txt_pos, txt_col, fallback_text, NULL);
   }
@@ -990,50 +1023,50 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
   // Top Bar: Tab Icons Selector (ONLY PNG Icons preserving 2:1 aspect ratio)
   igBeginGroup();
 
-  float tab_w = (avail_width - 24.0f) / 3.0f;
-  if (tab_w < 120.0f) tab_w = 120.0f;
+  const float gap = px(12.0f);
+  const float tab_w = fmaxf((avail_width - gap * 2.0f) / 3.0f, 1.0f);
 
   if (render_custom_tab_icon_only(0, mgr->active_tab, mgr->icon_ddnet_tex, "DDNet", tab_w)) {
     mgr->active_tab = 0;
   }
-  igSameLine(0, 12.0f);
+  igSameLine(0, gap);
   if (render_custom_tab_icon_only(1, mgr->active_tab, mgr->icon_kog_tex, "KoG", tab_w)) {
     mgr->active_tab = 1;
   }
-  igSameLine(0, 12.0f);
+  igSameLine(0, gap);
   if (render_custom_tab_icon_only(2, mgr->active_tab, mgr->icon_unique_tex, "Unique", tab_w)) {
     mgr->active_tab = 2;
   }
 
   igSpacing();
 
-  // Controls Row 1: Search Bar & Downloaded Only Checkbox
-  float search_w = avail_width - 165.0f;
-  if (search_w < 150.0f) search_w = avail_width;
-
-  igSetNextItemWidth(search_w);
+  // Controls Row 1: Search Bar & Downloaded Only Checkbox, the checkbox below the search when they
+  // don't fit side by side.
+  const char *downloaded_label = "Downloaded Only";
+  const float checkbox_w = igGetFrameHeight() + igGetStyle()->ItemInnerSpacing.x + igCalcTextSize(downloaded_label, NULL, true, -1.f).x;
+  const bool search_beside = avail_width - gap - checkbox_w >= px(150.0f);
+  igSetNextItemWidth(search_beside ? avail_width - gap - checkbox_w : avail_width);
   igInputTextWithHint("##map_search", ICON_FA_MAGNIFYING_GLASS " Search maps by name...", mgr->search_filter, sizeof(mgr->search_filter), 0, NULL, NULL);
 
-  igSameLine(0, 12.0f);
-  igCheckbox("Downloaded Only", &mgr->downloaded_only);
+  if (search_beside) igSameLine(0, gap);
+  igCheckbox(downloaded_label, &mgr->downloaded_only);
 
   igSpacing();
 
+  // The filters go on as many lines as they need.
+  const float row_right = igGetCursorScreenPos().x + avail_width;
+
   // Direction Toggle Button (Left of Sort Combo, no tooltip)
   const char *dir_icon = mgr->sort_descending ? ICON_FA_ARROW_DOWN_SHORT_WIDE : ICON_FA_ARROW_UP_SHORT_WIDE;
-  if (igButton(dir_icon, (ImVec2){32.0f, 0})) {
+  if (igButton(dir_icon, (ImVec2){igGetFrameHeight(), 0})) {
     mgr->sort_descending = !mgr->sort_descending;
   }
-  igSameLine(0, 4.0f);
+  igSameLine(0, px(4.0f));
 
   // Sort Field Combo
   const char *sort_fields[] = {"Name", "Points", "Stars"};
-  igPushItemWidth(110.0f);
+  igSetNextItemWidth(combo_width(sort_fields, 3));
   igCombo_Str_arr("Sort", &mgr->sort_field, sort_fields, 3, 3);
-  igPopItemWidth();
-
-  igSameLine(0, 12.0f);
-  igPushItemWidth(140.0f);
 
   // Category specific filters (using dynamically parsed types from maps.json!)
   if (mgr->active_tab == 0) { // DDNet
@@ -1050,17 +1083,16 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
       }
     }
 
-    if (igCombo_Str_arr("Type", &type_idx, ddnet_type_ptrs, type_count + 1, 12)) {
+    if (filter_combo(row_right, "Type", &type_idx, ddnet_type_ptrs, type_count + 1, 12)) {
       if (type_idx == 0) {
         strncpy(mgr->filter_ddnet_type, "All", sizeof(mgr->filter_ddnet_type) - 1);
       } else {
         strncpy(mgr->filter_ddnet_type, ddnet_type_ptrs[type_idx], sizeof(mgr->filter_ddnet_type) - 1);
       }
     }
-    igSameLine(0, 12.0f);
 
     const char *diff_names[] = {"All Diff", "1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars"};
-    igCombo_Str_arr("Diff", &mgr->filter_ddnet_difficulty, diff_names, 6, 6);
+    filter_combo(row_right, "Diff", &mgr->filter_ddnet_difficulty, diff_names, 6, 6);
   } else if (mgr->active_tab == 1) { // KoG
     const char *kog_diff_ptrs[65];
     kog_diff_ptrs[0] = "All Diffs";
@@ -1075,18 +1107,16 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
       }
     }
 
-    if (igCombo_Str_arr("Diff", &kdiff_idx, kog_diff_ptrs, kcount + 1, 10)) {
+    if (filter_combo(row_right, "Diff", &kdiff_idx, kog_diff_ptrs, kcount + 1, 10)) {
       if (kdiff_idx == 0) {
         strncpy(mgr->filter_kog_difficulty, "All", sizeof(mgr->filter_kog_difficulty) - 1);
       } else {
         strncpy(mgr->filter_kog_difficulty, kog_diff_ptrs[kdiff_idx], sizeof(mgr->filter_kog_difficulty) - 1);
       }
     }
-    igSameLine(0, 12.0f);
 
     const char *stars_names[] = {"All Stars", "1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars"};
-    igCombo_Str_arr("Stars", &mgr->filter_kog_stars, stars_names, 6, 6);
-    igSameLine(0, 12.0f);
+    filter_combo(row_right, "Stars", &mgr->filter_kog_stars, stars_names, 6, 6);
 
     const char *kog_len_ptrs[33];
     kog_len_ptrs[0] = "All Lengths";
@@ -1101,7 +1131,7 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
           len_idx = i + 1;
         }
       }
-      if (igCombo_Str_arr("Length", &len_idx, kog_len_ptrs, len_count + 1, 10)) {
+      if (filter_combo(row_right, "Length", &len_idx, kog_len_ptrs, len_count + 1, 10)) {
         if (len_idx == 0) {
           strncpy(mgr->filter_kog_length, "All", sizeof(mgr->filter_kog_length) - 1);
         } else {
@@ -1116,7 +1146,7 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
           break;
         }
       }
-      if (igCombo_Str_arr("Length", &len_idx, fallback_len_names, 11, 11)) {
+      if (filter_combo(row_right, "Length", &len_idx, fallback_len_names, 11, 11)) {
         if (len_idx == 0) {
           strncpy(mgr->filter_kog_length, "All", sizeof(mgr->filter_kog_length) - 1);
         } else {
@@ -1138,7 +1168,7 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
       }
     }
 
-    if (igCombo_Str_arr("Category", &ucat_idx, unique_cat_ptrs, ucount + 1, 10)) {
+    if (filter_combo(row_right, "Category", &ucat_idx, unique_cat_ptrs, ucount + 1, 10)) {
       if (ucat_idx == 0) {
         strncpy(mgr->filter_unique_category, "All", sizeof(mgr->filter_unique_category) - 1);
       } else {
@@ -1148,11 +1178,11 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
   }
 
   if (mgr->is_offline) {
-    igSameLine(0, 12.0f);
-    igTextColored((ImVec4){1.0f, 0.7f, 0.3f, 1.0f}, "%s Offline Mode", ICON_FA_PLUG);
+    const char *offline = ICON_FA_PLUG " Offline Mode";
+    place_next(row_right, igCalcTextSize(offline, NULL, true, -1.f).x);
+    igTextColored((ImVec4){1.0f, 0.7f, 0.3f, 1.0f}, "%s", offline);
   }
 
-  igPopItemWidth();
   igEndGroup();
   igSpacing();
 
@@ -1236,8 +1266,8 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
   if (igBeginChild_Str("MapImagesScrollRegion", (ImVec2){0, content_avail.y}, false, 0)) {
     ImVec2 grid_avail = igGetContentRegionAvail();
 
-    float card_width = 195.0f;
-    float card_margin = 5.0f; // Equal horizontal and vertical margin
+    float card_width = px(195.0f);
+    float card_margin = px(5.0f); // Equal horizontal and vertical margin
     int columns = (int)(grid_avail.x / (card_width + card_margin * 2.0f));
     if (columns < 1) columns = 1;
 
@@ -1274,10 +1304,13 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
 
             ImVec2 cursor_pos = igGetCursorScreenPos();
 
-            float actual_card_w = igGetColumnWidth(-1) - 4.0f;
-            if (actual_card_w < 110.0f) actual_card_w = card_width;
+            float actual_card_w = igGetColumnWidth(-1) - px(4.0f);
+            if (actual_card_w < px(110.0f)) actual_card_w = card_width;
             float actual_thumb_h = actual_card_w * (9.0f / 16.0f);
-            float total_item_h = actual_thumb_h + 46.0f;
+            // The name and a line of details under the thumbnail.
+            const float text_pad = px(8.0f), text_top = px(6.0f), line_h = igGetTextLineHeight();
+            float total_item_h = actual_thumb_h + text_top * 2.0f + line_h * 2.0f;
+            const float rounding = px(8.0f);
 
             ImVec2 card_min = cursor_pos;
             ImVec2 card_max = {cursor_pos.x + actual_card_w, cursor_pos.y + total_item_h};
@@ -1292,17 +1325,17 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
             ImU32 border_color = hovered ? IM_COL32(90, 175, 255, 255) : IM_COL32(48, 56, 75, 140);
             float border_thick = hovered ? 1.8f : 1.0f;
 
-            ImDrawList_AddRectFilled(draw_list, card_min, card_max, bg_color, 8.0f, ImDrawFlags_None);
+            ImDrawList_AddRectFilled(draw_list, card_min, card_max, bg_color, rounding, ImDrawFlags_None);
 
             // Draw Thumbnail image or placeholder
             ImVec2 thumb_min = card_min;
             ImVec2 thumb_max = {card_min.x + actual_card_w, card_min.y + actual_thumb_h};
 
             if (item->thumb_loaded && item->thumb_preview_texture) {
-              ImDrawList_AddImageRounded(draw_list, *item->thumb_preview_texture, thumb_min, thumb_max, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xFFFFFFFF, 8.0f, ImDrawFlags_RoundCornersTop);
+              ImDrawList_AddImageRounded(draw_list, *item->thumb_preview_texture, thumb_min, thumb_max, (ImVec2){0, 0}, (ImVec2){1, 1}, 0xFFFFFFFF, rounding, ImDrawFlags_RoundCornersTop);
             } else {
               // Placeholder background
-              ImDrawList_AddRectFilled(draw_list, thumb_min, thumb_max, IM_COL32(18, 22, 30, 240), 8.0f, ImDrawFlags_RoundCornersTop);
+              ImDrawList_AddRectFilled(draw_list, thumb_min, thumb_max, IM_COL32(18, 22, 30, 240), rounding, ImDrawFlags_RoundCornersTop);
 
               ImVec2 center = {thumb_min.x + actual_card_w * 0.5f, thumb_min.y + actual_thumb_h * 0.5f};
               if (item->thumb_fetching) {
@@ -1316,8 +1349,9 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
             }
 
             // Draw Map Name
-            ImVec2 name_pos = {card_min.x + 8.0f, card_min.y + actual_thumb_h + 6.0f};
-            ImDrawList_AddText_Vec2(draw_list, name_pos, IM_COL32(235, 240, 250, 255), item->name, NULL);
+            const float text_right = card_max.x - text_pad;
+            ImVec2 name_pos = {card_min.x + text_pad, card_min.y + actual_thumb_h + text_top};
+            card_text(draw_list, name_pos, text_right, IM_COL32(235, 240, 250, 255), item->name);
 
             // Draw Metadata Row (using FontAwesome ICON_FA_STAR instead of broken UTF8 unicode)
             char meta_str[128] = {0};
@@ -1354,19 +1388,19 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
             }
 
             if (meta_str[0]) {
-              ImVec2 meta_pos = {card_min.x + 8.0f, card_min.y + actual_thumb_h + 24.0f};
-              ImDrawList_AddText_Vec2(draw_list, meta_pos, IM_COL32(140, 160, 195, 255), meta_str, NULL);
+              ImVec2 meta_pos = {name_pos.x, name_pos.y + line_h};
+              card_text(draw_list, meta_pos, text_right, IM_COL32(140, 160, 195, 255), meta_str);
             }
 
             // Overlay badge if downloading or completed check
             if (item->map_downloading) {
-              ImDrawList_AddRectFilled(draw_list, thumb_min, thumb_max, IM_COL32(10, 14, 22, 210), 8.0f, ImDrawFlags_RoundCornersTop);
+              ImDrawList_AddRectFilled(draw_list, thumb_min, thumb_max, IM_COL32(10, 14, 22, 210), rounding, ImDrawFlags_RoundCornersTop);
               ImVec2 center = {thumb_min.x + actual_card_w * 0.5f, thumb_min.y + actual_thumb_h * 0.5f};
               draw_spinning_icon(center, ICON_FA_ROTATE);
             }
 
             // Draw Card Border Outline ON TOP of thumbnail image & contents
-            ImDrawList_AddRect(draw_list, card_min, card_max, border_color, 8.0f, ImDrawFlags_None, border_thick);
+            ImDrawList_AddRect(draw_list, card_min, card_max, border_color, rounding, ImDrawFlags_None, border_thick);
 
             // Handle Click on Map Card
             if (clicked && !item->map_downloading) {
