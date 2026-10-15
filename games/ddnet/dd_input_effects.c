@@ -651,7 +651,9 @@ void dd_input_effect_default(ft_game *game, uint32_t index, void *parameters, ui
   memset(parameters, 0, parameter_size);
   if (index == DD_EFFECT_CLEAN && parameter_size == sizeof(dd_clean_parameters_t)) {
     dd_clean_parameters_t *clean = parameters;
-    clean->fields = DD_CLEANABLE_FIELDS;
+    // The aim is left alone unless asked for: it is what the run looks like, even where it changes
+    // nothing.
+    clean->fields = DD_CLEANABLE_FIELDS & ~(UINT64_C(1) << DD_IN_TARGET);
   } else if (index == DD_EFFECT_SMOOTH_TARGET && parameter_size == sizeof(dd_smooth_parameters_t)) {
     dd_smooth_parameters_t *smooth = parameters;
     smooth->axes = DD_SMOOTH_REQUIRED_AXES;
