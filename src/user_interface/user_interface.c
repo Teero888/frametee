@@ -654,6 +654,9 @@ void setup_docking(ui_handler_t *ui) {
 // player manager panel
 static bool g_remove_confirm_needed = true;
 static int g_pending_remove_index = -1;
+// The confirmation is opened from the Players window, where it is drawn: a popup is known by its
+// name in the window that opens it, and one opened from a track's menu would never show.
+static bool g_open_remove_confirm = false;
 
 typedef struct {
   bool active;
@@ -959,7 +962,7 @@ void render_player_manager(ui_handler_t *ui) {
               if (igMenuItem_Bool(ICON_FA_TRASH " Delete Player Track", NULL, false, true)) {
                 if (g_remove_confirm_needed && track->snippet_count > 0) {
                   g_pending_remove_index = i;
-                  igOpenPopup_Str("Confirm remove player", ImGuiPopupFlags_AnyPopupLevel);
+                  g_open_remove_confirm = true;
                 } else {
                   pending_track_remove = i;
                 }
@@ -1006,6 +1009,10 @@ void render_player_manager(ui_handler_t *ui) {
       if (before && model_remove_group(ts, pending_group_remove)) register_timeline_data_change(ui, before, "Delete Group");
       else commands_free_timeline_data_snapshot(before);
     }
+  }
+  if (g_open_remove_confirm) {
+    igOpenPopup_Str("Confirm remove player", 0);
+    g_open_remove_confirm = false;
   }
   if (igBeginPopupModal("Confirm remove player", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
     igText("This player has inputs. Remove anyway?");
