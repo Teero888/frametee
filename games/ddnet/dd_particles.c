@@ -910,10 +910,12 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
 
   const bool presentation_enabled =
       !game->engine->presentation_effects_enabled || game->engine->presentation_effects_enabled();
+  // (the editor hears ahead of what it shows, stepping a world of its own without presentation)
+  const bool heard = game->engine->audio_heard && game->engine->audio_heard();
   const int index = world->index;
   // A world steps with the event build of the physics while its effects are of use: shown, heard, or
   // written into a demo. Searches, seeking and lookups step without (and faster).
-  const bool events = index >= 0 && (presentation_enabled || game->physics_events_forced);
+  const bool events = index >= 0 && (presentation_enabled || heard || game->physics_events_forced);
   world->core.user_data = events ? world : NULL;
   world->core.particle = events ? on_particle : NULL;
   world->core.damage_indicator = events ? on_damage_indicator : NULL;

@@ -1201,7 +1201,8 @@ static void mixer_update(const audio_listener_t *listeners, int listener_count, 
     if (!track || track->fresh == INT_MAX) continue;
     const double fresh = track->fresh - 1 + listeners[k].start_offset;
     const head_t *h = m->main_head >= 0 ? &m->heads[m->main_head] : NULL;
-    if (h && !clock->game_tick && h->rate > 0.0 && fresh < head_position(h, written)) rerender = true;
+    // (in ticks: the camera's clock counts its own seconds)
+    if (h && h->rate > 0.0 && fresh < map_tick(clock, head_position(h, written))) rerender = true;
     track->fresh = INT_MAX;
   }
   const uint64_t from = rerender ? keep : written;
