@@ -7,6 +7,7 @@
 #include "user_interface/timeline/timeline_types.h"
 #include <GLFW/glfw3.h>
 #include <engine/int_math.h>
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1009,9 +1010,25 @@ void interaction_toggle_recording(timeline_state_t *ts) {
 void interaction_cancel_recording(timeline_state_t *ts) {
   if (!ts->recording) return;
   ts->recording = false;
+  // The ticks the takes covered go back to what they held before, in the groups that had takes.
+  int *first_take = malloc(sizeof(int) * (size_t)ts->group_count);
+  for (int g = 0; first_take && g < ts->group_count; ++g)
+    first_take[g] = INT_MAX;
+  for (int i = 0; first_take && i < ts->player_track_count; ++i) {
+    const player_track_t *track = &ts->player_tracks[i];
+    const int g = track->group_index;
+    for (int j = 0; g >= 0 && g < ts->group_count && j < track->recording_snippet_count; ++j)
+      first_take[g] = imin(first_take[g], track->recording_snippets[j].start_tick);
+  }
   model_clear_all_recording_buffers(ts);
   ts->recording_snippets.count = 0;
-  model_recalc_physics(ts, 0);
+  if (!first_take) {
+    model_recalc_physics(ts, 0);
+    return;
+  }
+  for (int g = 0; g < ts->group_count; ++g)
+    if (first_take[g] != INT_MAX) model_recalc_group_physics(ts, g, first_take[g]);
+  free(first_take);
 }
 
 // Cuts the takes back to the playhead and keeps recording from there. With

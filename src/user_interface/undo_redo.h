@@ -6,7 +6,8 @@
 
 struct undo_command_t {
   char description[64];
-  // Internal commands invalidate the affected simulation history themselves.
+  // Commands invalidate the simulation history they affect themselves (a
+  // plugin's through the API calls it makes, which do).
   // A function to reverse the action.
   void (*undo)(void *cmd, void *ts);
   // A function to re-apply the action.

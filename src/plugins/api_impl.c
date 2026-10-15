@@ -343,8 +343,6 @@ static void api_end_bulk_edit(void) {
   }
   s_bulk_edit_original_active_group = -1;
 
-  model_recalc_physics(ts, 0);
-
   if (s_bulk_edit_before) {
     undo_command_t *change = commands_create_timeline_data_change(
         ui, s_bulk_edit_before, s_bulk_edit_description[0] ? s_bulk_edit_description : "Bulk Edit");
@@ -402,9 +400,7 @@ static int api_do_export_run_to_group(const char *name, int start_tick, int coun
   for (int i = 0; i < writable; ++i)
     memcpy(window[i].bytes, (const uint8_t *)records + (size_t)i * record_stride, record_size);
 
-  if (!s_bulk_edit_active) {
-    model_recalc_group_physics(ts, model_track_group_index(ts, track_index), start_tick);
-  }
+  model_recalc_group_physics(ts, model_track_group_index(ts, track_index), start_tick);
 
   if (record_undo && before) {
     undo_command_t *change = commands_create_timeline_data_change(ui, before, "Export Run to Group");

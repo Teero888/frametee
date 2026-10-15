@@ -1868,7 +1868,6 @@ static void undo_remove_track(void *cmd, void *ts_void) {
   ts->player_track_count = new_count;
   model_insert_track_physics(ts, c->track_index);
   if (new_track->starting_config.enabled) model_apply_starting_config(ts, c->track_index);
-  model_recalc_physics(ts, 0);
 }
 
 static void redo_remove_track(void *cmd, void *ts_void) {

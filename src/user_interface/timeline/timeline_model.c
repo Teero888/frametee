@@ -48,6 +48,12 @@ static const float s_group_colors[][4] = {
     {0.95f, 0.38f, 0.25f, 1.0f},
 };
 
+// Revisions come from one counter, so no two states of any groups share one: a
+// cache filed under a world's index (DDNet's race splits) also notices another
+// group moving into that place.
+static uint64_t s_physics_revision;
+static void physics_changed(timeline_group_t *group) { group->physics_revision = ++s_physics_revision; }
+
 static void group_runtime_init(timeline_state_t *ts, timeline_group_t *group, int world_index) {
   game_host_t *host = model_host(ts);
   const ft_level *level = ts->ui->gfx_handler->level;
@@ -61,6 +67,33 @@ static void group_runtime_init(timeline_state_t *ts, timeline_group_t *group, in
   group->audio_world_tick = -1;
   group->cached_tick = -1;
   group->presentation_tick = 0;
+}
+
+// A world under another index, with the same contents.
+static ft_world *world_moved(timeline_state_t *ts, ft_world *world, int world_index) {
+  if (!world) return NULL;
+  game_host_t *host = model_host(ts);
+  ft_world *moved = gh_world_create(host, ts->ui->gfx_handler->level, 0, world_index);
+  if (!moved) return world;
+  gh_world_copy(host, moved, world);
+  gh_world_destroy(host, world);
+  return moved;
+}
+
+// A group that moves up the list takes its worlds along. A game files what a
+// world reports (DDNet's particles and events) under the index it was made
+// with, and a copy keeps the destination's, so each is made again under the new
+// one; the snapshots are copied rather than simulated again.
+static void group_runtime_move(timeline_state_t *ts, timeline_group_t *group, int world_index) {
+  group->initial_world = world_moved(ts, group->initial_world, world_index);
+  group->previous_world = world_moved(ts, group->previous_world, world_index);
+  group->prev_world_cached = world_moved(ts, group->prev_world_cached, world_index);
+  group->world_cached = world_moved(ts, group->world_cached, world_index);
+  group->audio_world = world_moved(ts, group->audio_world, world_index);
+  for (uint32_t i = 0; i < group->vec.max_size; ++i)
+    group->vec.data[i] = world_moved(ts, group->vec.data[i], world_index);
+  // (what was worked out from it under the old index is not for the new one)
+  physics_changed(group);
 }
 
 static void group_runtime_cleanup(timeline_state_t *ts, timeline_group_t *group) {
@@ -205,7 +238,7 @@ void model_reset_groups_for_level(timeline_state_t *ts) {
 
     group_runtime_cleanup(ts, group);
     group_runtime_init(ts, group, i);
-    ++group->physics_revision;
+    physics_changed(group);
 
     // A fixed-cast game has already created its required players. Dynamic
     // games start lower and need only the difference represented by tracks.
@@ -711,7 +744,7 @@ player_track_t *model_add_new_track(timeline_state_t *ts, int num) {
       gh_world_remove_player(host, group->initial_world, gh_world_player_count(host, group->initial_world) - 1);
     return NULL;
   }
-  model_recalc_physics(ts, 0);
+  model_recalc_group_physics(ts, ts->active_group_index, 0);
   return rows;
 }
 
@@ -785,7 +818,7 @@ void model_remove_track_logic(timeline_state_t *ts, int track_index) {
   if (ts->selected_player_track_index == track_index) ts->selected_player_track_index = -1;
   else if (ts->selected_player_track_index > track_index) ts->selected_player_track_index--;
 
-  model_recalc_physics(ts, 0);
+  model_recalc_group_physics(ts, group_index, 0);
 }
 
 void model_insert_track_physics(timeline_state_t *ts, int track_index) {
@@ -802,7 +835,7 @@ void model_insert_track_physics(timeline_state_t *ts, int track_index) {
       ++other->linked_source_player;
   }
   snapshots_reset(ts->groups[group_index]);
-  model_recalc_physics(ts, 0);
+  model_recalc_group_physics(ts, group_index, 0);
 }
 
 void model_compact_layers_for_track(player_track_t *track) {
@@ -911,7 +944,7 @@ void model_invalidate_group_physics(timeline_state_t *ts, int group_index, int t
   game_host_t *host = model_host(ts);
   if (!host) return;
   timeline_group_t *group = ts->groups[group_index];
-  ++group->physics_revision;
+  physics_changed(group);
   tick = imax(0, tick);
   audio_track_invalidate(group->audio, tick + 1);
   if (group->audio_world_tick > tick) group->audio_world_tick = -1;
@@ -1601,6 +1634,8 @@ bool model_remove_group(timeline_state_t *ts, int group_index) {
           sizeof(*ts->groups) * (size_t)(ts->group_count - group_index - 1));
   ts->group_count--;
   ts->groups = realloc(ts->groups, sizeof(*ts->groups) * (size_t)ts->group_count);
+  for (int i = group_index; i < ts->group_count; ++i)
+    group_runtime_move(ts, ts->groups[i], i);
 
   for (int i = 0; i < ts->player_track_count; ++i)
     if (ts->player_tracks[i].group_index > group_index) ts->player_tracks[i].group_index--;
@@ -1618,7 +1653,8 @@ bool model_remove_group(timeline_state_t *ts, int group_index) {
   if (ts->active_group_index == group_index) ts->active_group_index = 0;
   else if (ts->active_group_index > group_index) ts->active_group_index--;
   if (group_index == 0 && ts->group_count > 0) ts->groups[0]->start_offset = 0;
-  model_recalc_physics(ts, 0);
+  // The other groups' worlds are what they were.
+  ts->current_tick = imax(ts->current_tick, model_get_min_global_tick(ts));
   return true;
 }
 
