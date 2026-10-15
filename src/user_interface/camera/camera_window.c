@@ -87,6 +87,7 @@ static void clamp_selection(ui_handler_t *ui) {
 static void command_apply(void *ts, const camera_timeline_t *state) {
   ui_handler_t *ui = ((timeline_state_t *)ts)->ui;
   ui->camera_timeline = *state;
+  camera_time_roving_keys(&ui->camera_timeline);
   clamp_selection(ui);
   ui_mark_unsaved(ui);
 }
@@ -158,6 +159,41 @@ static void delete_key(ui_handler_t *ui, camera_channel_t channel, int index) {
   camera_delete_key(&ui->camera_timeline, channel, index);
   if (opened) edit_end(ui);
   clamp_selection(ui);
+}
+
+// Whether pose key `index` is inside a shot, where it can be timed by the path.
+static bool can_rove(const camera_timeline_t *camera, int index) {
+  const camera_pose_key_t *keys = camera->pose_keys;
+  return index > 0 && index + 1 < camera->pose_count && keys[index].interp != CAMERA_INTERP_HOLD &&
+         keys[index - 1].interp != CAMERA_INTERP_HOLD;
+}
+
+static void set_rove(ui_handler_t *ui, int index, bool rove) {
+  camera_timeline_t *camera = &ui->camera_timeline;
+  if (index < 0 || index >= camera->pose_count || camera->pose_keys[index].rove == rove) return;
+  const bool opened = edit_begin(ui, rove ? "Time camera key by the path" : "Fix camera key's time");
+  camera->pose_keys[index].rove = rove;
+  // It keeps its place in time and gets automatic handles.
+  if (!rove) camera->pose_keys[index].ease.mode = CAMERA_HANDLE_AUTO;
+  camera_time_roving_keys(camera);
+  if (opened) edit_end(ui);
+}
+
+static void shot_rove(ui_handler_t *ui, double time, bool rove) {
+  const bool opened = edit_begin(ui, rove ? "Constant camera speed" : "Fixed camera timing");
+  camera_shot_rove(&ui->camera_timeline, time, rove);
+  if (opened) edit_end(ui);
+}
+
+// The shot at `time` for the menus: whether it has keys inside it, and whether any of them rove.
+static void shot_menu_items(ui_handler_t *ui, double time) {
+  const camera_timeline_t *camera = &ui->camera_timeline;
+  int first, last;
+  const bool shot = camera_shot_at(camera, time, &first, &last) && last - first >= 2;
+  bool roving = false;
+  for (int i = shot ? first + 1 : 0; shot && i < last; ++i) roving = roving || camera->pose_keys[i].rove;
+  if (igMenuItem_Bool("Constant speed through this shot", NULL, false, shot)) shot_rove(ui, time, true);
+  if (igMenuItem_Bool("Fixed timing through this shot", NULL, false, roving)) shot_rove(ui, time, false);
 }
 
 // The shot is about `track` from `time` on.
@@ -303,6 +339,8 @@ static void sync_view_scale(gfx_handler_t *h) {
 void camera_editor_update(ui_handler_t *ui) {
   camera_editor_t *ed = &ui->camera_editor;
   timeline_state_t *ts = &ui->timeline;
+  // (dragging a key in the level moves the roving ones' times with it)
+  camera_time_roving_keys(&ui->camera_timeline);
   if (!ui->gfx_handler->level || ts->recording) ed->drives_game = false;
   if (!owns_clock(ui)) {
     ed->playing = false;
@@ -386,6 +424,7 @@ void camera_editor_render_gizmos(gfx_handler_t *h) {
 
 void camera_editor_apply_for_export(gfx_handler_t *h, double seconds) {
   sync_view_scale(h);
+  camera_time_roving_keys(&h->user_interface.camera_timeline);
   // Exporting has no frame to keep smooth: walk whatever the chase needs at once.
   if (camera_rig_needs_heading(h)) camera_rig_prepare_paths_now(h);
   camera_pose_t pose;
@@ -723,12 +762,13 @@ static ImVec2 graph_key_position(ui_handler_t *ui, const layout_t *l, int index)
 static bool graph_handle(ui_handler_t *ui, const layout_t *l, int index, int side, double *time, double *value) {
   camera_timeline_t *camera = &ui->camera_timeline;
   const camera_channel_t channel = ui->camera_editor.selected_channel;
-  const int count = camera_channel_count(camera, channel);
-  if (index < 0 || index >= count || (side < 0 && index == 0) || (side > 0 && index + 1 >= count)) return false;
-  if (*camera_channel_key_interp(camera, channel, side < 0 ? index - 1 : index) != CAMERA_INTERP_SMOOTH) return false;
+  // (past roving keys: the timing runs to the next fixed key)
+  const int other = camera_timing_neighbor(camera, channel, index, side);
+  if (other < 0) return false;
+  if (*camera_channel_key_interp(camera, channel, side < 0 ? other : index) != CAMERA_INTERP_SMOOTH) return false;
   const camera_ease_t ease = camera_curve_key_ease(camera, channel, index, ticks_per_second(ui));
   const double key_time = camera_channel_key_time(camera, channel, index);
-  const double span = fabs(camera_channel_key_time(camera, channel, index + side) - key_time);
+  const double span = fabs(camera_channel_key_time(camera, channel, other) - key_time);
   const double reach = (side < 0 ? ease.in_influence : ease.out_influence) * span;
   const double slope = side < 0 ? ease.in_slope : ease.out_slope;
   *time = key_time + side * reach;
@@ -755,6 +795,13 @@ static void draw_square_key(ImDrawList *draw, ImVec2 at, float half, ImU32 color
   ImDrawList_AddConvexPolyFilled(draw, tab, 4, color);
   const ImVec2 outline[6] = {{left, top}, {step_right, top}, {step_right, step_bottom}, {right, step_bottom}, {right, bottom}, {left, bottom}};
   ImDrawList_AddPolyline(draw, outline, 6, rim, ImDrawFlags_Closed, 1.f);
+}
+
+// A roving key: a small dot, as After Effects draws one, since its time is not its own.
+static void draw_rove_key(ImDrawList *draw, ImVec2 at, bool selected, float scale) {
+  const float r = (selected ? 4.5f : 3.5f) * scale;
+  ImDrawList_AddCircleFilled(draw, at, r, selected ? SELECTED_COLOR : KEY_COLOR, 12);
+  ImDrawList_AddCircle(draw, at, r, IM_COL32(0, 0, 0, 170), 12, 1.f);
 }
 
 static void draw_key(ImDrawList *draw, ImVec2 at, int interp, int handle_mode, bool selected, float scale) {
@@ -971,9 +1018,11 @@ static void draw_pose_lane(ui_handler_t *ui, ImDrawList *draw, const layout_t *l
                                IM_COL32(64, 128, 196, 200), 3.f * scale, 0);
     }
   }
-  for (int i = 0; i < camera->pose_count; ++i)
-    draw_key(draw, lane_key_position(ui, l, lane, i), camera->pose_keys[i].interp, camera->pose_keys[i].ease.mode,
-             ed->selected_channel == CAMERA_CHANNEL_POSE && ed->selected_key == i, scale);
+  for (int i = 0; i < camera->pose_count; ++i) {
+    const bool selected = ed->selected_channel == CAMERA_CHANNEL_POSE && ed->selected_key == i;
+    if (camera_key_roves(camera, i)) draw_rove_key(draw, lane_key_position(ui, l, lane, i), selected, scale);
+    else draw_key(draw, lane_key_position(ui, l, lane, i), camera->pose_keys[i].interp, camera->pose_keys[i].ease.mode, selected, scale);
+  }
   if (camera->pose_count == 0) {
     char hint[160];
     keybind_entry_t *bind = keybinds_get_binding_for_action(&ui->keybinds, ACTION_CAMERA_INSERT_KEY, 0);
@@ -1181,9 +1230,14 @@ static void draw_graph(ui_handler_t *ui, ImDrawList *draw, const layout_t *l) {
       ImDrawList_AddCircleFilled(draw, tip, 5.f * scale, HANDLE_COLOR, 12);
     }
   }
-  for (int i = 0; i < camera_channel_count(camera, channel); ++i)
+  for (int i = 0; i < camera_channel_count(camera, channel); ++i) {
+    if (channel == CAMERA_CHANNEL_POSE && camera_key_roves(camera, i)) {
+      draw_rove_key(draw, graph_key_position(ui, l, i), i == selected, scale);
+      continue;
+    }
     draw_key(draw, graph_key_position(ui, l, i), *camera_channel_key_interp((camera_timeline_t *)camera, channel, i),
              camera_channel_key_ease((camera_timeline_t *)camera, channel, i)->mode, i == selected, scale);
+  }
   if (camera_channel_count(camera, channel) == 0)
     ImDrawList_AddText_Vec2(draw, (ImVec2){l->x0 + 10.f * scale, l->graph_top + 10.f * scale},
                             igGetColorU32_Col(ImGuiCol_TextDisabled, 1.f), "No keys on this channel. Double-click to add one.", NULL);
@@ -1262,6 +1316,15 @@ static void key_menu(ui_handler_t *ui) {
   const double tps = ticks_per_second(ui);
   const camera_channel_t channel = g_menu_channel;
   const int key = g_menu_key;
+  if (channel == CAMERA_CHANNEL_POSE && camera_key_roves(camera, key)) {
+    // Its time and ease are the path's.
+    if (igMenuItem_Bool("Timed by the path", NULL, true, true)) set_rove(ui, key, false);
+    shot_menu_items(ui, camera->pose_keys[key].time);
+    igSeparator();
+    if (igMenuItem_Bool("Move playhead here", NULL, false, true)) set_playhead(ui, camera->pose_keys[key].time);
+    if (igMenuItem_Bool("Delete key", NULL, false, true)) delete_key(ui, channel, key);
+    return;
+  }
   if (channel == CAMERA_CHANNEL_FOCUS) {
     igTextDisabled("About");
     const int picked = track_menu_items(ui, camera->focus_keys[key].track);
@@ -1288,6 +1351,11 @@ static void key_menu(ui_handler_t *ui) {
       if (opened) edit_end(ui);
     }
   if (igMenuItem_Bool("Easy ease", binding_text(ui, ACTION_CAMERA_EASY_EASE), false, true)) easy_ease(ui, channel, key);
+  if (channel == CAMERA_CHANNEL_POSE) {
+    igSeparator();
+    if (igMenuItem_Bool("Timed by the path", NULL, false, can_rove(camera, key))) set_rove(ui, key, true);
+    shot_menu_items(ui, camera->pose_keys[key].time);
+  }
   igSeparator();
   if (igMenuItem_Bool("Move playhead here", NULL, false, true)) set_playhead(ui, camera_channel_key_time(camera, channel, key));
   if (channel == CAMERA_CHANNEL_POSE && igMenuItem_Bool("Set from view", NULL, false, true)) {
@@ -1316,11 +1384,7 @@ static void empty_menu(ui_handler_t *ui) {
       set_playhead(ui, g_menu_time);
       key_current_view(ui);
     }
-    if (igMenuItem_Bool("Even out speed", NULL, false, ui->camera_timeline.pose_count > 2)) {
-      const bool opened = edit_begin(ui, "Even out camera speed");
-      camera_even_speed(&ui->camera_timeline);
-      if (opened) edit_end(ui);
-    }
+    shot_menu_items(ui, g_menu_time);
   }
 }
 
@@ -1418,10 +1482,10 @@ static void drag_handle(ui_handler_t *ui, const layout_t *l, ImVec2 mouse) {
   camera_editor_t *ed = &ui->camera_editor;
   camera_timeline_t *camera = &ui->camera_timeline;
   const int key = g_drag.key, side = g_drag.side;
-  const int count = camera_channel_count(camera, g_drag.channel);
-  if (key < 0 || key >= count || key + side < 0 || key + side >= count) return;
+  const int other = camera_timing_neighbor(camera, g_drag.channel, key, side);
+  if (other < 0) return;
   const double key_time = camera_channel_key_time(camera, g_drag.channel, key);
-  const double span = fabs(camera_channel_key_time(camera, g_drag.channel, key + side) - key_time);
+  const double span = fabs(camera_channel_key_time(camera, g_drag.channel, other) - key_time);
   const double reach = fmax(span * 0.01, fmin(span, side * (time_of(ed, l, mouse.x) - key_time)));
   const double key_value = camera_curve_key_value(camera, g_drag.channel, key, l->distances);
   const double slope = (graph_value(l, mouse.y) - key_value) * side / reach;
@@ -1698,6 +1762,13 @@ static void inspect_pose(ui_handler_t *ui, int index) {
   camera_pose_key_t *key = &camera->pose_keys[index];
   const bool is_3d = game_is_3d(&ui->gfx_handler->game_host);
   camera_pose_t *pose = &key->pose;
+  bool rove = key->rove;
+  if (!can_rove(camera, index)) igBeginDisabled(true);
+  if (igCheckbox("Timed by the path", &rove)) set_rove(ui, index, rove);
+  if (!can_rove(camera, index)) igEndDisabled();
+  if (camera_key_roves(camera, index))
+    igTextDisabled("Its time follows from its place on the path: the camera keeps one pace from the fixed key before it to "
+                   "the one after, eased only there.");
   igSeparatorText("View");
   if (is_3d) {
     igDragFloat3("Position", pose->eye, 0.05f, 0.f, 0.f, "%.2f", 0);
@@ -1827,13 +1898,17 @@ static void inspect_key(ui_handler_t *ui) {
   snprintf(title, sizeof(title), "%s key %d of %d", CHANNEL_NAMES[channel], index + 1, camera_channel_count(camera, channel));
   igSeparatorText(title);
 
+  // A roving key's time is the path's.
+  const bool roving = channel == CAMERA_CHANNEL_POSE && camera_key_roves(camera, index);
   double time = camera_channel_key_time(camera, channel, index);
   const double zero = 0.0, most = 1e6;
+  if (roving) igBeginDisabled(true);
   if (igDragScalar("Time", ImGuiDataType_Double, &time, 0.01f, &zero, &most, "%.3f s", ImGuiSliderFlags_AlwaysClamp)) {
     const int moved = camera_move_key(camera, channel, index, time);
     if (moved >= 0) select_key(ui, channel, moved);
   }
   track_item(ui, "Retime camera key");
+  if (roving) igEndDisabled();
   if (ed->selected_key < 0) return;
   const int key = ed->selected_key;
 
@@ -1865,7 +1940,7 @@ static void inspect_key(ui_handler_t *ui) {
   }
   default: break;
   }
-  if (channel != CAMERA_CHANNEL_FOCUS) inspect_timing(ui, channel, key);
+  if (channel != CAMERA_CHANNEL_FOCUS && !camera_key_roves(camera, key)) inspect_timing(ui, channel, key);
   igSpacing();
   if (igButton("Move playhead here", (ImVec2){0, 0})) set_playhead(ui, camera_channel_key_time(camera, channel, key));
   igSameLine(0.f, 8.f * gfx_get_ui_scale());

@@ -119,6 +119,8 @@ static bool reader_f32(byte_reader_t *reader, float *out);
 
 static bool buffer_f64(byte_buffer_t *buffer, double value);
 static bool reader_f64(byte_reader_t *reader, double *out);
+static bool buffer_u8(byte_buffer_t *buffer, uint8_t value);
+static bool reader_u8(byte_reader_t *reader, uint8_t *out);
 
 static bool write_camera_keys_header(byte_buffer_t *buffer, double time, int interp, const camera_ease_t *ease) {
   return buffer_f64(buffer, time) && buffer_i32(buffer, interp) && buffer_i32(buffer, ease->mode) &&
@@ -156,6 +158,8 @@ static bool write_camera_timeline(byte_buffer_t *buffer, const camera_timeline_t
     for (int h = 0; h < 4; ++h)
       for (int v = 0; v < 3; ++v)
         if (!buffer_f32(buffer, handles[h][v])) return false;
+    // Version 31: timed by the path.
+    if (!buffer_u8(buffer, key->rove ? 1 : 0)) return false;
   }
   const camera_influence_key_t *influence[2] = {camera->follow_keys, camera->aim_keys};
   const int counts[2] = {camera->follow_count, camera->aim_count};
@@ -252,6 +256,9 @@ static bool read_camera_timeline(byte_reader_t *reader, camera_timeline_t *camer
         for (int v = 0; v < 3; ++v)
           if (!reader_f32(reader, &handles[h][v]) || !isfinite(handles[h][v])) return false;
     }
+    uint8_t rove = 0;
+    if (version >= 31 && (!reader_u8(reader, &rove) || rove > 1)) return false;
+    key->rove = rove != 0;
   }
   camera_influence_key_t *influence[2] = {camera->follow_keys, camera->aim_keys};
   int *counts[2] = {&camera->follow_count, &camera->aim_count};
@@ -267,6 +274,8 @@ static bool read_camera_timeline(byte_reader_t *reader, camera_timeline_t *camer
     }
   }
   if (version == 21) camera_pose_eases_from_absolute(camera);
+  // Before version 31 automatic keys at the ends of a shot came to rest; such a project keeps them so.
+  if (version < 31) camera_pose_stop_open_ends(camera);
   if (version < 30) return true;
   if (!reader_u32(reader, &count) || count > CAMERA_MAX_FOCUS_KEYS) return false;
   camera->focus_count = (int)count;

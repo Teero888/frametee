@@ -82,11 +82,11 @@ static void pose(void) {
   camera_insert_pose_key(&camera, 2.0, &c, CAMERA_INTERP_SMOOTH);
   near(camera_eval_pose(&camera, 0.0).eye[0], 0.0);
   near(camera_eval_pose(&camera, 2.0).eye[0], 2.0);
-  // Passes through the middle key without stopping, starts and ends at rest.
+  // Passes through the middle key without stopping, and keeps its pace at the ends of the shot.
   const double through = (camera_eval_pose(&camera, 1.01).eye[0] - camera_eval_pose(&camera, 0.99).eye[0]) / 0.02;
   assert(through > 0.9);
   const double start = camera_eval_pose(&camera, 0.001).eye[0] / 0.001;
-  assert(start < 0.05);
+  assert(fabs(start - 1.0) < 0.05);
 
   // A key on the same spot as its neighbour holds still between them.
   camera_pose_t d = at_x(1.f);
@@ -217,19 +217,45 @@ static void handles(void) {
   }
   assert(fabs(speeds[0] - speeds[1]) < 0.05 * speeds[0]);
 
-  // Even speed retimes the middle key to where the distance puts it.
+  // Timed by the path: the middle key goes where the distance puts it, and with automatic ends the
+  // camera keeps one pace from the first frame of the shot to the last.
   camera_timeline_default(&camera);
   camera_pose_t c0 = at_x(0.f), c1 = at_x(1.f), c2 = at_x(4.f);
   camera_insert_pose_key(&camera, 0.0, &c0, CAMERA_INTERP_SMOOTH);
   camera_insert_pose_key(&camera, 2.0, &c1, CAMERA_INTERP_SMOOTH);
   camera_insert_pose_key(&camera, 4.0, &c2, CAMERA_INTERP_SMOOTH);
-  camera_even_speed(&camera);
+  assert(camera_shot_rove(&camera, 1.0, true));
+  assert(!camera_key_roves(&camera, 0) && camera_key_roves(&camera, 1) && !camera_key_roves(&camera, 2));
   near(camera.pose_keys[1].time, 1.0);
+  for (double t = 0.1; t < 4.0; t += 0.3) near(camera_eval_pose(&camera, t).eye[0], t);
   double distances[CAMERA_MAX_POSE_KEYS];
   camera_pose_distances(&camera, distances);
   near(distances[2], 4.0);
-  near(camera_curve_value(&camera, CAMERA_CHANNEL_POSE, 4.0, TPS, distances), 4.0);
   near(camera_curve_value(&camera, CAMERA_CHANNEL_POSE, 1.0, TPS, NULL), 1.0);
+  near(camera_curve_key_value(&camera, CAMERA_CHANNEL_POSE, 1, NULL), 1.0);
+  assert(camera_timing_neighbor(&camera, CAMERA_CHANNEL_POSE, 0, 1) == 2);
+  assert(camera_timing_neighbor(&camera, CAMERA_CHANNEL_POSE, 1, 1) == -1);
+
+  // Its time is the path's: moving it does nothing, moving the fixed end takes it along.
+  assert(camera_move_key(&camera, CAMERA_CHANNEL_POSE, 1, 3.0) == 1);
+  near(camera.pose_keys[1].time, 1.0);
+  assert(camera_move_key(&camera, CAMERA_CHANNEL_POSE, 2, 8.0) == 2);
+  near(camera.pose_keys[1].time, 2.0);
+  near(camera_eval_pose(&camera, 6.0).eye[0], 3.0);
+
+  // Fixed again, it stays where it was.
+  assert(camera_shot_rove(&camera, 1.0, false));
+  assert(!camera_key_roves(&camera, 1));
+  near(camera.pose_keys[1].time, 2.0);
+
+  // The ends of a shot keep their pace; a project from before they did gets ones that stop.
+  camera_timeline_default(&camera);
+  camera_insert_pose_key(&camera, 0.0, &c0, CAMERA_INTERP_SMOOTH);
+  camera_insert_pose_key(&camera, 4.0, &c2, CAMERA_INTERP_SMOOTH);
+  near(camera_eval_pose(&camera, 0.2).eye[0], 0.2);
+  camera_pose_stop_open_ends(&camera);
+  assert(camera_eval_pose(&camera, 0.2).eye[0] < 0.1);
+  near(camera_eval_pose(&camera, 2.0).eye[0], 2.0);
 }
 
 static void timing(void) {

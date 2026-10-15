@@ -117,7 +117,11 @@ int camera_insert_pose_key(camera_timeline_t *camera, double time, const camera_
   key.time = time;
   key.interp = interp;
   key.pose = *pose;
-  return array_insert(channel_array(camera, CAMERA_CHANNEL_POSE), &key);
+  // A key goes onto the path where its time falls among the roving keys' times, so those must be current.
+  camera_time_roving_keys(camera);
+  const int index = array_insert(channel_array(camera, CAMERA_CHANNEL_POSE), &key);
+  camera_time_roving_keys(camera);
+  return index;
 }
 
 int camera_insert_influence_key(camera_timeline_t *camera, camera_channel_t channel, double time, float value,
@@ -147,6 +151,7 @@ void camera_delete_key(camera_timeline_t *camera, camera_channel_t channel, int 
   if (index < 0 || index >= *array.count) return;
   memmove(slot(array, index), slot(array, index + 1), (size_t)(*array.count - index - 1) * array.size);
   --*array.count;
+  if (channel == CAMERA_CHANNEL_POSE) camera_time_roving_keys(camera);
 }
 
 int camera_move_key(camera_timeline_t *camera, camera_channel_t channel, int index, double time) {
@@ -154,6 +159,21 @@ int camera_move_key(camera_timeline_t *camera, camera_channel_t channel, int ind
   if (index < 0 || index >= *array.count) return -1;
   if (!isfinite(time)) return index;
   time = fmax(0.0, time);
+  if (channel == CAMERA_CHANNEL_POSE) {
+    // A roving key's time is the path's. A key that ends a roving stretch stays between its fixed
+    // neighbours, and the roving keys follow it: the path keeps its order.
+    if (camera_key_roves(camera, index)) return index;
+    if ((index > 0 && camera_key_roves(camera, index - 1)) ||
+        (index + 1 < camera->pose_count && camera_key_roves(camera, index + 1))) {
+      const int before = camera_timing_neighbor(camera, channel, index, -1);
+      const int after = camera_timing_neighbor(camera, channel, index, 1);
+      const double low = before >= 0 ? camera->pose_keys[before].time + 4.0 * KEY_EPSILON * (index - before) : 0.0;
+      const double high = after >= 0 ? camera->pose_keys[after].time - 4.0 * KEY_EPSILON * (after - index) : INFINITY;
+      camera->pose_keys[index].time = fmin(fmax(time, low), high);
+      camera_time_roving_keys(camera);
+      return index;
+    }
+  }
   for (int i = 0; i < *array.count; ++i)
     if (i != index && fabs(slot_time(array, i) - time) <= KEY_EPSILON) return index;
   union {
@@ -165,7 +185,9 @@ int camera_move_key(camera_timeline_t *camera, camera_channel_t channel, int ind
   memcpy(&moved, slot(array, index), array.size);
   moved.pose.time = time; // the common first member
   camera_delete_key(camera, channel, index);
-  return array_insert(array, &moved);
+  const int moved_to = array_insert(array, &moved);
+  if (channel == CAMERA_CHANNEL_POSE) camera_time_roving_keys(camera);
+  return moved_to;
 }
 
 int camera_find_key(const camera_timeline_t *camera, camera_channel_t channel, double time, double tolerance) {
@@ -189,6 +211,7 @@ void camera_ripple(camera_timeline_t *camera, double from, double delta) {
       if (slot_time(array, i) >= from - KEY_EPSILON) *(double *)slot(array, i) = fmax(0.0, slot_time(array, i) + delta);
   }
   if (camera->range_set && camera->range_end >= from) camera->range_end += delta;
+  camera_time_roving_keys(camera);
 }
 
 double camera_last_key_time(const camera_timeline_t *camera) {
@@ -395,7 +418,7 @@ typedef struct curve_t {
   const camera_timeline_t *camera;
   camera_channel_t channel;
   key_array_t array;
-  int count;
+  int count; // keys the curve runs through
   double tps;
   int base;
   double base_distance;
@@ -403,18 +426,59 @@ typedef struct curve_t {
   // Segment lengths near `base`, measured once per evaluation.
   double lengths[LENGTH_CACHE];
   unsigned measured;
+  // Pose with roving keys: the keys the timing runs through, as pose key
+  // indices. The roving ones are passed wherever their place on the path falls.
+  bool mapped;
+  int keys[CAMERA_MAX_POSE_KEYS];
 } curve_t;
+
+bool camera_key_roves(const camera_timeline_t *camera, int index) {
+  const camera_pose_key_t *keys = camera->pose_keys;
+  return index > 0 && index + 1 < camera->pose_count && keys[index].rove && keys[index].interp != CAMERA_INTERP_HOLD &&
+         keys[index - 1].interp != CAMERA_INTERP_HOLD;
+}
 
 static curve_t curve_for(const camera_timeline_t *camera, camera_channel_t channel, double tps, const double *distances) {
   curve_t curve;
-  memset(&curve, 0, sizeof(curve));
+  memset(&curve, 0, offsetof(curve_t, keys));
   curve.camera = camera;
   curve.channel = channel;
   curve.array = channel_array(camera, channel);
   curve.count = *curve.array.count;
   curve.tps = tps;
   curve.distances = distances;
+  if (channel == CAMERA_CHANNEL_POSE) {
+    int count = 0;
+    for (int i = 0; i < camera->pose_count; ++i)
+      if (!camera_key_roves(camera, i)) curve.keys[count++] = i;
+    curve.mapped = count != camera->pose_count;
+    curve.count = count;
+  }
   return curve;
+}
+
+// The pose key of curve key `k`, and that key's shared head.
+static int curve_pose_index(const curve_t *curve, int k) { return curve->mapped ? curve->keys[k] : k; }
+static key_head_t *curve_head(const curve_t *curve, int k) { return slot_head(curve->array, curve_pose_index(curve, k)); }
+static double curve_time(const curve_t *curve, int k) { return curve_head(curve, k)->time; }
+
+// The curve segment [k, k + 1] that contains `time`, for the curve's first key <= time < its last.
+static int curve_segment(const curve_t *curve, double time) {
+  int low = 0, high = curve->count - 1;
+  while (high - low > 1) {
+    const int middle = (low + high) / 2;
+    if (curve_time(curve, middle) <= time) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+
+// The curve key of key `index`, or -1 for a roving pose key, which has none.
+static int curve_key_of(const curve_t *curve, int index) {
+  if (!curve->mapped) return index >= 0 && index < curve->count ? index : -1;
+  for (int k = 0; k < curve->count; ++k)
+    if (curve->keys[k] == index) return k;
+  return -1;
 }
 
 static void curve_rebase(curve_t *curve, int base) {
@@ -422,14 +486,23 @@ static void curve_rebase(curve_t *curve, int base) {
   curve->measured = 0;
 }
 
-// Pose segment `index`'s length, from the caller's distances, the cache, or
-// by measuring it.
+// The path's length between curve keys `index` and `index + 1`, through any
+// roving keys between them.
+static double curve_span_length(curve_t *curve, int index) {
+  double length = 0.0;
+  for (int i = curve_pose_index(curve, index); i < curve_pose_index(curve, index + 1); ++i)
+    length += segment_length(curve->camera, i);
+  return length;
+}
+
+// That length from the caller's distances, the cache, or by measuring it.
 static double curve_length(curve_t *curve, int index) {
-  if (curve->distances) return curve->distances[index + 1] - curve->distances[index];
+  if (curve->distances)
+    return curve->distances[curve_pose_index(curve, index + 1)] - curve->distances[curve_pose_index(curve, index)];
   const int slot = index - curve->base + LENGTH_CACHE / 2;
-  if (slot < 0 || slot >= LENGTH_CACHE) return segment_length(curve->camera, index);
+  if (slot < 0 || slot >= LENGTH_CACHE) return curve_span_length(curve, index);
   if (!(curve->measured & (1u << slot))) {
-    curve->lengths[slot] = segment_length(curve->camera, index);
+    curve->lengths[slot] = curve_span_length(curve, index);
     curve->measured |= 1u << slot;
   }
   return curve->lengths[slot];
@@ -443,7 +516,7 @@ static double key_value(curve_t *curve, int index) {
   case CAMERA_CHANNEL_FOCUS: return curve->camera->focus_keys[index].track;
   case CAMERA_CHANNEL_POSE:
   default: {
-    if (curve->distances) return curve->distances[index];
+    if (curve->distances) return curve->distances[curve_pose_index(curve, index)];
     double value = curve->base_distance;
     for (int i = curve->base; i < index; ++i) value += curve_length(curve, i);
     for (int i = index; i < curve->base; ++i) value -= curve_length(curve, i);
@@ -453,7 +526,7 @@ static double key_value(curve_t *curve, int index) {
 }
 
 static curve_key_t curve_key(curve_t *curve, int index) {
-  const key_head_t *head = slot_head(curve->array, index);
+  const key_head_t *head = curve_head(curve, index);
   return (curve_key_t){head->time, key_value(curve, index), head->interp, head->ease};
 }
 
@@ -466,13 +539,27 @@ static double monotone_slope(double left, double right) {
   return left > 0.0 ? fmin(left, right) : fmax(left, right);
 }
 
+// The camera's pace through a key between two stretches that cover the path at
+// `left` and `right` (both distance per second, never negative) over `before`
+// and `after` seconds: each side counts as much as the other side lasts, as a
+// curve through the three keys would pass, but never more than three times the
+// slower side, past which the camera would run back along the path. A stretch
+// the camera stays put on stops it there.
+static double pose_pace(double left, double right, double before, double after) {
+  if (left <= 0.0 || right <= 0.0) return 0.0;
+  const double blended = before + after > 0.0 ? (left * after + right * before) / (before + after) : fmin(left, right);
+  return fmin(blended, 3.0 * fmin(left, right));
+}
+
 // The handles an auto key gets. Inside a run of keys the curve passes through
-// with a continuous, non-overshooting slope. Where the curve starts or ends,
-// game time eases into the 1x it continues at, and everything else comes to
-// rest. A hold cuts the run, and a key after one continues along its segment.
+// with a continuous, non-overshooting slope; the camera with a steady pace.
+// Where the curve starts or ends, game time eases into the 1x it continues at,
+// the camera keeps the pace of the stretch it starts or ends with, and
+// everything else comes to rest. A hold cuts the run, and a key after one
+// continues along its segment.
 static camera_ease_t auto_ease(curve_t *curve, int index) {
   const curve_key_t key = curve_key(curve, index);
-  const bool has_left = index > 0 && slot_head(curve->array, index - 1)->interp != CAMERA_INTERP_HOLD;
+  const bool has_left = index > 0 && curve_head(curve, index - 1)->interp != CAMERA_INTERP_HOLD;
   const bool has_right = index + 1 < curve->count && key.interp != CAMERA_INTERP_HOLD;
   double left = 0.0, right = 0.0;
   if (has_left) {
@@ -484,7 +571,10 @@ static camera_ease_t auto_ease(curve_t *curve, int index) {
     right = (next.value - key.value) / (next.time - key.time);
   }
   double slope = 0.0;
-  if (has_left && has_right) slope = monotone_slope(left, right);
+  if (has_left && has_right && curve->channel == CAMERA_CHANNEL_POSE)
+    slope = pose_pace(left, right, key.time - curve_time(curve, index - 1), curve_time(curve, index + 1) - key.time);
+  else if (has_left && has_right) slope = monotone_slope(left, right);
+  else if (curve->channel == CAMERA_CHANNEL_POSE) slope = has_left ? left : right;
   else if (curve->channel == CAMERA_CHANNEL_TIME) {
     const bool open_end = index == 0 || index + 1 == curve->count;
     const double other = has_left ? left : has_right ? right : curve->tps;
@@ -500,7 +590,7 @@ static bool pose_side(curve_t *curve, int index, int side, double *span, double 
   const int other = index + side;
   if (other < 0 || other >= curve->count) return false;
   const int first = side < 0 ? other : index;
-  *span = slot_time(curve->array, first + 1) - slot_time(curve->array, first);
+  *span = curve_time(curve, first + 1) - curve_time(curve, first);
   *length = curve_length(curve, first);
   return *span > 0.0 && *length > 0.0;
 }
@@ -518,7 +608,7 @@ static float pose_to_absolute(curve_t *curve, int index, int side, double relati
 
 // A pose key's ease with its rates relative, as stored.
 static camera_ease_t pose_relative_ease(curve_t *curve, int index) {
-  const camera_ease_t *stored = &slot_head(curve->array, index)->ease;
+  const camera_ease_t *stored = &curve_head(curve, index)->ease;
   if (stored->mode != CAMERA_HANDLE_AUTO) return *stored;
   camera_ease_t ease = auto_ease(curve, index);
   ease.in_slope = pose_to_relative(curve, index, -1, ease.in_slope);
@@ -528,7 +618,7 @@ static camera_ease_t pose_relative_ease(curve_t *curve, int index) {
 
 // Any key's ease in value per second.
 static camera_ease_t resolved_ease(curve_t *curve, int index) {
-  const camera_ease_t *stored = &slot_head(curve->array, index)->ease;
+  const camera_ease_t *stored = &curve_head(curve, index)->ease;
   if (curve->channel != CAMERA_CHANNEL_POSE) return stored->mode == CAMERA_HANDLE_AUTO ? auto_ease(curve, index) : *stored;
   camera_ease_t ease = pose_relative_ease(curve, index);
   ease.in_slope = pose_to_absolute(curve, index, -1, ease.in_slope);
@@ -589,14 +679,15 @@ camera_ease_t camera_curve_key_ease(const camera_timeline_t *camera, camera_chan
   curve_t curve = curve_for(camera, channel, tps, NULL);
   camera_ease_t none;
   memset(&none, 0, sizeof(none));
-  if (index < 0 || index >= curve.count) return none;
-  curve_rebase(&curve, index);
-  return resolved_ease(&curve, index);
+  const int k = curve_key_of(&curve, index);
+  if (k < 0) return none;
+  curve_rebase(&curve, k);
+  return resolved_ease(&curve, k);
 }
 
 // Stores a rate given in value per second on one side of a key.
 static void store_slope(curve_t *curve, int index, int side, float slope) {
-  camera_ease_t *ease = &slot_head(curve->array, index)->ease;
+  camera_ease_t *ease = &curve_head(curve, index)->ease;
   const float stored = curve->channel == CAMERA_CHANNEL_POSE ? pose_to_relative(curve, index, side, slope) : slope;
   if (side < 0) ease->in_slope = stored;
   else ease->out_slope = stored;
@@ -606,15 +697,17 @@ void camera_set_ease_mode(camera_timeline_t *camera, camera_channel_t channel, i
   camera_ease_t *ease = camera_channel_key_ease(camera, channel, index);
   if (!ease || mode < 0 || mode >= CAMERA_HANDLE_COUNT) return;
   curve_t curve = curve_for(camera, channel, tps, NULL);
-  curve_rebase(&curve, index);
+  const int k = curve_key_of(&curve, index);
+  if (k < 0) return;
+  curve_rebase(&curve, k);
   if (ease->mode == CAMERA_HANDLE_AUTO && mode != CAMERA_HANDLE_AUTO)
-    *ease = channel == CAMERA_CHANNEL_POSE ? pose_relative_ease(&curve, index) : auto_ease(&curve, index);
+    *ease = channel == CAMERA_CHANNEL_POSE ? pose_relative_ease(&curve, k) : auto_ease(&curve, k);
   if (mode == CAMERA_HANDLE_ALIGNED && ease->mode == CAMERA_HANDLE_FREE) {
     // One speed through the key: the mean of the two sides.
-    const camera_ease_t current = resolved_ease(&curve, index);
+    const camera_ease_t current = resolved_ease(&curve, k);
     const float mean = 0.5f * (current.in_slope + current.out_slope);
-    store_slope(&curve, index, -1, mean);
-    store_slope(&curve, index, 1, mean);
+    store_slope(&curve, k, -1, mean);
+    store_slope(&curve, k, 1, mean);
   }
   ease->mode = mode;
 }
@@ -623,25 +716,37 @@ void camera_set_ease_handle(camera_timeline_t *camera, camera_channel_t channel,
                             float influence, double tps) {
   camera_ease_t *ease = camera_channel_key_ease(camera, channel, index);
   if (!ease || !isfinite(slope) || !isfinite(influence)) return;
-  if (ease->mode == CAMERA_HANDLE_AUTO) camera_set_ease_mode(camera, channel, index, CAMERA_HANDLE_ALIGNED, tps);
   curve_t curve = curve_for(camera, channel, tps, NULL);
-  curve_rebase(&curve, index);
+  const int k = curve_key_of(&curve, index);
+  if (k < 0) return;
+  if (ease->mode == CAMERA_HANDLE_AUTO) camera_set_ease_mode(camera, channel, index, CAMERA_HANDLE_ALIGNED, tps);
+  curve_rebase(&curve, k);
   influence = fminf(1.f, fmaxf(0.01f, influence));
   if (side < 0) ease->in_influence = influence;
   else ease->out_influence = influence;
-  store_slope(&curve, index, side, slope);
+  store_slope(&curve, k, side, slope);
   // Aligned keys pass through at one speed.
-  if (ease->mode == CAMERA_HANDLE_ALIGNED) store_slope(&curve, index, -side, slope);
+  if (ease->mode == CAMERA_HANDLE_ALIGNED) store_slope(&curve, k, -side, slope);
 }
 
 void camera_pose_eases_from_absolute(camera_timeline_t *camera) {
   curve_t curve = curve_for(camera, CAMERA_CHANNEL_POSE, 0.0, NULL);
-  for (int i = 0; i < camera->pose_count; ++i) {
-    camera_ease_t *ease = &camera->pose_keys[i].ease;
+  for (int k = 0; k < curve.count; ++k) {
+    camera_ease_t *ease = &curve_head(&curve, k)->ease;
     if (ease->mode == CAMERA_HANDLE_AUTO) continue;
-    curve_rebase(&curve, i);
-    ease->in_slope = pose_to_relative(&curve, i, -1, ease->in_slope);
-    ease->out_slope = pose_to_relative(&curve, i, 1, ease->out_slope);
+    curve_rebase(&curve, k);
+    ease->in_slope = pose_to_relative(&curve, k, -1, ease->in_slope);
+    ease->out_slope = pose_to_relative(&curve, k, 1, ease->out_slope);
+  }
+}
+
+void camera_pose_stop_open_ends(camera_timeline_t *camera) {
+  const camera_pose_key_t *keys = camera->pose_keys;
+  for (int i = 0; i < camera->pose_count; ++i) {
+    const bool has_left = i > 0 && keys[i - 1].interp != CAMERA_INTERP_HOLD;
+    const bool has_right = i + 1 < camera->pose_count && keys[i].interp != CAMERA_INTERP_HOLD;
+    if (camera->pose_keys[i].ease.mode == CAMERA_HANDLE_AUTO && has_left != has_right)
+      camera->pose_keys[i].ease = (camera_ease_t){CAMERA_HANDLE_ALIGNED, 0.f, 0.f, AUTO_INFLUENCE, AUTO_INFLUENCE};
   }
 }
 
@@ -743,13 +848,15 @@ static float pose_fov(const camera_pose_t *pose) { return pose->fov_y; }
 static float pose_log_zoom(const camera_pose_t *pose) { return logf(fmaxf(pose->zoom, 1e-4f)); }
 
 // Roll, lens and zoom ride along with the camera's progress between keys,
-// smoothly through each key and at rest at the ends of a shot.
+// smoothly through each key and keeping pace at the ends of a shot, as the
+// camera does.
 static double scalar_tangent(const camera_pose_key_t *keys, int count, int index, pose_scalar_fn value) {
   const bool has_left = index > 0 && keys[index - 1].interp != CAMERA_INTERP_HOLD;
   const bool has_right = index + 1 < count && keys[index].interp != CAMERA_INTERP_HOLD;
-  if (!has_left || !has_right) return 0.0;
-  return monotone_slope(value(&keys[index].pose) - value(&keys[index - 1].pose),
-                        value(&keys[index + 1].pose) - value(&keys[index].pose));
+  const double left = has_left ? value(&keys[index].pose) - value(&keys[index - 1].pose) : 0.0;
+  const double right = has_right ? value(&keys[index + 1].pose) - value(&keys[index].pose) : 0.0;
+  if (has_left && has_right) return monotone_slope(left, right);
+  return has_left ? left : right;
 }
 
 static float blend_scalar(const camera_pose_key_t *keys, int count, int i, double u, bool smooth, pose_scalar_fn value) {
@@ -768,15 +875,25 @@ camera_pose_t camera_eval_pose(const camera_timeline_t *camera, double seconds) 
   if (seconds <= keys[0].time) return keys[0].pose;
   if (seconds >= keys[count - 1].time) return keys[count - 1].pose;
 
+  // The timing runs from one fixed key to the next; roving keys between them
+  // are passed wherever the path puts them.
   curve_t curve = curve_for(camera, CAMERA_CHANNEL_POSE, 0.0, NULL);
-  const int i = find_segment(curve.array, seconds);
-  const camera_pose_key_t *a = &keys[i];
-  if (a->interp == CAMERA_INTERP_HOLD) return a->pose;
+  const int k = curve_segment(&curve, seconds);
+  int i = curve_pose_index(&curve, k);
+  if (keys[i].interp == CAMERA_INTERP_HOLD) return keys[i].pose;
 
-  // How far along this segment's path the camera is, then where that is.
-  curve_rebase(&curve, i);
-  const double length = segment_length(camera, i);
-  const double u = fmin(1.0, fmax(0.0, curve_segment_value(&curve, i, seconds) / length));
+  // How far along the path from that key the camera is, then which piece of
+  // the path that falls on, and where on it.
+  curve_rebase(&curve, k);
+  double along = curve_segment_value(&curve, k, seconds);
+  const int end = curve_pose_index(&curve, k + 1);
+  double length = segment_length(camera, i);
+  while (i + 1 < end && along > length) {
+    along -= length;
+    length = segment_length(camera, ++i);
+  }
+  const camera_pose_key_t *a = &keys[i];
+  const double u = fmin(1.0, fmax(0.0, along / length));
   camera_pose_t out = a->pose;
   camera_path_point(camera, i, 0, u, out.eye);
   camera_path_point(camera, i, 1, u, out.target);
@@ -787,29 +904,81 @@ camera_pose_t camera_eval_pose(const camera_timeline_t *camera, double seconds) 
   return out;
 }
 
-void camera_even_speed(camera_timeline_t *camera) {
+// Roving keys
+
+void camera_time_roving_keys(camera_timeline_t *camera) {
+  curve_t curve = curve_for(camera, CAMERA_CHANNEL_POSE, 0.0, NULL);
+  if (!curve.mapped) return;
   camera_pose_key_t *keys = camera->pose_keys;
-  const int count = camera->pose_count;
-  double distances[CAMERA_MAX_POSE_KEYS];
-  camera_pose_distances(camera, distances);
-  int first = 0;
-  while (first < count) {
-    int last = first;
-    while (last + 1 < count && keys[last].interp != CAMERA_INTERP_HOLD) ++last;
-    const double travel = distances[last] - distances[first], span = keys[last].time - keys[first].time;
-    if (last - first >= 2 && travel > 0.0 && span > 0.0)
-      for (int i = first + 1; i < last; ++i) {
-        keys[i].time = keys[first].time + (distances[i] - distances[first]) / travel * span;
-        keys[i].ease.mode = CAMERA_HANDLE_AUTO;
+  for (int k = 0; k + 1 < curve.count; ++k) {
+    const int a = curve_pose_index(&curve, k), b = curve_pose_index(&curve, k + 1);
+    if (b == a + 1) continue;
+    curve_rebase(&curve, k);
+    double along = 0.0;
+    for (int r = a + 1; r < b; ++r) {
+      along += segment_length(camera, r - 1);
+      // The timing only ever moves forward along the path, so bisection finds when it gets here.
+      double low = keys[a].time, high = keys[b].time;
+      for (int iteration = 0; iteration < 48; ++iteration) {
+        const double middle = 0.5 * (low + high);
+        if (curve_segment_value(&curve, k, middle) < along) low = middle;
+        else high = middle;
       }
-    first = last + 1;
+      // Keys keep apart, so they stay in order however short the path between them.
+      keys[r].time = fmin(fmax(0.5 * (low + high), keys[r - 1].time + 4.0 * KEY_EPSILON), keys[b].time - 4.0 * KEY_EPSILON * (b - r));
+    }
   }
+}
+
+bool camera_shot_at(const camera_timeline_t *camera, double time, int *first, int *last) {
+  const camera_pose_key_t *keys = camera->pose_keys;
+  for (int start = 0; start < camera->pose_count;) {
+    int stop = start;
+    while (stop + 1 < camera->pose_count && keys[stop].interp != CAMERA_INTERP_HOLD) ++stop;
+    if (time >= keys[start].time - KEY_EPSILON && time <= keys[stop].time + KEY_EPSILON) {
+      *first = start;
+      *last = stop;
+      return true;
+    }
+    start = stop + 1;
+  }
+  return false;
+}
+
+bool camera_shot_rove(camera_timeline_t *camera, double time, bool rove) {
+  int first, last;
+  if (!camera_shot_at(camera, time, &first, &last) || last - first < 2) return false;
+  for (int i = first + 1; i < last; ++i) {
+    // A key that stops roving keeps its place in time and gets automatic handles.
+    if (camera->pose_keys[i].rove && !rove) camera->pose_keys[i].ease.mode = CAMERA_HANDLE_AUTO;
+    camera->pose_keys[i].rove = rove;
+  }
+  camera_time_roving_keys(camera);
+  return true;
+}
+
+int camera_timing_neighbor(const camera_timeline_t *camera, camera_channel_t channel, int index, int side) {
+  const int count = camera_channel_count(camera, channel);
+  if (index < 0 || index >= count) return -1;
+  if (channel != CAMERA_CHANNEL_POSE) return index + side >= 0 && index + side < count ? index + side : -1;
+  if (camera_key_roves(camera, index)) return -1;
+  int other = index + side;
+  while (other >= 0 && other < count && camera_key_roves(camera, other)) other += side;
+  return other >= 0 && other < count ? other : -1;
 }
 
 // Curves for the graph editor
 
 double camera_curve_key_value(const camera_timeline_t *camera, camera_channel_t channel, int index,
                               const double *distances) {
+  if (channel == CAMERA_CHANNEL_POSE) {
+    // (also for a roving key, which the timing curve does not hold)
+    if (index < 0 || index >= camera->pose_count) return 0.0;
+    if (distances) return distances[index];
+    double distance = 0.0;
+    for (int i = 0; i < index; ++i) distance += segment_length(camera, i);
+    return distance;
+  }
   curve_t curve = curve_for(camera, channel, 0.0, distances);
   if (index < 0 || index >= curve.count) return 0.0;
   return key_value(&curve, index);
@@ -821,13 +990,13 @@ double camera_curve_value(const camera_timeline_t *camera, camera_channel_t chan
   if (channel == CAMERA_CHANNEL_FOCUS) return camera_focus_key_track(camera, seconds);
   curve_t curve = curve_for(camera, channel, tps, distances);
   if (curve.count == 0) return 0.0;
-  if (seconds <= slot_time(curve.array, 0)) return key_value(&curve, 0);
-  if (seconds >= slot_time(curve.array, curve.count - 1)) return key_value(&curve, curve.count - 1);
-  const int i = find_segment(curve.array, seconds);
+  if (seconds <= curve_time(&curve, 0)) return key_value(&curve, 0);
+  if (seconds >= curve_time(&curve, curve.count - 1)) return key_value(&curve, curve.count - 1);
+  const int i = curve_segment(&curve, seconds);
   if (channel == CAMERA_CHANNEL_POSE && !distances) {
     // Measure only from the segment's start, then add what came before.
     double before = 0.0;
-    for (int k = 0; k < i; ++k) before += segment_length(camera, k);
+    for (int k = 0; k < curve_pose_index(&curve, i); ++k) before += segment_length(camera, k);
     curve_rebase(&curve, i);
     curve.base_distance = before;
   }

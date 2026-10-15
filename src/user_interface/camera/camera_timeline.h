@@ -80,6 +80,11 @@ typedef struct camera_pose_key_t {
   camera_ease_t ease; // on the distance travelled along the path
   camera_pose_t pose;
   camera_spatial_t spatial;
+  // Timed by the path (After Effects' roving keys): its time follows from
+  // where it lies on the path, and the timing runs from the fixed key before it
+  // to the fixed key after it as one curve, shaped by their eases alone. Only
+  // keys inside a shot rove; its time and ease are then not its own.
+  bool rove;
 } camera_pose_key_t;
 
 typedef struct camera_time_key_t {
@@ -209,15 +214,33 @@ void camera_set_spatial_mode(camera_timeline_t *camera, int index, int mode);
 // The position on the path between key `index` and the next, at fraction `u`
 // of that segment's length. point 0: eye, 1: target.
 void camera_path_point(const camera_timeline_t *camera, int index, int point, double u, float out[3]);
-// Retimes the keys inside each shot so the camera travels its whole path at
-// one speed, keeping the shot's first and last key where they are.
-void camera_even_speed(camera_timeline_t *camera);
 
 // Key arrays by channel, for editing code that does not care which it holds.
 int camera_channel_count(const camera_timeline_t *camera, camera_channel_t channel);
 double camera_channel_key_time(const camera_timeline_t *camera, camera_channel_t channel, int index);
 int *camera_channel_key_interp(camera_timeline_t *camera, camera_channel_t channel, int index);
 camera_ease_t *camera_channel_key_ease(camera_timeline_t *camera, camera_channel_t channel, int index);
+
+// Whether pose key `index` is timed by the path: marked to rove, and inside a
+// shot rather than at either end of one.
+bool camera_key_roves(const camera_timeline_t *camera, int index);
+// Puts each roving key at the time the path gives it. The timing never reads
+// their times, but everything that shows or orders keys does: call it after
+// the path or a fixed key changes.
+void camera_time_roving_keys(camera_timeline_t *camera);
+// Marks every key inside the shot at `time` as roving (or fixed), so the
+// camera keeps one pace through it. Returns false when no shot of three keys
+// or more is there.
+bool camera_shot_rove(camera_timeline_t *camera, double time, bool rove);
+// The keys of the shot at `time` (a run of pose keys between cuts), or false.
+bool camera_shot_at(const camera_timeline_t *camera, double time, int *first, int *last);
+// The key the timing runs to from key `index` on `side` (-1 before, 1 after):
+// the neighbour, but for the pose the next fixed key past roving ones. -1 for
+// none, or when `index` itself roves.
+int camera_timing_neighbor(const camera_timeline_t *camera, camera_channel_t channel, int index, int side);
+// Pose keys at either end of a shot once came to rest when automatic; they
+// keep their pace now. For loading older projects: gives those keys that stop.
+void camera_pose_stop_open_ends(camera_timeline_t *camera);
 
 // Inserts in time order and returns the key's index, replacing a key at the
 // same time. -1 when the channel is full or the time is not finite.
