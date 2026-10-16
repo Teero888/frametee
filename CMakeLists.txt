@@ -149,13 +149,17 @@ if(NOT glfw3_FOUND)
     # GLFW 3.4 defaults to both Wayland and X11 on Linux. Keep both backends
     # so one binary works in either session; do not force Wayland off here.
     # (the release archive rather than a clone: the patch is done by CMake, so
-    # nothing but CMake is needed to fetch and patch it)
+    # nothing but CMake is needed to fetch and patch it; the replacement's hash is
+    # in the command so that a fetched source is patched again when it changes)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS cmake/glfw/win32_poll_events.c.in)
+    file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/cmake/glfw/win32_poll_events.c.in GLFW_PATCH_SHA256)
     FetchContent_Declare(
         glfw
         URL https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip
         URL_HASH SHA256=b5ec004b2712fd08e8861dc271428f048775200a2df719ccf575143ba749a3e9
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/glfw/patch_win32_mouse_motion.cmake
+        PATCH_COMMAND ${CMAKE_COMMAND} -DREPLACEMENT_SHA256=${GLFW_PATCH_SHA256}
+                      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/glfw/patch_win32_mouse_motion.cmake
     )
     FetchContent_MakeAvailable(glfw)
     # the fetched library is static and ends up inside loadable game modules

@@ -537,9 +537,8 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   }
 
   // Begin Command Buffer
-  err = vkResetFences(handler->g_device, 1, &fd->Fence);
-  check_vk_result(err);
-
+  // (its fence is reset only by the submit that signals it again, in gfx_end_frame(): a frame that is
+  // skipped from here on would leave it unsignaled, and the next wait for it would never return)
   err = vkResetCommandPool(handler->g_device, fd->CommandPool, 0);
   check_vk_result(err);
   VkCommandBufferBeginInfo info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
@@ -580,6 +579,9 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   bool hovered = false;
 
   if (handler->g_swap_chain_rebuild || glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
+    // The image acquired for this frame is not presented, and only a new swapchain gives it back.
+    // (minimizing gets here: the window can be minimized by the events read after the acquire)
+    handler->g_swap_chain_rebuild = true;
     // End the ImGui frame to avoid state issues, but don't render.
     igEndFrame();
     // We also need to end the render pass we started.
@@ -667,6 +669,8 @@ bool gfx_end_frame(gfx_handler_t *handler) {
                               .signalSemaphoreCount = 1,
                               .pSignalSemaphores = &render_complete_semaphore};
 
+  err = vkResetFences(handler->g_device, 1, &fd->Fence);
+  check_vk_result(err);
   err = vkQueueSubmit(handler->g_queue, 1, &submit_info, fd->Fence);
   check_vk_result(err);
 

@@ -2,56 +2,44 @@
 // without the change below
 const int frametee_glfw_win32_mouse_motion_patch = 1;
 
-static void dispatchMessageWin32(MSG* msg)
-{
-    if (msg->message == WM_QUIT)
-    {
-        // NOTE: While GLFW does not itself post WM_QUIT, other processes
-        //       may post it to this one, for example Task Manager
-        // HACK: Treat WM_QUIT as a close on all windows
-
-        _GLFWwindow* window = _glfw.windowListHead;
-        while (window)
-        {
-            _glfwInputWindowCloseRequest(window);
-            window = window->next;
-        }
-    }
-    else
-    {
-        TranslateMessage(msg);
-        DispatchMessageW(msg);
-    }
-}
-
-// Retrieves the next message that is not mouse motion
-//
-static BOOL peekDiscreteMessageWin32(MSG* msg)
-{
-    return PeekMessageW(msg, NULL, 0, WM_NCMOUSEMOVE - 1, PM_REMOVE) ||
-           PeekMessageW(msg, NULL, WM_NCMOUSEMOVE + 1, WM_MOUSEMOVE - 1, PM_REMOVE) ||
-           PeekMessageW(msg, NULL, WM_MOUSEMOVE + 1, UINT_MAX, PM_REMOVE);
-}
-
 void _glfwPollEventsWin32(void)
 {
     MSG msg;
     HWND handle;
     _GLFWwindow* window;
+    int moves = 0;
 
-    // frametee: mouse motion is taken at most once per call (see glfw/glfw#2684).
+    // frametee: the loop ends at the second mouse move (see glfw/glfw#2684).
     // Windows makes a WM_MOUSEMOVE from the hardware input whenever the queue is
     // read while the mouse has moved, so with a mouse polling at 4-8 kHz the queue
     // never reads empty while it moves: each move takes about as long to retrieve
-    // as the mouse takes to report again, and an unbounded loop spins until the
-    // mouse stops. Moves in a row are merged into the one waiting, which holds
-    // the latest position, so no motion is lost; and it is the first one waiting,
-    // so it goes before the clicks and keys that came after it. Those are drained
-    // fully, as before.
-    if (PeekMessageW(&msg, NULL, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE))
-        dispatchMessageWin32(&msg);
-    if (PeekMessageW(&msg, NULL, WM_NCMOUSEMOVE, WM_NCMOUSEMOVE, PM_REMOVE))
-        dispatchMessageWin32(&msg);
-    while (peekDiscreteMessageWin32(&msg))
-        dispatchMessageWin32(&msg);
+    // as the mouse takes to report again, and the loop spun until the mouse
+    // stopped. Moves in a row are merged into the one waiting, which holds the
+    // latest position, so ending early loses no motion. Everything else is still
+    // taken as it came, in order, as before: what is left came after that second
+    // move, and the next call takes it.
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+    {
+        if (msg.message == WM_QUIT)
+        {
+            // NOTE: While GLFW does not itself post WM_QUIT, other processes
+            //       may post it to this one, for example Task Manager
+            // HACK: Treat WM_QUIT as a close on all windows
+
+            window = _glfw.windowListHead;
+            while (window)
+            {
+                _glfwInputWindowCloseRequest(window);
+                window = window->next;
+            }
+        }
+        else
+        {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+
+        if ((msg.message == WM_MOUSEMOVE || msg.message == WM_NCMOUSEMOVE) && ++moves == 2)
+            break;
+    }
 

@@ -1,8 +1,10 @@
 # Run on GLFW 3.4's source (the working directory) as FetchContent fetches it: replaces the start of
-# the Windows event loop, _glfwPollEventsWin32, with win32_poll_events.c.in, which takes mouse motion
-# at most once per glfwPollEvents. With a mouse polling at 4-8 kHz the stock loop does not end while
-# the mouse moves (glfw/glfw#2684). Done with CMake alone, so the build needs no git or patch tool,
-# and it leaves a source it was already run on as it is.
+# the Windows event loop, _glfwPollEventsWin32, with win32_poll_events.c.in, which ends the loop at
+# the second mouse move. With a mouse polling at 4-8 kHz the stock loop does not end while the mouse
+# moves (glfw/glfw#2684). Done with CMake alone, so the build needs no git or patch tool, and it
+# leaves a source it was already run on as it is. A source with an earlier version of the
+# replacement gets this one instead (CMakeLists.txt passes the replacement's hash, so that a change
+# to it runs this again).
 #
 # It cannot go wrong quietly:
 # - the code it replaces has to be exactly GLFW 3.4's, so a newer GLFW stops the configure here until
@@ -21,7 +23,14 @@ endif()
 
 set(begin_text "void _glfwPollEventsWin32(void)\n{")
 set(end_text "    // HACK: Release modifier keys that the system did not emit KEYUP for")
-string(FIND "${source}" "${begin_text}" begin)
+# (the first line of every version of the replacement)
+set(earlier_text "// frametee refers to this on Windows")
+string(FIND "${source}" "${earlier_text}" begin)
+set(earlier TRUE)
+if(begin EQUAL -1)
+    string(FIND "${source}" "${begin_text}" begin)
+    set(earlier FALSE)
+endif()
 string(FIND "${source}" "${end_text}" end)
 if(begin EQUAL -1 OR end EQUAL -1 OR NOT end GREATER begin)
     message(FATAL_ERROR "GLFW: ${file} has no _glfwPollEventsWin32 as GLFW 3.4 has it; "
@@ -30,7 +39,7 @@ endif()
 math(EXPR length "${end} - ${begin}")
 string(SUBSTRING "${source}" ${begin} ${length} original)
 string(SHA256 original_sha256 "${original}")
-if(NOT original_sha256 STREQUAL EXPECTED_SHA256)
+if(NOT earlier AND NOT original_sha256 STREQUAL EXPECTED_SHA256)
     message(FATAL_ERROR "GLFW: _glfwPollEventsWin32 in ${file} is not GLFW 3.4's (SHA256 ${original_sha256}). "
                         "Check ${CMAKE_CURRENT_LIST_DIR}/win32_poll_events.c.in against it, then update "
                         "EXPECTED_SHA256 in ${CMAKE_CURRENT_LIST_FILE}")
