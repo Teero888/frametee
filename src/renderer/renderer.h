@@ -57,10 +57,30 @@ struct buffer_t {
 
 // An allocation a primitive path has outgrown. Freeing one at the moment of the
 // swap would pull it out from under command buffers already recorded against
-// it, so it waits here until the frame fence has completed.
+// it, so it waits here until the frame that outgrew it has completed.
 struct retired_buffer_t {
   buffer_t buffer;
+  uint64_t serial; // gfx_handler_t.frame_serial of that frame
 };
+
+// How many frames may be in flight at once: while the GPU draws one, the CPU
+// records the next. Whatever a frame writes for the GPU to read (uniforms,
+// primitives, instances) exists once per frame in flight, so the frame being
+// recorded never writes what the one being drawn reads.
+#define MAX_FRAMES_IN_FLIGHT 2
+
+// One frame in flight's uniforms and primitive streams (see renderer_state_t).
+typedef struct frame_buffers_t {
+  buffer_t ubo;
+  void *ubo_ptr;
+  buffer_t vertices, indices;
+  primitive_vertex_t *vertex_ptr;
+  uint32_t *index_ptr;
+  uint32_t vertex_capacity, index_capacity;
+  buffer_t vertices3d;
+  primitive3d_vertex_t *vertex3d_ptr;
+  uint32_t vertex3d_capacity;
+} frame_buffers_t;
 
 struct texture_t {
   uint32_t id;
@@ -105,7 +125,8 @@ struct vertex_layout_t {
   VkVertexInputAttributeDescription attrs[MAX_CUSTOM_VERTEX_ATTRS];
   uint32_t attr_count;
   bool alpha_blend;
-  bool depth_test; /* a 3D mesh pipeline: depth-tested against the world pass */
+  bool straight_alpha; /* see ft_pipeline_desc */
+  bool depth_test;     /* a 3D mesh pipeline: depth-tested against the world pass */
 };
 
 struct shader_t {
@@ -130,8 +151,12 @@ struct custom_pipeline_t {
   uint32_t instance_stride;
   uint32_t max_instances;
   uint32_t texture_count;
+  // Room for max_instances per frame in flight; instance_ptr is the current
+  // frame's, starting at instance instance_first of the buffer.
   buffer_t instance_buffer;
+  uint8_t *instance_mapped;
   uint8_t *instance_ptr;
+  uint32_t instance_first;
   uint32_t instance_count;
 };
 
@@ -327,8 +352,11 @@ struct atlas_renderer_t {
   VkSampler sampler;
   sprite_definition_t *sprite_definitions;
   uint32_t sprite_count;
+  // As in custom_pipeline_t: max_instances per frame in flight.
   buffer_t instance_buffer;
+  atlas_instance_t *instance_mapped;
   atlas_instance_t *instance_ptr;
+  uint32_t instance_first;
   uint32_t instance_count;
   uint32_t max_instances;
   uint32_t layer_width;  // Max width of a sprite, used for UV scaling
@@ -353,9 +381,12 @@ typedef enum {
   RENDER_CMD_MESH
 } render_cmd_type_t;
 
-// Uniform payload carried inline with a queued mesh draw. Small on purpose: a
-// mesh technique's per-draw constants, not a general buffer.
+// Uniform payload carried inline with a queued mesh draw: a mesh technique's
+// per-draw constants. Anything larger, up to MAX_MESH_UNIFORM_BYTES (a draw
+// carrying an entry per quad it covers), is copied to the frame's transient
+// memory instead.
 #define MAX_QUEUED_UNIFORM_BYTES 256
+#define MAX_MESH_UNIFORM_BYTES (16 * 1024)
 
 struct render_command_t {
   render_cmd_type_t type;
@@ -396,8 +427,12 @@ struct render_command_t {
       texture_t *textures[MAX_TEXTURES_PER_DRAW];
       uint32_t texture_count;
       uint8_t uniforms[MAX_QUEUED_UNIFORM_BYTES];
+      const uint8_t *large_uniforms; // in transient memory when larger than the above, else NULL
       uint32_t uniform_size;
       uint32_t first_index, index_count;
+      // Drawn only inside clip (normalized device coordinates x0, y0, x1, y1), as a scissor.
+      bool clipped;
+      float clip[4];
     } mesh_draw;
   } data;
 };
@@ -426,7 +461,16 @@ struct renderer_state_t {
   VkRenderPass preview_render_pass;
   VkFormat preview_render_format;
 
-  VkDescriptorPool frame_descriptor_pools[3];
+  // One per frame in flight, reset when its frame begins.
+  VkDescriptorPool frame_descriptor_pools[MAX_FRAMES_IN_FLIGHT];
+  // The frame in flight being recorded (gfx_handler_t.frame_slot when it began).
+  uint32_t frame_slot;
+  // Each frame in flight's uniforms and primitive streams. The fields below that
+  // they mirror (dynamic_ubo_buffer, dynamic_vertex_buffer and the rest) are those
+  // of the frame being recorded: renderer_begin_frame swaps them.
+  frame_buffers_t frame_buffers[MAX_FRAMES_IN_FLIGHT];
+  // Textures a game renders into itself (renderer_mark_texture_external).
+  uint32_t external_texture_count;
   VkCommandPool transfer_command_pool;
 
   shader_t *primitive_shader;
@@ -470,6 +514,7 @@ struct renderer_state_t {
   void *ubo_buffer_ptr;
   uint32_t ubo_buffer_offset;
   VkDeviceSize min_ubo_alignment;
+  uint32_t max_ubo_range;
 
   camera_t camera;
   // Viewport camera for a 3D game: an orbit around a point, which is what an
@@ -496,10 +541,10 @@ struct renderer_state_t {
 void check_vk_result(VkResult err);
 int renderer_init(gfx_handler_t *handler);
 void renderer_cleanup(gfx_handler_t *handler);
-// Called only after the preceding frame fence (or the whole device) has
-// completed. Dynamic allocations replaced while recording that frame can then
-// be released without guessing how many frames the GPU may have in flight.
-void renderer_frame_completed(gfx_handler_t *handler);
+// Every frame up to `serial` has completed on the GPU (UINT64_MAX: all of them,
+// after a wait for the whole device). Dynamic allocations those frames outgrew
+// are released.
+void renderer_frames_completed(gfx_handler_t *handler, uint64_t serial);
 
 shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, const char *frag_path);
 texture_t *renderer_load_texture(gfx_handler_t *handler, const char *image_path);
@@ -531,9 +576,11 @@ VkImageView create_image_view_aspect(gfx_handler_t *handler, VkImage image, VkFo
 VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat format, VkImageViewType view_type, uint32_t mip_levels, uint32_t layer_count);
 VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter);
 // The same, with the wrap mode spelled out. World textures repeat across a
-// surface; UI and sprite sheets clamp.
+// surface; UI and sprite sheets clamp. `anisotropic` is for a surface seen
+// along its length (a 3D road); a texture facing the screen gains nothing from
+// it and pays for every extra probe.
 VkSampler create_texture_sampler_wrapped(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter,
-                                         VkSamplerAddressMode address_mode);
+                                         VkSamplerAddressMode address_mode, bool anisotropic);
 
 void renderer_submit_atlas_batch(gfx_handler_t *h, atlas_renderer_t *ar, float z, const atlas_instance_t *instances, uint32_t count, bool screen_space);
 void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, atlas_instance_t *out_inst);
@@ -616,7 +663,7 @@ custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void 
                                                    size_t frag_size, const uint32_t *attr_locations, const uint32_t *attr_offsets,
                                                    const int *attr_formats, uint32_t attr_count, uint32_t instance_stride,
                                                    uint32_t max_instances, uint32_t texture_count, bool alpha_blend,
-                                                   uint32_t vertex_stride, bool depth_test);
+                                                   bool straight_alpha, uint32_t vertex_stride, bool depth_test);
 void renderer_destroy_custom_pipeline(gfx_handler_t *h, custom_pipeline_t *pipe);
 void renderer_submit_instances(gfx_handler_t *h, custom_pipeline_t *pipe, float z, texture_t *const *textures, uint32_t texture_count,
                                const void *instances, uint32_t count);
@@ -632,9 +679,11 @@ texture_t *renderer_render_instances_preview(gfx_handler_t *h, custom_pipeline_t
 // through here, which is what lets it sit above or below the entities by z.
 void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh, texture_t *const *textures,
                           uint32_t texture_count, const void *uniforms, size_t uniform_size);
+// `clip`, when not NULL, keeps the draw inside that rectangle of normalized device coordinates (x0, y0,
+// x1, y1) with a scissor; its edges are meant to fall on pixels.
 void renderer_submit_mesh_range(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh,
                                 uint32_t first_index, uint32_t index_count, texture_t *const *textures,
-                                uint32_t texture_count, const void *uniforms, size_t uniform_size);
+                                uint32_t texture_count, const void *uniforms, size_t uniform_size, const float *clip);
 void renderer_destroy_mesh(gfx_handler_t *h, mesh_t *mesh);
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
 texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t layer_count, VkFormat format);

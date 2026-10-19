@@ -38,6 +38,26 @@ void glfwGetCursorPos(GLFWwindow *window, double *x, double *y) {
   (void)window;
   *x = *y = 0.0;
 }
+// The rest of what system/window_state.c asks GLFW. It follows no window here, so input.c's questions
+// reach the stand-ins above.
+void glfwGetWindowSize(GLFWwindow *window, int *width, int *height) {
+  (void)window;
+  *width = *height = 0;
+}
+void glfwGetFramebufferSize(GLFWwindow *window, int *width, int *height) {
+  (void)window;
+  *width = *height = 0;
+}
+int glfwGetInputMode(GLFWwindow *window, int mode) {
+  (void)window;
+  (void)mode;
+  return GLFW_CURSOR_NORMAL;
+}
+void glfwSetWindowAttrib(GLFWwindow *window, int attrib, int value) {
+  (void)window;
+  (void)attrib;
+  (void)value;
+}
 void input_repeat_init(void) { input_repeat_refresh(); }
 void input_repeat_shutdown(void) {}
 void input_repeat_refresh(void) { ++refresh_count; }

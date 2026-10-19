@@ -1,6 +1,7 @@
 #include "input.h"
 #include "input_repeat.h"
 #include "raw_mouse.h"
+#include "window_state.h"
 #include <GLFW/glfw3.h>
 #include <math.h>
 #include <string.h>
@@ -403,7 +404,7 @@ void input_accumulate_key_repeat(int glfw_key) {
 void input_new_frame(void) {
   if (!g_input.initialized) return;
 
-  const bool focused = glfwGetWindowAttrib(g_input.window, GLFW_FOCUSED) != 0;
+  const bool focused = window_state_get_attrib(g_input.window, GLFW_FOCUSED) != 0;
   if (focused && !g_input.focused) input_repeat_refresh();
   g_input.focused = focused;
   const input_repeat_settings_t settings = input_repeat_settings();
@@ -465,7 +466,7 @@ void input_new_frame(void) {
     g_input.wheel_queue_count--;
   }
 
-  glfwGetCursorPos(g_input.window, &g_input.cursor_x, &g_input.cursor_y);
+  window_state_get_cursor_pos(g_input.window, &g_input.cursor_x, &g_input.cursor_y);
 }
 
 bool input_key_down(int glfw_key) {

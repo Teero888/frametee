@@ -404,6 +404,10 @@ void render_menu_bar(ui_handler_t *ui) {
         }
         if (igSliderInt("FPS Limit", &ui->fps_limit, 0, 1000, "%d", 0)) config_save(ui);
         if (igIsItemHovered(ImGuiHoveredFlags_None)) igSetTooltip("0 = Unlimited");
+        if (igSliderInt("Frames in Flight", &ui->frames_in_flight, 1, MAX_FRAMES_IN_FLIGHT, "%d", ImGuiSliderFlags_AlwaysClamp))
+          config_save(ui);
+        if (igIsItemHovered(ImGuiHoveredFlags_None))
+          igSetTooltip("2: the GPU draws one frame while the next is prepared (faster)\n1: each frame waits for the one before (a frame less behind)");
         if (igDragFloat("LOD Bias", &ui->lod_bias, 0.1f, -5.0f, 5.0f, "%.1f", 0)) {
           ui->gfx_handler->renderer.lod_bias = ui->lod_bias;
           config_save(ui);
@@ -1417,6 +1421,7 @@ void ui_init_config(ui_handler_t *ui) {
   ui->mouse_max_distance = 400.f;
   ui->vsync = true;
   ui->fps_limit = 0;
+  ui->frames_in_flight = 2;
   ui->audio_volume = 1.f;
   ui->follow_playhead = true;
   ui->lod_bias = -0.5f;

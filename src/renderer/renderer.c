@@ -74,7 +74,7 @@ static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width,
 static void flush_primitives(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 static void destroy_mapped_buffer(gfx_handler_t *handler, buffer_t *buffer);
 // Frees the allocations the primitive paths have outgrown; see its definition.
-static void destroy_retired_buffers(gfx_handler_t *handler);
+static void destroy_retired_buffers(gfx_handler_t *handler, uint64_t serial);
 static void flush_primitives3d(gfx_handler_t *h, VkCommandBuffer command_buffer);
 static primitive_ubo_t world_ubo(gfx_handler_t *h);
 void renderer_cleanup_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar);
@@ -347,19 +347,19 @@ VkImageView create_image_view(gfx_handler_t *handler, VkImage image, VkFormat fo
 }
 
 VkSampler create_texture_sampler(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter) {
-  return create_texture_sampler_wrapped(handler, mip_levels, filter, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+  return create_texture_sampler_wrapped(handler, mip_levels, filter, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, false);
 }
 
 VkSampler create_texture_sampler_wrapped(gfx_handler_t *handler, uint32_t mip_levels, VkFilter filter,
-                                         VkSamplerAddressMode address_mode) {
-  // Repeating means a world surface, and a world surface is usually looked at
-  // along its length rather than face on. That is the case anisotropy exists
-  // for, and without it a road is a grey smear a few metres ahead of the car.
+                                         VkSamplerAddressMode address_mode, bool anisotropic) {
+  // A world surface is usually looked at along its length rather than face on.
+  // That is the case anisotropy exists for, and without it a road is a grey
+  // smear a few metres ahead of the car.
   VkPhysicalDeviceFeatures features = {0};
   VkPhysicalDeviceProperties properties;
   vkGetPhysicalDeviceFeatures(handler->g_physical_device, &features);
   vkGetPhysicalDeviceProperties(handler->g_physical_device, &properties);
-  const bool anisotropic = address_mode == VK_SAMPLER_ADDRESS_MODE_REPEAT && features.samplerAnisotropy;
+  anisotropic = anisotropic && features.samplerAnisotropy;
   const float max_anisotropy = anisotropic ? fminf(16.f, properties.limits.maxSamplerAnisotropy) : 1.f;
 
   VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -533,6 +533,63 @@ texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t wid
   return texArray;
 }
 
+// One frame in flight's uniforms and primitive streams, at their first sizes.
+static void create_frame_buffers(gfx_handler_t *handler, frame_buffers_t *f) {
+  const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  create_buffer(handler, INITIAL_PRIMITIVE_VERTICES * sizeof(primitive_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, host, &f->vertices);
+  vkMapMemory(handler->g_device, f->vertices.memory, 0, VK_WHOLE_SIZE, 0, (void **)&f->vertex_ptr);
+  f->vertices.mapped_memory = f->vertex_ptr;
+  f->vertex_capacity = INITIAL_PRIMITIVE_VERTICES;
+
+  create_buffer(handler, INITIAL_PRIMITIVE_INDICES * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, host, &f->indices);
+  vkMapMemory(handler->g_device, f->indices.memory, 0, VK_WHOLE_SIZE, 0, (void **)&f->index_ptr);
+  f->indices.mapped_memory = f->index_ptr;
+  f->index_capacity = INITIAL_PRIMITIVE_INDICES;
+
+  create_buffer(handler, INITIAL_PRIMITIVE3D_VERTICES * sizeof(primitive3d_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, host,
+                &f->vertices3d);
+  vkMapMemory(handler->g_device, f->vertices3d.memory, 0, VK_WHOLE_SIZE, 0, (void **)&f->vertex3d_ptr);
+  f->vertices3d.mapped_memory = f->vertex3d_ptr;
+  f->vertex3d_capacity = INITIAL_PRIMITIVE3D_VERTICES;
+
+  create_buffer(handler, DYNAMIC_UBO_BUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, host, &f->ubo);
+  vkMapMemory(handler->g_device, f->ubo.memory, 0, VK_WHOLE_SIZE, 0, &f->ubo_ptr);
+  f->ubo.mapped_memory = f->ubo_ptr;
+}
+
+// The frame being recorded hands its buffers back to its frame in flight: growing
+// them this frame replaced them there.
+static void save_frame_buffers(renderer_state_t *r) {
+  frame_buffers_t *f = &r->frame_buffers[r->frame_slot];
+  f->ubo = r->dynamic_ubo_buffer;
+  f->ubo_ptr = r->ubo_buffer_ptr;
+  f->vertices = r->dynamic_vertex_buffer;
+  f->indices = r->dynamic_index_buffer;
+  f->vertex_ptr = r->vertex_buffer_ptr;
+  f->index_ptr = r->index_buffer_ptr;
+  f->vertex_capacity = r->primitive_vertex_capacity;
+  f->index_capacity = r->primitive_index_capacity;
+  f->vertices3d = r->dynamic_vertex_buffer3d;
+  f->vertex3d_ptr = r->vertex3d_buffer_ptr;
+  f->vertex3d_capacity = r->primitive3d_vertex_capacity;
+}
+
+static void load_frame_buffers(renderer_state_t *r, uint32_t slot) {
+  const frame_buffers_t *f = &r->frame_buffers[slot];
+  r->dynamic_ubo_buffer = f->ubo;
+  r->ubo_buffer_ptr = f->ubo_ptr;
+  r->dynamic_vertex_buffer = f->vertices;
+  r->dynamic_index_buffer = f->indices;
+  r->vertex_buffer_ptr = f->vertex_ptr;
+  r->index_buffer_ptr = f->index_ptr;
+  r->primitive_vertex_capacity = f->vertex_capacity;
+  r->primitive_index_capacity = f->index_capacity;
+  r->dynamic_vertex_buffer3d = f->vertices3d;
+  r->vertex3d_buffer_ptr = f->vertex3d_ptr;
+  r->primitive3d_vertex_capacity = f->vertex3d_capacity;
+  r->frame_slot = slot;
+}
+
 int renderer_init(gfx_handler_t *handler) {
   renderer_state_t *renderer = &handler->renderer;
   memset(renderer, 0, sizeof(renderer_state_t));
@@ -549,6 +606,7 @@ int renderer_init(gfx_handler_t *handler) {
   VkPhysicalDeviceProperties properties;
   vkGetPhysicalDeviceProperties(handler->g_physical_device, &properties);
   renderer->min_ubo_alignment = properties.limits.minUniformBufferOffsetAlignment;
+  renderer->max_ubo_range = properties.limits.maxUniformBufferRange;
 
   renderer->camera.zoom_wanted = 5.0f;
   renderer->lod_bias = -0.5f; // Default bias
@@ -565,7 +623,7 @@ int renderer_init(gfx_handler_t *handler) {
 
   VkDescriptorPoolSize pool_sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16384},
                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16384 * MAX_TEXTURES_PER_DRAW}};
-  for (int i = 0; i < 3; i++) { // triple buffering
+  for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     VkDescriptorPoolCreateInfo pool_create_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                                    .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
                                                    .maxSets = 16384,
@@ -581,22 +639,14 @@ int renderer_init(gfx_handler_t *handler) {
   // Primitive & UBO Ring Buffer Setup
   renderer->primitive_shader = renderer_load_shader(handler, "data/shaders/primitive.vert.spv", "data/shaders/primitive.frag.spv");
 
-  create_buffer(handler, INITIAL_PRIMITIVE_VERTICES * sizeof(primitive_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_vertex_buffer);
-  vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->vertex_buffer_ptr);
-  renderer->dynamic_vertex_buffer.mapped_memory = renderer->vertex_buffer_ptr;
-  renderer->primitive_vertex_capacity = INITIAL_PRIMITIVE_VERTICES;
-
   renderer->primitive3d_shader =
       renderer_load_shader(handler, "data/shaders/primitive3d.vert.spv", "data/shaders/primitive3d.frag.spv");
-  create_buffer(handler, INITIAL_PRIMITIVE3D_VERTICES * sizeof(primitive3d_vertex_t), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_vertex_buffer3d);
-  vkMapMemory(handler->g_device, renderer->dynamic_vertex_buffer3d.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->vertex3d_buffer_ptr);
-  renderer->dynamic_vertex_buffer3d.mapped_memory = renderer->vertex3d_buffer_ptr;
-  renderer->primitive3d_vertex_capacity = INITIAL_PRIMITIVE3D_VERTICES;
+  for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    create_frame_buffers(handler, &renderer->frame_buffers[i]);
+  load_frame_buffers(renderer, 0);
 
   renderer->primitive3d_sampler =
-      create_texture_sampler_wrapped(handler, 16, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+      create_texture_sampler_wrapped(handler, 16, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT, true);
 
   // One white page, bound whenever a game draws in 3D without a texture array
   // of its own. The 3D fragment stage declares a sampler either way.
@@ -622,17 +672,6 @@ int renderer_init(gfx_handler_t *handler) {
   // The reversed depth range makes a near plane this close free.
   renderer->camera3.near_z = 0.05f;
   renderer->camera3.far_z = CAMERA3_FAR_Z;
-
-  create_buffer(handler, INITIAL_PRIMITIVE_INDICES * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_index_buffer);
-  vkMapMemory(handler->g_device, renderer->dynamic_index_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&renderer->index_buffer_ptr);
-  renderer->dynamic_index_buffer.mapped_memory = renderer->index_buffer_ptr;
-  renderer->primitive_index_capacity = INITIAL_PRIMITIVE_INDICES;
-
-  create_buffer(handler, DYNAMIC_UBO_BUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->dynamic_ubo_buffer);
-  vkMapMemory(handler->g_device, renderer->dynamic_ubo_buffer.memory, 0, VK_WHOLE_SIZE, 0, &renderer->ubo_buffer_ptr);
-  renderer->dynamic_ubo_buffer.mapped_memory = renderer->ubo_buffer_ptr;
 
   // Game Skin Sprites (32x16 grid, 32px unit)
 
@@ -708,20 +747,24 @@ void renderer_cleanup(gfx_handler_t *handler) {
     }
   }
 
-  destroy_retired_buffers(handler);
+  destroy_retired_buffers(handler, UINT64_MAX);
   free(renderer->retired_buffers);
   renderer->retired_buffers = NULL;
   renderer->retired_buffer_count = 0;
   renderer->retired_buffer_capacity = 0;
 
-  destroy_mapped_buffer(handler, &renderer->dynamic_vertex_buffer);
-  destroy_mapped_buffer(handler, &renderer->dynamic_index_buffer);
-  destroy_mapped_buffer(handler, &renderer->dynamic_vertex_buffer3d);
-  destroy_mapped_buffer(handler, &renderer->dynamic_ubo_buffer);
+  save_frame_buffers(renderer);
+  for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    frame_buffers_t *f = &renderer->frame_buffers[i];
+    destroy_mapped_buffer(handler, &f->vertices);
+    destroy_mapped_buffer(handler, &f->indices);
+    destroy_mapped_buffer(handler, &f->vertices3d);
+    destroy_mapped_buffer(handler, &f->ubo);
+  }
   if (renderer->primitive3d_sampler != VK_NULL_HANDLE)
     vkDestroySampler(device, renderer->primitive3d_sampler, allocator);
 
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     if (renderer->frame_descriptor_pools[i] != VK_NULL_HANDLE) {
       vkDestroyDescriptorPool(device, renderer->frame_descriptor_pools[i], allocator);
       renderer->frame_descriptor_pools[i] = VK_NULL_HANDLE;
@@ -908,9 +951,11 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
       .depthCompareOp = depth_3d ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL,
       .maxDepthBounds = 1.0f};
 
-  VkBlendFactor src_color_factor = VK_BLEND_FACTOR_ONE;
+  // (straight: the colour arrives unmultiplied, and the blend multiplies it)
+  VkBlendFactor src_color_factor =
+      shader->layout && shader->layout->straight_alpha ? VK_BLEND_FACTOR_SRC_ALPHA : VK_BLEND_FACTOR_ONE;
 
-  // CORRECTED: Standard Alpha Blending
+  // Premultiplied alpha blending, or straight where a game's pipeline asks for it.
   VkPipelineColorBlendAttachmentState color_blend = {
       .blendEnable = VK_TRUE,
       .srcColorBlendFactor = src_color_factor,
@@ -1363,8 +1408,23 @@ void renderer_destroy_mesh(gfx_handler_t *h, mesh_t *mesh) {
 
 void renderer_begin_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer) {
   renderer_state_t *renderer = &handler->renderer;
-  uint32_t frame_pool_index = handler->g_main_window_data.FrameIndex % 3;
-  check_vk_result(vkResetDescriptorPool(handler->g_device, renderer->frame_descriptor_pools[frame_pool_index], 0));
+  // The frame in flight this one is: gfx_begin_frame has waited for the frame that used its buffers
+  // before.
+  const uint32_t slot = handler->frame_slot < MAX_FRAMES_IN_FLIGHT ? handler->frame_slot : 0;
+  save_frame_buffers(renderer);
+  load_frame_buffers(renderer, slot);
+  check_vk_result(vkResetDescriptorPool(handler->g_device, renderer->frame_descriptor_pools[slot], 0));
+  for (uint32_t i = 0; i < renderer->dynamic_atlas_count; ++i) {
+    atlas_renderer_t *ar = renderer->dynamic_atlases[i];
+    ar->instance_first = slot * ar->max_instances;
+    ar->instance_ptr = ar->instance_mapped ? ar->instance_mapped + ar->instance_first : NULL;
+  }
+  for (uint32_t i = 0; i < renderer->custom_pipeline_count; ++i) {
+    custom_pipeline_t *pipe = &renderer->custom_pipelines[i];
+    if (!pipe->instance_mapped) continue;
+    pipe->instance_first = slot * pipe->max_instances;
+    pipe->instance_ptr = pipe->instance_mapped + (size_t)pipe->instance_first * pipe->instance_stride;
+  }
   renderer->primitive_vertex_count = 0;
   renderer->primitive_index_count = 0;
   renderer->primitive_index_offset_drawn = 0;
@@ -1391,9 +1451,8 @@ void renderer_draw_mesh(gfx_handler_t *handler, VkCommandBuffer command_buffer, 
 
   // Allocate a descriptor set for this pipeline
   VkDescriptorSet descriptor_set;
-  uint32_t frame_pool_index = handler->g_main_window_data.FrameIndex % 3;
   VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                            .descriptorPool = renderer->frame_descriptor_pools[frame_pool_index],
+                                            .descriptorPool = renderer->frame_descriptor_pools[renderer->frame_slot],
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &pso->descriptor_set_layout};
   VkResult err = vkAllocateDescriptorSets(handler->g_device, &alloc_info, &descriptor_set);
@@ -1506,6 +1565,7 @@ void renderer_destroy_texture(gfx_handler_t *handler, texture_t *tex) {
   h->retire_textures[h->retire_count].frame_serial = h->frame_serial;
   h->retire_count++;
 
+  if (tex->external && h->renderer.external_texture_count > 0) --h->renderer.external_texture_count;
   memset(tex, 0, sizeof(texture_t));
   renderer_unlock();
 }
@@ -1776,11 +1836,10 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   renderer->ubo_buffer_offset += (uint32_t)aligned_size;
 
   // Allocate descriptor set
-  uint32_t frame_pool_index = h->g_main_window_data.FrameIndex % 3;
   VkDescriptorSet descriptor_set;
   VkDescriptorSetAllocateInfo alloc_info = {
       .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-      .descriptorPool = renderer->frame_descriptor_pools[frame_pool_index],
+      .descriptorPool = renderer->frame_descriptor_pools[renderer->frame_slot],
       .descriptorSetCount = 1,
       .pSetLayouts = &pso->descriptor_set_layout};
 
@@ -1899,22 +1958,26 @@ static void retire_buffer(gfx_handler_t *handler, const buffer_t *buffer) {
   if (buffer->buffer == VK_NULL_HANDLE) return;
   renderer_state_t *renderer = &handler->renderer;
   renderer->retired_buffers[renderer->retired_buffer_count].buffer = *buffer;
+  // Draws this frame recorded before outgrowing it still read it.
+  renderer->retired_buffers[renderer->retired_buffer_count].serial = handler->frame_serial;
   ++renderer->retired_buffer_count;
 }
 
-// gfx_begin_frame waits for the immediately preceding submission before it
-// starts another one, so every allocation retired while recording that frame
-// is safe once renderer_frame_completed is called. Cleanup has likewise waited
-// for the whole device.
-static void destroy_retired_buffers(gfx_handler_t *handler) {
+// What frames up to `serial` outgrew: those frames, and so every draw recorded
+// against these, have completed.
+static void destroy_retired_buffers(gfx_handler_t *handler, uint64_t serial) {
   renderer_state_t *renderer = &handler->renderer;
-  for (int i = 0; i < renderer->retired_buffer_count; ++i) {
+  for (int i = 0; i < renderer->retired_buffer_count;) {
+    if (renderer->retired_buffers[i].serial > serial) {
+      ++i;
+      continue;
+    }
     destroy_mapped_buffer(handler, &renderer->retired_buffers[i].buffer);
+    renderer->retired_buffers[i] = renderer->retired_buffers[--renderer->retired_buffer_count];
   }
-  renderer->retired_buffer_count = 0;
 }
 
-void renderer_frame_completed(gfx_handler_t *handler) { destroy_retired_buffers(handler); }
+void renderer_frames_completed(gfx_handler_t *handler, uint64_t serial) { destroy_retired_buffers(handler, serial); }
 
 // Room for one more primitive, whatever it takes.
 //
@@ -2046,18 +2109,19 @@ void renderer_draw_rect_rounded(gfx_handler_t *handler, vec2 pos, vec2 size, flo
   if (segments < 1) segments = 1;
   if (segments > 64) segments = 64;
 
+  // Five rectangles and a fan in each corner, around the corner's own centre.
+  // One fan from the middle made every corner a spray of long slivers reaching
+  // across the whole rectangle, the shape a rasterizer covers worst. The pieces
+  // meet only at shared vertices, so they tile the rectangle exactly.
   const uint32_t per_corner = segments + 1;
-  const uint32_t perimeter = per_corner * 4;
-  if (!ensure_primitive_space(handler, perimeter + 1, perimeter * 3)) return;
+  const uint32_t vertex_count = (per_corner + 1) * 4;
+  const uint32_t index_count = (5 * 2 + segments * 4) * 3;
+  if (!ensure_primitive_space(handler, vertex_count, index_count)) return;
 
   renderer_state_t *renderer = &handler->renderer;
   const uint32_t base_index = renderer->primitive_vertex_count;
   primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base_index;
   uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
-
-  vtx[0].pos[0] = pos[0] + size[0] * 0.5f;
-  vtx[0].pos[1] = pos[1] + size[1] * 0.5f;
-  glm_vec4_copy(color, vtx[0].color);
 
   // Clockwise on screen, y down: the top-left arc sweeps from pointing left to
   // pointing up, and each following corner picks up where the last stopped.
@@ -2067,25 +2131,49 @@ void renderer_draw_rect_rounded(gfx_handler_t *handler, vec2 pos, vec2 size, flo
                                {pos[0] + radius, pos[1] + size[1] - radius}};
   const float starts[4] = {(float)M_PI, (float)(M_PI * 1.5), 0.f, (float)(M_PI * 0.5)};
 
-  uint32_t out = 1;
+  // Corner c is its centre, then its arc: vertex c * (per_corner + 1), arc point k after it.
   for (uint32_t corner = 0; corner < 4; ++corner) {
+    primitive_vertex_t *v = vtx + corner * (per_corner + 1);
+    v[0].pos[0] = centers[corner][0];
+    v[0].pos[1] = centers[corner][1];
+    glm_vec4_copy(color, v[0].color);
     for (uint32_t step = 0; step <= segments; ++step) {
       const float angle = starts[corner] + (float)(M_PI * 0.5) * (float)step / (float)segments;
-      vtx[out].pos[0] = centers[corner][0] + cosf(angle) * radius;
-      vtx[out].pos[1] = centers[corner][1] + sinf(angle) * radius;
-      glm_vec4_copy(color, vtx[out].color);
-      ++out;
+      v[1 + step].pos[0] = centers[corner][0] + cosf(angle) * radius;
+      v[1 + step].pos[1] = centers[corner][1] + sinf(angle) * radius;
+      glm_vec4_copy(color, v[1 + step].color);
+    }
+  }
+  uint32_t center[4], arc_start[4], arc_end[4];
+  for (uint32_t corner = 0; corner < 4; ++corner) {
+    center[corner] = base_index + corner * (per_corner + 1);
+    arc_start[corner] = center[corner] + 1;
+    arc_end[corner] = center[corner] + 1 + segments;
+  }
+  uint32_t out = 0;
+  const uint32_t quads[5][4] = {{arc_end[0], arc_start[1], center[1], center[0]},  // top edge
+                                {arc_start[0], center[0], center[3], arc_end[3]},  // left edge
+                                {center[0], center[1], center[2], center[3]},      // middle
+                                {center[1], arc_end[1], arc_start[2], center[2]},  // right edge
+                                {center[3], center[2], arc_end[2], arc_start[3]}}; // bottom edge
+  for (uint32_t q = 0; q < 5; ++q) {
+    idx[out++] = quads[q][0];
+    idx[out++] = quads[q][1];
+    idx[out++] = quads[q][2];
+    idx[out++] = quads[q][0];
+    idx[out++] = quads[q][2];
+    idx[out++] = quads[q][3];
+  }
+  for (uint32_t corner = 0; corner < 4; ++corner) {
+    for (uint32_t step = 0; step < segments; ++step) {
+      idx[out++] = center[corner];
+      idx[out++] = arc_start[corner] + step;
+      idx[out++] = arc_start[corner] + step + 1;
     }
   }
 
-  for (uint32_t i = 0; i < perimeter; ++i) {
-    idx[i * 3 + 0] = base_index;
-    idx[i * 3 + 1] = base_index + 1 + i;
-    idx[i * 3 + 2] = base_index + 1 + ((i + 1) % perimeter);
-  }
-
-  renderer->primitive_vertex_count += perimeter + 1;
-  renderer->primitive_index_count += perimeter * 3;
+  renderer->primitive_vertex_count += vertex_count;
+  renderer->primitive_index_count += index_count;
 }
 
 void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radius, vec4 color, uint32_t segments) {
@@ -2250,6 +2338,15 @@ static void upload_texture_layer(gfx_handler_t *h, texture_t *array, VkFormat fo
 // Slices `source_atlas` into a texture array, one sprite per layer, and gives
 // the atlas renderer its instance ring. Split out from the path-based helper so
 // a game module can build an atlas from pixels it produced itself.
+// The atlas's instance ring, max_instances for each frame in flight, starting out on the current one's.
+static void create_atlas_instances(gfx_handler_t *h, atlas_renderer_t *ar) {
+  create_buffer(h, sizeof(atlas_instance_t) * ar->max_instances * MAX_FRAMES_IN_FLIGHT, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ar->instance_buffer);
+  vkMapMemory(h->g_device, ar->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&ar->instance_mapped);
+  ar->instance_first = h->renderer.frame_slot * ar->max_instances;
+  ar->instance_ptr = ar->instance_mapped + ar->instance_first;
+}
+
 static void renderer_build_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar, texture_t *source_atlas, const sprite_definition_t *sprites,
                                           uint32_t sprite_count, uint32_t max_instances) {
   const char *atlas_path = source_atlas->path;
@@ -2394,9 +2491,7 @@ static void renderer_build_atlas_renderer(gfx_handler_t *h, atlas_renderer_t *ar
                                       .unnormalizedCoordinates = VK_FALSE};
   check_vk_result(vkCreateSampler(h->g_device, &sampler_info, h->g_allocator, &ar->sampler));
 
-  create_buffer(h, sizeof(atlas_instance_t) * ar->max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ar->instance_buffer);
-  vkMapMemory(h->g_device, ar->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&ar->instance_ptr);
+  create_atlas_instances(h, ar);
   ar->instance_count = 0;
 }
 
@@ -2878,7 +2973,7 @@ static void flush_primitives3d(gfx_handler_t *h, VkCommandBuffer command_buffer)
   memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, sizeof(ubo));
   renderer->ubo_buffer_offset += (uint32_t)aligned;
 
-  uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
+  uint32_t pool_idx = h->renderer.frame_slot;
   VkDescriptorSet desc;
   VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                     .descriptorPool = renderer->frame_descriptor_pools[pool_idx],
@@ -2946,7 +3041,7 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
   memcpy((char *)renderer->ubo_buffer_ptr + dyn_offset, &ubo, sizeof(ubo));
   renderer->ubo_buffer_offset += (uint32_t)aligned;
 
-  uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
+  uint32_t pool_idx = h->renderer.frame_slot;
   VkDescriptorSet desc;
   VkDescriptorSetAllocateInfo ai = {
       .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -2970,7 +3065,7 @@ void renderer_flush_atlas_instances(gfx_handler_t *h, VkCommandBuffer cmd, atlas
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
 
   // Calculate the offset into the instance buffer for this specific batch
-  VkDeviceSize instance_offset = (VkDeviceSize)start_index * sizeof(atlas_instance_t);
+  VkDeviceSize instance_offset = (VkDeviceSize)(ar->instance_first + start_index) * sizeof(atlas_instance_t);
 
   VkBuffer bufs[2] = {quad->vertex_buffer.buffer, ar->instance_buffer.buffer};
   VkDeviceSize offs[2] = {0, instance_offset}; // Bind at the correct memory location
@@ -3109,19 +3204,26 @@ void renderer_submit_line(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, ve
   glm_vec4_copy(color, cmd->data.prim.color);
 }
 
+// Where a new command's data starts in this frame's transient memory: aligned
+// for any vector type (cglm's vec4 wants 16), whatever size the copy before it
+// was. A module's instances can be any size, and what follows them is read as
+// the engine's own structs. Data merged into the command before it instead
+// goes right after that command's own.
+static size_t transient_start(const renderer_state_t *r) { return (r->transient_offset + 15) & ~(size_t)15; }
+
 void renderer_submit_line_batch(struct gfx_handler_t *h, float z, const line_segment_t *segments, uint32_t count) {
   renderer_state_t *renderer = &h->renderer;
   if (!segments || count == 0 || (size_t)count > SIZE_MAX / sizeof(*segments)) return;
   const size_t size = sizeof(*segments) * (size_t)count;
-  if (renderer->transient_offset > renderer->transient_capacity ||
-      size > renderer->transient_capacity - renderer->transient_offset) {
+  const size_t start = transient_start(renderer);
+  if (start > renderer->transient_capacity || size > renderer->transient_capacity - start) {
     log_error(LOG_SOURCE, "Transient memory exhausted while queuing %u line segments.", count);
     return;
   }
   if (!queue_reserve_one(renderer)) return;
-  line_segment_t *copy = (line_segment_t *)(renderer->transient_memory + renderer->transient_offset);
+  line_segment_t *copy = (line_segment_t *)(renderer->transient_memory + start);
   memcpy(copy, segments, size);
-  renderer->transient_offset += size;
+  renderer->transient_offset = start + size;
 
   render_command_t *cmd = &renderer->queue.commands[renderer->queue.count++];
   cmd->type = RENDER_CMD_LINE_BATCH;
@@ -3175,11 +3277,16 @@ void renderer_submit_atlas_batch(struct gfx_handler_t *h, struct atlas_renderer_
     }
   }
 
+  const size_t start = transient_start(r);
+  if (start > r->transient_capacity || size > r->transient_capacity - start) {
+    log_error(LOG_SOURCE, "Transient memory exhausted! Cannot submit atlas batch.");
+    return;
+  }
   if (!queue_reserve_one(r)) return;
 
-  void *dest = r->transient_memory + r->transient_offset;
+  void *dest = r->transient_memory + start;
   memcpy(dest, instances, size);
-  r->transient_offset += size;
+  r->transient_offset = start + size;
 
   render_command_t *cmd = &r->queue.commands[r->queue.count++];
   cmd->type = RENDER_CMD_ATLAS_BATCH;
@@ -3188,6 +3295,22 @@ void renderer_submit_atlas_batch(struct gfx_handler_t *h, struct atlas_renderer_
   cmd->data.atlas_batch.instances = (atlas_instance_t *)dest;
   cmd->data.atlas_batch.count = count;
   cmd->data.atlas_batch.screen_space = screen_space;
+}
+
+// The scissor on the part of the viewport `ndc` (x0, y0, x1, y1) covers, or on all of it for NULL.
+// Edges round to the nearest pixel, which a clip given on pixel boundaries lands on exactly.
+static void set_scissor_ndc(gfx_handler_t *h, VkCommandBuffer cmd, const float *ndc) {
+  const float width = h->viewport[0], height = h->viewport[1];
+  VkRect2D scissor = {{0, 0}, {(uint32_t)width, (uint32_t)height}};
+  if (ndc) {
+    const float x0 = roundf((fmaxf(-1.f, fminf(1.f, ndc[0])) + 1.f) * 0.5f * width);
+    const float y0 = roundf((fmaxf(-1.f, fminf(1.f, ndc[1])) + 1.f) * 0.5f * height);
+    const float x1 = roundf((fmaxf(-1.f, fminf(1.f, ndc[2])) + 1.f) * 0.5f * width);
+    const float y1 = roundf((fmaxf(-1.f, fminf(1.f, ndc[3])) + 1.f) * 0.5f * height);
+    scissor.offset = (VkOffset2D){(int32_t)x0, (int32_t)y0};
+    scissor.extent = (VkExtent2D){x1 > x0 ? (uint32_t)(x1 - x0) : 0, y1 > y0 ? (uint32_t)(y1 - y0) : 0};
+  }
+  vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
 
 void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
@@ -3373,12 +3496,16 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       if (r->primitive_index_count > 0) flush_primitives(h, cmd);
       custom_pipeline_t *mesh_pipe = q->data.mesh_draw.pipeline;
       if (mesh_pipe && mesh_pipe->shader) {
-        void *ubos[1] = {(void *)q->data.mesh_draw.uniforms};
+        if (q->data.mesh_draw.clipped) set_scissor_ndc(h, cmd, q->data.mesh_draw.clip);
+        void *ubos[1] = {q->data.mesh_draw.large_uniforms ? (void *)q->data.mesh_draw.large_uniforms
+                                                           : (void *)q->data.mesh_draw.uniforms};
         VkDeviceSize ubo_sizes[1] = {q->data.mesh_draw.uniform_size};
         const bool has_uniforms = q->data.mesh_draw.uniform_size > 0;
         renderer_draw_mesh(h, cmd, q->data.mesh_draw.mesh, mesh_pipe->shader, (texture_t **)q->data.mesh_draw.textures,
                            q->data.mesh_draw.texture_count, has_uniforms ? ubos : NULL, has_uniforms ? ubo_sizes : NULL,
                            has_uniforms ? 1 : 0, q->data.mesh_draw.first_index, q->data.mesh_draw.index_count);
+        // (whatever is drawn next, batched or not, draws on the whole viewport)
+        if (q->data.mesh_draw.clipped) set_scissor_ndc(h, cmd, NULL);
       }
       break;
     }
@@ -3587,9 +3714,7 @@ atlas_renderer_t *renderer_create_texture_atlas(gfx_handler_t *h, texture_t *src
   ar->sprite_definitions[0] = (sprite_definition_t){0, 0, src->width, src->height};
   ar->layer_width = src->width;
   ar->layer_height = src->height;
-  create_buffer(h, sizeof(atlas_instance_t) * ar->max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ar->instance_buffer);
-  vkMapMemory(h->g_device, ar->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&ar->instance_ptr);
+  create_atlas_instances(h, ar);
 
   r->dynamic_atlases[r->dynamic_atlas_count++] = ar;
   renderer_unlock();
@@ -3674,7 +3799,7 @@ custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void 
                                                    size_t frag_size, const uint32_t *attr_locations, const uint32_t *attr_offsets,
                                                    const int *attr_formats, uint32_t attr_count, uint32_t instance_stride,
                                                    uint32_t max_instances, uint32_t texture_count, bool alpha_blend,
-                                                   uint32_t vertex_stride, bool depth_test) {
+                                                   bool straight_alpha, uint32_t vertex_stride, bool depth_test) {
   renderer_state_t *r = &h->renderer;
   if (r->custom_pipeline_count >= MAX_CUSTOM_PIPELINES) {
     log_error(LOG_SOURCE, "Custom pipeline limit (%d) reached.", MAX_CUSTOM_PIPELINES);
@@ -3735,6 +3860,7 @@ custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void 
     }
   }
   pipe->layout.alpha_blend = alpha_blend;
+  pipe->layout.straight_alpha = straight_alpha;
 
   pipe->shader = renderer_create_shader_spirv(h, vert_spirv, vert_size, frag_spirv, frag_size, &pipe->layout);
   if (!pipe->shader) return NULL;
@@ -3743,9 +3869,12 @@ custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void 
   pipe->max_instances = max_instances;
   pipe->texture_count = texture_count;
   if (!mesh_mode) {
-    create_buffer(h, (VkDeviceSize)instance_stride * max_instances, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    // max_instances for each frame in flight, starting out on the current one's
+    create_buffer(h, (VkDeviceSize)instance_stride * max_instances * MAX_FRAMES_IN_FLIGHT, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &pipe->instance_buffer);
-    vkMapMemory(h->g_device, pipe->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&pipe->instance_ptr);
+    vkMapMemory(h->g_device, pipe->instance_buffer.memory, 0, VK_WHOLE_SIZE, 0, (void **)&pipe->instance_mapped);
+    pipe->instance_first = r->frame_slot * max_instances;
+    pipe->instance_ptr = pipe->instance_mapped + (size_t)pipe->instance_first * instance_stride;
   }
   pipe->active = true;
   r->custom_pipeline_count++;
@@ -3761,6 +3890,7 @@ void renderer_destroy_custom_pipeline(gfx_handler_t *h, custom_pipeline_t *pipe)
     vkFreeMemory(h->g_device, pipe->instance_buffer.memory, h->g_allocator);
   }
   pipe->active = false;
+  pipe->instance_mapped = NULL;
   pipe->instance_ptr = NULL;
   pipe->instance_count = 0;
 }
@@ -3809,11 +3939,16 @@ void renderer_submit_instances(gfx_handler_t *h, custom_pipeline_t *pipe, float 
     }
   }
 
+  const size_t start = transient_start(r);
+  if (start > r->transient_capacity || size > r->transient_capacity - start) {
+    log_error(LOG_SOURCE, "Transient memory exhausted! Cannot submit instances.");
+    return;
+  }
   if (!queue_reserve_one(r)) return;
 
-  void *dest = (char *)r->transient_memory + r->transient_offset;
+  void *dest = (char *)r->transient_memory + start;
   memcpy(dest, instances, size);
-  r->transient_offset += size;
+  r->transient_offset = start + size;
 
   render_command_t *cmd = &r->queue.commands[r->queue.count++];
   cmd->type = RENDER_CMD_INSTANCES;
@@ -4094,25 +4229,39 @@ texture_t *renderer_render_instances_preview(gfx_handler_t *h, custom_pipeline_t
   return target;
 }
 
+// A copy of `size` bytes in this frame's transient memory, or NULL when it is full.
+static const uint8_t *transient_copy(renderer_state_t *r, const void *data, size_t size) {
+  const size_t start = transient_start(r);
+  if (start > r->transient_capacity || size > r->transient_capacity - start) return NULL;
+  uint8_t *copy = r->transient_memory + start;
+  memcpy(copy, data, size);
+  r->transient_offset = start + size;
+  return copy;
+}
+
 void renderer_submit_mesh(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh, texture_t *const *textures,
                           uint32_t texture_count, const void *uniforms, size_t uniform_size) {
   if (!mesh) return;
-  renderer_submit_mesh_range(h, pipe, z, mesh, 0, mesh->index_count, textures, texture_count, uniforms, uniform_size);
+  renderer_submit_mesh_range(h, pipe, z, mesh, 0, mesh->index_count, textures, texture_count, uniforms, uniform_size, NULL);
 }
 
 void renderer_submit_mesh_range(gfx_handler_t *h, custom_pipeline_t *pipe, float z, mesh_t *mesh,
                                 uint32_t first_index, uint32_t index_count, texture_t *const *textures,
-                                uint32_t texture_count, const void *uniforms, size_t uniform_size) {
+                                uint32_t texture_count, const void *uniforms, size_t uniform_size, const float *clip) {
   renderer_state_t *r = &h->renderer;
   if (!pipe || !pipe->active || !mesh || !mesh->active) return;
   if (first_index > mesh->index_count || index_count > mesh->index_count - first_index) return;
   if (mesh->index_count && (!index_count || index_count % 3 || first_index % 3)) return;
   if (texture_count > 0 && !textures) return;
   if (uniform_size > 0 && !uniforms) return;
-  if (uniform_size > MAX_QUEUED_UNIFORM_BYTES) {
-    log_error(LOG_SOURCE, "Mesh draw carries %zu uniform bytes, limit is %d.", uniform_size, MAX_QUEUED_UNIFORM_BYTES);
+  if (uniform_size > MAX_MESH_UNIFORM_BYTES || uniform_size > r->max_ubo_range) {
+    log_error(LOG_SOURCE, "Mesh draw carries %zu uniform bytes, limit is %u.", uniform_size,
+              r->max_ubo_range < MAX_MESH_UNIFORM_BYTES ? r->max_ubo_range : MAX_MESH_UNIFORM_BYTES);
     return;
   }
+  // (taken before the command, so a full transient memory drops the draw without a hole in the queue)
+  const uint8_t *large_uniforms = NULL;
+  if (uniform_size > MAX_QUEUED_UNIFORM_BYTES && !(large_uniforms = transient_copy(r, uniforms, uniform_size))) return;
   if (!queue_reserve_one(r)) return;
 
   render_command_t *cmd = &r->queue.commands[r->queue.count++];
@@ -4126,7 +4275,10 @@ void renderer_submit_mesh_range(gfx_handler_t *h, custom_pipeline_t *pipe, float
   for (uint32_t i = 0; i < cmd->data.mesh_draw.texture_count; ++i)
     cmd->data.mesh_draw.textures[i] = textures[i];
   cmd->data.mesh_draw.uniform_size = (uint32_t)uniform_size;
-  if (uniforms && uniform_size > 0) memcpy(cmd->data.mesh_draw.uniforms, uniforms, uniform_size);
+  cmd->data.mesh_draw.large_uniforms = large_uniforms;
+  if (uniforms && uniform_size > 0 && !large_uniforms) memcpy(cmd->data.mesh_draw.uniforms, uniforms, uniform_size);
+  cmd->data.mesh_draw.clipped = clip != NULL;
+  if (clip) memcpy(cmd->data.mesh_draw.clip, clip, sizeof(cmd->data.mesh_draw.clip));
 }
 
 static void renderer_flush_custom_instances_batch(gfx_handler_t *h, VkCommandBuffer cmd, custom_pipeline_t *pipe,
@@ -4149,7 +4301,7 @@ static void renderer_flush_custom_instances_batch(gfx_handler_t *h, VkCommandBuf
   memcpy((char *)r->ubo_buffer_ptr + dyn_offset, &ubo, sizeof(ubo));
   r->ubo_buffer_offset += (uint32_t)aligned;
 
-  const uint32_t pool_idx = h->g_main_window_data.FrameIndex % 3;
+  const uint32_t pool_idx = h->renderer.frame_slot;
   VkDescriptorSet desc;
   VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                     .descriptorPool = r->frame_descriptor_pools[pool_idx],
@@ -4195,7 +4347,7 @@ static void renderer_flush_custom_instances_batch(gfx_handler_t *h, VkCommandBuf
   mesh_t *quad = h->quad_mesh;
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline);
   VkBuffer bufs[2] = {quad->vertex_buffer.buffer, pipe->instance_buffer.buffer};
-  VkDeviceSize offs[2] = {0, (VkDeviceSize)start_index * pipe->instance_stride};
+  VkDeviceSize offs[2] = {0, (VkDeviceSize)(pipe->instance_first + start_index) * pipe->instance_stride};
   vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
   vkCmdBindIndexBuffer(cmd, quad->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso->pipeline_layout, 0, 1, &desc, 0, NULL);
@@ -4226,12 +4378,13 @@ bool renderer_mark_texture_external(gfx_handler_t *h, texture_t *tex) {
   transition_image_layout(h, h->renderer.transfer_command_pool, tex->image, tex->format, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, tex->mip_levels, 0, tex->layer_count);
   tex->external = true;
+  ++h->renderer.external_texture_count;
   renderer_unlock();
   return true;
 }
 
 void renderer_sync_external_textures(gfx_handler_t *h, VkCommandBuffer cmd, bool for_sampling) {
-  if (!h || cmd == VK_NULL_HANDLE) return;
+  if (!h || cmd == VK_NULL_HANDLE || h->renderer.external_texture_count == 0) return;
 
   renderer_state_t *renderer = &h->renderer;
   for (uint32_t i = 0; i < MAX_TEXTURES; ++i) {

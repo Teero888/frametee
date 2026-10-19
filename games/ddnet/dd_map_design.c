@@ -9,17 +9,48 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAP_CHUNK 64
+#define MAP_CHUNK 64 /* along a border */
+/* A tile layer is cut into chunks this many tiles square, culled as a whole and
+ * drawn a row of visible chunks at a time. (Smaller chunks cull more of the
+ * tiles off the screen, which measured nothing: what tiles cost is their
+ * pixels.) */
+#define TILE_CHUNK 64
+#define NO_BATCH UINT32_MAX
 #define QUAD_BATCH 64
+/* A quad layer with this many batches gets a grid (design_grid_t). */
+#define GRID_MIN_BATCHES 256
+#define GRID_MAX_CELLS 64   /* along either axis */
+#define GRID_LOOSE_CELLS 16 /* a batch reaching more cells is visited every frame */
 
 typedef struct {
   uint32_t first, count;
   float bounds[4];
+  /* Where a quad batch can be at all: its bounds widened by how far its
+   * envelope may move it (envelope_reach). A tile batch's bounds. */
+  float reachable[4];
   int quad, border;
 } design_batch_t;
 
+/* A quad layer's batches by where they can be, so a frame visits the batches
+ * the screen may show rather than every one: a map that animates thousands of
+ * quads on their own offsets has thousands of batches in a layer. */
+typedef struct {
+  float origin[2], cell;
+  int cols, rows;
+  uint32_t *cell_start;   /* cols * rows + 1 offsets into cell_batches */
+  uint32_t *cell_batches; /* batch indices, each cell's in map order */
+  uint32_t *loose;        /* batches reaching too many cells to list in each */
+  uint32_t loose_count;
+} design_grid_t;
+
 typedef struct {
   size_t first, count;
+  design_grid_t *grid; /* NULL for a tile layer, or a quad layer with few batches */
+  /* A tile layer's chunks, row by row, as their batches (NO_BATCH: empty), and
+   * where its border batches begin after them. */
+  uint32_t *chunks;
+  int chunks_x, chunks_y;
+  size_t first_border;
 } design_layer_t;
 typedef struct {
   ft_texture *tiles, *quads;
@@ -31,6 +62,9 @@ struct dd_map_design {
   design_layer_t *layers;
   design_batch_t *batches;
   size_t num_batches, capacity;
+  float (*reach)[2]; /* per envelope, see envelope_reach */
+  /* Room for the batches a frame takes out of any grid (see gather_batches). */
+  uint32_t *gather;
 };
 
 typedef struct {
@@ -39,15 +73,28 @@ typedef struct {
   size_t quads, capacity;
 } design_builder_t;
 
-/* Six std140 vec4s, below the engine's 128-byte queued-uniform limit. */
+/* Six std140 vec4s (design_vert.glsl.inc). A quad layer's draws carry more:
+ * design_group_uniforms_t. */
 typedef struct {
   float view[4]; /* center.xy, inverse half size.xy */
   float tint[4];
-  float clip[4];      /* NDC left, top, right, bottom */
+  float clip[4];      /* NDC left, top, right, bottom; drawn as a scissor, the shaders ignore it */
   float geometry[4];  /* offset.xy, scale.xy (tile borders) */
-  float animation[4]; /* offset.xy, unused.zw */
-  float params[4];    /* cos, sin, lod bias, tile mode */
+  float animation[4]; /* unused */
+  float params[4];    /* unused.xy, lod bias, unused */
 } design_uniforms_t;
+
+#define DESIGN_GROUP_QUADS 128 /* GROUP_QUADS in design_vert.glsl.inc */
+
+/* A quad layer's draw: consecutive quads of the mesh, each with its own place
+ * and tint, as DDNet groups them. A map that animates every quad on its own
+ * offset would otherwise take a draw per quad. Sent only as far as `quads` is
+ * used. */
+typedef struct {
+  design_uniforms_t base;
+  float group[4];                        /* x: the draw's first quad in the mesh */
+  float quads[DESIGN_GROUP_QUADS][2][4]; /* offset.xy, cos, sin; then the tint */
+} design_group_uniforms_t;
 
 static bool grow(void **data, size_t *capacity, size_t needed, size_t stride) {
   if (needed <= *capacity) return true;
@@ -122,13 +169,21 @@ static bool tile_batch(struct dd_map_design *d, design_builder_t *b, const map_l
   return finish_batch(d, b, &batch);
 }
 
-static bool build_tiles(struct dd_map_design *d, design_builder_t *b, const map_layer_t *l) {
-  for (int y = 0; y < l->height; y += MAP_CHUNK)
-    for (int x = 0; x < l->width; x += MAP_CHUNK) {
-      int x1 = x + MAP_CHUNK < l->width ? x + MAP_CHUNK : l->width;
-      int y1 = y + MAP_CHUNK < l->height ? y + MAP_CHUNK : l->height;
+static bool build_tiles(struct dd_map_design *d, design_builder_t *b, const map_layer_t *l, design_layer_t *dl) {
+  dl->chunks_x = (l->width + TILE_CHUNK - 1) / TILE_CHUNK;
+  dl->chunks_y = (l->height + TILE_CHUNK - 1) / TILE_CHUNK;
+  dl->chunks = malloc(sizeof(*dl->chunks) * (size_t)(dl->chunks_x * dl->chunks_y > 0 ? dl->chunks_x * dl->chunks_y : 1));
+  if (!dl->chunks) return false;
+  for (int cy = 0; cy < dl->chunks_y; ++cy)
+    for (int cx = 0; cx < dl->chunks_x; ++cx) {
+      const int x = cx * TILE_CHUNK, y = cy * TILE_CHUNK;
+      const int x1 = x + TILE_CHUNK < l->width ? x + TILE_CHUNK : l->width;
+      const int y1 = y + TILE_CHUNK < l->height ? y + TILE_CHUNK : l->height;
+      const size_t before = d->num_batches;
       if (!tile_batch(d, b, l, x, y, x1, y1, 0)) return false;
+      dl->chunks[(size_t)cy * dl->chunks_x + cx] = d->num_batches > before ? (uint32_t)before : NO_BATCH;
     }
+  dl->first_border = d->num_batches;
   for (int y = 0; y < l->height; y += MAP_CHUNK) {
     int end = y + MAP_CHUNK < l->height ? y + MAP_CHUNK : l->height;
     if (!tile_batch(d, b, l, 0, y, 1, end, 1) || !tile_batch(d, b, l, l->width - 1, y, l->width, end, 2)) return false;
@@ -142,6 +197,27 @@ static bool build_tiles(struct dd_map_design *d, design_builder_t *b, const map_
     if (!tile_batch(d, b, l, x, y, x + 1, y + 1, 5 + i)) return false;
   }
   return true;
+}
+
+/* How far an envelope's position channels can move a quad, in tiles: the
+ * largest offset a point holds, or a Bezier handle, since those bound the curve
+ * between points. A batch further off the screen than this is culled without
+ * evaluating its envelope, which a map animating every quad on its own offset
+ * would otherwise do for the whole map each frame. */
+static void envelope_reach(const map_data_t *map, int index, float out[2]) {
+  out[0] = out[1] = 0;
+  const map_envelope_t *e = &map->envelopes[index];
+  if (e->start_point < 0 || e->num_points <= 0 || e->start_point >= map->num_env_points ||
+      e->num_points > map->num_env_points - e->start_point)
+    return;
+  for (int i = 0; i < e->num_points; ++i) {
+    const map_env_point_t *p = &map->env_points[e->start_point + i];
+    for (int c = 0; c < 2 && c < e->channels; ++c) {
+      float v = fabsf((float)p->values[c]);
+      if (map->env_bezier) v = fmaxf(v, fmaxf(fabsf((float)p->values[c] + p->in_dy[c]), fabsf((float)p->values[c] + p->out_dy[c])));
+      out[c] = fmaxf(out[c], v / 1024.f / 32.f);
+    }
+  }
 }
 
 static bool same_envelopes(const map_quad_t *a, const map_quad_t *b) {
@@ -265,43 +341,160 @@ static ft_texture *image_texture(ft_game *game, const unsigned char *pixels, int
   return texture;
 }
 
+static bool design_pipelines_ready(const ft_game *game) {
+  for (int i = 0; i < DD_DESIGN_VARIANTS; ++i)
+    if (!game->gfx.design[i]) return false;
+  return game->gfx.design_white && game->gfx.design_white_tiles;
+}
+
 static bool design_pipelines(ft_game *game) {
-  if (game->gfx.design_tiles && game->gfx.design_quads && game->gfx.design_white && game->gfx.design_white_tiles) return true;
-  char path[1024];
-  void *vert = NULL, *frag = NULL;
-  size_t vert_size = 0, frag_size = 0;
-  game->engine->resolve_data_path("shaders/design.vert.spv", path, sizeof(path));
-  if (!game->engine->read_file(path, &vert, &vert_size)) return false;
+  if (design_pipelines_ready(game)) return true;
+  static const char *const stages[DD_DESIGN_VARIANTS][2] = {
+      [DD_DESIGN_TILE] = {"shaders/design_tile.vert.spv", "shaders/design_tile.frag.spv"},
+      [DD_DESIGN_TILE_BORDER] = {"shaders/design_tile.vert.spv", "shaders/design_tile_border.frag.spv"},
+      [DD_DESIGN_QUAD] = {"shaders/design_quad.vert.spv", "shaders/design_quad.frag.spv"},
+  };
   const ft_vertex_attr attrs[] = {
       {0, offsetof(ft_vertex, pos), FT_VERTEX_FLOAT2},
       {1, offsetof(ft_vertex, color), FT_VERTEX_UINT1},
       {2, offsetof(ft_vertex, color) + sizeof(float), FT_VERTEX_FLOAT2},
       {3, offsetof(ft_vertex, uv), FT_VERTEX_FLOAT2},
   };
-  ft_pipeline_desc desc = {.struct_size = sizeof(desc),
-                           .vertex_spirv = vert,
-                           .vertex_spirv_size = vert_size,
-                           .instance_attrs = attrs,
-                           .instance_attr_count = 4,
-                           .texture_count = 1,
-                           .alpha_blend = true};
-  for (int i = 0; i < 2; ++i) {
-    ft_pipeline **pipeline = i ? &game->gfx.design_quads : &game->gfx.design_tiles;
+  for (int i = 0; i < DD_DESIGN_VARIANTS; ++i) {
+    ft_pipeline **pipeline = &game->gfx.design[i];
     if (*pipeline) continue;
-    game->engine->resolve_data_path(i ? "shaders/design_quad.frag.spv" : "shaders/design_tile.frag.spv", path, sizeof(path));
-    if (!game->engine->read_file(path, &frag, &frag_size)) break;
-    desc.fragment_spirv = frag;
-    desc.fragment_spirv_size = frag_size;
-    *pipeline = game->engine->pipeline_create(&desc);
-    game->engine->free_file_data(frag);
-    frag = NULL;
+    char path[1024];
+    void *code[2] = {NULL, NULL};
+    size_t size[2] = {0, 0};
+    bool read = true;
+    for (int stage = 0; stage < 2 && read; ++stage) {
+      game->engine->resolve_data_path(stages[i][stage], path, sizeof(path));
+      read = game->engine->read_file(path, &code[stage], &size[stage]);
+    }
+    if (read) {
+      ft_pipeline_desc desc = {.struct_size = sizeof(desc),
+                               .vertex_spirv = code[0],
+                               .vertex_spirv_size = size[0],
+                               .fragment_spirv = code[1],
+                               .fragment_spirv_size = size[1],
+                               .instance_attrs = attrs,
+                               .instance_attr_count = 4,
+                               .texture_count = 1,
+                               .alpha_blend = true,
+                               .straight_alpha = true};
+      *pipeline = game->engine->pipeline_create(&desc);
+    }
+    for (int stage = 0; stage < 2; ++stage)
+      if (code[stage]) game->engine->free_file_data(code[stage]);
+    if (!read) break;
   }
-  game->engine->free_file_data(vert);
   unsigned char white[16 * 16 * 4];
   memset(white, 255, sizeof(white));
   if (!game->gfx.design_white) game->gfx.design_white = image_texture(game, white, 1, 1, false);
   if (!game->gfx.design_white_tiles) game->gfx.design_white_tiles = image_texture(game, white, 16, 16, true);
-  return game->gfx.design_tiles && game->gfx.design_quads && game->gfx.design_white && game->gfx.design_white_tiles;
+  return design_pipelines_ready(game);
+}
+
+static int grid_cell(const design_grid_t *g, float value, int axis) {
+  const int count = axis ? g->rows : g->cols;
+  const int cell = (int)floorf((value - g->origin[axis]) / g->cell);
+  return cell < 0 ? 0 : cell >= count ? count - 1 : cell;
+}
+
+static void destroy_grid(design_grid_t *g) {
+  if (!g) return;
+  free(g->cell_start);
+  free(g->cell_batches);
+  free(g->loose);
+  free(g);
+}
+
+/* Lists every batch of the layer in each cell its reachable bounds overlap. */
+static design_grid_t *build_grid(const struct dd_map_design *d, const design_layer_t *dl) {
+  float lo[2] = {FLT_MAX, FLT_MAX}, hi[2] = {-FLT_MAX, -FLT_MAX};
+  for (size_t i = dl->first; i < dl->first + dl->count; ++i)
+    for (int axis = 0; axis < 2; ++axis) {
+      lo[axis] = fminf(lo[axis], d->batches[i].reachable[axis]);
+      hi[axis] = fmaxf(hi[axis], d->batches[i].reachable[axis + 2]);
+    }
+  if (!(hi[0] >= lo[0] && hi[1] >= lo[1])) return NULL;
+  design_grid_t *g = calloc(1, sizeof(*g));
+  if (!g) return NULL;
+  g->cell = fmaxf(4.f, fmaxf(hi[0] - lo[0], hi[1] - lo[1]) / GRID_MAX_CELLS);
+  g->origin[0] = lo[0];
+  g->origin[1] = lo[1];
+  g->cols = (int)fminf(GRID_MAX_CELLS, floorf((hi[0] - lo[0]) / g->cell) + 1);
+  g->rows = (int)fminf(GRID_MAX_CELLS, floorf((hi[1] - lo[1]) / g->cell) + 1);
+  const size_t cells = (size_t)g->cols * g->rows;
+  g->cell_start = calloc(cells + 1, sizeof(*g->cell_start));
+  if (!g->cell_start) goto fail;
+  /* Counted first, then filled, each cell's list in the layer's order. */
+  for (int pass = 0; pass < 2; ++pass) {
+    for (size_t i = dl->first; i < dl->first + dl->count; ++i) {
+      const float *r = d->batches[i].reachable;
+      const int x0 = grid_cell(g, r[0], 0), x1 = grid_cell(g, r[2], 0);
+      const int y0 = grid_cell(g, r[1], 1), y1 = grid_cell(g, r[3], 1);
+      if ((x1 - x0 + 1) * (y1 - y0 + 1) > GRID_LOOSE_CELLS) {
+        if (pass) g->loose[g->loose_count] = (uint32_t)i;
+        ++g->loose_count;
+        continue;
+      }
+      for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
+          const size_t cell = (size_t)y * g->cols + x;
+          if (pass) g->cell_batches[g->cell_start[cell]++] = (uint32_t)i;
+          else ++g->cell_start[cell + 1];
+        }
+    }
+    if (pass) break;
+    for (size_t c = 0; c < cells; ++c)
+      g->cell_start[c + 1] += g->cell_start[c];
+    g->cell_batches = malloc(sizeof(*g->cell_batches) * (g->cell_start[cells] ? g->cell_start[cells] : 1));
+    g->loose = malloc(sizeof(*g->loose) * (g->loose_count ? g->loose_count : 1));
+    if (!g->cell_batches || !g->loose) goto fail;
+    g->loose_count = 0;
+  }
+  /* Filling moved every start on to where the next cell begins. */
+  for (size_t c = cells; c > 0; --c)
+    g->cell_start[c] = g->cell_start[c - 1];
+  g->cell_start[0] = 0;
+  return g;
+fail:
+  destroy_grid(g);
+  return NULL;
+}
+
+static int compare_index(const void *a, const void *b) {
+  const uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+  return x < y ? -1 : x > y;
+}
+
+/* The batches of a grid the screen (`cull`) may show, in map order, into
+ * `out`. SIZE_MAX when the screen covers most of the grid, where visiting the
+ * whole layer is cheaper than collecting it. */
+static size_t gather_batches(const design_grid_t *g, const float cull[4], uint32_t *out) {
+  size_t n = 0;
+  const bool overlaps = cull[2] >= g->origin[0] && cull[3] >= g->origin[1] && cull[0] <= g->origin[0] + g->cols * g->cell &&
+                        cull[1] <= g->origin[1] + g->rows * g->cell;
+  if (overlaps) {
+    const int x0 = grid_cell(g, cull[0], 0), x1 = grid_cell(g, cull[2], 0);
+    const int y0 = grid_cell(g, cull[1], 1), y1 = grid_cell(g, cull[3], 1);
+    if ((size_t)(x1 - x0 + 1) * (y1 - y0 + 1) * 2 > (size_t)g->cols * g->rows) return SIZE_MAX;
+    for (int y = y0; y <= y1; ++y)
+      for (int x = x0; x <= x1; ++x) {
+        const size_t cell = (size_t)y * g->cols + x;
+        for (uint32_t k = g->cell_start[cell]; k < g->cell_start[cell + 1]; ++k)
+          out[n++] = g->cell_batches[k];
+      }
+  }
+  memcpy(out + n, g->loose, sizeof(*out) * g->loose_count);
+  n += g->loose_count;
+  /* A batch in several cells was taken from each. */
+  qsort(out, n, sizeof(*out), compare_index);
+  size_t unique = 0;
+  for (size_t i = 0; i < n; ++i)
+    if (unique == 0 || out[unique - 1] != out[i]) out[unique++] = out[i];
+  return unique;
 }
 
 void dd_map_design_destroy(ft_game *game, ft_level *level) {
@@ -314,8 +507,15 @@ void dd_map_design_destroy(ft_game *game, ft_level *level) {
       if (d->images[i].quads) game->engine->texture_destroy(d->images[i].quads);
     }
   free(d->images);
+  if (d->layers)
+    for (int i = 0; i < level->map.num_layers; ++i) {
+      destroy_grid(d->layers[i].grid);
+      free(d->layers[i].chunks);
+    }
   free(d->layers);
   free(d->batches);
+  free(d->reach);
+  free(d->gather);
   free(d);
   level->design = NULL;
 }
@@ -331,8 +531,11 @@ void dd_map_design_create(ft_game *game, ft_level *level) {
   level->design = d;
   d->images = calloc((size_t)map->num_images, sizeof(*d->images));
   d->layers = calloc((size_t)map->num_layers, sizeof(*d->layers));
+  d->reach = calloc((size_t)(map->num_envelopes > 0 ? map->num_envelopes : 1), sizeof(*d->reach));
   design_builder_t builder = {0};
-  if ((map->num_images && !d->images) || (map->num_layers && !d->layers)) goto fail;
+  if ((map->num_images && !d->images) || (map->num_layers && !d->layers) || !d->reach) goto fail;
+  for (int i = 0; i < map->num_envelopes; ++i)
+    envelope_reach(map, i, d->reach[i]);
   for (int i = 0; i < map->num_images; ++i) {
     bool tiles = false, quads = false;
     for (int l = 0; l < map->num_layers; ++l)
@@ -368,10 +571,27 @@ void dd_map_design_create(ft_game *game, ft_level *level) {
     const map_layer_t *l = &map->layers[i];
     d->layers[i].first = d->num_batches;
     if (l->type == 2 && !l->tile_flags && l->tiles) {
-      if (!build_tiles(d, &builder, l)) goto fail;
+      if (!build_tiles(d, &builder, l, &d->layers[i])) goto fail;
     } else if (l->type == 3 && !build_quads(d, &builder, l)) goto fail;
     d->layers[i].count = d->num_batches - d->layers[i].first;
   }
+  /* Where each batch can be, and the grids of the quad layers with many. */
+  size_t gather_capacity = 0;
+  for (int i = 0; i < map->num_layers; ++i) {
+    design_layer_t *dl = &d->layers[i];
+    for (size_t bi = dl->first; bi < dl->first + dl->count; ++bi) {
+      design_batch_t *b = &d->batches[bi];
+      const map_quad_t *q = b->quad >= 0 ? &map->layers[i].quads[b->quad] : NULL;
+      const float *reach = q && q->pos_env >= 0 && q->pos_env < map->num_envelopes ? d->reach[q->pos_env] : (const float[2]){0, 0};
+      for (int k = 0; k < 4; ++k)
+        b->reachable[k] = b->bounds[k] + (k < 2 ? -reach[k & 1] : reach[k & 1]);
+    }
+    if (map->layers[i].type == 3 && dl->count >= GRID_MIN_BATCHES && (dl->grid = build_grid(d, dl))) {
+      const size_t entries = dl->grid->cell_start[(size_t)dl->grid->cols * dl->grid->rows] + dl->grid->loose_count;
+      if (entries > gather_capacity) gather_capacity = entries;
+    }
+  }
+  if (gather_capacity && !(d->gather = malloc(sizeof(*d->gather) * gather_capacity))) goto fail;
   if (builder.quads) {
     d->mesh = game->engine->mesh_create(builder.vertices, (uint32_t)builder.quads * 4, sizeof(ft_vertex), builder.indices,
                                         (uint32_t)builder.quads * 6);
@@ -416,6 +636,138 @@ static bool border_geometry(int border, const map_layer_t *l, const float view[4
   return g[2] > 0 && g[3] > 0;
 }
 
+/* What a layer's batches are drawn with this frame. */
+typedef struct {
+  ft_game *game;
+  const map_data_t *map;
+  const struct dd_map_design *d;
+  const map_layer_t *layer;
+  const design_uniforms_t *group; /* the group's view and clip, every batch's start */
+  const float *view, *cull;
+  float color[4]; /* the layer's tint this frame */
+  ft_texture *texture;
+  double time;
+  float z;
+  bool clips;
+} layer_draw_t;
+
+/* Draws tile batch `bi`, and after a chunk the visible chunks following it in
+ * the mesh along with it, up to `end`. Returns the last batch drawn. */
+static size_t draw_batch(const layer_draw_t *ld, size_t bi, size_t end) {
+  const struct dd_map_design *d = ld->d;
+  const design_batch_t *b = &d->batches[bi];
+  design_uniforms_t u = *ld->group;
+  memcpy(u.tint, ld->color, sizeof(u.tint));
+  if (!border_geometry(b->border, ld->layer, ld->view, u.geometry)) return bi;
+  float bounds[4];
+  for (int k = 0; k < 4; ++k)
+    bounds[k] = b->bounds[k] * u.geometry[2 + (k & 1)] + u.geometry[k & 1];
+  if (!visible(bounds, ld->cull)) return bi;
+  uint32_t count = b->count;
+  // Consecutive visible tile chunks have identical state. Submit them as
+  // one range (often an entire layer when zoomed out), while retaining
+  // chunk-level culling when the view only covers part of the map.
+  if (!b->border) {
+    while (bi + 1 < end) {
+      const design_batch_t *next = &d->batches[bi + 1];
+      if (next->border || next->first != b->first + count || !visible(next->bounds, ld->cull)) break;
+      count += next->count;
+      ++bi;
+    }
+  }
+  ft_pipeline *pipeline = ld->game->gfx.design[b->border ? DD_DESIGN_TILE_BORDER : DD_DESIGN_TILE];
+  ft_texture *texture = ld->texture;
+  // DDNet clips a group with a scissor too.
+  if (ld->clips)
+    ld->game->engine->draw_mesh_range_clipped(pipeline, ld->z, d->mesh, b->first, count, &texture, 1, &u, sizeof(u), u.clip);
+  else ld->game->engine->draw_mesh_range(pipeline, ld->z, d->mesh, b->first, count, &texture, 1, &u, sizeof(u));
+  return bi;
+}
+
+/* A quad layer's batches on their way into its draws. */
+typedef struct {
+  design_group_uniforms_t u;
+  uint32_t first_quad, count; /* the quads of the mesh the draw covers; none yet when count is 0 */
+} quad_group_t;
+
+/* A tile layer: the chunks the screen covers, a row of chunks at a time (with
+ * the visible ones following each in the mesh drawn along with it), then the
+ * borders. */
+static void draw_tile_layer(const layer_draw_t *ld, const design_layer_t *dl) {
+  const size_t end = dl->first + dl->count;
+  const float *c = ld->cull;
+  if (dl->chunks && c[2] > 0 && c[3] > 0 && c[0] < (float)(dl->chunks_x * TILE_CHUNK) && c[1] < (float)(dl->chunks_y * TILE_CHUNK)) {
+    const int x0 = c[0] > 0 ? (int)(c[0] / TILE_CHUNK) : 0, y0 = c[1] > 0 ? (int)(c[1] / TILE_CHUNK) : 0;
+    const int x1 = (int)fminf((float)(dl->chunks_x - 1), floorf(c[2] / TILE_CHUNK));
+    const int y1 = (int)fminf((float)(dl->chunks_y - 1), floorf(c[3] / TILE_CHUNK));
+    size_t drawn = 0; /* one past the last batch drawn: a merge can run on into the next row */
+    for (int y = y0; y <= y1; ++y)
+      for (int x = x0; x <= x1; ++x) {
+        const uint32_t bi = dl->chunks[(size_t)y * dl->chunks_x + x];
+        if (bi == NO_BATCH || bi < drawn) continue;
+        drawn = draw_batch(ld, bi, dl->first_border) + 1;
+      }
+  }
+  for (size_t bi = dl->first_border; bi < end; ++bi)
+    bi = draw_batch(ld, bi, end);
+}
+
+static void flush_group(const layer_draw_t *ld, quad_group_t *g) {
+  if (!g->count) return;
+  g->u.group[0] = (float)g->first_quad;
+  const size_t size = offsetof(design_group_uniforms_t, quads) + (size_t)g->count * sizeof(g->u.quads[0]);
+  ft_pipeline *pipeline = ld->game->gfx.design[DD_DESIGN_QUAD];
+  ft_texture *texture = ld->texture;
+  const uint32_t first = g->first_quad * 6, count = g->count * 6;
+  if (ld->clips)
+    ld->game->engine->draw_mesh_range_clipped(pipeline, ld->z, ld->d->mesh, first, count, &texture, 1, &g->u, size, g->u.base.clip);
+  else ld->game->engine->draw_mesh_range(pipeline, ld->z, ld->d->mesh, first, count, &texture, 1, &g->u, size);
+  g->count = 0;
+}
+
+/* Adds `quads` quads of the mesh from `first_quad` on, all placed by `animation`
+ * (offset.xy, cos, sin) and tinted `tint`, to the draw being gathered: sent
+ * first if they would not fit in it. */
+static void group_quads(const layer_draw_t *ld, quad_group_t *g, uint32_t first_quad, uint32_t quads, const float animation[4],
+                        const float tint[4]) {
+  if (g->count && first_quad + quads - g->first_quad > DESIGN_GROUP_QUADS) flush_group(ld, g);
+  if (!g->count) {
+    g->u.base = *ld->group;
+    g->first_quad = first_quad;
+  }
+  // The quads in between are drawn too, being in the range: with nothing to show
+  // and far out of any view, so they cost the pixels nothing.
+  for (uint32_t k = g->first_quad + g->count; k < first_quad; ++k) {
+    float(*e)[4] = g->u.quads[k - g->first_quad];
+    memcpy(e[0], (const float[4]){1e6f, 1e6f, 1.f, 0.f}, sizeof(e[0]));
+    memset(e[1], 0, sizeof(e[1]));
+  }
+  for (uint32_t k = first_quad; k < first_quad + quads; ++k) {
+    float(*e)[4] = g->u.quads[k - g->first_quad];
+    memcpy(e[0], animation, sizeof(e[0]));
+    memcpy(e[1], tint, sizeof(e[1]));
+  }
+  g->count = first_quad + quads - g->first_quad;
+}
+
+/* Quad batch `bi` into the draw being gathered, where it can be seen. */
+static void group_batch(const layer_draw_t *ld, quad_group_t *g, size_t bi) {
+  const design_batch_t *b = &ld->d->batches[bi];
+  // Off the screen wherever its envelope may move it, it needs no evaluating.
+  if (!visible(b->reachable, ld->cull)) return;
+  const map_quad_t *q = &ld->layer->quads[b->quad];
+  float tint[4], pos[4] = {0};
+  memcpy(tint, ld->color, sizeof(tint));
+  dd_map_envelope(ld->map, q->color_env, ld->time + q->color_env_offset, 4, tint);
+  if (tint[3] <= 0) return;
+  dd_map_envelope(ld->map, q->pos_env, ld->time + q->pos_env_offset, 3, pos);
+  const float offset[2] = {pos[0] / 32.f, pos[1] / 32.f};
+  const float bounds[4] = {b->bounds[0] + offset[0], b->bounds[1] + offset[1], b->bounds[2] + offset[0], b->bounds[3] + offset[1]};
+  if (!visible(bounds, ld->cull)) return;
+  const float angle = pos[2] * (3.14159265358979323846f / 180.f);
+  group_quads(ld, g, b->first / 6, b->count / 6, (const float[4]){offset[0], offset[1], cosf(angle), sinf(angle)}, tint);
+}
+
 void dd_map_design_render(ft_game *game, const ft_render_frame *frame) {
   const ft_level *level = frame->level;
   if (!level || !level->design || !level->design->mesh) return;
@@ -432,7 +784,7 @@ void dd_map_design_render(ft_game *game, const ft_render_frame *frame) {
   for (int g = 0; g < map->num_groups; ++g) {
     const map_group_t *group = &map->groups[g];
     design_uniforms_t u = {
-        .tint = {1, 1, 1, 1}, .clip = {-1, -1, 1, 1}, .geometry = {0, 0, 1, 1}, .params = {1, 0, frame->state.lod_bias, 0}};
+        .tint = {1, 1, 1, 1}, .clip = {-1, -1, 1, 1}, .geometry = {0, 0, 1, 1}, .params = {0, 0, frame->state.lod_bias, 0}};
     float view[4], cull[4];
     dd_map_group_view(group, camera, view);
     memcpy(cull, view, sizeof(cull));
@@ -454,6 +806,8 @@ void dd_map_design_render(ft_game *game, const ft_render_frame *frame) {
         cull[k] = view[axis] + (u.clip[k] + 1) * 0.5f * (view[axis + 2] - view[axis]);
       }
     }
+    // (a clip as large as the screen drops nothing)
+    const bool clips = group->use_clipping && (u.clip[0] > -1 || u.clip[1] > -1 || u.clip[2] < 1 || u.clip[3] < 1);
     for (int j = 0; j < group->num_layers; ++j) {
       int li = group->start_layer + j;
       const map_layer_t *l = &map->layers[li];
@@ -474,45 +828,34 @@ void dd_map_design_render(ft_game *game, const ft_render_frame *frame) {
         if (color[3] <= 0) continue;
       }
       const design_layer_t *dl = &d->layers[li];
-      for (size_t bi = dl->first; bi < dl->first + dl->count; ++bi) {
-        const design_batch_t *b = &d->batches[bi];
-        memcpy(u.tint, color, sizeof(color));
-        memset(u.animation, 0, sizeof(u.animation));
-        u.params[0] = 1;
-        u.params[1] = 0;
-        u.params[3] = tiles ? 1 : 0;
-        if (!border_geometry(b->border, l, view, u.geometry)) continue;
-        if (!tiles) {
-          const map_quad_t *q = &l->quads[b->quad];
-          float pos[4] = {0};
-          dd_map_envelope(map, q->color_env, time + q->color_env_offset, 4, u.tint);
-          if (u.tint[3] <= 0) continue;
-          dd_map_envelope(map, q->pos_env, time + q->pos_env_offset, 3, pos);
-          u.animation[0] = pos[0] / 32.f;
-          u.animation[1] = pos[1] / 32.f;
-          float angle = pos[2] * (3.14159265358979323846f / 180.f);
-          u.params[0] = cosf(angle);
-          u.params[1] = sinf(angle);
-        }
-        float bounds[4];
-        for (int k = 0; k < 4; ++k)
-          bounds[k] = b->bounds[k] * u.geometry[2 + (k & 1)] + u.geometry[k & 1] + u.animation[k & 1];
-        if (!visible(bounds, cull)) continue;
-        uint32_t count = b->count;
-        // Consecutive visible tile chunks have identical state. Submit them as
-        // one range (often an entire layer when zoomed out), while retaining
-        // chunk-level culling when the view only covers part of the map.
-        if (tiles && !b->border) {
-          while (bi + 1 < dl->first + dl->count) {
-            const design_batch_t *next = &d->batches[bi + 1];
-            if (next->border || next->first != b->first + count || !visible(next->bounds, cull)) break;
-            count += next->count;
-            ++bi;
-          }
-        }
-        game->engine->draw_mesh_range(tiles ? game->gfx.design_tiles : game->gfx.design_quads, want_foreground ? DD_Z_MAP : 0.f, d->mesh,
-                                      b->first, count, &texture, 1, &u, sizeof(u));
+      layer_draw_t draw = {.game = game,
+                           .map = map,
+                           .d = d,
+                           .layer = l,
+                           .group = &u,
+                           .view = view,
+                           .cull = cull,
+                           .texture = texture,
+                           .time = time,
+                           .z = want_foreground ? DD_Z_MAP : 0.f,
+                           .clips = clips};
+      memcpy(draw.color, color, sizeof(color));
+      const size_t end = dl->first + dl->count;
+      if (tiles) {
+        draw_tile_layer(&draw, dl);
+        continue;
       }
+      quad_group_t quads;
+      quads.count = 0;
+      const size_t gathered = dl->grid ? gather_batches(dl->grid, cull, d->gather) : SIZE_MAX;
+      if (gathered == SIZE_MAX) {
+        for (size_t bi = dl->first; bi < end; ++bi)
+          group_batch(&draw, &quads, bi);
+      } else {
+        for (size_t i = 0; i < gathered; ++i)
+          group_batch(&draw, &quads, d->gather[i]);
+      }
+      flush_group(&draw, &quads);
     }
   }
 }

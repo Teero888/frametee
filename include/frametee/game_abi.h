@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 31u
+#define FT_GAME_ABI_VERSION 32u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -965,6 +965,12 @@ typedef struct ft_pipeline_desc {
   uint32_t max_instances_per_frame;
   uint32_t texture_count; /* combined image samplers bound at draw time */
   bool alpha_blend;
+  /* With alpha_blend: the fragment stage writes its colour as it is, not
+   * multiplied by its alpha, and blending does the multiplying (colour times
+   * alpha, plus what was there times one minus alpha; alpha accumulates as it
+   * does premultiplied). The result is the same, without the fragment stage's
+   * multiplies, which counts on every pixel of a fill-heavy draw. */
+  bool straight_alpha;
   /* Mesh pipelines only (instance_stride 0). Bytes per vertex of the meshes
    * it draws, laid out as `instance_attrs` describes; 0 means ft_vertex. A 3D
    * level brings its own vertex (a position in three dimensions, texture
@@ -1422,6 +1428,12 @@ typedef struct ft_engine_api {
   /* The game changed a setting itself, in a window of its own: the engine
    * saves its config the way it does after a change in the settings menu. */
   void (*settings_changed)(void);
+  /* draw_mesh_range, kept inside `clip`: a rectangle in normalized device
+   * coordinates (x0, y0, x1, y1, each -1 to 1). It is a scissor, so it costs
+   * nothing per pixel; edges given on pixel boundaries are kept exactly. */
+  void (*draw_mesh_range_clipped)(ft_pipeline *pipeline, float z, ft_mesh *mesh, uint32_t first_index, uint32_t index_count,
+                                  ft_texture *const *textures, uint32_t texture_count, const void *uniforms,
+                                  size_t uniform_size, const float clip[4]);
 } ft_engine_api;
 
 /* The layer a 3D triangle names when it carries no texture. */

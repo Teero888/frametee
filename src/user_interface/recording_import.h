@@ -19,6 +19,9 @@ void recording_import_open(ui_handler_t *ui, const char *path, bool new_project)
 // to ask (a video rendered from the command line): the suggested players, on the recording's own
 // level if the project's is another.
 bool recording_import_finish(ui_handler_t *ui);
+// Chooses every player of the recording rather than the suggested ones, for a finish to follow
+// (a benchmark draws all of them, as the game's own demo player does).
+void recording_import_choose_all(ui_handler_t *ui);
 // The import dialog, once per frame.
 void recording_import_render(ui_handler_t *ui);
 // Whether an import dialog is up. The start screen stays away meanwhile, even with no level loaded:

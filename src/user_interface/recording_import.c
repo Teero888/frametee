@@ -763,6 +763,17 @@ static void render_ready(ui_handler_t *ui, timeline_recording_t *recording) {
   }
 }
 
+void recording_import_choose_all(ui_handler_t *ui) {
+  if (!imp.active) return;
+  timeline_recording_t *recording = recordings_find(&ui->timeline, imp.recording_id);
+  if (!recording || !recordings_wait(&ui->timeline, recording)) return;
+  const int count = (int)recording->info.player_count;
+  free(imp.selected);
+  imp.selected = calloc((size_t)(count > 0 ? count : 1), sizeof(*imp.selected));
+  imp.selected_count = imp.selected ? count : 0;
+  for (int i = 0; i < imp.selected_count; ++i) imp.selected[i] = true;
+}
+
 bool recording_import_finish(ui_handler_t *ui) {
   if (!imp.active) return false;
   timeline_recording_t *recording = recordings_find(&ui->timeline, imp.recording_id);

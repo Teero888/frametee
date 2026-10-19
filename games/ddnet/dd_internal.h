@@ -471,21 +471,21 @@ typedef struct {
   bool loaded;
 } dd_skin_slot_t;
 
-// DDNet text is rendered by the game module, through the same atlas path as
-// its other sprites. This keeps it inside the viewport render target and gives
-// it exactly the same camera transform and clipping as the map and players.
-// DDNet keeps the fill and the outline in two separate textures and draws the
-// string twice, which is what lets it colour the outline independently. The
-// same split here, plus one dilated variant per outline thickness so the ring
-// can also match the size DDNet would have baked for a given screen size.
+// DDNet text is rendered by the game module, through a pipeline of its own in
+// the ordinary render queue. This keeps it inside the viewport render target
+// and gives it exactly the same camera transform and clipping as the map and
+// players. DDNet keeps the fill and the outline in two separate textures and
+// composes them in one pass, which is what lets it colour the outline
+// independently. The same here, with the two in the channels of one layer,
+// and one layer per outline thickness so the ring can also match the size
+// DDNet would have baked for a given screen size.
 enum { DD_TEXT_OUTLINE_VARIANTS = 4 };
 
 typedef struct {
   uint32_t codepoint;
   uint32_t glyph_index;
-  uint32_t sprite_index;
-  uint32_t outline_sprite[DD_TEXT_OUTLINE_VARIANTS];
-  uint32_t width;
+  uint32_t layer; // its first sprite in its page; one per outline variant, thinnest first
+  uint32_t width; // the bitmap's, without the margin each sprite adds (dd_text.c)
   uint32_t height;
   float offset_x;
   float offset_y;
@@ -495,18 +495,23 @@ typedef struct {
   uint8_t page; // index into dd_text_renderer_t.pages
 } dd_text_glyph_t;
 
-// One sheet of baked glyphs and the atlas drawn from it. The first holds the
-// common repertoire, baked up front; the others fill as text needs more.
+// A glyph's coverage for one outline variant, over that variant's margin: the
+// fill and the ring around it, interleaved.
+typedef struct {
+  uint32_t width, height;
+  uint8_t *coverage; // NULL for an empty glyph, and once the page is done growing
+} dd_text_sprite_t;
+
+// Baked glyphs and the array texture drawn from them, one layer per sprite. The
+// first page holds the common repertoire, baked up front; the others fill as
+// text needs more.
 typedef struct {
   ft_texture *texture;
-  ft_atlas *atlas;
-  uint8_t *sheet; // kept for pages that still grow: an atlas cannot, so it is rebuilt from this
-  uint32_t sheet_size;
-  ft_sprite_rect *rects;
+  dd_text_sprite_t *sprites;
   uint32_t sprite_count, sprite_capacity;
-  uint32_t uploaded_sprites; // how many of them the atlas has: glyphs past it draw as the replacement
+  uint32_t uploaded_sprites; // how many of them the texture has: glyphs past it draw as the replacement
+  uint32_t layer_width, layer_height; // the texture's: its biggest sprite
   uint32_t glyph_count, glyph_capacity;
-  uint32_t pack_x, pack_y, row_height;
   bool full;
 } dd_text_page_t;
 
@@ -520,10 +525,10 @@ typedef struct {
   void *font_data[DD_TEXT_MAX_FACES];
   int font_data_count;
   void *face; // faces[0], which also bakes the entity numbers
+  ft_pipeline *pipeline;
   dd_text_page_t pages[DD_TEXT_MAX_PAGES];
   int page_count;
-  // Atlases replaced this frame: draws may still be queued on them, so they go at the next frame.
-  ft_atlas *retired_atlases[DD_TEXT_MAX_RETIRED];
+  // Page textures replaced this frame: draws may still be queued on them, so they go at the next frame.
   ft_texture *retired_textures[DD_TEXT_MAX_RETIRED];
   int retired_count;
   ft_texture *entity_source_textures[3];
@@ -536,6 +541,8 @@ typedef struct {
   // in, so changing it re-uploads them exactly as CMapImages does.
   int entity_scale;
 } dd_text_renderer_t;
+
+enum { DD_DESIGN_TILE, DD_DESIGN_TILE_BORDER, DD_DESIGN_QUAD, DD_DESIGN_VARIANTS };
 
 typedef struct {
   bool ready;
@@ -579,7 +586,8 @@ typedef struct {
   // Level rendering.
   ft_texture *entities;
   ft_pipeline *map_pipeline;
-  ft_pipeline *design_tiles, *design_quads;
+  // The map design's pipelines, one per variant of its fragment stage (see design_frag.glsl.inc).
+  ft_pipeline *design[DD_DESIGN_VARIANTS];
   ft_texture *design_white, *design_white_tiles;
   ft_mesh *map_mesh;
 

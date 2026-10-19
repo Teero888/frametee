@@ -279,10 +279,17 @@ static bool read_file(const char *p, void **out, size_t *size) {
 }
 static void draw_range(ft_pipeline *p, float z, ft_mesh *m, uint32_t first, uint32_t count, ft_texture *const *t, uint32_t n, const void *u,
                        size_t size) {
-  assert(p && m && n == 1 && t[0] && first + count <= indices && size == sizeof(last_uniforms));
-  memcpy(last_uniforms, u, size);
+  // (a quad layer's draws carry an entry per quad after the uniforms every draw has)
+  assert(p && m && n == 1 && t[0] && first + count <= indices && size >= sizeof(last_uniforms));
+  memcpy(last_uniforms, u, sizeof(last_uniforms));
   last_z = z;
   ++draws;
+}
+static void draw_range_clipped(ft_pipeline *p, float z, ft_mesh *m, uint32_t first, uint32_t count, ft_texture *const *t, uint32_t n,
+                               const void *u, size_t size, const float clip[4]) {
+  // The scissor is the group's clip, as the uniforms hold it.
+  assert(clip && !memcmp(clip, (const float *)u + 8, 4 * sizeof(float)));
+  draw_range(p, z, m, first, count, t, n, u, size);
 }
 void dd_log(ft_game *g, ft_log_level level, const char *fmt, ...) {
   (void)g;
@@ -302,7 +309,8 @@ static void test_render(void) {
                        .resolve_data_path = resolve,
                        .read_file = read_file,
                        .free_file_data = free,
-                       .draw_mesh_range = draw_range};
+                       .draw_mesh_range = draw_range,
+                       .draw_mesh_range_clipped = draw_range_clipped};
   ft_game game = {.engine = &api};
   game.settings.map_detail = true;
   ft_level level = {0};
@@ -378,9 +386,9 @@ static void test_render(void) {
   free_map_data(&level.map);
   texture_destroy(game.gfx.design_white);
   texture_destroy(game.gfx.design_white_tiles);
-  free(game.gfx.design_tiles);
-  free(game.gfx.design_quads);
-  pipelines -= 2;
+  for (int i = 0; i < DD_DESIGN_VARIANTS; ++i)
+    free(game.gfx.design[i]);
+  pipelines -= DD_DESIGN_VARIANTS;
   assert(!textures && !meshes && !pipelines);
 }
 int main(void) {

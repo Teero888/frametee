@@ -88,6 +88,14 @@ struct gfx_handler_t {
   struct ImGui_ImplVulkanH_Window g_main_window_data;
   uint32_t g_min_image_count;
   bool g_swap_chain_rebuild;
+  // The viewport is the whole frame and ImGui draws nothing (a benchmark): the
+  // game draws straight into the window's image, or, where the two differ in
+  // size, the viewport is copied there. Takes effect with the next swapchain,
+  // which then also takes transfers.
+  bool present_viewport_only;
+  // The viewport has to be left in the offscreen target even so, to be read
+  // back (--screenshot).
+  bool keep_viewport_offscreen;
 
   // Per-frame data
   VkCommandBuffer current_frame_command_buffer;
@@ -117,6 +125,12 @@ struct gfx_handler_t {
   // Retirement is keyed by a monotonic serial, not the swapchain image index
   // (which wraps between 0 and ImageCount - 1).
   uint64_t frame_serial;
+  // The frame in flight being recorded (renderer.h, MAX_FRAMES_IN_FLIGHT), and
+  // for each, the fence and serial of the last frame submitted from it: its
+  // buffers are free again once that fence is.
+  uint32_t frame_slot;
+  VkFence slot_fences[MAX_FRAMES_IN_FLIGHT];
+  uint64_t slot_serials[MAX_FRAMES_IN_FLIGHT];
   struct {
     VkImage image;
     VkImageView image_view;
@@ -151,6 +165,20 @@ struct gfx_handler_t {
   uint32_t offscreen_width;
   uint32_t offscreen_height;
   bool offscreen_initialized;
+  // A pass has given the depth its layout since it was made, so a pass may keep it.
+  bool offscreen_depth_written;
+
+  // The passes a frame's game drawing goes into, all compatible with
+  // offscreen_render_pass (the pipelines are built for that one), indexed
+  // [into the window's image][keep the depth]: the window's image for a frame
+  // that is nothing but the viewport, and the depth kept as it is rather than
+  // cleared for a 2D game, which never tests it. [0][0] is offscreen_render_pass.
+  VkRenderPass game_passes[2][2];
+  // The window's images as targets of those passes, with the offscreen depth.
+  VkFramebuffer window_framebuffers[8];
+  uint32_t window_framebuffer_count;
+  // This frame draws straight into the window's image.
+  bool frame_into_window;
 
   // Dedicated video target; its extent never follows the editor viewport.
   VkImage export_image;

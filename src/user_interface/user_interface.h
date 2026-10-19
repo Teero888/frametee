@@ -59,6 +59,10 @@ struct ui_handler_t {
 
   int current_tick;
   int fps_limit;
+  // How many frames the GPU may be drawing while the next is recorded (renderer.h,
+  // MAX_FRAMES_IN_FLIGHT). One waits for each frame before starting the next: the
+  // GPU then idles while the CPU works, and the other way round.
+  int frames_in_flight;
   float audio_volume;
 
   float mouse_sens;

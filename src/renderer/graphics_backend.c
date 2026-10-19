@@ -21,8 +21,8 @@ extern bool g_hide_render_window;
 #include <GLFW/glfw3.h>
 // prototypes for the cached monitor wrappers defined below; NO_REDIRECT keeps the
 // real GLFW entry points visible here, only imgui_impl_glfw.cpp gets the redirects
-#define IMGUI_GLFW_MONITOR_CACHE_NO_REDIRECT
-#include "imgui_glfw_monitor_cache.h"
+#define IMGUI_GLFW_CACHE_NO_REDIRECT
+#include "imgui_glfw_cache.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -57,6 +57,8 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(VkDebugUtilsMessageSe
 
 // offscreen helpers
 static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint32_t height);
+static VkFramebuffer window_framebuffer(gfx_handler_t *handler, uint32_t index);
+static void destroy_window_framebuffers(gfx_handler_t *handler);
 static void destroy_offscreen_resources(gfx_handler_t *handler);
 static int recreate_offscreen_if_needed(gfx_handler_t *handler, uint32_t width, uint32_t height);
 static void destroy_export_resources(gfx_handler_t *handler);
@@ -155,6 +157,7 @@ static void add_recording_aim(gfx_handler_t *handler, double diff_x, double diff
 }
 
 static void cursor_position_callback(GLFWwindow *window, double xpos, double ypos) {
+  window_state_on_cursor(window, xpos, ypos);
   gfx_handler_t *handler = glfwGetWindowUserPointer(window);
   if (!handler) return;
 
@@ -196,6 +199,7 @@ static void char_callback(GLFWwindow *window, unsigned int c) {
 }
 
 static void cursor_enter_callback(GLFWwindow *window, int entered) {
+  window_state_on_enter(window, entered);
   // Leaving the window has to arrive after the last position inside it, or imgui keeps a cursor that
   // is no longer there.
   flush_imgui_mouse_pos();
@@ -203,9 +207,19 @@ static void cursor_enter_callback(GLFWwindow *window, int entered) {
 }
 
 static void window_focus_callback(GLFWwindow *window, int focused) {
+  window_state_on_focus(window, focused);
   flush_imgui_mouse_pos();
   ImGui_ImplGlfw_WindowFocusCallback((void *)window, focused);
 }
+
+// Followed only for system/window_state.c, which answers from them what GLFW would ask X11 for.
+static void window_size_callback(GLFWwindow *window, int width, int height) { window_state_on_size(window, width, height); }
+
+static void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
+  window_state_on_framebuffer_size(window, width, height);
+}
+
+static void window_iconify_callback(GLFWwindow *window, int iconified) { window_state_on_iconify(window, iconified); }
 
 // Taken back before the imgui backend is shut down, since every one of these hands the event to a
 // backend that would no longer be there. Kept in step with the set installed in init_imgui().
@@ -217,6 +231,9 @@ static void clear_glfw_callbacks(GLFWwindow *window) {
   glfwSetKeyCallback(window, NULL);
   glfwSetCharCallback(window, NULL);
   glfwSetWindowFocusCallback(window, NULL);
+  glfwSetWindowSizeCallback(window, NULL);
+  glfwSetFramebufferSizeCallback(window, NULL);
+  glfwSetWindowIconifyCallback(window, NULL);
 }
 
 static bool imgui_queue_needs_trickling(void) {
@@ -444,6 +461,29 @@ static VkPresentModeKHR choose_present_mode(gfx_handler_t *handler, VkSurfaceKHR
   return ImGui_ImplVulkanH_SelectPresentMode(handler->g_physical_device, surface, modes, ARRAYSIZE(modes));
 }
 
+// Whether the window's images take the viewport copied in (present_viewport_only); ImGui draws into them either way.
+static bool g_swapchain_takes_transfers = false;
+
+static VkImageUsageFlags swapchain_usage(gfx_handler_t *handler) {
+  VkSurfaceCapabilitiesKHR caps = {0};
+  g_swapchain_takes_transfers =
+      handler->present_viewport_only &&
+      vkGetPhysicalDeviceSurfaceCapabilitiesKHR(handler->g_physical_device, handler->g_main_window_data.Surface, &caps) == VK_SUCCESS &&
+      (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+  return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (g_swapchain_takes_transfers ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0);
+}
+
+// How many frames may be in flight: the setting, as far as the swapchain has images for them. One
+// means each frame waits for the one before, which is what a game drawing with a renderer of its own
+// gets, since it may count on that.
+static uint32_t frames_in_flight(const gfx_handler_t *handler) {
+  int n = handler->user_interface.frames_in_flight;
+  if (handler->renderer.external_texture_count > 0) n = 1;
+  if (n > (int)handler->g_main_window_data.ImageCount) n = (int)handler->g_main_window_data.ImageCount;
+  if (n > MAX_FRAMES_IN_FLIGHT) n = MAX_FRAMES_IN_FLIGHT;
+  return n < 1 ? 1 : (uint32_t)n;
+}
+
 // This frame's keys, buttons and wheel, and the raw motion read off the main thread (see raw_mouse.h).
 static void read_input(gfx_handler_t *handler) {
   input_new_frame();
@@ -451,7 +491,7 @@ static void read_input(gfx_handler_t *handler) {
     double dx, dy;
     raw_mouse_take(&dx, &dy);
     // (it is the mouse's motion whichever window has it)
-    if (glfwGetWindowAttrib(handler->window, GLFW_FOCUSED)) add_recording_aim(handler, dx, dy);
+    if (window_state_get_attrib(handler->window, GLFW_FOCUSED)) add_recording_aim(handler, dx, dy);
   }
 }
 
@@ -464,25 +504,28 @@ int gfx_begin_frame(gfx_handler_t *handler) {
 
   glfwPollEvents();
 
-  if (glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
+  if (window_state_get_attrib(handler->window, GLFW_ICONIFIED) != 0) {
     read_input(handler);
     ImGui_ImplGlfw_Sleep(10);
     return FRAME_SKIP;
   }
 
   int fb_width, fb_height;
-  glfwGetFramebufferSize(handler->window, &fb_width, &fb_height);
+  window_state_get_framebuffer_size(handler->window, &fb_width, &fb_height);
   if (fb_width > 0 && fb_height > 0 &&
       (handler->g_swap_chain_rebuild || handler->g_main_window_data.Width != fb_width || handler->g_main_window_data.Height != fb_height)) {
     vkDeviceWaitIdle(handler->g_device);
-    renderer_frame_completed(handler);
+    renderer_frames_completed(handler, UINT64_MAX);
+    // (they hold the images of the swapchain about to be replaced, and its fences)
+    destroy_window_framebuffers(handler);
+    memset(handler->slot_fences, 0, sizeof(handler->slot_fences));
 
     // Update Present Mode based on settings
     handler->g_main_window_data.PresentMode = choose_present_mode(handler, handler->g_main_window_data.Surface);
 
     ImGui_ImplVulkan_SetMinImageCount(handler->g_min_image_count);
     ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, &handler->g_main_window_data,
-                                           handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+                                           handler->g_queue_family, handler->g_allocator, fb_width, fb_height, handler->g_min_image_count, swapchain_usage(handler));
     handler->g_main_window_data.FrameIndex = 0;
     handler->g_swap_chain_rebuild = false;
   }
@@ -492,11 +535,16 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   // switching to fullscreen made dialogs vanish.
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
-  // Ensure the previous use of this frame's fence is completed, so reuse of semaphores is safe
-  ImGui_ImplVulkanH_Frame *acquire_fd = &wd->Frames.Data[wd->FrameIndex];
-  VkResult err = vkWaitForFences(handler->g_device, 1, &acquire_fd->Fence, VK_TRUE, UINT64_MAX);
-  check_vk_result(err);
-  renderer_frame_completed(handler);
+  // The frame in flight this one is. Its buffers are those the frame frames_in_flight() before used,
+  // so that one has to be done; and with it everything submitted earlier, including the last wait on
+  // the semaphore about to be acquired with, which comes round every ImageCount frames, no fewer.
+  handler->frame_slot = (uint32_t)(handler->frame_serial % frames_in_flight(handler));
+  VkResult err;
+  if (handler->slot_fences[handler->frame_slot] != VK_NULL_HANDLE) {
+    err = vkWaitForFences(handler->g_device, 1, &handler->slot_fences[handler->frame_slot], VK_TRUE, UINT64_MAX);
+    check_vk_result(err);
+    renderer_frames_completed(handler, handler->slot_serials[handler->frame_slot]);
+  }
 
   err = vkAcquireNextImageKHR(handler->g_device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
   if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
@@ -532,7 +580,7 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   if (target_w > 0 && target_h > 0 &&
       (handler->offscreen_width != target_w || handler->offscreen_height != target_h)) {
     vkDeviceWaitIdle(handler->g_device);
-    renderer_frame_completed(handler);
+    renderer_frames_completed(handler, UINT64_MAX);
     recreate_offscreen_if_needed(handler, target_w, target_h);
   }
 
@@ -556,29 +604,97 @@ int gfx_begin_frame(gfx_handler_t *handler) {
   // The renderer now uses the same dimensions that ImGui will display.
   renderer_begin_frame(handler, handler->current_frame_command_buffer);
 
-  // Begin offscreen render pass (for game rendering)
+  // Begin the game's render pass: into the offscreen target, or straight into the window's image
+  // when the frame is nothing but the viewport and that has not to be read back.
+  handler->frame_into_window = false;
   if (handler->offscreen_initialized && handler->offscreen_render_pass != VK_NULL_HANDLE && handler->offscreen_framebuffer != VK_NULL_HANDLE) {
+    const VkFramebuffer window_fb = handler->present_viewport_only && !handler->keep_viewport_offscreen
+                                        ? window_framebuffer(handler, wd->FrameIndex)
+                                        : VK_NULL_HANDLE;
+    handler->frame_into_window = window_fb != VK_NULL_HANDLE;
+    // A 2D game never tests the depth, so once it has its layout it is left as it is.
+    const bool keep_depth = handler->offscreen_depth_written && !game_is_3d(&handler->game_host);
     // Depth clears to zero because the 3D path runs on a reversed range, where
     // zero is the far plane. See renderer_camera3_view_proj.
     VkClearValue clears[2] = {{.color = {.float32 = {handler->user_interface.bg_color[0], handler->user_interface.bg_color[1],
                                                      handler->user_interface.bg_color[2], 1.0f}}},
                               {.depthStencil = {.depth = 0.0f, .stencil = 0}}};
     VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                                     .renderPass = handler->offscreen_render_pass,
-                                     .framebuffer = handler->offscreen_framebuffer,
+                                     .renderPass = handler->game_passes[handler->frame_into_window][keep_depth],
+                                     .framebuffer = handler->frame_into_window ? window_fb : handler->offscreen_framebuffer,
                                      .renderArea = {{0, 0}, {handler->offscreen_width, handler->offscreen_height}},
                                      .clearValueCount = 2,
                                      .pClearValues = clears};
     vkCmdBeginRenderPass(fd->CommandBuffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+    handler->offscreen_depth_written = true;
   }
 
   return FRAME_OK;
 }
 
+// The viewport as the whole frame: the offscreen target's drawn corner copied
+// into the window's image, which ImGui otherwise covers with it as one quad.
+static void blit_viewport(gfx_handler_t *handler, VkCommandBuffer cmd, VkImage window_image) {
+  const ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
+  const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  const VkImageSubresourceLayers layers = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  // Out of the layout the offscreen pass leaves for ImGui's sampler, and the
+  // window's image from whatever it was presented in.
+  VkImageMemoryBarrier to_copy[2] = {
+      {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+       .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+       .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+       .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+       .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+       .image = handler->offscreen_image,
+       .subresourceRange = range},
+      {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+       .srcAccessMask = 0,
+       .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+       .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+       .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+       .image = window_image,
+       .subresourceRange = range}};
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 2, to_copy);
+
+  // (only the top-left viewport-sized corner of the target is drawn)
+  const int32_t width = handler->viewport[0] > 0.f && (uint32_t)handler->viewport[0] < handler->offscreen_width
+                            ? (int32_t)handler->viewport[0]
+                            : (int32_t)handler->offscreen_width;
+  const int32_t height = handler->viewport[1] > 0.f && (uint32_t)handler->viewport[1] < handler->offscreen_height
+                             ? (int32_t)handler->viewport[1]
+                             : (int32_t)handler->offscreen_height;
+  const VkImageBlit region = {.srcSubresource = layers,
+                              .srcOffsets = {{0, 0, 0}, {width, height, 1}},
+                              .dstSubresource = layers,
+                              .dstOffsets = {{0, 0, 0}, {wd->Width, wd->Height, 1}}};
+  vkCmdBlitImage(cmd, handler->offscreen_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, window_image,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
+
+  // Back for the next frame's pass, which must not draw over the target before
+  // this has read it, and the window's image on to the display.
+  VkImageMemoryBarrier after[2] = {to_copy[0], to_copy[1]};
+  after[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  after[0].dstAccessMask = 0;
+  after[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  after[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  after[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  after[1].dstAccessMask = 0;
+  after[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  after[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL,
+                       2, after);
+}
+
 bool gfx_end_frame(gfx_handler_t *handler) {
   bool hovered = false;
 
-  if (handler->g_swap_chain_rebuild || glfwGetWindowAttrib(handler->window, GLFW_ICONIFIED) != 0) {
+  if (handler->g_swap_chain_rebuild || window_state_get_attrib(handler->window, GLFW_ICONIFIED) != 0) {
     // The image acquired for this frame is not presented, and only a new swapchain gives it back.
     // (minimizing gets here: the window can be minimized by the events read after the acquire)
     handler->g_swap_chain_rebuild = true;
@@ -608,25 +724,34 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   // into, so the next frame starts from the same state this one assumed.
   renderer_sync_external_textures(handler, handler->current_frame_command_buffer, false);
 
-  // Begin swapchain render pass for ImGui
   ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
   ImGui_ImplVulkanH_Frame *fd = &wd->Frames.Data[wd->FrameIndex];
-  VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                                   .renderPass = wd->RenderPass,
-                                   .framebuffer = fd->Framebuffer,
-                                   .renderArea = {{0, 0}, {(uint32_t)wd->Width, (uint32_t)wd->Height}},
-                                   .clearValueCount = 1,
-                                   .pClearValues = &wd->ClearValue};
-  vkCmdBeginRenderPass(handler->current_frame_command_buffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+  const bool copy_viewport = !handler->frame_into_window && handler->present_viewport_only && g_swapchain_takes_transfers &&
+                             handler->offscreen_initialized;
+  if (handler->frame_into_window || copy_viewport) {
+    // ImGui keeps its clock and input, but draws nothing.
+    igEndFrame();
+    // (drawn straight into the window's image, the frame is already there)
+    if (copy_viewport) blit_viewport(handler, handler->current_frame_command_buffer, fd->Backbuffer);
+  } else {
+    // Begin swapchain render pass for ImGui
+    VkRenderPassBeginInfo rp_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                     .renderPass = wd->RenderPass,
+                                     .framebuffer = fd->Framebuffer,
+                                     .renderArea = {{0, 0}, {(uint32_t)wd->Width, (uint32_t)wd->Height}},
+                                     .clearValueCount = 1,
+                                     .pClearValues = &wd->ClearValue};
+    vkCmdBeginRenderPass(handler->current_frame_command_buffer, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
-  hovered = ui_render_late(&handler->user_interface);
+    hovered = ui_render_late(&handler->user_interface);
 
-  igRender();
-  ImDrawData *draw_data = igGetDrawData();
-  ImGui_ImplVulkan_RenderDrawData(draw_data, handler->current_frame_command_buffer, VK_NULL_HANDLE);
+    igRender();
+    ImDrawData *draw_data = igGetDrawData();
+    ImGui_ImplVulkan_RenderDrawData(draw_data, handler->current_frame_command_buffer, VK_NULL_HANDLE);
 
-  // End swapchain render pass
-  vkCmdEndRenderPass(handler->current_frame_command_buffer);
+    // End swapchain render pass
+    vkCmdEndRenderPass(handler->current_frame_command_buffer);
+  }
 
   // Retire resources only after enough complete submissions have passed for
   // every swapchain image that could reference them.
@@ -659,7 +784,8 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   VkSemaphore image_acquired_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].ImageAcquiredSemaphore;
   VkSemaphore render_complete_semaphore = wd->FrameSemaphores.Data[wd->SemaphoreIndex].RenderCompleteSemaphore;
 
-  VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  // (the window's image is first written by the copy, or else by ImGui's pass)
+  VkPipelineStageFlags wait_stage = copy_viewport ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   VkSubmitInfo submit_info = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                               .waitSemaphoreCount = 1,
                               .pWaitSemaphores = &image_acquired_semaphore,
@@ -673,6 +799,8 @@ bool gfx_end_frame(gfx_handler_t *handler) {
   check_vk_result(err);
   err = vkQueueSubmit(handler->g_queue, 1, &submit_info, fd->Fence);
   check_vk_result(err);
+  handler->slot_fences[handler->frame_slot] = fd->Fence;
+  handler->slot_serials[handler->frame_slot] = handler->frame_serial;
 
   handler->current_frame_command_buffer = VK_NULL_HANDLE;
   ImGuiIO *io = igGetIO_Nil();
@@ -744,10 +872,13 @@ void gfx_cleanup(gfx_handler_t *handler) {
     handler->retire_imgui_count = 0;
     renderer_cleanup(handler);
     destroy_offscreen_resources(handler);
-    if (handler->offscreen_render_pass != VK_NULL_HANDLE) {
-      vkDestroyRenderPass(handler->g_device, handler->offscreen_render_pass, handler->g_allocator);
-      handler->offscreen_render_pass = VK_NULL_HANDLE;
-    }
+    for (int into_window = 0; into_window < 2; ++into_window)
+      for (int keep_depth = 0; keep_depth < 2; ++keep_depth)
+        if (handler->game_passes[into_window][keep_depth] != VK_NULL_HANDLE) {
+          vkDestroyRenderPass(handler->g_device, handler->game_passes[into_window][keep_depth], handler->g_allocator);
+          handler->game_passes[into_window][keep_depth] = VK_NULL_HANDLE;
+        }
+    handler->offscreen_render_pass = VK_NULL_HANDLE;
     if (handler->offscreen_sampler != VK_NULL_HANDLE) {
       vkDestroySampler(handler->g_device, handler->offscreen_sampler, handler->g_allocator);
       handler->offscreen_sampler = VK_NULL_HANDLE;
@@ -1409,6 +1540,10 @@ static int init_imgui(gfx_handler_t *handler) {
   // one path from the window to imgui, and the whole set has to be installed here, since anything
   // left out is an event imgui stops receiving.
   ImGui_ImplGlfw_InitForVulkan((void *)handler->window, false);
+  window_state_init(handler->window);
+  glfwSetWindowSizeCallback(handler->window, window_size_callback);
+  glfwSetFramebufferSizeCallback(handler->window, framebuffer_size_callback);
+  glfwSetWindowIconifyCallback(handler->window, window_iconify_callback);
   glfwSetCursorPosCallback(handler->window, cursor_position_callback);
   glfwSetCursorEnterCallback(handler->window, cursor_enter_callback);
   glfwSetMouseButtonCallback(handler->window, mouse_button_callback);
@@ -1469,6 +1604,111 @@ static void cleanup_vulkan_window(gfx_handler_t *handler) {
 }
 
 // offscreen resource helpers
+// One of the passes the game draws into (see game_passes). They differ only in
+// what happens to the images at either end, which leaves them compatible.
+static bool create_game_pass(gfx_handler_t *handler, VkFormat format, bool into_window, bool keep_depth, VkRenderPass *out) {
+  VkAttachmentDescription attachments[2] = {
+      {
+          .format = format,
+          .samples = VK_SAMPLE_COUNT_1_BIT,
+          .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+          .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+          .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+          .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+          .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+          // ready for ImGui to sample, or to be shown
+          .finalLayout = into_window ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+      },
+      {
+          .format = handler->offscreen_depth_format,
+          .samples = VK_SAMPLE_COUNT_1_BIT,
+          .loadOp = keep_depth ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_CLEAR,
+          .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+          .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+          .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+          // Kept, the depth stays in its layout: coming from UNDEFINED, the driver would set it up again
+          // every frame. Intel's, at least, can only fast-clear depth to 1, not to the 0 a 3D game needs.
+          .initialLayout = keep_depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+          .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+      }};
+  VkAttachmentReference color_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+  VkAttachmentReference depth_ref = {.attachment = 1, .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+  VkSubpassDescription subpass = {
+      .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+      .colorAttachmentCount = 1,
+      .pColorAttachments = &color_ref,
+      .pDepthStencilAttachment = &depth_ref,
+  };
+  // The offscreen colour and the depth are the same images every frame, and with
+  // frames in flight the previous frame may still be drawing into them: its writes
+  // come first. (Its reads, ImGui sampling the viewport, end before colour output,
+  // which the stage mask takes in with every stage before it.)
+  VkSubpassDependency dependency = {
+      .srcSubpass = VK_SUBPASS_EXTERNAL,
+      .dstSubpass = 0,
+      .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+      .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+      .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+      .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+      .dependencyFlags = 0,
+  };
+  VkRenderPassCreateInfo info = {
+      .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+      .attachmentCount = 2,
+      .pAttachments = attachments,
+      .subpassCount = 1,
+      .pSubpasses = &subpass,
+      .dependencyCount = 1,
+      .pDependencies = &dependency,
+  };
+  VkResult err = vkCreateRenderPass(handler->g_device, &info, handler->g_allocator, out);
+  if (err != VK_SUCCESS) {
+    log_error(LOG_SOURCE, "Failed to create a game render pass (%d)", err);
+    *out = VK_NULL_HANDLE;
+    return false;
+  }
+  return true;
+}
+
+// Only once nothing in flight uses them: after a wait for the device.
+static void destroy_window_framebuffers(gfx_handler_t *handler) {
+  for (uint32_t i = 0; i < handler->window_framebuffer_count; ++i)
+    vkDestroyFramebuffer(handler->g_device, handler->window_framebuffers[i], handler->g_allocator);
+  handler->window_framebuffer_count = 0;
+}
+
+// The window's image `index` as the target of the game's passes, where the
+// viewport fills the window exactly; otherwise none, and the frame goes through
+// the offscreen target. Made for the swapchain and depth there are now, and
+// dropped whenever either is made anew.
+static VkFramebuffer window_framebuffer(gfx_handler_t *handler, uint32_t index) {
+  ImGui_ImplVulkanH_Window *wd = &handler->g_main_window_data;
+  if (handler->offscreen_width != (uint32_t)wd->Width || handler->offscreen_height != (uint32_t)wd->Height ||
+      (uint32_t)wd->ImageCount > ARRAYSIZE(handler->window_framebuffers) || index >= (uint32_t)wd->ImageCount)
+    return VK_NULL_HANDLE;
+  if (handler->window_framebuffer_count == 0) {
+    for (uint32_t i = 0; i < (uint32_t)wd->ImageCount; ++i) {
+      VkImageView attachments[2] = {wd->Frames.Data[i].BackbufferView, handler->offscreen_depth_view};
+      VkFramebufferCreateInfo info = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                                      .renderPass = handler->game_passes[1][0],
+                                      .attachmentCount = 2,
+                                      .pAttachments = attachments,
+                                      .width = (uint32_t)wd->Width,
+                                      .height = (uint32_t)wd->Height,
+                                      .layers = 1};
+      if (vkCreateFramebuffer(handler->g_device, &info, handler->g_allocator, &handler->window_framebuffers[i]) != VK_SUCCESS) {
+        destroy_window_framebuffers(handler);
+        return VK_NULL_HANDLE;
+      }
+      handler->window_framebuffer_count = i + 1;
+    }
+  }
+  return handler->window_framebuffers[index];
+}
+
 static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint32_t height) {
   if (width == 0 || height == 0) {
     return 1;
@@ -1499,74 +1739,13 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
     handler->offscreen_sampler = create_texture_sampler(handler, 1, VK_FILTER_LINEAR);
   }
 
-  // Create a render pass for the offscreen image if needed. Final layout will be SHADER_READ_ONLY_OPTIMAL
+  // The passes the game draws into, made once: their formats never change.
   if (handler->offscreen_render_pass == VK_NULL_HANDLE) {
-    VkAttachmentDescription color_attachment = {
-        .flags = 0,
-        .format = format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-
-    VkAttachmentReference color_attachment_ref = {
-        .attachment = 0,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    };
-
     handler->offscreen_depth_format = VK_FORMAT_D32_SFLOAT;
-    VkAttachmentDescription depth_attachment = {
-        .format = handler->offscreen_depth_format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
-    VkAttachmentReference depth_attachment_ref = {
-        .attachment = 1,
-        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
-
-    VkSubpassDescription subpass = {
-        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &color_attachment_ref,
-        .pDepthStencilAttachment = &depth_attachment_ref,
-    };
-
-    VkSubpassDependency dependency = {
-        .srcSubpass = VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0,
-        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .srcAccessMask = 0,
-        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        .dependencyFlags = 0,
-    };
-
-    const VkAttachmentDescription offscreen_attachments[2] = {color_attachment, depth_attachment};
-    VkRenderPassCreateInfo rp_info = {
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .attachmentCount = 2,
-        .pAttachments = offscreen_attachments,
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .dependencyCount = 1,
-        .pDependencies = &dependency,
-    };
-
-    VkResult err = vkCreateRenderPass(handler->g_device, &rp_info, handler->g_allocator, &handler->offscreen_render_pass);
-    if (err != VK_SUCCESS) {
-      log_error(LOG_SOURCE, "Failed to create offscreen render pass (%d)", err);
-      return 1;
-    }
+    for (int into_window = 0; into_window < 2; ++into_window)
+      for (int keep_depth = 0; keep_depth < 2; ++keep_depth)
+        if (!create_game_pass(handler, format, into_window, keep_depth, &handler->game_passes[into_window][keep_depth])) return 1;
+    handler->offscreen_render_pass = handler->game_passes[0][0];
   }
 
   // Depth image for that attachment, matching the colour target's extent.
@@ -1576,6 +1755,8 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
   handler->offscreen_depth_view =
       create_image_view_aspect(handler, handler->offscreen_depth_image, handler->offscreen_depth_format, VK_IMAGE_VIEW_TYPE_2D, 1, 1,
                                VK_IMAGE_ASPECT_DEPTH_BIT);
+
+  handler->offscreen_depth_written = false;
 
   // Create framebuffer
   VkImageView attachments[2];
@@ -1612,6 +1793,7 @@ static int init_offscreen_resources(gfx_handler_t *handler, uint32_t width, uint
 
 static void destroy_offscreen_resources(gfx_handler_t *handler) {
   if (!handler->offscreen_initialized) return;
+  destroy_window_framebuffers(handler);
 
   // Note: ImGui_ImplVulkan does not provide an explicit remove for a texture id, but the descriptor set
   // allocated by AddTexture will be freed when the descriptor pool is destroyed / ImGui shuts down.
@@ -1771,7 +1953,7 @@ bool gfx_render_export_frame(gfx_handler_t *h, uint32_t width, uint32_t height,
   // dynamic buffers and descriptor pools. Complete it before resetting them.
   if (vkQueueWaitIdle(h->g_queue) != VK_SUCCESS ||
       vkResetCommandPool(h->g_device, h->export_command_pool, 0) != VK_SUCCESS) return false;
-  renderer_frame_completed(h);
+  renderer_frames_completed(h, UINT64_MAX);
   const VkCommandBuffer cmd = h->export_command_buffer;
   VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                     .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
@@ -2007,7 +2189,7 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
 
   assert(handler->g_min_image_count >= 2);
   ImGui_ImplVulkanH_CreateOrResizeWindow(handler->g_instance, handler->g_physical_device, handler->g_device, wd, handler->g_queue_family,
-                                         handler->g_allocator, width, height, handler->g_min_image_count, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+                                         handler->g_allocator, width, height, handler->g_min_image_count, swapchain_usage(handler));
 }
 
 // frame rendering and presentation

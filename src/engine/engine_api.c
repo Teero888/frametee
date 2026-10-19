@@ -161,9 +161,12 @@ static ft_texture *api_texture_create(const ft_texture_desc *desc) {
   texture_t *tex = renderer_create_texture_layered(g_engine, (const unsigned char *)desc->pixels, desc->width, desc->height, layers,
                                                    abi_texture_format(desc->format), desc->mipmaps, desc->linear_filter);
   if (tex && desc->repeat) {
+    // A 3D game repeats a texture across world surfaces, seen at grazing angles; a 2D game's face
+    // the screen, where anisotropy only multiplies the samples (DDNet's own client has it off).
     vkDestroySampler(g_engine->g_device, tex->sampler, g_engine->g_allocator);
     tex->sampler = create_texture_sampler_wrapped(g_engine, desc->mipmaps ? tex->mip_levels : 1,
-                                                  desc->linear_filter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                                                  desc->linear_filter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST,
+                                                  VK_SAMPLER_ADDRESS_MODE_REPEAT, game_is_3d(&g_engine->game_host));
   }
   return (ft_texture *)tex;
 }
@@ -269,7 +272,7 @@ static ft_pipeline *api_pipeline_create(const ft_pipeline_desc *desc) {
   custom_pipeline_t *pipe = renderer_create_custom_pipeline(
       g_engine, desc->vertex_spirv, desc->vertex_spirv_size, desc->fragment_spirv, desc->fragment_spirv_size, locations, offsets, formats,
       desc->instance_attr_count, desc->instance_stride, desc->max_instances_per_frame, desc->texture_count, desc->alpha_blend,
-      desc->vertex_stride, desc->depth_test);
+      desc->straight_alpha, desc->vertex_stride, desc->depth_test);
   return (ft_pipeline *)pipe;
 }
 
@@ -453,7 +456,15 @@ static void api_draw_mesh_range(ft_pipeline *pipeline, float z, ft_mesh *mesh,
                                 uint32_t texture_count, const void *uniforms, size_t uniform_size) {
   if (!have_graphics() || !mesh || !pipeline) return;
   renderer_submit_mesh_range(g_engine, AS_PIPELINE(pipeline), z, AS_MESH(mesh), first_index, index_count,
-                             (texture_t *const *)textures, texture_count, uniforms, uniform_size);
+                             (texture_t *const *)textures, texture_count, uniforms, uniform_size, NULL);
+}
+
+static void api_draw_mesh_range_clipped(ft_pipeline *pipeline, float z, ft_mesh *mesh, uint32_t first_index,
+                                        uint32_t index_count, ft_texture *const *textures, uint32_t texture_count,
+                                        const void *uniforms, size_t uniform_size, const float clip[4]) {
+  if (!have_graphics() || !mesh || !pipeline) return;
+  renderer_submit_mesh_range(g_engine, AS_PIPELINE(pipeline), z, AS_MESH(mesh), first_index, index_count,
+                             (texture_t *const *)textures, texture_count, uniforms, uniform_size, clip);
 }
 
 static void api_draw_mesh(ft_pipeline *pipeline, float z, ft_mesh *mesh, ft_texture *const *textures, uint32_t texture_count,
@@ -982,6 +993,7 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .draw_instances = api_draw_instances,
       .draw_mesh = api_draw_mesh,
       .draw_mesh_range = api_draw_mesh_range,
+      .draw_mesh_range_clipped = api_draw_mesh_range_clipped,
       .camera_get = api_camera_get,
       .camera_set = api_camera_set,
       .screen_to_world = api_screen_to_world,

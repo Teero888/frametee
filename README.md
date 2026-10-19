@@ -141,6 +141,12 @@ An MP4 can also be rendered from the command line (from a level or a saved proje
 
 `--render-range` is in seconds of camera time and defaults to the project's export range. Use `--render-bitrate <kb/s>` instead of `--render-crf <value>` for target bitrate mode. The CLI render still needs a working Vulkan display.
 
+A demo can be played back as a renderer benchmark. Like DDNet's `benchmark_quit`, this plays it fullscreen with all its players, without vsync or a frame limit, and writes one `Frametime <n> us` line per frame for the given number of seconds:
+
+```bash
+./frametee --game ddnet --demo path/to/demo.demo --benchmark 30 frametimes.txt
+```
+
 Use:
 
 ```bash

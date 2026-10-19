@@ -460,6 +460,11 @@ void config_load(ui_handler_t *ui) {
       ui->fps_limit = (int)fps_limit.u.int64;
     }
 
+    toml_datum_t frames_in_flight = toml_get(graphics_settings, "frames_in_flight");
+    if (frames_in_flight.type == TOML_INT64 && frames_in_flight.u.int64 >= 1 && frames_in_flight.u.int64 <= MAX_FRAMES_IN_FLIGHT) {
+      ui->frames_in_flight = (int)frames_in_flight.u.int64;
+    }
+
     toml_datum_t lod_bias = toml_get(graphics_settings, "lod_bias");
     if (lod_bias.type == TOML_FP64) {
       ui->lod_bias = (float)lod_bias.u.fp64;
@@ -710,6 +715,7 @@ void config_save(ui_handler_t *ui) {
   fprintf(fp, "vsync = %s\n", ui->vsync ? "true" : "false");
   fprintf(fp, "show_fps = %s\n", ui->show_fps ? "true" : "false");
   fprintf(fp, "fps_limit = %d\n", ui->fps_limit);
+  fprintf(fp, "frames_in_flight = %d\n", ui->frames_in_flight);
   fprintf(fp, "lod_bias = %.2f\n", ui->lod_bias);
   fprintf(fp, "interface_size = %.2f\n", gfx_get_ui_size());
   fprintf(fp, "bg_color = [%.3f, %.3f, %.3f]\n", ui->bg_color[0], ui->bg_color[1], ui->bg_color[2]);

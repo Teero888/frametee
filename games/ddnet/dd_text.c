@@ -1,8 +1,8 @@
 // DDNet's viewport text renderer.
 //
-// FreeType is owned by the game module. Glyphs are baked into an engine atlas
-// once, then every character is submitted as a normal world-space sprite. The
-// resulting quads are part of the ordinary DDNet render queue: they use the
+// FreeType is owned by the game module. Glyphs are baked into array textures
+// once, then every character is submitted as one world-space quad of the text
+// pipeline. The quads are part of the ordinary DDNet render queue: they use the
 // same camera, z sorting, viewport clipping and offscreen target as the map.
 
 #include "dd_internal.h"
@@ -25,15 +25,14 @@
 static const uint32_t k_outline_thickness[DD_TEXT_OUTLINE_VARIANTS] = {3u, 4u, 6u, 9u};
 #define DD_TEXT_MAX_OUTLINE 9u
 #define DD_TEXT_PADDING (DD_TEXT_MAX_OUTLINE + 1u)
-#define DD_TEXT_SHEET_SIZE 2048u
 #define DD_TEXT_MAX_GLYPHS 256u
-// One sprite per glyph for the fill and one per outline variant. Each is its
-// own array layer, which Vulkan guarantees 2048 of: 256 glyphs make 1280.
-// Pages baked on demand: smaller, as they hold only what text asked for. Every
-// layer of an atlas is as big as its biggest sprite, so a page costs what it holds.
-#define DD_TEXT_EXTRA_SHEET_SIZE 1024u
+// One sprite per glyph and outline variant. Each is its own array layer, which
+// Vulkan guarantees 2048 of: 256 glyphs make 1024.
+// Pages baked on demand hold fewer, only what text asked for. Every layer of a
+// page is as big as its biggest sprite, so a page costs what it holds.
 #define DD_TEXT_EXTRA_GLYPHS 96u
-#define DD_TEXT_SPRITES_PER_GLYPH (1u + DD_TEXT_OUTLINE_VARIANTS)
+// Glyph quads one frame can draw, across all text.
+#define DD_TEXT_MAX_QUADS 32768u
 // What DDNet draws for a character no font has: a white square (CGlyphMap's REPLACEMENT_CHARACTER).
 #define DD_TEXT_REPLACEMENT 0x25a1u
 #define DD_ENTITY_CELL_SIZE 64u
@@ -107,8 +106,8 @@ static const dd_text_glyph_t *find_glyph(const dd_text_renderer_t *text, uint32_
   return glyph;
 }
 
-// CTextRender::Grow: the glyph dilated by `thickness`, which is the shape the
-// outline pass draws underneath the fill.
+// CTextRender::Grow: the glyph dilated by `thickness`, which is the shape of the
+// outline under the fill.
 static uint8_t outline_sample(const uint8_t *fill, uint32_t width, uint32_t height, uint32_t x, uint32_t y,
                               uint32_t thickness) {
   int best = fill[(size_t)y * width + x];
@@ -125,51 +124,29 @@ static uint8_t outline_sample(const uint8_t *fill, uint32_t width, uint32_t heig
   return (uint8_t)best;
 }
 
-static bool pack_rect(uint32_t sheet_size, uint32_t width, uint32_t height, uint32_t *x, uint32_t *y, uint32_t *row_height,
-                      ft_sprite_rect *out) {
-  if (width > sheet_size - 2u || height > sheet_size - 2u) return false;
-  if (*x + width + 1u > sheet_size) {
-    *x = 1u;
-    *y += *row_height + 1u;
-    *row_height = 0u;
-  }
-  if (*y + height + 1u > sheet_size) return false;
-  *out = (ft_sprite_rect){*x, *y, width, height};
-  *x += width + 1u;
-  if (height > *row_height) *row_height = height;
-  return true;
-}
+// How far past the bitmap a glyph's sprite for outline variant `v` reaches:
+// its ring reaches as far as it is thick, and one more texel of nothing is left
+// for the filter at its edge. Every sprite padded for the thickest outline
+// instead made the quads up to twice the size, each extra pixel shaded and
+// blended for nothing.
+static uint32_t sprite_margin(uint32_t v) { return k_outline_thickness[v] + 1u; }
 
-// Blits one coverage mask into the sheet as white with that coverage in alpha.
-// Colour comes from the draw, exactly as it does for DDNet's two textures.
-static void blit_mask(uint8_t *sheet, uint32_t sheet_size, const ft_sprite_rect *rect, const uint8_t *mask, uint32_t width,
-                      uint32_t height) {
-  for (uint32_t y = 0; y < height; ++y) {
-    for (uint32_t x = 0; x < width; ++x) {
-      const size_t target = ((size_t)(rect->y + y) * sheet_size + rect->x + x) * 4u;
-      sheet[target + 0u] = 255u;
-      sheet[target + 1u] = 255u;
-      sheet[target + 2u] = 255u;
-      sheet[target + 3u] = mask[(size_t)y * width + x];
-    }
-  }
-}
-
-static bool page_init(dd_text_page_t *page, uint32_t sheet_size, uint32_t glyph_capacity) {
+static bool page_init(dd_text_page_t *page, uint32_t glyph_capacity) {
   memset(page, 0, sizeof(*page));
-  page->sheet = calloc((size_t)sheet_size * sheet_size, 4u);
-  page->rects = calloc((size_t)glyph_capacity * DD_TEXT_SPRITES_PER_GLYPH, sizeof(*page->rects));
-  if (!page->sheet || !page->rects) {
-    free(page->sheet);
-    free(page->rects);
-    memset(page, 0, sizeof(*page));
-    return false;
-  }
-  page->sheet_size = sheet_size;
+  page->sprites = calloc((size_t)glyph_capacity * DD_TEXT_OUTLINE_VARIANTS, sizeof(*page->sprites));
+  if (!page->sprites) return false;
   page->glyph_capacity = glyph_capacity;
-  page->sprite_capacity = glyph_capacity * DD_TEXT_SPRITES_PER_GLYPH;
-  page->pack_x = page->pack_y = 1u;
+  page->sprite_capacity = glyph_capacity * DD_TEXT_OUTLINE_VARIANTS;
   return true;
+}
+
+// The coverage of a page's sprites is only needed to rebuild its texture, which a page that no
+// longer grows never is.
+static void page_release_coverage(dd_text_page_t *page) {
+  for (uint32_t s = 0; s < page->sprite_count; ++s) {
+    free(page->sprites[s].coverage);
+    page->sprites[s].coverage = NULL;
+  }
 }
 
 // Puts a glyph into the table, which stays sorted by codepoint. Pointers into it do not survive this.
@@ -191,7 +168,7 @@ static bool insert_glyph(dd_text_renderer_t *text, const dd_text_glyph_t *glyph)
 
 typedef enum { GLYPH_ADDED, GLYPH_NOT_IN_FONT, GLYPH_PAGE_FULL, GLYPH_FAILED } glyph_result_t;
 
-// Bakes `codepoint` from font `face_index` into page `page_index`: its fill and every outline variant.
+// Bakes `codepoint` from font `face_index` into page `page_index`: its fill with every outline variant.
 static glyph_result_t add_glyph(dd_text_renderer_t *text, int page_index, int face_index, uint32_t codepoint) {
   FT_Face face = (FT_Face)text->faces[face_index];
   dd_text_page_t *page = &text->pages[page_index];
@@ -203,39 +180,42 @@ static glyph_result_t add_glyph(dd_text_renderer_t *text, int page_index, int fa
   const FT_Bitmap *bitmap = &slot->bitmap;
   const bool visible = bitmap->width > 0u && bitmap->rows > 0u;
   if (visible && bitmap->pixel_mode != FT_PIXEL_MODE_GRAY) return GLYPH_NOT_IN_FONT;
-
-  const uint32_t pad = visible ? DD_TEXT_PADDING : 0u;
-  const uint32_t width = visible ? bitmap->width + pad * 2u : 1u;
-  const uint32_t height = visible ? bitmap->rows + pad * 2u : 1u;
-  // A glyph needs its fill sprite and one sprite per outline variant, and they
-  // are only useful together, so they are reserved as a group.
-  if (page->glyph_count >= page->glyph_capacity || page->sprite_count + DD_TEXT_SPRITES_PER_GLYPH > page->sprite_capacity)
-    return GLYPH_PAGE_FULL;
-  uint32_t pack_x = page->pack_x, pack_y = page->pack_y, row_height = page->row_height;
-  ft_sprite_rect rects[DD_TEXT_SPRITES_PER_GLYPH];
-  for (uint32_t r = 0; r < DD_TEXT_SPRITES_PER_GLYPH; ++r)
-    if (!pack_rect(page->sheet_size, width, height, &pack_x, &pack_y, &row_height, &rects[r])) return GLYPH_PAGE_FULL;
+  // A glyph needs a sprite per outline variant, and they are only useful together.
+  if (page->glyph_count >= page->glyph_capacity) return GLYPH_PAGE_FULL;
 
   dd_text_glyph_t glyph = {.codepoint = codepoint,
                            .glyph_index = glyph_index,
-                           .width = visible ? width : 0u,
-                           .height = visible ? height : 0u,
+                           .layer = page->sprite_count,
+                           .width = visible ? bitmap->width : 0u,
+                           .height = visible ? bitmap->rows : 0u,
                            .offset_x = (float)(slot->metrics.horiBearingX >> 6),
                            .offset_y = (float)-((slot->metrics.height >> 6) - (slot->metrics.horiBearingY >> 6)),
                            .advance_x = (float)(slot->advance.x >> 6),
                            .visible = visible,
                            .face = (uint8_t)face_index,
                            .page = (uint8_t)page_index};
-  glyph.sprite_index = page->sprite_count;
-  for (uint32_t v = 0; v < DD_TEXT_OUTLINE_VARIANTS; ++v) glyph.outline_sprite[v] = page->sprite_count + 1u + v;
+
+  dd_text_sprite_t sprites[DD_TEXT_OUTLINE_VARIANTS];
+  for (uint32_t v = 0; v < DD_TEXT_OUTLINE_VARIANTS; ++v) {
+    const uint32_t margin = visible ? sprite_margin(v) : 0u;
+    sprites[v] = (dd_text_sprite_t){visible ? bitmap->width + margin * 2u : 1u, visible ? bitmap->rows + margin * 2u : 1u, NULL};
+  }
 
   if (visible) {
+    // The masks are made with room for the thickest outline, and each sprite takes its own margin of them.
+    const uint32_t pad = DD_TEXT_PADDING;
+    const uint32_t width = bitmap->width + pad * 2u;
+    const uint32_t height = bitmap->rows + pad * 2u;
     const size_t pixel_count = (size_t)width * height;
     uint8_t *fill = calloc(pixel_count, 1u);
     uint8_t *outline = malloc(pixel_count);
-    if (!fill || !outline) {
+    bool ok = fill && outline;
+    for (uint32_t v = 0; ok && v < DD_TEXT_OUTLINE_VARIANTS; ++v)
+      ok = (sprites[v].coverage = malloc((size_t)sprites[v].width * sprites[v].height * 2u)) != NULL;
+    if (!ok) {
       free(fill);
       free(outline);
+      for (uint32_t v = 0; v < DD_TEXT_OUTLINE_VARIANTS; ++v) free(sprites[v].coverage);
       return GLYPH_FAILED;
     }
 
@@ -246,73 +226,83 @@ static glyph_result_t add_glyph(dd_text_renderer_t *text, int page_index, int fa
       memcpy(fill + (size_t)(y + pad) * width + pad, source, bitmap->width);
     }
 
-    blit_mask(page->sheet, page->sheet_size, &rects[0], fill, width, height);
     for (uint32_t v = 0; v < DD_TEXT_OUTLINE_VARIANTS; ++v) {
       for (uint32_t y = 0; y < height; ++y)
         for (uint32_t x = 0; x < width; ++x)
           outline[(size_t)y * width + x] = outline_sample(fill, width, height, x, y, k_outline_thickness[v]);
-      blit_mask(page->sheet, page->sheet_size, &rects[1u + v], outline, width, height);
+      const uint32_t inset = pad - sprite_margin(v);
+      uint8_t *coverage = sprites[v].coverage;
+      for (uint32_t y = 0; y < sprites[v].height; ++y) {
+        const size_t row = (size_t)(y + inset) * width + inset;
+        for (uint32_t x = 0; x < sprites[v].width; ++x) {
+          *coverage++ = fill[row + x];
+          *coverage++ = outline[row + x];
+        }
+      }
     }
 
     free(fill);
     free(outline);
   }
 
-  if (!insert_glyph(text, &glyph)) return GLYPH_FAILED;
-  memcpy(&page->rects[page->sprite_count], rects, sizeof(rects));
-  page->sprite_count += DD_TEXT_SPRITES_PER_GLYPH;
+  if (!insert_glyph(text, &glyph)) {
+    for (uint32_t v = 0; v < DD_TEXT_OUTLINE_VARIANTS; ++v) free(sprites[v].coverage);
+    return GLYPH_FAILED;
+  }
+  memcpy(&page->sprites[page->sprite_count], sprites, sizeof(sprites));
+  page->sprite_count += DD_TEXT_OUTLINE_VARIANTS;
   page->glyph_count++;
-  page->pack_x = pack_x;
-  page->pack_y = pack_y;
-  page->row_height = row_height;
   return GLYPH_ADDED;
 }
 
-// (Re)creates a page's atlas from its sheet. The one it replaces may still have draws queued this
-// frame, so it is kept until the next. False when the page cannot be shown (out of memory, or too
-// many atlases replaced in one frame).
+// (Re)creates a page's texture from its sprites, each in the top-left corner of a layer of its own,
+// so that each mip level of it is that sprite's alone. The texture it replaces may still have draws
+// queued this frame, so it is kept until the next. False when the page cannot be shown (out of
+// memory, or too many textures replaced in one frame).
 static bool page_upload(ft_game *game, int page_index) {
   dd_text_renderer_t *text = &game->gfx.text;
   dd_text_page_t *page = &text->pages[page_index];
   if (page->sprite_count == 0u) return false;
-  if (page->atlas && text->retired_count >= DD_TEXT_MAX_RETIRED) return false;
+  if (page->texture && text->retired_count >= DD_TEXT_MAX_RETIRED) return false;
+
+  uint32_t layer_width = 1u, layer_height = 1u;
+  for (uint32_t s = 0; s < page->sprite_count; ++s) {
+    if (page->sprites[s].width > layer_width) layer_width = page->sprites[s].width;
+    if (page->sprites[s].height > layer_height) layer_height = page->sprites[s].height;
+  }
+  const size_t layer_bytes = (size_t)layer_width * layer_height * 2u;
+  uint8_t *pixels = calloc(page->sprite_count, layer_bytes);
+  if (!pixels) return false;
+  for (uint32_t s = 0; s < page->sprite_count; ++s) {
+    const dd_text_sprite_t *sprite = &page->sprites[s];
+    if (!sprite->coverage) continue;
+    for (uint32_t y = 0; y < sprite->height; ++y)
+      memcpy(pixels + s * layer_bytes + (size_t)y * layer_width * 2u, sprite->coverage + (size_t)y * sprite->width * 2u,
+             (size_t)sprite->width * 2u);
+  }
+
   const ft_texture_desc texture_desc = {.struct_size = sizeof(texture_desc),
-                                        .pixels = page->sheet,
-                                        .width = page->sheet_size,
-                                        .height = page->sheet_size,
-                                        .layers = 1u,
-                                        .format = FT_TEXTURE_RGBA8,
-                                        .mipmaps = false,
+                                        .pixels = pixels,
+                                        .width = layer_width,
+                                        .height = layer_height,
+                                        .layers = page->sprite_count,
+                                        .format = FT_TEXTURE_RG8,
+                                        .mipmaps = true,
                                         .linear_filter = true};
   ft_texture *texture = game->engine->texture_create(&texture_desc);
+  free(pixels);
   if (!texture) return false;
-  const ft_atlas_desc atlas_desc = {.struct_size = sizeof(atlas_desc),
-                                    .texture = texture,
-                                    .sprites = page->rects,
-                                    .sprite_count = page->sprite_count,
-                                    .max_instances_per_frame = 32768u};
-  ft_atlas *atlas = game->engine->atlas_create(&atlas_desc);
-  if (!atlas) {
-    game->engine->texture_destroy(texture);
-    return false;
-  }
-  if (page->atlas) {
-    text->retired_atlases[text->retired_count] = page->atlas;
-    text->retired_textures[text->retired_count] = page->texture;
-    text->retired_count++;
-  }
-  page->atlas = atlas;
+  if (page->texture) text->retired_textures[text->retired_count++] = page->texture;
   page->texture = texture;
+  page->layer_width = layer_width;
+  page->layer_height = layer_height;
   page->uploaded_sprites = page->sprite_count;
   return true;
 }
 
 void dd_text_frame_begin(ft_game *game) {
   dd_text_renderer_t *text = &game->gfx.text;
-  for (int i = 0; i < text->retired_count; ++i) {
-    game->engine->atlas_destroy(text->retired_atlases[i]);
-    game->engine->texture_destroy(text->retired_textures[i]);
-  }
+  for (int i = 0; i < text->retired_count; ++i) game->engine->texture_destroy(text->retired_textures[i]);
   text->retired_count = 0;
 }
 
@@ -350,7 +340,7 @@ static void prepare_text(ft_game *game, const char *value) {
       int page = text->page_count - 1;
       if (text->pages[page].full) {
         if (text->page_count >= DD_TEXT_MAX_PAGES ||
-            !page_init(&text->pages[text->page_count], DD_TEXT_EXTRA_SHEET_SIZE, DD_TEXT_EXTRA_GLYPHS)) {
+            !page_init(&text->pages[text->page_count], DD_TEXT_EXTRA_GLYPHS)) {
           result = GLYPH_FAILED;
           break;
         }
@@ -373,11 +363,11 @@ static void prepare_text(ft_game *game, const char *value) {
     if (touched[page] || text->pages[page].uploaded_sprites < text->pages[page].sprite_count) page_upload(game, page);
 }
 
-// The glyph as it can be drawn now: one whose page's atlas does not have it yet is the replacement.
+// The glyph as it can be drawn now: one whose page's texture does not have it yet is the replacement.
 static const dd_text_glyph_t *drawable_glyph(const dd_text_renderer_t *text, const dd_text_glyph_t *glyph) {
   if (!glyph || glyph->page >= text->page_count) return NULL;
   const dd_text_page_t *page = &text->pages[glyph->page];
-  if (page->atlas && glyph->sprite_index + DD_TEXT_SPRITES_PER_GLYPH <= page->uploaded_sprites) return glyph;
+  if (page->texture && glyph->layer + DD_TEXT_OUTLINE_VARIANTS <= page->uploaded_sprites) return glyph;
   const dd_text_glyph_t *replacement = find_exact_glyph(text, DD_TEXT_REPLACEMENT);
   return replacement && replacement != glyph ? drawable_glyph(text, replacement) : NULL;
 }
@@ -391,11 +381,11 @@ void dd_text_destroy(ft_game *game) {
   dd_text_frame_begin(game);
   for (int i = 0; i < text->page_count; ++i) {
     dd_text_page_t *page = &text->pages[i];
-    if (page->atlas) game->engine->atlas_destroy(page->atlas);
     if (page->texture) game->engine->texture_destroy(page->texture);
-    free(page->sheet);
-    free(page->rects);
+    page_release_coverage(page);
+    free(page->sprites);
   }
+  if (text->pipeline) game->engine->pipeline_destroy(text->pipeline);
   for (int i = 0; i < text->face_count; ++i) FT_Done_Face((FT_Face)text->faces[i]);
   if (text->library) FT_Done_FreeType((FT_Library)text->library);
   for (int i = 0; i < text->font_data_count; ++i) game->engine->free_file_data(text->font_data[i]);
@@ -575,12 +565,64 @@ static bool load_font_file(ft_game *game, const char *relative_path) {
   return true;
 }
 
+// One glyph quad. Attribute locations mirror data/games/ddnet/shaders/text.vert;
+// location 0 is the engine's quad corner.
+typedef struct {
+  ft_vec2 pos;  // world-space centre
+  ft_vec2 size; // world-space size
+  ft_vec2 uv;   // how much of its layer the sprite covers
+  int32_t layer;
+  ft_color fill;
+  ft_color outline;
+} text_instance_t;
+
+static bool create_text_pipeline(ft_game *game) {
+  char vert_path[1024], frag_path[1024];
+  game->engine->resolve_data_path("shaders/text.vert.spv", vert_path, sizeof(vert_path));
+  game->engine->resolve_data_path("shaders/text.frag.spv", frag_path, sizeof(frag_path));
+  void *vert = NULL, *frag = NULL;
+  size_t vert_size = 0, frag_size = 0;
+  if (!game->engine->read_file(vert_path, &vert, &vert_size) || !game->engine->read_file(frag_path, &frag, &frag_size)) {
+    dd_log(game, FT_LOG_ERROR, "Missing text shaders (%s / %s).", vert_path, frag_path);
+    game->engine->free_file_data(vert);
+    game->engine->free_file_data(frag);
+    return false;
+  }
+  const ft_vertex_attr attrs[] = {
+      {1, offsetof(text_instance_t, pos), FT_VERTEX_FLOAT2},
+      {2, offsetof(text_instance_t, size), FT_VERTEX_FLOAT2},
+      {3, offsetof(text_instance_t, uv), FT_VERTEX_FLOAT2},
+      {4, offsetof(text_instance_t, layer), FT_VERTEX_INT1},
+      {5, offsetof(text_instance_t, fill), FT_VERTEX_FLOAT4},
+      {6, offsetof(text_instance_t, outline), FT_VERTEX_FLOAT4},
+  };
+  const ft_pipeline_desc desc = {.struct_size = sizeof(desc),
+                                 .vertex_spirv = vert,
+                                 .vertex_spirv_size = vert_size,
+                                 .fragment_spirv = frag,
+                                 .fragment_spirv_size = frag_size,
+                                 .instance_attrs = attrs,
+                                 .instance_attr_count = (uint32_t)(sizeof(attrs) / sizeof(attrs[0])),
+                                 .instance_stride = sizeof(text_instance_t),
+                                 .max_instances_per_frame = DD_TEXT_MAX_QUADS,
+                                 .texture_count = 1,
+                                 .alpha_blend = true};
+  game->gfx.text.pipeline = game->engine->pipeline_create(&desc);
+  game->engine->free_file_data(vert);
+  game->engine->free_file_data(frag);
+  return game->gfx.text.pipeline != NULL;
+}
+
 bool dd_text_create(ft_game *game) {
   dd_text_renderer_t *text = &game->gfx.text;
   if (text->page_count > 0) return true;
+  if (!create_text_pipeline(game)) return false;
 
   FT_Library library = NULL;
-  if (FT_Init_FreeType(&library) != 0) return false;
+  if (FT_Init_FreeType(&library) != 0) {
+    dd_text_destroy(game);
+    return false;
+  }
   text->library = library;
 
   // DDNet's stack (data/fonts/index.json): DejaVu Sans, then its fallbacks for what DejaVu lacks,
@@ -598,7 +640,7 @@ bool dd_text_create(ft_game *game) {
   text->baked_size = (float)DD_TEXT_BAKED_SIZE;
 
   // The common chat and nameplate repertoire up front, in one page; everything else as it shows up.
-  if (!page_init(&text->pages[0], DD_TEXT_SHEET_SIZE, DD_TEXT_MAX_GLYPHS)) {
+  if (!page_init(&text->pages[0], DD_TEXT_MAX_GLYPHS)) {
     dd_text_destroy(game);
     return false;
   }
@@ -612,10 +654,9 @@ bool dd_text_create(ft_game *game) {
     dd_text_destroy(game);
     return false;
   }
-  // The first page is done growing; its sheet is only needed to rebuild it.
+  // The first page is done growing.
   text->pages[0].full = true;
-  free(text->pages[0].sheet);
-  text->pages[0].sheet = NULL;
+  page_release_coverage(&text->pages[0]);
 
   text->entity_scale = game->settings.entity_text_size;
   for (int style = 0; style < DD_ENTITY_TEXT_STYLE_COUNT; ++style) {
@@ -625,7 +666,7 @@ bool dd_text_create(ft_game *game) {
     }
   }
   // Entity atlas creation changes FreeType's active pixel size. Kerning for
-  // the regular glyph atlas must stay in the same 64px metric space it was
+  // the regular glyphs must stay in the same 64px metric space they were
   // baked in.
   FT_Set_Pixel_Sizes((FT_Face)text->face, 0, DD_TEXT_BAKED_SIZE);
   return true;
@@ -688,32 +729,31 @@ static uint32_t outline_variant_for(float reference_px) {
 void dd_text_draw_outlined(ft_game *game, float z, ft_vec2 position, float size, ft_color color, ft_color outline,
                            float outline_reference_px, const char *value) {
   const dd_text_renderer_t *text = &game->gfx.text;
-  if (text->page_count == 0 || !value || !value[0] || size <= 0.f) return;
+  if (text->page_count == 0 || !text->pipeline || !value || !value[0] || size <= 0.f) return;
   const bool want_outline = outline.a > 0.f;
-  const bool want_fill = color.a > 0.f;
-  if (!want_outline && !want_fill) return;
+  if (!want_outline && !(color.a > 0.f)) return;
   prepare_text(game, value);
 
+  // One quad per glyph, with the page it is drawn from.
   const size_t capacity = strlen(value);
-  // Every quad twice, outline and fill, with the page each is drawn from.
-  const size_t total_quads = (capacity ? capacity : 1u) * 2u;
-  ft_sprite_draw stack_draws[128];
-  uint8_t stack_pages[128];
-  ft_sprite_draw *draws = total_quads <= 128 ? stack_draws : malloc(total_quads * sizeof(*draws));
-  uint8_t *pages = total_quads <= 128 ? stack_pages : malloc(total_quads);
-  if (!draws || !pages) {
-    if (draws != stack_draws) free(draws);
+  text_instance_t stack_quads[64];
+  uint8_t stack_pages[64];
+  text_instance_t *quads = capacity <= 64 ? stack_quads : malloc(capacity * sizeof(*quads));
+  uint8_t *pages = capacity <= 64 ? stack_pages : malloc(capacity);
+  if (!quads || !pages) {
+    if (quads != stack_quads) free(quads);
     if (pages != stack_pages) free(pages);
     return;
   }
 
-  const uint32_t variant = outline_variant_for(outline_reference_px);
+  // Without an outline, the thinnest variant: its quads are the smallest.
+  const uint32_t variant = want_outline ? outline_variant_for(outline_reference_px) : 0u;
+  const ft_color ring = want_outline ? outline : (ft_color){0.f, 0.f, 0.f, 0.f};
+  const float margin = (float)sprite_margin(variant) * 2.f;
   const float scale = size / text->baked_size;
   float cursor_x = position.x;
   float line_y = position.y;
-  uint32_t outline_count = 0u, fill_count = 0u;
-  ft_sprite_draw *fills = draws + capacity;
-  uint8_t *fill_pages = pages + capacity;
+  uint32_t count = 0u;
   const dd_text_glyph_t *previous = NULL;
   while (*value) {
     const uint32_t codepoint = utf8_next(&value);
@@ -727,51 +767,39 @@ void dd_text_draw_outlined(ft_game *game, float z, ft_vec2 position, float size,
     if (!glyph) continue;
     cursor_x += kerning(text, previous, glyph) * scale;
 
-    if (glyph->visible && fill_count < capacity) {
-      const float width = (float)glyph->width * scale;
-      const float height = (float)glyph->height * scale;
+    if (glyph->visible && count < capacity) {
+      // Where the glyph's sprites were laid out when each had the room of the thickest outline: the
+      // bitmap that far in from the corner. Every sprite is centred on it, as large as its margin makes it.
       const float char_x = cursor_x + glyph->offset_x * scale;
       const float char_bottom = line_y + size - glyph->offset_y * scale;
-      const ft_sprite_draw quad = {.pos = {char_x + width * 0.5f, char_bottom - height * 0.5f},
-                                   .size = {width, height},
-                                   .rotation = 0.f,
-                                   .sprite_index = glyph->sprite_index,
-                                   .color = color,
-                                   .tiling = {1.f, 1.f}};
-      if (want_outline) {
-        draws[outline_count] = quad;
-        draws[outline_count].sprite_index = glyph->outline_sprite[variant];
-        draws[outline_count].color = outline;
-        pages[outline_count] = glyph->page;
-        ++outline_count;
-      }
-      if (want_fill) {
-        fill_pages[fill_count] = glyph->page;
-        fills[fill_count++] = quad;
-      }
+      const dd_text_page_t *page = &text->pages[glyph->page];
+      const float sprite_w = (float)glyph->width + margin, sprite_h = (float)glyph->height + margin;
+      quads[count] = (text_instance_t){
+          .pos = {char_x + ((float)glyph->width * 0.5f + DD_TEXT_PADDING) * scale,
+                  char_bottom - ((float)glyph->height * 0.5f + DD_TEXT_PADDING) * scale},
+          .size = {sprite_w * scale, sprite_h * scale},
+          .uv = {sprite_w / (float)page->layer_width, sprite_h / (float)page->layer_height},
+          .layer = (int32_t)(glyph->layer + variant),
+          .fill = color,
+          .outline = ring};
+      pages[count++] = glyph->page;
     }
     cursor_x += glyph->advance_x * scale * (codepoint == '\t' ? 4.f : 1.f);
     previous = glyph;
   }
 
-  // One batch per page. Batches at one depth are ordered by atlas, not by when they were drawn, so
-  // the fill goes a hair above the outline to stay on top of it whichever pages they come from.
-  ft_sprite_draw stack_batch[128];
-  const uint32_t most = outline_count > fill_count ? outline_count : fill_count;
-  ft_sprite_draw *batch = most <= 128 ? stack_batch : malloc((size_t)most * sizeof(*batch));
-  for (int pass = 0; batch && pass < 2; ++pass) {
-    const ft_sprite_draw *source = pass == 0 ? draws : fills;
-    const uint8_t *source_pages = pass == 0 ? pages : fill_pages;
-    const uint32_t count = pass == 0 ? outline_count : fill_count;
-    for (int page = 0; page < text->page_count; ++page) {
-      uint32_t n = 0;
-      for (uint32_t q = 0; q < count; ++q)
-        if (source_pages[q] == page) batch[n++] = source[q];
-      if (n > 0 && text->pages[page].atlas) game->engine->draw_sprites(text->pages[page].atlas, pass == 0 ? z : z + 0.001f, batch, n);
-    }
+  // One draw per page.
+  text_instance_t stack_batch[64];
+  text_instance_t *batch = count <= 64 ? stack_batch : malloc((size_t)count * sizeof(*batch));
+  for (int page = 0; batch && page < text->page_count; ++page) {
+    uint32_t n = 0;
+    for (uint32_t q = 0; q < count; ++q)
+      if (pages[q] == page) batch[n++] = quads[q];
+    ft_texture *texture = text->pages[page].texture;
+    if (n > 0 && texture) game->engine->draw_instances(text->pipeline, z, &texture, 1u, batch, n);
   }
   if (batch != stack_batch) free(batch);
-  if (draws != stack_draws) free(draws);
+  if (quads != stack_quads) free(quads);
   if (pages != stack_pages) free(pages);
 }
 
@@ -792,8 +820,8 @@ void dd_text_set_entity_scale(ft_game *game, int scale) {
 
   for (int style = 0; style < DD_ENTITY_TEXT_STYLE_COUNT; ++style)
     create_entity_atlas(game, style);
-  // Baking a sheet leaves FreeType on the entity pixel size; the glyph atlas
-  // and its kerning live in the 64px metric space they were measured in.
+  // Baking a sheet leaves FreeType on the entity pixel size; the glyphs
+  // and their kerning live in the 64px metric space they were measured in.
   FT_Set_Pixel_Sizes((FT_Face)text->face, 0, DD_TEXT_BAKED_SIZE);
 }
 

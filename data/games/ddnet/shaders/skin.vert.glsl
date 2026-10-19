@@ -45,6 +45,25 @@ ubo;
 
 layout(location = 12) flat out float frag_lod_bias;
 layout(location = 13) flat out float frag_alpha;
+// Where the body and the two feet sample, each as its animation moves and turns
+// it. Affine in frag_uv, so worked out at the corners and interpolated: the
+// fragment stage, which composes every part per pixel, has no turning to do.
+layout(location = 14) noperspective out vec2 frag_uv_body;
+layout(location = 15) noperspective out vec2 frag_uv_back;
+layout(location = 16) noperspective out vec2 frag_uv_front;
+
+// `anim` moves the part (x, y in 64ths of the tee) and turns it (z in whole
+// turns) about the centre of where it is placed.
+vec2 apply_anim(vec2 uv, vec3 anim, vec2 place_centre) {
+  vec2 offs = vec2(-anim.x / 64.0, -anim.y / 64.0);
+  vec2 center = place_centre - offs;
+  float a = anim.z * 2.0 * 3.14159265;
+  float s = sin(a), c = cos(a);
+  uv -= center;
+  uv *= mat2(c, s, -s, c);
+  uv += center;
+  return uv + offs;
+}
 
 void main() {
   // the hand rides a quad of its own, the tee quad never rotates
@@ -78,4 +97,8 @@ void main() {
   frag_mode = instance_mode;
   frag_lod_bias = ubo.lod_bias;
   frag_alpha = instance_alpha;
+  // (the body and the feet are both placed about the middle of the tee)
+  frag_uv_body = apply_anim(frag_uv, anim_body, vec2(0.5));
+  frag_uv_back = apply_anim(frag_uv, anim_back, vec2(0.5));
+  frag_uv_front = apply_anim(frag_uv, anim_front, vec2(0.5));
 }

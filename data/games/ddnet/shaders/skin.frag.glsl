@@ -24,6 +24,10 @@ layout(location = 12) flat in float frag_lod_bias;
 // Whole-instance fade. Every colour below is premultiplied, so scaling rgb and
 // alpha together is the correct way to make one instance translucent.
 layout(location = 13) flat in float frag_alpha;
+// The body's and the feet's sample points, as their animation moves them (skin.vert).
+layout(location = 14) noperspective in vec2 frag_uv_body;
+layout(location = 15) noperspective in vec2 frag_uv_back;
+layout(location = 16) noperspective in vec2 frag_uv_front;
 
 layout(location = 0) out vec4 out_color;
 
@@ -36,21 +40,7 @@ struct part_info_t {
   vec2 place_size;    // 0..1
 };
 
-mat2 rot(float a) {
-  float s = sin(a), c = cos(a);
-  return mat2(c, s, -s, c);
-}
-
 vec4 blend_pma(vec4 dst, vec4 src) { return vec4(src.rgb + dst.rgb * (1.0 - src.a), src.a + dst.a * (1.0 - src.a)); }
-
-vec2 apply_anim(vec2 uv, vec3 anim, part_info_t part) {
-  vec2 offs = vec2(-anim.x / 64.0, -anim.y / 64.0);
-  vec2 center = part.place_offset + part.place_size * 0.5 - offs;
-  uv -= center;
-  uv *= rot(anim.z * 2.0 * 3.14159265);
-  uv += center;
-  return uv + offs;
-}
 
 vec4 get_part_color(part_info_t part, vec2 frag_uv, int skin_index, bool use_body_color, bool mirror) {
   vec2 local_uv = (frag_uv - part.place_offset) / part.place_size;
@@ -114,9 +104,9 @@ void main() {
 
   vec4 final_color = vec4(0.0);
 
-  vec2 uv_body = apply_anim(frag_uv, frag_body, body);
-  vec2 uv_back = apply_anim(frag_uv, frag_back, foot);
-  vec2 uv_front = apply_anim(frag_uv, frag_front, foot);
+  vec2 uv_body = frag_uv_body;
+  vec2 uv_back = frag_uv_back;
+  vec2 uv_front = frag_uv_front;
 
   final_color = blend_pma(final_color, get_part_color(foot_shadow, uv_back, frag_skin_index, false, false));
   final_color = blend_pma(final_color, get_part_color(body_shadow, uv_body, frag_skin_index, true, false));

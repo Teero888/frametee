@@ -80,6 +80,7 @@ set(SRCS
 	src/system/save.c
 	src/system/config.c
 	src/system/input.c
+	src/system/window_state.c
 	src/system/input_repeat.c
 	src/system/raw_mouse.c
 	src/system/file_dialog.c
@@ -236,20 +237,20 @@ elseif(MSVC)
     target_sources(${PROJECT_NAME} PRIVATE src/system/windows/frametee.manifest)
 endif()
 
-# Force-include the cached GLFW monitor wrappers instead of renaming the GLFW
+# Force-include the cached GLFW monitor and window-state wrappers instead of renaming the GLFW
 # entry points with -D: a -D rename also hits their declarations in glfw3.h, so
 # on Windows (where glfw3.h marks them __declspec(dllimport)) the wrappers turn
 # into unresolved __imp_mock_glfw* imports at link time.
-set(IMGUI_GLFW_MONITOR_CACHE_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/imgui_glfw_monitor_cache.h")
+set(IMGUI_GLFW_CACHE_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/imgui_glfw_cache.h")
 if(MSVC)
-    set(IMGUI_GLFW_MONITOR_CACHE_FLAGS "/FI${IMGUI_GLFW_MONITOR_CACHE_HEADER}")
+    set(IMGUI_GLFW_CACHE_FLAGS "/FI${IMGUI_GLFW_CACHE_HEADER}")
 else()
-    set(IMGUI_GLFW_MONITOR_CACHE_FLAGS "-include;${IMGUI_GLFW_MONITOR_CACHE_HEADER}")
+    set(IMGUI_GLFW_CACHE_FLAGS "-include;${IMGUI_GLFW_CACHE_HEADER}")
 endif()
 set_source_files_properties(libs/cimgui/imgui/backends/imgui_impl_glfw.cpp PROPERTIES
     COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\""
-    COMPILE_OPTIONS "${IMGUI_GLFW_MONITOR_CACHE_FLAGS}"
-    OBJECT_DEPENDS "${IMGUI_GLFW_MONITOR_CACHE_HEADER}"
+    COMPILE_OPTIONS "${IMGUI_GLFW_CACHE_FLAGS}"
+    OBJECT_DEPENDS "${IMGUI_GLFW_CACHE_HEADER}"
 )
 set_source_files_properties(libs/cimgui/imgui/backends/imgui_impl_vulkan.cpp PROPERTIES
     COMPILE_DEFINITIONS "IMGUI_IMPL_API=extern \"C\""
@@ -564,9 +565,12 @@ foreach(GAME_DATA_ENTRY ${GAME_DATA_ENTRIES})
     list(APPEND GAME_SHADER_GLOBS
         "${GAME_DATA_ENTRY}/shaders/*.vert.glsl"
         "${GAME_DATA_ENTRY}/shaders/*.frag.glsl")
+    # Shared code the stages #include (GL_GOOGLE_include_directive), never compiled on its own.
+    list(APPEND GAME_SHADER_INCLUDE_GLOBS "${GAME_DATA_ENTRY}/shaders/*.glsl.inc")
 endforeach()
 
 file(GLOB GAME_SHADER_SOURCES ${GAME_SHADER_GLOBS})
+file(GLOB GAME_SHADER_INCLUDES ${GAME_SHADER_INCLUDE_GLOBS})
 set(GAME_SHADER_OUTPUTS "")
 foreach(SHADER ${GAME_SHADER_SOURCES})
     file(RELATIVE_PATH SHADER_REL "${CMAKE_SOURCE_DIR}/data" "${SHADER}")
@@ -578,7 +582,7 @@ foreach(SHADER ${GAME_SHADER_SOURCES})
         OUTPUT ${SHADER_OUTPUT}
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
         COMMAND ${GLSLANG_VALIDATOR} -V ${SHADER} -o ${SHADER_OUTPUT}
-        DEPENDS ${SHADER}
+        DEPENDS ${SHADER} ${GAME_SHADER_INCLUDES}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Compiling game shader ${SHADER_REL}"
     )

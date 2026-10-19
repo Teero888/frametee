@@ -207,18 +207,36 @@ static void render_export_passes(struct gfx_handler_t *handler, float intra) {
   render_game_passes(handler, intra, true);
 }
 
-// A demo rendered from the command line is seen as its recording player saw it: the camera on the
-// imported group's first player, in the game's first directed mode, as wide as the game shows it.
+// The imported group's track that replays the player who recorded it, else its first track.
+static int recording_player_track(struct gfx_handler_t *handler) {
+  timeline_state_t *ts = &handler->user_interface.timeline;
+  int first = -1;
+  for (int t = 0; t < ts->player_track_count; ++t) {
+    if (model_track_group_index(ts, t) != ts->active_group_index) continue;
+    if (first < 0) first = t;
+    const player_track_t *track = &ts->player_tracks[t];
+    for (int s = 0; s < track->snippet_count; ++s) {
+      if (!snippet_is_playback(&track->snippets[s])) continue;
+      const timeline_recording_t *recording = recordings_find(ts, track->snippets[s].recording_id);
+      ft_recording_player player = {.struct_size = sizeof(player)};
+      if (recording && recording->handle &&
+          gh_recording_player(&handler->game_host, recording->handle, (unsigned)track->snippets[s].recording_player, &player) &&
+          player.suggested)
+        return t;
+    }
+  }
+  return first;
+}
+
+// A demo rendered from the command line is seen as its recording player saw it: the camera on that
+// player's track, in the game's first directed mode, as wide as the game shows it.
 // Only when the camera is not animated, and only for this run.
 static void follow_imported_player(struct gfx_handler_t *handler) {
   ui_handler_t *ui = &handler->user_interface;
   timeline_state_t *ts = &ui->timeline;
   if (ui->camera_timeline.pose_count > 0) return;
-  for (int t = 0; t < ts->player_track_count; ++t)
-    if (model_track_group_index(ts, t) == ts->active_group_index) {
-      ts->selected_player_track_index = t;
-      break;
-    }
+  const int track = recording_player_track(handler);
+  if (track >= 0) ts->selected_player_track_index = track;
   camera_t *camera = &handler->renderer.camera;
   camera->zoom = camera->zoom_wanted;
   for (unsigned i = 0; i < game_camera_mode_count(&handler->game_host); ++i) {
@@ -297,6 +315,10 @@ int main(int argc, char **argv) {
   bool video_range_given = false;
   video_export_options_t video_cli;
   video_export_defaults(&video_cli);
+  // DDNet's benchmark_quit for a demo: its frame times for so many seconds, in
+  // its file format, so whatever reads DDNet's reads these.
+  double benchmark_seconds = 0.0;
+  const char *benchmark_path = NULL;
 
 #define MAX_CLI_PLUGINS 64
   const char *forced_plugins[MAX_CLI_PLUGINS];
@@ -396,6 +418,9 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
       set_environment_variable("FRAMETEE_WINDOW_SIZE", argv[i + 1]);
       set_environment_variable("FRAMETEE_VIEWPORT_SIZE", argv[++i]);
+    } else if (strcmp(argv[i], "--benchmark") == 0 && i + 2 < argc) {
+      benchmark_seconds = atof(argv[++i]);
+      benchmark_path = argv[++i];
     } else if (strcmp(argv[i], "--benchmark-groups") == 0 && i + 1 < argc) {
       benchmark_groups = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--project") == 0 && i + 1 < argc) {
@@ -472,7 +497,10 @@ int main(int argc, char **argv) {
            "  --screenshot <path>     Save viewport as PPM and exit\n"
            "  --size <width>x<height> Set capture dimensions\n"
            "  --view <x,y,width>      Pin the 2D world view for capture\n"
-           "  --frames <count>        Frames before capture (default: 60)\n\n"
+           "  --frames <count>        Frames before capture (default: 60)\n"
+           "  --benchmark <s> <file>  With --demo: play it with all its players, fullscreen\n"
+           "                          and unlimited, write frame times for s seconds as\n"
+           "                          DDNet's benchmark_quit does, then exit\n\n"
            "Video export options (video only):\n"
            "  --render-video <path>   Render an MP4 and exit\n"
            "  --render-range <a:b>    Inclusive camera time range in seconds\n"
@@ -638,8 +666,10 @@ int main(int argc, char **argv) {
     }
     if (recording_import_available(&handler.user_interface)) {
       recording_import_open(&handler.user_interface, demo_path, handler.level == NULL);
+      if (benchmark_path) recording_import_choose_all(&handler.user_interface);
       // A render has no one to answer the import dialog.
-      if (video_path && recording_import_finish(&handler.user_interface)) follow_imported_player(&handler);
+      if ((video_path || benchmark_path) && recording_import_finish(&handler.user_interface))
+        follow_imported_player(&handler);
     } else
       log_error("Main", "The active game cannot open '%s'; pick one with --game", demo_path);
   }
@@ -670,6 +700,39 @@ int main(int argc, char **argv) {
       if (video_progress_path) fs_remove(video_progress_path);
     }
     return succeeded ? 0 : 1;
+  }
+
+  // A benchmark sees the demo the way benchmark_quit does: fullscreen, the
+  // game alone, no frame limit, from its first tick. The settings it overrides
+  // go back before they are saved.
+  FILE *benchmark_file = NULL;
+  double benchmark_end = 0.0, benchmark_last = -1.0;
+  const bool vsync_before = handler.user_interface.vsync;
+  const int fps_limit_before = handler.user_interface.fps_limit;
+  if (benchmark_path) {
+    ui_handler_t *ui = &handler.user_interface;
+    if (!demo_path || !handler.level)
+      log_error("Main", "--benchmark needs a --demo to play");
+    else if ((benchmark_file = fs_open(benchmark_path, "w")) == NULL)
+      log_error("Main", "Cannot write '%s'", benchmark_path);
+    if (!benchmark_file) {
+      free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
+      gfx_cleanup(&handler);
+      return 1;
+    }
+    recordings_wait_all(&ui->timeline);
+    // The game alone, as a video shows it: none of the editor's overlays.
+    render_apply(ui, RENDER_TARGET_VIDEO);
+    ui->vsync = false;
+    ui->fps_limit = 0;
+    ui->show_ui = false;
+    handler.present_viewport_only = true;
+    handler.keep_viewport_offscreen = screenshot_path != NULL;
+    handler.g_swap_chain_rebuild = true;
+    if (!glfwGetWindowMonitor(handler.window)) gfx_toggle_fullscreen(&handler);
+    ui->timeline.current_tick = 0;
+    // (tests: a capture pinned to a tick holds still there, so it comes out the same every time)
+    ui->timeline.is_playing = !(screenshot_path && getenv("FRAMETEE_TEST_TICK"));
   }
 
   double last_time = glfwGetTime();
@@ -705,6 +768,17 @@ int main(int argc, char **argv) {
     int frame_result = gfx_begin_frame(&handler);
     if (frame_result == FRAME_EXIT) break;
     if (frame_result == FRAME_SKIP) continue;
+    // From one drawn frame to the next, as benchmark_quit times them.
+    if (benchmark_file) {
+      const double frame_start = glfwGetTime();
+      if (benchmark_last >= 0.0) {
+        fprintf(benchmark_file, "Frametime %d us\n", (int)((frame_start - benchmark_last) * 1e6));
+      } else {
+        benchmark_end = frame_start + benchmark_seconds;
+        handler.user_interface.timeline.last_update_time = igGetTime();
+      }
+      benchmark_last = frame_start;
+    }
     ui_update(&handler.user_interface);
 
     timeline_state_t *timeline = &handler.user_interface.timeline;
@@ -770,7 +844,8 @@ int main(int argc, char **argv) {
     double t_flush_done = glfwGetTime();
 
     ui_check_auto_save(&handler.user_interface);
-    ui_render(&handler.user_interface);
+    // (a benchmark shows nothing of the editor, so builds none of it)
+    if (!handler.present_viewport_only) ui_render(&handler.user_interface);
     double t_ui_done = glfwGetTime();
     // The playhead has moved for this frame: sound follows it.
     audio_timeline_update(&handler);
@@ -812,6 +887,8 @@ int main(int argc, char **argv) {
     if (handler.user_interface.video_job.active)
       video_export_step(&handler, &handler.user_interface.video_job, NULL);
 
+    if (benchmark_file && benchmark_last > benchmark_end) break;
+
     if (screenshot_path != NULL && --screenshot_frames <= 0) {
       // A few frames in, so the level has settled and the viewport has been
       // sized by the layout rather than by its initial guess.
@@ -836,6 +913,12 @@ int main(int argc, char **argv) {
     }
   }
 
+  if (benchmark_file) {
+    fclose(benchmark_file);
+    log_info("Main", "Wrote %s", benchmark_path);
+    handler.user_interface.vsync = vsync_before;
+    handler.user_interface.fps_limit = fps_limit_before;
+  }
   free_cli_args(plugin_argv, plugin_arg_copies, num_plugin_arg_copies);
   gfx_cleanup(&handler);
   audio_shutdown();
