@@ -1586,7 +1586,8 @@ static bool draw_setup(tg *g, tg_program *p, const tg_state *state, const tg_tex
 
 // the draw held back, recorded
 static void held_send(tg *g) {
-  if (!g->held.on) return;
+  // (headless, nothing was made, and the module's resources go without a device)
+  if (!g || !g->held.on) return;
   g->held.on = false;
   tg_program *p = g->held.program;
   if (!g->recording || g->failed) return;

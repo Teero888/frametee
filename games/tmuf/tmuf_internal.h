@@ -11,6 +11,8 @@
 #include <frametee/game_abi.h>
 #include <tmuf_physics/tmuf_physics.h>
 
+// (the input record and what plugins may read of a world)
+#include "include/tmuf/tmuf_game.h"
 #include "tmuf_gpu.h"
 #include "tmuf_data.h"
 
@@ -19,17 +21,6 @@
 #include <stdint.h>
 
 // --- input record --------------------------------------------------------
-
-// The game's own inputs, as tmuf_input takes them.
-typedef struct tm_input {
-  uint8_t accelerate;
-  uint8_t brake;
-  uint8_t respawn;
-  // A key event that leaves the input as it was (a second steering key):
-  // imported from replays, where it cancels a master jump.
-  uint8_t input_event;
-  int32_t steer; // -65536 (full left) .. 65536 (full right)
-} tm_input;
 
 enum tm_field {
   TM_FIELD_ACCELERATE,
@@ -157,11 +148,12 @@ typedef struct tm_audio {
 } tm_audio;
 
 struct ft_world {
-  tmuf_world w;
+  tmuf_world w; // first: plugins read it (tmuf_game_world)
   tm_race_display display;
   const ft_level *level;
   tm_audio audio;
 };
+_Static_assert(offsetof(struct ft_world, w) == 0, "tmuf_game_world reads the tmuf_world at the start of a world");
 
 // --- the game --------------------------------------------------------------
 
