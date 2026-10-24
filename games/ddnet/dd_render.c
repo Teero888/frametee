@@ -1137,6 +1137,14 @@ bool dd_camera_update(ft_game *game, const ft_camera_frame *frame, ft_camera *in
 
 // --- status readout ----------------------------------------------------------
 
+// DDNet's VelocityRamp(): CCharacterCore::Move() moves a tee by vel.x times
+// this and puts vel.x back after, so the stored velocity is not the one it moves
+// with once it is fast.
+static float velocity_ramp(const ddnet_tuning_values_t *tuning, float speed) {
+  if (speed < tuning->velramp_start) return 1.0f;
+  return 1.0f / powf(tuning->velramp_curvature, (speed - tuning->velramp_start) / tuning->velramp_range);
+}
+
 // What the editor shows beside the viewport while scrubbing. The wording and
 // precision are DDNet's, which is the point: the engine cannot know that
 // velocity is worth showing in blocks per second, or that a race timer exists.
@@ -1158,16 +1166,20 @@ uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, f
 
   const int pos_x = (int)chr->pos.x;
   const int pos_y = (int)chr->pos.y;
-  const float vel_x = c->vel.x;
+  const float ramp =
+      velocity_ramp(&world->core.tuning_values[chr->tune_zone], sqrtf(c->vel.x * c->vel.x + c->vel.y * c->vel.y) * 50.0f);
+  const float vel_x = c->vel.x * ramp;
   const float vel_y = c->vel.y;
 
-  const float vel_scaled_x = roundf(vel_x * 256.0f);
+  const float vel_scaled_x = roundf(c->vel.x * 256.0f);
   const float vel_scaled_y = roundf(vel_y * 256.0f);
 
+  // DDNet's HUD ramps the speed after rounding it away near zero.
   float speed_x = vel_scaled_x / 256.0f * (50.0f / 32.0f);
   if (vel_scaled_x >= -1.0f && vel_scaled_x <= 1.0f) {
     speed_x = 0.0f;
   }
+  speed_x *= ramp;
   float speed_y = vel_scaled_y / 256.0f * (50.0f / 32.0f);
   if (vel_scaled_y >= -128.0f && vel_scaled_y <= 128.0f) {
     speed_y = 0.0f;
