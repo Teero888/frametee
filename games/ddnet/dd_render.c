@@ -847,6 +847,8 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft
       idx = GAMESKIN_PICKUP_ARMOR_SHOTGUN + type - DDNET_POWERUP_ARMOR_SHOTGUN;
     else if (type == DDNET_POWERUP_WEAPON && subtype >= 0 && subtype < DDNET_NUM_WEAPONS) idx = GAMESKIN_PICKUP_HAMMER + subtype;
     else if (type == DDNET_POWERUP_NINJA) idx = GAMESKIN_PICKUP_NINJA;
+    // The map's hearts, which freeze: DDNet gives them a sprite of their own.
+    else if (type == DDNET_POWERUP_FREEZE) idx = GAMESKIN_PICKUP_FREEZE;
     if (idx < 0) continue;
 
     const ft_sprite_rect *rect = dd_sprite_rect(game, game->gfx.gameskin, (uint32_t)idx);

@@ -104,6 +104,7 @@ static const dd_asset_part_t game_parts[] = {
     {"pickup_armor_grenade", "Grenade shield", G_PICKUPS, 17, 2, 2, 2},
     {"pickup_armor_laser", "Laser shield", G_PICKUPS, 19, 2, 2, 2},
     {"pickup_armor_ninja", "Ninja shield", G_PICKUPS, 10, 10, 2, 2},
+    {"pickup_freeze", "Freeze", G_PICKUPS, 6, 2, 2, 2},
     {"part1", "Particle 1", G_PARTICLES, 6, 0, 1, 1},
     {"part2", "Particle 2", G_PARTICLES, 6, 1, 1, 1},
     {"part3", "Particle 3", G_PARTICLES, 7, 0, 1, 1},

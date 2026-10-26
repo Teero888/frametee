@@ -638,12 +638,15 @@ static void draw_inspector(game_host_t *host, const ft_input_schema *schema, inp
   igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, (ImVec2){igGetStyle()->ItemSpacing.x, layout.row_gap});
   igDummy((ImVec2){0.f, 0.f});
   igAlignTextToFramePadding();
-  if (first < 0)
+  if (first < 0) {
+    igPushTextWrapPos(0.f);
     igTextDisabled("Move the playhead into the snippet, or Ctrl+drag to select ticks.");
-  else if (first == last)
+    igPopTextWrapPos();
+  } else if (first == last) {
     igText("Tick %d", snippet->start_tick + first);
-  else
+  } else {
     igText("Ticks %d \xE2\x80\x93 %d  (%d selected)", snippet->start_tick + first, snippet->start_tick + last, last - first + 1);
+  }
   if (first < 0) {
     igPopStyleVar(1);
     return;
@@ -941,7 +944,7 @@ static void draw_lane_header(const input_lane_t *lane, ImVec2 min, float width) 
 }
 
 static void draw_lanes(ui_handler_t *ui, game_host_t *host, const ft_input_schema *schema, input_snippet_t *snippet, int group,
-                       int playhead_index, float height) {
+                       int playhead_index, float width, float height) {
   const float scale = gfx_get_ui_scale();
   const ImGuiIO *io = igGetIO_Nil();
   timeline_state_t *ts = &ui->timeline;
@@ -956,10 +959,10 @@ static void draw_lanes(ui_handler_t *ui, game_host_t *host, const ft_input_schem
                              : 0.f;
     if (custom > 0.f) lanes[l].height = custom * scale;
   }
-  const float header_w = fminf(lanes_header_width(lanes, lane_count), igGetContentRegionAvail().x * 0.4f);
+  const float header_w = fminf(lanes_header_width(lanes, lane_count), width * 0.4f);
 
   const ImVec2 origin = igGetCursorScreenPos();
-  const float avail_w = igGetContentRegionAvail().x;
+  const float avail_w = width;
   lane_frame_t frame = {.canvas_x = origin.x + header_w, .canvas_w = fmaxf(50.f, avail_w - header_w), .hovered_index = -1};
 
   if (ed.fit_pending) {
@@ -1444,13 +1447,32 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
   igSeparator();
 
   const float scale = gfx_get_ui_scale();
-  const float scrollbar_h = 8.f * scale + 4.f + igGetStyle()->ItemSpacing.y;
-  const float inspector_h = inspector_height(schema, igGetContentRegionAvail().x);
-  const float lanes_h = igGetContentRegionAvail().y - inspector_h - scrollbar_h - igGetStyle()->ItemSpacing.y * 2.f - 1.f;
-  draw_lanes(ui, host, schema, snippet, group, playhead_index, lanes_h);
-
-  igSeparator();
-  if (igBeginChild_Str("##inspector", (ImVec2){0, inspector_h}, 0, 0)) {
+  const ImGuiStyle *style = igGetStyle();
+  const float scrollbar_h = 8.f * scale + 4.f + style->ItemSpacing.y;
+  const ImVec2 avail = igGetContentRegionAvail();
+  const float inspector_h = inspector_height(schema, avail.x);
+  // In a short window, such as one docked beside the timeline, the inspector
+  // under the lanes would leave them no room. It moves to their right then,
+  // as a column that scrolls by itself.
+  ImVec2 inspector_size = {0.f, inspector_h};
+  if (inspector_h > avail.y * 0.5f) {
+    const float gap = style->ItemSpacing.x * 2.f;
+    const float inspector_w =
+        fminf(inspector_layout(schema, avail.x).label_w + 360.f * scale + style->ScrollbarSize, (avail.x - gap) * 0.5f);
+    const float lanes_w = avail.x - gap - inspector_w;
+    const ImVec2 origin = igGetCursorScreenPos();
+    draw_lanes(ui, host, schema, snippet, group, playhead_index, lanes_w, avail.y - scrollbar_h - 1.f);
+    const float line_x = roundf(origin.x + lanes_w + gap * 0.5f);
+    ImDrawList_AddLine(igGetWindowDrawList(), (ImVec2){line_x, origin.y}, (ImVec2){line_x, origin.y + avail.y},
+                       igGetColorU32_Col(ImGuiCol_Separator, 1.f), 1.f);
+    igSetCursorScreenPos((ImVec2){origin.x + lanes_w + gap, origin.y});
+    inspector_size = (ImVec2){inspector_w, avail.y};
+  } else {
+    draw_lanes(ui, host, schema, snippet, group, playhead_index, avail.x,
+               avail.y - inspector_h - scrollbar_h - style->ItemSpacing.y * 2.f - 1.f);
+    igSeparator();
+  }
+  if (igBeginChild_Str("##inspector", inspector_size, 0, 0)) {
     igBeginDisabled(ed.read_only);
     draw_inspector(host, schema, snippet, playhead_index);
     igEndDisabled();
