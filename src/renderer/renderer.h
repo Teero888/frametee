@@ -377,6 +377,8 @@ typedef enum {
   RENDER_CMD_TRIANGLE_FILLED,
   RENDER_CMD_LINE,
   RENDER_CMD_LINE_BATCH,
+  RENDER_CMD_POLYLINE,
+  RENDER_CMD_POLYGON,
   RENDER_CMD_INSTANCES,
   RENDER_CMD_MESH
 } render_cmd_type_t;
@@ -414,6 +416,14 @@ struct render_command_t {
       line_segment_t *segments;
       uint32_t count;
     } line_batch;
+    // A smooth polyline or convex polygon: its points are in transient memory.
+    struct {
+      vec2 *points;
+      uint32_t count;
+      vec4 color;
+      float thickness;
+      bool closed;
+    } path;
     struct {
       custom_pipeline_t *pipeline;
       const void *instances;
@@ -595,6 +605,12 @@ void renderer_submit_circle_filled(gfx_handler_t *h, float z, vec2 center, float
 void renderer_submit_triangle_filled(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec2 p3, vec4 color);
 void renderer_submit_line(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec4 color, float thickness);
 void renderer_submit_line_batch(gfx_handler_t *h, float z, const line_segment_t *segments, uint32_t count);
+// Anti-aliased, unlike the shapes above: their edges fade out over one pixel of the target. A
+// polyline mitres its corners, and `closed` adds the segment from the last point back to the
+// first; a line thinner than a pixel keeps the pixel and fades instead. A polygon must be convex.
+void renderer_submit_polyline(gfx_handler_t *h, float z, const vec2 *points, uint32_t count, vec4 color, float thickness,
+                              bool closed);
+void renderer_submit_polygon(gfx_handler_t *h, float z, const vec2 *points, uint32_t count, vec4 color);
 void renderer_flush_queue(gfx_handler_t *h, VkCommandBuffer cmd);
 
 // --- resources a game module creates at runtime -------------------------------

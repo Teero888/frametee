@@ -426,6 +426,21 @@ static void api_draw_triangle(float z, ft_vec2 a, ft_vec2 b, ft_vec2 c, ft_color
   renderer_submit_triangle_filled(g_engine, z, (vec2){a.x, a.y}, (vec2){b.x, b.y}, (vec2){c.x, c.y}, col);
 }
 
+// ft_vec2 is two floats, laid out as cglm's vec2; the renderer copies them.
+static void api_draw_polyline_smooth(float z, const ft_vec2 *points, uint32_t count, ft_color color, float thickness, bool closed) {
+  if (!have_graphics() || !points) return;
+  vec4 col;
+  copy_color(&color, col);
+  renderer_submit_polyline(g_engine, z, (const vec2 *)points, count, col, thickness, closed);
+}
+
+static void api_draw_polygon_smooth(float z, const ft_vec2 *points, uint32_t count, ft_color color) {
+  if (!have_graphics() || !points) return;
+  vec4 col;
+  copy_color(&color, col);
+  renderer_submit_polygon(g_engine, z, (const vec2 *)points, count, col);
+}
+
 static void api_draw_text(float z, ft_vec2 pos, float size, ft_color color, const char *text) {
   // World-space text goes through ImGui's viewport draw list: the renderer has
   // no glyph pipeline of its own yet, and this keeps module labels legible at
@@ -990,6 +1005,8 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .draw_circle = api_draw_circle,
       .draw_triangle = api_draw_triangle,
       .draw_text = api_draw_text,
+      .draw_polyline_smooth = api_draw_polyline_smooth,
+      .draw_polygon_smooth = api_draw_polygon_smooth,
       .draw_instances = api_draw_instances,
       .draw_mesh = api_draw_mesh,
       .draw_mesh_range = api_draw_mesh_range,

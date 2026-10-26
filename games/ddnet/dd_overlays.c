@@ -653,6 +653,7 @@ void dd_render_world_overlays(ft_game *game, const ft_render_frame *frame) {
   render_freeze_bars(game, frame);
   render_chat(game, frame);
   dd_race_hud_render(game, frame);
+  dd_speed_hud_render(game, frame);
   if (frame->last_world || frame->active) dd_skins_flush_overlay(game);
 }
 

@@ -2233,6 +2233,213 @@ void renderer_draw_circle_filled(gfx_handler_t *handler, vec2 center, float radi
   renderer->primitive_vertex_count += segments + 1;
   renderer->primitive_index_count += segments * 3;
 }
+// --- smooth shapes -----------------------------------------------------------
+//
+// Anti-aliased the way ImGui does it: around the solid shape runs a fringe one
+// pixel wide whose outer vertices are transparent, so the edge fades over that
+// pixel. The fringe shares its vertices with the shape, so nothing is drawn
+// twice and a translucent shape stays even.
+
+// One pixel of the target in world units, where `at` is.
+static float world_per_pixel(gfx_handler_t *handler, const float *at) {
+  float x0, y0, x1, y1;
+  world_to_screen(handler, at[0], at[1], &x0, &y0);
+  world_to_screen(handler, at[0] + 1.f, at[1], &x1, &y1);
+  const float pixels = hypotf(x1 - x0, y1 - y0);
+  return pixels > 1e-6f ? 1.f / pixels : 1.f;
+}
+
+// Copies the points, leaving out each that sits on the one before it (and, for
+// a closed shape, the last ones that sit on the first). A segment of no length
+// has no direction, and the edge around one folded back on itself by a fraction
+// of a pixel: a pill's ends did, and drew a long sliver twice.
+static uint32_t distinct_points(const vec2 *points, uint32_t count, bool closed, float epsilon, vec2 *out) {
+  uint32_t kept = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (kept > 0 && fabsf(points[i][0] - out[kept - 1][0]) <= epsilon && fabsf(points[i][1] - out[kept - 1][1]) <= epsilon)
+      continue;
+    glm_vec2_copy((float *)points[i], out[kept++]);
+  }
+  while (closed && kept > 1 && fabsf(out[kept - 1][0] - out[0][0]) <= epsilon && fabsf(out[kept - 1][1] - out[0][1]) <= epsilon)
+    --kept;
+  return kept;
+}
+
+// The unit normal of every segment, to the left of a -> b in a y-up frame.
+static void segment_normals(const vec2 *points, uint32_t count, bool closed, vec2 *out) {
+  const uint32_t segments = closed ? count : count - 1;
+  for (uint32_t i = 0; i < segments; ++i) {
+    const float *a = points[i], *b = points[(i + 1) % count];
+    const float dx = b[0] - a[0], dy = b[1] - a[1], len = hypotf(dx, dy);
+    out[i][0] = dy / len;
+    out[i][1] = -dx / len;
+  }
+  if (!closed) glm_vec2_copy(out[segments - 1], out[count - 1]);
+}
+
+// The offset of a corner whose sides are pushed out by one unit along their
+// normals: the mitre, at most four units long so a sharp corner cannot spike.
+static void corner_offset(const vec2 before, const vec2 after, vec2 out) {
+  float x = (before[0] + after[0]) * 0.5f, y = (before[1] + after[1]) * 0.5f;
+  const float length_squared = x * x + y * y;
+  const float scale = length_squared > 1e-6f ? fminf(1.f / length_squared, 16.f) : 1.f;
+  out[0] = x * scale;
+  out[1] = y * scale;
+}
+
+// The distinct points and their normals, for up to this many points on the stack.
+#define SMOOTH_STACK_POINTS 256
+
+typedef struct {
+  vec2 stack[SMOOTH_STACK_POINTS * 2];
+  vec2 *points, *normals;
+  uint32_t count;
+} smooth_path_t;
+
+// False when there is nothing to draw: too few distinct points, or no memory.
+static bool smooth_path_begin(smooth_path_t *path, const vec2 *points, uint32_t count, bool closed, float pixel,
+                              uint32_t min_count) {
+  path->points = count <= SMOOTH_STACK_POINTS ? path->stack : malloc(sizeof(vec2) * 2 * (size_t)count);
+  if (!path->points) return false;
+  path->normals = path->points + count;
+  // (a thousandth of a pixel: far below what shows, far above rounding)
+  path->count = distinct_points(points, count, closed, pixel * 1e-3f, path->points);
+  if (path->count < min_count) return false;
+  segment_normals(path->points, path->count, closed, path->normals);
+  return true;
+}
+
+static void smooth_path_end(smooth_path_t *path) {
+  if (path->points && path->points != path->stack) free(path->points);
+}
+
+static void draw_polyline_smooth(gfx_handler_t *handler, const vec2 *points, uint32_t count, const vec4 color, float thickness,
+                                 bool closed) {
+  if (count < 2) return;
+  const float pixel = world_per_pixel(handler, points[0]);
+  smooth_path_t path;
+  if (!smooth_path_begin(&path, points, count, closed, pixel, 2)) {
+    smooth_path_end(&path);
+    return;
+  }
+  count = path.count;
+  closed = closed && count > 2;
+  const uint32_t segments = closed ? count : count - 1;
+  const uint32_t vertex_count = count * 4, index_count = segments * 18;
+  if (!ensure_primitive_space(handler, vertex_count, index_count)) {
+    smooth_path_end(&path);
+    return;
+  }
+
+  // A solid core, and the fringe on either side of it. A line under a pixel
+  // has no core: its fringes meet in the middle, at an alpha that thins it.
+  const float half = fmaxf(thickness - pixel, 0.f) * 0.5f;
+  vec4 solid, clear;
+  glm_vec4_copy((float *)color, solid);
+  if (thickness < pixel) solid[3] *= fmaxf(thickness, 0.f) / pixel;
+  glm_vec4_copy((float *)color, clear);
+  clear[3] = 0.f;
+
+  renderer_state_t *renderer = &handler->renderer;
+  const uint32_t base = renderer->primitive_vertex_count;
+  primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base;
+  uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
+  const vec2 *normals = path.normals;
+  for (uint32_t i = 0; i < count; ++i) {
+    vec2 offset;
+    if (!closed && i == 0) glm_vec2_copy((float *)normals[0], offset);
+    else if (!closed && i == count - 1) glm_vec2_copy((float *)normals[count - 2], offset);
+    else corner_offset(normals[(i + segments - 1) % segments], normals[i % segments], offset);
+    const float reach[4] = {half + pixel, half, -half, -half - pixel};
+    for (uint32_t k = 0; k < 4; ++k) {
+      primitive_vertex_t *v = &vtx[i * 4 + k];
+      v->pos[0] = path.points[i][0] + offset[0] * reach[k];
+      v->pos[1] = path.points[i][1] + offset[1] * reach[k];
+      glm_vec4_copy(k == 0 || k == 3 ? clear : solid, v->color);
+    }
+  }
+  // Three strips along each segment: the fringe, the core, the other fringe.
+  for (uint32_t i = 0; i < segments; ++i) {
+    const uint32_t a = base + i * 4, b = base + ((i + 1) % count) * 4;
+    for (uint32_t k = 0; k < 3; ++k) {
+      *idx++ = a + k;
+      *idx++ = b + k;
+      *idx++ = b + k + 1;
+      *idx++ = a + k;
+      *idx++ = b + k + 1;
+      *idx++ = a + k + 1;
+    }
+  }
+  renderer->primitive_vertex_count += vertex_count;
+  renderer->primitive_index_count += index_count;
+  smooth_path_end(&path);
+}
+
+static void draw_polygon_smooth(gfx_handler_t *handler, const vec2 *points, uint32_t count, const vec4 color) {
+  if (count < 3) return;
+  const float pixel = world_per_pixel(handler, points[0]);
+  smooth_path_t path;
+  if (!smooth_path_begin(&path, points, count, true, pixel, 3)) {
+    smooth_path_end(&path);
+    return;
+  }
+  count = path.count;
+  const uint32_t vertex_count = count * 2, index_count = (count - 2) * 3 + count * 6;
+  if (!ensure_primitive_space(handler, vertex_count, index_count)) {
+    smooth_path_end(&path);
+    return;
+  }
+  // Which side is out depends on which way round the points go. Measured from
+  // the first point: a shape far out in the world loses its area to rounding
+  // when its corners' own coordinates are multiplied.
+  const float *origin = path.points[0];
+  float area = 0.f;
+  for (uint32_t i = 1; i + 1 < count; ++i) {
+    const float ax = path.points[i][0] - origin[0], ay = path.points[i][1] - origin[1];
+    const float bx = path.points[i + 1][0] - origin[0], by = path.points[i + 1][1] - origin[1];
+    area += ax * by - bx * ay;
+  }
+
+  // The edge runs half a pixel either side of the outline, so the shape keeps its size.
+  const float fringe = pixel * 0.5f * (area < 0.f ? -1.f : 1.f);
+  vec4 clear;
+  glm_vec4_copy((float *)color, clear);
+  clear[3] = 0.f;
+
+  renderer_state_t *renderer = &handler->renderer;
+  const uint32_t base = renderer->primitive_vertex_count;
+  primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base;
+  uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
+  // Vertex 2i is the inner end of point i, 2i + 1 its transparent outer end.
+  for (uint32_t i = 0; i < count; ++i) {
+    vec2 offset;
+    corner_offset(path.normals[(i + count - 1) % count], path.normals[i], offset);
+    vtx[i * 2].pos[0] = path.points[i][0] - offset[0] * fringe;
+    vtx[i * 2].pos[1] = path.points[i][1] - offset[1] * fringe;
+    glm_vec4_copy((float *)color, vtx[i * 2].color);
+    vtx[i * 2 + 1].pos[0] = path.points[i][0] + offset[0] * fringe;
+    vtx[i * 2 + 1].pos[1] = path.points[i][1] + offset[1] * fringe;
+    glm_vec4_copy(clear, vtx[i * 2 + 1].color);
+  }
+  for (uint32_t i = 1; i + 1 < count; ++i) {
+    *idx++ = base;
+    *idx++ = base + i * 2;
+    *idx++ = base + (i + 1) * 2;
+  }
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t a = base + i * 2, b = base + ((i + 1) % count) * 2;
+    *idx++ = a;
+    *idx++ = b;
+    *idx++ = b + 1;
+    *idx++ = a;
+    *idx++ = b + 1;
+    *idx++ = a + 1;
+  }
+  renderer->primitive_vertex_count += vertex_count;
+  renderer->primitive_index_count += index_count;
+  smooth_path_end(&path);
+}
+
 // TODO: ensuring the width of the thing is atleast 1px is kinda expensive. think of another way to do this
 static void draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness, float width_px);
 
@@ -3251,6 +3458,44 @@ void renderer_submit_line_batch(struct gfx_handler_t *h, float z, const line_seg
   cmd->data.line_batch.count = count;
 }
 
+static render_command_t *submit_path(gfx_handler_t *h, render_cmd_type_t type, float z, const vec2 *points, uint32_t count,
+                                     vec4 color) {
+  renderer_state_t *renderer = &h->renderer;
+  if (!points || count < 2 || (size_t)count > SIZE_MAX / sizeof(*points)) return NULL;
+  const size_t size = sizeof(*points) * (size_t)count;
+  const size_t start = transient_start(renderer);
+  if (start > renderer->transient_capacity || size > renderer->transient_capacity - start) {
+    log_error(LOG_SOURCE, "Transient memory exhausted while queuing a path of %u points.", count);
+    return NULL;
+  }
+  if (!queue_reserve_one(renderer)) return NULL;
+  vec2 *copy = (vec2 *)(renderer->transient_memory + start);
+  memcpy(copy, points, size);
+  renderer->transient_offset = start + size;
+
+  render_command_t *cmd = &renderer->queue.commands[renderer->queue.count++];
+  cmd->type = type;
+  cmd->z = z;
+  cmd->data.path.points = copy;
+  cmd->data.path.count = count;
+  glm_vec4_copy(color, cmd->data.path.color);
+  cmd->data.path.thickness = 0.f;
+  cmd->data.path.closed = false;
+  return cmd;
+}
+
+void renderer_submit_polyline(gfx_handler_t *h, float z, const vec2 *points, uint32_t count, vec4 color, float thickness,
+                              bool closed) {
+  render_command_t *cmd = submit_path(h, RENDER_CMD_POLYLINE, z, points, count, color);
+  if (!cmd) return;
+  cmd->data.path.thickness = thickness;
+  cmd->data.path.closed = closed && count > 2;
+}
+
+void renderer_submit_polygon(gfx_handler_t *h, float z, const vec2 *points, uint32_t count, vec4 color) {
+  if (count >= 3) submit_path(h, RENDER_CMD_POLYGON, z, points, count, color);
+}
+
 void renderer_calculate_atlas_uvs(atlas_renderer_t *ar, uint32_t sprite_index, atlas_instance_t *out_inst) {
   if (sprite_index >= ar->sprite_count) return;
   float layer_w = (float)ar->layer_width;
@@ -3410,8 +3655,8 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     // Flush primitives if switching to non-primitive
     if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_RECT_ROUNDED && q->type != RENDER_CMD_CIRCLE_FILLED &&
         q->type != RENDER_CMD_TRIANGLE_FILLED &&
-        q->type != RENDER_CMD_LINE && q->type != RENDER_CMD_LINE_BATCH &&
-        r->primitive_index_count > r->primitive_index_offset_drawn) {
+        q->type != RENDER_CMD_LINE && q->type != RENDER_CMD_LINE_BATCH && q->type != RENDER_CMD_POLYLINE &&
+        q->type != RENDER_CMD_POLYGON && r->primitive_index_count > r->primitive_index_offset_drawn) {
       flush_primitives(h, cmd);
     }
 
@@ -3473,6 +3718,15 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
         line_segment_t *line = &q->data.line_batch.segments[segment];
         draw_line(h, line->p1, line->p2, line->color, line->thickness, line->width_px);
       }
+      break;
+
+    case RENDER_CMD_POLYLINE:
+      draw_polyline_smooth(h, q->data.path.points, q->data.path.count, q->data.path.color, q->data.path.thickness,
+                           q->data.path.closed);
+      break;
+
+    case RENDER_CMD_POLYGON:
+      draw_polygon_smooth(h, q->data.path.points, q->data.path.count, q->data.path.color);
       break;
 
     case RENDER_CMD_INSTANCES:

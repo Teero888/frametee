@@ -1616,6 +1616,7 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
                                    .show_key_presses = true,
                                    .key_press_size = 30,
                                    .center_dot = false,
+                                   .speed_hold_top = true,
                                    .cursor_scale = 1.0f};
   game->auto_finish_events = true;
 
@@ -1633,6 +1634,7 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
 static void ddnet_update(ft_game *game, const ft_engine_state *state) {
   dd_assets_update(game);
   dd_race_hud_update(game, state);
+  dd_speed_hud_update(game, state);
 }
 
 static void ddnet_destroy(ft_game *game) {
@@ -1645,6 +1647,7 @@ static void ddnet_destroy(ft_game *game) {
   free(game->particles);
   free(game->seen_teams);
   dd_race_hud_cleanup(game);
+  dd_speed_hud_cleanup(game);
   dd_assets_cleanup(game);
   dd_audio_unload(game);
   free(game);
@@ -1943,6 +1946,10 @@ enum ddnet_setting {
   SET_RENDER_TIMER,
   SET_RENDER_SPLITS,
   SET_PICKUP_HITBOXES,
+  SET_RENDER_SPEED,
+  SET_RENDER_SPEED_CURVE,
+  SET_SPEED_HOLD_TOP,
+  SET_RENDER_POSITION,
   // DDNet's assets (dd_assets.c): a pack per type, then the parts mixed in from others.
   SET_ASSET_FIRST,
   SET_ASSET_MIX_FIRST = SET_ASSET_FIRST + DD_ASSET_TYPE_COUNT,
@@ -1978,6 +1985,16 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
                            "Under the timer after a checkpoint or the finish: how far the tee is behind the fastest other group "
                            "there, or its own time where no other group is faster",
                            "HUD", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_RENDER_SPEED] = {"render_speed", "Speed", "How fast the tee moves along the map, against the most the velocity ramp lets it reach",
+                          "HUD", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_RENDER_SPEED_CURVE] = {"render_speed_curve", "Velocity ramp plot",
+                                "What the velocity ramp makes of every raw speed, with the tee on it", "HUD", FT_VALUE_BOOL, 0, 0,
+                                FT_SETTING_RENDER},
+    [SET_SPEED_HOLD_TOP] = {"speed_hold_top", "Hold the top speed",
+                            "Show the fastest the tee has been so far instead of its speed at each tick, which wobbles as it bounces",
+                            "HUD", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_RENDER_POSITION] = {"render_position", "Position", "How far along the map the tee is, in blocks, out of the map's width",
+                             "HUD", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_CHAT] = {"render_chat", "Show chat", NULL, "Chat", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CHAT_FONT_SIZE] = {"chat_font_size", "Chat font size", NULL, "Chat", FT_VALUE_INT, 10, 100, FT_SETTING_RENDER},
     [SET_CHAT_WIDTH] = {"chat_width", "Chat width", NULL, "Chat", FT_VALUE_INT, 140, 400, FT_SETTING_RENDER},
@@ -2054,6 +2071,18 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
     return true;
   case SET_PICKUP_HITBOXES:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->pickup_hitboxes};
+    return true;
+  case SET_RENDER_SPEED:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_speed};
+    return true;
+  case SET_RENDER_SPEED_CURVE:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_speed_curve};
+    return true;
+  case SET_SPEED_HOLD_TOP:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->speed_hold_top};
+    return true;
+  case SET_RENDER_POSITION:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_position};
     return true;
   case SET_RENDER_CURSOR:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_cursor};
@@ -2179,6 +2208,18 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
     return true;
   case SET_PICKUP_HITBOXES:
     s->pickup_hitboxes = value->as.b;
+    return true;
+  case SET_RENDER_SPEED:
+    s->render_speed = value->as.b;
+    return true;
+  case SET_RENDER_SPEED_CURVE:
+    s->render_speed_curve = value->as.b;
+    return true;
+  case SET_SPEED_HOLD_TOP:
+    s->speed_hold_top = value->as.b;
+    return true;
+  case SET_RENDER_POSITION:
+    s->render_position = value->as.b;
     return true;
   case SET_RENDER_CURSOR:
     s->render_cursor = value->as.b;

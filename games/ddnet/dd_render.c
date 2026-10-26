@@ -788,14 +788,13 @@ static void draw_pickup_hitbox(ft_game *game, const vec2 center, float thickness
   enum { SEGMENTS = 48 };
   // A pickup whose switch is off for the viewed team takes no one: drawn faint.
   const float alpha = off ? 0.35f : 1.f;
-  dd_draw_circle(game, DD_Z_LINES, (float *)center, PICKUP_REACH, (vec4){1.f, 1.f, 1.f, 0.12f * alpha}, SEGMENTS);
-  vec2 from = {center[0] + PICKUP_REACH, center[1]};
-  for (int s = 1; s <= SEGMENTS; ++s) {
+  ft_vec2 ring[SEGMENTS];
+  for (int s = 0; s < SEGMENTS; ++s) {
     const float angle = 2.f * (float)M_PI * (float)s / SEGMENTS;
-    vec2 to = {center[0] + cosf(angle) * PICKUP_REACH, center[1] + sinf(angle) * PICKUP_REACH};
-    dd_draw_line(game, DD_Z_LINES, from, to, (vec4){1.f, 1.f, 1.f, 0.8f * alpha}, thickness);
-    glm_vec2_copy(to, from);
+    ring[s] = (ft_vec2){center[0] + cosf(angle) * PICKUP_REACH, center[1] + sinf(angle) * PICKUP_REACH};
   }
+  dd_draw_polygon_smooth(game, DD_Z_LINES, ring, SEGMENTS, (vec4){1.f, 1.f, 1.f, 0.12f * alpha});
+  dd_draw_polyline_smooth(game, DD_Z_LINES, ring, SEGMENTS, (vec4){1.f, 1.f, 1.f, 0.8f * alpha}, thickness, true);
 }
 
 static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft_world *world, const ft_world *prev_world, float intra) {
@@ -1162,14 +1161,6 @@ bool dd_camera_update(ft_game *game, const ft_camera_frame *frame, ft_camera *in
 
 // --- status readout ----------------------------------------------------------
 
-// DDNet's VelocityRamp(): CCharacterCore::Move() moves a tee by vel.x times
-// this and puts vel.x back after, so the stored velocity is not the one it moves
-// with once it is fast.
-static float velocity_ramp(const ddnet_tuning_values_t *tuning, float speed) {
-  if (speed < tuning->velramp_start) return 1.0f;
-  return 1.0f / powf(tuning->velramp_curvature, (speed - tuning->velramp_start) / tuning->velramp_range);
-}
-
 // What the editor shows beside the viewport while scrubbing. The wording and
 // precision are DDNet's, which is the point: the engine cannot know that
 // velocity is worth showing in blocks per second, or that a race timer exists.
@@ -1191,8 +1182,10 @@ uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, f
 
   const int pos_x = (int)chr->pos.x;
   const int pos_y = (int)chr->pos.y;
+  // CCharacterCore::Move() moves a tee by vel.x times the ramp and puts vel.x back after, so the
+  // stored velocity is not the one it moves with once it is fast.
   const float ramp =
-      velocity_ramp(&world->core.tuning_values[chr->tune_zone], sqrtf(c->vel.x * c->vel.x + c->vel.y * c->vel.y) * 50.0f);
+      dd_velocity_ramp(&world->core.tuning_values[chr->tune_zone], sqrtf(c->vel.x * c->vel.x + c->vel.y * c->vel.y) * 50.0f);
   const float vel_x = c->vel.x * ramp;
   const float vel_y = c->vel.y;
 

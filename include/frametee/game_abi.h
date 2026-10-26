@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 32u
+#define FT_GAME_ABI_VERSION 33u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -1215,6 +1215,14 @@ typedef struct ft_engine_api {
   void (*draw_circle)(float z, ft_vec2 center, float radius, ft_color color, uint32_t segments);
   void (*draw_triangle)(float z, ft_vec2 a, ft_vec2 b, ft_vec2 c, ft_color color);
   void (*draw_text)(float z, ft_vec2 pos, float size, ft_color color, const char *text);
+  /* Anti-aliased, unlike the shapes above, whose hard edges are what most
+   * games' own art expects: the edges fade out over one pixel. A polyline
+   * mitres its corners and `closed` adds the segment from the last point back
+   * to the first; `thickness` is in world units, and a line thinner than a
+   * pixel fades instead of breaking up. A polygon must be convex. Both copy
+   * the points. */
+  void (*draw_polyline_smooth)(float z, const ft_vec2 *points, uint32_t count, ft_color color, float thickness, bool closed);
+  void (*draw_polygon_smooth)(float z, const ft_vec2 *points, uint32_t count, ft_color color);
 
   /* --- drawing in three dimensions (only valid inside render callbacks) ---
    * The same primitives, positioned in the volume a 3D game lives in. These

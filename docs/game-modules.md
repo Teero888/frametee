@@ -291,7 +291,10 @@ draws through `ft_engine_api`, which offers, in rising order of power:
 
 1. **Primitives**: `draw_rect`, `draw_circle`, `draw_line`, `draw_triangle`,
    `draw_text` in the plane, and `draw_line3`, `draw_triangle3`, `draw_box3` in
-   a volume. Enough for a whole game, as the examples show.
+   a volume. Enough for a whole game, as the examples show. The plane's shapes
+   have hard edges; `draw_polyline_smooth` and `draw_polygon_smooth` (convex)
+   fade theirs out over a pixel, for overlays and HUDs that should look
+   anti-aliased.
 2. **Sprite atlases**: `texture_create` + `atlas_create`, then `draw_sprites`
    with an array of instances. The engine batches every draw sharing an atlas,
    which is how a game gets thousands of particles or tiles per frame without

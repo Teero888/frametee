@@ -852,6 +852,14 @@ void dd_draw_circle(ft_game *game, float z, vec2 center, float radius, vec4 colo
   game->engine->draw_circle(z, (ft_vec2){center[0], center[1]}, radius, world_color(game, color), segments);
 }
 
+void dd_draw_polyline_smooth(ft_game *game, float z, const ft_vec2 *points, uint32_t count, vec4 color, float thickness, bool closed) {
+  if (game->engine->draw_polyline_smooth) game->engine->draw_polyline_smooth(z, points, count, world_color(game, color), thickness, closed);
+}
+
+void dd_draw_polygon_smooth(ft_game *game, float z, const ft_vec2 *points, uint32_t count, vec4 color) {
+  if (game->engine->draw_polygon_smooth) game->engine->draw_polygon_smooth(z, points, count, world_color(game, color));
+}
+
 void dd_draw_triangle(ft_game *game, float z, vec2 a, vec2 b, vec2 c, vec4 color) {
   game->engine->draw_triangle(z, (ft_vec2){a[0], a[1]}, (ft_vec2){b[0], b[1]}, (ft_vec2){c[0], c[1]}, world_color(game, color));
 }

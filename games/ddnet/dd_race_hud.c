@@ -137,7 +137,7 @@ static void format_race_time(float seconds, char *out, size_t size) {
 
 // The tee the HUD is about: the frame's focus, else the one the camera's animation follows, else
 // the selected one, else the first that is in the game.
-static int hud_player(const ft_render_frame *frame) {
+int dd_hud_player(const ft_render_frame *frame) {
   const ft_world *world = frame->world;
   const int focus = dd_focus_player(frame);
   if (focus >= 0) return focus;
@@ -167,7 +167,7 @@ void dd_race_hud_render(ft_game *game, const ft_render_frame *frame) {
   const float center_x = camera.viewport.x / scale / 2.f;
 
   const ft_world *world = frame->world;
-  const int player = hud_player(frame);
+  const int player = dd_hud_player(frame);
   const int client = ddnet_player_client(world, player);
   if (client < 0) return;
   const ddnet_character_t *chr = ddnet_player_character(world, player);

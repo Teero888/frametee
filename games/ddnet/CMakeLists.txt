@@ -78,6 +78,7 @@ add_library(ddnet_game MODULE
     dd_skin_browser.c
     dd_player_panel.c
     dd_race_hud.c
+    dd_speed_hud.c
     dd_assets.c
     dd_assets_window.c
     dd_profile.c

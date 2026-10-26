@@ -520,9 +520,17 @@ typedef struct {
   uint32_t layer_width, layer_height; // the texture's: its biggest sprite
   uint32_t glyph_count, glyph_capacity;
   bool full;
+  uint8_t tier; // the size its glyphs are baked at (dd_text.c)
 } dd_text_page_t;
 
-enum { DD_TEXT_MAX_FACES = 16, DD_TEXT_MAX_PAGES = 4, DD_TEXT_MAX_RETIRED = 8 };
+// Glyphs by codepoint, sorted.
+typedef struct {
+  dd_text_glyph_t *glyphs;
+  uint32_t count, capacity;
+} dd_text_glyph_table_t;
+
+// DD_TEXT_TIERS: the sizes glyphs are baked at, 64 px doubling (dd_text.c).
+enum { DD_TEXT_MAX_FACES = 16, DD_TEXT_MAX_PAGES = 10, DD_TEXT_MAX_RETIRED = 8, DD_TEXT_TIERS = 3 };
 
 typedef struct {
   void *library;
@@ -541,8 +549,9 @@ typedef struct {
   ft_texture *entity_source_textures[3];
   ft_atlas *entity_atlases[3];
   // Every glyph looked up so far, by codepoint; one no font has points at the replacement's sprites.
-  dd_text_glyph_t *glyphs;
-  uint32_t glyph_count, glyph_capacity;
+  // The first table is the 64 px glyphs every text is laid out with; the others hold the same
+  // glyphs baked bigger, for text that is drawn bigger, as far as any has been.
+  dd_text_glyph_table_t tables[DD_TEXT_TIERS];
   float baked_size;
   // cl_text_entities_size, as a percentage. The entity number sheets bake it
   // in, so changing it re-uploads them exactly as CMapImages does.
@@ -705,6 +714,13 @@ typedef struct {
   // The race HUD (dd_race_hud.c): DDNet's timer at the top, and under it the checkpoint splits.
   bool render_timer;
   bool render_splits;
+  // The speed HUD (dd_speed_hud.c): the number with its bar, the velocity ramp's plot, whether
+  // both show the fastest the tee has been so far instead of its speed at each tick, and how far
+  // along the map the tee is.
+  bool render_speed;
+  bool render_speed_curve;
+  bool speed_hold_top;
+  bool render_position;
 } dd_settings_t;
 
 typedef struct {
@@ -729,6 +745,9 @@ struct ft_game {
   // By world index: the fastest each world's tees were at every checkpoint (dd_race_hud.c).
   struct dd_race_splits_t *race_splits;
   int race_split_worlds;
+  // By world index: the fastest each world's tees had been by every tick (dd_speed_hud.c).
+  struct dd_speed_history_t *speed_history;
+  int speed_history_worlds;
   bool headless;
   // Worlds stepped while this is set make their effects whatever the engine
   // presents (a demo export reads them from the worlds it asks the timeline for).
@@ -921,6 +940,9 @@ void dd_draw_sprites(ft_game *game, ft_atlas *atlas, float z, const ft_sprite_dr
 void dd_draw_line(ft_game *game, float z, vec2 a, vec2 b, vec4 color, float thickness);
 void dd_draw_circle(ft_game *game, float z, vec2 center, float radius, vec4 color, uint32_t segments);
 void dd_draw_triangle(ft_game *game, float z, vec2 a, vec2 b, vec2 c, vec4 color);
+// The engine's anti-aliased shapes, in the world's opacity like the ones above.
+void dd_draw_polyline_smooth(ft_game *game, float z, const ft_vec2 *points, uint32_t count, vec4 color, float thickness, bool closed);
+void dd_draw_polygon_smooth(ft_game *game, float z, const ft_vec2 *points, uint32_t count, vec4 color);
 
 void dd_skins_begin(ft_game *game);
 void dd_skin_push(ft_game *game, vec2 pos, float scale, int skin, int eye, vec2 dir, const dd_anim_state_t *anim, vec3 col_body, vec3 col_feet,
@@ -948,6 +970,14 @@ void dd_draw_text_screen(ft_game *game, float x, float y, float size, ft_color c
 void dd_race_hud_update(ft_game *game, const ft_engine_state *state);
 void dd_race_hud_render(ft_game *game, const ft_render_frame *frame);
 void dd_race_hud_cleanup(ft_game *game);
+// The tee the HUD is about (dd_race_hud.c).
+int dd_hud_player(const ft_render_frame *frame);
+
+void dd_speed_hud_update(ft_game *game, const ft_engine_state *state);
+void dd_speed_hud_render(ft_game *game, const ft_render_frame *frame);
+void dd_speed_hud_cleanup(ft_game *game);
+// DDNet's VelocityRamp(), for a speed in units per second (dd_speed_hud.c).
+float dd_velocity_ramp(const ddnet_tuning_values_t *tuning, float speed);
 void dd_map_overlays_create(ft_level *level);
 void dd_map_overlays_destroy(ft_level *level);
 void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame);
