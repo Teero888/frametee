@@ -32,6 +32,10 @@ float camera_rig_view_scale(gfx_handler_t *h) {
   return 2.f * h->world_width / (fmaxf(h->world_width, h->world_height) * 0.001f);
 }
 
+float camera_rig_min_zoom(gfx_handler_t *h) { return camera_rig_view_scale(h) / 400000.f; }
+
+float camera_rig_max_zoom(gfx_handler_t *h) { return camera_rig_view_scale(h) / 2.f; }
+
 // Framing is the same at every aspect: a keyed zoom or lens covers the
 // picture's shorter side, exactly as the renderer does at 16:9. A 9:16 video
 // then shows its width as wide as a 16:9 one shows its height, and everything
@@ -483,7 +487,7 @@ void camera_rig_apply(gfx_handler_t *h, const camera_pose_t *pose) {
     if (h->world_width <= 0.f || h->world_height <= 0.f) return;
     h->renderer.camera.pos[0] = pose->target[0] / h->world_width;
     h->renderer.camera.pos[1] = pose->target[1] / h->world_height;
-    h->renderer.camera.zoom = fmaxf(0.005f, renderer_zoom(pose->zoom, viewport_aspect(h)));
+    h->renderer.camera.zoom = fmaxf(camera_rig_min_zoom(h), renderer_zoom(pose->zoom, viewport_aspect(h)));
     h->renderer.camera.zoom_wanted = h->renderer.camera.zoom;
     return;
   }
@@ -690,7 +694,7 @@ static void draw_marker_2d(gfx_handler_t *h, const float at[2], vec4 color, floa
 // function of the zoom alone, and the height the width over the video's aspect.
 static void draw_frame_2d(gfx_handler_t *h, const camera_pose_t *pose, vec4 color) {
   if (h->world_width <= 0.f || h->world_height <= 0.f) return;
-  const float half_width = 0.5f * camera_rig_view_scale(h) / fmaxf(0.005f, renderer_zoom(pose->zoom, output_aspect(h)));
+  const float half_width = 0.5f * camera_rig_view_scale(h) / fmaxf(camera_rig_min_zoom(h), renderer_zoom(pose->zoom, output_aspect(h)));
   const float half_height = half_width / output_aspect(h);
   const float x = pose->target[0], y = pose->target[1];
   const float thickness = half_width * 0.006f;

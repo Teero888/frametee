@@ -484,7 +484,20 @@ static bool build_mipmaps(gfx_handler_t *handler, VkImage image, uint32_t width,
   return true;
 }
 
-texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t layer_count, VkFormat format) {
+// Whether the device takes an image this large. Vulkan leaves a larger one
+// undefined: a driver may create it and sample it with its size wrapped.
+static bool texture_size_supported(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t layers) {
+  const renderer_state_t *renderer = &handler->renderer;
+  if (width && height && layers && width <= renderer->max_image_dimension_2d && height <= renderer->max_image_dimension_2d &&
+      layers <= renderer->max_image_array_layers)
+    return true;
+  log_error(LOG_SOURCE, "Refusing a %ux%u texture with %u layers: the device takes at most %ux%u and %u layers.", width, height,
+            layers, renderer->max_image_dimension_2d, renderer->max_image_dimension_2d, renderer->max_image_array_layers);
+  return false;
+}
+
+static texture_t *create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t layer_count,
+                                          VkFormat format, bool mipmaps) {
   renderer_state_t *renderer = &handler->renderer;
 
   // find free slot
@@ -506,7 +519,7 @@ texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t wid
   texArray->active = true;
   texArray->width = width;
   texArray->height = height;
-  texArray->mip_levels = (uint32_t)floor(log2(fmax(width, height))) + 1;
+  texArray->mip_levels = mipmaps ? (uint32_t)floor(log2(fmax(width, height))) + 1 : 1;
   texArray->layer_count = layer_count;
   texArray->format = format;
   strncpy(texArray->path, "runtime_texture_array", sizeof(texArray->path) - 1);
@@ -531,6 +544,10 @@ texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t wid
 
   // log_info(LOG_SOURCE, "Created 2D texture array (%ux%u x %u layers)", width, height, layer_count);
   return texArray;
+}
+
+texture_t *renderer_create_texture_2d_array(gfx_handler_t *handler, uint32_t width, uint32_t height, uint32_t layer_count, VkFormat format) {
+  return create_texture_2d_array(handler, width, height, layer_count, format, true);
 }
 
 // One frame in flight's uniforms and primitive streams, at their first sizes.
@@ -607,6 +624,8 @@ int renderer_init(gfx_handler_t *handler) {
   vkGetPhysicalDeviceProperties(handler->g_physical_device, &properties);
   renderer->min_ubo_alignment = properties.limits.minUniformBufferOffsetAlignment;
   renderer->max_ubo_range = properties.limits.maxUniformBufferRange;
+  renderer->max_image_dimension_2d = properties.limits.maxImageDimension2D;
+  renderer->max_image_array_layers = properties.limits.maxImageArrayLayers;
 
   renderer->camera.zoom_wanted = 5.0f;
   renderer->lod_bias = -0.5f; // Default bias
@@ -1262,7 +1281,7 @@ static VkFilter g_next_texture_filter = VK_FILTER_LINEAR;
 texture_t *renderer_create_texture_from_rgba(gfx_handler_t *handler, const unsigned char *pixels, int width, int height) {
   renderer_lock();
   renderer_state_t *renderer = &handler->renderer;
-  if (!pixels) {
+  if (!pixels || width <= 0 || height <= 0 || !texture_size_supported(handler, (uint32_t)width, (uint32_t)height, 1)) {
     renderer_unlock();
     return NULL;
   }
@@ -3551,6 +3570,7 @@ static uint32_t format_bytes_per_pixel(VkFormat format) {
 
 texture_t *renderer_create_texture_layered(gfx_handler_t *h, const unsigned char *pixels, uint32_t width, uint32_t height, uint32_t layers,
                                            VkFormat format, bool mipmaps, bool linear_filter) {
+  if (!texture_size_supported(h, width, height, layers ? layers : 1)) return NULL;
   if (layers <= 1 && format == VK_FORMAT_R8G8B8A8_UNORM && !pixels) {
     renderer_state_t *renderer = &h->renderer;
     uint32_t free_slot = UINT32_MAX;
@@ -3588,7 +3608,7 @@ texture_t *renderer_create_texture_layered(gfx_handler_t *h, const unsigned char
     return tex;
   }
 
-  texture_t *tex = renderer_create_texture_2d_array(h, width, height, layers, format);
+  texture_t *tex = create_texture_2d_array(h, width, height, layers, format, mipmaps);
   if (!tex) return NULL;
   // A single layer is a sampler2D, and disabled mipmaps must not expose
   // uninitialized lower levels through either the view or the sampler.

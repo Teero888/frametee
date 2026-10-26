@@ -31,6 +31,10 @@ void camera_rig_render_gizmos(struct gfx_handler_t *h, double playhead, int sele
 
 // The world width a 2D view spans at zoom 1.
 float camera_rig_view_scale(struct gfx_handler_t *h);
+// The range a 2D zoom is kept in: from 400000 world units across to 2. A zoom
+// is relative to the level's shape, so the range is too.
+float camera_rig_min_zoom(struct gfx_handler_t *h);
+float camera_rig_max_zoom(struct gfx_handler_t *h);
 // Whether Follow or Aim ever apply, so the camera's path depends on the game.
 bool camera_rig_constrained(const camera_timeline_t *camera);
 // Walks the tracked characters' paths over the keyed span a slice at a time,

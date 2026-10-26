@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef M_PI
@@ -672,9 +673,34 @@ static void map_text(ft_game *game, float z, int x, int y, int style, int value)
   dd_entity_text_draw(game, z, style, x, y, value, (ft_color){1.f, 1.f, 1.f, 1.f});
 }
 
+// Whether tile i of the map can carry a speedup arrow or a number.
+static bool overlay_tile(const map_data_t *map, size_t i) {
+  return (map->speedup_layer.type && map->speedup_layer.type[i]) || (map->tele_layer.type && map->tele_layer.type[i]) ||
+         (map->switch_layer.type && map->switch_layer.type[i]);
+}
+
+void dd_map_overlays_create(ft_level *level) {
+  const map_data_t *map = &level->map;
+  if (!map->speedup_layer.type && !map->tele_layer.type && !map->switch_layer.type) return;
+  const size_t tiles = (size_t)map->width * (size_t)map->height;
+  size_t count = 0;
+  for (size_t i = 0; i < tiles; ++i)
+    count += overlay_tile(map, i);
+  if (!count || !(level->overlay_tiles = malloc(count * sizeof(*level->overlay_tiles)))) return;
+  for (size_t i = 0; i < tiles; ++i)
+    if (overlay_tile(map, i)) level->overlay_tiles[level->overlay_tile_count++] = i;
+}
+
+void dd_map_overlays_destroy(ft_level *level) {
+  free(level->overlay_tiles);
+  level->overlay_tiles = NULL;
+  level->overlay_tile_count = 0;
+}
+
 void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame) {
   if ((!game->settings.render_entity_text && !game->settings.render_speedups) || !frame->level) return;
-  const map_data_t *map = &frame->level->map;
+  const ft_level *level = frame->level;
+  const map_data_t *map = &level->map;
   ft_camera camera;
   game->engine->camera_get(&camera);
   int x0 = (int)floorf(camera.visible.x) - 1;
@@ -685,33 +711,43 @@ void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame) {
   if (y0 < 0) y0 = 0;
   if (x1 > map->width) x1 = map->width;
   if (y1 > map->height) y1 = map->height;
+  if (x0 >= x1 || y0 >= y1) return;
 
-  for (int y = y0; y < y1; ++y) {
-    for (int x = x0; x < x1; ++x) {
-      const int index = y * map->width + x;
-      if (map->speedup_layer.type && map->speedup_layer.type[index]) {
-        const int type = map->speedup_layer.type[index];
-        const int force = map->speedup_layer.force[index];
-        const int max_speed = map->speedup_layer.max_speed[index];
-        // Outside the editor DDNet only shows a speedup that would do
-        // something: the old tile needs a force, the new one either value.
-        if ((force && type == TILE_SPEED_BOOST_OLD) || ((force || max_speed) && type == TILE_SPEED_BOOST)) {
-          if (game->settings.render_speedups) draw_speedup_arrow(game, x, y, map->speedup_layer.angle[index]);
-          if (game->settings.render_entity_text) {
-            map_text(game, DD_Z_MAP_SPEEDUP_TEXT, x, y, DD_ENTITY_TEXT_TOP, max_speed);
-            map_text(game, DD_Z_MAP_SPEEDUP_TEXT, x, y, DD_ENTITY_TEXT_BOTTOM, force);
-          }
+  // Only the tiles that can carry something, from the first of row y0 on: a
+  // view of a large map takes in far more tiles than it labels.
+  const size_t width = (size_t)map->width, first = (size_t)y0 * width, last = (size_t)y1 * width;
+  size_t lo = 0, hi = level->overlay_tile_count;
+  while (lo < hi) {
+    const size_t mid = lo + (hi - lo) / 2;
+    if (level->overlay_tiles[mid] < first) lo = mid + 1;
+    else hi = mid;
+  }
+  for (size_t t = lo; t < level->overlay_tile_count && level->overlay_tiles[t] < last; ++t) {
+    const size_t index = level->overlay_tiles[t];
+    const int x = (int)(index % width), y = (int)(index / width);
+    if (x < x0 || x >= x1) continue;
+    if (map->speedup_layer.type && map->speedup_layer.type[index]) {
+      const int type = map->speedup_layer.type[index];
+      const int force = map->speedup_layer.force[index];
+      const int max_speed = map->speedup_layer.max_speed[index];
+      // Outside the editor DDNet only shows a speedup that would do
+      // something: the old tile needs a force, the new one either value.
+      if ((force && type == TILE_SPEED_BOOST_OLD) || ((force || max_speed) && type == TILE_SPEED_BOOST)) {
+        if (game->settings.render_speedups) draw_speedup_arrow(game, x, y, map->speedup_layer.angle[index]);
+        if (game->settings.render_entity_text) {
+          map_text(game, DD_Z_MAP_SPEEDUP_TEXT, x, y, DD_ENTITY_TEXT_TOP, max_speed);
+          map_text(game, DD_Z_MAP_SPEEDUP_TEXT, x, y, DD_ENTITY_TEXT_BOTTOM, force);
         }
       }
-      if (!game->settings.render_entity_text) continue;
-      // CFRM tiles use the last activated checkpoint, not their own number.
-      if (map->tele_layer.type && map->tele_layer.type[index] &&
-          map->tele_layer.type[index] != TILE_TELECHECKIN && map->tele_layer.type[index] != TILE_TELECHECKINEVIL)
-        map_text(game, DD_Z_MAP_TELE_TEXT, x, y, DD_ENTITY_TEXT_CENTER, map->tele_layer.number[index]);
-      if (map->switch_layer.type && map->switch_layer.type[index]) {
-        map_text(game, DD_Z_MAP_SWITCH_TEXT, x, y, DD_ENTITY_TEXT_TOP, map->switch_layer.number[index]);
-        map_text(game, DD_Z_MAP_SWITCH_TEXT, x, y, DD_ENTITY_TEXT_BOTTOM, map->switch_layer.delay[index]);
-      }
+    }
+    if (!game->settings.render_entity_text) continue;
+    // CFRM tiles use the last activated checkpoint, not their own number.
+    if (map->tele_layer.type && map->tele_layer.type[index] &&
+        map->tele_layer.type[index] != TILE_TELECHECKIN && map->tele_layer.type[index] != TILE_TELECHECKINEVIL)
+      map_text(game, DD_Z_MAP_TELE_TEXT, x, y, DD_ENTITY_TEXT_CENTER, map->tele_layer.number[index]);
+    if (map->switch_layer.type && map->switch_layer.type[index]) {
+      map_text(game, DD_Z_MAP_SWITCH_TEXT, x, y, DD_ENTITY_TEXT_TOP, map->switch_layer.number[index]);
+      map_text(game, DD_Z_MAP_SWITCH_TEXT, x, y, DD_ENTITY_TEXT_BOTTOM, map->switch_layer.delay[index]);
     }
   }
 }

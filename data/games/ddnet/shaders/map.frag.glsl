@@ -1,10 +1,19 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
+// The physics layers, drawn with the entities sheet over the whole screen.
+// The layers are cut into 32x32-tile pages (dd_map.c). A page that holds one
+// game tile and nothing else (every empty page, and the solid insides of a
+// map) is only its entry in the page table; every other page has a slot in
+// the atlas, two layers per set of slots:
+//   0: game, front, tele, tune
+//   1: speedup, switch, game flags | front flags << 4, switch flags
+// so neither the size of a map nor its empty space decides how large a
+// texture gets.
 layout(binding = 1) uniform sampler2DArray tex_sampler1;
-layout(binding = 2) uniform sampler2D tex1; // rgb = game, front, tele
-layout(binding = 3) uniform sampler2D tex2; // rgb = tune, speedup, switch
-layout(binding = 4) uniform sampler2D tex3; // rgb = game flags, front flags, switch flags
+// rgb: the page's atlas slot (a = 1), or r: its game tile, g: that tile's flags (a = 0)
+layout(binding = 2) uniform sampler2D pages;
+layout(binding = 3) uniform sampler2DArray atlas;
 
 layout(location = 0) in vec3 frag_color;
 layout(location = 1) in vec2 frag_tex_coord;
@@ -12,11 +21,16 @@ layout(location = 1) in vec2 frag_tex_coord;
 layout(location = 0) out vec4 out_color;
 
 layout(binding = 0) uniform UniformBufferObject {
-  vec3 transform;
-  float aspect;
-  float lod_bias;
+  // The tile at the centre of the screen (exact in a float) and where in it the
+  // centre is: positions are taken relative to it, so a tile 100000 tiles out
+  // keeps its precision.
+  vec4 camera;
+  vec4 scale; // xy: tiles from the centre to the edge of the screen, z: lod bias
+  vec4 map;   // xy: size in tiles, z: atlas columns, w: slots per set
 }
 ubo;
+
+const int PAGE = 32;
 
 // The tile's corner of the sheet for a point of the tile, as DDNet's CalculateTexCoords puts it:
 // it mirrors the texture coordinates of the corners and then hands each corner the one of the
@@ -43,43 +57,44 @@ void apply_flags(uint flags, inout vec2 uv, inout vec2 dx, inout vec2 dy) {
   }
 }
 
+uvec4 bytes(vec4 texel) { return uvec4(texel * 255.0 + 0.5); }
+
 void main() {
-  vec2 map_data_size = vec2(textureSize(tex1, 0));
-  vec2 tile_size = vec2(1.0) / map_data_size;
+  vec2 local = frag_tex_coord * ubo.scale.xy + ubo.camera.zw;
+  vec2 cell = floor(local);
+  vec2 within_tile_coord_normalized = local - cell;
 
-  vec2 tex_coord = frag_tex_coord;
-  tex_coord.y *= ubo.aspect;
-  tex_coord *= ubo.transform.z;
-  tex_coord += ubo.transform.xy;
-
-  // Calculate derivatives before wrapping
-  vec2 uv_scaled = tex_coord * map_data_size;
-  vec2 dx = dFdx(uv_scaled);
-  vec2 dy = dFdy(uv_scaled);
-  float bias_scale = exp2(ubo.lod_bias);
+  vec2 dx = dFdx(local);
+  vec2 dy = dFdy(local);
+  float bias_scale = exp2(ubo.scale.z);
   dx *= bias_scale;
   dy *= bias_scale;
 
-  // handle texture coordinate wrapping
-  if (tex_coord.x < 0.0) tex_coord.x = mod(tex_coord.x, tile_size.x);
-  if (tex_coord.x > 1.0) tex_coord.x = (1.0 - tile_size.x) + mod(tex_coord.x, tile_size.x);
-  if (tex_coord.y < 0.0) tex_coord.y = mod(tex_coord.y, tile_size.y);
-  if (tex_coord.y > 1.0) tex_coord.y = (1.0 - tile_size.y) + mod(tex_coord.y, tile_size.y);
+  // Outside the map its edge tiles go on.
+  ivec2 tile = clamp(ivec2(ubo.camera.xy) + ivec2(cell), ivec2(0), ivec2(ubo.map.xy) - 1);
+  uvec4 page = bytes(texelFetch(pages, tile / PAGE, 0));
+  uvec4 ids = uvec4(page.r, 0u, 0u, 0u);
+  uvec4 more = uvec4(0u, 0u, page.g, 0u);
+  if (page.a != 0u) {
+    uint slot = page.r | (page.g << 8) | (page.b << 16);
+    uint per_set = uint(ubo.map.w), columns = uint(ubo.map.z);
+    uint index = slot % per_set;
+    ivec2 texel = ivec2(index % columns, index / columns) * PAGE + tile % PAGE;
+    int layer = int(slot / per_set) * 2;
+    ids = bytes(texelFetch(atlas, ivec3(texel, layer), 0));
+    more = bytes(texelFetch(atlas, ivec3(texel, layer + 1), 0));
+  }
 
-  // Read tile IDs
-  uint game_tile_id = uint(texture(tex1, tex_coord).r * 255.0);
-  uint front_tile_id = uint(texture(tex1, tex_coord).g * 255.0);
-  uint tele_tile_id = uint(texture(tex1, tex_coord).b * 255.0);
-  uint tune_tile_id = uint(texture(tex2, tex_coord).r * 255.0);
-  uint speedup_tile_id = uint(texture(tex2, tex_coord).g * 255.0);
-  uint switch_tile_id = uint(texture(tex2, tex_coord).b * 255.0);
+  uint game_tile_id = ids.r;
+  uint front_tile_id = ids.g;
+  uint tele_tile_id = ids.b;
+  uint tune_tile_id = ids.a;
+  uint speedup_tile_id = more.r;
+  uint switch_tile_id = more.g;
 
-  // Read flags
-  uint game_flags = uint(texture(tex3, tex_coord).r * 255.0);
-  uint front_flags = uint(texture(tex3, tex_coord).g * 255.0);
-  uint switch_flags = uint(texture(tex3, tex_coord).b * 255.0);
-
-  vec2 within_tile_coord_normalized = mod(tex_coord, tile_size) / tile_size;
+  uint game_flags = more.b & 15u;
+  uint front_flags = more.b >> 4;
+  uint switch_flags = more.a;
 
   // initialize final color and alpha
   vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);

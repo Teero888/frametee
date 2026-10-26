@@ -1,6 +1,7 @@
 #include "user_interface.h"
 #include "cglm/vec2.h"
 #include <include_cimgui.h>
+#include "camera/camera_rig.h"
 #include "input_effects_editor.h"
 #include "render/render_window.h"
 #include "player_profile.h"
@@ -1325,7 +1326,7 @@ void on_camera_update(gfx_handler_t *handler, bool hovered, float intra) {
   if (scroll_y != 0.0f) {
     float zoom_factor = 1.0f + scroll_y * 0.1f;
     camera->zoom_wanted *= zoom_factor;
-    camera->zoom_wanted = glm_clamp(camera->zoom_wanted, 0.005f, 1000.0f);
+    camera->zoom_wanted = glm_clamp(camera->zoom_wanted, camera_rig_min_zoom(handler), camera_rig_max_zoom(handler));
   }
   float smoothing_factor = 1.0f - expf(-10.0f * io->DeltaTime); // Adjust 10.0f for speed
   camera->zoom = camera->zoom + (camera->zoom_wanted - camera->zoom) * smoothing_factor;

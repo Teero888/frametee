@@ -103,8 +103,14 @@ struct ft_level {
   char name[128];
   bool loaded;
 
-  // Tile layers uploaded for rendering; owned by the module, rebuilt per level.
-  ft_texture *layer_textures[3];
+  // The physics layers as map.frag.glsl draws them (dd_map.c): a page table
+  // and the atlas of the pages it does not hold itself. Rebuilt per level.
+  ft_texture *entity_pages, *entity_atlas;
+  uint32_t entity_atlas_columns, entity_atlas_per_set;
+  // The tiles a speedup arrow or a number may go on, in map order (y * width
+  // + x), so the overlays need not walk a large map's empty tiles (dd_overlays.c).
+  size_t *overlay_tiles;
+  size_t overlay_tile_count;
   struct dd_map_design *design;
 };
 
@@ -939,6 +945,8 @@ void dd_draw_text_screen(ft_game *game, float x, float y, float size, ft_color c
 void dd_race_hud_update(ft_game *game, const ft_engine_state *state);
 void dd_race_hud_render(ft_game *game, const ft_render_frame *frame);
 void dd_race_hud_cleanup(ft_game *game);
+void dd_map_overlays_create(ft_level *level);
+void dd_map_overlays_destroy(ft_level *level);
 void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame);
 void dd_render_doors(ft_game *game, const ft_render_frame *frame);
 // The player the frame is about (ft_render_frame.focus_player), or -1.

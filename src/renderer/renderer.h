@@ -515,6 +515,8 @@ struct renderer_state_t {
   uint32_t ubo_buffer_offset;
   VkDeviceSize min_ubo_alignment;
   uint32_t max_ubo_range;
+  // The largest image the device takes; a larger one is refused, not created.
+  uint32_t max_image_dimension_2d, max_image_array_layers;
 
   camera_t camera;
   // Viewport camera for a 3D game: an orbit around a point, which is what an
