@@ -1942,6 +1942,7 @@ enum ddnet_setting {
   SET_KEY_PRESS_SIZE,
   SET_RENDER_TIMER,
   SET_RENDER_SPLITS,
+  SET_PICKUP_HITBOXES,
   // DDNet's assets (dd_assets.c): a pack per type, then the parts mixed in from others.
   SET_ASSET_FIRST,
   SET_ASSET_MIX_FIRST = SET_ASSET_FIRST + DD_ASSET_TYPE_COUNT,
@@ -1963,6 +1964,8 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_RENDER_WEAPONS] = {"render_weapons", "Weapons and hooks", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_PARTICLES] = {"render_particles", "Particles", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_PICKUPS] = {"render_pickups", "Pickups", NULL, "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
+    [SET_PICKUP_HITBOXES] = {"pickup_hitboxes", "Pickup hitboxes", "The circle a tee's center has to enter to collect a pickup",
+                             "World", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_RENDER_CURSOR] = {"render_cursor", "Show crosshairs", NULL, "Crosshair", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_CURSOR_SCALE] = {"cursor_scale", "Crosshair scale", NULL, "Crosshair", FT_VALUE_FLOAT, 0.1, 2.0, FT_SETTING_RENDER},
     [SET_CURSOR_FOLLOW] = {"cursor_follow", "Crosshair in follow camera", NULL, "Crosshair", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
@@ -2048,6 +2051,9 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
     return true;
   case SET_RENDER_PICKUPS:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_pickups};
+    return true;
+  case SET_PICKUP_HITBOXES:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->pickup_hitboxes};
     return true;
   case SET_RENDER_CURSOR:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_cursor};
@@ -2170,6 +2176,9 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
     return true;
   case SET_RENDER_PICKUPS:
     s->render_pickups = value->as.b;
+    return true;
+  case SET_PICKUP_HITBOXES:
+    s->pickup_hitboxes = value->as.b;
     return true;
   case SET_RENDER_CURSOR:
     s->render_cursor = value->as.b;

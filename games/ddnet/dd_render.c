@@ -780,8 +780,27 @@ static bool frame_highlights_selected(const ft_render_frame *frame) {
          frame->highlight_selected;
 }
 
+// CPickup::Tick takes every tee whose center is closer than the pickup's
+// proximity radius, its collision extra size and the tee's physical size.
+#define PICKUP_REACH ((14.f + 6.f + 28.f) / PX_PER_TILE)
+
+static void draw_pickup_hitbox(ft_game *game, const vec2 center, float thickness, bool off) {
+  enum { SEGMENTS = 48 };
+  // A pickup whose switch is off for the viewed team takes no one: drawn faint.
+  const float alpha = off ? 0.35f : 1.f;
+  dd_draw_circle(game, DD_Z_LINES, (float *)center, PICKUP_REACH, (vec4){1.f, 1.f, 1.f, 0.12f * alpha}, SEGMENTS);
+  vec2 from = {center[0] + PICKUP_REACH, center[1]};
+  for (int s = 1; s <= SEGMENTS; ++s) {
+    const float angle = 2.f * (float)M_PI * (float)s / SEGMENTS;
+    vec2 to = {center[0] + cosf(angle) * PICKUP_REACH, center[1] + sinf(angle) * PICKUP_REACH};
+    dd_draw_line(game, DD_Z_LINES, from, to, (vec4){1.f, 1.f, 1.f, 0.8f * alpha}, thickness);
+    glm_vec2_copy(to, from);
+  }
+}
+
 static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft_world *world, const ft_world *prev_world, float intra) {
-  if (!game->settings.render_pickups || !frame->active) return;
+  const bool sprites = game->settings.render_pickups, hitboxes = game->settings.pickup_hitboxes;
+  if ((!sprites && !hitboxes) || !frame->active) return;
   const ddnet_world_t *core = &world->core;
   const int team = dd_view_team(frame);
   const bool blink = (core->tick % GAME_TICK_SPEED) % 22 < 4;
@@ -800,11 +819,13 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft
   const float max_x = camera.visible.x + camera.visible.w + margin;
   const float min_y = camera.visible.y - margin;
   const float max_y = camera.visible.y + camera.visible.h + margin;
+  // A hitbox outline keeps its width on screen at any zoom.
+  const float outline = camera.viewport.y > 0.f ? 1.5f * camera.visible.h / camera.viewport.y : 1.5f / PX_PER_TILE;
 
   for (int i = core->first_entity[DDNET_ENTTYPE_PICKUP]; i != -1; i = core->entities[i].link.next) {
     const ddnet_entity_t *ent = &core->entities[i];
     if (ent->kind != DDNET_ENTITY_PICKUP) continue;
-    if (switch_off(core, ent->number, team) && blink) continue;
+    const bool off = switch_off(core, ent->number, team);
     // Pickups on conveyors move: drawn between where they were and are, like DDNet's client.
     vec2 pos, cur;
     tile_pos(ent->pos, cur);
@@ -815,6 +836,8 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft
       lerp2(prev, cur, intra, pos);
     }
     if (pos[0] < min_x || pos[0] > max_x || pos[1] < min_y || pos[1] > max_y) continue;
+    if (hitboxes) draw_pickup_hitbox(game, pos, outline, off);
+    if (!sprites || (off && blink)) continue;
 
     const int type = ent->u.pickup.type, subtype = ent->u.pickup.subtype;
     vec2 size = {1.0f, 1.0f};

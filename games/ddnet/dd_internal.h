@@ -667,6 +667,8 @@ typedef struct {
   bool render_weapons;
   bool render_particles;
   bool render_pickups;
+  // The reach of every pickup, drawn whether the pickups themselves are or not.
+  bool pickup_hitboxes;
   bool render_cursor; // crosshairs at all; the two below say on whom
   bool render_cursor_follow;
   bool render_cursor_all; // a crosshair on every player, not only the followed one
