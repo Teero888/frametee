@@ -362,6 +362,27 @@ static void get_config_path(char *buffer, size_t size) {
   }
 }
 
+// Moves a config file that does not parse to config.toml.bad (or .bad.2 and on, never over an
+// earlier one), so the defaults the editor falls back to are never saved over the user's settings.
+// `out` gets where it went, or is empty when it could not be moved.
+static void set_aside_unreadable(const char *config_path, char *out, size_t out_size) {
+  out[0] = '\0';
+  for (int n = 1; n < 100; ++n) {
+    char path[1040];
+    if (n == 1)
+      snprintf(path, sizeof(path), "%s.bad", config_path);
+    else
+      snprintf(path, sizeof(path), "%s.bad.%d", config_path, n);
+    FILE *taken = fs_open(path, "r");
+    if (taken) {
+      fclose(taken);
+      continue;
+    }
+    if (fs_replace(config_path, path)) snprintf(out, out_size, "%s", path);
+    return;
+  }
+}
+
 void config_load(ui_handler_t *ui) {
   char config_path[1024];
   get_config_path(config_path, sizeof(config_path));
@@ -384,7 +405,12 @@ void config_load(ui_handler_t *ui) {
   fclose(fp);
 
   if (!res.ok) {
-    log_error(LOG_SOURCE, "Failed to parse config file: %s", res.errmsg);
+    char kept[1040];
+    set_aside_unreadable(config_path, kept, sizeof(kept));
+    if (kept[0])
+      log_error(LOG_SOURCE, "Failed to parse config file: %s. Using defaults; the file was kept as %s.", res.errmsg, kept);
+    else
+      log_error(LOG_SOURCE, "Failed to parse config file: %s. Using defaults, without saving over it.", res.errmsg);
     toml_free(res);
     return;
   }
@@ -624,6 +650,18 @@ void config_save(ui_handler_t *ui) {
     fclose(old);
     parsed_previous = true;
     have_previous = previous.ok;
+  }
+  // (one that does not parse, whatever made it so, is kept and never written over)
+  if (parsed_previous && !have_previous) {
+    char kept[1040];
+    set_aside_unreadable(config_path, kept, sizeof(kept));
+    if (!kept[0]) {
+      log_error(LOG_SOURCE, "Not saving the config: %s does not parse (%s) and could not be kept aside.", config_path,
+                previous.errmsg);
+      toml_free(previous);
+      return;
+    }
+    log_error(LOG_SOURCE, "The config file did not parse (%s); it was kept as %s.", previous.errmsg, kept);
   }
 
   char temporary_path[1060];
