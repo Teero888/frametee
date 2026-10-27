@@ -73,6 +73,7 @@ void render_state_defaults(ui_handler_t *ui) {
   render_state_t *state = &ui->render;
   memset(state, 0, sizeof(*state));
   for (int layer = 0; layer < RENDER_LAYER_COUNT; ++layer) state->viewport.layers[layer] = true;
+  state->viewport.focus = RENDER_FOCUS_MERGED;
   state->applied = RENDER_TARGET_VIEWPORT;
 }
 
@@ -84,10 +85,10 @@ void render_state_new_project(ui_handler_t *ui) {
 render_profile_t *render_video_profile(ui_handler_t *ui) {
   render_state_t *state = &ui->render;
   if (!state->video.valid) {
-    // A first video looks like the viewport, without the editor's overlays.
+    // A first video looks like the viewport, without the editor's overlays, and shows every group's chat.
     state->video = state->viewport;
     for (int layer = 0; layer < RENDER_LAYER_COUNT; ++layer) state->video.layers[layer] = false;
-    state->video.focus = RENDER_FOCUS_CAMERA;
+    state->video.focus = RENDER_FOCUS_MERGED;
     state->video.valid = true;
   }
   return &state->video;
@@ -174,5 +175,5 @@ float render_group_volume(ui_handler_t *ui, int group_index) {
 }
 
 bool render_merged_chat(ui_handler_t *ui) {
-  return ui->render.applied == RENDER_TARGET_VIDEO && render_video_profile(ui)->focus == RENDER_FOCUS_MERGED;
+  return profile_for(ui, ui->render.applied)->focus == RENDER_FOCUS_MERGED;
 }

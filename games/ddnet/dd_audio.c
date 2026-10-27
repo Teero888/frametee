@@ -125,11 +125,21 @@ static int effect_sound(const ft_world *world, const dd_physics_particle_event_t
   }
 }
 
+// Whether a player of the world finished in the step to its tick: DDNet's client hears the server's
+// chat line about it as a server message, once however many finished (see dd_finish_tick).
+static bool finish_heard(const ft_world *world) {
+  const int tick = ddnet_engine_tick(world);
+  for (int player = 0; player < world->player_count; ++player)
+    if (dd_finish_tick(world, player) == tick) return true;
+  return false;
+}
+
 bool dd_world_audio(ft_game *game, const ft_world *world, ft_audio_step *out) {
   if (!world) return false;
   // The step's sounds, and those DDNet's client plays with an effect, for
   // which the physics raises no sound: hammer hits, spawns and air jumps.
-  int count = world->physics_sound_event_count;
+  const bool finished = finish_heard(world);
+  int count = world->physics_sound_event_count + finished;
   for (int i = 0; i < world->physics_particle_event_count; ++i)
     if (effect_sound(world, &world->physics_particle_events[i]) >= 0) ++count;
   if (count == 0) return false;
@@ -157,6 +167,9 @@ bool dd_world_audio(ft_game *game, const ft_world *world, ft_audio_step *out) {
     const ft_audio_sample sample = pick_take(game, sound, tick, event->client_id, i + 64);
     if (sample) sounds[n++] = positioned(sample, event->x, event->y);
   }
+  // (a server message is heard where the camera is, at full volume)
+  const ft_audio_sample message = finished ? pick_take(game, DDNET_SOUND_CHAT_SERVER, tick, -1, 0) : 0;
+  if (message) sounds[n++] = (ft_audio_sound){.sample = message, .volume = 1.f, .pitch = 1.f};
   out->sounds = sounds;
   out->sound_count = n;
   return n > 0;

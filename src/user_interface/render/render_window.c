@@ -212,23 +212,24 @@ static void editor_layers(ui_handler_t *ui, const layer_list_t *list) {
   }
 }
 
-// Whether the video shows every group's chat together. Whose HUD and chat it shows is the Camera
-// tab's Focus; the viewport shows the selected group's own.
+// Whether every group's chat shows together, or only the chat of the group whose HUD shows: the
+// selected one in the viewport, the Camera tab's Focus in the video.
 static void merged_chat_row(ui_handler_t *ui, const layer_list_t *list) {
-  render_profile_t *video = render_video_profile(ui);
   const float top = igGetCursorScreenPos().y;
   row_begin(list, "Every group's chat",
-            "The focused character's HUD with every group's chat together. Who is focused is the Camera tab's Focus.",
+            "Every group's chat together, beside the HUD of the selected character (the viewport) or of the focused "
+            "one (the video, see the Camera tab's Focus).",
             NULL);
-  const float dash = igCalcTextSize("-", NULL, false, 0.f).x;
-  igSetCursorScreenPos((ImVec2){column_x(list, RENDER_TARGET_VIEWPORT) + 0.5f * (list->column_width - dash),
-                                top + 0.5f * (list->row_height - igGetTextLineHeight())});
-  igTextDisabled("-");
-  row_column(list, RENDER_TARGET_VIDEO, top);
-  const bool merged = video->focus == RENDER_FOCUS_MERGED;
-  if (toggle_pill("##merged_chat", merged, ICON_FA_VIDEO, ICON_FA_VIDEO_SLASH, VIDEO_ON, list->column_width)) {
-    video->focus = merged ? RENDER_FOCUS_CAMERA : RENDER_FOCUS_MERGED;
-    ui_mark_unsaved(ui);
+  for (int target = RENDER_TARGET_VIEWPORT; target <= RENDER_TARGET_VIDEO; ++target) {
+    const bool video = target == RENDER_TARGET_VIDEO;
+    render_profile_t *profile = video ? render_video_profile(ui) : &ui->render.viewport;
+    row_column(list, (render_target_t)target, top);
+    const bool merged = profile->focus == RENDER_FOCUS_MERGED;
+    if (toggle_pill(video ? "##merged_chat_video" : "##merged_chat", merged, video ? ICON_FA_VIDEO : ICON_FA_EYE,
+                    video ? ICON_FA_VIDEO_SLASH : ICON_FA_EYE_SLASH, video ? VIDEO_ON : VIEWPORT_ON, list->column_width)) {
+      profile->focus = merged ? RENDER_FOCUS_CAMERA : RENDER_FOCUS_MERGED;
+      if (video) ui_mark_unsaved(ui);
+    }
   }
   row_end(list, top);
 }

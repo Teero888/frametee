@@ -920,6 +920,23 @@ static bool write_timeline_event(dd_demo_writer *writer, const dd_event_payload_
   return true;
 }
 
+// A finish of the world's player `player` (demo client `client`), as a server tells it
+// (CGameTeams::OnFinish, SendFinish, SendRecord): the line to everyone, the race time and the record to
+// the tee's own client, which in a demo is its first one, and the finish to everyone.
+static void write_finish(ft_game *game, dd_demo_writer *writer, int world_index, const ft_world *world, int player, int client) {
+  char line[256];
+  dd_finish_line(game, world_index, world, player, line, sizeof(line));
+  demo_w_write_msg_sv_chat(writer, 0, -1, line);
+  const float time = dd_world_finish_time(world, ddnet_player_client(world, player));
+  const int hundredths = (int)lroundf(time * 100.f);
+  if (client == 0) demo_w_write_msg_sv_ddrace_time_legacy(writer, hundredths, 0, 1);
+  demo_w_write_msg_sv_racefinish(writer, client, (int)lroundf(time * 1000.f), 0, 1, 1);
+  if (client == 0) {
+    demo_w_write_msg_sv_record_legacy(writer, hundredths, hundredths);
+    demo_w_write_msg_sv_record(writer, hundredths, hundredths);
+  }
+}
+
 // CGameContext::SendTuningParams: every parameter, in hundredths, in DDNet's order.
 static void write_sv_tuneparams(dd_demo_writer *writer, const ddnet_tuning_t *tuning) {
   char buffer[DD_MAX_MESSAGE_SIZE];
@@ -1195,6 +1212,13 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
         if (timeline_event.tick + worlds[world_index].start_offset != tick) continue;
         write_timeline_event(writer, &payload, client_maps[world_index], client_counts[world_index]);
       }
+    }
+    // (the worlds' own finishes, which the server tells itself)
+    for (uint32_t world_index = 0; world_index < world_count; ++world_index) {
+      const ft_world *world = curr_worlds[world_index];
+      for (int p = 0; world && p < world->player_count && p < client_counts[world_index]; ++p)
+        if (client_maps[world_index][p] >= 0 && dd_finish_tick(world, p) == ddnet_engine_tick(world))
+          write_finish(game, writer, (int)world_index, world, p, client_maps[world_index][p]);
     }
 
     if (request->progress && ((tick - start_tick) % 50 == 0 || tick == end_tick))

@@ -28,16 +28,17 @@ typedef struct render_setting_value_t {
   ft_value value;
 } render_setting_value_t;
 
-// Whose HUD, chat and pickups a video shows: always the camera's focus (see camera_rig_focus_track).
-enum { RENDER_FOCUS_CAMERA = -1, // the focus's group
-       RENDER_FOCUS_MERGED = -2 }; // the focus's group, with every group's chat together
+// Whose HUD, chat and pickups a video shows: always the camera's focus (see camera_rig_focus_track); the
+// viewport shows the selected group's. Either shows every group's chat together by default.
+enum { RENDER_FOCUS_CAMERA = -1, // that group's, with its own chat only
+       RENDER_FOCUS_MERGED = -2 }; // that group's, with every group's chat together
 
 typedef struct render_profile_t {
   bool valid;
   int setting_count;
   render_setting_value_t settings[RENDER_PROFILE_MAX_SETTINGS];
   bool layers[RENDER_LAYER_COUNT];
-  int focus; // RENDER_FOCUS_*; only the video's is used
+  int focus; // RENDER_FOCUS_*: whether every group's chat shows
 } render_profile_t;
 
 typedef enum render_target_t { RENDER_TARGET_VIEWPORT = 0, RENDER_TARGET_VIDEO } render_target_t;

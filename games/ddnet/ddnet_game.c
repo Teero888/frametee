@@ -1986,7 +1986,6 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
                                    .center_dot = false,
                                    .speed_hold_top = true,
                                    .cursor_scale = 1.0f};
-  game->auto_finish_events = true;
 
   ft_engine_state state;
   memset(&state, 0, sizeof(state));
@@ -2067,9 +2066,6 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
 
   switch (frame->slot) {
   case FT_UI_MAIN_MENU:
-    // The one slot the editor draws every frame whatever else is on screen, so
-    // recording keeps producing finish events with the panels hidden.
-    dd_events_scan_recording(game, frame);
     if (igBeginMenu("DDNet", true)) {
       ddnet_map_settings_menu(game);
       // The physics the project runs on: DDNet's, or the Unique Race mod's (the other build of this
@@ -2347,7 +2343,6 @@ enum ddnet_setting {
   SET_NAMEPLATE_CLAN_SIZE,
   SET_NAMEPLATE_OFFSET,
   SET_NAMEPLATE_TEAM_COLORS,
-  SET_AUTO_FINISH_EVENTS,
   SET_ENTITIES_VIEW,
   SET_MAP_DETAIL,
   SET_CURSOR_ALL,
@@ -2423,7 +2418,6 @@ static const ft_setting_desc ddnet_settings[SET_COUNT] = {
     [SET_NAMEPLATE_TEAM_COLORS] = {"nameplate_team_colors", "Team colors", NULL, "Nameplates", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_SHOW_KEY_PRESSES] = {"show_key_presses", "Show players' key presses", NULL, "Key presses", FT_VALUE_BOOL, 0, 0, FT_SETTING_RENDER},
     [SET_KEY_PRESS_SIZE] = {"key_press_size", "Size of key press icons", NULL, "Key presses", FT_VALUE_INT, -50, 100, FT_SETTING_RENDER},
-    [SET_AUTO_FINISH_EVENTS] = {"auto_finish_events", "Generate finish events while recording", NULL, "Timeline events", FT_VALUE_BOOL, 0, 0, 0},
     // Chosen in the Assets window (dd_assets_window.c).
     [SET_ASSET_FIRST + DD_ASSET_ENTITIES] = {"asset_entities", "Entities", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
     [SET_ASSET_FIRST + DD_ASSET_GAME] = {"asset_game", "Game", NULL, "Assets", FT_VALUE_STRING, 0, 0, FT_SETTING_HIDDEN},
@@ -2572,9 +2566,6 @@ static bool ddnet_setting_get(ft_game *game, uint32_t index, ft_value *out) {
   case SET_RENDER_DOORS:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = s->render_doors};
     return true;
-  case SET_AUTO_FINISH_EVENTS:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = game->auto_finish_events};
-    return true;
   default:
     return false;
   }
@@ -2710,9 +2701,6 @@ static bool ddnet_setting_set(ft_game *game, uint32_t index, const ft_value *val
     return true;
   case SET_RENDER_DOORS:
     s->render_doors = value->as.b;
-    return true;
-  case SET_AUTO_FINISH_EVENTS:
-    game->auto_finish_events = value->as.b;
     return true;
   default:
     return false;

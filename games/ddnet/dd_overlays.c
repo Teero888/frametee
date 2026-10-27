@@ -266,6 +266,24 @@ static int world_start_offset(ft_game *game, int world) {
              : 0;
 }
 
+// Puts an event into `out`, which is chronological and holds `capacity`: once it is full, the oldest
+// goes, so chat and emote rendering always follows the newest events.
+static void insert_visible(visible_event *out, int *count, int capacity, const visible_event *event) {
+  int insert;
+  if (*count < capacity) {
+    insert = (*count)++;
+  } else {
+    if (event->tick <= out[0].tick) return;
+    memmove(out, out + 1, (size_t)(capacity - 1) * sizeof(*out));
+    insert = capacity - 1;
+  }
+  while (insert > 0 && out[insert - 1].tick > event->tick) {
+    if (insert < capacity) out[insert] = out[insert - 1];
+    --insert;
+  }
+  out[insert] = *event;
+}
+
 // The frame's world's events of `type` from the last `lifetime` ticks, oldest first; with
 // `all_worlds`, every world's, their ticks moved onto the frame's world's clock.
 static int recent_events(ft_game *game, const ft_render_frame *frame, dd_event_type_t type, int lifetime, bool all_worlds,
@@ -289,24 +307,40 @@ static int recent_events(ft_game *game, const ft_render_frame *frame, dd_event_t
     if (event.tick > frame->tick || event.tick <= frame->tick - lifetime || !dd_event_decode(&event, &payload) ||
         payload.type != (int)type)
       continue;
-
-    int insert;
-    if (count < capacity) {
-      insert = count++;
-    } else {
-      // The output is chronological. Once it is full, discard the oldest
-      // entry so chat and emote rendering always follows the newest events.
-      if (event.tick <= out[0].tick) continue;
-      memmove(out, out + 1, (size_t)(capacity - 1) * sizeof(*out));
-      insert = capacity - 1;
-    }
-    while (insert > 0 && out[insert - 1].tick > event.tick) {
-      if (insert < capacity) out[insert] = out[insert - 1];
-      --insert;
-    }
-    out[insert] = (visible_event){.tick = event.tick, .world = event.world_index, .payload = payload};
+    insert_visible(out, &count, capacity, &(visible_event){.tick = event.tick, .world = event.world_index, .payload = payload});
   }
   return count;
+}
+
+// The servers' chat lines about the finishes of the last `lifetime` ticks, which the worlds tell
+// themselves (dd_finish_tick): the frame's world's, or with `all_worlds` every world's at the
+// playhead, on the frame's world's clock.
+static void finish_lines(ft_game *game, const ft_render_frame *frame, int lifetime, bool all_worlds, visible_event *out,
+                         int *count, int capacity) {
+  const int own_offset = world_start_offset(game, frame->world_index);
+  const int worlds = all_worlds && game->engine->timeline_world_count ? (int)game->engine->timeline_world_count() : 1;
+  for (int i = 0; i < worlds; ++i) {
+    const int world_index = all_worlds ? i : frame->world_index;
+    const ft_world *world = frame->world;
+    int shift = 0;
+    if (world_index != frame->world_index) {
+      const ft_world *previous = NULL;
+      if (!game->engine->timeline_world_pair ||
+          !game->engine->timeline_world_pair((uint32_t)world_index, frame->state.current_tick, &previous, &world))
+        continue;
+      shift = world_start_offset(game, world_index) - own_offset;
+    }
+    if (!world) continue;
+    for (int player = 0; player < world->player_count; ++player) {
+      const int finish = dd_finish_tick(world, player);
+      if (finish < 0 || finish + shift > frame->tick || finish + shift <= frame->tick - lifetime) continue;
+      visible_event line = {.tick = finish + shift,
+                            .world = world_index,
+                            .payload = {.magic = DD_EVENT_PAYLOAD_MAGIC, .type = DD_EVENT_CHAT, .client_id = -1}};
+      dd_finish_line(game, world_index, world, player, line.payload.message, sizeof(line.payload.message));
+      insert_visible(out, count, capacity, &line);
+    }
+  }
 }
 
 // CChat lays its messages out in a virtual screen 300 units tall, anchored at
@@ -513,7 +547,8 @@ static void chat_draw_tee(ft_game *game, const ft_render_frame *frame, const cha
 static void render_chat(ft_game *game, const ft_render_frame *frame) {
   if (!game->settings.render_chat || !frame->active) return;
   visible_event messages[8];
-  const int count = recent_events(game, frame, DD_EVENT_CHAT, DD_CHAT_LIFETIME, merged_events(frame), messages, 8);
+  int count = recent_events(game, frame, DD_EVENT_CHAT, DD_CHAT_LIFETIME, merged_events(frame), messages, 8);
+  finish_lines(game, frame, DD_CHAT_LIFETIME, merged_events(frame), messages, &count, 8);
   if (count <= 0) return;
 
   ft_camera camera;

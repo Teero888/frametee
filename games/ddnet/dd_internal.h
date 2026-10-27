@@ -452,7 +452,12 @@ typedef struct {
 } dd_event_payload_t;
 
 void dd_events_render(ft_game *game, const ft_ui_frame *frame);
-void dd_events_scan_recording(ft_game *game, const ft_ui_frame *frame);
+// A finish is told by the server, which sends everyone a chat line about it ("... finished in: ...")
+// and the finishing player its time and record (CGameTeams::OnFinish). The worlds tell it themselves:
+// the tick the world's player `player` last finished at, -1 for none (and for a player replaying a
+// recording, which has the recording's messages), and the server's line about it.
+int dd_finish_tick(const ft_world *world, int player);
+void dd_finish_line(ft_game *game, int world_index, const ft_world *world, int player, char *out, size_t out_size);
 bool dd_event_decode(const ft_timeline_event *event, dd_event_payload_t *out);
 // An authored timeline event carrying `payload`; `summary` backs its text.
 void dd_event_make(int world_index, int tick, const dd_event_payload_t *payload, ft_timeline_event *out, char *summary,
@@ -773,7 +778,6 @@ struct ft_game {
   bool show_assets;
   bool show_skin_browser;
   bool show_events;
-  bool auto_finish_events;
 
   // DDNet owns its demo configuration: ranges, group/track selection and
   // protocol-specific ping values never enter the game-independent editor.

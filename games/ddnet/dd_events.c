@@ -122,19 +122,27 @@ static bool update_event(ft_game *game, uint32_t index, int world_index, int tic
   return game->engine->timeline_event_update(index, &event);
 }
 
-// An event of the type on the tick, and with a message that starts with prefix
-// unless it is NULL.
-static bool has_event(ft_game *game, int world_index, int tick, dd_event_type_t type, const char *prefix) {
-  const uint32_t count = game->engine->timeline_event_count();
-  for (uint32_t i = 0; i < count; ++i) {
-    ft_timeline_event event = {.struct_size = sizeof(event)};
-    dd_event_payload_t payload;
-    if (game->engine->timeline_event_get(i, &event) && event.world_index == world_index && event.tick == tick &&
-        dd_event_decode(&event, &payload) && payload.type == (int32_t)type &&
-        (!prefix || strncmp(payload.message, prefix, strlen(prefix)) == 0))
-      return true;
-  }
-  return false;
+int dd_finish_tick(const ft_world *world, int player) {
+  if (!world || dd_replay_active(world, player)) return -1;
+  const ddnet_player_t *state = dd_world_client(world, ddnet_player_client(world, player));
+  return state ? state->finish_tick : -1;
+}
+
+void dd_finish_line(ft_game *game, int world_index, const ft_world *world, int player, char *out, size_t out_size) {
+  const int track = game->engine->timeline_player_track && world_index >= 0
+                        ? game->engine->timeline_player_track((uint32_t)world_index, (uint32_t)player)
+                        : -1;
+  char name[32];
+  dd_profile_display_name(game, track, name, sizeof(name));
+  const float time = dd_world_finish_time(world, ddnet_player_client(world, player));
+  // (CGameTeams::OnFinish, whose times Unique Race gives in thousandths)
+#if DD_UNIQUE
+  const int precision = 3;
+#else
+  const int precision = 2;
+#endif
+  snprintf(out, out_size, "%s finished in: %d minute(s) %5.*f second(s)", name, (int)time / 60, precision,
+           time - (float)((int)time / 60 * 60));
 }
 
 static const char *world_name(ft_game *game, int world_index, char *fallback, size_t fallback_size) {
@@ -150,61 +158,6 @@ static int current_local_tick(ft_game *game, const ft_ui_frame *frame, int world
   if (game->engine->timeline_world_info && game->engine->timeline_world_info((uint32_t)world_index, &info))
     return frame->state.current_tick - info.start_offset;
   return frame->state.current_tick;
-}
-
-static void generate_finish_events(ft_game *game, int world_index, int local_tick, int local_player, float race_time) {
-  if (race_time <= 0.f) return;
-  const int track = game->engine->timeline_player_track((uint32_t)world_index, (uint32_t)local_player);
-  char name[32];
-  dd_profile_display_name(game, track, name, sizeof(name));
-
-  // A team finishes on one tick, with a line for each of its tees; the time and
-  // the record are the demo's own client's, the same for all of them.
-  char prefix[64];
-  snprintf(prefix, sizeof(prefix), "%s finished in:", name);
-  if (!has_event(game, world_index, local_tick, DD_EVENT_CHAT, prefix)) {
-    dd_event_payload_t payload = {.magic = DD_EVENT_PAYLOAD_MAGIC, .type = DD_EVENT_CHAT, .team = 0, .client_id = -1};
-    const int minutes = (int)race_time / 60;
-    const float seconds = fmodf(race_time, 60.f);
-    snprintf(payload.message, sizeof(payload.message), "%s %d minute(s) %.3f second(s)", prefix, minutes, seconds);
-    add_event(game, world_index, local_tick, &payload);
-  }
-  if (!has_event(game, world_index, local_tick, DD_EVENT_DDRACE_TIME, NULL)) {
-    dd_event_payload_t payload = {.magic = DD_EVENT_PAYLOAD_MAGIC,
-                                  .type = DD_EVENT_DDRACE_TIME,
-                                  .time = (int)lroundf(race_time * 100.f),
-                                  .finish = 1};
-    add_event(game, world_index, local_tick, &payload);
-  }
-  if (!has_event(game, world_index, local_tick, DD_EVENT_RECORD, NULL)) {
-    const int time = (int)lroundf(race_time * 100.f);
-    dd_event_payload_t payload = {
-        .magic = DD_EVENT_PAYLOAD_MAGIC, .type = DD_EVENT_RECORD, .server_time_best = time, .player_time_best = time};
-    add_event(game, world_index, local_tick, &payload);
-  }
-}
-
-static void scan_finish_tick(ft_game *game, int global_tick) {
-  if (global_tick <= 0 || !game->engine->timeline_world_count || !game->engine->timeline_world_pair) return;
-  const uint32_t worlds = game->engine->timeline_world_count();
-  for (uint32_t world_index = 0; world_index < worlds; ++world_index) {
-    ft_timeline_world_info info = {.struct_size = sizeof(info)};
-    if (!game->engine->timeline_world_info(world_index, &info) || global_tick < info.start_offset) continue;
-    const ft_world *previous = NULL;
-    const ft_world *current = NULL;
-    if (!game->engine->timeline_world_pair(world_index, global_tick, &previous, &current) || !previous || !current) continue;
-    const int players = current->player_count < previous->player_count ? current->player_count : previous->player_count;
-    for (int player = 0; player < players; ++player) {
-      const int client_id = ddnet_player_client(current, player);
-      if (ddnet_player_client(previous, player) != client_id) continue;
-      const ddnet_player_t *before = dd_world_client(previous, client_id);
-      const ddnet_player_t *after = dd_world_client(current, client_id);
-      // (a tee that finishes again keeps the tick of its last finish till then)
-      if (before && after && after->finish_tick >= 0 && after->finish_tick != before->finish_tick)
-        generate_finish_events(game, (int)world_index, ddnet_engine_tick(current), player,
-                               dd_world_finish_time(current, client_id));
-    }
-  }
 }
 
 static bool payload_input_int(const char *label, const char *id, int *value) {
@@ -530,14 +483,6 @@ static void render_event_inspector(ft_game *game, dd_event_editor_t *editor, int
   igEndChild();
 }
 
-// Generating finish events follows recording, not the editor: the panels can be
-// hidden (Tab) or simply closed while a run is being recorded, and this is
-// driven from the menu-bar slot, which the editor draws either way.
-void dd_events_scan_recording(ft_game *game, const ft_ui_frame *frame) {
-  if (!event_api_ready(game) || !frame) return;
-  if (game->auto_finish_events && frame->state.recording) scan_finish_tick(game, frame->state.current_tick);
-}
-
 void dd_events_render(ft_game *game, const ft_ui_frame *frame) {
   if (!event_api_ready(game) || !frame) return;
   if (!game->show_events) return;
@@ -563,17 +508,6 @@ void dd_events_render(ft_game *game, const ft_ui_frame *frame) {
 
   const float dpi = igGetFontSize() > 0.f ? igGetFontSize() / 19.f : 1.f;
   const float window_width = igGetContentRegionAvail().x;
-  const bool automation_inline = window_width >= 560.f * dpi;
-  igCheckbox("Auto-generate finish events while recording", &game->auto_finish_events);
-  if (automation_inline) igSameLine(0.f, 10.f * dpi);
-  if (igButton(ICON_FA_FLAG_CHECKERED " Generate finish events", (ImVec2){0.f, 0.f}) && game->engine->timeline_range) {
-    int32_t first = 0, last = 0;
-    if (game->engine->timeline_range(&first, &last))
-      for (int tick = first + 1; tick <= last; ++tick)
-        scan_finish_tick(game, tick);
-  }
-  igSeparator();
-
   if (igCollapsingHeader_TreeNodeFlags("Create event", ImGuiTreeNodeFlags_DefaultOpen)) {
     const int basics_columns = window_width >= 590.f * dpi ? 3 : (window_width >= 360.f * dpi ? 2 : 1);
     if (igBeginTable("NewEventBasics", basics_columns, ImGuiTableFlags_SizingStretchSame, (ImVec2){0.f, 0.f}, 0.f)) {

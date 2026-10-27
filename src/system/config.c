@@ -567,6 +567,10 @@ void config_load(ui_handler_t *ui) {
                  {"editor_show_camera_path", RENDER_LAYER_CAMERA_PATH}};
     for (size_t k = 0; k < sizeof(shown) / sizeof(shown[0]); ++k)
       config_bool(per_game, shown[k].key, &ui->render.viewport.layers[shown[k].layer]);
+    // and whether it shows every group's chat (by default)
+    bool merged_chat = ui->render.viewport.focus == RENDER_FOCUS_MERGED;
+    if (config_bool(per_game, "editor_merged_chat", &merged_chat))
+      ui->render.viewport.focus = merged_chat ? RENDER_FOCUS_MERGED : RENDER_FOCUS_CAMERA;
 
     toml_datum_t linked_copy = toml_get(per_game, "editor_linked_copy_input");
     if (linked_copy.type == TOML_BOOLEAN) ui->configured_linked_copy_input = linked_copy.u.boolean;
@@ -807,6 +811,7 @@ void config_save(ui_handler_t *ui) {
       fprintf(fp, "editor_show_start_markers = %s\n",
               ui->render.viewport.layers[RENDER_LAYER_START_MARKERS] ? "true" : "false");
       fprintf(fp, "editor_show_camera_path = %s\n", ui->render.viewport.layers[RENDER_LAYER_CAMERA_PATH] ? "true" : "false");
+      fprintf(fp, "editor_merged_chat = %s\n", ui->render.viewport.focus == RENDER_FOCUS_MERGED ? "true" : "false");
       write_prediction_config(fp, &ui->configured_prediction);
     }
   }
