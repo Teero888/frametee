@@ -26,6 +26,14 @@ extern "C" {
 LOGGER_API void logger_init(void);
 LOGGER_API void logger_set_quiet(bool quiet);
 LOGGER_API void logger_log(log_level_t level, const char *source, const char *format, ...);
+// The text of the first error the calling thread logged since logger_clear_first_error, "" for none:
+// what went wrong in an operation that can only fail with a log line, for showing it to the user (the
+// errors after it are mostly that one again, seen from further out).
+LOGGER_API const char *logger_first_error(void);
+// The warnings it logged since then, a line each (as many as fit): what an operation that went
+// through wants the user to know.
+LOGGER_API const char *logger_warnings(void);
+LOGGER_API void logger_clear_first_error(void);
 #ifdef __cplusplus
 }
 #endif

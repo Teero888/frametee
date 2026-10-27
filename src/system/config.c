@@ -513,7 +513,7 @@ void config_load(ui_handler_t *ui) {
   // not overwrite the other one's preferences.
   game_host_t *host = &ui->gfx_handler->game_host;
   char game_table[64];
-  snprintf(game_table, sizeof(game_table), "game.%s", game_host_active_id(host));
+  snprintf(game_table, sizeof(game_table), "game.%s", game_host_settings_id(host));
   toml_datum_t per_game = toml_seek(res.toptab, game_table);
   if (per_game.type == TOML_TABLE) {
     const unsigned setting_count = gh_setting_count(host);
@@ -747,7 +747,7 @@ void config_save(ui_handler_t *ui) {
       for (int table_index = 0; table_index < old_game.u.tab.size; ++table_index) {
         const char *game_id = old_game.u.tab.key[table_index];
         toml_datum_t table = old_game.u.tab.value[table_index];
-        if (!game_id || table.type != TOML_TABLE || strcmp(game_id, game_host_active_id(host)) == 0) continue;
+        if (!game_id || table.type != TOML_TABLE || strcmp(game_id, game_host_settings_id(host)) == 0) continue;
         fputs("\n[game.", fp);
         write_toml_key(fp, game_id);
         fputs("]\n", fp);
@@ -762,9 +762,9 @@ void config_save(ui_handler_t *ui) {
     if (game_host_ready(host)) {
       const unsigned setting_count = gh_setting_count(host);
       fputs("\n[game.", fp);
-      write_toml_key(fp, game_host_active_id(host));
+      write_toml_key(fp, game_host_settings_id(host));
       fputs("]\n", fp);
-      toml_datum_t old_active = old_game.type == TOML_TABLE ? toml_get(old_game, game_host_active_id(host)) : (toml_datum_t){0};
+      toml_datum_t old_active = old_game.type == TOML_TABLE ? toml_get(old_game, game_host_settings_id(host)) : (toml_datum_t){0};
       write_preserved_values(fp, old_active, skip_active_game_value, host);
       for (unsigned i = 0; i < setting_count; ++i) {
         const ft_setting_desc *desc = gh_setting_desc(host, i);

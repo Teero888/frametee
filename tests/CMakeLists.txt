@@ -198,3 +198,38 @@ if(TARGET ddnet_game)
             ENVIRONMENT "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config;APPDATA=${CMAKE_BINARY_DIR}/test-config")
     endif()
 endif()
+
+# A project moved from DDNet to Unique Race and back is the project it was, undo history and all: a
+# global plugin run headless that builds one and moves it through the editor's own functions, which it
+# reaches through the executable's exported symbols (-rdynamic, so Linux only).
+if(TARGET ddnet_game AND TARGET unique_game AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(backend_switch_probe MODULE backend_switch.c)
+    target_include_directories(backend_switch_probe PRIVATE ../src/plugins
+        $<TARGET_PROPERTY:frametee,INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:cimgui,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:cglm,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_compile_definitions(backend_switch_probe PRIVATE $<TARGET_PROPERTY:frametee,COMPILE_DEFINITIONS>)
+    target_compile_options(backend_switch_probe PRIVATE -UNDEBUG)
+    set_target_properties(backend_switch_probe PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/backend_switch_probe"
+        BUILD_RPATH_USE_ORIGIN ON)
+    file(WRITE "${CMAKE_BINARY_DIR}/plugins/backend_switch_probe/plugin.toml"
+         "name = \"Backend switch test\"\ndescription = \"Moves a project from DDNet to Unique Race and back\"\n")
+    add_dependencies(backend_switch_probe frametee ddnet_game unique_game)
+    if(EXISTS "${FRAMETEE_DDNET_PHYSICS_DIR}/tests/Aip-Gores.map")
+        # (a demo for the recording that goes along, when there is one)
+        set(BACKEND_SWITCH_DEMO "${CMAKE_SOURCE_DIR}/libs/ddnet_demo/Corazon4caroLin_722.780_Teero.demo")
+        set(BACKEND_SWITCH_ARGS)
+        if(EXISTS "${BACKEND_SWITCH_DEMO}")
+            set(BACKEND_SWITCH_ARGS --recording "${BACKEND_SWITCH_DEMO}")
+        endif()
+        add_test(NAME backend_switch COMMAND frametee --headless --game ddnet
+            --level "${FRAMETEE_DDNET_PHYSICS_DIR}/tests/Aip-Gores.map" --plugin backend_switch_probe ${BACKEND_SWITCH_ARGS})
+        # (a config directory of its own, which has to exist: the switch writes the preferences and
+        # the moving project there)
+        set(BACKEND_SWITCH_CONFIG "${CMAKE_BINARY_DIR}/test-config-backend-switch")
+        file(MAKE_DIRECTORY "${BACKEND_SWITCH_CONFIG}")
+        set_tests_properties(backend_switch PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+            ENVIRONMENT "XDG_CONFIG_HOME=${BACKEND_SWITCH_CONFIG};APPDATA=${BACKEND_SWITCH_CONFIG}")
+    endif()
+endif()

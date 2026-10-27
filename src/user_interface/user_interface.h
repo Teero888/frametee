@@ -24,6 +24,8 @@ typedef enum {
   UI_PENDING_LOAD_LEVEL,
   // A recording (a DDNet demo) to start a new project from.
   UI_PENDING_OPEN_RECORDING,
+  // The open project, moved to another backend of its game (pending_game_index). Discards nothing.
+  UI_PENDING_SWITCH_BACKEND,
 } ui_pending_action_t;
 
 struct ui_handler_t {
@@ -47,6 +49,10 @@ struct ui_handler_t {
   video_export_job_t video_job;
   keybind_manager_t keybinds;
   undo_manager_t undo_manager;
+  // The history of a project on its way to another backend of its game (switch_project_backend),
+  // held here while activating that game empties undo_manager. A plugin unloaded meanwhile takes its
+  // steps out of both.
+  undo_manager_t parked_undo_manager;
   plugin_manager_t plugin_manager;
   tas_context_t plugin_context;
   tas_api_t plugin_api;
@@ -126,6 +132,11 @@ struct ui_handler_t {
   char pending_variant_id[FT_ID_MAX];
   bool pending_confirmed;
   bool show_unsaved_prompt;
+  // What the last physics switch (UI_PENDING_SWITCH_BACKEND) has to tell, shown until dismissed: why
+  // it did not happen, or what it warned about.
+  char backend_switch_message[2048];
+  bool backend_switch_failed;
+  bool show_backend_switch_message;
 };
 
 // `intra` is the interpolation between the previous tick and the current one,
@@ -152,10 +163,17 @@ void ui_request_open_project(ui_handler_t *ui, const char *path);
 // Loads a bare level under the active game, which starts an untitled project
 // and so asks about unsaved work the same way.
 void ui_request_load_level(ui_handler_t *ui, const char *path);
+// The same, with the level opened by the game module `game_index` (a backend of the active or browsed one).
+void ui_request_load_level_with(ui_handler_t *ui, const char *path, int game_index);
+// Moves the open project to the game module `game_index` at the start of the next frame (see
+// switch_project_backend). False when there is no project or that game is not a backend of this one.
+bool ui_request_switch_backend(ui_handler_t *ui, int game_index);
 // An open started from the start screen: a level, a project, or a map the
 // game's own browser picked. Recorded rather than performed, so the project
 // that screen is covering keeps drawing until the switch below runs.
 void ui_splash_open(ui_handler_t *ui, ui_pending_action_t action, const char *path);
+// The same, with the level opened by the game module `game_index` instead of the browsed one.
+void ui_splash_open_with(ui_handler_t *ui, ui_pending_action_t action, const char *path, int game_index);
 // Performs a project switch that has nothing left to ask about. Call at the
 // top of a frame, before any rendering: it can replace the level, the timeline
 // and the active game outright.

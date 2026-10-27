@@ -22,14 +22,20 @@ struct dd_race_splits_t {
   bool valid;
   uint64_t revision;
   float checkpoint[DDNET_MAX_CHECKPOINTS]; // race seconds; 0 where none of them got there
-  int finish_ticks;                        // -1 where none of them finished
+  float finish_time;                       // race seconds; -1 where none of them finished
 };
 
 static void take_checkpoints(struct dd_race_splits_t *splits, const ddnet_character_t *chr) {
+#if DD_UNIQUE
+  // (Unique Race has no time checkpoints)
+  (void)splits;
+  (void)chr;
+#else
   for (int cp = 0; cp < DDNET_MAX_CHECKPOINTS; ++cp) {
     const float time = chr->current_time_cp[cp];
     if (time > 0.f && (splits->checkpoint[cp] <= 0.f || time < splits->checkpoint[cp])) splits->checkpoint[cp] = time;
   }
+#endif
 }
 
 // One world's splits from where its tees are at the end of the timeline and, for those that
@@ -37,7 +43,7 @@ static void take_checkpoints(struct dd_race_splits_t *splits, const ddnet_charac
 static void collect_splits(ft_game *game, uint32_t world_index, const ft_timeline_world_info *info, int32_t end_tick,
                            struct dd_race_splits_t *splits) {
   memset(splits->checkpoint, 0, sizeof(splits->checkpoint));
-  splits->finish_ticks = -1;
+  splits->finish_time = -1.f;
   const ft_engine_api *engine = game->engine;
   const ft_world *world = NULL;
   if (end_tick < info->start_offset || !engine->timeline_world_pair(world_index, end_tick, NULL, &world) || !world) return;
@@ -49,9 +55,10 @@ static void collect_splits(ft_game *game, uint32_t world_index, const ft_timelin
     if (client < 0) continue;
     const ddnet_character_t *chr = ddnet_player_character(world, player);
     if (chr) take_checkpoints(splits, chr);
-    const ddnet_player_t *state = &world->core.players[client];
-    if (state->finish_tick < 0) continue;
-    if (splits->finish_ticks < 0 || state->finish_time_ticks < splits->finish_ticks) splits->finish_ticks = state->finish_time_ticks;
+    const ddnet_player_t *state = dd_world_client(world, client);
+    if (!state || state->finish_tick < 0) continue;
+    const float time = dd_world_finish_time(world, client);
+    if (splits->finish_time < 0.f || time < splits->finish_time) splits->finish_time = time;
     finish_ticks[finished++] = state->finish_tick;
   }
   // (each query hands back a world that is only good until the next one)
@@ -103,7 +110,7 @@ static float fastest_other(const ft_game *game, int world_index, int cp) {
     if (world == world_index || !splits->valid) continue;
     float time = -1.f;
     if (cp >= 0) time = splits->checkpoint[cp];
-    else if (splits->finish_ticks >= 0) time = (float)splits->finish_ticks / GAME_TICK_SPEED;
+    else time = splits->finish_time;
     if (time > 0.f && (best < 0.f || time < best)) best = time;
   }
   return best;
@@ -169,9 +176,9 @@ void dd_race_hud_render(ft_game *game, const ft_render_frame *frame) {
   const ft_world *world = frame->world;
   const int player = dd_hud_player(frame);
   const int client = ddnet_player_client(world, player);
-  if (client < 0) return;
+  const ddnet_player_t *state = dd_world_client(world, client);
+  if (!state) return;
   const ddnet_character_t *chr = ddnet_player_character(world, player);
-  const ddnet_player_t *state = &world->core.players[client];
   const int tick = ddnet_engine_tick(world);
   const bool racing = chr && chr->race_state == DDNET_RACE_STARTED;
   char text[64];
@@ -195,7 +202,7 @@ void dd_race_hud_render(ft_game *game, const ft_render_frame *frame) {
   if (state->finish_tick >= 0 && tick >= state->finish_tick && tick - state->finish_tick < SPLIT_TICKS) {
     const int age = tick - state->finish_tick;
     const float alpha = age < SPLIT_TICKS - SPLIT_FADE_TICKS ? 1.f : (float)(SPLIT_TICKS - age) / SPLIT_FADE_TICKS;
-    const float time = (float)state->finish_time_ticks / GAME_TICK_SPEED;
+    const float time = dd_world_finish_time(world, client);
     char clock[32];
     format_race_time(time, clock, sizeof(clock));
     snprintf(text, sizeof(text), "Finish time: %s", clock);
@@ -206,7 +213,9 @@ void dd_race_hud_render(ft_game *game, const ft_render_frame *frame) {
       snprintf(text, sizeof(text), "+%s", clock);
       hud_text(game, scale, center_x, 34.f, 10.f, dd_text_width(game, 10.f, text), (ft_color){red.r, red.g, red.b, alpha}, text);
     }
-  } else if (racing && chr->last_time_cp >= 0 && chr->last_time_cp < DDNET_MAX_CHECKPOINTS) {
+  }
+#if !DD_UNIQUE
+  else if (racing && chr->last_time_cp >= 0 && chr->last_time_cp < DDNET_MAX_CHECKPOINTS) {
     const int cp = chr->last_time_cp;
     const float time = chr->current_time_cp[cp];
     const int age = tick - (chr->start_time + (int)lroundf(time * GAME_TICK_SPEED));
@@ -225,6 +234,7 @@ void dd_race_hud_render(ft_game *game, const ft_render_frame *frame) {
     color.a = alpha;
     hud_text(game, scale, center_x, 20.f, 10.f, dd_text_width(game, 10.f, text), color, text);
   }
+#endif
 }
 
 void dd_race_hud_cleanup(ft_game *game) {

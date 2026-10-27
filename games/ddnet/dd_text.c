@@ -598,7 +598,7 @@ static bool load_font_file(ft_game *game, const char *relative_path) {
   dd_text_renderer_t *text = &game->gfx.text;
   if (text->font_data_count >= DD_TEXT_MAX_FACES || text->face_count >= DD_TEXT_MAX_FACES) return false;
   char path[1024];
-  game->engine->resolve_data_path(relative_path, path, sizeof(path));
+  dd_data_path(game->engine, relative_path, path, sizeof(path));
   void *data = NULL;
   size_t size = 0;
   if (!game->engine->read_file(path, &data, &size) || size == 0u) {
@@ -644,8 +644,8 @@ typedef struct {
 
 static bool create_text_pipeline(ft_game *game) {
   char vert_path[1024], frag_path[1024];
-  game->engine->resolve_data_path("shaders/text.vert.spv", vert_path, sizeof(vert_path));
-  game->engine->resolve_data_path("shaders/text.frag.spv", frag_path, sizeof(frag_path));
+  dd_data_path(game->engine, "shaders/text.vert.spv", vert_path, sizeof(vert_path));
+  dd_data_path(game->engine, "shaders/text.frag.spv", frag_path, sizeof(frag_path));
   void *vert = NULL, *frag = NULL;
   size_t vert_size = 0, frag_size = 0;
   if (!game->engine->read_file(vert_path, &vert, &vert_size) || !game->engine->read_file(frag_path, &frag, &frag_size)) {

@@ -99,7 +99,7 @@ bool dd_skin_fetch(ft_game *game, const char *name, char *out_path, size_t out_s
   if (!game || !valid_fetch_name(name) || !out_path || out_size == 0) return false;
 
   char directory[1024];
-  game->engine->resolve_cache_path("skins", directory, sizeof(directory));
+  dd_cache_path(game->engine, "skins", directory, sizeof(directory));
   dd_mkdir(directory);
 
   char destination[1024], temporary[1024];
@@ -253,7 +253,7 @@ static void scan_skins(ft_game *game) {
   release_catalog(game);
 
   char path[1024];
-  game->engine->resolve_cache_path("skins", path, sizeof(path));
+  dd_cache_path(game->engine, "skins", path, sizeof(path));
   scan_directory(game, path);
 
 #ifdef _WIN32
@@ -289,7 +289,7 @@ static void scan_skins(ft_game *game) {
   }
 #endif
 
-  game->engine->resolve_data_path("skins", path, sizeof(path));
+  dd_data_path(game->engine, "skins", path, sizeof(path));
   scan_directory(game, path);
   browser->scanned = true;
 }

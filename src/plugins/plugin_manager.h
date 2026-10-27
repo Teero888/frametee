@@ -44,6 +44,10 @@ struct loaded_plugin_t {
   // fall back to a game named only by the manifest.
   char game_id[32];
   bool game_id_known;
+  // The game the library that is loaded was opened for: the game itself, or a backend of it
+  // (ft_game_info::backend_of), for which a plugin of the game ships a library of its own,
+  // lib<key>.<backend id> beside lib<key>. A plugin is opened again when that changes.
+  char loaded_for[32];
 
   // From the manifest the plugin ships beside its library, which the editor
   // reads as data so that a plugin it will not run can still be listed. Every

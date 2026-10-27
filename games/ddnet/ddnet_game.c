@@ -5,6 +5,7 @@
 // (dd_gfx.c, dd_render.c, dd_particles.c, dd_anim_*.c) and none of them are
 // visible to the engine.
 
+#include "dd_assets.h"
 #include "dd_character_state.h"
 #include "dd_input_effects.h"
 #include "dd_internal.h"
@@ -59,6 +60,13 @@ static const char *const weapon_labels[] = {"Hammer", "Gun", "Shotgun", "Grenade
 static const char *const eye_labels[] = {"Normal", "Angry", "Pain", "Happy", "Blink", "Surprise"};
 static const char *const lock_labels[] = {"Unchanged", "Locked", "Unlocked"};
 static const char *const connection_labels[] = {"Unchanged", "Connected", "Disconnected"};
+#if DD_UNIQUE
+static const char *const side_labels[] = {"Unchanged", "Red", "Blue"};
+// What Unique Race has none of (a team, its lock, /spec, other players joining): hidden.
+#define DD_DDNET_ONLY FT_INPUT_FLAG_EDITOR_HIDDEN
+#else
+#define DD_DDNET_ONLY 0
+#endif
 
 // The player flag of each of the fields IN_PLAYING to IN_SPEC_CAM.
 static const uint8_t player_flag_of_field[] = {
@@ -136,6 +144,19 @@ static const ft_input_field input_fields[IN_COUNT] = {
                      .kind = FT_INPUT_INT,
                      .flags = FT_INPUT_FLAG_PLAYER_STATE,
                      .max_value = 255},
+#if DD_UNIQUE
+    // (in m_Side, see dd_input_t)
+    [IN_TEAM] = {.id = "side",
+                 .display_name = "Side",
+                 .description = "Fastcap: the flag the tee spawns at while set (/red, /blue); a change kills it to respawn there",
+                 .kind = FT_INPUT_ENUM,
+                 .flags = FT_INPUT_FLAG_PLAYER_STATE,
+                 .min_value = 0,
+                 .max_value = DD_SIDE_COUNT - 1,
+                 .enum_labels = side_labels,
+                 .enum_count = (uint32_t)(sizeof(side_labels) / sizeof(side_labels[0])),
+                 .color = {0.95f, 0.55f, 0.55f, 1.0f}},
+#else
     [IN_TEAM] = {.id = "team",
                  .display_name = "Team",
                  .description = "Puts the player into this team while set; -1 leaves its team to the game",
@@ -145,20 +166,21 @@ static const ft_input_field input_fields[IN_COUNT] = {
                  .max_value = DDNET_NUM_TEAMS - 1,
                  .default_value = -1,
                  .color = {0.55f, 0.85f, 0.95f, 1.0f}},
+#endif
     [IN_LOCK] = {.id = "lock",
                  .display_name = "Team lock",
                  .kind = FT_INPUT_ENUM,
-                 .flags = FT_INPUT_FLAG_PLAYER_STATE,
+                 .flags = FT_INPUT_FLAG_PLAYER_STATE | DD_DDNET_ONLY,
                  .min_value = 0,
                  .max_value = DD_LOCK_COUNT - 1,
                  .enum_labels = lock_labels,
                  .enum_count = (uint32_t)(sizeof(lock_labels) / sizeof(lock_labels[0])),
                  .color = {0.95f, 0.8f, 0.45f, 1.0f}},
-    [IN_SPEC] = {.id = "spec", .display_name = "Spec", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_PLAYER_STATE, .color = {0.75f, 0.75f, 0.8f, 1.0f}},
+    [IN_SPEC] = {.id = "spec", .display_name = "Spec", .kind = FT_INPUT_BOOL, .flags = FT_INPUT_FLAG_PLAYER_STATE | DD_DDNET_ONLY, .color = {0.75f, 0.75f, 0.8f, 1.0f}},
     [IN_CONNECTION] = {.id = "connection",
                        .display_name = "Connection",
                        .kind = FT_INPUT_ENUM,
-                       .flags = FT_INPUT_FLAG_PLAYER_STATE,
+                       .flags = FT_INPUT_FLAG_PLAYER_STATE | DD_DDNET_ONLY,
                        .min_value = 0,
                        .max_value = DD_CONNECTION_COUNT - 1,
                        .enum_labels = connection_labels,
@@ -173,27 +195,27 @@ static const ft_input_field input_fields[IN_COUNT] = {
 };
 
 static const ft_input_control input_controls[] = {
-    {.id = "left", .display_name = "Move Left", .category = "DDNet", .default_binding = "A", .field = IN_DIRECTION, .value = -1, .flags = FT_CONTROL_ADD},
-    {.id = "right", .display_name = "Move Right", .category = "DDNet", .default_binding = "D", .field = IN_DIRECTION, .value = 1, .flags = FT_CONTROL_ADD},
-    {.id = "jump", .display_name = "Jump", .category = "DDNet", .default_binding = "Space", .field = IN_JUMP, .value = 1},
-    {.id = "fire", .display_name = "Fire Weapon", .category = "DDNet", .default_binding = "MouseLeft", .field = IN_FIRE, .value = 1},
+    {.id = "left", .display_name = "Move Left", .category = DD_GAME_NAME, .default_binding = "A", .field = IN_DIRECTION, .value = -1, .flags = FT_CONTROL_ADD},
+    {.id = "right", .display_name = "Move Right", .category = DD_GAME_NAME, .default_binding = "D", .field = IN_DIRECTION, .value = 1, .flags = FT_CONTROL_ADD},
+    {.id = "jump", .display_name = "Jump", .category = DD_GAME_NAME, .default_binding = "Space", .field = IN_JUMP, .value = 1},
+    {.id = "fire", .display_name = "Fire Weapon", .category = DD_GAME_NAME, .default_binding = "MouseLeft", .field = IN_FIRE, .value = 1},
     // On the same button as Fire Weapon: every press is recorded on the tick it happens on, also one
     // let go of again before that tick is recorded, which holding alone would miss.
     {.id = "fire_press",
      .display_name = "Fire Press",
      .description = "Records every press of the fire button, also a tap shorter than a tick. Bind it like Fire Weapon.",
-     .category = "DDNet",
+     .category = DD_GAME_NAME,
      .default_binding = "MouseLeft",
      .field = IN_FIRE_PRESS,
      .value = 1,
      .flags = FT_CONTROL_PRESSED},
-    {.id = "hook", .display_name = "Hook", .category = "DDNet", .default_binding = "MouseRight", .field = IN_HOOK, .value = 1},
-    {.id = "hammer", .display_name = "Switch to Hammer", .category = "DDNet", .default_binding = "1", .field = IN_WEAPON, .value = 0, .flags = FT_CONTROL_PRESSED},
-    {.id = "gun", .display_name = "Switch to Gun", .category = "DDNet", .default_binding = "2", .field = IN_WEAPON, .value = 1, .flags = FT_CONTROL_PRESSED},
-    {.id = "shotgun", .display_name = "Switch to Shotgun", .category = "DDNet", .default_binding = "3", .field = IN_WEAPON, .value = 2, .flags = FT_CONTROL_PRESSED},
-    {.id = "grenade", .display_name = "Switch to Grenade", .category = "DDNet", .default_binding = "4", .field = IN_WEAPON, .value = 3, .flags = FT_CONTROL_PRESSED},
-    {.id = "laser", .display_name = "Switch to Laser", .category = "DDNet", .default_binding = "5", .field = IN_WEAPON, .value = 4, .flags = FT_CONTROL_PRESSED},
-    {.id = "kill", .display_name = "Kill", .category = "DDNet", .default_binding = "K", .field = IN_KILL, .value = 1, .flags = FT_CONTROL_PRESSED},
+    {.id = "hook", .display_name = "Hook", .category = DD_GAME_NAME, .default_binding = "MouseRight", .field = IN_HOOK, .value = 1},
+    {.id = "hammer", .display_name = "Switch to Hammer", .category = DD_GAME_NAME, .default_binding = "1", .field = IN_WEAPON, .value = 0, .flags = FT_CONTROL_PRESSED},
+    {.id = "gun", .display_name = "Switch to Gun", .category = DD_GAME_NAME, .default_binding = "2", .field = IN_WEAPON, .value = 1, .flags = FT_CONTROL_PRESSED},
+    {.id = "shotgun", .display_name = "Switch to Shotgun", .category = DD_GAME_NAME, .default_binding = "3", .field = IN_WEAPON, .value = 2, .flags = FT_CONTROL_PRESSED},
+    {.id = "grenade", .display_name = "Switch to Grenade", .category = DD_GAME_NAME, .default_binding = "4", .field = IN_WEAPON, .value = 3, .flags = FT_CONTROL_PRESSED},
+    {.id = "laser", .display_name = "Switch to Laser", .category = DD_GAME_NAME, .default_binding = "5", .field = IN_WEAPON, .value = 4, .flags = FT_CONTROL_PRESSED},
+    {.id = "kill", .display_name = "Kill", .category = DD_GAME_NAME, .default_binding = "K", .field = IN_KILL, .value = 1, .flags = FT_CONTROL_PRESSED},
 };
 
 // The layout projects store records in.
@@ -221,7 +243,6 @@ static const ft_linked_action linked_actions[] = {
 };
 
 static void ddnet_input_default(ft_game *game, void *record) {
-  (void)game;
   dd_input_t *input = record;
   memset(input, 0, sizeof(*input));
   // A zero aim would leave the tee pointing at itself, which no real client
@@ -230,6 +251,13 @@ static void ddnet_input_default(ft_game *game, void *record) {
   // Gun is DDNet's neutral wanted-weapon value. A zeroed record requests the
   // hammer and would switch away from the weapon the tee spawns with.
   input->m_WantedWeapon = DDNET_WEAPON_GUN;
+#if DD_UNIQUE
+  // (a tee of fastcap spawns with the grenade in hand)
+  if (game && game->current_level && game->current_level->config.gamemode == DDNET_MODE_UNIQUE_FASTCAP)
+    input->m_WantedWeapon = DDNET_WEAPON_GRENADE;
+#else
+  (void)game;
+#endif
 }
 
 static int64_t ddnet_input_get(ft_game *game, const void *record, uint32_t field) {
@@ -259,7 +287,11 @@ static int64_t ddnet_input_get(ft_game *game, const void *record, uint32_t field
   case IN_TELE_OUT:
     return in->m_TeleOut;
   case IN_TEAM:
+#if DD_UNIQUE
+    return dd_input_fastcap_side(in);
+#else
     return dd_input_team(in);
+#endif
   case IN_LOCK:
     return get_flag_lock(in);
   case IN_SPEC:
@@ -317,7 +349,11 @@ static void ddnet_input_set(ft_game *game, void *record, uint32_t field, int64_t
     in->m_TeleOut = (uint8_t)value;
     break;
   case IN_TEAM:
+#if DD_UNIQUE
+    in->m_Side = (uint8_t)(value < 0 || value >= DD_SIDE_COUNT ? DD_SIDE_KEEP : value);
+#else
     dd_input_set_team(in, (int)(value < -1 ? -1 : (value >= DDNET_NUM_TEAMS ? DDNET_NUM_TEAMS - 1 : value)));
+#endif
     break;
   case IN_LOCK:
     set_flag_lock(in, (uint8_t)(value < 0 || value >= DD_LOCK_COUNT ? DD_LOCK_KEEP : value));
@@ -541,6 +577,41 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
                                 .flags = DD_PROP_START},
 };
 
+#if DD_UNIQUE
+// A tee of Unique Race has fewer properties: these, in this order. Its grenades have ammo with
+// sv_health_and_ammo (PROP_GRENADES, a property only it has).
+enum { PROP_GRENADES = PROP_COUNT };
+static const uint32_t unique_prop_ids[] = {PROP_POSITION, PROP_RACE_STARTED, PROP_RACE_ELAPSED, PROP_VELOCITY,
+                                           PROP_ACTIVE_WEAPON, PROP_HAS_GRENADE, PROP_GRENADES, PROP_HEALTH,
+                                           PROP_ARMOR, PROP_FREEZE_TIME, PROP_JUMPS, PROP_JUMPS_LEFT,
+                                           PROP_GROUNDED, PROP_HOOK_STATE, PROP_RACE_TIME};
+#define DD_PLAYER_PROP_COUNT ((uint32_t)(sizeof(unique_prop_ids) / sizeof(unique_prop_ids[0])))
+static const ft_prop_desc grenades_prop = {.id = "grenades",
+                                           .display_name = "Grenades",
+                                           .group = "Weapons",
+                                           .kind = FT_VALUE_INT,
+                                           .flags = DD_PROP_START,
+                                           .min_value = 0,
+                                           .max_value = DDNET_GRENADE_MAX_AMMO};
+// (filled from the lists above by fill_unique_props, before the module is handed to the engine)
+static ft_prop_desc unique_player_props[sizeof(unique_prop_ids) / sizeof(unique_prop_ids[0])];
+
+static void fill_unique_props(void) {
+  for (uint32_t i = 0; i < DD_PLAYER_PROP_COUNT; ++i) {
+    const uint32_t id = unique_prop_ids[i];
+    unique_player_props[i] = id == PROP_GRENADES ? grenades_prop : player_props[id];
+    // (health and armor count with sv_health_and_ammo: a tee can start with less)
+    if (id == PROP_HEALTH || id == PROP_ARMOR) unique_player_props[i].flags |= FT_PROP_STARTING;
+  }
+}
+
+// The property of the tee at an index of the class's list, PROP_COUNT + 1 for none.
+static uint32_t player_prop_id(uint32_t index) { return index < DD_PLAYER_PROP_COUNT ? unique_prop_ids[index] : PROP_COUNT + 1; }
+#else
+#define DD_PLAYER_PROP_COUNT PROP_COUNT
+static uint32_t player_prop_id(uint32_t index) { return index; }
+#endif
+
 // Projectiles and lasers, so they can be picked and inspected in the viewport.
 // The editor knows none of this: it walks whatever classes a game publishes and
 // reads whatever properties they list.
@@ -619,8 +690,15 @@ enum { DD_CLASS_PLAYER = 0,
        DD_CLASS_COUNT };
 
 static const ft_entity_class entity_classes[] = {
+#if DD_UNIQUE
+    // (the grenades of Unique Race are neither explosive bullets, nor freeze, nor bounce: the last
+    // properties of a projectile are left out)
+    [DD_CLASS_PLAYER] = {.id = "player", .display_name = "Tee", .props = unique_player_props, .prop_count = DD_PLAYER_PROP_COUNT},
+    [DD_CLASS_PROJECTILE] = {.id = "projectile", .display_name = "Projectile", .props = projectile_props, .prop_count = PROJ_EXPLOSIVE},
+#else
     [DD_CLASS_PLAYER] = {.id = "player", .display_name = "Tee", .props = player_props, .prop_count = PROP_COUNT},
     [DD_CLASS_PROJECTILE] = {.id = "projectile", .display_name = "Projectile", .props = projectile_props, .prop_count = PROJ_PROP_COUNT},
+#endif
     [DD_CLASS_LASER] = {.id = "laser", .display_name = "Laser", .props = laser_props, .prop_count = LASER_PROP_COUNT},
     [DD_CLASS_HOOK] = {.id = "hook", .display_name = "Hook", .props = hook_props, .prop_count = HOOK_PROP_COUNT},
 };
@@ -645,6 +723,7 @@ static int hook_player(const ft_world *world, int32_t index) {
   return -1;
 }
 
+#if !DD_UNIQUE
 static const ddnet_entity_t *entity_at(const ft_world *world, int type, ddnet_entity_kind_t kind, int32_t index) {
   if (!world || index < 0) return NULL;
   int32_t seen = 0;
@@ -662,12 +741,10 @@ static int32_t entity_list_count(const ft_world *world, int type, ddnet_entity_k
     count += world->core.entities[i].kind == kind;
   return count;
 }
+#endif
 
 // The race time of a player that finished, in seconds; -1 until then.
-static float race_time(const ft_world *world, int client_id) {
-  const ddnet_player_t *player = &world->core.players[client_id];
-  return player->finish_tick >= 0 ? (float)player->finish_time_ticks / (float)GAME_TICK_SPEED : -1.f;
-}
+static float race_time(const ft_world *world, int client_id) { return dd_world_finish_time(world, client_id); }
 
 static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t entity_class, int32_t entity, uint32_t prop, ft_value *out) {
   (void)game;
@@ -676,6 +753,8 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   if (entity_class == DD_CLASS_LASER) return laser_prop_get(world, entity, prop, out);
   if (entity_class == DD_CLASS_HOOK) return hook_prop_get(world, entity, prop, out);
   if (entity_class != FT_ENTITY_CLASS_PLAYER) return false;
+  prop = player_prop_id(prop);
+#if !DD_UNIQUE
   // (the one property of a player that has no tee)
   if (prop == PROP_CONNECTED) {
     const int client_id = ddnet_player_client(world, entity);
@@ -683,23 +762,26 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = world->core.players[client_id].active};
     return true;
   }
+#endif
   const ddnet_character_t *chr = ddnet_player_character(world, entity);
-  if (!chr || prop >= PROP_COUNT) return false;
+  if (!chr || prop > PROP_COUNT) return false;
   const ddnet_character_core_t *c = &chr->core;
+#if !DD_UNIQUE
   const int team = world->core.players[ddnet_player_client(world, entity)].team;
+#endif
 
   switch (prop) {
+#if DD_UNIQUE
+  case PROP_GRENADES:
+    *out = (ft_value){.kind = FT_VALUE_INT,
+                      .as.i = c->weapons[DDNET_WEAPON_GRENADE].got ? c->weapons[DDNET_WEAPON_GRENADE].ammo : 0};
+    return true;
+#else
   case PROP_TEAM:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = team};
     return true;
   case PROP_TEAM_LOCKED:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = ddnet_world_team(&world->core, team).locked};
-    return true;
-  case PROP_RACE_STARTED:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = dd_player_race_started(chr)};
-    return true;
-  case PROP_RACE_ELAPSED:
-    *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = (double)dd_player_race_ticks(&world->core, chr) / GAME_TICK_SPEED};
     return true;
   case PROP_SWITCHES_OFF: {
     // (read on the main thread and copied by the caller before the next read; a
@@ -710,6 +792,14 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
     *out = (ft_value){.kind = FT_VALUE_STRING, .as.s = text};
     return true;
   }
+#endif
+  case PROP_RACE_STARTED:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = dd_player_race_started(chr)};
+    return true;
+  case PROP_RACE_ELAPSED:
+    *out = (ft_value){.kind = FT_VALUE_FLOAT,
+                      .as.f = (double)dd_player_race_ticks(ddnet_player_world(world, entity), chr) / GAME_TICK_SPEED};
+    return true;
   case PROP_POSITION:
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {chr->pos.x / PX_PER_TILE, chr->pos.y / PX_PER_TILE}};
     return true;
@@ -740,9 +830,6 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   case PROP_JUMPS_LEFT:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->jumped_total};
     return true;
-  case PROP_ENDLESS_JUMP:
-    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->endless_jump};
-    return true;
   case PROP_GROUNDED:
     *out = (ft_value){.kind = FT_VALUE_BOOL,
                       .as.b = world->level && ddnet_collision_is_on_ground(&world->level->collision, c->pos, 28.f)};
@@ -750,11 +837,15 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   case PROP_HOOK_STATE:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->hook_state};
     return true;
-  case PROP_HOOKED_PLAYER:
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->hooked_player >= 0 ? ddnet_client_player(world, c->hooked_player) : -1};
-    return true;
   case PROP_RACE_TIME:
     *out = (ft_value){.kind = FT_VALUE_FLOAT, .as.f = race_time(world, ddnet_player_client(world, entity))};
+    return true;
+#if !DD_UNIQUE
+  case PROP_ENDLESS_JUMP:
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->endless_jump};
+    return true;
+  case PROP_HOOKED_PLAYER:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->hooked_player >= 0 ? ddnet_client_player(world, c->hooked_player) : -1};
     return true;
   case PROP_DEEP_FROZEN:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = c->deep_frozen};
@@ -800,6 +891,7 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
   case PROP_LASER_HITS_OTHERS:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !c->laser_hit_disabled};
     return true;
+#endif
   default:
     return false;
   }
@@ -810,6 +902,8 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   if (entity_class != FT_ENTITY_CLASS_PLAYER || !value) return false;
   const int client_id = ddnet_player_client(world, entity);
   if (client_id < 0) return false;
+  prop = player_prop_id(prop);
+#if !DD_UNIQUE
   // A player that is not in the game when the world starts has no tee, and one
   // that is stands at the spawn like the others.
   if (prop == PROP_CONNECTED) {
@@ -818,11 +912,20 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
       return ddnet_player_join(&world->core, client_id) && ddnet_player_spawn(&world->core, client_id);
     return true;
   }
+#endif
   ddnet_character_t *chr = ddnet_player_character_mut(world, entity);
-  if (!chr || prop >= PROP_COUNT) return false;
+  if (!chr || prop > PROP_COUNT) return false;
   ddnet_character_core_t *c = &chr->core;
 
   switch (prop) {
+#if DD_UNIQUE
+  case PROP_GRENADES:
+    if (value->as.i < 0 || value->as.i > DDNET_GRENADE_MAX_AMMO) return false;
+    // (without sv_health_and_ammo a grenade has no ammo to count: -1)
+    if (!c->weapons[DDNET_WEAPON_GRENADE].got || !ddnet_player_world(world, entity)->config.sv_health_and_ammo) return false;
+    c->weapons[DDNET_WEAPON_GRENADE].ammo = (int)value->as.i;
+    break;
+#else
   case PROP_TEAM:
     if (value->as.i < 0 || value->as.i >= DDNET_NUM_TEAMS) return false;
     dd_player_set_team(&world->core, client_id, (int)value->as.i);
@@ -834,19 +937,20 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
     if (ddnet_world_team(&world->core, team).locked != value->as.b) ddnet_world_lock_team(&world->core, team, value->as.b);
     break;
   }
-  case PROP_RACE_STARTED:
-    dd_player_set_race_started(&world->core, client_id, chr, value->as.b);
-    break;
-  case PROP_RACE_ELAPSED:
-    if (!(value->as.f >= 0.0) || value->as.f > 86400.0) return false;
-    if (dd_player_race_started(chr)) chr->start_time = world->core.tick - (int)lround(value->as.f * GAME_TICK_SPEED);
-    break;
   case PROP_SWITCHES_OFF: {
     dd_switch_set off;
     if (value->kind != FT_VALUE_STRING || !dd_switch_set_parse(value->as.s, &off)) return false;
     dd_team_set_switches_off(&world->core, client_id, &off);
     break;
   }
+#endif
+  case PROP_RACE_STARTED:
+    dd_player_set_race_started(ddnet_player_world_mut(world, entity), dd_space_client(client_id), chr, value->as.b);
+    break;
+  case PROP_RACE_ELAPSED:
+    if (!(value->as.f >= 0.0) || value->as.f > 86400.0) return false;
+    if (dd_player_race_started(chr)) chr->start_time = ddnet_engine_tick(world) - (int)lround(value->as.f * GAME_TICK_SPEED);
+    break;
   case PROP_POSITION:
     chr->pos = (ddnet_vec2_t){value->as.v.x * PX_PER_TILE, value->as.v.y * PX_PER_TILE};
     chr->prev_pos = chr->pos;
@@ -858,7 +962,7 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   case PROP_ACTIVE_WEAPON:
     if (value->as.i < 0 || value->as.i >= DDNET_NUM_WEAPONS) return false;
     c->active_weapon = (int)value->as.i;
-    ddnet_set_weapon_got(c, (int)value->as.i, true);
+    if (!c->weapons[c->active_weapon].got) dd_set_weapon_got(ddnet_player_world(world, entity), c, (int)value->as.i, true);
     break;
   case PROP_HEALTH:
     chr->health = (int)value->as.i;
@@ -874,14 +978,16 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   case PROP_HAS_LASER:
   case PROP_HAS_NINJA: {
     const int weapon = (int)prop - (PROP_HAS_SHOTGUN - 2);
-    ddnet_set_weapon_got(c, weapon, value->as.b);
+    dd_set_weapon_got(ddnet_player_world(world, entity), c, weapon, value->as.b);
     // A tee cannot hold a weapon it does not have; fall back to the hammer,
     // which every tee keeps.
     if (!value->as.b && c->active_weapon == weapon) c->active_weapon = DDNET_WEAPON_HAMMER;
+#if !DD_UNIQUE
     if (c->weapons[DDNET_WEAPON_NINJA].got) {
       c->active_weapon = DDNET_WEAPON_NINJA;
       c->ninja.activation_tick = world->core.tick;
     }
+#endif
     break;
   }
   case PROP_JUMPS:
@@ -891,6 +997,7 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   case PROP_JUMPS_LEFT:
     c->jumped_total = (int)value->as.i;
     break;
+#if !DD_UNIQUE
   case PROP_ENDLESS_JUMP:
     c->endless_jump = value->as.b;
     break;
@@ -937,10 +1044,11 @@ static bool ddnet_entity_prop_set(ft_game *game, ft_world *world, uint32_t entit
   case PROP_LASER_HITS_OTHERS:
     c->laser_hit_disabled = !value->as.b;
     break;
+#endif
   default:
     return false;
   }
-  ddnet_character_changed(&world->core, client_id);
+  dd_world_character_changed(world, client_id);
   return true;
 }
 
@@ -951,10 +1059,21 @@ static int32_t ddnet_entity_count(ft_game *game, const ft_world *world, uint32_t
   switch (entity_class) {
   case DD_CLASS_PLAYER:
     return world->player_count;
+#if DD_UNIQUE
+  case DD_CLASS_PROJECTILE: {
+    int32_t count = 0;
+    for (int client_id = 0; client_id < world->client_count; ++client_id)
+      if (world->spaces[client_id]) count += world->spaces[client_id]->num_projectiles;
+    return count;
+  }
+  case DD_CLASS_LASER:
+    return 0;
+#else
   case DD_CLASS_PROJECTILE:
     return entity_list_count(world, DDNET_ENTTYPE_PROJECTILE, DDNET_ENTITY_PROJECTILE);
   case DD_CLASS_LASER:
     return entity_list_count(world, DDNET_ENTTYPE_LASER, DDNET_ENTITY_LASER);
+#endif
   case DD_CLASS_HOOK: {
     int32_t count = 0;
     for (int player = 0; player < world->player_count; ++player) count += hook_out(ddnet_player_character(world, player));
@@ -966,22 +1085,53 @@ static int32_t ddnet_entity_count(ft_game *game, const ft_world *world, uint32_t
 }
 
 static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
+#if DD_UNIQUE
+  // (the grenades of the players' worlds, in client order)
+  if (!world || entity < 0) return false;
+  const ddnet_world_t *space = NULL;
+  int owner = 0;
+  for (; owner < world->client_count; ++owner) {
+    space = world->spaces[owner];
+    if (!space) continue;
+    if (entity < space->num_projectiles) break;
+    entity -= space->num_projectiles;
+  }
+  if (owner >= world->client_count) return false;
+  const ddnet_entity_t *ent = &space->projectiles[entity];
+#else
+  const ddnet_world_t *space = &world->core;
   const ddnet_entity_t *ent = entity_at(world, DDNET_ENTTYPE_PROJECTILE, DDNET_ENTITY_PROJECTILE, entity);
   if (!ent) return false;
+#endif
   const ddnet_projectile_t *proj = &ent->u.projectile;
 
   switch (prop) {
   case PROJ_POSITION: {
     // Where it is *now*, which for a projectile is a function of flight time
     // rather than a stored position.
-    const float time = (world->core.tick - proj->start_tick) / (float)GAME_TICK_SPEED;
-    const ddnet_vec2_t pos = ddnet_projectile_get_pos(&world->core, ent, time);
+    const float time = (space->tick - proj->start_tick) / (float)GAME_TICK_SPEED;
+    const ddnet_vec2_t pos = ddnet_projectile_get_pos(space, ent, time);
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {pos.x / PX_PER_TILE, pos.y / PX_PER_TILE}};
     return true;
   }
   case PROJ_DIRECTION:
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {proj->direction.x, proj->direction.y}};
     return true;
+#if DD_UNIQUE
+  // (a grenade of the tee of its world, the ticks it has left)
+  case PROJ_TYPE:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = DDNET_WEAPON_GRENADE};
+    return true;
+  case PROJ_OWNER:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = ddnet_client_player(world, owner)};
+    return true;
+  case PROJ_START_TICK:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->start_tick};
+    return true;
+  case PROJ_LIFESPAN:
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->life_span};
+    return true;
+#else
   case PROJ_TYPE:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->type};
     return true;
@@ -993,7 +1143,7 @@ static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t 
     return true;
   case PROJ_LIFESPAN:
     // ticks left, -1 for none (the bullets of map shotguns)
-    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->expire_tick == INT_MAX ? -1 : proj->expire_tick - world->core.tick - 1};
+    *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->expire_tick == INT_MAX ? -1 : proj->expire_tick - space->tick - 1};
     return true;
   case PROJ_EXPLOSIVE:
     *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = proj->explosive};
@@ -1004,12 +1154,21 @@ static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t 
   case PROJ_BOUNCING:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = proj->bouncing};
     return true;
+#endif
   default:
     return false;
   }
 }
 
 static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
+#if DD_UNIQUE
+  // (Unique Race has no lasers)
+  (void)world;
+  (void)entity;
+  (void)prop;
+  (void)out;
+  return false;
+#else
   const ddnet_entity_t *ent = entity_at(world, DDNET_ENTTYPE_LASER, DDNET_ENTITY_LASER, entity);
   if (!ent) return false;
   const ddnet_laser_t *laser = &ent->u.laser;
@@ -1039,6 +1198,7 @@ static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop,
   default:
     return false;
   }
+#endif
 }
 
 static bool hook_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
@@ -1052,8 +1212,12 @@ static bool hook_prop_get(const ft_world *world, int32_t entity, uint32_t prop, 
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {c->hook_pos.x / PX_PER_TILE, c->hook_pos.y / PX_PER_TILE}};
     return true;
   case HOOK_ORIGIN: {
-    // the base the physics measures the hook's length from
+    // the base the physics measures the hook's length from (Unique Race's maps have no hook teleporters)
+#if DD_UNIQUE
+    const ddnet_vec2_t base = chr->pos;
+#else
     const ddnet_vec2_t base = c->new_hook ? c->hook_tele_base : chr->pos;
+#endif
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {base.x / PX_PER_TILE, base.y / PX_PER_TILE}};
     return true;
   }
@@ -1072,24 +1236,70 @@ static bool hook_prop_get(const ft_world *world, int32_t entity, uint32_t prop, 
 // Levels
 // -----------------------------------------------------------------------------
 
-// The physics has DDNet's DDRace game type; race and fastcap are not in it yet.
+#if DD_UNIQUE
+// Unique Race plays a map in the game mode its server runs it in, which the map shows: a map of
+// FastCap has the two flags, and the copy of one that is played without weapons is named *_no_wpns
+// (the server configs of unique-maps say so for all of its 642 maps). `prototype` is a world of the
+// map in race.
+static ddnet_gamemode_t unique_map_mode(const ddnet_world_t *prototype, const char *name) {
+  const ddnet_vec2_t *flags = prototype->flag_pos;
+  if (flags[0].x == 0.f && flags[0].y == 0.f && flags[1].x == 0.f && flags[1].y == 0.f) return DDNET_MODE_UNIQUE_RACE;
+  static const char suffix[] = "_no_wpns";
+  const size_t length = name ? strlen(name) : 0, suffix_length = sizeof(suffix) - 1;
+  return length >= suffix_length && strcmp(name + length - suffix_length, suffix) == 0 ? DDNET_MODE_UNIQUE_FASTCAP_NO_WEAPONS
+                                                                                     : DDNET_MODE_UNIQUE_FASTCAP;
+}
+
+static const char *unique_mode_name(ddnet_gamemode_t mode) {
+  return mode == DDNET_MODE_UNIQUE_FASTCAP               ? "FastCap"
+         : mode == DDNET_MODE_UNIQUE_FASTCAP_NO_WEAPONS ? "FastCap without weapons"
+                                                         : "Race";
+}
+#else
+// The physics has DDNet's DDRace game type. (Race and FastCap are Unique Race's, the build of these
+// sources as the game unique.)
 static const ft_game_variant variants[] = {
     {.id = "ddrace", .display_name = "DDRace"},
 };
+#endif
 
 static ft_level *level_finish(ft_game *game, map_data_t *map, const char *variant_id, const char *name) {
+#if DD_UNIQUE
+  // (the game mode comes from the map, see unique_map_mode)
+  (void)variant_id;
+  // (what Unique Race's maps never have, which its physics leaves out: the map is played without it)
+  const char *unsupported = ddnet_map_unsupported(map);
+  if (unsupported)
+    dd_log(game, FT_LOG_WARN, "Map '%s' is not a map of Unique Race: it has %s, and Unique Race plays the map as if that were not there.",
+           name ? name : "?", unsupported);
+#else
+  if (variant_id && *variant_id && strcmp(variant_id, "ddrace") != 0)
+    dd_log(game, FT_LOG_WARN, "The game type '%s' is not supported; the map is played as DDRace.", variant_id);
+#endif
+
   ft_level *level = calloc(1, sizeof(ft_level));
   if (!level) {
     free_map_data(map);
     return NULL;
   }
-  if (variant_id && strcmp(variant_id, "ddrace") != 0)
-    dd_log(game, FT_LOG_WARN, "The game type '%s' is not supported; the map is played as DDRace.", variant_id);
-
   level->map = *map;
+#if DD_UNIQUE
+  // (in race first, which shows whether the map is one of FastCap)
+  level->config = ddnet_config_default(DDNET_MODE_UNIQUE_RACE);
+#else
   level->config = ddnet_config_default(DDNET_MODE_DDRACE);
-  if (!ddnet_collision_init(&level->collision, &level->map) ||
-      !ddnet_world_init(&level->prototype, &level->collision, &level->config)) {
+#endif
+  bool ready = ddnet_collision_init(&level->collision, &level->map) &&
+               ddnet_world_init(&level->prototype, &level->collision, &level->config);
+#if DD_UNIQUE
+  const ddnet_gamemode_t mode = ready ? unique_map_mode(&level->prototype, name) : DDNET_MODE_UNIQUE_RACE;
+  if (mode != DDNET_MODE_UNIQUE_RACE) {
+    ddnet_world_free(&level->prototype);
+    level->config = ddnet_config_default(mode);
+    ready = ddnet_world_init(&level->prototype, &level->collision, &level->config);
+  }
+#endif
+  if (!ready) {
     dd_log(game, FT_LOG_ERROR, "Map '%s' could not be prepared.", name ? name : "?");
     ddnet_collision_free(&level->collision);
     free_map_data(&level->map);
@@ -1098,6 +1308,9 @@ static ft_level *level_finish(ft_game *game, map_data_t *map, const char *varian
   }
 
   snprintf(level->name, sizeof(level->name), "%s", name ? name : "map");
+#if DD_UNIQUE
+  dd_log(game, FT_LOG_INFO, "Map '%s' is played in %s.", level->name, unique_mode_name(level->config.gamemode));
+#endif
   dd_map_create(game, level);
   level->loaded = true;
   for (int i = 0; i < game->particle_count; ++i)
@@ -1204,6 +1417,15 @@ static bool dd_world_reserve(ft_world *world, int clients, int players) {
   }
   if (clients > world->client_room) {
     const int room = clients > 2 * world->client_room ? clients : 2 * world->client_room;
+#if DD_UNIQUE
+    ddnet_world_t **spaces = realloc(world->spaces, (size_t)room * sizeof(*spaces));
+    if (!spaces) return false;
+    memset(&spaces[world->client_room], 0, (size_t)(room - world->client_room) * sizeof(*spaces));
+    world->spaces = spaces;
+    struct dd_space_effects *effects = realloc(world->space_effects, (size_t)room * sizeof(*effects));
+    if (!effects) return false;
+    world->space_effects = effects;
+#endif
     dd_input_t *inputs = realloc(world->inputs, (size_t)room * sizeof(*inputs));
     if (!inputs) return false;
     world->inputs = inputs;
@@ -1217,18 +1439,54 @@ static bool dd_world_reserve(ft_world *world, int clients, int players) {
   return true;
 }
 
+#if DD_UNIQUE
+static void space_free(ddnet_world_t *space) {
+  if (!space) return;
+  ddnet_world_free(space);
+  free(space);
+}
+
+// Drops the world of the physics of client `client_id`, and the client ids after the last one a
+// player has.
+static void space_drop(ft_world *world, int client_id) {
+  space_free(world->spaces[client_id]);
+  world->spaces[client_id] = NULL;
+  while (world->client_count > 0 && !world->spaces[world->client_count - 1])
+    --world->client_count;
+}
+#else
 // Whether a player of the world has client id `client_id`, connected or not.
 static bool client_taken(const ft_world *world, int client_id) {
   for (int i = 0; i < world->player_count; ++i)
     if (world->client_ids[i] == client_id) return true;
   return false;
 }
+#endif
 
 // A new player at `at_index` of the engine's players (or the end): the lowest
 // free client id joins the world and spawns right away, so that it stands at the
 // spawn like the players a world is made with. A player that left the game keeps
 // its id to come back with. Returns the player, or -1.
+//
+// Unique Race: the player gets a world of the physics of its own (a copy of the level's, at the
+// world's tick), which it is in from the start.
 static int32_t add_player(ft_world *world, int32_t at_index) {
+#if DD_UNIQUE
+  int client_id = 0;
+  while (client_id < world->client_count && world->spaces[client_id])
+    ++client_id;
+  if (client_id >= DDNET_MAX_CLIENTS || !dd_world_reserve(world, client_id + 1, world->player_count + 1)) return -1;
+  ddnet_world_t *space = calloc(1, sizeof(*space));
+  if (!space) return -1;
+  if (!ddnet_world_copy(space, &world->level->prototype)) {
+    space_free(space);
+    return -1;
+  }
+  space->tick = world->tick;
+  ddnet_player_spawn(space);
+  world->spaces[client_id] = space;
+  if (client_id >= world->client_count) world->client_count = client_id + 1;
+#else
   if (world->player_count >= DDNET_MAX_CLIENTS) return -1;
   int client_id = 0;
   while (client_id < DDNET_MAX_CLIENTS && client_taken(world, client_id))
@@ -1237,6 +1495,7 @@ static int32_t add_player(ft_world *world, int32_t at_index) {
       !ddnet_player_join(&world->core, client_id))
     return -1;
   ddnet_player_spawn(&world->core, client_id);
+#endif
   dd_input_t *held = &world->inputs[client_id];
   memset(held, 0, sizeof(*held));
   held->m_TargetY = -1;
@@ -1264,10 +1523,15 @@ static ft_world *dd_world_create(ft_game *game, const ft_world_desc *desc) {
   world->level = level;
   world->game = game;
   world->index = desc->world_index;
+#if DD_UNIQUE
+  world->tick = level->prototype.tick;
+  world->collision = &level->collision;
+#else
   if (!ddnet_world_copy(&world->core, &level->prototype)) {
     free(world);
     return NULL;
   }
+#endif
 
   const int32_t wanted = desc->player_count > 0 ? desc->player_count : 0;
   for (int32_t i = 0; i < wanted; ++i) {
@@ -1280,7 +1544,17 @@ static ft_world *dd_world_create(ft_game *game, const ft_world_desc *desc) {
 }
 
 void dd_world_release(ft_world *world) {
+#if DD_UNIQUE
+  for (int i = 0; i < world->client_count; ++i)
+    space_free(world->spaces[i]);
+  free(world->spaces);
+  free(world->space_effects);
+  world->spaces = NULL;
+  world->space_effects = NULL;
+  world->client_count = 0;
+#else
   ddnet_world_free(&world->core);
+#endif
   free(world->client_ids);
   free(world->inputs);
   free(world->pain_ticks);
@@ -1325,14 +1599,37 @@ void dd_world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
   // ddnet_world_copy reuses whatever dst already allocated (and only copies
   // what changed since the two were the same), which is what keeps the engine's
   // constant snapshotting affordable.
-  ddnet_world_copy(&dst->core, &src->core);
-  dst->entities_stale = src->entities_stale;
-  // (only the players and client ids that src has)
-  const int clients = src->core.num_clients;
+  const int clients = dd_world_clients(src);
+#if DD_UNIQUE
   if (!dd_world_reserve(dst, clients, src->player_count)) {
     dst->player_count = 0;
     return;
   }
+  for (int i = 0; i < clients; ++i) {
+    if (!src->spaces[i]) {
+      space_free(dst->spaces[i]);
+      dst->spaces[i] = NULL;
+      continue;
+    }
+    if (!dst->spaces[i]) dst->spaces[i] = calloc(1, sizeof(ddnet_world_t));
+    if (dst->spaces[i]) ddnet_world_copy(dst->spaces[i], src->spaces[i]);
+  }
+  for (int i = clients; i < dst->client_count; ++i) {
+    space_free(dst->spaces[i]);
+    dst->spaces[i] = NULL;
+  }
+  dst->client_count = clients;
+  dst->tick = src->tick;
+  dst->collision = src->collision;
+#else
+  ddnet_world_copy(&dst->core, &src->core);
+  if (!dd_world_reserve(dst, clients, src->player_count)) {
+    dst->player_count = 0;
+    return;
+  }
+#endif
+  dst->entities_stale = src->entities_stale;
+  // (only the players and client ids that src has)
   dst->player_count = src->player_count;
   if (src->player_count) memcpy(dst->client_ids, src->client_ids, (size_t)src->player_count * sizeof(*dst->client_ids));
   if (clients) {
@@ -1360,10 +1657,7 @@ void dd_world_copy(ft_game *game, ft_world *dst, const ft_world *src) {
           ? src->physics_sound_event_count
           : 0;
   dst->render_physics_effects = false;
-  dst->core.user_data = NULL;
-  dst->core.particle = NULL;
-  dst->core.damage_indicator = NULL;
-  dst->core.sound = NULL;
+  dd_world_unbind_effects(dst);
 }
 
 // Players the engine has no input for keep holding their last one, which is how a track that ran
@@ -1392,8 +1686,8 @@ static bool dd_world_player_view(ft_game *game, const ft_world *world, int32_t p
   out->velocity = (ft_vec2){chr->core.vel.x, chr->core.vel.y};
   out->aim = (ft_vec2){(float)chr->core.input.target_x / PX_PER_TILE, (float)chr->core.input.target_y / PX_PER_TILE};
   out->flags = FT_PLAYER_ALIVE;
-  if (chr->freeze_time > 0 || chr->core.deep_frozen) out->flags |= FT_PLAYER_DISABLED;
-  if (world->core.players[client_id].finish_tick >= 0) out->flags |= FT_PLAYER_FINISHED;
+  if (chr->freeze_time > 0 || dd_tee_deep_frozen(chr)) out->flags |= FT_PLAYER_DISABLED;
+  if (dd_world_client(world, client_id)->finish_tick >= 0) out->flags |= FT_PLAYER_FINISHED;
   out->run_start_tick = chr->race_state == DDNET_RACE_NONE ? -1 : chr->start_time;
   return true;
 }
@@ -1409,6 +1703,11 @@ static void ddnet_collect_events(ft_game *game, const ft_world *previous, const 
     const ddnet_character_t *after = ddnet_player_character(world, player);
     const int client_id = ddnet_player_client(world, player);
 
+#if DD_UNIQUE
+    // (Unique Race has no time checkpoints)
+    (void)before;
+    (void)after;
+#else
     if (before && after && after->last_time_cp >= 0 && after->last_time_cp < DDNET_MAX_CHECKPOINTS &&
         after->last_time_cp != before->last_time_cp) {
       char text[64];
@@ -1421,9 +1720,11 @@ static void ddnet_collect_events(ft_game *game, const ft_world *previous, const 
                                        .color = {0.35f, 0.75f, 1.0f, 1.0f}};
       emit(user, &event);
     }
+#endif
 
     if (client_id >= 0 && ddnet_player_client(previous, player) == client_id &&
-        previous->core.players[client_id].finish_tick < 0 && world->core.players[client_id].finish_tick >= 0) {
+        dd_world_client(previous, client_id) && dd_world_client(previous, client_id)->finish_tick < 0 &&
+        dd_world_client(world, client_id)->finish_tick >= 0) {
       char text[64];
       snprintf(text, sizeof(text), "Finish: %.3fs", race_time(world, client_id));
       const ft_timeline_event event = {.struct_size = sizeof(ft_timeline_event),
@@ -1463,7 +1764,12 @@ static int32_t dd_world_add_player(ft_game *game, ft_world *world, int32_t at_in
 static bool dd_world_remove_player(ft_game *game, ft_world *world, int32_t player) {
   (void)game;
   if (!world || player < 0 || player >= world->player_count) return false;
+#if DD_UNIQUE
+  // (its world of the physics goes with it)
+  space_drop(world, world->client_ids[player]);
+#else
   ddnet_player_leave(&world->core, world->client_ids[player]);
+#endif
   memmove(&world->client_ids[player], &world->client_ids[player + 1], (size_t)(world->player_count - player - 1));
   --world->player_count;
   dd_replay_remove_player(world, player);
@@ -1476,7 +1782,16 @@ static bool dd_world_remove_player(ft_game *game, ft_world *world, int32_t playe
 // in flight (projectiles, lasers) are deliberately dropped, because a project
 // stores a point to simulate from, not a mid-flight snapshot.
 
+#if DD_UNIQUE
+// Unique Race: the tick and the tee (dd_character_state_unique).
+#define DDNET_STATE_MAGIC 0x55515731u /* "UQW1" */
+#define DDNET_STATE_VERSION 1
+typedef dd_character_state_unique dd_character_state_t;
+#else
 #define DDNET_STATE_MAGIC 0x444E5732u /* "DDNW2" */
+#define DDNET_STATE_VERSION 3
+typedef dd_character_state_v3 dd_character_state_t;
+#endif
 
 typedef struct {
   uint32_t magic;
@@ -1489,18 +1804,18 @@ typedef struct {
 static size_t dd_world_serialize(ft_game *game, const ft_world *world, void *out, size_t out_size) {
   (void)game;
   if (!world) return 0;
-  const size_t needed = sizeof(ddnet_state_header) + (size_t)world->player_count * sizeof(dd_character_state_v3);
+  const size_t needed = sizeof(ddnet_state_header) + (size_t)world->player_count * sizeof(dd_character_state_t);
   if (!out) return needed;
   if (out_size < needed) return 0;
 
   ddnet_state_header header = {.magic = DDNET_STATE_MAGIC,
-                               .version = 3,
-                               .game_tick = world->core.tick,
+                               .version = DDNET_STATE_VERSION,
+                               .game_tick = ddnet_engine_tick(world),
                                .character_count = world->player_count,
-                               .character_size = (uint32_t)sizeof(dd_character_state_v3)};
+                               .character_size = (uint32_t)sizeof(dd_character_state_t)};
   memcpy(out, &header, sizeof(header));
   for (int i = 0; i < world->player_count; ++i)
-    dd_character_state_write((char *)out + sizeof(header) + (size_t)i * sizeof(dd_character_state_v3), world, i);
+    dd_character_state_write((char *)out + sizeof(header) + (size_t)i * sizeof(dd_character_state_t), world, i);
   return needed;
 }
 
@@ -1509,8 +1824,13 @@ static bool dd_world_deserialize(ft_game *game, ft_world *world, const void *dat
 
   ddnet_state_header header;
   memcpy(&header, data, sizeof(header));
+#if DD_UNIQUE
+  if (header.magic != DDNET_STATE_MAGIC || header.version != DDNET_STATE_VERSION) return false;
+  const size_t character_size = sizeof(dd_character_state_t);
+#else
   if (header.magic != DDNET_STATE_MAGIC || (header.version != 2 && header.version != 3)) return false;
   const size_t character_size = header.version == 3 ? sizeof(dd_character_state_v3) : sizeof(dd_character_state_v2);
+#endif
   if (header.character_size != character_size) {
     dd_log(game, FT_LOG_WARN, "Stored world was written by a different physics build; ignoring it.");
     return false;
@@ -1524,7 +1844,17 @@ static bool dd_world_deserialize(ft_game *game, ft_world *world, const void *dat
   world->replay_recording = NULL;
   memset(world->replay_clients, 0, sizeof(world->replay_clients));
   ft_level *level = world->level;
+#if DD_UNIQUE
+  for (int i = 0; i < world->client_count; ++i) {
+    space_free(world->spaces[i]);
+    world->spaces[i] = NULL;
+  }
+  world->client_count = 0;
+  world->tick = level->prototype.tick;
+  world->collision = &level->collision;
+#else
   ddnet_world_copy(&world->core, &level->prototype);
+#endif
   world->player_count = 0;
   for (int i = 0; i < header.character_count; ++i)
     if (add_player(world, -1) < 0) return false;
@@ -1534,10 +1864,7 @@ static bool dd_world_deserialize(ft_game *game, ft_world *world, const void *dat
   world->physics_damage_event_count = 0;
   world->physics_sound_event_count = 0;
   world->render_physics_effects = false;
-  world->core.user_data = NULL;
-  world->core.particle = NULL;
-  world->core.damage_indicator = NULL;
-  world->core.sound = NULL;
+  dd_world_unbind_effects(world);
   return true;
 }
 
@@ -1560,22 +1887,63 @@ static const ft_exporter_desc ddnet_ghost_exporter = {.id = "ghost",
                                                       .file_extension = "gho",
                                                       .filter_name = "DDNet Ghost"};
 
+static const ft_exporter_desc *const ddnet_exporters[] = {
+    &ddnet_exporter,
+    &ddnet_ghost_exporter,
+};
+#define DD_EXPORTER_COUNT ((uint32_t)(sizeof(ddnet_exporters) / sizeof(ddnet_exporters[0])))
+
 static uint32_t ddnet_exporter_count(ft_game *game) {
   (void)game;
-  return 2;
+  return DD_EXPORTER_COUNT;
 }
 
 static const ft_exporter_desc *ddnet_exporter_desc(ft_game *game, uint32_t index) {
   (void)game;
-  if (index == 0) return &ddnet_exporter;
-  if (index == 1) return &ddnet_ghost_exporter;
-  return NULL;
+  return index < DD_EXPORTER_COUNT ? ddnet_exporters[index] : NULL;
 }
 
 static bool ddnet_export_run(ft_game *game, uint32_t index, const ft_export_request *request) {
-  if (index == 0) return dd_demo_export(game, request);
-  if (index == 1) return dd_ghost_export_request(game, request);
+  if (index >= DD_EXPORTER_COUNT) return false;
+  if (ddnet_exporters[index] == &ddnet_ghost_exporter) return dd_ghost_export_request(game, request);
+  if (ddnet_exporters[index] == &ddnet_exporter) return dd_demo_export(game, request);
   return false;
+}
+
+// A path of resolve (the engine's data or cache path of this game) in DDNet's directory instead.
+static size_t ddnet_directory_path(size_t (*resolve)(const char *, char *, size_t), bool create, const char *relative,
+                                   char *out, size_t out_size) {
+#if DD_UNIQUE
+  // (".../unique/": this game's id between the last two separators)
+  char base[1024];
+  const size_t length = resolve("", base, sizeof(base));
+  if (length > 1 && length < sizeof(base) && (base[length - 1] == '/' || base[length - 1] == '\\')) {
+    const size_t end = length - 1;
+    size_t start = end;
+    while (start > 0 && base[start - 1] != '/' && base[start - 1] != '\\')
+      --start;
+    if (end - start == strlen("unique") && memcmp(base + start, "unique", end - start) == 0) {
+      if (create) {
+        char directory[1024];
+        snprintf(directory, sizeof(directory), "%.*sddnet", (int)start, base);
+        dd_assets_make_directory(directory);
+      }
+      const int needed = snprintf(out, out_size, "%.*sddnet%c%s", (int)start, base, base[end], relative ? relative : "");
+      return needed > 0 ? (size_t)needed : 0;
+    }
+  }
+#else
+  (void)create;
+#endif
+  return resolve(relative, out, out_size);
+}
+
+size_t dd_data_path(const ft_engine_api *engine, const char *relative, char *out, size_t out_size) {
+  return ddnet_directory_path(engine->resolve_data_path, false, relative, out, out_size);
+}
+
+size_t dd_cache_path(const ft_engine_api *engine, const char *relative, char *out, size_t out_size) {
+  return ddnet_directory_path(engine->resolve_cache_path, true, relative, out, out_size);
 }
 
 static ft_game *ddnet_create(const ft_engine_api *engine) {
@@ -1583,7 +1951,7 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
   if (!game) return NULL;
   game->engine = engine;
   // Recordings open on worker threads, which must not ask the engine for paths.
-  if (engine->resolve_cache_path) engine->resolve_cache_path("", game->cache_dir, sizeof(game->cache_dir));
+  if (engine->resolve_cache_path) dd_cache_path(engine, "", game->cache_dir, sizeof(game->cache_dir));
 
   // Presentation defaults. These are the game's, not the editor's, which is why
   // they no longer sit in the engine's ui_handler_t.
@@ -1626,7 +1994,7 @@ static ft_game *ddnet_create(const ft_engine_api *engine) {
   game->headless = state.headless;
   if (!game->headless) dd_audio_load(game);
 
-  dd_log(game, FT_LOG_INFO, "DDNet game module ready (ABI %u).", FT_GAME_ABI_VERSION);
+  dd_log(game, FT_LOG_INFO, DD_GAME_NAME " game module ready (ABI %u).", FT_GAME_ABI_VERSION);
   return game;
 }
 
@@ -1704,6 +2072,13 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
     dd_events_scan_recording(game, frame);
     if (igBeginMenu("DDNet", true)) {
       ddnet_map_settings_menu(game);
+      // The physics the project runs on: DDNet's, or the Unique Race mod's (the other build of this
+      // module), which takes the project along.
+      if (igBeginMenu("Physics", game->current_level != NULL && game->engine->switch_backend)) {
+        if (igMenuItem_Bool("DDNet", NULL, !DD_UNIQUE, true) && DD_UNIQUE) game->engine->switch_backend("ddnet");
+        if (igMenuItem_Bool("Unique Race", NULL, DD_UNIQUE, true) && !DD_UNIQUE) game->engine->switch_backend("unique");
+        igEndMenu();
+      }
       igSeparator();
       igMenuItem_BoolPtr("Assets", NULL, &game->show_assets, true);
       igMenuItem_BoolPtr("Skin Browser", NULL, &game->show_skin_browser, true);
@@ -1723,7 +2098,11 @@ static void ddnet_ui(ft_game *game, const ft_ui_frame *frame) {
           name = game->current_level->name;
         }
       }
+#if DD_UNIQUE
+      igText("%s (Unique Race, %s)", name, unique_mode_name(game->current_level->config.gamemode));
+#else
       igText("%s", name);
+#endif
     }
     break;
   case FT_UI_PANELS:
@@ -1782,6 +2161,25 @@ static const ft_game_module module = {
     .abi_version = FT_GAME_ABI_VERSION,
     .abi_revision = FT_GAME_ABI_REVISION,
 
+#if DD_UNIQUE
+    // Unique Race is a backend of DDNet: the maps of its category in DDNet's browser open with it, and a
+    // project moves between the two (DDNet > Physics).
+    .info = {.struct_size = sizeof(ft_game_info),
+             .id = "unique",
+             .display_name = "Unique Race",
+             .version = "1.0.0",
+             .author = "Teero",
+             .url = "https://uniqueclan.net",
+             .backend_of = "ddnet"},
+
+    // As many players in a world as DDNet has, each racing alone (a solo server, see ft_world).
+    .constraints = {.struct_size = sizeof(ft_game_constraints),
+                    .caps = FT_CAP_DYNAMIC_PLAYERS | FT_CAP_LINKED_INPUTS | FT_CAP_WORLD_SERIALIZE | FT_CAP_EXPORTERS |
+                            FT_CAP_LEVEL_FROM_MEMORY | FT_CAP_TIMELINE_EVENTS | FT_CAP_RENDERS_LEVEL | FT_CAP_HEADLESS |
+                            FT_CAP_HOSTS_STARTING_STATE | FT_CAP_RECORDINGS,
+                    .min_players = 0,
+                    .max_players = DDNET_MAX_CLIENTS,
+#else
     .info = {.struct_size = sizeof(ft_game_info),
              .id = "ddnet",
              .display_name = "DDNet",
@@ -1796,15 +2194,23 @@ static const ft_game_module module = {
                             FT_CAP_HOSTS_STARTING_STATE | FT_CAP_RECORDINGS,
                     .min_players = 0,
                     .max_players = DDNET_MAX_CLIENTS,
+#endif
                     .ticks_per_second = 50,
                     .units_per_tile = 1.f,
                     .default_camera_height = 20.f,
+#if !DD_UNIQUE
                     .variants = variants,
                     .variant_count = (uint32_t)(sizeof(variants) / sizeof(variants[0])),
+#endif
                     .camera_modes = dd_camera_modes,
                     .camera_mode_count = DD_CAMERA_MODE_COUNT,
                     .level_extension = "map",
+#if DD_UNIQUE
+                    .level_filter_name = "Unique Race map",
+#else
                     .level_filter_name = "DDNet map",
+#endif
+                    // (Unique Race's servers record DDNet's demos)
                     .recording_extension = "demo",
                     .recording_filter_name = "DDNet demo"},
 
@@ -1879,6 +2285,7 @@ static const ft_game_module module = {
     .setting_get = ddnet_setting_get,
     .setting_set = ddnet_setting_set,
 
+    // (the demo export's settings)
     .project_save = dd_export_project_save,
     .project_load = dd_export_project_load,
 
@@ -1899,6 +2306,9 @@ static const ft_game_module module = {
 
 FT_GAME_EXPORT const ft_game_module *ft_game_module_entry(uint32_t engine_abi_version) {
   if (engine_abi_version != FT_GAME_ABI_VERSION) return NULL;
+#if DD_UNIQUE
+  fill_unique_props();
+#endif
   return &module;
 }
 

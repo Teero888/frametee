@@ -188,13 +188,14 @@ typedef struct expected_player_t {
 static void expect(expected_player_t *out, const ft_world *world, int player) {
   memset(out, 0, sizeof(*out));
   const ddnet_character_t *chr = ddnet_player_character(world, player);
-  out->finish_tick = world->core.players[ddnet_player_client(world, player)].finish_tick;
+  const ddnet_player_t *state = dd_world_client(world, ddnet_player_client(world, player));
+  out->finish_tick = state ? state->finish_tick : -1;
   if (!chr) return;
   out->has_tee = true;
   out->position = chr->pos;
   out->velocity = chr->core.vel;
   out->freeze_time = chr->freeze_time;
-  out->deep_frozen = chr->core.deep_frozen;
+  out->deep_frozen = dd_tee_deep_frozen(chr);
   out->start_time = chr->start_time;
 }
 
@@ -566,7 +567,7 @@ static bool smooth_target(const ft_input_effect_frame *frame, const dd_smooth_pa
       if (!character) continue;
       attack_ticks[row] = character->attack_tick;
       hook_states[row] = character->core.hook_state;
-      jetpacks[row] = character->core.jetpack && character->core.active_weapon == DDNET_WEAPON_GUN;
+      jetpacks[row] = dd_tee_jetpack(character) && character->core.active_weapon == DDNET_WEAPON_GUN;
     }
     for (uint32_t row = 0; row + 1 < count; ++row) {
       const dd_input_t *current = (const dd_input_t *)((unsigned char *)records + (size_t)row * frame->record_stride);

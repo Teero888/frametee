@@ -58,7 +58,7 @@ static FILE *fs_open(const char *path, const char *mode) { return fopen(path, mo
 // the editor resolves and creates.
 static bool fs_get_config_dir(char *out, size_t size) {
   if (!host() || !host()->resolve_cache_path) return false;
-  host()->resolve_cache_path("", out, size);
+  dd_cache_path(host(), "", out, size);
   const size_t len = strlen(out);
   if (len > 0 && (out[len - 1] == '/' || out[len - 1] == '\\')) out[len - 1] = '\0';
   return out[0] != '\0';
@@ -170,8 +170,10 @@ static size_t curl_write_file_cb(void *ptr, size_t size, size_t nmemb, FILE *str
 
 static bool http_download_to_file(const char *url, const char *dest_file_path) {
   ensure_parent_dirs_exist(dest_file_path);
+  // (named after the game: DDNet's browser and Unique Race's download into the same cache, and both
+  // can be open at once)
   char temp_path[1024];
-  snprintf(temp_path, sizeof(temp_path), "%s.tmp", dest_file_path);
+  snprintf(temp_path, sizeof(temp_path), "%s.%s.tmp", dest_file_path, DD_UNIQUE ? "unique" : "ddnet");
 
   FILE *fp = fs_open(temp_path, "wb");
   if (!fp) {
@@ -552,6 +554,10 @@ void online_map_manager_init(online_map_manager_t *mgr, const ft_engine_api *eng
   g_engine = engine;
   mgr->engine = engine;
   mgr->initialized = true;
+#if DD_UNIQUE
+  // (Unique Race plays its own maps only)
+  mgr->active_tab = 2;
+#endif
   pthread_mutex_init(&mgr->mutex, NULL);
 
   char config_dir[512];
@@ -863,8 +869,13 @@ static void trigger_map_download(online_map_item_t *item) {
 
 static void load_online_map(const ft_engine_api *engine, const online_map_item_t *item) {
   // The editor owns "which level is open", so the browser asks rather than
-  // reaching in and loading one itself.
-  if (host()) host()->request_level(item->local_map_path);
+  // reaching in and loading one itself. A map of Unique Race runs on its
+  // physics, the backend "unique" of this game.
+  if (!host()) return;
+  if (strcmp(item->repo, "unique") == 0 && host()->request_level_with)
+    host()->request_level_with("unique", item->local_map_path);
+  else
+    host()->request_level(item->local_map_path);
 }
 
 static void draw_spinning_icon(ImVec2 center, const char *icon_text) {
@@ -956,6 +967,7 @@ static void card_text(ImDrawList *draw_list, ImVec2 at, float right, ImU32 colou
   igPopStyleColor(1);
 }
 
+#if !DD_UNIQUE
 // Helper to draw custom tab button displaying ONLY the PNG icon (preserving 2:1 aspect ratio)
 static bool render_custom_tab_icon_only(int tab_index, int active_tab, ImTextureRef *icon_tex, const char *fallback_text, float btn_w) {
   igPushID_Int(tab_index);
@@ -1008,6 +1020,7 @@ static bool render_custom_tab_icon_only(int tab_index, int active_tab, ImTexture
 
   return clicked;
 }
+#endif
 
 bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t *mgr, float avail_width, float avail_height) {
   g_engine = engine;
@@ -1024,6 +1037,8 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
   igBeginGroup();
 
   const float gap = px(12.0f);
+  // (Unique Race has its own maps only: no tabs)
+#if !DD_UNIQUE
   const float tab_w = fmaxf((avail_width - gap * 2.0f) / 3.0f, 1.0f);
 
   if (render_custom_tab_icon_only(0, mgr->active_tab, mgr->icon_ddnet_tex, "DDNet", tab_w)) {
@@ -1039,6 +1054,7 @@ bool render_online_map_browser(const ft_engine_api *engine, online_map_manager_t
   }
 
   igSpacing();
+#endif
 
   // Controls Row 1: Search Bar & Downloaded Only Checkbox, the checkbox below the search when they
   // don't fit side by side.

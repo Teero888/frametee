@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if !DD_UNIQUE
 // --- what a player is in its team ----------------------------------------------
 //
 // The setters a starting state is made with, as its properties and as a stored
@@ -63,11 +64,24 @@ static inline void dd_player_set_team(ddnet_world_t *world, int client_id, int t
   if (joined) dd_team_set_switches_off(world, client_id, &off);
 }
 
+#endif
+
 // Whether the race of a tee is running, and the ticks since it started.
 static inline bool dd_player_race_started(const ddnet_character_t *chr) { return chr->race_state == DDNET_RACE_STARTED; }
 static inline int dd_player_race_ticks(const ddnet_world_t *world, const ddnet_character_t *chr) {
   return dd_player_race_started(chr) ? world->tick - chr->start_time : 0;
 }
+
+#if DD_UNIQUE
+// Starts the race of the tee, as if it crossed the start line at the start of this tick, or stops it.
+static inline void dd_player_set_race_started(ddnet_world_t *world, int client_id, ddnet_character_t *chr, bool started) {
+  (void)client_id;
+  if (started == dd_player_race_started(chr)) return;
+  chr->race_state = started ? DDNET_RACE_STARTED : DDNET_RACE_NONE;
+  chr->start_time = world->tick;
+  chr->start_time_offset = 0.f;
+}
+#else
 
 // Starts the race of a tee, as if it went through the start line, or stops it. A team that is not
 // team 0 has started when one of its tees has.
@@ -90,7 +104,9 @@ static inline void dd_player_set_race_started(ddnet_world_t *world, int client_i
     if (world->players[i].active && world->players[i].team == player->team && world->players[i].tee_started) return;
   if (team->state == DDNET_TEAMSTATE_STARTED) team->state = DDNET_TEAMSTATE_OPEN;
 }
+#endif
 
+#if !DD_UNIQUE
 // The switches of a set as text, for a property: numbers and ranges ("2 5-7"). False when it does
 // not fit.
 static inline bool dd_switch_set_format(const dd_switch_set *set, char *out, size_t out_size) {
@@ -134,7 +150,91 @@ static inline bool dd_switch_set_parse(const char *text, dd_switch_set *out) {
   return true;
 }
 
+#endif
+
 // --- the stored tee --------------------------------------------------------------
+
+#if DD_UNIQUE
+// Unique Race: the tee as a project stores it for a starting state, and where its race is. Fixed
+// sizes and no padding, read and written with memcpy.
+typedef struct {
+  float pos_x, pos_y;
+  float vel_x, vel_y;
+  int32_t active_weapon;
+  int32_t freeze_time;
+  int32_t jumps;
+  int32_t jumped_total;
+  int32_t health;
+  int32_t armor;
+  int32_t grenade_ammo;
+  int32_t race_ticks; // since the race started
+  float race_start_offset; // the fraction of the tick the race started at
+  uint8_t weapons_got[DDNET_NUM_WEAPONS];
+  uint8_t race_started;
+  uint8_t got_flag[2]; // fastcap: the red and the blue flag
+  uint8_t padding[3];
+} dd_character_state_unique;
+
+static inline void dd_character_state_write(void *out, const ft_world *world, int player) {
+  dd_character_state_unique s;
+  memset(&s, 0, sizeof(s));
+  const ddnet_character_t *chr = ddnet_player_character(world, player);
+  if (chr) {
+    const ddnet_character_core_t *c = &chr->core;
+    s.pos_x = chr->pos.x;
+    s.pos_y = chr->pos.y;
+    s.vel_x = c->vel.x;
+    s.vel_y = c->vel.y;
+    s.active_weapon = c->active_weapon;
+    s.freeze_time = chr->freeze_time;
+    s.jumps = c->jumps;
+    s.jumped_total = c->jumped_total;
+    s.health = chr->health;
+    s.armor = chr->armor;
+    s.grenade_ammo = c->weapons[DDNET_WEAPON_GRENADE].ammo;
+    for (int w = 0; w < DDNET_NUM_WEAPONS; ++w)
+      s.weapons_got[w] = c->weapons[w].got;
+    s.race_started = dd_player_race_started(chr);
+    s.race_ticks = dd_player_race_ticks(ddnet_player_world(world, player), chr);
+    s.race_start_offset = s.race_started ? chr->start_time_offset : 0.f;
+    s.got_flag[0] = chr->got_flag[0];
+    s.got_flag[1] = chr->got_flag[1];
+  }
+  memcpy(out, &s, sizeof(s));
+}
+
+static inline void dd_character_state_read(ft_world *world, int player, const void *in, uint32_t version) {
+  (void)version;
+  dd_character_state_unique s;
+  memcpy(&s, in, sizeof(s));
+  ddnet_character_t *chr = ddnet_player_character_mut(world, player);
+  if (!chr) return;
+  ddnet_character_core_t *c = &chr->core;
+  chr->pos = (ddnet_vec2_t){s.pos_x, s.pos_y};
+  chr->prev_pos = chr->pos;
+  c->pos = chr->pos;
+  c->vel = (ddnet_vec2_t){s.vel_x, s.vel_y};
+  c->active_weapon =
+      s.active_weapon >= 0 && s.active_weapon < DDNET_NUM_WEAPONS ? s.active_weapon : DDNET_WEAPON_GUN;
+  chr->freeze_time = s.freeze_time;
+  c->jumps = s.jumps;
+  c->jumped_total = s.jumped_total;
+  chr->health = s.health;
+  chr->armor = s.armor;
+  for (int w = 0; w < DDNET_NUM_WEAPONS; ++w)
+    ddnet_set_weapon_got(c, w, s.weapons_got[w] != 0);
+  if (s.weapons_got[DDNET_WEAPON_GRENADE]) c->weapons[DDNET_WEAPON_GRENADE].ammo = s.grenade_ammo;
+  ddnet_world_t *space = ddnet_player_world_mut(world, player);
+  dd_player_set_race_started(space, 0, chr, s.race_started != 0);
+  if (s.race_started) {
+    chr->start_time = space->tick - s.race_ticks;
+    chr->start_time_offset = s.race_start_offset;
+  }
+  chr->got_flag[0] = s.got_flag[0] != 0;
+  chr->got_flag[1] = s.got_flag[1] != 0;
+  ddnet_character_changed(space);
+}
+#else
 
 // A tee as a project stores it for a starting state: what the editor can set a
 // tee up with (the properties it offers as starting overrides), at the spawn of
@@ -267,5 +367,6 @@ static inline void dd_character_state_read(ft_world *world, int player, const vo
   }
   ddnet_character_changed(&world->core, client_id);
 }
+#endif
 
 #endif // DD_CHARACTER_STATE_H

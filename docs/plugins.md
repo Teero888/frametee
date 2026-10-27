@@ -61,6 +61,15 @@ handed a project to another machine can open it again here.
 that holds `track`, whichever group is active: the tick is global, and the
 world is an owned copy to release with `destroy_world`.
 
+## Tracks and players (plugin ABI 10)
+
+Track indices are the timeline's, across all groups; a world numbers its
+players within its group. `get_track_player(track, &group)` gives the player a
+track is in its group's worlds, `get_group_track(group, player)` the other way,
+and `get_active_group()` the group whose worlds `get_initial_world` and
+`get_world_state_at` give. The selected track is always one of the active
+group's (or none, -1).
+
 ## Layout
 
 A plugin is a directory inside `plugins/`, holding its library, its manifest,

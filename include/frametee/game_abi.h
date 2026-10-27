@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 33u
+#define FT_GAME_ABI_VERSION 34u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -165,6 +165,14 @@ typedef struct ft_game_info {
   const char *family_thumbnail;
   const char *family_member;
   int32_t family_order;
+  /* Optional: this module is another physics backend of the game with this
+   * id, which is another module: the same game with other rules (a mod of it,
+   * say), whose input records are the same bytes. It gets no card in the game
+   * picker. That game's start screen opens levels with it
+   * (ft_engine_api::request_level_with), and the editor can move an open
+   * project between the two (ft_engine_api::switch_backend). NULL: a game of
+   * its own. */
+  const char *backend_of;
   /* Optional: about how many bytes one world holds. The editor keeps past
    * worlds to seek the timeline, and keeps them sparser for large worlds so
    * that they fit its memory budget. 0: small, not worth counting. */
@@ -1442,6 +1450,22 @@ typedef struct ft_engine_api {
   void (*draw_mesh_range_clipped)(ft_pipeline *pipeline, float z, ft_mesh *mesh, uint32_t first_index, uint32_t index_count,
                                   ft_texture *const *textures, uint32_t texture_count, const void *uniforms,
                                   size_t uniform_size, const float clip[4]);
+
+  /* Backends (ft_game_info::backend_of). request_level, with the level opened
+   * by the game `game_id`: the calling game, a backend of it, or the game it
+   * is a backend of. */
+  bool (*request_level_with)(const char *game_id, const char *path);
+  /* Moves the open project to the game `game_id`, one of those: its timeline,
+   * starting states, recordings, camera, video settings, project data
+   * (project_save) and undo history go with it, and that game loads its
+   * level. The starting worlds the old game stored are made again from their
+   * tracks' overrides, and project data the new game cannot read is left out
+   * with a warning; moving back gives the same project. A project the new game
+   * has no room for (recordings it cannot play, more players in a group than
+   * its worlds hold) stays where it is. Carried out at the start of the next
+   * frame, as request_level; false when there is no project or `game_id` is
+   * none of those games. */
+  bool (*switch_backend)(const char *game_id);
 } ft_engine_api;
 
 /* The layer a 3D triangle names when it carries no texture. */

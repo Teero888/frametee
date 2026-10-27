@@ -92,6 +92,24 @@ can explain the problem instead of silently ignoring the file.
 - Optional function pointers may be `NULL`. That means "this game does not do
   that", and the engine hides the feature rather than failing.
 
+### Backends
+
+A game can come in several modules that are the same game with other physics:
+the rules of a mod of it, say. Such a module names the game it belongs to in
+`info.backend_of`. It gets no card in the game picker; the game's own start
+screen opens levels with it (`engine->request_level_with(id, path)`), and the
+editor moves an open project between the two (`engine->switch_backend(id)`):
+the timeline, the starting states, the recordings, the camera, the video
+settings, the project data and the undo history go along, and the other module
+loads the level. Both must take the same input records. The starting worlds the
+old module stored are made again from their tracks' property overrides (which a
+module keeps even where it has no such property), and project data the other
+module cannot read is left out with a warning, so moving back gives the same
+project. A project the other module has no room for (recordings it cannot play,
+more players in a group than its worlds hold) stays where it is. DDNet's Unique
+Race build (`games/ddnet`, game `unique`) is one: a group there is a solo
+server, each of its tees racing alone in a world of the physics of its own.
+
 ---
 
 ## Constraints: how a game restricts the editor
@@ -628,7 +646,8 @@ Three services exist for exactly this kind of panel:
 - `resolve_cache_path`: a writable directory for anything downloaded or
   generated, under the user's config rather than the install.
 - `request_level`: asks the editor to open a level by path, as if the user had
-  picked it themselves.
+  picked it themselves. `request_level_with` does the same with the level opened
+  by another backend of the game (see below).
 - `imgui_texture_id`: an owned ImGui handle for a texture the game created, so
   its panels can draw thumbnails. Release each handle with
   `imgui_texture_release` before destroying its texture.

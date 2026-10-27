@@ -298,6 +298,9 @@ void dd_log(ft_game *g, ft_log_level level, const char *fmt, ...) {
 }
 unsigned char *dd_decode_png(const void *p, size_t n, int *w, int *h, int *channels) { return NULL; }
 void dd_free_png(unsigned char *p) { free(p); }
+size_t dd_data_path(const ft_engine_api *engine, const char *relative, char *out, size_t out_size) {
+  return engine->resolve_data_path(relative, out, out_size);
+}
 
 static void test_render(void) {
   ft_engine_api api = {.texture_create = texture_create,

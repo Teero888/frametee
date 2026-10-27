@@ -215,6 +215,10 @@ void model_set_active_group(timeline_state_t *ts, int group_index) {
   if (!ts || group_index < 0 || group_index >= ts->group_count) return;
   if (ts->recording && group_index != ts->active_group_index) return;
   ts->active_group_index = group_index;
+  // The selected track is one of the active group's: what plays, records and what plugins search is
+  // that group's, so a track of another group is selected no more.
+  if (ts->selected_player_track_index >= 0 && model_track_group_index(ts, ts->selected_player_track_index) != group_index)
+    ts->selected_player_track_index = -1;
 }
 
 void model_set_group_start_offset(timeline_state_t *ts, int group_index, int offset) {
@@ -1665,6 +1669,8 @@ bool model_remove_group(timeline_state_t *ts, int group_index) {
 
   if (ts->active_group_index == group_index) ts->active_group_index = 0;
   else if (ts->active_group_index > group_index) ts->active_group_index--;
+  // (the selected track stays in the active group, see model_set_active_group)
+  if (ts->selected_player_track_index >= 0) ts->active_group_index = model_track_group_index(ts, ts->selected_player_track_index);
   if (group_index == 0 && ts->group_count > 0) ts->groups[0]->start_offset = 0;
   // The other groups' worlds are what they were.
   ts->current_tick = imax(ts->current_tick, model_get_min_global_tick(ts));

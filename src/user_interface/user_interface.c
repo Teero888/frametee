@@ -500,7 +500,8 @@ static void place_game_panels(ui_handler_t *ui) {
 
   game_host_t *host = &ui->gfx_handler->game_host;
   if (!game_host_ready(host)) return;
-  const char *game_id = game_host_active_id(host);
+  // (the panels of a game are placed once for all its backends)
+  const char *game_id = game_host_settings_id(host);
   if (!game_id) return;
   if (strcmp(placed_game, game_id) != 0) {
     snprintf(placed_game, sizeof(placed_game), "%s", game_id);
@@ -1561,6 +1562,7 @@ void ui_init(ui_handler_t *ui, gfx_handler_t *gfx_handler) {
   camera_init(&gfx_handler->renderer.camera);
   config_apply_game_editor_state(ui);
   undo_manager_init(&ui->undo_manager);
+  undo_manager_init(&ui->parked_undo_manager);
 
   ui->plugin_api = api_init(ui);
   ui->plugin_context.imgui_context = igGetCurrentContext();
@@ -1656,6 +1658,13 @@ void ui_run_pending_project_switch(ui_handler_t *ui) {
       recording_import_open(ui, path, true);
     }
     break;
+  case UI_PENDING_SWITCH_BACKEND:
+    ui->backend_switch_failed =
+        !switch_project_backend(ui, game_index, ui->backend_switch_message, sizeof(ui->backend_switch_message));
+    if (!ui->backend_switch_failed)
+      snprintf(ui->backend_switch_message, sizeof(ui->backend_switch_message), "%s", logger_warnings());
+    ui->show_backend_switch_message = ui->backend_switch_failed || ui->backend_switch_message[0];
+    break;
   case UI_PENDING_NONE:
     break;
   }
@@ -1673,6 +1682,27 @@ static const char *pending_action_phrase(ui_handler_t *ui) {
   default:
     return "starting a new project";
   }
+}
+
+// Why the project stayed on its physics, after the user asked to switch them, or what the other
+// physics do not play as these did.
+static void render_backend_switch_message(ui_handler_t *ui) {
+  const char *popup_id = ui->backend_switch_failed ? "Physics Not Switched###BackendSwitch" : "Physics Switched###BackendSwitch";
+  if (ui->show_backend_switch_message) {
+    ui->show_backend_switch_message = false;
+    igOpenPopup_Str(popup_id, ImGuiPopupFlags_None);
+  }
+  ImGuiViewport *viewport = igGetMainViewport();
+  igSetNextWindowPos((ImVec2){viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f},
+                     ImGuiCond_Appearing, (ImVec2){0.5f, 0.5f});
+  if (!igBeginPopupModal(popup_id, NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) return;
+  const float dpi = gfx_get_ui_scale();
+  igPushTextWrapPos(420.0f * dpi);
+  igTextUnformatted(ui->backend_switch_message[0] ? ui->backend_switch_message : "The project could not be moved.", NULL);
+  igPopTextWrapPos();
+  igSpacing();
+  if (igButton("OK", (ImVec2){110.0f * dpi, 0.0f})) igCloseCurrentPopup();
+  igEndPopup();
 }
 
 static void render_unsaved_prompt(ui_handler_t *ui) {
@@ -1866,7 +1896,8 @@ static bool render_splash_game_picker(ui_handler_t *ui, float width) {
   if (igBeginTable("SplashGameGrid", columns, ImGuiTableFlags_SizingStretchSame, (ImVec2){0, 0}, 0)) {
     for (int i = 0; i < host->count; ++i) {
       const game_module_slot_t *slot = &host->slots[i];
-      if (!slot->usable) continue;
+      // (a backend of another game is opened by that game's start screen)
+      if (!slot->usable || slot->module->info.backend_of) continue;
 
       // A family is one card, at its first member's place, opening the member
       // family_representative picks.
@@ -2043,11 +2074,18 @@ static void splash_dismiss(ui_handler_t *ui) {
 // activate a game or change its live ruleset.
 void ui_splash_open(ui_handler_t *ui, ui_pending_action_t action, const char *path) {
   if (!ui || !path || !*path) return;
+  ui_splash_open_with(ui, action, path, game_host_browsed_index(&ui->gfx_handler->game_host));
+}
+
+void ui_splash_open_with(ui_handler_t *ui, ui_pending_action_t action, const char *path, int game_index) {
+  if (!ui || !path || !*path) return;
   ui_request_project_switch(ui, action, path);
   if (action == UI_PENDING_LOAD_LEVEL || action == UI_PENDING_OPEN_RECORDING) {
     game_host_t *host = &ui->gfx_handler->game_host;
-    ui->pending_game_index = game_host_browsed_index(host);
-    snprintf(ui->pending_variant_id, sizeof(ui->pending_variant_id), "%s", game_host_browsed_variant(host));
+    ui->pending_game_index = game_index;
+    // (the ruleset the start screen shows is the browsed game's; another one starts with its first)
+    snprintf(ui->pending_variant_id, sizeof(ui->pending_variant_id), "%s",
+             game_index == game_host_browsed_index(host) ? game_host_browsed_variant(host) : "");
   }
   ui->show_splash = false;
   igCloseCurrentPopup();
@@ -2358,6 +2396,7 @@ void ui_render(ui_handler_t *ui) {
   // Not a panel: the prompt answers something just asked for, a shortcut or closing the window, with
   // the interface down as much as up.
   render_unsaved_prompt(ui);
+  render_backend_switch_message(ui);
   recording_import_render(ui);
 
   // with nothing loaded the splash is the only thing to show, otherwise it is up because
@@ -2769,6 +2808,24 @@ void ui_request_open_project(ui_handler_t *ui, const char *path) {
 void ui_request_load_level(ui_handler_t *ui, const char *path) {
   if (!path || !*path) return;
   ui_request_project_switch(ui, UI_PENDING_LOAD_LEVEL, path);
+}
+
+void ui_request_load_level_with(ui_handler_t *ui, const char *path, int game_index) {
+  if (!path || !*path) return;
+  ui_request_project_switch(ui, UI_PENDING_LOAD_LEVEL, path);
+  ui->pending_game_index = game_index;
+}
+
+bool ui_request_switch_backend(ui_handler_t *ui, int game_index) {
+  game_host_t *host = &ui->gfx_handler->game_host;
+  if (!ui->gfx_handler->level || !game_host_same_game(host, host->active, game_index)) return false;
+  if (game_index == host->active) return true;
+  // (the project goes along, so there is nothing to ask about)
+  ui_request_project_switch(ui, UI_PENDING_SWITCH_BACKEND, NULL);
+  ui->pending_game_index = game_index;
+  ui->pending_confirmed = true;
+  ui->show_unsaved_prompt = false;
+  return true;
 }
 
 void ui_mark_unsaved(ui_handler_t *ui) {

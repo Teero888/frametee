@@ -128,7 +128,7 @@ static void render_nameplates(ft_game *game, const ft_render_frame *frame) {
     ft_color color = {1.f, 1.f, 1.f,
                       frame->opacity * (dd_player_specced(frame->world, player) ? 0.4f : 1.f) *
                           dd_team_alpha(game, world, viewer, player)};
-    const int team = world->core.players[ddnet_player_client(world, player)].team;
+    const int team = dd_world_team(world, ddnet_player_client(world, player));
     if (game->settings.nameplate_team_colors && team != DDNET_TEAM_FLOCK) {
       float rgb[3];
       dd_team_color(team, 0.75f, rgb);
@@ -232,13 +232,13 @@ static void render_freeze_bars(ft_game *game, const ft_render_frame *frame) {
   for (int player = 0; player < world->player_count; ++player) {
     const ddnet_character_t *character = ddnet_player_character(world, player);
     if (!character || dd_replay_absent(frame->world, player) || dd_player_specced(frame->world, player)) continue;
-    if (character->core.deep_frozen || character->core.is_in_freeze || character->freeze_time <= 0 ||
+    if (dd_tee_deep_frozen(character) || dd_tee_in_freeze(character) || character->freeze_time <= 0 ||
         character->core.freeze_start <= 0)
       continue;
 
     // DDNet's Max is the whole freeze and its numerator the ticks left, which
     // is exactly what the tee tracks as freeze_time.
-    const int freeze_end = world->core.tick + character->freeze_time;
+    const int freeze_end = ddnet_engine_tick(world) + character->freeze_time;
     const int duration = freeze_end - character->core.freeze_start;
     if (duration <= 0) continue;
 
@@ -471,7 +471,7 @@ static bool sender_profile(ft_game *game, const ft_render_frame *frame, int worl
 // The ddrace team of player `player` of a world.
 static int sender_team(const ft_world *world, int player) {
   const int client_id = ddnet_player_client(world, player);
-  return client_id >= 0 ? world->core.players[client_id].team : DDNET_TEAM_FLOCK;
+  return client_id >= 0 ? dd_world_team(world, client_id) : DDNET_TEAM_FLOCK;
 }
 
 static const char *sender_name(ft_game *game, const ft_render_frame *frame, int world, int client_id, char *fallback,
@@ -753,6 +753,7 @@ void dd_render_map_overlays(ft_game *game, const ft_render_frame *frame) {
   }
 }
 
+#if !DD_UNIQUE
 // CItems::RenderLaser for LASERTYPE_DOOR. The laser object a door snaps is
 // flipped -- CDoor::Read reads its m_To back as the door's own position -- so
 // RenderLaser's `Pos`, the end that carries the head, is the door's tile, and
@@ -792,8 +793,14 @@ static void draw_door(ft_game *game, vec2 pos, vec2 to, float opacity, bool on) 
                           (ft_vec2){12.f / PX_PER_TILE, 12.f / PX_PER_TILE},
                           (ft_color){inner[0], inner[1], inner[2], inner[3]});
 }
+#endif
 
 void dd_render_doors(ft_game *game, const ft_render_frame *frame) {
+#if DD_UNIQUE
+  // (the maps of Unique Race have no doors)
+  (void)game;
+  (void)frame;
+#else
   if (!game->settings.render_doors || !frame->active || !frame->world || !frame->level) return;
   const ddnet_collision_t *collision = &frame->level->collision;
   const ft_world *world = frame->world;
@@ -817,4 +824,5 @@ void dd_render_doors(ft_game *game, const ft_render_frame *frame) {
       continue;
     draw_door(game, from, to, frame->opacity, !off);
   }
+#endif
 }

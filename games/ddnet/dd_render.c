@@ -55,7 +55,7 @@ int dd_view_player(const ft_render_frame *frame) {
 int dd_view_team(const ft_render_frame *frame) {
   if (!frame || !frame->world) return 0;
   const int client_id = ddnet_player_client(frame->world, dd_view_player(frame));
-  return client_id >= 0 ? frame->world->core.players[client_id].team : 0;
+  return client_id >= 0 ? dd_world_team(frame->world, client_id) : 0;
 }
 
 int dd_seen_team(const ft_game *game, int world_index, int player) {
@@ -75,15 +75,17 @@ static void see_teams(ft_game *game, const ft_world *world, int world_index) {
   }
   for (int player = 0; player < DDNET_MAX_CLIENTS; ++player) {
     const int client_id = ddnet_player_client(world, player);
-    game->seen_teams[world_index][player] = client_id >= 0 ? world->core.players[client_id].team : 0;
+    game->seen_teams[world_index][player] = (uint8_t)(client_id >= 0 ? dd_world_team(world, client_id) : 0);
   }
 }
 
 float dd_team_alpha(const ft_game *game, const ft_world *world, int viewer, int player) {
   const int seen_as = ddnet_player_client(world, viewer), owner = ddnet_player_client(world, player);
   if (seen_as < 0 || owner < 0 || seen_as == owner) return 1.f;
+#if !DD_UNIQUE
   const ddnet_player_t *a = &world->core.players[seen_as], *b = &world->core.players[owner];
   if (!a->is_solo && !b->is_solo && a->team == b->team) return 1.f;
+#endif
   return (float)game->settings.others_alpha / 100.f;
 }
 
@@ -102,7 +104,7 @@ static ft_vec2 world_aim(ft_game *game, const ft_render_frame *frame, const ft_w
                          const ddnet_character_t *chr) {
   const ft_vec2 stepped = {(float)chr->core.input.target_x, (float)chr->core.input.target_y};
   const ft_engine_api *engine = game->engine;
-  if (world->core.tick != 0 || frame->world_index < 0 || !engine->timeline_player_track || !engine->get_player_input)
+  if (ddnet_engine_tick(world) != 0 || frame->world_index < 0 || !engine->timeline_player_track || !engine->get_player_input)
     return stepped;
   const int32_t track = engine->timeline_player_track((uint32_t)frame->world_index, (uint32_t)player);
   input_record_bytes_t record;
@@ -189,7 +191,7 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   out->in_air = !world->level || !ddnet_collision_check_point(&world->level->collision, pos[0] * PX_PER_TILE, pos[1] * PX_PER_TILE + 16.0f);
   // An attack tick of 0 is what a tee starts the world with, not an attack: shown as one long past,
   // or the weapon would fire on the first tick.
-  out->attack_ticks_passed = chr->attack_tick == 0 ? 1e6f : (float)(world->core.tick - chr->attack_tick) + intra;
+  out->attack_ticks_passed = chr->attack_tick == 0 ? 1e6f : (float)(ddnet_engine_tick(world) - chr->attack_tick) + intra;
   const float last_attack_time = out->attack_ticks_passed / (float)GAME_TICK_SPEED;
 
   if (out->in_air) {
@@ -269,7 +271,7 @@ static int tee_eye_state(const ft_world *world, int index, const ddnet_character
   if (dd_player_inactive(world, index)) return EYE_BLINK;
   int eye = get_flag_eye_state(record);
   if (chr->freeze_time > 0 && eye == 0) eye = EYE_BLINK;
-  const int pain_age = world->core.tick - world->pain_ticks[client_id];
+  const int pain_age = ddnet_engine_tick(world) - world->pain_ticks[client_id];
   if (pain_age >= 0 && pain_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
   return eye;
 }
@@ -315,7 +317,7 @@ static void render_weapon(ft_game *game, const ft_world *world, const ddnet_char
 
     const float attack_time_sec = tee->attack_ticks_passed / (float)GAME_TICK_SPEED;
     if (attack_time_sec <= 1.0f / 6.0f && spec->num_muzzles > 0) {
-      const int muzzle_idx = world->core.tick % spec->num_muzzles;
+      const int muzzle_idx = ddnet_engine_tick(world) % spec->num_muzzles;
       vec2 hadoken_dir = {chr->pos.x - prev_chr->pos.x, chr->pos.y - prev_chr->pos.y};
       if (glm_vec2_norm2(hadoken_dir) < 0.0001f) {
         hadoken_dir[0] = 1.0f;
@@ -368,7 +370,7 @@ static void render_weapon(ft_game *game, const ft_world *world, const ddnet_char
 
     if ((active_weapon == DDNET_WEAPON_GUN || active_weapon == DDNET_WEAPON_SHOTGUN) && spec->num_muzzles > 0) {
       if (tee->attack_ticks_passed > 0 && tee->attack_ticks_passed < spec->muzzleduration + 3.0f) {
-        const int muzzle_idx = world->core.tick % spec->num_muzzles;
+        const int muzzle_idx = ddnet_engine_tick(world) % spec->num_muzzles;
         vec2 muzzle_dir_y = {-tee->dir[1], tee->dir[0]};
         const float offset_y = -spec->muzzleoffsety * flip_factor;
 
@@ -441,8 +443,14 @@ static void render_hook(ft_game *game, const ft_world *world, const ddnet_charac
     vec2 from, to;
     tile_pos(prev_chr->core.hook_pos, from);
     tile_pos(chr->core.hook_pos, to);
+#if DD_UNIQUE
+    // (a tee of Unique Race hooks no one)
+    const ddnet_character_t *hooked = NULL;
+    (void)world;
+#else
     const ddnet_character_t *hooked =
         chr->core.hooked_player >= 0 ? ddnet_world_character((ddnet_world_t *)&world->core, chr->core.hooked_player) : NULL;
+#endif
     if (hooked) {
       tile_pos(hooked->prev_pos, from);
       tile_pos(hooked->pos, to);
@@ -646,6 +654,7 @@ void dd_render_laser(ft_game *game, const vec2 from, const vec2 to, bool rifle, 
   draw_laser(game, from, to, rifle ? LASER_RIFLE : LASER_SHOTGUN, 0, age_ticks, (float)tick + intra, bounce_delay_ms);
 }
 
+#if !DD_UNIQUE
 // The switch of an entity is off for a team (it blinks or shows as a dot), see CItems::OnRender.
 static bool switch_off(const ddnet_world_t *core, int number, int team) {
   return number > 0 && number < core->num_switchers && !ddnet_world_switch(core, number, team).status;
@@ -660,6 +669,7 @@ static bool dragger_beam_shown(const ft_world *world, const ddnet_dragger_t *dra
   if (target < 0 || ddnet_dragger_beam(&world->core, dragger, target) == -1) return false;
   return ddnet_world_character((ddnet_world_t *)&world->core, target) && world->core.players[target].team == team;
 }
+#endif
 
 // What DDNet's server sends of the world and its client draws (see "Effects, sounds and drawing" in the
 // physics' README): projectiles, lasers, and the laser walls, turrets, plasma, draggers and their beams of
@@ -673,6 +683,32 @@ static float owned_alpha(ft_game *game, const ft_world *world, int viewer_player
   return world_alpha;
 }
 
+#if DD_UNIQUE
+// Unique Race: the grenades of every player's world of the physics, which are all of that player's
+// tee (faded like the shots of another team for everyone else's view).
+static void render_projectiles_and_lasers(ft_game *game, const ft_render_frame *frame, const ft_world *world, float intra) {
+  ddnet_world_entities_current(world);
+  const int viewer_player = dd_view_player(frame);
+  for (int s = 0; s < dd_world_space_count(world); ++s) {
+    int client_id;
+    const ddnet_world_t *space = dd_world_space_at(world, s, &client_id);
+    if (!space || space->num_projectiles == 0) continue;
+    const int tick = space->tick;
+    const float world_alpha = owned_alpha(game, world, viewer_player, client_id);
+    for (int i = 0; i < space->num_projectiles; ++i) {
+      const ddnet_entity_t *ent = &space->projectiles[i];
+      const ddnet_projectile_t *proj = &ent->u.projectile;
+      const float pt = (tick - proj->start_tick - 1) / (float)GAME_TICK_SPEED;
+      const float ct = (tick - proj->start_tick) / (float)GAME_TICK_SPEED;
+      vec2 from, to;
+      tile_pos(ddnet_projectile_get_pos(space, ent, pt), from);
+      tile_pos(ddnet_projectile_get_pos(space, ent, ct), to);
+      dd_render_projectile(game, from, to, intra, DDNET_WEAPON_GRENADE, tick, proj->start_tick);
+    }
+    game->gfx.world_alpha = world_alpha;
+  }
+}
+#else
 static void render_projectiles_and_lasers(ft_game *game, const ft_render_frame *frame, const ft_world *world, float intra) {
   ddnet_world_entities_current(world);
   const ddnet_world_t *core = &world->core;
@@ -773,6 +809,7 @@ static void render_projectiles_and_lasers(ft_game *game, const ft_render_frame *
     game->gfx.world_alpha = world_alpha;
   }
 }
+#endif
 
 // Whether the selected player is marked; frames from before the flag always mark it.
 static bool frame_highlights_selected(const ft_render_frame *frame) {
@@ -797,19 +834,37 @@ static void draw_pickup_hitbox(ft_game *game, const vec2 center, float thickness
   dd_draw_polyline_smooth(game, DD_Z_LINES, ring, SEGMENTS, (vec4){1.f, 1.f, 1.f, 0.8f * alpha}, thickness, true);
 }
 
+#if DD_UNIQUE
+// Unique Race: the world of the physics whose pickups and flags of fastcap a frame shows. On a solo
+// server they are each player's own (which pickups it took and which flags it touched), so they are
+// the viewer's, else those of the first player that has a world; with no players, the level's.
+static const ddnet_world_t *viewed_space(const ft_render_frame *frame, const ft_world *world) {
+  const ddnet_world_t *space = ddnet_player_world(world, dd_view_player(frame));
+  for (int player = 0; !space && player < world->player_count; ++player)
+    space = ddnet_player_world(world, player);
+  return space ? space : world->level ? &world->level->prototype : NULL;
+}
+#endif
+
 static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft_world *world, const ft_world *prev_world, float intra) {
   const bool sprites = game->settings.render_pickups, hitboxes = game->settings.pickup_hitboxes;
   if ((!sprites && !hitboxes) || !frame->active) return;
+#if DD_UNIQUE
+  const ddnet_world_t *space = viewed_space(frame, world);
+  if (!space) return;
+#else
   const ddnet_world_t *core = &world->core;
   const int team = dd_view_team(frame);
-  const bool blink = (core->tick % GAME_TICK_SPEED) % 22 < 4;
+#endif
+  const int tick = ddnet_engine_tick(world);
+  const bool blink = (tick % GAME_TICK_SPEED) % 22 < 4;
 
   ft_sprite_draw stack_draws[128];
   int capacity = 128;
   ft_sprite_draw *draws = stack_draws;
   uint32_t count = 0;
 
-  const float animation_time = intra + (float)core->tick;
+  const float animation_time = intra + (float)tick;
 
   ft_camera camera;
   game->engine->camera_get(&camera);
@@ -821,6 +876,22 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft
   // A hitbox outline keeps its width on screen at any zoom.
   const float outline = camera.viewport.y > 0.f ? 1.5f * camera.visible.h / camera.viewport.y : 1.5f / PX_PER_TILE;
 
+#if DD_UNIQUE
+  for (int i = 0; i < space->num_pickups; ++i) {
+    // With sv_health_and_ammo a pickup the tee took is gone for it until it respawns (CPickup::Snap).
+    if (space->pickup_spawn_ticks && space->pickup_spawn_ticks[i] != -1) continue;
+    const bool off = false;
+    vec2 pos;
+    tile_pos(space->pickups[i].pos, pos);
+    // (Unique Race's heart, armor and weapon are DDNet's first three; its hearts freeze without
+    // sv_health_and_ammo, but its server sends them as hearts)
+    const int type = space->pickups[i].type == DDNET_UNIQUE_POWERUP_HEALTH  ? DDNET_POWERUP_HEALTH
+                     : space->pickups[i].type == DDNET_UNIQUE_POWERUP_ARMOR ? DDNET_POWERUP_ARMOR
+                                                                            : DDNET_POWERUP_WEAPON;
+    const int subtype = space->pickups[i].subtype;
+    (void)prev_world;
+    (void)intra;
+#else
   for (int i = core->first_entity[DDNET_ENTTYPE_PICKUP]; i != -1; i = core->entities[i].link.next) {
     const ddnet_entity_t *ent = &core->entities[i];
     if (ent->kind != DDNET_ENTITY_PICKUP) continue;
@@ -834,11 +905,12 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft
       tile_pos(prev_world->core.entities[i].pos, prev);
       lerp2(prev, cur, intra, pos);
     }
+    const int type = ent->u.pickup.type, subtype = ent->u.pickup.subtype;
+#endif
     if (pos[0] < min_x || pos[0] > max_x || pos[1] < min_y || pos[1] > max_y) continue;
     if (hitboxes) draw_pickup_hitbox(game, pos, outline, off);
     if (!sprites || (off && blink)) continue;
 
-    const int type = ent->u.pickup.type, subtype = ent->u.pickup.subtype;
     vec2 size = {1.0f, 1.0f};
     int idx = -1;
     if (type == DDNET_POWERUP_HEALTH || type == DDNET_POWERUP_ARMOR) idx = GAMESKIN_PICKUP_HEALTH + type;
@@ -895,6 +967,22 @@ static void render_pickups(ft_game *game, const ft_render_frame *frame, const ft
   if (draws != stack_draws) free(draws);
 }
 
+#if DD_UNIQUE
+// The flags of fastcap that the tee of a world of the physics has yet to touch (both, while it has
+// none): Unique Race's server sends both as red flags (CSnappingFlag), which DDNet's client draws over
+// their stands (CItems::RenderFlag).
+static void render_flags(ft_game *game, const ddnet_world_t *space) {
+  if (!space || space->config.gamemode == DDNET_MODE_UNIQUE_RACE) return;
+  const ddnet_character_t *chr = dd_client_character(space, 0);
+  for (int side = 0; side < 2; ++side) {
+    if (chr && chr->got_flag[side]) continue;
+    const vec2 pos = {space->flag_pos[side].x / PX_PER_TILE, (space->flag_pos[side].y - 42.f * 0.75f) / PX_PER_TILE};
+    dd_draw_sprite(game, game->gfx.gameskin, DD_Z_PICKUPS + 0.1f, (float *)pos, (vec2){42.f / PX_PER_TILE, 84.f / PX_PER_TILE},
+                   0.f, GAMESKIN_FLAG_RED, (vec4){1.f, 1.f, 1.f, 1.f});
+  }
+}
+#endif
+
 // --- entry point -------------------------------------------------------------
 
 static void render_entities(ft_game *game, const ft_render_frame *frame) {
@@ -910,6 +998,9 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
   const float world_alpha = game->gfx.world_alpha;
 
   render_pickups(game, frame, world, prev_world, intra);
+#if DD_UNIQUE
+  render_flags(game, viewed_space(frame, world));
+#endif
 
   if (game->settings.render_players) {
     // Cull to the viewport with a margin wide enough that a tee entering the
@@ -1170,7 +1261,9 @@ uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, f
   const ddnet_character_t *chr = ddnet_player_character(world, player);
   if (!chr || max_lines == 0) return 0;
   const ddnet_character_core_t *c = &chr->core;
-  const ddnet_player_t *p = &world->core.players[ddnet_player_client(world, player)];
+  const int client_id = ddnet_player_client(world, player);
+  const ddnet_world_t *space = ddnet_player_world(world, player);
+  const ddnet_player_t *p = dd_world_client(world, client_id);
 
   uint32_t count = 0;
 #define LINE(...)                                                      \
@@ -1185,7 +1278,7 @@ uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, f
   // CCharacterCore::Move() moves a tee by vel.x times the ramp and puts vel.x back after, so the
   // stored velocity is not the one it moves with once it is fast.
   const float ramp =
-      dd_velocity_ramp(&world->core.tuning_values[chr->tune_zone], sqrtf(c->vel.x * c->vel.x + c->vel.y * c->vel.y) * 50.0f);
+      dd_velocity_ramp(&space->tuning_values[chr->tune_zone], sqrtf(c->vel.x * c->vel.x + c->vel.y * c->vel.y) * 50.0f);
   const float vel_x = c->vel.x * ramp;
   const float vel_y = c->vel.y;
 
@@ -1211,13 +1304,23 @@ uint32_t dd_status_lines(ft_game *game, const ft_world *world, int32_t player, f
   LINE("Weapon: %d", c->active_weapon);
   LINE("Weapons: [ %d, %d, %d, %d, %d, %d ]", c->weapons[0].got, c->weapons[1].got, c->weapons[2].got, c->weapons[3].got,
        c->weapons[4].got, c->weapons[5].got);
+#if DD_UNIQUE
+  if (space->config.sv_health_and_ammo) {
+    LINE("Health: %d, Armor: %d", chr->health, chr->armor);
+    LINE("Grenades: %d", c->weapons[DDNET_WEAPON_GRENADE].got ? c->weapons[DDNET_WEAPON_GRENADE].ammo : 0);
+  }
+#endif
 
   // Race timer, counting up until the run finishes and then holding.
   float race_time = -1.f;
   if (p->finish_tick >= 0) {
-    race_time = (float)p->finish_time_ticks / GAME_TICK_SPEED;
+    race_time = dd_world_finish_time(world, client_id);
   } else if (chr->race_state == DDNET_RACE_STARTED) {
-    race_time = ((float)world->core.tick + alpha - (float)chr->start_time) / GAME_TICK_SPEED;
+    race_time = ((float)ddnet_engine_tick(world) + alpha - (float)chr->start_time) / GAME_TICK_SPEED;
+#if DD_UNIQUE
+    // (from the fraction of the tick the tee crossed the start line at)
+    race_time -= chr->start_time_offset / GAME_TICK_SPEED;
+#endif
     if (race_time < 0.0f) race_time = 0.0f;
   }
   if (race_time >= 0.0f) {
@@ -1236,16 +1339,19 @@ bool dd_player_label(ft_game *game, const ft_world *world, int32_t player, char 
   (void)game;
   const int client_id = ddnet_player_client(world, player);
   if (client_id < 0) return false;
-  const ddnet_player_t *p = &world->core.players[client_id];
+  const ddnet_player_t *p = dd_world_client(world, client_id);
+  if (!p) return false;
   if (p->finish_tick >= 0) {
-    const float time = (float)p->finish_time_ticks / GAME_TICK_SPEED;
+    const float time = dd_world_finish_time(world, client_id);
     snprintf(out, out_size, "%02d:%06.3f", (int)time / 60, fmodf(time, 60.0f));
     return true;
   }
+#if !DD_UNIQUE
   const ddnet_character_t *c = ddnet_player_character(world, player);
   if (c && c->last_time_cp >= 0 && c->last_time_cp < DDNET_MAX_CHECKPOINTS) {
     snprintf(out, out_size, "CP%d %.3fs", c->last_time_cp + 1, c->current_time_cp[c->last_time_cp]);
     return true;
   }
+#endif
   return false;
 }

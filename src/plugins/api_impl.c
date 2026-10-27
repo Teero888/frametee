@@ -43,6 +43,21 @@ static int api_get_track_count(void) { return g_ui_handler_for_api->timeline.pla
 
 static int api_get_selected_track(void) { return g_ui_handler_for_api->timeline.selected_player_track_index; }
 
+static int api_get_active_group(void) { return g_ui_handler_for_api->timeline.active_group_index; }
+
+static int api_get_track_player(int track_index, int *out_group) {
+  const timeline_state_t *ts = &g_ui_handler_for_api->timeline;
+  const int group = track_index >= 0 && track_index < ts->player_track_count ? model_track_group_index(ts, track_index) : -1;
+  if (out_group) *out_group = group;
+  return group >= 0 ? model_group_local_track_index(ts, track_index) : -1;
+}
+
+static int api_get_group_track(int group_index, int player) {
+  const timeline_state_t *ts = &g_ui_handler_for_api->timeline;
+  if (group_index < 0 || group_index >= ts->group_count || player < 0) return -1;
+  return model_group_track_index(ts, group_index, player);
+}
+
 static int track_last_tick(const player_track_t *track) {
   int last = -1;
   for (int i = 0; i < track->snippet_count; ++i) {
@@ -302,6 +317,7 @@ static void discard_undo_command(undo_command_t *command) {
 static bool s_undo_suppressed = false;
 static bool s_bulk_edit_active = false;
 static int s_bulk_edit_original_active_group = -1;
+static int s_bulk_edit_original_selected_track = -1;
 static timeline_data_snapshot_t *s_bulk_edit_before = NULL;
 static char s_bulk_edit_description[64] = {0};
 
@@ -324,6 +340,7 @@ static void api_begin_bulk_edit(const char *description) {
   if (s_bulk_edit_active) return;
   s_bulk_edit_active = true;
   s_bulk_edit_original_active_group = g_ui_handler_for_api ? g_ui_handler_for_api->timeline.active_group_index : -1;
+  s_bulk_edit_original_selected_track = g_ui_handler_for_api ? g_ui_handler_for_api->timeline.selected_player_track_index : -1;
   if (!s_undo_suppressed && description && description[0]) {
     snprintf(s_bulk_edit_description, sizeof(s_bulk_edit_description), "%s", description);
     s_bulk_edit_before = commands_capture_timeline_data(&g_ui_handler_for_api->timeline);
@@ -340,8 +357,13 @@ static void api_end_bulk_edit(void) {
 
   if (s_bulk_edit_original_active_group >= 0 && s_bulk_edit_original_active_group < ts->group_count) {
     model_set_active_group(ts, s_bulk_edit_original_active_group);
+    // (and the track selected in it, which the groups made meanwhile took away)
+    const int selected = s_bulk_edit_original_selected_track;
+    if (selected >= 0 && selected < ts->player_track_count && model_track_group_index(ts, selected) == ts->active_group_index)
+      ts->selected_player_track_index = selected;
   }
   s_bulk_edit_original_active_group = -1;
+  s_bulk_edit_original_selected_track = -1;
 
   if (s_bulk_edit_before) {
     undo_command_t *change = commands_create_timeline_data_change(
@@ -379,9 +401,13 @@ static int api_do_export_run_to_group(const char *name, int start_tick, int coun
   model_set_active_group(ts, group_index);
   model_sync_tracks_to_world(ts, group_index);
 
-  // The track lands in the active group, which is the one just made.
+  // The track lands in the active group, which is the one just made. A game
+  // whose worlds come with their players (a fixed cast, which cannot add one)
+  // has it already: the one the group was given for its player.
   int track_index = -1;
-  discard_undo_command(timeline_api_create_track(ui, NULL, &track_index));
+  for (int i = 0; i < ts->player_track_count && track_index < 0; ++i)
+    if (model_track_group_index(ts, i) == group_index) track_index = i;
+  if (track_index < 0) discard_undo_command(timeline_api_create_track(ui, NULL, &track_index));
   if (track_index < 0) {
     if (before) commands_free_timeline_data_snapshot(before);
     return -1;
@@ -615,5 +641,8 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .save_project_snapshot = api_save_project_snapshot,
       .get_track_world_state_at = api_get_track_world_state_at,
       .open_project = api_open_project,
+      .get_active_group = api_get_active_group,
+      .get_track_player = api_get_track_player,
+      .get_group_track = api_get_group_track,
   };
 }

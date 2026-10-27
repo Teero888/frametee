@@ -368,7 +368,7 @@ static bool design_pipelines(ft_game *game) {
     size_t size[2] = {0, 0};
     bool read = true;
     for (int stage = 0; stage < 2 && read; ++stage) {
-      game->engine->resolve_data_path(stages[i][stage], path, sizeof(path));
+      dd_data_path(game->engine, stages[i][stage], path, sizeof(path));
       read = game->engine->read_file(path, &code[stage], &size[stage]);
     }
     if (read) {
@@ -551,7 +551,7 @@ void dd_map_design_create(ft_game *game, ft_level *level) {
     if (im->external && im->name && im->name[0] && !strchr(im->name, '/') && !strchr(im->name, '\\') && !strchr(im->name, ':')) {
       char relative[512], path[1024];
       snprintf(relative, sizeof(relative), "mapres/%s.png", im->name);
-      game->engine->resolve_data_path(relative, path, sizeof(path));
+      dd_data_path(game->engine, relative, path, sizeof(path));
       void *file = NULL;
       size_t bytes = 0;
       if (game->engine->read_file(path, &file, &bytes)) {

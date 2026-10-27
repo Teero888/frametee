@@ -341,6 +341,8 @@ void commands_free_timeline_data_snapshot(timeline_data_snapshot_t *snapshot) {
 // builds the ones it holds again, so they are found again by identity rather than by place.
 typedef struct camera_track_refs_t {
   bool owned;
+  // (counted here: taking the tracks down takes their characters out of the camera)
+  int subject_count;
   uint32_t subjects[CAMERA_MAX_SUBJECTS];
   uint32_t focus[CAMERA_MAX_FOCUS_KEYS];
 } camera_track_refs_t;
@@ -359,6 +361,7 @@ static void camera_refs_capture(const timeline_state_t *ts, camera_track_refs_t 
   refs->owned = ts->ui && &ts->ui->timeline == ts;
   if (!refs->owned) return;
   const camera_timeline_t *camera = &ts->ui->camera_timeline;
+  refs->subject_count = camera->subject_count;
   for (int i = 0; i < camera->subject_count; ++i)
     refs->subjects[i] = track_uid(ts, camera->subject_tracks[i]);
   for (int i = 0; i < camera->focus_count; ++i)
@@ -370,7 +373,7 @@ static void camera_refs_restore(timeline_state_t *ts, const camera_track_refs_t 
   if (!refs->owned) return;
   camera_timeline_t *camera = &ts->ui->camera_timeline;
   int kept = 0;
-  for (int i = 0; i < camera->subject_count; ++i) {
+  for (int i = 0; i < refs->subject_count; ++i) {
     const int track = track_with_uid(ts, refs->subjects[i]);
     if (track >= 0) camera->subject_tracks[kept++] = track;
   }
@@ -1911,6 +1914,11 @@ static void undo_remove_track(void *cmd, void *ts_void) {
           (ts->player_track_count - c->track_index) * sizeof(player_track_t));
   player_track_t *new_track = &ts->player_tracks[c->track_index];
   *new_track = c->track_copy;
+  // (a string override points into the copy, which goes when the command does, and the copy's
+  // recording buffer went with the track)
+  model_rebind_starting_strings(&new_track->starting_config);
+  new_track->recording_snippets = NULL;
+  new_track->recording_snippet_count = new_track->recording_snippet_capacity = 0;
   new_track->snippets = malloc(sizeof(input_snippet_t) * new_track->snippet_count);
   for (int i = 0; i < new_track->snippet_count; i++) {
     model_snippet_clone(&new_track->snippets[i], &c->track_copy.snippets[i]);

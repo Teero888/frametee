@@ -197,12 +197,12 @@ static void scan_finish_tick(ft_game *game, int global_tick) {
     for (int player = 0; player < players; ++player) {
       const int client_id = ddnet_player_client(current, player);
       if (ddnet_player_client(previous, player) != client_id) continue;
-      const ddnet_player_t *before = &previous->core.players[client_id];
-      const ddnet_player_t *after = &current->core.players[client_id];
+      const ddnet_player_t *before = dd_world_client(previous, client_id);
+      const ddnet_player_t *after = dd_world_client(current, client_id);
       // (a tee that finishes again keeps the tick of its last finish till then)
-      if (after->finish_tick >= 0 && after->finish_tick != before->finish_tick)
+      if (before && after && after->finish_tick >= 0 && after->finish_tick != before->finish_tick)
         generate_finish_events(game, (int)world_index, ddnet_engine_tick(current), player,
-                               (float)after->finish_time_ticks / (float)GAME_TICK_SPEED);
+                               dd_world_finish_time(current, client_id));
     }
   }
 }

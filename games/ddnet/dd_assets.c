@@ -978,7 +978,7 @@ static void type_directories(ft_game *game, int type, dd_roots_t *out) {
   char relative[64];
   snprintf(relative, sizeof(relative), "assets/%s", info->id);
   char path[DD_ASSET_PATH_SIZE];
-  if (game->engine->resolve_cache_path && game->engine->resolve_cache_path(relative, path, sizeof(path)) > 0 &&
+  if (game->engine->resolve_cache_path && dd_cache_path(game->engine, relative, path, sizeof(path)) > 0 &&
       directory_exists(game, path))
     roots_add(out, DD_ORIGIN_FRAMETEE, "%s%s", path, NULL);
   dd_roots_t roots = {.count = 0};
@@ -1001,7 +1001,7 @@ bool dd_assets_directory(ft_game *game, int type, int origin, char *out, size_t 
   if (origin == DD_ORIGIN_FRAMETEE) {
     char relative[64];
     snprintf(relative, sizeof(relative), "assets/%s", info->id);
-    return game->engine->resolve_cache_path && game->engine->resolve_cache_path(relative, out, out_size) > 0;
+    return game->engine->resolve_cache_path && dd_cache_path(game->engine, relative, out, out_size) > 0;
   }
   if (origin != DD_ORIGIN_DDNET) return false;
   // The user directory DDNet uses: the first that exists.
@@ -1140,7 +1140,7 @@ static int pack_compare(const void *a, const void *b) {
 }
 
 static void builtin_path(ft_game *game, int type, char *out, size_t out_size) {
-  game->engine->resolve_data_path(dd_asset_types[type].builtin, out, out_size);
+  dd_data_path(game->engine, dd_asset_types[type].builtin, out, out_size);
 }
 
 void dd_assets_scan(ft_game *game, int type) {

@@ -641,6 +641,32 @@ static bool api_request_level(const char *path) {
   return true;
 }
 
+// The game module a game asks about by id: the caller (the browsed game while its start screen draws, or
+// the active one), a backend of it or the game it is a backend of. -1 for anything else.
+static int api_same_game_index(const char *game_id) {
+  game_host_t *host = &g_engine->game_host;
+  const int caller = host->calling_index >= 0 ? host->calling_index : host->active;
+  const int index = game_host_find_id(host, game_id);
+  return game_host_same_game(host, caller, index) ? index : -1;
+}
+
+static bool api_request_level_with(const char *game_id, const char *path) {
+  if (!g_engine || !game_id || !path || !*path) return false;
+  const int index = api_same_game_index(game_id);
+  if (index < 0) return false;
+  if (g_engine->game_host.calling_index >= 0)
+    ui_splash_open_with(&g_engine->user_interface, UI_PENDING_LOAD_LEVEL, path, index);
+  else
+    ui_request_load_level_with(&g_engine->user_interface, path, index);
+  return true;
+}
+
+static bool api_switch_backend(const char *game_id) {
+  if (!g_engine || !game_id) return false;
+  const int index = api_same_game_index(game_id);
+  return index >= 0 && ui_request_switch_backend(&g_engine->user_interface, index);
+}
+
 static uint64_t api_imgui_texture_id(ft_texture *texture) {
   if (!have_graphics() || !texture) return 0;
   texture_t *tex = AS_TEXTURE(texture);
@@ -1011,6 +1037,8 @@ const ft_engine_api *engine_api_init(gfx_handler_t *handler) {
       .draw_mesh = api_draw_mesh,
       .draw_mesh_range = api_draw_mesh_range,
       .draw_mesh_range_clipped = api_draw_mesh_range_clipped,
+      .request_level_with = api_request_level_with,
+      .switch_backend = api_switch_backend,
       .camera_get = api_camera_get,
       .camera_set = api_camera_set,
       .screen_to_world = api_screen_to_world,

@@ -774,13 +774,27 @@ static dd_physics_sound_event_t *append_physics_sound_event(ft_world *world) {
 // The callbacks get DDNet's client ids; everything here is about the engine's players.
 static int player_of(const ft_world *world, int client_id) { return client_id >= 0 ? ddnet_client_player(world, client_id) : -1; }
 
+// The world a callback's `user_data` is (see dd_particles_bind), with `cid` made the module's client
+// id: a world of the physics of Unique Race calls its one client 0.
+static ft_world *effects_world(void *user_data, int *cid) {
+#if DD_UNIQUE
+  const struct dd_space_effects *effects = user_data;
+  if (!effects) return NULL;
+  if (*cid >= 0) *cid = effects->client_id;
+  return effects->world;
+#else
+  (void)cid;
+  return user_data;
+#endif
+}
+
 // How opaque the effects a player makes are, as the world's effects are seen (cl_show_others_alpha).
 static float effect_alpha(const ft_world *world, int player) {
   return dd_team_alpha(world->game, world, world->effects_viewer, player);
 }
 
 static void on_particle(ddnet_vec2_t pos, int type, int cid, void *user_data) {
-  ft_world *world = user_data;
+  ft_world *world = effects_world(user_data, &cid);
   if (!world || !world->game) return;
   const int player = player_of(world, cid);
   if (dd_replay_muted(world, player)) return;
@@ -864,7 +878,7 @@ void dd_damage_star(ft_world *world, float x, float y, float angle, int player) 
 // CGameContext::CreateDamageInd: `amount` stars spread over the third of a turn
 // around 3pi/2 + angle, each sent as its own event.
 static void on_damage_indicator(ddnet_vec2_t pos, float angle, int amount, int cid, void *user_data) {
-  ft_world *world = user_data;
+  ft_world *world = effects_world(user_data, &cid);
   if (!world) return;
   const int player = player_of(world, cid);
   const float pi = 3.14159265358979323846f;
@@ -879,7 +893,7 @@ static void on_damage_indicator(ddnet_vec2_t pos, float angle, int amount, int c
 }
 
 static void on_sound(ddnet_vec2_t pos, int sound_id, int cid, void *user_data) {
-  ft_world *world = user_data;
+  ft_world *world = effects_world(user_data, &cid);
   if (!world || !world->game) return;
   const int player = player_of(world, cid);
   if (dd_replay_muted(world, player)) return;
@@ -916,10 +930,23 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
   // A world steps with the event build of the physics while its effects are of use: shown, heard, or
   // written into a demo. Searches, seeking and lookups step without (and faster).
   const bool events = index >= 0 && (presentation_enabled || heard || game->physics_events_forced);
+#if DD_UNIQUE
+  world->space_events = events;
+  for (int i = 0; i < world->client_count; ++i) {
+    ddnet_world_t *space = world->spaces[i];
+    if (!space) continue;
+    world->space_effects[i] = (struct dd_space_effects){.world = world, .client_id = i};
+    space->user_data = events ? &world->space_effects[i] : NULL;
+    space->particle = events ? on_particle : NULL;
+    space->damage_indicator = events ? on_damage_indicator : NULL;
+    space->sound = events ? on_sound : NULL;
+  }
+#else
   world->core.user_data = events ? world : NULL;
   world->core.particle = events ? on_particle : NULL;
   world->core.damage_indicator = events ? on_damage_indicator : NULL;
   world->core.sound = events ? on_sound : NULL;
+#endif
 
   world->render_physics_effects = events && presentation_enabled && !game->headless && game->settings.render_particles;
   if (!world->render_physics_effects) return false;
@@ -967,7 +994,7 @@ bool dd_skidding(const ft_world *world, int player) {
 // A skid sounds when it starts and then every tenth of a second, as DDNet's
 // client times it, and trails smoke at its hundred hertz.
 static void skids(ft_world *world, dd_particle_system_t *ps, const uint8_t *was_skidding) {
-  const int tick = world->core.tick;
+  const int tick = ddnet_engine_tick(world);
   for (int player = 0; player < world->player_count; ++player) {
     if (dd_replay_absent(world, player) || !dd_skidding(world, player)) continue;
     const ddnet_character_t *chr = ddnet_player_character(world, player);
@@ -988,11 +1015,27 @@ static void skids(ft_world *world, dd_particle_system_t *ps, const uint8_t *was_
 // Closes out a tick's effects. The high-water mark only moves once the tick has
 // actually run: spawning refuses anything at or below it, so raising it first
 // silently rejected every particle the tick produced.
-void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool bound, const uint8_t *was_skidding) {
+void dd_world_unbind_effects(ft_world *world) {
+#if DD_UNIQUE
+  world->space_events = false;
+  for (int i = 0; i < world->client_count; ++i) {
+    ddnet_world_t *space = world->spaces[i];
+    if (!space) continue;
+    space->particle = NULL;
+    space->damage_indicator = NULL;
+    space->sound = NULL;
+    space->user_data = NULL;
+  }
+#else
   world->core.particle = NULL;
   world->core.damage_indicator = NULL;
   world->core.sound = NULL;
   world->core.user_data = NULL;
+#endif
+}
+
+void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool bound, const uint8_t *was_skidding) {
+  dd_world_unbind_effects(world);
   world->render_physics_effects = false;
   dd_particle_system_t *ps = bound ? dd_particles_for(game, world->index) : NULL;
   skids(world, ps, was_skidding);
@@ -1000,7 +1043,7 @@ void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool b
 
   // DDNet's client adds these presentation-only effects after the physics
   // tick; they are not raised by gamecore callbacks.
-  if (world->core.tick % 5 == 0) {
+  if (ddnet_engine_tick(world) % 5 == 0) {
     for (int player = 0; player < world->player_count; ++player) {
       const ddnet_character_t *chr = ddnet_player_character(world, player);
       if (chr && chr->freeze_time > 0) {
@@ -1009,12 +1052,15 @@ void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool b
       }
     }
   }
+#if !DD_UNIQUE
+  // (Unique Race has no ninja)
   for (int i = world->core.first_entity[DDNET_ENTTYPE_PICKUP]; i != -1; i = world->core.entities[i].link.next) {
     const ddnet_entity_t *pickup = &world->core.entities[i];
     if (pickup->kind != DDNET_ENTITY_PICKUP || pickup->u.pickup.type != DDNET_POWERUP_NINJA) continue;
     vec2 pos = {pickup->pos.x, pickup->pos.y};
     dd_particles_create_powerup_shine(ps, pos, (vec2){96.f, 18.f}, 1.f);
   }
+#endif
   ps->last_simulated_tick = tick_before;
 }
 

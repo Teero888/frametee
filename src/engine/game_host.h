@@ -72,8 +72,16 @@ const char *game_host_browsed_variant(const game_host_t *host);
 void game_host_browsed_set_variant(game_host_t *host, const char *variant_id);
 
 int game_host_find_id(const game_host_t *host, const char *id);
+// Whether modules `a` and `b` are backends of one game (ft_game_info::backend_of): one is a backend of
+// the other, or both are of the same third one. A project moves between them, and a game's start screen
+// opens levels with them. A module is one of its own.
+bool game_host_same_game(const game_host_t *host, int a, int b);
 static inline bool game_host_ready(const game_host_t *host) { return host && host->instance != NULL; }
 const char *game_host_active_id(const game_host_t *host);
+// The id the active game's preferences are kept under (its settings, key bindings, camera mode, panels):
+// for a backend of another game (ft_game_info::backend_of) that game's, so that all its backends share
+// them; else its own.
+const char *game_host_settings_id(const game_host_t *host);
 // The game an ambient service is answering for. That is the active game,
 // except while the host is inside a call to a browsed one: a game being looked
 // at resolves its own data and cache directories rather than borrowing those

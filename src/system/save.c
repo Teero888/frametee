@@ -3,6 +3,7 @@
 
 #include "fs.h"
 #include <engine/engine_api.h>
+#include <system/config.h>
 #include <engine/game_host.h>
 #include <engine/int_math.h>
 #include <limits.h>
@@ -14,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <user_interface/camera/camera_rig.h>
 #include <user_interface/snippet_editor.h>
 #include <user_interface/timeline/timeline.h>
 #include <user_interface/timeline/timeline_model.h>
@@ -862,7 +864,8 @@ static bool recording_is_referenced(const timeline_state_t *timeline, int id) {
   return false;
 }
 
-static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
+// `every_recording`: the recordings no snippet replays go along too (see below).
+static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui, bool every_recording) {
   timeline_state_t *timeline = &ui->timeline;
   game_host_t *host = &ui->gfx_handler->game_host;
   const uint32_t input_size = game_input_size(host);
@@ -955,14 +958,15 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
   }
 
   // Recordings some snippet replays. The others only stay open so undo can bring their snippets
-  // back; a saved project has no undo history.
+  // back; a saved project has no undo history. The project moving to another backend of its game
+  // keeps its history, and with it all of them.
   uint32_t recording_count = 0;
   for (int i = 0; i < timeline->recording_count; ++i)
-    if (recording_is_referenced(timeline, timeline->recordings[i]->id)) ++recording_count;
+    if (every_recording || recording_is_referenced(timeline, timeline->recordings[i]->id)) ++recording_count;
   if (!buffer_u32(buffer, recording_count)) return false;
   for (int i = 0; i < timeline->recording_count; ++i) {
     const timeline_recording_t *recording = timeline->recordings[i];
-    if (!recording_is_referenced(timeline, recording->id)) continue;
+    if (!every_recording && !recording_is_referenced(timeline, recording->id)) continue;
     if (!buffer_i32(buffer, recording->id) || !buffer_string(buffer, recording->name) || !buffer_u64(buffer, recording->size) ||
         !buffer_write(buffer, recording->data, recording->size))
       return false;
@@ -970,7 +974,7 @@ static bool write_timeline(byte_buffer_t *buffer, ui_handler_t *ui) {
   return buffer->ok;
 }
 
-static bool write_project_file(ui_handler_t *ui, const char *path) {
+static bool write_project_file(ui_handler_t *ui, const char *path, bool every_recording) {
   game_host_t *host = &ui->gfx_handler->game_host;
   uint8_t *level_data = NULL;
   size_t level_size = 0;
@@ -1023,7 +1027,7 @@ static bool write_project_file(ui_handler_t *ui, const char *path) {
     goto done;
 
   const size_t timeline_start = buffer.size;
-  if (!write_timeline(&buffer, ui) || !buffer_patch_u64(&buffer, timeline_size_offset, buffer.size - timeline_start) ||
+  if (!write_timeline(&buffer, ui, every_recording) || !buffer_patch_u64(&buffer, timeline_size_offset, buffer.size - timeline_start) ||
       !write_camera_timeline(&buffer, &ui->camera_timeline) || !write_render_video(&buffer, ui)) goto done;
 
   char temporary_path[1200];
@@ -1066,7 +1070,7 @@ bool save_project(ui_handler_t *ui, const char *path) {
   }
 
   const double start = glfwGetTime();
-  if (!write_project_file(ui, stable_path)) return false;
+  if (!write_project_file(ui, stable_path, false)) return false;
 
   snprintf(ui->current_project_path, sizeof(ui->current_project_path), "%s", stable_path);
   ui->has_unsaved_changes = false;
@@ -1078,7 +1082,7 @@ bool save_project(ui_handler_t *ui, const char *path) {
 bool save_project_snapshot(ui_handler_t *ui, const char *path) {
   if (!ui || !path || !*path || !ui->gfx_handler || !ui->gfx_handler->level ||
       !game_host_ready(&ui->gfx_handler->game_host)) return false;
-  return write_project_file(ui, path);
+  return write_project_file(ui, path, false);
 }
 
 static bool read_value(byte_reader_t *reader, starting_override_t *override) {
@@ -1276,7 +1280,23 @@ static bool read_timeline(byte_reader_t *reader, project_document_t *document, b
   return reader->ok && reader->pos == reader->size;
 }
 
-static bool validate_document_compatibility(const project_document_t *document, game_host_t *host, const char *path) {
+// `converting`: the project is moved to the active game from another backend of its game
+// (switch_project_backend), which takes the same input records and has a version of its own.
+static bool validate_document_compatibility(const project_document_t *document, game_host_t *host, const char *path,
+                                            bool converting) {
+  if (converting) {
+    if (!game_host_same_game(host, game_host_find_id(host, document->game_id), host->active)) {
+      log_error(LOG_SOURCE, "Project '%s' of game '%s' cannot move to game '%s'.", path, document->game_id,
+                game_host_active_id(host));
+      return false;
+    }
+    if (document->input_record_size != game_input_size(host)) {
+      log_error(LOG_SOURCE, "Project '%s' has input records of %u bytes; game '%s' takes %u.", path,
+                document->input_record_size, game_host_active_id(host), game_input_size(host));
+      return false;
+    }
+    return true;
+  }
   if (strcmp(document->game_id, game_host_active_id(host)) != 0) {
     log_error(LOG_SOURCE, "Project '%s' belongs to game '%s'; start a project with that game first.", path, document->game_id);
     return false;
@@ -1361,7 +1381,8 @@ static bool activate_project_game(ui_handler_t *ui, const char *path) {
   return true;
 }
 
-static bool read_project_file(ui_handler_t *ui, const char *path, project_document_t *document, bool keep_session_data) {
+static bool read_project_file(ui_handler_t *ui, const char *path, project_document_t *document, bool keep_session_data,
+                              bool converting) {
   memset(document, 0, sizeof(*document));
   FILE *file = fs_open(path, "rb");
   if (!file) {
@@ -1420,7 +1441,7 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
     if (dot && dot != stem) *dot = '\0';
     if (stem[0]) snprintf(document->level_name, sizeof(document->level_name), "%s", stem);
   }
-  if (!validate_document_compatibility(document, &ui->gfx_handler->game_host, path)) goto done;
+  if (!validate_document_compatibility(document, &ui->gfx_handler->game_host, path, converting)) goto done;
   if (level_size == 0 && document->level_path[0] == '\0') goto malformed;
   if (keep_session_data) {
     if (!reader_blob(&reader, level_size, &document->level_data, &document->level_size) ||
@@ -1456,8 +1477,10 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
     int players = 0;
     for (int track = 0; track < document->track_count; ++track)
       if (document->tracks[track].group_index == group) ++players;
-    if (players < game_min_players(&ui->gfx_handler->game_host) ||
-        (game_max_players(&ui->gfx_handler->game_host) > 0 && players > game_max_players(&ui->gfx_handler->game_host)))
+    // (a project moved from another backend too: switch_project_backend checks this before it
+    // moves one, and puts nothing where it does not fit)
+    const int max_players = game_max_players(&ui->gfx_handler->game_host);
+    if ((max_players > 0 && players > max_players) || players < game_min_players(&ui->gfx_handler->game_host))
       goto malformed;
   }
   ok = true;
@@ -1479,9 +1502,68 @@ static int document_group_track_count(const project_document_t *document, int gr
   return count;
 }
 
-static bool populate_timeline_from_document(timeline_state_t *timeline, project_document_t *document) {
+// What an open project holds beyond its file, kept while it moves to another backend of its game and
+// when it is put back (switch_project_backend). The undo history names tracks by their place and their
+// uid, and snippets and recordings by their id: the timeline the other game builds keeps all of them,
+// and the ids it gives out next. The selection and the view stay as they were.
+typedef struct project_session_t {
+  uint32_t *track_uids; // in the order of the tracks, which is the file's
+  int track_count;
+  int *selected_snippet_ids;
+  int selected_snippet_count;
+  int active_snippet_id;
+  int next_snippet_id;
+  int next_recording_id;
+  float zoom, track_height;
+  int view_start_tick;
+} project_session_t;
+
+static bool project_session_capture(const timeline_state_t *timeline, project_session_t *out) {
+  memset(out, 0, sizeof(*out));
+  out->track_count = timeline->player_track_count;
+  out->selected_snippet_count = timeline->selected_snippets.count;
+  out->track_uids = out->track_count ? malloc(sizeof(*out->track_uids) * (size_t)out->track_count) : NULL;
+  out->selected_snippet_ids =
+      out->selected_snippet_count ? malloc(sizeof(*out->selected_snippet_ids) * (size_t)out->selected_snippet_count) : NULL;
+  if ((out->track_count && !out->track_uids) || (out->selected_snippet_count && !out->selected_snippet_ids)) {
+    free(out->track_uids);
+    free(out->selected_snippet_ids);
+    return false;
+  }
+  for (int i = 0; i < out->track_count; ++i)
+    out->track_uids[i] = timeline->player_tracks[i].uid;
+  if (out->selected_snippet_count)
+    memcpy(out->selected_snippet_ids, timeline->selected_snippets.ids,
+           sizeof(*out->selected_snippet_ids) * (size_t)out->selected_snippet_count);
+  out->active_snippet_id = timeline->active_snippet_id;
+  out->next_snippet_id = timeline->next_snippet_id;
+  out->next_recording_id = timeline->next_recording_id;
+  out->zoom = timeline->zoom;
+  out->track_height = timeline->track_height;
+  out->view_start_tick = timeline->view_start_tick;
+  return true;
+}
+
+static void project_session_free(project_session_t *session) {
+  free(session->track_uids);
+  free(session->selected_snippet_ids);
+  memset(session, 0, sizeof(*session));
+}
+
+// `session`: the project is moved here from another backend of its game, or put back after that
+// failed (switch_project_backend), and the timeline keeps what the session held (see
+// project_session_t). The undo history names tracks by their place, so the file's order of them, a
+// group's after another's, has to be the one they get here.
+static bool populate_timeline_from_document(timeline_state_t *timeline, project_document_t *document,
+                                            const project_session_t *session) {
   ui_handler_t *ui = timeline->ui;
   game_host_t *host = &ui->gfx_handler->game_host;
+
+  if (session) {
+    if (session->track_count != document->track_count) return false;
+    for (int i = 1; i < document->track_count; ++i)
+      if (document->tracks[i].group_index < document->tracks[i - 1].group_index) return false;
+  }
 
   for (int i = timeline->player_track_count - 1; i >= 0; --i)
     model_remove_track_logic(timeline, i);
@@ -1489,7 +1571,7 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
     if (!model_add_group(timeline, document->groups[timeline->group_count].name)) return false;
 
   for (int i = 0; i < document->group_count; ++i) {
-    project_group_t *source = &document->groups[i];
+    const project_group_t *source = &document->groups[i];
     timeline_group_t *destination = timeline->groups[i];
     snprintf(destination->name, sizeof(destination->name), "%s", source->name);
     memcpy(destination->color, source->color, sizeof(destination->color));
@@ -1497,11 +1579,10 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
     destination->export_enabled = source->export_enabled;
     destination->prediction_enabled = source->prediction_enabled;
     destination->start_offset = source->start_offset;
-    if (source->world_size > 0) {
-      if (!gh_world_deserialize(host, destination->initial_world, source->world_data, source->world_size) ||
-          gh_world_player_count(host, destination->initial_world) != document_group_track_count(document, i))
-        return false;
-    }
+    if (source->world_size > 0 &&
+        (!gh_world_deserialize(host, destination->initial_world, source->world_data, source->world_size) ||
+         gh_world_player_count(host, destination->initial_world) != document_group_track_count(document, i)))
+      return false;
   }
 
   int max_snippet_id = 0;
@@ -1513,7 +1594,7 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
       player_track_t *destination = model_add_new_track(timeline, 1);
       if (!destination) return false;
       const int destination_group = destination->group_index;
-      const uint32_t uid = destination->uid;
+      const uint32_t uid = session ? session->track_uids[i] : destination->uid;
       *destination = *source;
       destination->group_index = destination_group;
       destination->uid = uid;
@@ -1552,6 +1633,19 @@ static bool populate_timeline_from_document(timeline_state_t *timeline, project_
   timeline->current_tick = document->current_tick;
   timeline->active_group_index = document->active_group_index;
   timeline->selected_player_track_index = document->selected_track_index;
+  if (session) {
+    // (an id the history holds may be past every snippet and recording there is now: one deleted, or
+    // a demo import undone, is brought back by it, and must not have been given to another meanwhile)
+    if (session->next_snippet_id > timeline->next_snippet_id) timeline->next_snippet_id = session->next_snippet_id;
+    if (session->next_recording_id > timeline->next_recording_id) timeline->next_recording_id = session->next_recording_id;
+    for (int i = 0; i < session->selected_snippet_count; ++i)
+      if (model_find_snippet_by_id(timeline, session->selected_snippet_ids[i], NULL))
+        snippet_id_vector_add(&timeline->selected_snippets, session->selected_snippet_ids[i]);
+    timeline->active_snippet_id = session->active_snippet_id;
+    timeline->zoom = session->zoom;
+    timeline->track_height = session->track_height;
+    timeline->view_start_tick = session->view_start_tick;
+  }
   // (linked_copy_input is the user's setting, kept in the config; the copy in
   // the file is left as it is)
   model_recalc_physics(timeline, 0);
@@ -1592,15 +1686,18 @@ static void restore_camera(ui_handler_t *ui, const project_document_t *document)
   camera->is_dragging = false;
 }
 
-bool load_project(ui_handler_t *ui, const char *path) {
-  if (!ui || !path || !ui->gfx_handler) return false;
-  if (!activate_project_game(ui, path)) return false;
+// Reads the project at `path` into the active game. `session`: it is moved there from another backend
+// of its game, or put back after that failed (switch_project_backend), and keeps what the session held
+// (project_session_t) and its undo history; the caller owns where it is saved.
+static bool load_project_document(ui_handler_t *ui, const char *path, const project_session_t *session) {
+  const bool converting = session != NULL;
   project_document_t document;
-  if (!read_project_file(ui, path, &document, true)) return false;
+  if (!read_project_file(ui, path, &document, true, converting)) return false;
 
   game_host_t *host = &ui->gfx_handler->game_host;
+  // (a game without variants has none: NULL)
   char old_variant[FT_ID_MAX];
-  snprintf(old_variant, sizeof(old_variant), "%s", game_host_variant(host));
+  snprintf(old_variant, sizeof(old_variant), "%s", game_host_variant(host) ? game_host_variant(host) : "");
   uint8_t *old_project_data = NULL;
   size_t old_project_size = 0;
   if (!collect_project_data(host, &old_project_data, &old_project_size)) {
@@ -1608,14 +1705,50 @@ bool load_project(ui_handler_t *ui, const char *path) {
     return false;
   }
 
+  // Written by the other backend (only ever when converting): what it stored of its own is read as
+  // this game reads it, or is left behind.
+  const bool foreign = strcmp(document.game_id, game_host_active_id(host)) != 0;
+  const int foreign_index = foreign ? game_host_find_id(host, document.game_id) : -1;
+  const char *foreign_name = foreign_index >= 0 ? host->slots[foreign_index].display_name : document.game_id;
+  const char *own_name = host->active >= 0 ? host->slots[host->active].display_name : game_host_active_id(host);
+  if (foreign) {
+    // A stored starting world is the other game's own, but never more than its level's with the tracks'
+    // overrides applied (model_rebuild_group_start), which this game's worlds get here instead. The
+    // overrides stay on the tracks as they are, those of properties this game lacks included: they set
+    // nothing here, and set them again once the project goes back.
+    for (int g = 0; g < document.group_count; ++g) {
+      free(document.groups[g].world_data);
+      document.groups[g].world_data = NULL;
+      document.groups[g].world_size = 0;
+    }
+  }
+
   game_host_set_variant(host, document.variant_id[0] ? document.variant_id : NULL);
-  if (document.variant_id[0] && strcmp(game_host_variant(host), document.variant_id) != 0) {
+  if (foreign) {
+    // A ruleset this game lacks becomes its first, which is what a game without rulesets gives a
+    // project going back to one that has them (DDNet's "ddrace", from Unique Race).
+    if (document.variant_id[0] && game_host_variant(host) && strcmp(game_host_variant(host), document.variant_id) != 0)
+      log_warn(LOG_SOURCE, "%s has no ruleset '%s'; the project plays its '%s'.", own_name, document.variant_id,
+               game_host_variant(host));
+  } else if (document.variant_id[0] && !game_host_variant(host)) {
+    // (a game that has since dropped its rulesets, as Unique Race did for the modes its maps name)
+    log_info(LOG_SOURCE, "Game '%s' has no rulesets; the project's '%s' is ignored.", document.game_id, document.variant_id);
+  } else if (document.variant_id[0] && strcmp(game_host_variant(host), document.variant_id) != 0) {
     log_error(LOG_SOURCE, "Project '%s' requests unknown variant '%s'.", path, document.variant_id);
     goto failed_before_timeline;
   }
   if (!gh_project_load(host, document.project_data, document.project_size)) {
-    log_error(LOG_SOURCE, "Game '%s' rejected its project data in '%s'.", document.game_id, path);
-    goto failed_before_timeline;
+    if (!foreign) {
+      log_error(LOG_SOURCE, "Game '%s' rejected its project data in '%s'.", document.game_id, path);
+      goto failed_before_timeline;
+    }
+    // (the backends of a game mostly store the same; what this one cannot read is left out)
+    log_warn(LOG_SOURCE, "%s could not read the settings %s kept in the project (%zu bytes), so they are left out.",
+             own_name, foreign_name, document.project_size);
+    if (!gh_project_load(host, NULL, 0)) {
+      log_error(LOG_SOURCE, "Game '%s' could not start from empty project data.", game_host_active_id(host));
+      goto failed_before_timeline;
+    }
   }
 
   char previous_level_name[128];
@@ -1638,7 +1771,7 @@ bool load_project(ui_handler_t *ui, const char *path) {
   handler->level = new_level;
   timeline_state_t loaded = {0};
   model_init(&loaded, ui);
-  if (!populate_timeline_from_document(&loaded, &document)) {
+  if (!populate_timeline_from_document(&loaded, &document, session)) {
     model_cleanup(&loaded);
     handler->level = old_level;
     gh_level_destroy(host, new_level);
@@ -1647,9 +1780,13 @@ bool load_project(ui_handler_t *ui, const char *path) {
   }
 
   timeline_state_t previous = ui->timeline;
-  snippet_editor_reset();
-  undo_manager_cleanup(&ui->undo_manager);
-  undo_manager_init(&ui->undo_manager);
+  // (a moved project keeps its history, which the caller holds meanwhile: activating the game emptied
+  // this one, and the snippet editor's view of the snippet)
+  if (!converting) {
+    snippet_editor_reset();
+    undo_manager_cleanup(&ui->undo_manager);
+    undo_manager_init(&ui->undo_manager);
+  }
   ui->timeline = loaded;
   model_cleanup(&previous);
   gh_level_destroy(host, old_level);
@@ -1657,7 +1794,9 @@ bool load_project(ui_handler_t *ui, const char *path) {
   update_level_metadata(ui, &document);
   restore_camera(ui, &document);
   ui->camera_timeline = document.camera_timeline;
-  camera_editor_reset(ui);
+  // (the Camera tab of a moved project stays where it was; only the paths it drew are the old game's)
+  if (converting) camera_rig_forget();
+  else camera_editor_reset(ui);
   // The video's look travels with the project; groups the file does not list
   // appear in it.
   ui->render.video = document.video_profile;
@@ -1673,10 +1812,12 @@ bool load_project(ui_handler_t *ui, const char *path) {
     ui->timeline.groups[g]->volume = loud ? document.group_volumes[2 * g] : 1.f;
     ui->timeline.groups[g]->video_volume = loud ? document.group_volumes[2 * g + 1] : 1.f;
   }
-  snprintf(ui->current_project_path, sizeof(ui->current_project_path), "%s", path);
-  ui->has_unsaved_changes = false;
-  ui_add_recent_project(ui, path);
-  log_info(LOG_SOURCE, "Project loaded successfully from '%s'", path);
+  if (!converting) {
+    snprintf(ui->current_project_path, sizeof(ui->current_project_path), "%s", path);
+    ui->has_unsaved_changes = false;
+    ui_add_recent_project(ui, path);
+    log_info(LOG_SOURCE, "Project loaded successfully from '%s'", path);
+  }
 
   free(old_project_data);
   project_document_free(&document);
@@ -1689,6 +1830,154 @@ failed_before_timeline:
   free(old_project_data);
   project_document_free(&document);
   return false;
+}
+
+bool load_project(ui_handler_t *ui, const char *path) {
+  if (!ui || !path || !ui->gfx_handler) return false;
+  if (!activate_project_game(ui, path)) return false;
+  return load_project_document(ui, path, NULL);
+}
+
+static void backend_switch_path(char *out, size_t size, const char *name) {
+  if (!fs_get_config_dir(out, size)) {
+    out[0] = '\0';
+    return;
+  }
+  // (made on first use: the preferences may not have been saved yet)
+  fs_mkdir(out);
+  const size_t length = strlen(out);
+  snprintf(out + length, size - length, "%c%s", PATH_SEP, name);
+}
+
+// Whether the game in slot `target` can take the open project as it is; if not, why, in `error`. Asked
+// before anything changes, so that a switch it refuses leaves the project, its undo history and the
+// plugins as they were (activating the other game would reopen every plugin of the game, and the undo
+// steps a plugin made go with it).
+static bool backend_takes_project(ui_handler_t *ui, int target, char *error, size_t error_size) {
+  game_host_t *host = &ui->gfx_handler->game_host;
+  const timeline_state_t *timeline = &ui->timeline;
+  const ft_game_module *module = host->slots[target].module;
+  const char *name = host->slots[target].display_name;
+  const char *own_name = host->slots[host->active].display_name;
+  if (timeline->recording) {
+    snprintf(error, error_size, "The physics cannot be switched while recording. Stop the recording first.");
+    return false;
+  }
+  if (!module->input_schema || module->input_schema->record_size != game_input_size(host)) {
+    snprintf(error, error_size, "%s takes other inputs than %s.", name, own_name);
+    return false;
+  }
+  // Every recording goes along, also those only the undo history still uses.
+  if (timeline->recording_count > 0 && !(module->constraints.caps & FT_CAP_RECORDINGS)) {
+    bool replayed = false;
+    for (int i = 0; i < timeline->recording_count && !replayed; ++i)
+      replayed = recording_is_referenced(timeline, timeline->recordings[i]->id);
+    snprintf(error, error_size, "%s cannot play demos, and this project holds %d.%s", name, timeline->recording_count,
+             replayed ? ""
+                      : " No snippet replays them now, but undo can bring such snippets back: saving the project and "
+                        "opening it again lets the demos go.");
+    return false;
+  }
+  if (timeline->recording_count > PROJECT_MAX_RECORDINGS) {
+    snprintf(error, error_size, "The project holds %d demos, more than a project carries (%d).", timeline->recording_count,
+             PROJECT_MAX_RECORDINGS);
+    return false;
+  }
+  const int min_players = module->constraints.min_players, max_players = module->constraints.max_players;
+  for (int g = 0; g < timeline->group_count; ++g) {
+    const int players = model_group_track_count(timeline, g);
+    if (players >= min_players && (max_players <= 0 || players <= max_players)) continue;
+    if (max_players > 0)
+      snprintf(error, error_size, "Group '%s' has %d players, and %s takes %d to %d in a group.", timeline->groups[g]->name,
+               players, name, min_players, max_players);
+    else
+      snprintf(error, error_size, "Group '%s' has %d players, and %s takes at least %d in a group.", timeline->groups[g]->name,
+               players, name, min_players);
+    return false;
+  }
+  return true;
+}
+
+bool switch_project_backend(ui_handler_t *ui, int game_index, char *error, size_t error_size) {
+  if (error_size) error[0] = '\0';
+  if (!ui || !ui->gfx_handler || !ui->gfx_handler->level) return false;
+  gfx_handler_t *handler = ui->gfx_handler;
+  game_host_t *host = &handler->game_host;
+  const int source = host->active;
+  if (game_index == source) return true;
+  if (!game_host_same_game(host, source, game_index)) return false;
+  const char *target_id = host->slots[game_index].id;
+  const char *target_name = host->slots[game_index].display_name;
+
+  // (warnings and the first error from here on are what the dialog tells; what the game says first
+  // when it does not take the project, a level of the other game say, is its reason)
+  logger_clear_first_error();
+  if (!backend_takes_project(ui, game_index, error, error_size)) {
+    log_error(LOG_SOURCE, "%s", error);
+    return false;
+  }
+
+  // The project goes through a file of its own, which the other game reads as it reads any project,
+  // and is put back from it if that game does not take it. The file holds every recording, and both
+  // reads are moves: they keep the path, the recent projects and what the session holds besides the
+  // file (project_session_t). Activating a game empties the undo history, which is held aside
+  // meanwhile and comes back after. Nothing is converted on the way: what only the old game can read
+  // (load_project_document) is left out of what the other one gets, with a warning each
+  // (logger_warnings), and its tracks keep what it is made from, so the way back restores it.
+  char path[1024];
+  backend_switch_path(path, sizeof(path), "backend_switch.tasp");
+  if (!path[0]) return false;
+  project_session_t session;
+  if (!project_session_capture(&ui->timeline, &session)) {
+    snprintf(error, error_size, "Out of memory.");
+    return false;
+  }
+  char saved_path[sizeof(ui->current_project_path)];
+  snprintf(saved_path, sizeof(saved_path), "%s", ui->current_project_path);
+  const bool had_unsaved_changes = ui->has_unsaved_changes;
+  // (the preferences go along too: written now, they are what the other backend of the game reads)
+  config_save(ui);
+  if (!write_project_file(ui, path, true)) {
+    snprintf(error, error_size, "The project could not be written to '%s' to move it.", path);
+    log_error(LOG_SOURCE, "%s", error);
+    project_session_free(&session);
+    return false;
+  }
+
+  // (a plugin unloaded meanwhile takes its steps out of it, as out of the history in use)
+  ui->parked_undo_manager = ui->undo_manager;
+  undo_manager_init(&ui->undo_manager);
+
+  const bool moved = gfx_activate_game(handler, game_index) && load_project_document(ui, path, &session);
+  bool restored = moved;
+  if (!moved) {
+    if (logger_first_error()[0]) snprintf(error, error_size, "%s", logger_first_error());
+    else snprintf(error, error_size, "%s could not open the project.", target_name);
+    log_error(LOG_SOURCE, "Game '%s' could not take the project; it stays with game '%s'.", target_id, host->slots[source].id);
+    restored = gfx_activate_game(handler, source) && load_project_document(ui, path, &session);
+    if (!restored) {
+      const size_t used = strlen(error);
+      snprintf(error + used, error_size - used, "\n\nThe project could not be restored either; it is in '%s'.", path);
+      log_error(LOG_SOURCE, "The project could not be restored either; it is still in '%s'.", path);
+    }
+  }
+  // (whatever was registered while the games changed is about the empty project activating one made)
+  undo_manager_cleanup(&ui->undo_manager);
+  ui->undo_manager = ui->parked_undo_manager;
+  undo_manager_init(&ui->parked_undo_manager);
+  // A history without its project would undo into whatever is open instead.
+  if (!restored) {
+    undo_manager_cleanup(&ui->undo_manager);
+    undo_manager_init(&ui->undo_manager);
+  }
+  project_session_free(&session);
+
+  snprintf(ui->current_project_path, sizeof(ui->current_project_path), "%s", saved_path);
+  // (the file on disk is the old game's until it is saved again)
+  ui->has_unsaved_changes = moved || had_unsaved_changes;
+  if (restored) fs_remove(path);
+  if (moved) log_info(LOG_SOURCE, "The project now runs on game '%s'.", target_id);
+  return moved;
 }
 
 static const char *project_file_stem(const char *path, char *buffer, size_t buffer_size) {
@@ -1757,7 +2046,7 @@ bool import_project_as_group(ui_handler_t *ui, const char *path) {
   // Import only needs portable timeline data. The source level, game-owned
   // project state and serialized worlds are validated and skipped by the reader
   // rather than allocated, loaded or compared with the active session.
-  if (!read_project_file(ui, path, &document, false)) return false;
+  if (!read_project_file(ui, path, &document, false, false)) return false;
 
   timeline_state_t *timeline = &ui->timeline;
   const int original_group_count = timeline->group_count;

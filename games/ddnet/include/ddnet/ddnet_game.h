@@ -15,6 +15,14 @@
 // The physics is ddnet_physics (<ddnet_physics/ddnet_physics.h>), its optimized
 // backend. A world steps with ddnet_world_tick, or with ddnet_ev_world_tick when
 // its effects are wanted (see ddnet_step_events).
+//
+// The module is built twice from the same sources: as DDNet (game "ddnet", the
+// physics' DDNet backend) and as the Unique Race mod of it (game "unique", its
+// Unique backend, which defines DDNET_PHYSICS_GAME_UNIQUE and DD_UNIQUE here).
+// Unique Race is played on solo servers: a world of the module has a world of
+// the physics for each of its players, which has that one player, client 0,
+// and no teams, switches or other tees (see dd_world_space). The dd_client_*
+// functions below read a player of a world of the physics either way.
 
 #include <ddnet_physics/ddnet_physics.h>
 #include <frametee/game_abi.h>
@@ -25,6 +33,124 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#if defined(DDNET_PHYSICS_GAME_UNIQUE)
+#define DD_UNIQUE 1
+#define DD_GAME_NAME "Unique Race"
+#else
+#define DD_UNIQUE 0
+#define DD_GAME_NAME "DDNet"
+#endif
+
+// --- players of the physics ---------------------------------------------------
+
+// The player of a client id (Unique Race: the one player).
+static inline ddnet_player_t *dd_client(const ddnet_world_t *world, int client_id) {
+#if DD_UNIQUE
+  (void)client_id;
+  return (ddnet_player_t *)&world->player;
+#else
+  return (ddnet_player_t *)&world->players[client_id];
+#endif
+}
+
+// The living tee of a client id, or NULL.
+static inline ddnet_character_t *dd_client_character(const ddnet_world_t *world, int client_id) {
+#if DD_UNIQUE
+  return client_id == 0 ? ddnet_world_character((ddnet_world_t *)world) : 0;
+#else
+  return ddnet_world_character((ddnet_world_t *)world, client_id);
+#endif
+}
+
+// To be called after writing to the tee of a client id (ddnet_character_changed).
+static inline void dd_client_character_changed(ddnet_world_t *world, int client_id) {
+#if DD_UNIQUE
+  (void)client_id;
+  ddnet_character_changed(world);
+#else
+  ddnet_character_changed(world, client_id);
+#endif
+}
+
+// How many client ids the world has had (Unique Race: its one player).
+static inline int dd_client_count(const ddnet_world_t *world) {
+#if DD_UNIQUE
+  (void)world;
+  return 1;
+#else
+  return world->num_clients;
+#endif
+}
+
+// Whether a client is in the game (Unique Race: always).
+static inline bool dd_client_active(const ddnet_world_t *world, int client_id) {
+#if DD_UNIQUE
+  (void)world;
+  return client_id == 0;
+#else
+  return world->players[client_id].active;
+#endif
+}
+
+// The ddrace team of a client (Unique Race: 0, which is no team).
+static inline int dd_client_team(const ddnet_world_t *world, int client_id) {
+#if DD_UNIQUE
+  (void)world;
+  (void)client_id;
+  return 0;
+#else
+  return world->players[client_id].team;
+#endif
+}
+
+// The race time of a client that finished, in seconds; -1 until then.
+static inline float dd_client_finish_time(const ddnet_world_t *world, int client_id) {
+  const ddnet_player_t *player = dd_client(world, client_id);
+  if (player->finish_tick < 0) return -1.f;
+#if DD_UNIQUE
+  return player->finish_time;
+#else
+  return (float)player->finish_time_ticks / (float)DDNET_TICK_SPEED;
+#endif
+}
+
+// The race time of a client that finished, in whole ticks (Unique Race times
+// its races in fractions of a tick: rounded).
+static inline int dd_client_finish_ticks(const ddnet_world_t *world, int client_id) {
+#if DD_UNIQUE
+  return (int)(dd_client_finish_time(world, client_id) * (float)DDNET_TICK_SPEED + 0.5f);
+#else
+  return dd_client(world, client_id)->finish_time_ticks;
+#endif
+}
+
+// What only a tee of DDNet can be (never in Unique Race): deep frozen, in a
+// freeze tile, with a jetpack.
+static inline bool dd_tee_deep_frozen(const ddnet_character_t *chr) {
+#if DD_UNIQUE
+  (void)chr;
+  return false;
+#else
+  return chr->core.deep_frozen;
+#endif
+}
+static inline bool dd_tee_in_freeze(const ddnet_character_t *chr) {
+#if DD_UNIQUE
+  (void)chr;
+  return false;
+#else
+  return chr->core.is_in_freeze;
+#endif
+}
+static inline bool dd_tee_jetpack(const ddnet_character_t *chr) {
+#if DD_UNIQUE
+  (void)chr;
+  return false;
+#else
+  return chr->core.jetpack;
+#endif
+}
 
 // --- input -------------------------------------------------------------------
 
@@ -50,6 +176,10 @@ typedef struct __attribute__((aligned(8))) dd_input {
   uint8_t m_Hook;
   uint8_t m_WantedWeapon; // DDNET_WEAPON_*, switched to as soon as the tee has it
   uint8_t m_TeleOut;      // picks the exit of a teleporter with several, see ddnet_character_t::tele_out
+  // Unique Race: the side of fastcap the player chooses while it is set (dd_input_fastcap_side). In a
+  // byte of its own, so that a project keeps its teams and its sides when it moves between DDNet and
+  // Unique Race (each ignores the other's). Zero in older records, which is no side.
+  uint8_t m_Side;
   uint16_t m_Flags;       // FLAG_*
   // The ddrace team the player is put into while this is set, as team + 1; 0
   // leaves the team to the physics (spawning, finishing and so on move tees).
@@ -128,6 +258,10 @@ static inline int dd_input_team(const dd_input_t *p) { return p->m_Team > 0 && p
 static inline void dd_input_set_team(dd_input_t *p, int team) {
   p->m_Team = (uint8_t)(team >= 0 && team < DDNET_NUM_TEAMS ? team + 1 : 0);
 }
+// Unique Race: the side of fastcap the record chooses while it is set (the /red
+// and /blue commands): 1 red, 2 blue, 0 none.
+enum { DD_SIDE_KEEP = 0, DD_SIDE_RED, DD_SIDE_BLUE, DD_SIDE_COUNT };
+static inline int dd_input_fastcap_side(const dd_input_t *p) { return p->m_Side < DD_SIDE_COUNT ? p->m_Side : DD_SIDE_KEEP; }
 
 // The player flags the physics acts on: the input of a tee whose player is
 // chatting or in the spectator camera does not reach it. The others only show,
@@ -172,13 +306,23 @@ static inline void ddnet_input_from_record(const dd_input_t *record, ddnet_input
 // the tick (/spec, the teleporter exit and the input). `events` picks the event
 // build of the physics (see ddnet_step_events). A player that connects spawns
 // during the tick after, as on a server.
+//
+// Unique Race: the side of fastcap (which kills the tee to respawn there), the
+// kill, the teleporter exit (one for the world) and the input.
 static inline void ddnet_record_apply(ddnet_world_t *world, int client_id, const dd_input_t *record, bool events) {
-  if (client_id < 0 || client_id >= world->num_clients) return;
+  if (client_id < 0 || client_id >= dd_client_count(world)) return;
 #if defined(DDNET_PHYSICS_HAS_EVENTS)
 #define DD_PHYSICS_CALL(name, ...) (events ? ddnet_ev_##name(__VA_ARGS__) : ddnet_##name(__VA_ARGS__))
 #else
 #define DD_PHYSICS_CALL(name, ...) ((void)events, ddnet_##name(__VA_ARGS__))
 #endif
+#if DD_UNIQUE
+  const int side = dd_input_fastcap_side(record);
+  if (side != DD_SIDE_KEEP && side != world->player.fastcap_side) DD_PHYSICS_CALL(player_set_fastcap_side, world, side);
+  if (get_flag_kill(record)) DD_PHYSICS_CALL(player_kill, world);
+  world->tele_out = record->m_TeleOut;
+  ddnet_input_from_record(record, &world->player.input);
+#else
   ddnet_player_t *player = &world->players[client_id];
   const uint8_t connection = get_flag_connection(record);
   if (connection == DD_CONNECTION_CONNECTED && !player->active)
@@ -194,10 +338,11 @@ static inline void ddnet_record_apply(ddnet_world_t *world, int client_id, const
       ddnet_world_lock_team(world, player->team, lock == DD_LOCK_LOCKED);
     if (get_flag_kill(record) && ddnet_world_character(world, client_id)) DD_PHYSICS_CALL(player_kill, world, client_id);
   }
-#undef DD_PHYSICS_CALL
   world->characters[client_id].spec = get_flag_spec(record) != 0;
   world->characters[client_id].tele_out = record->m_TeleOut;
   ddnet_input_from_record(record, &player->input);
+#endif
+#undef DD_PHYSICS_CALL
 }
 
 // --- worlds ------------------------------------------------------------------
@@ -207,8 +352,25 @@ static inline void ddnet_record_apply(ddnet_world_t *world, int client_id, const
 struct dd_physics_particle_event;
 struct dd_physics_damage_event;
 struct dd_physics_sound_event;
+struct dd_space_effects;
 struct ft_world {
+#if DD_UNIQUE
+  // Unique Race is played on solo servers: every player races alone, in a world
+  // of the physics of its own, and sees the others go. These are those worlds,
+  // by client id (NULL for an id no player has now), the tick they are all at
+  // (which a world without players keeps too), and whom the effects each raises
+  // are of while they are shown (see dd_particles_bind). Read through
+  // dd_world_space and the other dd_world_* functions below.
+  ddnet_world_t **spaces;              // [client_count] (room for client_room)
+  struct dd_space_effects *space_effects; // [client_room]
+  int client_count;
+  int tick;
+  // The map they all play on, which a world without players has too.
+  const ddnet_collision_t *collision;
+  bool space_events; // while the spaces' effect callbacks are set
+#else
   ddnet_world_t core;
+#endif
   ft_level *level;
   ft_game *game;
   // Which editor world this belongs to. Every cached copy of one shares it, so
@@ -220,7 +382,7 @@ struct ft_world {
   int player_count;
   uint8_t *client_ids; // [player_count] (room for player_room)
   // By client id, for the client ids the world has had (below
-  // core.num_clients; room for client_room):
+  // dd_world_clients; room for client_room):
   // the record each client held on its last tick: what its tee shows (eyes,
   // emote, sitting), and what a player the engine has no input for goes on
   // holding;
@@ -266,25 +428,159 @@ struct ft_world {
   bool entities_stale;
 };
 
+// --- the worlds of the physics in a world -------------------------------------
+//
+// A world of DDNet is one world of the physics with all its players in it. One
+// of Unique Race has a world of the physics for each player (a solo server), in
+// which that player is client 0. These read a world either way, by the
+// module's client ids.
+
+// The world of the physics client `client_id` plays in: DDNet's one world, or
+// the client's own in Unique Race (NULL for an id no player has).
+static inline ddnet_world_t *dd_world_space(const ft_world *world, int client_id) {
+#if DD_UNIQUE
+  return world && client_id >= 0 && client_id < world->client_count ? world->spaces[client_id] : 0;
+#else
+  (void)client_id;
+  return world ? (ddnet_world_t *)&world->core : 0;
+#endif
+}
+
+// The map a world is played on.
+static inline const ddnet_collision_t *dd_world_collision(const ft_world *world) {
+#if DD_UNIQUE
+  return world ? world->collision : 0;
+#else
+  return world ? world->core.collision : 0;
+#endif
+}
+
+// The id a client has in the world of the physics it plays in (Unique Race: 0).
+static inline int dd_space_client(int client_id) {
+#if DD_UNIQUE
+  (void)client_id;
+  return 0;
+#else
+  return client_id;
+#endif
+}
+
+// How many client ids the world has had.
+static inline int dd_world_clients(const ft_world *world) {
+#if DD_UNIQUE
+  return world ? world->client_count : 0;
+#else
+  return world ? world->core.num_clients : 0;
+#endif
+}
+
+// Whether a client is in the game.
+static inline bool dd_world_client_active(const ft_world *world, int client_id) {
+  const ddnet_world_t *space = dd_world_space(world, client_id);
+  return space && client_id >= 0 && dd_client_active(space, dd_space_client(client_id));
+}
+
+// The player of a client id (NULL for none).
+static inline ddnet_player_t *dd_world_client(const ft_world *world, int client_id) {
+  const ddnet_world_t *space = dd_world_space(world, client_id);
+  return space && client_id >= 0 ? dd_client(space, dd_space_client(client_id)) : 0;
+}
+
+// The living tee of a client id, or NULL.
+static inline ddnet_character_t *dd_world_character(const ft_world *world, int client_id) {
+  const ddnet_world_t *space = dd_world_space(world, client_id);
+  return space && client_id >= 0 ? dd_client_character(space, dd_space_client(client_id)) : 0;
+}
+
+// To be called after writing to the tee of a client id.
+static inline void dd_world_character_changed(ft_world *world, int client_id) {
+  ddnet_world_t *space = dd_world_space(world, client_id);
+  if (space) dd_client_character_changed(space, dd_space_client(client_id));
+}
+
+// The ddrace team of a client (Unique Race: 0, which is no team).
+static inline int dd_world_team(const ft_world *world, int client_id) {
+  const ddnet_world_t *space = dd_world_space(world, client_id);
+  return space ? dd_client_team(space, dd_space_client(client_id)) : 0;
+}
+
+// The race time of a client that finished, in seconds (-1 until then) and in
+// whole ticks.
+static inline float dd_world_finish_time(const ft_world *world, int client_id) {
+  const ddnet_world_t *space = dd_world_space(world, client_id);
+  return space ? dd_client_finish_time(space, dd_space_client(client_id)) : -1.f;
+}
+static inline int dd_world_finish_ticks(const ft_world *world, int client_id) {
+  const ddnet_world_t *space = dd_world_space(world, client_id);
+  return space ? dd_client_finish_ticks(space, dd_space_client(client_id)) : -1;
+}
+
+// For going through what is in the worlds of the physics (shots, pickups): how
+// many there are, and each with the client it is of (-1 for DDNet's one, which
+// is everyone's). dd_world_space_at can be NULL in Unique Race, for a client id
+// no player has.
+static inline int dd_world_space_count(const ft_world *world) {
+#if DD_UNIQUE
+  return world ? world->client_count : 0;
+#else
+  return world ? 1 : 0;
+#endif
+}
+static inline ddnet_world_t *dd_world_space_at(const ft_world *world, int index, int *out_client) {
+#if DD_UNIQUE
+  if (out_client) *out_client = index;
+  return dd_world_space(world, index);
+#else
+  (void)index;
+  if (out_client) *out_client = -1;
+  return world ? (ddnet_world_t *)&world->core : 0;
+#endif
+}
+
+// The client a thing of the world of the physics `space_client` is of, which
+// that world calls `owner` (-1 for the world's own): DDNet's client ids are the
+// module's, a world of Unique Race has its one client.
+static inline int dd_space_owner(int space_client, int owner) {
+#if DD_UNIQUE
+  return owner >= 0 ? space_client : -1;
+#else
+  (void)space_client;
+  return owner;
+#endif
+}
+
 // Brings a world's entities up to date for reading them (its projectiles and
-// lasers, world->core.entities): the optimized physics moves bullets and laser
-// walls that no tee is near only when they matter, and a world stepped without
-// effects has them where they were then. Changes nothing the world will do.
+// lasers, the entities of each dd_world_space): the optimized physics moves
+// bullets and laser walls that no tee is near only when they matter, and a
+// world stepped without effects has them where they were then. Changes nothing
+// the world will do.
 static inline void ddnet_world_entities_current(const ft_world *world) {
   if (!world || !world->entities_stale) return;
   ft_world *current = (ft_world *)world;
-  ddnet_world_sync(&current->core);
+  for (int i = 0; i < dd_world_space_count(world); ++i) {
+    ddnet_world_t *space = dd_world_space_at(world, i, 0);
+    if (space) ddnet_world_sync(space);
+  }
   current->entities_stale = false;
 }
 
+#if !DD_UNIQUE
 // Reads a world handed over by the engine, e.g. from tas_api_t::get_world_state_at.
-// Its entities as they are: see ddnet_world_entities_current.
+// Its entities as they are: see ddnet_world_entities_current. (Unique Race has
+// a world of the physics for each player: ddnet_player_world.)
 static inline const ddnet_world_t *ddnet_world(const ft_world *world) { return world ? &world->core : 0; }
 static inline ddnet_world_t *ddnet_world_mut(ft_world *world) { return world ? &world->core : 0; }
+#endif
 
 // The engine's tick of a world, which is its game tick: a world is made at
 // tick 0 with its tees at the spawn (ddnet_player_spawn).
-static inline int ddnet_engine_tick(const ft_world *world) { return world ? world->core.tick : 0; }
+static inline int ddnet_engine_tick(const ft_world *world) {
+#if DD_UNIQUE
+  return world ? world->tick : 0;
+#else
+  return world ? world->core.tick : 0;
+#endif
+}
 
 // The client id of the world's player `player`, or -1.
 static inline int ddnet_player_client(const ft_world *world, int player) {
@@ -299,11 +595,20 @@ static inline int ddnet_client_player(const ft_world *world, int client_id) {
   return -1;
 }
 
+// The world of the physics the world's player `player` plays in (DDNet: the
+// world's one), and its client id there (dd_space_client); NULL for none.
+static inline ddnet_world_t *ddnet_player_world_mut(ft_world *world, int player) {
+  return dd_world_space(world, ddnet_player_client(world, player));
+}
+static inline const ddnet_world_t *ddnet_player_world(const ft_world *world, int player) {
+  return ddnet_player_world_mut((ft_world *)world, player);
+}
+
 // The tee of the world's player `player`, or NULL while it has none: before it
 // spawns, between dying and respawning, and while it is in /spec.
 static inline ddnet_character_t *ddnet_player_character_mut(ft_world *world, int player) {
   const int client_id = ddnet_player_client(world, player);
-  return client_id >= 0 ? ddnet_world_character(&world->core, client_id) : 0;
+  return client_id >= 0 ? dd_world_character(world, client_id) : 0;
 }
 static inline const ddnet_character_t *ddnet_player_character(const ft_world *world, int player) {
   return ddnet_player_character_mut((ft_world *)world, player);
@@ -311,15 +616,30 @@ static inline const ddnet_character_t *ddnet_player_character(const ft_world *wo
 
 // Gives a tee a weapon or takes it away. A weapon only fires with ammo, and a
 // DDNet tee has endless ammo (-1) in every weapon it has, as a pickup gives it.
+// (Unique Race: but the grenade of sv_health_and_ammo, see dd_set_weapon_got.)
 static inline void ddnet_set_weapon_got(ddnet_character_core_t *core, int weapon, bool got) {
   core->weapons[weapon].got = got;
   core->weapons[weapon].ammo = got ? -1 : 0;
 }
 
+// The same for a tee of a world, with the ammo a pickup gives in it.
+static inline void dd_set_weapon_got(const ddnet_world_t *world, ddnet_character_core_t *core, int weapon, bool got) {
+  ddnet_set_weapon_got(core, weapon, got);
+#if DD_UNIQUE
+  if (got && weapon == DDNET_WEAPON_GRENADE && world->config.sv_health_and_ammo) core->weapons[weapon].ammo = DDNET_GRENADE_MAX_AMMO;
+#else
+  (void)world;
+#endif
+}
+
 // Whether a step of the world calls its effect callbacks (core.sound and so
 // on), which takes the event build of the physics (ddnet_ev_*).
 static inline bool ddnet_step_events(const ft_world *world) {
+#if DD_UNIQUE
+  return world->space_events;
+#else
   return world->core.sound || world->core.particle || world->core.damage_indicator;
+#endif
 }
 
 // Input records the engine stores are dd_input_t. The engine pads them into a

@@ -87,7 +87,7 @@ void dd_export_window_open(ft_game *game) {
   game->demo_export_end_tick = last_tick + GAME_TICK_SPEED;
   game->demo_export_error[0] = '\0';
   if (!sync_selection(game))
-    snprintf(game->demo_export_error, sizeof(game->demo_export_error), "Could not read the DDNet timeline.");
+    snprintf(game->demo_export_error, sizeof(game->demo_export_error), "Could not read the timeline.");
   game->open_demo_export = true;
 }
 
@@ -153,7 +153,7 @@ void dd_export_window_render(ft_game *game) {
   }
 
   const bool selection_ok = sync_selection(game);
-  igTextWrapped("Choose the inclusive global tick range and the DDNet groups/tracks to combine in the demo.");
+  igTextWrapped("Choose the inclusive global tick range and the groups and tracks to combine in the demo.");
   igSetNextItemWidth(150.f);
   igDragInt("Start tick", &game->demo_export_start_tick, 1.f, -100000000, 100000000, "%d", ImGuiSliderFlags_AlwaysClamp);
   igSameLine(0, 12.f);
@@ -190,7 +190,7 @@ void dd_export_window_render(ft_game *game) {
   igEndChild();
 
   igText("Selected tracks: %d / 64", selected_count);
-  if (!selection_ok) snprintf(game->demo_export_error, sizeof(game->demo_export_error), "Could not read the DDNet timeline.");
+  if (!selection_ok) snprintf(game->demo_export_error, sizeof(game->demo_export_error), "Could not read the timeline.");
   if (game->demo_export_error[0]) {
     igSameLine(0, 12.f);
     igTextColored((ImVec4){1.f, 0.35f, 0.3f, 1.f}, "%s", game->demo_export_error);

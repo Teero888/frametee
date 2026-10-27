@@ -985,7 +985,8 @@ static bool adopt_active_game(gfx_handler_t *handler) {
   ui->has_unsaved_changes = false;
   // Only a game the editor actually ran is worth coming back up under, which is
   // why this is recorded here and not where the start screen offers the choice.
-  snprintf(ui->preferred_game_id, sizeof(ui->preferred_game_id), "%s", game_host_active_id(&handler->game_host));
+  // (the game, not one of its backends: the start screen opens those)
+  snprintf(ui->preferred_game_id, sizeof(ui->preferred_game_id), "%s", game_host_settings_id(&handler->game_host));
   config_save(ui);
   plugin_manager_on_game_changed(&ui->plugin_manager);
   return true;

@@ -1,8 +1,12 @@
-# DDNet game module.
+# DDNet game module, and the one of Unique Race, a mod of DDNet.
 #
 # A shared library built against the ABI header. It links ddnet_physics because
 # that is this game's physics, cglm for its own maths and stb for image decoding;
 # the engine neither knows nor cares what a module links.
+#
+# The sources are built twice: as DDNet (ddnet.so, the DDNet backend of the
+# physics) and as Unique Race (unique.so, its Unique backend, a library of its
+# own: unique_physics), a backend of DDNet (ft_game_info::backend_of).
 
 cmake_minimum_required(VERSION 3.14)
 
@@ -25,7 +29,7 @@ if(NOT TARGET ddnet_physics)
         message(FATAL_ERROR "ddnet_physics at ${FRAMETEE_DDNET_PHYSICS_DIR} has no map loader: "
                             "run `git submodule update --init --recursive`")
     endif()
-    set(DDNET_PHYSICS_BACKEND optimized CACHE STRING "" FORCE)
+    set(DDNET_PHYSICS_BACKEND ddnet_optimized CACHE STRING "" FORCE)
     set(DDNET_PHYSICS_EVENTS ON CACHE BOOL "" FORCE)
     set(DDNET_PHYSICS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(DDNET_PHYSICS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -38,6 +42,15 @@ if(NOT TARGET ddnet_physics)
         set(DDNET_PHYSICS_ARCH "x86-64-v3" CACHE STRING "" FORCE)
     endif()
     add_subdirectory(${FRAMETEE_DDNET_PHYSICS_DIR} ${CMAKE_BINARY_DIR}/libs/ddnet_physics)
+endif()
+# The physics of Unique Race: the same checkout and settings, its backend, under
+# another name.
+if(NOT TARGET unique_physics)
+    set(DDNET_PHYSICS_TARGET unique_physics)
+    set(DDNET_PHYSICS_BACKEND unique_optimized)
+    add_subdirectory(${FRAMETEE_DDNET_PHYSICS_DIR} ${CMAKE_BINARY_DIR}/libs/unique_physics)
+    unset(DDNET_PHYSICS_TARGET)
+    unset(DDNET_PHYSICS_BACKEND)
 endif()
 
 if(NOT TARGET ddnet_ghost)
@@ -55,12 +68,14 @@ endif()
 
 # The map loader is a static library that the module links too (it loads the
 # maps it hands the physics), so it has to be usable inside a shared object.
-set_target_properties(ddnet_physics PROPERTIES BUILD_RPATH_USE_ORIGIN ON)
+set_target_properties(ddnet_physics unique_physics PROPERTIES BUILD_RPATH_USE_ORIGIN ON)
 if(TARGET ddnet_map_loader)
     set_target_properties(ddnet_map_loader PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
-add_library(ddnet_game MODULE
+# The sources of both modules. Unique Race plays and writes DDNet's demos too
+# (recordings replayed on the timeline, the demo export).
+set(DD_COMMON_SOURCES
     ddnet_game.c
     dd_input_effects.c
     dd_gfx.c
@@ -84,62 +99,68 @@ add_library(ddnet_game MODULE
     dd_profile.c
     dd_events.c
     dd_audio.c
+    dd_ghost.c
     dd_export.c
     dd_demo.c
-    dd_ghost.c
     dd_recording.c
     dd_recording_impl.c
+    # cJSON is compiled straight in; it is one file and the editor's copy is not
+    # a library a module can link against.
+    ${CMAKE_SOURCE_DIR}/libs/cjson/cJSON.c
 )
 
-set_target_properties(ddnet_game PROPERTIES
-    PREFIX ""
-    OUTPUT_NAME "ddnet"
-    C_STANDARD 99
-    C_STANDARD_REQUIRED ON
-    C_VISIBILITY_PRESET hidden
-)
-if(UNIX AND NOT APPLE)
-    set_target_properties(ddnet_game PROPERTIES
-        INSTALL_RPATH "$ORIGIN/../libs/ddnet_physics:$ORIGIN/../libs/ddnet_physics/libs/ddnet_map_loader"
-    )
-endif()
-
-target_include_directories(ddnet_game PRIVATE
-    ${FRAMETEE_ABI_INCLUDE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/libs/stb
-    ${CMAKE_SOURCE_DIR}/libs/cjson
-    ${CMAKE_SOURCE_DIR}/libs
-    ${CMAKE_SOURCE_DIR}/libs/ddnet_ghost/include
-    # This game draws its own panels with the editor's ImGui. Only the headers
-    # are needed: the ig* symbols resolve against the host executable at load
-    # time, exactly as the bundled plugins do.
-    ${CMAKE_SOURCE_DIR}/libs/cimgui
-    ${CMAKE_SOURCE_DIR}/libs/cimgui/imgui
-)
-
-target_compile_definitions(ddnet_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
-
-find_package(CURL REQUIRED)
-find_package(Freetype REQUIRED)
-target_link_libraries(ddnet_game PRIVATE ddnet_physics ddnet_ghost cglm CURL::libcurl Freetype::Freetype)
 # The demo library is header-only; its reconstruction replays DDNet's physics bit for bit, so its
 # file must never be built with anything that changes float results.
 if(NOT MSVC)
     set_source_files_properties(dd_recording_impl.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-fast-math")
 endif()
 
-# cJSON is compiled straight in; it is one file and the editor's copy is not a
-# library a module can link against.
-target_sources(ddnet_game PRIVATE ${CMAKE_SOURCE_DIR}/libs/cjson/cJSON.c)
+find_package(CURL REQUIRED)
+find_package(Freetype REQUIRED)
 
-if(NOT MSVC)
-    target_compile_options(ddnet_game PRIVATE -Wall -Wextra -Wno-unused-parameter)
-endif()
+foreach(game ddnet unique)
+    set(physics ${game}_physics)
+    add_library(${game}_game MODULE ${DD_COMMON_SOURCES})
 
-# Windows resolves every symbol at link time, so the ig* calls above cannot be
-# left dangling for the loader the way they are on ELF. The module links the
-# host executable's import library instead, exactly as the bundled plugins do.
-if(WIN32 AND TARGET frametee)
-    target_link_libraries(ddnet_game PRIVATE frametee)
-endif()
+    set_target_properties(${game}_game PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "${game}"
+        C_STANDARD 99
+        C_STANDARD_REQUIRED ON
+        C_VISIBILITY_PRESET hidden
+    )
+    if(UNIX AND NOT APPLE)
+        set_target_properties(${game}_game PROPERTIES
+            INSTALL_RPATH "$ORIGIN/../libs/${physics}:$ORIGIN/../libs/ddnet_physics/libs/ddnet_map_loader"
+        )
+    endif()
+
+    target_include_directories(${game}_game PRIVATE
+        ${FRAMETEE_ABI_INCLUDE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/libs/stb
+        ${CMAKE_SOURCE_DIR}/libs/cjson
+        ${CMAKE_SOURCE_DIR}/libs
+        ${CMAKE_SOURCE_DIR}/libs/ddnet_ghost/include
+        # This game draws its own panels with the editor's ImGui. Only the headers
+        # are needed: the ig* symbols resolve against the host executable at load
+        # time, exactly as the bundled plugins do.
+        ${CMAKE_SOURCE_DIR}/libs/cimgui
+        ${CMAKE_SOURCE_DIR}/libs/cimgui/imgui
+    )
+
+    target_compile_definitions(${game}_game PRIVATE CIMGUI_DEFINE_ENUMS_AND_STRUCTS)
+
+    target_link_libraries(${game}_game PRIVATE ${physics} ddnet_ghost cglm CURL::libcurl Freetype::Freetype)
+
+    if(NOT MSVC)
+        target_compile_options(${game}_game PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    endif()
+
+    # Windows resolves every symbol at link time, so the ig* calls above cannot be
+    # left dangling for the loader the way they are on ELF. The module links the
+    # host executable's import library instead, exactly as the bundled plugins do.
+    if(WIN32 AND TARGET frametee)
+        target_link_libraries(${game}_game PRIVATE frametee)
+    endif()
+endforeach()

@@ -372,12 +372,23 @@ bool dd_particles_bind(ft_game *game, ft_world *world);
 // dd_particles_bind returned.
 // `was_skidding` (one byte per player, or NULL): who skidded before the step, from dd_skidding.
 void dd_particles_finish(ft_game *game, ft_world *world, int tick_before, bool bound, const uint8_t *was_skidding);
+// Clears the effect callbacks dd_particles_bind set on the world's worlds of the physics (a copy of a
+// world has them cleared too).
+void dd_world_unbind_effects(ft_world *world);
 // DDNet's client skids a tee that is on the ground, fast, and steered against the way it moves.
 bool dd_skidding(const ft_world *world, int player);
 // A world into another (zero initialized, or one copied to before; it keeps its index), and what a world
 // holds without the world itself (for one that is not on the heap).
 void dd_world_copy(ft_game *game, ft_world *dst, const ft_world *src);
 void dd_world_release(ft_world *world);
+#if DD_UNIQUE
+// Whom the effects a world of the physics of a world of Unique Race raises are of (the user_data of
+// its callbacks while they are set, see dd_particles_bind): that world and the client it is of.
+struct dd_space_effects {
+  ft_world *world;
+  int client_id;
+};
+#endif
 // A star of a damage indicator at its final angle: kept for demo export and drawn.
 void dd_damage_star(ft_world *world, float x, float y, float angle, int player);
 // Advances the visible particle simulation to `tick + alpha`.
@@ -811,6 +822,12 @@ void dd_audio_spatialize(ft_game *game, int32_t world_index, const ft_audio_soun
 bool dd_event_audio(ft_game *game, const ft_timeline_event *event, ft_audio_sound *out);
 
 void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...);
+
+// The engine's resolve_data_path and resolve_cache_path for DDNet's directories (data/games/ddnet/ and
+// its cache), from both builds of the module: the Unique Race one has DDNet's assets, and shares the
+// skins and maps DDNet downloads.
+size_t dd_data_path(const ft_engine_api *engine, const char *relative, char *out, size_t out_size);
+size_t dd_cache_path(const ft_engine_api *engine, const char *relative, char *out, size_t out_size);
 
 // --- recordings (dd_recording.c): DDNet demos replayed on the timeline ------
 ft_recording *dd_recording_open(ft_game *game, const void *data, size_t size, const char *name,

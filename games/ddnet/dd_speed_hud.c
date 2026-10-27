@@ -46,15 +46,16 @@ float dd_velocity_ramp(const ddnet_tuning_values_t *tuning, float speed) {
   return 1.0f / powf(tuning->velramp_curvature, (speed - tuning->velramp_start) / tuning->velramp_range);
 }
 
-static const ddnet_tuning_values_t *tee_tuning(const ft_world *world, const ddnet_character_t *chr) {
-  const int zone = chr->tune_zone >= 0 && chr->tune_zone < world->core.num_tune_zones ? chr->tune_zone : 0;
-  return &world->core.tuning_values[zone];
+// The tuning of the zone a tee is in, from the world of the physics it is in (ddnet_player_world).
+static const ddnet_tuning_values_t *tee_tuning(const ddnet_world_t *space, const ddnet_character_t *chr) {
+  const int zone = chr->tune_zone >= 0 && chr->tune_zone < space->num_tune_zones ? chr->tune_zone : 0;
+  return &space->tuning_values[zone];
 }
 
 // A tee's horizontal speed in blocks per second, after the ramp and without it.
-static void tee_speeds(const ft_world *world, const ddnet_character_t *chr, float *after, float *raw) {
+static void tee_speeds(const ddnet_world_t *space, const ddnet_character_t *chr, float *after, float *raw) {
   const ddnet_vec2_t v = chr->core.vel;
-  const float ramp = dd_velocity_ramp(tee_tuning(world, chr), sqrtf(v.x * v.x + v.y * v.y) * GAME_TICK_SPEED);
+  const float ramp = dd_velocity_ramp(tee_tuning(space, chr), sqrtf(v.x * v.x + v.y * v.y) * GAME_TICK_SPEED);
   *raw = fabsf(v.x) * GAME_TICK_SPEED / PX_PER_TILE;
   *after = *raw * ramp;
 }
@@ -101,7 +102,7 @@ static void collect_history(ft_game *game, uint32_t world_index, const ft_timeli
         const ddnet_character_t *chr = ddnet_player_character(world, player);
         if (!chr || dd_replay_absent(world, player)) continue;
         float after, without;
-        tee_speeds(world, chr, &after, &without);
+        tee_speeds(ddnet_player_world(world, player), chr, &after, &without);
         if (after > top[player]) top[player] = after;
         if (without > raw[player]) raw[player] = without;
       }
@@ -179,9 +180,9 @@ static bool shown_speeds(const ft_game *game, const ft_render_frame *frame, int 
   } else {
     const ddnet_character_t *chr = ddnet_player_character(world, player);
     if (!chr) return false;
-    tee_speeds(world, chr, &a1, &r1);
+    tee_speeds(ddnet_player_world(world, player), chr, &a1, &r1);
     const ddnet_character_t *before = previous->player_count == world->player_count ? ddnet_player_character(previous, player) : NULL;
-    if (before) tee_speeds(previous, before, &a0, &r0);
+    if (before) tee_speeds(ddnet_player_world(previous, player), before, &a0, &r0);
     else {
       a0 = a1;
       r0 = r1;
@@ -416,7 +417,7 @@ void dd_speed_hud_render(ft_game *game, const ft_render_frame *frame) {
   }
   float after, raw;
   if (!speed || !shown_speeds(game, frame, player, &after, &raw)) return;
-  const ddnet_tuning_values_t *tuning = tee_tuning(world, chr);
+  const ddnet_tuning_values_t *tuning = tee_tuning(ddnet_player_world(world, player), chr);
   if (settings->render_speed) draw_readout(&hud, width, tuning, after, raw);
   if (settings->render_speed_curve) draw_curve(&hud, width, tuning, raw);
 }

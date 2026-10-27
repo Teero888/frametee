@@ -1,5 +1,6 @@
 #include "logger.h"
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -16,6 +17,15 @@
 static const char *level_strings[] = {"INFO", "WARN", "ERROR"};
 static const char *level_colors[] = {BLUE, YELLOW, RED};
 static bool g_logger_quiet = false;
+// (each thread's own: an operation is told what it logged itself, not what workers did meanwhile)
+// (C99: the compilers' own keywords)
+#if defined(_MSC_VER) && !defined(__clang__)
+#define LOGGER_THREAD_LOCAL __declspec(thread)
+#else
+#define LOGGER_THREAD_LOCAL __thread
+#endif
+static LOGGER_THREAD_LOCAL char g_first_error[512];
+static LOGGER_THREAD_LOCAL char g_warnings[2048];
 
 void logger_init(void) {
 #ifdef _WIN32
@@ -35,7 +45,29 @@ void logger_set_quiet(bool quiet) {
   g_logger_quiet = quiet;
 }
 
+const char *logger_first_error(void) { return g_first_error; }
+
+const char *logger_warnings(void) { return g_warnings; }
+
+void logger_clear_first_error(void) {
+  g_first_error[0] = '\0';
+  g_warnings[0] = '\0';
+}
+
 void logger_log(log_level_t level, const char *source, const char *format, ...) {
+  if (level == LOG_LEVEL_ERROR && !g_first_error[0]) {
+    va_list args;
+    va_start(args, format);
+    vsnprintf(g_first_error, sizeof(g_first_error), format, args);
+    va_end(args);
+  } else if (level == LOG_LEVEL_WARNING) {
+    size_t used = strlen(g_warnings);
+    if (used && used + 1 < sizeof(g_warnings)) g_warnings[used++] = '\n', g_warnings[used] = '\0';
+    va_list args;
+    va_start(args, format);
+    if (used < sizeof(g_warnings)) vsnprintf(g_warnings + used, sizeof(g_warnings) - used, format, args);
+    va_end(args);
+  }
   if (g_logger_quiet && level < LOG_LEVEL_ERROR) return;
 
   time_t timer;

@@ -463,7 +463,7 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
     const ft_input_control *control = &schema->controls[i];
     action_t action = keybinds_game_action(i);
     char identifier[96];
-    snprintf(identifier, sizeof(identifier), "game_%s_%s", game_host_active_id(host), control->id);
+    snprintf(identifier, sizeof(identifier), "game_%s_%s", game_host_settings_id(host), control->id);
     set_action_info(manager, action, identifier, control->display_name,
                     control->category && *control->category ? control->category : host->module->info.display_name);
     add_default_bindings(manager, action, control->default_binding);
@@ -483,7 +483,7 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
     const action_t action = keybinds_linked_game_action(i);
     char identifier[96];
     char name[64];
-    snprintf(identifier, sizeof(identifier), "game_%s_linked_%s", game_host_active_id(host), control->id);
+    snprintf(identifier, sizeof(identifier), "game_%s_linked_%s", game_host_settings_id(host), control->id);
     snprintf(name, sizeof(name), "Linked: %s", control->display_name);
     set_action_info(manager, action, identifier, name, category);
     add_default_bindings(manager, action, control->linked_default_binding);
@@ -495,7 +495,7 @@ void keybinds_bind_game(keybind_manager_t *manager, const game_host_t *host) {
     const ft_linked_action *desc = &host->module->linked_actions[i];
     const action_t action = keybinds_linked_extra_action(i);
     char identifier[96];
-    snprintf(identifier, sizeof(identifier), "game_%s_linked_%s", game_host_active_id(host), desc->id);
+    snprintf(identifier, sizeof(identifier), "game_%s_linked_%s", game_host_settings_id(host), desc->id);
     set_action_info(manager, action, identifier, desc->display_name, category);
     add_default_bindings(manager, action, desc->default_binding);
   }

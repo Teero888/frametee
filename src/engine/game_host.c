@@ -90,6 +90,8 @@ static bool validate_module(const ft_game_module *m, char *error, size_t error_s
   if (m->info.struct_size != sizeof(ft_game_info))
     FAIL("game info struct is %u bytes, engine expects %zu", m->info.struct_size, sizeof(ft_game_info));
   if (!id_is_valid(m->info.id)) FAIL("invalid game id (lowercase ascii, digits, '_' and '-', under %d chars)", FT_ID_MAX);
+  if (m->info.backend_of && (!id_is_valid(m->info.backend_of) || strcmp(m->info.backend_of, m->info.id) == 0))
+    FAIL("invalid backend_of '%s'", m->info.backend_of);
   if (!m->info.display_name || !*m->info.display_name) FAIL("missing display name");
   if (!semver_is_valid(m->info.version) || strlen(m->info.version) >= FT_NAME_MAX)
     FAIL("invalid or missing SemVer 2.0.0 game version (must fit in %d bytes)", FT_NAME_MAX);
@@ -484,6 +486,15 @@ int game_host_find_id(const game_host_t *host, const char *id) {
   return -1;
 }
 
+bool game_host_same_game(const game_host_t *host, int a, int b) {
+  if (!host || a < 0 || b < 0 || a >= host->count || b >= host->count || !host->slots[a].usable || !host->slots[b].usable)
+    return false;
+  if (a == b) return true;
+  const ft_game_info *x = &host->slots[a].module->info, *y = &host->slots[b].module->info;
+  return (x->backend_of && strcmp(x->backend_of, y->id) == 0) || (y->backend_of && strcmp(y->backend_of, x->id) == 0) ||
+         (x->backend_of && y->backend_of && strcmp(x->backend_of, y->backend_of) == 0);
+}
+
 bool game_host_activate_index(game_host_t *host, int index) {
   if (index < 0 || index >= host->count) return false;
   game_module_slot_t *slot = &host->slots[index];
@@ -603,6 +614,14 @@ void game_host_shutdown(game_host_t *host) {
 
 const char *game_host_active_id(const game_host_t *host) {
   if (!host) return "";
+  return host->active_id;
+}
+
+const char *game_host_settings_id(const game_host_t *host) {
+  if (!host) return "";
+  if (host->active >= 0 && host->active < host->count && host->slots[host->active].usable &&
+      host->slots[host->active].module->info.backend_of)
+    return host->slots[host->active].module->info.backend_of;
   return host->active_id;
 }
 
@@ -1147,6 +1166,7 @@ void game_host_print_listing(const game_host_t *host) {
     const ft_game_constraints *c = &slot->module->constraints;
     printf("  %-24s %s v%s by %s\n", slot->id, slot->display_name, slot->module->info.version ? slot->module->info.version : "?",
            slot->module->info.author ? slot->module->info.author : "?");
+    if (slot->module->info.backend_of) printf("      a backend of %s\n", slot->module->info.backend_of);
     char max_players[16];
     if (c->max_players > 0)
       snprintf(max_players, sizeof(max_players), "%d", c->max_players);

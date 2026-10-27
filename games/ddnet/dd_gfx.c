@@ -127,7 +127,7 @@ void dd_log(ft_game *game, ft_log_level level, const char *fmt, ...) {
   va_start(args, fmt);
   vsnprintf(message, sizeof(message), fmt, args);
   va_end(args);
-  game->engine->log(level, "DDNet", message);
+  game->engine->log(level, DD_GAME_NAME, message);
 }
 
 // A colour as the world being drawn shows it: faded by its opacity.
@@ -143,7 +143,7 @@ void dd_free_png(unsigned char *pixels) { stbi_image_free(pixels); }
 
 static ft_texture *load_sheet(ft_game *game, const char *relative, uint32_t *out_w, uint32_t *out_h) {
   char path[1024];
-  game->engine->resolve_data_path(relative, path, sizeof(path));
+  dd_data_path(game->engine, relative, path, sizeof(path));
 
   void *file = NULL;
   size_t size = 0;
@@ -311,8 +311,8 @@ bool dd_gfx_install_sheet(ft_game *game, int type, const uint8_t *pixels, int wi
 // location 0 is the engine's quad corner, so this game's data starts at 1.
 static bool create_skin_pipeline(ft_game *game) {
   char vert_path[1024], frag_path[1024];
-  game->engine->resolve_data_path("shaders/skin.vert.spv", vert_path, sizeof(vert_path));
-  game->engine->resolve_data_path("shaders/skin.frag.spv", frag_path, sizeof(frag_path));
+  dd_data_path(game->engine, "shaders/skin.vert.spv", vert_path, sizeof(vert_path));
+  dd_data_path(game->engine, "shaders/skin.frag.spv", frag_path, sizeof(frag_path));
 
   void *vert = NULL, *frag = NULL;
   size_t vert_size = 0, frag_size = 0;
@@ -621,10 +621,10 @@ bool dd_gfx_find_skin_file(ft_game *game, const char *name, char *out, size_t ou
   char relative[256];
   snprintf(relative, sizeof(relative), "skins/%s.png", name);
 
-  game->engine->resolve_cache_path(relative, out, out_size);
+  dd_cache_path(game->engine, relative, out, out_size);
   if (skin_file_exists(game, out)) return true;
 
-  game->engine->resolve_data_path(relative, out, out_size);
+  dd_data_path(game->engine, relative, out, out_size);
   if (skin_file_exists(game, out)) return true;
 
 #ifdef _WIN32

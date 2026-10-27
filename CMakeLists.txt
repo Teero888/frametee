@@ -753,7 +753,8 @@ install(FILES ${SHADER_OUTPUTS}
 )
 
 if(TARGET ddnet_game)
-    install(TARGETS ddnet_game
+    # (and Unique Race, its other backend, built from the same sources, which reads DDNet's data)
+    install(TARGETS ddnet_game unique_game
         RUNTIME DESTINATION "games" COMPONENT Runtime
         LIBRARY DESTINATION "games" COMPONENT Runtime
     )
@@ -772,12 +773,12 @@ if(TARGET ddnet_game)
 
     # DDNet's physics libraries are shared on ELF and static on Windows. Only
     # shared targets need to be present in the runtime component.
-    foreach(DDNET_RUNTIME_TARGET ddnet_physics ddnet_map_loader)
+    foreach(DDNET_RUNTIME_TARGET ddnet_physics unique_physics ddnet_map_loader)
         if(TARGET ${DDNET_RUNTIME_TARGET})
             get_target_property(DDNET_RUNTIME_TARGET_TYPE ${DDNET_RUNTIME_TARGET} TYPE)
             if(DDNET_RUNTIME_TARGET_TYPE STREQUAL "SHARED_LIBRARY")
-                if(DDNET_RUNTIME_TARGET STREQUAL "ddnet_physics")
-                    set(DDNET_RUNTIME_DESTINATION "libs/ddnet_physics")
+                if(NOT DDNET_RUNTIME_TARGET STREQUAL "ddnet_map_loader")
+                    set(DDNET_RUNTIME_DESTINATION "libs/${DDNET_RUNTIME_TARGET}")
                 else()
                     set(DDNET_RUNTIME_DESTINATION "libs/ddnet_physics/libs/ddnet_map_loader")
                 endif()

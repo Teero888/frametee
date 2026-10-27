@@ -72,7 +72,7 @@ static void load_takes(ft_game *game, int set, const char *name, int takes) {
     char relative[96], path[1024];
     if (takes) snprintf(relative, sizeof(relative), "audio/%s-%02d.flac", name, take + 1);
     else snprintf(relative, sizeof(relative), "audio/%s.flac", name);
-    engine->resolve_data_path(relative, path, sizeof(path));
+    dd_data_path(engine, relative, path, sizeof(path));
     const ft_audio_sample sample = engine->audio_sample_load(path);
     if (sample) game->sound_samples[set][game->sound_take_count[set]++] = sample;
     else dd_log(game, FT_LOG_WARN, "Missing sound %s", relative);

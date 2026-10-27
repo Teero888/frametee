@@ -1,5 +1,7 @@
 #include "plugin_manager.h"
 #include "api_impl.h"
+#include <engine/game_host.h>
+#include <renderer/graphics_backend.h>
 #include <ctype.h>
 #include <float.h>
 #include <frametee/icons.h>
@@ -92,12 +94,27 @@ const char *plugin_target_game(const loaded_plugin_t *plugin) {
   return plugin->game_id_known ? plugin->game_id : plugin->manifest_game;
 }
 
+// While a backend of another game is active (ft_game_info::backend_of), the library a plugin of that
+// game ships for it: lib<key>.<backend id> beside its own. False under any other game, or when the
+// plugin has none, which leaves it waiting as it would under another game.
+static bool backend_library(const plugin_manager_t *manager, const loaded_plugin_t *plugin, char *out, size_t size) {
+  if (!manager->context || !manager->host_ui || !manager->host_ui->gfx_handler) return false;
+  const char *active = manager->context->active_game_id;
+  const char *base = game_host_settings_id(&manager->host_ui->gfx_handler->game_host);
+  if (!active || !base || strcmp(active, base) == 0 || strcmp(plugin_target_game(plugin), base) != 0) return false;
+  char name[192];
+  snprintf(name, sizeof(name), "%s.%s", plugin->key, active);
+  return find_plugin_library(plugin->directory, name, out, size);
+}
+
 bool plugin_manager_matches_active_game(const plugin_manager_t *manager, const loaded_plugin_t *plugin) {
   const char *declared = plugin_target_game(plugin);
   if (!declared[0]) return true; // global
   if (!manager->context) return false;
   const char *active = manager->context->active_game_id;
-  return active && strcmp(active, declared) == 0;
+  if (active && strcmp(active, declared) == 0) return true;
+  char path[1024];
+  return backend_library(manager, plugin, path, sizeof(path));
 }
 
 // A plugin's name, author, version, description and game id all live inside the
@@ -358,11 +375,15 @@ static bool plugin_manager_load_plugin_internal(plugin_manager_t *manager, int i
     return false;
   }
 
-  void *handle = fs_load_library(p->path);
+  // (under a backend of its game, the library it ships for that backend)
+  char load_path[sizeof(p->path)];
+  const bool for_backend = !ignore_game && backend_library(manager, p, load_path, sizeof(load_path));
+  if (!for_backend) snprintf(load_path, sizeof(load_path), "%s", p->path);
+  void *handle = fs_load_library(load_path);
   if (!handle) {
     p->status = PLUGIN_STATUS_ERROR;
-    snprintf(p->error_msg, sizeof(p->error_msg), "Failed to load library: %s", p->path);
-    log_error(LOG_SOURCE, "Failed to load plugin: %s", p->path);
+    snprintf(p->error_msg, sizeof(p->error_msg), "Failed to load library: %s", load_path);
+    log_error(LOG_SOURCE, "Failed to load plugin: %s", load_path);
     return false;
   }
 
@@ -423,7 +444,21 @@ static bool plugin_manager_load_plugin_internal(plugin_manager_t *manager, int i
 
   // The library's own answer, which is the authority: a manifest that stayed
   // quiet, or claimed this game while the code says otherwise, is caught here.
+  // A backend's library answers with the backend; the plugin stays the game's.
+  char base_game[sizeof(p->game_id)];
+  snprintf(base_game, sizeof(base_game), "%s", plugin_target_game(p));
   read_game_id(handle, p);
+  if (for_backend) {
+    const char *active = manager->context->active_game_id;
+    if (strcmp(p->game_id, active) != 0) {
+      p->status = PLUGIN_STATUS_ERROR;
+      snprintf(p->error_msg, sizeof(p->error_msg), "Its library for '%s' says it is for game '%s'.", active, p->game_id);
+      log_error(LOG_SOURCE, "'%s' is not a library for game '%s'.", load_path, active);
+      fs_free_library(handle);
+      return false;
+    }
+    snprintf(p->game_id, sizeof(p->game_id), "%s", base_game);
+  }
   if (!ignore_game && !plugin_manager_matches_active_game(manager, p)) {
     p->status = PLUGIN_STATUS_WRONG_GAME;
     snprintf(p->error_msg, sizeof(p->error_msg), "Written for game '%s', which is not active.", p->game_id);
@@ -445,7 +480,11 @@ static bool plugin_manager_load_plugin_internal(plugin_manager_t *manager, int i
   if (p->data) {
     p->status = PLUGIN_STATUS_LOADED;
     p->error_msg[0] = '\0';
-    log_info(LOG_SOURCE, "Loaded '%s'.", plugin_display_name(p));
+    // (the game the library is built for: a backend's, or the plugin's own)
+    snprintf(p->loaded_for, sizeof(p->loaded_for), "%s",
+             for_backend && manager->context->active_game_id ? manager->context->active_game_id : plugin_target_game(p));
+    log_info(LOG_SOURCE, "Loaded '%s'%s%s.", plugin_display_name(p), for_backend ? " for " : "",
+             for_backend ? manager->context->active_game_id : "");
     return true;
   } else {
     p->status = PLUGIN_STATUS_ERROR;
@@ -473,9 +512,11 @@ void plugin_manager_unload_plugin(plugin_manager_t *manager, int index) {
   // Anything this plugin put on the undo stack is three pointers into a library
   // that is about to stop existing. Take them back while the code that knows
   // how to clean them up is still mapped, and before the plugin's own shutdown
-  // frees whatever they point at.
+  // frees whatever they point at. (The history held aside while the project moves to another backend
+  // of its game too: that move is what unloads a plugin of the game.)
   if (p->handle && manager->host_ui) {
-    const int dropped = undo_manager_purge_owner(&manager->host_ui->undo_manager, p->handle);
+    const int dropped = undo_manager_purge_owner(&manager->host_ui->undo_manager, p->handle) +
+                        undo_manager_purge_owner(&manager->host_ui->parked_undo_manager, p->handle);
     if (dropped > 0)
       log_info(LOG_SOURCE, "Dropped %d undo step(s) that only '%s' knew how to reverse.", dropped, plugin_display_name(p));
   }
@@ -704,6 +745,14 @@ void plugin_manager_on_game_changed(plugin_manager_t *manager) {
   for (int i = 0; i < manager->count; ++i) {
     loaded_plugin_t *p = &manager->plugins[i];
     const bool allowed = plugin_manager_matches_active_game(manager, p);
+
+    // A plugin of a game whose backend changed runs another library now (see backend_library).
+    const char *active = manager->context ? manager->context->active_game_id : NULL;
+    if (allowed && p->status == PLUGIN_STATUS_LOADED && plugin_target_game(p)[0] && active &&
+        strcmp(p->loaded_for, active) != 0) {
+      plugin_manager_unload_plugin(manager, i);
+      p->status = PLUGIN_STATUS_UNLOADED;
+    }
 
     if (!allowed && p->status == PLUGIN_STATUS_LOADED) {
       plugin_manager_unload_plugin(manager, i);

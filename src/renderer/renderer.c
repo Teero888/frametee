@@ -1016,6 +1016,46 @@ static pipeline_cache_entry_t *get_or_create_pipeline(gfx_handler_t *handler, sh
   return entry;
 }
 
+// A free shader slot: one a destroyed pipeline gave back, else the next one. Its row of the pipeline
+// cache is empty (see release_shader). NULL when all are taken.
+static shader_t *new_shader_slot(renderer_state_t *renderer) {
+  for (uint32_t i = 0; i < renderer->shader_count; ++i)
+    if (!renderer->shaders[i].active) {
+      shader_t *shader = &renderer->shaders[i];
+      memset(shader, 0, sizeof(*shader));
+      shader->id = i;
+      return shader;
+    }
+  if (renderer->shader_count >= MAX_SHADERS) {
+    log_error(LOG_SOURCE, "Max shader count (%d) reached.", MAX_SHADERS);
+    return NULL;
+  }
+  shader_t *shader = &renderer->shaders[renderer->shader_count];
+  memset(shader, 0, sizeof(*shader));
+  shader->id = renderer->shader_count++;
+  return shader;
+}
+
+// Gives a shader's slot back: its modules and the pipelines made of it. The device must be idle.
+static void release_shader(gfx_handler_t *handler, shader_t *shader) {
+  if (!shader || !shader->active) return;
+  renderer_state_t *renderer = &handler->renderer;
+  const uint32_t pipeline_slots = (uint32_t)(sizeof(renderer->pipeline_cache[0]) / sizeof(renderer->pipeline_cache[0][0]));
+  for (uint32_t j = 0; j < pipeline_slots; ++j) {
+    pipeline_cache_entry_t *entry = &renderer->pipeline_cache[shader->id][j];
+    if (!entry->initialized) continue;
+    vkDestroyPipeline(handler->g_device, entry->pipeline, handler->g_allocator);
+    vkDestroyPipelineLayout(handler->g_device, entry->pipeline_layout, handler->g_allocator);
+    vkDestroyDescriptorSetLayout(handler->g_device, entry->descriptor_set_layout, handler->g_allocator);
+    entry->initialized = false;
+  }
+  vkDestroyShaderModule(handler->g_device, shader->vert_shader_module, handler->g_allocator);
+  vkDestroyShaderModule(handler->g_device, shader->frag_shader_module, handler->g_allocator);
+  shader->vert_shader_module = VK_NULL_HANDLE;
+  shader->frag_shader_module = VK_NULL_HANDLE;
+  shader->active = false;
+}
+
 shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, const char *frag_path) {
   renderer_state_t *renderer = &handler->renderer;
 
@@ -1024,11 +1064,6 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
         strcmp(renderer->shaders[i].frag_path, frag_path) == 0) {
       return &renderer->shaders[i];
     }
-  }
-
-  if (renderer->shader_count >= MAX_SHADERS) {
-    log_error(LOG_SOURCE, "Max shader count (%d) reached.", MAX_SHADERS);
-    return NULL;
   }
 
   size_t vert_size, frag_size;
@@ -1040,8 +1075,12 @@ shader_t *renderer_load_shader(gfx_handler_t *handler, const char *vert_path, co
     return NULL;
   }
 
-  shader_t *shader = &renderer->shaders[renderer->shader_count];
-  shader->id = renderer->shader_count++;
+  shader_t *shader = new_shader_slot(renderer);
+  if (!shader) {
+    free(vert_code);
+    free(frag_code);
+    return NULL;
+  }
   shader->active = true;
   shader->vert_shader_module = create_shader_module(handler, vert_code, vert_size);
   shader->frag_shader_module = create_shader_module(handler, frag_code, frag_size);
@@ -4047,14 +4086,8 @@ shader_t *renderer_create_shader_spirv(gfx_handler_t *h, const void *vert_spirv,
                                        const vertex_layout_t *layout) {
   renderer_state_t *r = &h->renderer;
   if (!vert_spirv || !frag_spirv) return NULL;
-  if (r->shader_count >= MAX_SHADERS) {
-    log_error(LOG_SOURCE, "Max shader count (%d) reached.", MAX_SHADERS);
-    return NULL;
-  }
-
-  shader_t *shader = &r->shaders[r->shader_count];
-  memset(shader, 0, sizeof(*shader));
-  shader->id = r->shader_count++;
+  shader_t *shader = new_shader_slot(r);
+  if (!shader) return NULL;
   shader->active = true;
   shader->vert_shader_module = create_shader_module(h, (const char *)vert_spirv, vert_size);
   shader->frag_shader_module = create_shader_module(h, (const char *)frag_spirv, frag_size);
@@ -4075,7 +4108,11 @@ custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void 
                                                    uint32_t max_instances, uint32_t texture_count, bool alpha_blend,
                                                    bool straight_alpha, uint32_t vertex_stride, bool depth_test) {
   renderer_state_t *r = &h->renderer;
-  if (r->custom_pipeline_count >= MAX_CUSTOM_PIPELINES) {
+  // (a slot a destroyed pipeline gave back, else the next one)
+  uint32_t slot = r->custom_pipeline_count;
+  for (uint32_t i = 0; i < r->custom_pipeline_count && slot == r->custom_pipeline_count; ++i)
+    if (!r->custom_pipelines[i].active) slot = i;
+  if (slot >= MAX_CUSTOM_PIPELINES) {
     log_error(LOG_SOURCE, "Custom pipeline limit (%d) reached.", MAX_CUSTOM_PIPELINES);
     return NULL;
   }
@@ -4093,7 +4130,7 @@ custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void 
     return NULL;
   }
 
-  custom_pipeline_t *pipe = &r->custom_pipelines[r->custom_pipeline_count];
+  custom_pipeline_t *pipe = &r->custom_pipelines[slot];
   memset(pipe, 0, sizeof(*pipe));
 
   pipe->layout.bindings[0] = (VkVertexInputBindingDescription){.binding = 0, .stride = sizeof(vertex_t), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
@@ -4151,7 +4188,7 @@ custom_pipeline_t *renderer_create_custom_pipeline(gfx_handler_t *h, const void 
     pipe->instance_ptr = pipe->instance_mapped + (size_t)pipe->instance_first * instance_stride;
   }
   pipe->active = true;
-  r->custom_pipeline_count++;
+  if (slot == r->custom_pipeline_count) r->custom_pipeline_count++;
   return pipe;
 }
 
@@ -4163,6 +4200,8 @@ void renderer_destroy_custom_pipeline(gfx_handler_t *h, custom_pipeline_t *pipe)
     vkDestroyBuffer(h->g_device, pipe->instance_buffer.buffer, h->g_allocator);
     vkFreeMemory(h->g_device, pipe->instance_buffer.memory, h->g_allocator);
   }
+  release_shader(h, pipe->shader);
+  pipe->shader = NULL;
   pipe->active = false;
   pipe->instance_mapped = NULL;
   pipe->instance_ptr = NULL;

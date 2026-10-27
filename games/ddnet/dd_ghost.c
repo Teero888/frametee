@@ -69,19 +69,19 @@ bool dd_ghost_scan_track(ft_game *game, int world_index, int local_player,
     if (client_id < 0 || ddnet_player_client(prev, local_player) != client_id) {
       continue;
     }
-    const ddnet_player_t *before = &prev->core.players[client_id];
-    const ddnet_player_t *after = &curr->core.players[client_id];
+    const ddnet_player_t *before = dd_world_client(prev, client_id);
+    const ddnet_player_t *after = dd_world_client(curr, client_id);
 
-    if (before->finish_tick < 0 && after->finish_tick >= 0) {
+    if (before && after && before->finish_tick < 0 && after->finish_tick >= 0) {
       int global_finish = tick;
-      int global_start = after->finish_tick - after->finish_time_ticks + info.start_offset;
+      int global_start = after->finish_tick - dd_world_finish_ticks(curr, client_id) + info.start_offset;
       if (global_start < first_tick) global_start = first_tick;
       if (global_start >= global_finish) global_start = (global_finish > first_tick) ? global_finish - 1 : first_tick;
 
       if (out_start_tick) *out_start_tick = global_start;
       if (out_end_tick) *out_end_tick = global_finish;
       if (out_time) {
-        *out_time = (float)after->finish_time_ticks / (float)GAME_TICK_SPEED;
+        *out_time = dd_world_finish_time(curr, client_id);
       }
       if (out_has_finish) *out_has_finish = true;
       return true;
@@ -143,8 +143,9 @@ bool dd_ghost_export(ft_game *game, int world_index, int local_player, int start
   const int finished_client = game->engine->timeline_world_pair((uint32_t)world_index, end_tick, &prev, &curr) && curr
                                   ? ddnet_player_client(curr, local_player)
                                   : -1;
-  if (finished_client >= 0 && curr->core.players[finished_client].finish_tick >= 0) {
-    time_ms = (int)roundf((float)curr->core.players[finished_client].finish_time_ticks * 1000.0f / (float)GAME_TICK_SPEED);
+  const ddnet_player_t *finisher = finished_client >= 0 ? dd_world_client(curr, finished_client) : NULL;
+  if (finisher && finisher->finish_tick >= 0) {
+    time_ms = (int)roundf(dd_world_finish_time(curr, finished_client) * 1000.0f);
   } else {
     float dur = (float)(end_tick - start_tick) / (float)GAME_TICK_SPEED;
     time_ms = (int)roundf(dur * 1000.0f);
@@ -186,7 +187,7 @@ bool dd_ghost_export(ft_game *game, int world_index, int local_player, int start
     snap.angle = ddnet_character_angle(c_cur);
     snap.direction = c_cur->core.input.direction;
 
-    const bool frozen = (c_cur->core.deep_frozen || c_cur->freeze_time > 0);
+    const bool frozen = (dd_tee_deep_frozen(c_cur) || c_cur->freeze_time > 0);
     snap.weapon = frozen ? DDNET_WEAPON_NINJA : c_cur->core.active_weapon;
 
     snap.hook_state = c_cur->core.hook_state;

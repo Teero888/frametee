@@ -196,7 +196,7 @@ static int demo_character_emote(const ft_world *world, int player, const ddnet_c
   int eye = get_flag_eye_state(&world->inputs[client_id]);
   if (eye < EYE_NORMAL || eye >= NUM_EYES) eye = EYE_NORMAL;
   if (character->freeze_time > 0 && eye == EYE_NORMAL) eye = EYE_BLINK;
-  const int pain_age = world->core.tick - world->pain_ticks[client_id];
+  const int pain_age = ddnet_engine_tick(world) - world->pain_ticks[client_id];
   if (pain_age >= 0 && pain_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
   return emotes_by_eye[eye];
 }
@@ -219,10 +219,24 @@ static bool is_point_in_view(float px, float py, const ddnet_vec2_t *positions, 
 
 // The pickups of a level: every world of it has these in its pickup list, in this order.
 static int level_pickup_count(const ft_level *level) {
+#if DD_UNIQUE
+  return level->prototype.num_pickups;
+#else
   int count = 0;
   for (int i = level->prototype.first_entity[DDNET_ENTTYPE_PICKUP]; i != -1; i = level->prototype.entities[i].link.next)
     count += level->prototype.entities[i].kind == DDNET_ENTITY_PICKUP;
   return count;
+#endif
+}
+
+// The doors a demo of the level has (Unique Race has none).
+static int level_door_count(const ft_level *level) {
+#if DD_UNIQUE
+  (void)level;
+  return 0;
+#else
+  return level->collision.num_doors;
+#endif
 }
 
 // The demo client of a world client (a player of the world), or -1.
@@ -231,6 +245,7 @@ static int remap_world_client(const ft_world *world, const int *client_ids, int 
   return remap_client_id(client_ids, client_count, ddnet_client_player(world, world_client));
 }
 
+#if !DD_UNIQUE
 static void snap_laser(dd_netobj_ddnet_laser *l, ddnet_vec2_t to, ddnet_vec2_t from, int start_tick, int owner, int type, int subtype,
                        int number) {
   l->m_ToX = (int)to.x;
@@ -244,13 +259,41 @@ static void snap_laser(dd_netobj_ddnet_laser *l, ddnet_vec2_t to, ddnet_vec2_t f
   l->m_SwitchNumber = number;
   l->m_Flags = 0;
 }
+#endif
+
+#if DD_UNIQUE
+// Where a flag is in CNetObj_GameData: standing, or not there.
+enum { DD_DEMO_FLAG_MISSING = -3, DD_DEMO_FLAG_ATSTAND = -2 };
+// (newer than the flags the demo library knows)
+#define DD_DEMO_GAMEINFOFLAG2_PREDICT_EVENTS (1 << 10)
+
+// IGameController::SnapFlags of Unique Race, for a client whose tee is `view_character` (or that has
+// none): fastcap's flags its tee has not touched yet stand, both as red ones like its server has
+// them, and the record holder's flag is not there (a server has it for the clients only).
+static void snap_flags(dd_snapshot_builder *sb, const ddnet_world_t *space, const ddnet_character_t *view_character) {
+  dd_netobj_game_data *data = demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEDATA, 0, sizeof(*data));
+  if (!data) return;
+  *data = (dd_netobj_game_data){.m_FlagCarrierRed = DD_DEMO_FLAG_MISSING, .m_FlagCarrierBlue = DD_DEMO_FLAG_MISSING};
+  if (space->config.gamemode == DDNET_MODE_UNIQUE_RACE) return;
+  for (int team = 0; team < 2; ++team) {
+    if (view_character && view_character->got_flag[team]) continue;
+    // (the ids a server would give them are its own; these stay the same from snapshot to snapshot,
+    // which is all a client asks of them)
+    dd_netobj_flag *flag = demo_sb_add_item(sb, DD_NETOBJTYPE_FLAG, team, sizeof(*flag));
+    if (!flag) continue;
+    flag->m_X = (int)space->flag_pos[team].x;
+    flag->m_Y = (int)space->flag_pos[team].y;
+    flag->m_Team = DD_TEAM_RED;
+    data->m_FlagCarrierRed = DD_DEMO_FLAG_ATSTAND;
+  }
+}
+#endif
 
 static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, const int *client_ids, int client_count,
                        const int *client_options, const ft_world *prev_world, const ft_world *current_world, bool include_static,
                        const ddnet_vec2_t *active_positions, int active_pos_count, int demo_tick, int tick_delta, int *next_item_id) {
   (void)client_options;
   ddnet_world_entities_current(current_world);
-  const ddnet_world_t *cur = &current_world->core;
   const ft_level *level = game->current_level;
   int first_exported_local = -1;
   for (int i = 0; i < client_count; ++i) {
@@ -260,9 +303,17 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     }
   }
   const ddnet_character_t *view_character = ddnet_player_character(current_world, first_exported_local);
+#if DD_UNIQUE
+  // The pickups and flags a demo shows are those the first player in it sees, in its own world of the
+  // physics (with sv_health_and_ammo, a pickup it took is gone for it a while).
+  const ddnet_world_t *view_space = ddnet_player_world(current_world, first_exported_local);
+  if (!view_space && level) view_space = &level->prototype;
+#else
+  const ddnet_world_t *cur = &current_world->core;
   // The switch states a demo shows are those of the team of the first player in it.
   const int view_client = ddnet_player_client(current_world, first_exported_local);
   const int view_team = view_client >= 0 ? cur->players[view_client].team : 0;
+#endif
 
   ddnet_vec2_t fallback_pos[1];
   if (active_pos_count <= 0 && view_character) {
@@ -273,6 +324,35 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
 
   // do pickups first since they have static ids basically
   const int num_pickups = level ? level_pickup_count(level) : 0;
+#if DD_UNIQUE
+  int pickups_snapped = 0;
+  for (int i = 0; include_static && view_space && i < view_space->num_pickups; ++i) {
+    const ddnet_pickup_t *pickup = &view_space->pickups[i];
+    const int id = 64 + i;
+    if (pickups_snapped >= DD_DEMO_MAX_SNAPPED_PICKUPS) break;
+    if (view_space->pickup_spawn_ticks && view_space->pickup_spawn_ticks[i] != -1) continue;
+    if (num_pickups > 128) {
+      if (active_pos_count > 0) {
+        if (!is_point_in_view(pickup->pos.x, pickup->pos.y, active_positions, active_pos_count, DD_DEMO_VIEW_CLIP_X,
+                              DD_DEMO_VIEW_CLIP_Y)) {
+          continue;
+        }
+      } else if (pickups_snapped >= 64) {
+        break;
+      }
+    }
+    dd_netobj_ddnet_pickup *p = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, id, sizeof(dd_netobj_ddnet_pickup));
+    if (!p) break;
+    pickups_snapped++;
+    // (Unique Race numbers its pickups like the protocol's POWERUP_*)
+    p->m_X = (int)pickup->pos.x;
+    p->m_Y = (int)pickup->pos.y;
+    p->m_Type = pickup->type;
+    p->m_Subtype = pickup->subtype;
+    p->m_SwitchNumber = 0;
+    p->m_Flags = 0;
+  }
+#else
   int pickups_snapped = 0, pickup_index = 0;
   for (int i = include_static ? cur->first_entity[DDNET_ENTTYPE_PICKUP] : -1; i != -1; i = cur->entities[i].link.next) {
     const ddnet_entity_t *pickup = &cur->entities[i];
@@ -354,6 +434,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       }
     }
   }
+#endif
 
   // game info
   dd_netobj_game_info *game_info = include_static ? demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEINFO, 0, sizeof(dd_netobj_game_info)) : NULL;
@@ -363,6 +444,30 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     game_info->m_GameStateFlags = DD_GAMESTATEFLAG_RACETIME;
   }
   dd_netobj_game_info_ex *game_info_ex = include_static ? demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEINFOEX, 0, sizeof(dd_netobj_game_info_ex)) : NULL;
+#if DD_UNIQUE
+  // IGameController::Snap of Unique Race, of its GAMEINFO_CURVERSION
+  if (game_info_ex) {
+    const ddnet_config_t *config = view_space ? &view_space->config : NULL;
+    game_info_ex->m_Version = 11;
+    game_info_ex->m_Flags = DD_GAMEINFOFLAG_TIMESCORE | DD_GAMEINFOFLAG_GAMETYPE_RACE | DD_GAMEINFOFLAG_GAMETYPE_DDRACE |
+                            DD_GAMEINFOFLAG_GAMETYPE_DDNET | DD_GAMEINFOFLAG_UNLIMITED_AMMO | DD_GAMEINFOFLAG_RACE_RECORD_MESSAGE |
+                            DD_GAMEINFOFLAG_ALLOW_EYE_WHEEL | DD_GAMEINFOFLAG_ALLOW_HOOK_COLL | DD_GAMEINFOFLAG_ALLOW_ZOOM |
+                            DD_GAMEINFOFLAG_BUG_DDRACE_GHOST | DD_GAMEINFOFLAG_BUG_DDRACE_INPUT | DD_GAMEINFOFLAG_PREDICT_DDRACE |
+                            DD_GAMEINFOFLAG_PREDICT_DDRACE_TILES | DD_GAMEINFOFLAG_ENTITIES_DDNET | DD_GAMEINFOFLAG_ENTITIES_DDRACE |
+                            DD_GAMEINFOFLAG_ENTITIES_RACE | DD_GAMEINFOFLAG_RACE;
+    game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_DDRACE | DD_GAMEINFOFLAG2_DDRACE_TEAM | DD_DEMO_GAMEINFOFLAG2_PREDICT_EVENTS;
+    if (config && config->sv_health_and_ammo) {
+      game_info_ex->m_Flags &= ~(DD_GAMEINFOFLAG_UNLIMITED_AMMO | DD_GAMEINFOFLAG_GAMETYPE_DDNET | DD_GAMEINFOFLAG_GAMETYPE_DDRACE |
+                                 DD_GAMEINFOFLAG_PREDICT_DDRACE);
+      game_info_ex->m_Flags |= DD_GAMEINFOFLAG_GAMETYPE_VANILLA | DD_GAMEINFOFLAG_PREDICT_VANILLA;
+      game_info_ex->m_Flags2 &= ~(DD_GAMEINFOFLAG2_HUD_DDRACE | DD_GAMEINFOFLAG2_DDRACE_TEAM);
+      game_info_ex->m_Flags2 |= DD_GAMEINFOFLAG2_HUD_HEALTH_ARMOR | DD_GAMEINFOFLAG2_HUD_AMMO;
+    }
+    if (config && config->gamemode != DDNET_MODE_UNIQUE_RACE)
+      game_info_ex->m_Flags |= DD_GAMEINFOFLAG_GAMETYPE_FASTCAP | DD_GAMEINFOFLAG_FLAG_STARTS_RACE;
+  }
+  if (include_static && view_space) snap_flags(sb, view_space, view_character);
+#else
   if (game_info_ex) {
     game_info_ex->m_Version = 10;
     game_info_ex->m_Flags = DD_GAMEINFOFLAG_TIMESCORE | DD_GAMEINFOFLAG_GAMETYPE_RACE | DD_GAMEINFOFLAG_GAMETYPE_DDRACE |
@@ -373,6 +478,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
                             DD_GAMEINFOFLAG_ENTITIES_RACE | DD_GAMEINFOFLAG_RACE;
     game_info_ex->m_Flags2 = DD_GAMEINFOFLAG2_HUD_DDRACE;
   }
+#endif
 
   for (int p = 0; p < current_world->player_count; ++p) {
     if (p >= client_count || client_ids[p] < 0) continue;
@@ -384,7 +490,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     const ddnet_character_t *c_cur = ddnet_player_character(current_world, p);
     const int world_client = ddnet_player_client(current_world, p);
     // A player that left the game is not in it.
-    if (!current_world->core.players[world_client].active) continue;
+    if (!dd_world_client_active(current_world, world_client)) continue;
     const bool paused = dd_player_specced(current_world, p);
 
     dd_netobj_client_info *ci = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, client_id, sizeof(dd_netobj_client_info));
@@ -415,8 +521,13 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     dd_netobj_ddnet_player *dp = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPLAYER, client_id, sizeof(dd_netobj_ddnet_player));
     if (dp) {
       dp->m_AuthLevel = 0;
+#if DD_UNIQUE
+      // (a player of Unique Race cannot pause; only a replayed one can be in /spec)
+      dp->m_Flags = paused ? DD_EXPLAYERFLAG_SPEC : 0;
+#else
       dp->m_Flags = paused ? DD_EXPLAYERFLAG_SPEC
                            : (current_world->core.players[world_client].paused == DDNET_PAUSE_PAUSED ? DD_EXPLAYERFLAG_PAUSED : 0);
+#endif
     }
 
     // Replayed /spec players only have a waiting position. Export it as DDNet
@@ -445,7 +556,12 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       ch->core.m_HookY = round_to_int(core->hook_pos.y);
       ch->core.m_HookDx = round_to_int(core->hook_dir.x * 256.0f);
       ch->core.m_HookDy = round_to_int(core->hook_dir.y * 256.0f);
+#if DD_UNIQUE
+      // (a tee of Unique Race hooks no players)
+      ch->core.m_HookedPlayer = -1;
+#else
       ch->core.m_HookedPlayer = remap_world_client(current_world, client_ids, client_count, core->hooked_player);
+#endif
       ch->core.m_Jumped = core->jumped;
       ch->core.m_Direction = core->direction;
       ch->core.m_Angle = ddnet_character_angle(c_cur);
@@ -456,10 +572,19 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       ch->m_Emote = demo_character_emote(current_world, p, c_cur);
 
       ch->m_AttackTick = c_cur->attack_tick + tick_delta;
-      ch->m_Weapon = (core->deep_frozen || c_cur->freeze_time > 0) ? DDNET_WEAPON_NINJA : core->active_weapon;
+      ch->m_Weapon = (dd_tee_deep_frozen(c_cur) || c_cur->freeze_time > 0) ? DDNET_WEAPON_NINJA : core->active_weapon;
+#if DD_UNIQUE
+      // As a server sends them in a demo of its own: what the HUD of sv_health_and_ammo shows.
+      const ddnet_world_t *space = ddnet_player_world(current_world, p);
+      const int ammo = core->weapons[core->active_weapon].ammo;
+      ch->m_AmmoCount = space && space->config.sv_health_and_ammo ? ammo : c_cur->freeze_time == 0 ? ammo : 0;
+      ch->m_Health = c_cur->health;
+      ch->m_Armor = c_cur->armor;
+#else
       ch->m_AmmoCount = 0;
       ch->m_Health = 10;
       ch->m_Armor = 10;
+#endif
       ch->m_PlayerFlags = current_world->inputs[world_client].m_PlayerFlags;
     }
 
@@ -468,6 +593,14 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       memset(dc, 0, sizeof(*dc));
       dc->m_TuneZoneOverride = -1;
       dc->m_Flags = 0;
+#if DD_UNIQUE
+      // As a solo server has every tee, alone and without hooking players (its tuning), with the
+      // weapons a tee of Unique Race can have.
+      dc->m_Flags = DD_CHARACTERFLAG_SOLO | DD_CHARACTERFLAG_COLLISION_DISABLED | DD_CHARACTERFLAG_HOOK_HIT_DISABLED;
+      if (core->weapons[DDNET_WEAPON_HAMMER].got) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_HAMMER;
+      if (core->weapons[DDNET_WEAPON_GUN].got) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GUN;
+      if (core->weapons[DDNET_WEAPON_GRENADE].got) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_GRENADE;
+#else
       if (core->solo) dc->m_Flags |= DD_CHARACTERFLAG_SOLO;
       if (core->endless_hook) dc->m_Flags |= DD_CHARACTERFLAG_ENDLESS_HOOK;
       if (core->collision_disabled) dc->m_Flags |= DD_CHARACTERFLAG_COLLISION_DISABLED;
@@ -488,17 +621,25 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       if (core->weapons[DDNET_WEAPON_LASER].got) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_LASER;
       if (core->active_weapon == DDNET_WEAPON_NINJA) dc->m_Flags |= DD_CHARACTERFLAG_WEAPON_NINJA;
       if (core->live_frozen) dc->m_Flags |= DD_CHARACTERFLAG_MOVEMENTS_DISABLED;
+#endif
 
       dc->m_Jumps = core->jumps;
       dc->m_TeleCheckpoint = c_cur->tele_checkpoint;
+#if DD_UNIQUE
+      // (whose hook is the stronger means nothing without hooking players; no ninja)
+      dc->m_StrongWeakId = 0;
+      dc->m_JumpedTotal = core->jumped_total;
+      dc->m_NinjaActivationTick = 0;
+#else
       dc->m_StrongWeakId = c_cur->strong_weak_id;
       dc->m_JumpedTotal = core->jumped_total;
       dc->m_NinjaActivationTick = core->ninja.activation_tick + tick_delta;
+#endif
 
       dc->m_FreezeStart = core->freeze_start == 0 ? 0 : core->freeze_start + tick_delta;
-      dc->m_FreezeEnd = core->deep_frozen ? -1 : c_cur->freeze_time == 0 ? 0 : demo_tick + c_cur->freeze_time;
+      dc->m_FreezeEnd = dd_tee_deep_frozen(c_cur) ? -1 : c_cur->freeze_time == 0 ? 0 : demo_tick + c_cur->freeze_time;
 
-      if (core->is_in_freeze) {
+      if (dd_tee_in_freeze(c_cur)) {
         dc->m_Flags |= DD_CHARACTERFLAG_IN_FREEZE;
       }
       dc->m_TargetX = core->input.target_x;
@@ -506,8 +647,10 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     }
 
     // CreateFinishEffect, which is when DDNet's server sends it
-    if (prev_world && world_client >= 0 && ddnet_player_client(prev_world, p) == world_client &&
-        prev_world->core.players[world_client].finish_tick < 0 && cur->players[world_client].finish_tick >= 0) {
+    const ddnet_player_t *before = prev_world && ddnet_player_client(prev_world, p) == world_client
+                                       ? dd_world_client(prev_world, world_client)
+                                       : NULL;
+    if (before && world_client >= 0 && before->finish_tick < 0 && dd_world_client(current_world, world_client)->finish_tick >= 0) {
       dd_netevent_finish *nf = demo_sb_add_item(sb, DD_NETEVENTTYPE_FINISH, (*next_item_id)++, sizeof(dd_netevent_finish));
       if (nf) {
         nf->common.m_X = (int)c_cur->pos.x;
@@ -588,6 +731,32 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
   }
 
   // do entities
+#if DD_UNIQUE
+  // The grenades of each exported player, from its own world of the physics (CProjectile::FillExtraInfo).
+  for (int index = 0; index < dd_world_space_count(current_world); ++index) {
+    int space_client;
+    const ddnet_world_t *space = dd_world_space_at(current_world, index, &space_client);
+    const int owner = space ? remap_world_client(current_world, client_ids, client_count, space_client) : -1;
+    if (owner < 0) continue;
+    for (int i = 0; i < space->num_projectiles; ++i) {
+      const ddnet_entity_t *ent = &space->projectiles[i];
+      const ddnet_projectile_t *proj = &ent->u.projectile;
+      dd_netobj_ddnet_projectile *p =
+          demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPROJECTILE, (*next_item_id)++, sizeof(dd_netobj_ddnet_projectile));
+      if (!p) continue;
+      p->m_VelX = round_to_int(proj->direction.x * 1e6f);
+      p->m_VelY = round_to_int(proj->direction.y * 1e6f);
+      p->m_X = round_to_int(ent->pos.x * 100.0f);
+      p->m_Y = round_to_int(ent->pos.y * 100.0f);
+      p->m_Type = DDNET_WEAPON_GRENADE;
+      p->m_StartTick = proj->start_tick + tick_delta;
+      p->m_Owner = owner;
+      p->m_Flags = DD_PROJECTILEFLAG_EXPLOSIVE | DD_PROJECTILEFLAG_NORMALIZE_VEL;
+      p->m_SwitchNumber = 0;
+      p->m_TuneZone = proj->tune_zone;
+    }
+  }
+#else
   for (int i = cur->first_entity[DDNET_ENTTYPE_PROJECTILE]; i != -1; i = cur->entities[i].link.next) {
     const ddnet_entity_t *ent = &cur->entities[i];
     const ddnet_projectile_t *proj = &ent->u.projectile;
@@ -676,6 +845,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
     dd_netobj_ddnet_laser *l = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, (*next_item_id)++, sizeof(dd_netobj_ddnet_laser));
     if (l) snap_laser(l, to, from, start_tick, owner, type, subtype, ent->number);
   }
+#endif
   return dd_recording_snap_entities(current_world, sb, client_ids, client_count, demo_tick, next_item_id);
 }
 
@@ -811,6 +981,13 @@ static void legacy_team_numbers(int teams[64]) {
 static void exported_teams(const ft_world *const *worlds, uint32_t world_count, int *const *client_maps, const int *client_counts,
                            int teams[64]) {
   memset(teams, 0, 64 * sizeof(*teams));
+#if DD_UNIQUE
+  // (Unique Race's servers are solo servers)
+  (void)worlds;
+  (void)world_count;
+  (void)client_maps;
+  (void)client_counts;
+#else
   for (uint32_t wi = 0; wi < world_count; ++wi) {
     const ft_world *world = worlds[wi];
     if (!world || world->core.config.sv_team == DDNET_SV_TEAM_FORCED_SOLO) continue;
@@ -821,6 +998,7 @@ static void exported_teams(const ft_world *const *worlds, uint32_t world_count, 
         teams[exported] = world->core.players[client_id].team;
     }
   }
+#endif
   legacy_team_numbers(teams);
 }
 
@@ -944,7 +1122,7 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
   for (int tick = start_tick; ok && tick <= end_tick; ++tick) {
     demo_sb_clear(builder);
     int num_pickups = game->current_level ? level_pickup_count(game->current_level) : 0;
-    int num_doors = game->current_level ? game->current_level->collision.num_doors : 0;
+    int num_doors = game->current_level ? level_door_count(game->current_level) : 0;
     int next_item_id = 64 + num_pickups + num_doors;
 
     ddnet_vec2_t active_positions[64];

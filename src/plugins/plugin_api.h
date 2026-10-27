@@ -60,6 +60,9 @@ struct tas_api_t {
   // game's own headers then give the handles meaning.
   int (*get_current_tick)(void);
   int (*get_track_count)(void);
+  // The selected track, a global timeline track index (-1 for none). It is
+  // always one of the active group's, whose worlds get_initial_world and
+  // get_world_state_at give.
   int (*get_selected_track)(void);
   // Last tick carrying active input on this track, in the track's own local
   // time, or -1 when it has no input. Recording snippets are included.
@@ -199,6 +202,14 @@ struct tas_api_t {
   // that is cancelled. False when the editor cannot open one (headless), or
   // without a path.
   bool (*open_project)(const char *path);
+
+  // Between global timeline track indices and the players of a group's worlds:
+  // the active group; the player a track is in its group's worlds (-1 for no
+  // such track), with that group in `out_group` (may be NULL); and the track
+  // of a group's player (-1 for none).
+  int (*get_active_group)(void);
+  int (*get_track_player)(int track_index, int *out_group);
+  int (*get_group_track)(int group_index, int player);
 };
 
 // A plugin's name, author, version and description come from the manifest
@@ -218,7 +229,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 9u
+#define FRAMETEE_PLUGIN_ABI_VERSION 10u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

@@ -186,8 +186,8 @@ static bool create_map_pipeline(ft_game *game) {
   if (game->gfx.map_pipeline) return true;
 
   char vert_path[1024], frag_path[1024];
-  game->engine->resolve_data_path("shaders/map.vert.spv", vert_path, sizeof(vert_path));
-  game->engine->resolve_data_path("shaders/map.frag.spv", frag_path, sizeof(frag_path));
+  dd_data_path(game->engine, "shaders/map.vert.spv", vert_path, sizeof(vert_path));
+  dd_data_path(game->engine, "shaders/map.frag.spv", frag_path, sizeof(frag_path));
 
   void *vert = NULL, *frag = NULL;
   size_t vert_size = 0, frag_size = 0;
