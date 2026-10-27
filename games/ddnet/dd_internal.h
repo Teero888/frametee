@@ -454,8 +454,8 @@ typedef struct {
 void dd_events_render(ft_game *game, const ft_ui_frame *frame);
 // A finish is told by the server, which sends everyone a chat line about it ("... finished in: ...")
 // and the finishing player its time and record (CGameTeams::OnFinish). The worlds tell it themselves:
-// the tick the world's player `player` last finished at, -1 for none (and for a player replaying a
-// recording, which has the recording's messages), and the server's line about it.
+// the tick the world's player `player` last finished at, -1 for none, and the server's line about it.
+// A replayed player finishes like any other: the physics steps it, so its race timer keeps up.
 int dd_finish_tick(const ft_world *world, int player);
 void dd_finish_line(ft_game *game, int world_index, const ft_world *world, int player, char *out, size_t out_size);
 bool dd_event_decode(const ft_timeline_event *event, dd_event_payload_t *out);

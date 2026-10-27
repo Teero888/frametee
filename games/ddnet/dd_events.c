@@ -123,7 +123,7 @@ static bool update_event(ft_game *game, uint32_t index, int world_index, int tic
 }
 
 int dd_finish_tick(const ft_world *world, int player) {
-  if (!world || dd_replay_active(world, player)) return -1;
+  if (!world) return -1;
   const ddnet_player_t *state = dd_world_client(world, ddnet_player_client(world, player));
   return state ? state->finish_tick : -1;
 }
