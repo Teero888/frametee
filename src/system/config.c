@@ -122,7 +122,7 @@ static bool is_render_snapshot(const char *path) {
 static bool reserved_game_editor_key(const char *key) {
   return strcmp(key, "editor_camera_mode") == 0 || strcmp(key, "editor_top_down_view") == 0 ||
          strcmp(key, "editor_isometric_view") == 0 ||
-         strcmp(key, "editor_linked_copy_input") == 0 ||
+         strcmp(key, "editor_linked_copy_input") == 0 || strcmp(key, "editor_merged_chat") == 0 ||
          strncmp(key, "editor_show_", strlen("editor_show_")) == 0 ||
          strncmp(key, "editor_prediction_", strlen("editor_prediction_")) == 0;
 }
