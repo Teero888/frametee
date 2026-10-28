@@ -264,12 +264,13 @@ static void build_tee_visual(ft_game *game, const ft_render_frame *frame, const 
   }
 }
 
-static int tee_eye_state(const ft_world *world, int index, const ddnet_character_t *chr) {
+static int tee_eye_state(const ft_world *world, int index, const ddnet_character_t *chr, int emoticon_eyes) {
   const int client_id = ddnet_player_client(world, index);
   const dd_input_t *record = &world->inputs[client_id];
   // An inactive tee sleeps: its eyes are closed over any others, frozen or not.
   if (dd_player_inactive(world, index)) return EYE_BLINK;
-  int eye = get_flag_eye_state(record);
+  // (an emoticon's eyes go over the player's own and a frozen tee's, see dd_frame_emoticon_eyes)
+  int eye = emoticon_eyes >= 0 ? emoticon_eyes : get_flag_eye_state(record);
   if (chr->freeze_time > 0 && eye == 0) eye = EYE_BLINK;
   const int pain_age = ddnet_engine_tick(world) - world->pain_ticks[client_id];
   if (pain_age >= 0 && pain_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
@@ -1011,6 +1012,9 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
     const float max_x = vis->x + vis->w + margin;
     const float min_y = vis->y - margin;
     const float max_y = vis->y + vis->h + margin;
+    int8_t emoticon_eyes[DDNET_MAX_CLIENTS];
+    const int eye_players = world->player_count < DDNET_MAX_CLIENTS ? world->player_count : DDNET_MAX_CLIENTS;
+    dd_frame_emoticon_eyes(game, frame, emoticon_eyes, eye_players);
 
     for (int i = 0; i < world->player_count; ++i) {
       // No tee: dead, in /spec, or not in its recording at this tick.
@@ -1043,7 +1047,7 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
 
       tee_visual_t tee;
       build_tee_visual(game, frame, world, prev_world, i, intra, p, &tee);
-      const int eye = tee_eye_state(world, i, chr);
+      const int eye = tee_eye_state(world, i, chr, i < eye_players ? emoticon_eyes[i] : -1);
 
       dd_skin_push(game, p, 1.0f, tee.skin, eye, tee.dir, &tee.anim, tee.body_col, tee.feet_col, tee.custom);
 

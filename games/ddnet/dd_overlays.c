@@ -312,6 +312,18 @@ static int recent_events(ft_game *game, const ft_render_frame *frame, dd_event_t
   return count;
 }
 
+void dd_frame_emoticon_eyes(ft_game *game, const ft_render_frame *frame, int8_t *eyes, int count) {
+  memset(eyes, -1, (size_t)count);
+  visible_event emotes[64];
+  const int found = recent_events(game, frame, DD_EVENT_EMOTICON, DD_EMOTICON_EYE_TICKS + 1, false, emotes, 64);
+  for (int i = 0; i < found; ++i) {
+    const int player = emotes[i].payload.client_id;
+    if (emotes[i].tick >= frame->tick || player < 0 || player >= count || dd_replay_active(frame->world, player)) continue;
+    const ddnet_character_t *chr = ddnet_player_character(frame->world, player);
+    if (chr && chr->spawn_tick <= emotes[i].tick) eyes[player] = (int8_t)dd_emoticon_eyes(emotes[i].payload.emoticon);
+  }
+}
+
 // The servers' chat lines about the finishes of the last `lifetime` ticks, which the worlds tell
 // themselves (dd_finish_tick): the frame's world's, or with `all_worlds` every world's at the
 // playhead, on the frame's world's clock.

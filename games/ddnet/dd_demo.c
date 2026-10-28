@@ -183,7 +183,14 @@ static int remap_client_id(const int *client_ids, int client_count, int local_id
   return local_id < client_count ? client_ids[local_id] : -1;
 }
 
-static int demo_character_emote(const ft_world *world, int player, const ddnet_character_t *character) {
+// A client's newest emoticon in the demo: its demo tick, and the eyes it gives the tee (dd_emoticon_eyes).
+typedef struct {
+  int tick;
+  int eyes;
+} demo_emoticon;
+
+static int demo_character_emote(const ft_world *world, int player, const ddnet_character_t *character,
+                                const demo_emoticon *emoticon, int demo_tick, int tick_delta) {
   static const int emotes_by_eye[NUM_EYES] = {
       [EYE_NORMAL] = DD_EMOTE_NORMAL,
       [EYE_ANGRY] = DD_EMOTE_ANGRY,
@@ -195,6 +202,11 @@ static int demo_character_emote(const ft_world *world, int player, const ddnet_c
   const int client_id = ddnet_player_client(world, player);
   int eye = get_flag_eye_state(&world->inputs[client_id]);
   if (eye < EYE_NORMAL || eye >= NUM_EYES) eye = EYE_NORMAL;
+  // (an emoticon's eyes go over the player's own and a frozen tee's, from the snapshot after it)
+  const int age = demo_tick - emoticon->tick;
+  if (age >= 1 && age <= DD_EMOTICON_EYE_TICKS && character->spawn_tick + tick_delta <= emoticon->tick &&
+      !dd_replay_active(world, player))
+    eye = emoticon->eyes;
   if (character->freeze_time > 0 && eye == EYE_NORMAL) eye = EYE_BLINK;
   const int pain_age = ddnet_engine_tick(world) - world->pain_ticks[client_id];
   if (pain_age >= 0 && pain_age < GAME_TICK_SPEED / 2) eye = EYE_PAIN;
@@ -290,7 +302,8 @@ static void snap_flags(dd_snapshot_builder *sb, const ddnet_world_t *space, cons
 #endif
 
 static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, const int *client_ids, int client_count,
-                       const int *client_options, const ft_world *prev_world, const ft_world *current_world, bool include_static,
+                       const int *client_options, const demo_emoticon *emoticons, const ft_world *prev_world,
+                       const ft_world *current_world, bool include_static,
                        const ddnet_vec2_t *active_positions, int active_pos_count, int demo_tick, int tick_delta, int *next_item_id) {
   (void)client_options;
   ddnet_world_entities_current(current_world);
@@ -569,7 +582,7 @@ static bool snap_world(dd_snapshot_builder *sb, ft_game *game, int world_index, 
       // Physics groups run on local clocks, while a demo has one shared clock. Every absolute tick
       // written to the protocol must be translated or the client predicts offset groups far away.
       ch->core.m_Tick = demo_tick;
-      ch->m_Emote = demo_character_emote(current_world, p, c_cur);
+      ch->m_Emote = demo_character_emote(current_world, p, c_cur, &emoticons[client_id], demo_tick, tick_delta);
 
       ch->m_AttackTick = c_cur->attack_tick + tick_delta;
       ch->m_Weapon = (dd_tee_deep_frozen(c_cur) || c_cur->freeze_time > 0) ? DDNET_WEAPON_NINJA : core->active_weapon;
@@ -1130,8 +1143,10 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
   const ft_world **curr_worlds = (const ft_world **)calloc(world_count, sizeof(const ft_world *));
   const ft_world **prev_worlds = (const ft_world **)calloc(world_count, sizeof(const ft_world *));
   uint8_t snapshot[DD_SNAPSHOT_MAX_SIZE];
-  // The teams the demo's clients were last told about.
+  // The teams the demo's clients were last told about, and their newest emoticons.
   int sent_teams[64];
+  demo_emoticon emoticons[64];
+  for (int i = 0; i < 64; ++i) emoticons[i] = (demo_emoticon){.tick = -DD_EMOTICON_EYE_TICKS - 1, .eyes = EYE_NORMAL};
   bool ok = (curr_worlds && prev_worlds);
   const int tick_span = end_tick - start_tick + 1;
   // The worlds asked for below are stepped with their effects, which the snapshots carry.
@@ -1166,7 +1181,7 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
       if (!curr_worlds[world_index]) continue;
 
       if (!snap_world(builder, game, (int)world_index, client_maps[world_index], client_counts[world_index], client_options,
-                 prev_worlds[world_index], curr_worlds[world_index], include_static, active_positions,
+                 emoticons, prev_worlds[world_index], curr_worlds[world_index], include_static, active_positions,
                  active_pos_count, tick - start_tick, worlds[world_index].start_offset - start_tick, &next_item_id)) {
         ok = false;
         break;
@@ -1210,7 +1225,12 @@ static bool dd_demo_export_impl(ft_game *game, const ft_export_request *request,
         const int world_index = timeline_event.world_index;
         if (!world_has_exported_client(client_maps[world_index], client_counts[world_index])) continue;
         if (timeline_event.tick + worlds[world_index].start_offset != tick) continue;
-        write_timeline_event(writer, &payload, client_maps[world_index], client_counts[world_index]);
+        if (write_timeline_event(writer, &payload, client_maps[world_index], client_counts[world_index]) &&
+            payload.type == DD_EVENT_EMOTICON) {
+          const int client_id = remap_client_id(client_maps[world_index], client_counts[world_index], payload.client_id);
+          if (client_id >= 0 && client_id < 64)
+            emoticons[client_id] = (demo_emoticon){.tick = tick - start_tick, .eyes = dd_emoticon_eyes(payload.emoticon)};
+        }
       }
     }
     // (the worlds' own finishes, which the server tells itself)

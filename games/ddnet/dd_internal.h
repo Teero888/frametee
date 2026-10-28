@@ -459,6 +459,14 @@ void dd_events_render(ft_game *game, const ft_ui_frame *frame);
 int dd_finish_tick(const ft_world *world, int player);
 void dd_finish_line(ft_game *game, int world_index, const ft_world *world, int player, char *out, size_t out_size);
 bool dd_event_decode(const ft_timeline_event *event, dd_event_payload_t *out);
+// The eyes (EYE_*) a server gives the tee of a player who sends `emoticon`, for two seconds from the
+// tick after it (sv_emotional_tees, CGameContext::OnSetEmoticonNetMessage).
+enum { DD_EMOTICON_EYE_TICKS = 2 * GAME_TICK_SPEED };
+int dd_emoticon_eyes(int emoticon);
+// The eyes the newest emoticon of each of the frame's world's first `count` players gives its tee, -1
+// for none: not one sent before the tee last spawned, nor one of a replayed tee, whose recording has
+// its eyes.
+void dd_frame_emoticon_eyes(ft_game *game, const ft_render_frame *frame, int8_t *eyes, int count);
 // An authored timeline event carrying `payload`; `summary` backs its text.
 void dd_event_make(int world_index, int tick, const dd_event_payload_t *payload, ft_timeline_event *out, char *summary,
                    size_t summary_size);

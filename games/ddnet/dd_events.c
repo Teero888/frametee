@@ -26,6 +26,14 @@ static const char *const sound_names[] = {
 static const char *const weapon_names[] = {"Hammer", "Gun", "Shotgun", "Grenade", "Laser", "Ninja"};
 static const char *const emote_names[] = {"oop", "exclamation", "hearts", "drop", "dotdot", "music", "sorry", "ghost",
                                           "sushi", "splattee", "deviltee", "zomg", "zzz", "wtf", "eyes", "question"};
+
+int dd_emoticon_eyes(int emoticon) {
+  static const int8_t eyes[DD_EMOTICON_COUNT] = {
+      EYE_PAIN,  EYE_SURPRISE, EYE_HAPPY, EYE_BLINK, EYE_BLINK, EYE_HAPPY,    EYE_PAIN,  EYE_SURPRISE,
+      EYE_PAIN,  EYE_ANGRY,    EYE_ANGRY, EYE_ANGRY, EYE_BLINK, EYE_SURPRISE, EYE_HAPPY, EYE_SURPRISE};
+  return emoticon >= 0 && emoticon < DD_EMOTICON_COUNT ? eyes[emoticon] : EYE_NORMAL;
+}
+
 static const char *const team_names[] = {"All", "Spectators", "Red", "Blue", "Whisper Send", "Whisper Receive"};
 
 static bool event_api_ready(const ft_game *game) {
