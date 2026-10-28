@@ -928,8 +928,9 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
   const bool heard = game->engine->audio_heard && game->engine->audio_heard();
   const int index = world->index;
   // A world steps with the event build of the physics while its effects are of use: shown, heard, or
-  // written into a demo. Searches, seeking and lookups step without (and faster).
-  const bool events = index >= 0 && (presentation_enabled || heard || game->physics_events_forced);
+  // written into a demo, or a prediction's explosions marked. Searches, seeking and lookups step
+  // without (and faster).
+  const bool events = (index >= 0 && (presentation_enabled || heard || game->physics_events_forced)) || world->marks;
 #if DD_UNIQUE
   world->space_events = events;
   for (int i = 0; i < world->client_count; ++i) {
@@ -948,7 +949,9 @@ bool dd_particles_bind(ft_game *game, ft_world *world) {
   world->core.sound = events ? on_sound : NULL;
 #endif
 
-  world->render_physics_effects = events && presentation_enabled && !game->headless && game->settings.render_particles;
+  // (never a scratch world's, a prediction's included)
+  world->render_physics_effects =
+      index >= 0 && events && presentation_enabled && !game->headless && game->settings.render_particles;
   if (!world->render_physics_effects) return false;
   world->effects_viewer = selected_player_of(game, world);
 

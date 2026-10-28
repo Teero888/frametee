@@ -557,7 +557,26 @@ typedef struct ft_world_desc {
    * rather than to show. A game must not raise effects from those, or a lookup
    * the user never sees would fill the screen with them. */
   int32_t world_index;
+  uint32_t flags; /* ft_world_flags; a copy into the world keeps its own */
 } ft_world_desc;
+
+enum ft_world_flags {
+  /* The engine draws where this world's steps go (a prediction), and asks
+   * world_marks after each step what to mark along the way. */
+  FT_WORLD_MARKS = 1u << 0,
+};
+
+/* A spot a step left, marked where it happened in a prediction: an explosion
+ * and how far it reaches. Colours left at zero alpha leave their part out, and
+ * the engine fades them all with its line. */
+typedef struct ft_world_mark {
+  uint32_t struct_size;
+  ft_vec2 position;
+  float radius; /* world units */
+  ft_color fill;
+  ft_color ring;
+  ft_color dot; /* a dot at the centre, as wide as three entity paths */
+} ft_world_mark;
 
 /* What the engine itself needs to know about a player to do its own job:
  * follow the camera, draw prediction lines, show a position readout. Anything
@@ -740,15 +759,10 @@ typedef struct ft_entity_trail {
   float dot;    /* a dot this many widths across at the entity, where a beam ends; zero for none */
   /* Where the entity's path through the coming step ends: where it will be
    * after it, or where the level stops it on the way. When the entity is gone
-   * after that step, its path is drawn on to here and the end is marked. */
+   * after that step, its path is drawn on to here. (What it did there, such as
+   * explode, is the step's to mark: world_marks.) */
   bool has_next;
   ft_vec2 next;
-  /* The mark: a disc of this radius in world units, an explosion's reach,
-   * filled with end_fill and ringed with end_ring, with a dot of `color` at its
-   * centre. Zero leaves the end unmarked. */
-  float end_radius;
-  ft_color end_fill;
-  ft_color end_ring;
   /* A line from `anchor` to the entity at this step, drawn at every step that
    * sets it: a hook's rope while it holds on. With rope_only the ropes are all
    * of the entity that is drawn, and its path is left out. */
@@ -1737,6 +1751,12 @@ typedef struct ft_game_module {
   /* Optional: how the prediction draws an entity's path as `world` has it.
    * False, or NULL, draws it plainly in the prediction line's colour. */
   bool (*entity_trail)(ft_game *game, const ft_world *world, uint32_t entity_class, int32_t entity, ft_entity_trail *out);
+  /* Optional: what the last step of a world created with FT_WORLD_MARKS left
+   * to mark, at most `capacity` of it into `out` (each one's struct_size set by
+   * the engine). Returns how many marks the step left, which may be more. A
+   * mark covers what no entity shows, such as a grenade that explodes in the
+   * same step it is fired. */
+  uint32_t (*world_marks)(ft_game *game, const ft_world *world, ft_world_mark *out, uint32_t capacity);
 
   /* ---- rendering (optional; skipped headless) ----
    * Called once per pass per visible world. A game that draws nothing in a

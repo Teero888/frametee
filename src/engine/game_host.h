@@ -142,6 +142,8 @@ size_t gh_level_serialize(game_host_t *host, const ft_level *level, void *out, s
 
 // `world_index` is the editor world this belongs to; every copy of it shares one.
 ft_world *gh_world_create(game_host_t *host, const ft_level *level, int player_count, int world_index);
+// The same with ft_world_flags, such as FT_WORLD_MARKS for a prediction's world.
+ft_world *gh_world_create_flags(game_host_t *host, const ft_level *level, int player_count, int world_index, uint32_t flags);
 void gh_world_destroy(game_host_t *host, ft_world *world);
 void gh_world_copy(game_host_t *host, ft_world *dst, const ft_world *src);
 void gh_world_step(game_host_t *host, ft_world *world, const void *inputs, unsigned player_count);
@@ -221,6 +223,8 @@ bool gh_entity_prop_set(game_host_t *host, ft_world *world, unsigned entity_clas
 int gh_entity_count(game_host_t *host, const ft_world *world, unsigned entity_class);
 // How the prediction draws an entity's path; false when the game says nothing about it.
 bool gh_entity_trail(game_host_t *host, const ft_world *world, unsigned entity_class, int entity, ft_entity_trail *out);
+// What the last step of a world made with FT_WORLD_MARKS left to mark (see ft_game_module.world_marks).
+uint32_t gh_world_marks(game_host_t *host, const ft_world *world, ft_world_mark *out, uint32_t capacity);
 const ft_entity_class *gh_entity_class(const game_host_t *host, unsigned index);
 unsigned gh_entity_class_count(const game_host_t *host);
 

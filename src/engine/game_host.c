@@ -785,6 +785,10 @@ size_t gh_level_serialize(game_host_t *host, const ft_level *level, void *out, s
 }
 
 ft_world *gh_world_create(game_host_t *host, const ft_level *level, int player_count, int world_index) {
+  return gh_world_create_flags(host, level, player_count, world_index, 0);
+}
+
+ft_world *gh_world_create_flags(game_host_t *host, const ft_level *level, int player_count, int world_index, uint32_t flags) {
   REQUIRE_GAME(NULL);
   ft_world_desc desc = {0};
   desc.struct_size = sizeof(desc);
@@ -792,6 +796,7 @@ ft_world *gh_world_create(game_host_t *host, const ft_level *level, int player_c
   desc.variant_id = game_host_variant(host);
   desc.player_count = game_clamp_player_count(host, player_count);
   desc.world_index = world_index;
+  desc.flags = flags;
   return m->world_create(host->instance, &desc);
 }
 
@@ -1136,6 +1141,16 @@ bool gh_entity_trail(game_host_t *host, const ft_world *world, unsigned entity_c
   memset(out, 0, sizeof(*out));
   out->struct_size = sizeof(*out);
   return m->entity_trail(host->instance, world, entity_class, entity, out);
+}
+
+uint32_t gh_world_marks(game_host_t *host, const ft_world *world, ft_world_mark *out, uint32_t capacity) {
+  REQUIRE_GAME(0);
+  if (!world || !m->world_marks) return 0;
+  for (uint32_t i = 0; i < capacity; ++i) {
+    memset(&out[i], 0, sizeof(out[i]));
+    out[i].struct_size = sizeof(out[i]);
+  }
+  return m->world_marks(host->instance, world, out, capacity);
 }
 
 const ft_entity_class *gh_entity_class(const game_host_t *host, unsigned index) {

@@ -1228,8 +1228,8 @@ static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop,
 }
 
 // How the prediction draws projectiles, lasers and hooks: lasers in DDNet's colours, the rest as
-// Ultraforce draws them. A projectile's path goes on to where the map stops it, and an explosive
-// one's ends in its explosion, drawn as far as it reaches.
+// Ultraforce draws them. A projectile's path goes on to where the map stops it (its explosion
+// there is a mark of the step, ddnet_world_marks).
 static bool ddnet_entity_trail(ft_game *game, const ft_world *world, uint32_t entity_class, int32_t entity,
                                ft_entity_trail *out) {
   (void)game;
@@ -1250,18 +1250,10 @@ static bool ddnet_entity_trail(ft_game *game, const ft_world *world, uint32_t en
     out->next = (ft_vec2){to.x / PX_PER_TILE, to.y / PX_PER_TILE};
     out->width = 0.75f;
 #if DD_UNIQUE
-    const bool explosive = true;
-#else
-    const bool explosive = proj->explosive;
-#endif
-    if (!explosive) {
-      out->color = (ft_color){1.f, 0.8f, 0.f, 1.f};
-      return true;
-    }
     out->color = (ft_color){1.f, 0.f, 0.f, 1.f};
-    out->end_radius = 135.f / PX_PER_TILE; // (CGameContext::CreateExplosion)
-    out->end_fill = (ft_color){1.f, 0.2f, 0.f, 0.15f};
-    out->end_ring = (ft_color){1.f, 0.3f, 0.f, 0.6f};
+#else
+    out->color = proj->explosive ? (ft_color){1.f, 0.f, 0.f, 1.f} : (ft_color){1.f, 0.8f, 0.f, 1.f};
+#endif
     return true;
   }
 #if !DD_UNIQUE
@@ -1291,6 +1283,36 @@ static bool ddnet_entity_trail(ft_game *game, const ft_world *world, uint32_t en
   default:
     return false;
   }
+}
+
+// The explosions of the last step of a prediction's world, as far as they reach (CGameContext::
+// CreateExplosion), as Ultraforce draws them. They are where the physics made them, and that
+// includes a grenade fired into the ground, which explodes in the step that fires it and is never
+// seen as a projectile. (Two at one spot, the double explosion of a grenade that runs out of
+// time, are one mark.)
+static uint32_t ddnet_world_marks(ft_game *game, const ft_world *world, ft_world_mark *out, uint32_t capacity) {
+  (void)game;
+  if (!world || !world->marks) return 0;
+  uint32_t count = 0;
+  for (int i = 0; i < world->physics_particle_event_count; ++i) {
+    const dd_physics_particle_event_t *event = &world->physics_particle_events[i];
+    if (event->type != DDNET_PARTICLE_EXPLOSION) continue;
+    const ft_vec2 at = {event->x / PX_PER_TILE, event->y / PX_PER_TILE};
+    bool seen = false;
+    for (uint32_t k = 0; k < count && k < capacity && !seen; ++k)
+      seen = fabsf(out[k].position.x - at.x) < 0.5f / PX_PER_TILE && fabsf(out[k].position.y - at.y) < 0.5f / PX_PER_TILE;
+    if (seen) continue;
+    if (count < capacity) {
+      ft_world_mark *mark = &out[count];
+      mark->position = at;
+      mark->radius = 135.f / PX_PER_TILE;
+      mark->fill = (ft_color){1.f, 0.2f, 0.f, 0.15f};
+      mark->ring = (ft_color){1.f, 0.3f, 0.f, 0.6f};
+      mark->dot = (ft_color){1.f, 0.f, 0.f, 1.f};
+    }
+    ++count;
+  }
+  return count;
 }
 
 static bool hook_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
@@ -1615,6 +1637,7 @@ static ft_world *dd_world_create(ft_game *game, const ft_world_desc *desc) {
   world->level = level;
   world->game = game;
   world->index = desc->world_index;
+  world->marks = desc->struct_size >= offsetof(ft_world_desc, flags) + sizeof(desc->flags) && (desc->flags & FT_WORLD_MARKS);
 #if DD_UNIQUE
   world->tick = level->prototype.tick;
   world->collision = &level->collision;
@@ -2352,6 +2375,7 @@ static const ft_game_module module = {
     .entity_prop_set = ddnet_entity_prop_set,
     .entity_count = ddnet_entity_count,
     .entity_trail = ddnet_entity_trail,
+    .world_marks = ddnet_world_marks,
 
     .render = ddnet_render,
     .resources_create = ddnet_resources_create,

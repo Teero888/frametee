@@ -231,9 +231,12 @@ module must not emit persistent presentation effects while stepping them.
 The paths of a module's other entity classes (projectiles, beams, hooks) are
 followed too, by their reflected `position`, `from` and `origin`; the optional
 `entity_trail` says how one looks and, for a projectile that hits something,
-where its last step really ends and how to mark that (DDNet draws a grenade's
-explosion reach there). It can also ask for a rope from an anchor to the entity
-at a step instead of the path, which is how DDNet draws a hook that holds on.
+where its last step really ends. It can also ask for a rope from an anchor to
+the entity at a step instead of the path, which is how DDNet draws a hook that
+holds on. A prediction's worlds are created with `FT_WORLD_MARKS`, and after
+each step the optional `world_marks` says what that step left to mark: DDNet's
+explosions and how far they reach, including those of grenades that explode in
+the step that fires them and so never exist as an entity.
 
 Snippet effects are ordered, reversible transforms over authored input. The
 engine owns only the ordered instances, opaque parameter bytes, undo/project

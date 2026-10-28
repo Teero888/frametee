@@ -124,7 +124,7 @@ static ft_world *prediction_world(timeline_state_t *timeline, timeline_group_t *
     world = NULL;
   }
   if (!world) {
-    world = gh_world_create(host, timeline->ui->gfx_handler->level, players, -1);
+    world = gh_world_create_flags(host, timeline->ui->gfx_handler->level, players, -1, FT_WORLD_MARKS);
     group->prediction_worlds[line_index] = world;
   }
   if (world) gh_world_copy(host, world, source);
@@ -514,28 +514,39 @@ static void entity_stroke(prediction_draw_t *d, const stroke_t *stroke, const ft
 }
 
 // Draws a path and lets it go. One whose entity is gone runs on to where the
-// game says its last step took it, and gets its end marked there.
+// game says its last step took it.
 static void entity_path_end(prediction_draw_t *d, entity_path_t *path, bool gone) {
   const ft_entity_trail *style = &path->style;
   if (gone && style->has_next && path->stroke.count > 0) {
     vec4 color;
     entity_color(d, style->color, color);
     stroke_add(&path->stroke, style->next, color);
-    if (style->end_radius > 0.f) {
-      if (style->end_fill.a > 0.f) {
-        entity_color(d, style->end_fill, color);
-        draw_circle(d, LAYER_REACH, style->next, style->end_radius, color, 0.f);
-      }
-      if (style->end_ring.a > 0.f) {
-        entity_color(d, style->end_ring, color);
-        draw_circle(d, LAYER_RING, style->next, style->end_radius, color, fmaxf(1.f, d->width_px * 0.5f));
-      }
-      entity_dot(d, style->next, entity_width(d, style) * 3.f, style->color);
-    }
   }
   if (!style->rope_only) entity_stroke(d, &path->stroke, style);
   free(path->stroke.points);
   memset(&path->stroke, 0, sizeof(path->stroke));
+}
+
+// What the step the world just took left to mark: an explosion's reach, a ring
+// around it and a dot where it was.
+static void draw_marks(game_host_t *host, const ft_world *world, prediction_draw_t *d) {
+  enum { MAX_MARKS = 32 };
+  ft_world_mark marks[MAX_MARKS];
+  uint32_t count = gh_world_marks(host, world, marks, MAX_MARKS);
+  if (count > MAX_MARKS) count = MAX_MARKS;
+  for (uint32_t i = 0; i < count; ++i) {
+    const ft_world_mark *mark = &marks[i];
+    vec4 color;
+    if (mark->radius > 0.f && mark->fill.a > 0.f) {
+      entity_color(d, mark->fill, color);
+      draw_circle(d, LAYER_REACH, mark->position, mark->radius, color, 0.f);
+    }
+    if (mark->radius > 0.f && mark->ring.a > 0.f) {
+      entity_color(d, mark->ring, color);
+      draw_circle(d, LAYER_RING, mark->position, mark->radius, color, fmaxf(1.f, d->width_px * 0.5f));
+    }
+    if (mark->dot.a > 0.f) entity_dot(d, mark->position, 0.75f * d->width_px * 3.f, mark->dot);
+  }
 }
 
 static int entity_path_start(entity_traces_t *t) {
@@ -849,7 +860,10 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
         memcpy(packed_inputs + (size_t)player * input_size, input.bytes, input_size);
       }
       gh_world_step_playback(host, world, packed_inputs, replaying ? playback : NULL, (unsigned)players);
-      if (!is_3d) entity_traces_step(host, world, &entities, &draw, true);
+      if (!is_3d) {
+        entity_traces_step(host, world, &entities, &draw, true);
+        draw_marks(host, world, &draw);
+      }
 
       for (int player = 0; player < players; ++player) {
         const int track = tracks[player];
@@ -1034,7 +1048,28 @@ static bool render_rule_component(prediction_color_rule_t *rule, ft_value_kind k
   return changed;
 }
 
-static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind kind) {
+// A trigger's number, dragged: in whole steps for an integer property, and
+// within the property's own range where it has one.
+static bool rule_number(const char *label, double *value, const ft_prop_desc *property) {
+  const bool scalar = property->kind == FT_VALUE_INT || property->kind == FT_VALUE_FLOAT;
+  const bool bounded = scalar && property->min_value < property->max_value;
+  const ImGuiSliderFlags flags = bounded ? ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None;
+  bool changed;
+  if (property->kind == FT_VALUE_INT) {
+    int number = (int)fmax(fmin(round(*value), (double)INT_MAX), (double)INT_MIN);
+    changed = igDragInt(label, &number, 0.25f, bounded ? (int)property->min_value : 0, bounded ? (int)property->max_value : 0, "%d",
+                        flags);
+    if (changed) *value = number;
+  } else {
+    changed = igDragScalar(label, ImGuiDataType_Double, value, 0.1f, bounded ? &property->min_value : NULL,
+                           bounded ? &property->max_value : NULL, "%.6g", flags);
+  }
+  if (!isfinite(*value)) *value = 0.0;
+  return changed;
+}
+
+static bool render_rule_comparison(prediction_color_rule_t *rule, const ft_prop_desc *property) {
+  const ft_value_kind kind = property->kind;
   bool changed = false;
   if (kind == FT_VALUE_BOOL) {
     if (rule->comparison != PREDICTION_COMPARE_EQUAL && rule->comparison != PREDICTION_COMPARE_CHANGED) {
@@ -1079,21 +1114,11 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
     }
     igEndCombo();
   }
-  const char *format = kind == FT_VALUE_INT ? "%.0f" : "%.6g";
   if (rule->comparison == PREDICTION_COMPARE_SCALE) {
-    if (igInputDouble("From", &rule->from, 0.0, 0.0, format, 0)) {
-      if (!isfinite(rule->from)) rule->from = 0.0;
-      changed = true;
-    }
-    if (igInputDouble("To", &rule->target, 0.0, 0.0, format, 0)) {
-      if (!isfinite(rule->target)) rule->target = 0.0;
-      changed = true;
-    }
+    changed |= rule_number("From", &rule->from, property);
+    changed |= rule_number("To", &rule->target, property);
   } else if (rule->comparison != PREDICTION_COMPARE_CHANGED) {
-    if (igInputDouble("Value", &rule->target, 0.0, 0.0, format, 0)) {
-      if (!isfinite(rule->target)) rule->target = 0.0;
-      changed = true;
-    }
+    changed |= rule_number("Value", &rule->target, property);
   }
   return changed;
 }
@@ -1157,7 +1182,7 @@ static bool speed_and_jump_rules(prediction_line_t *line, const ft_entity_class 
     color_rule_select_property(rule, &player_class->props[velocity]);
     rule->comparison = PREDICTION_COMPARE_SCALE;
     rule->from = 0.0;
-    rule->target = 40.0;
+    rule->target = 75.0;
     memcpy(rule->color, (float[4]){0.f, 1.f, 0.f, 1.f}, sizeof(rule->color));
     rule->enabled = true;
   }
@@ -1182,7 +1207,7 @@ static bool render_color_rules(prediction_line_t *line, int line_index, const ft
     const ft_prop_desc *property = player_class ? color_rule_property(player_class, rule, NULL) : NULL;
     if (property) {
       changed |= render_rule_component(rule, property->kind);
-      changed |= render_rule_comparison(rule, property->kind);
+      changed |= render_rule_comparison(rule, property);
 
       if (rule->comparison == PREDICTION_COMPARE_CHANGED && color_rule_is_velocity(rule))
         changed |= render_rule_change_mode(rule);

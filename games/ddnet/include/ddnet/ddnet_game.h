@@ -426,6 +426,9 @@ struct ft_world {
   // they matter (see ddnet_world_sync); ddnet_world_entities_current brings
   // them up to date before anything reads them.
   bool entities_stale;
+  // A prediction's world (FT_WORLD_MARKS): its steps keep their explosions, for
+  // world_marks, though it shows no effects. A copy into it keeps this.
+  bool marks;
 };
 
 // --- the worlds of the physics in a world -------------------------------------
