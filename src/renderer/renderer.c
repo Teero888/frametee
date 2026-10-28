@@ -2479,16 +2479,166 @@ static void draw_polygon_smooth(gfx_handler_t *handler, const vec2 *points, uint
   smooth_path_end(&path);
 }
 
-// TODO: ensuring the width of the thing is atleast 1px is kinda expensive. think of another way to do this
-static void draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness, float width_px);
+float renderer_world_per_pixel(gfx_handler_t *h, const float *at) { return world_per_pixel(h, at); }
 
-void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness) {
-  draw_line(handler, p1, p2, color, thickness, 0.f);
+// A row of four vertices across a stroke at `at`, pushed out along `offset` by
+// `reach`: solid in the middle and transparent at the edges, or transparent
+// throughout for the faded end of an open stroke.
+static void stroke_row(primitive_vertex_t *row, const float *at, const float *offset, const float *reach, const float *color,
+                       float fade, bool end) {
+  for (uint32_t k = 0; k < 4; ++k) {
+    row[k].pos[0] = at[0] + offset[0] * reach[k];
+    row[k].pos[1] = at[1] + offset[1] * reach[k];
+    glm_vec4_copy((float *)color, row[k].color);
+    row[k].color[3] = end || k == 0 || k == 3 ? 0.f : color[3] * fade;
+  }
 }
 
-// A line of `thickness` world units, at least a pixel, or with width_px above
-// zero exactly that many pixels wide.
-static void draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness, float width_px) {
+// The fringe, the core and the other fringe between two rows.
+static uint32_t *stroke_strips(uint32_t *idx, uint32_t a, uint32_t b) {
+  for (uint32_t k = 0; k < 3; ++k) {
+    *idx++ = a + k;
+    *idx++ = b + k;
+    *idx++ = b + k + 1;
+    *idx++ = a + k;
+    *idx++ = b + k + 1;
+    *idx++ = a + k + 1;
+  }
+  return idx;
+}
+
+// A stroke width_px wide on screen, built like draw_polyline_smooth with two
+// differences. Its colour goes by segment, so a corner between two colours gets
+// a row of vertices for each and the colour changes there sharply. And the ends
+// of an open stroke fade over a pixel as well as its edges.
+//
+// Points less than a pixel from the one kept before them are left out first. A
+// path sampled every tick has many where it is slow or the view is far out, and
+// the corners of segments much shorter than the stroke is wide fold over each
+// other, which draws a translucent stroke twice there.
+static void draw_stroke_smooth(gfx_handler_t *handler, const stroke_point_t *points, uint32_t count, float width_px,
+                               bool closed) {
+  if (count < 2) return;
+  const float pixel = world_per_pixel(handler, points[0].pos);
+  const float thickness = width_px * pixel;
+
+  // The kept points and after them their segments' normals, and each segment's colour.
+  vec2 stack_points[SMOOTH_STACK_POINTS * 2];
+  vec4 stack_colors[SMOOTH_STACK_POINTS];
+  vec2 *kept_points = count <= SMOOTH_STACK_POINTS ? stack_points : malloc(sizeof(vec2) * 2 * (size_t)count);
+  vec4 *colors = count <= SMOOTH_STACK_POINTS ? stack_colors : malloc(sizeof(vec4) * (size_t)count);
+  if (!kept_points || !colors) goto done;
+
+  uint32_t kept = 1;
+  glm_vec2_copy((float *)points[0].pos, kept_points[0]);
+  for (uint32_t i = 1; i < count; ++i) {
+    const float dx = points[i].pos[0] - kept_points[kept - 1][0], dy = points[i].pos[1] - kept_points[kept - 1][1];
+    const float distance_squared = dx * dx + dy * dy;
+    if (distance_squared < pixel * pixel) {
+      if (i + 1 < count) continue;
+      // The last point stays where it is, and the one kept before it goes instead.
+      if (kept > 1) --kept;
+      else if (distance_squared <= pixel * pixel * 1e-6f) continue;
+    }
+    glm_vec4_copy((float *)points[i - 1].color, colors[kept - 1]);
+    glm_vec2_copy((float *)points[i].pos, kept_points[kept++]);
+  }
+  if (closed) {
+    while (kept > 2 && fabsf(kept_points[kept - 1][0] - kept_points[0][0]) < pixel &&
+           fabsf(kept_points[kept - 1][1] - kept_points[0][1]) < pixel)
+      --kept;
+    glm_vec4_copy((float *)points[count - 1].color, colors[kept - 1]);
+    closed = kept > 2;
+  }
+  if (kept < 2) goto done;
+
+  vec2 *normals = kept_points + count;
+  segment_normals(kept_points, kept, closed, normals);
+  const uint32_t segments = closed ? kept : kept - 1;
+  // At most four rows a point (a hairpin's), each joined to the one before it and
+  // two more for a hairpin's ends.
+  if (!ensure_primitive_space(handler, kept * 4 * 4, (segments + 2 + kept * 2) * 18)) goto done;
+
+  // As in draw_polyline_smooth: a line under a pixel has no core, only fringes at an alpha that thins it.
+  const float half = fmaxf(thickness - pixel, 0.f) * 0.5f;
+  const float fade = thickness < pixel ? fmaxf(thickness, 0.f) / pixel : 1.f;
+  const float reach[4] = {half + pixel, half, -half, -half - pixel};
+
+  renderer_state_t *renderer = &handler->renderer;
+  const uint32_t base = renderer->primitive_vertex_count;
+  primitive_vertex_t *vtx = renderer->vertex_buffer_ptr + base;
+  uint32_t *idx = renderer->index_buffer_ptr + renderer->primitive_index_count;
+  const uint32_t *idx_start = idx;
+  uint32_t rows = 0, first_row = 0, last_row = 0;
+  for (uint32_t i = 0; i < kept; ++i) {
+    const float *at = kept_points[i];
+    const float *before = normals[(i + segments - 1) % segments], *after = normals[i % segments];
+    const float *in_color = colors[(i + kept - 1) % kept], *out_color = colors[i];
+
+    // An open end, and beyond it the row it fades out to, a pixel along the
+    // segment (whose way is its normal turned a quarter back).
+    const bool start = !closed && i == 0, end = !closed && i == kept - 1;
+    if (start || end) {
+      const float *normal = start ? after : before;
+      const float way = start ? -pixel : pixel;
+      const vec2 beyond = {at[0] - normal[1] * way, at[1] + normal[0] * way};
+      stroke_row(vtx + rows * 4, beyond, normal, reach, start ? out_color : in_color, fade, true);
+      const uint32_t cap_row = base + rows++ * 4;
+      stroke_row(vtx + rows * 4, at, normal, reach, start ? out_color : in_color, fade, false);
+      const uint32_t row = base + rows++ * 4;
+      if (start) {
+        idx = stroke_strips(idx, cap_row, row);
+      } else {
+        idx = stroke_strips(idx, last_row, row);
+        idx = stroke_strips(idx, row, cap_row);
+      }
+      last_row = row;
+      continue;
+    }
+
+    // A hairpin, where a mitre would pinch the stroke to nothing: the two sides
+    // end square half a width on, faded like open ends, and overlap.
+    if (before[0] * after[0] + before[1] * after[1] < -0.875f && i > 0) {
+      const float *sides[2] = {before, after};
+      const float ways[2][2] = {{half, half + pixel}, {-half, -half - pixel}};
+      uint32_t row[2][2];
+      for (int side = 0; side < 2; ++side)
+        for (int k = 0; k < 2; ++k) {
+          const float *normal = sides[side];
+          const vec2 p = {at[0] - normal[1] * ways[side][k], at[1] + normal[0] * ways[side][k]};
+          stroke_row(vtx + rows * 4, p, normal, reach, side == 0 ? in_color : out_color, fade, k == 1);
+          row[side][k] = base + rows++ * 4;
+        }
+      idx = stroke_strips(idx, last_row, row[0][0]);
+      idx = stroke_strips(idx, row[0][0], row[0][1]);
+      idx = stroke_strips(idx, row[1][1], row[1][0]);
+      last_row = row[1][0];
+      continue;
+    }
+
+    vec2 offset;
+    corner_offset(before, after, offset);
+    stroke_row(vtx + rows * 4, at, offset, reach, in_color, fade, false);
+    const uint32_t in_row = base + rows++ * 4;
+    if (i > 0) idx = stroke_strips(idx, last_row, in_row);
+    else first_row = in_row;
+    last_row = in_row;
+    if (memcmp(in_color, out_color, sizeof(vec4)) != 0) {
+      stroke_row(vtx + rows * 4, at, offset, reach, out_color, fade, false);
+      last_row = base + rows++ * 4;
+    }
+  }
+  if (closed) idx = stroke_strips(idx, last_row, first_row);
+  renderer->primitive_vertex_count += rows * 4;
+  renderer->primitive_index_count += (uint32_t)(idx - idx_start);
+
+done:
+  if (kept_points != stack_points) free(kept_points);
+  if (colors != stack_colors) free(colors);
+}
+
+// TODO: ensuring the width of the thing is atleast 1px is kinda expensive. think of another way to do this
+void renderer_draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, float thickness) {
   // Calculate perpendicular direction
   vec2 dir;
   glm_vec2_sub(p2, p1, dir);
@@ -2531,10 +2681,6 @@ static void draw_line(gfx_handler_t *handler, vec2 p1, vec2 p2, vec4 color, floa
 
   float half_t1 = fmaxf(thickness * 0.5f, min_world_thickness_p1 * 0.5f);
   float half_t2 = fmaxf(thickness * 0.5f, min_world_thickness_p2 * 0.5f);
-  if (width_px > 0.f) {
-    half_t1 = width_px * 0.5f / pix_per_unit_p1;
-    half_t2 = width_px * 0.5f / pix_per_unit_p2;
-  }
 
   // Create quad vertices
   vtx[0].pos[0] = p1[0] - normal[0] * half_t1;
@@ -3476,25 +3622,28 @@ void renderer_submit_line(struct gfx_handler_t *h, float z, vec2 p1, vec2 p2, ve
 // goes right after that command's own.
 static size_t transient_start(const renderer_state_t *r) { return (r->transient_offset + 15) & ~(size_t)15; }
 
-void renderer_submit_line_batch(struct gfx_handler_t *h, float z, const line_segment_t *segments, uint32_t count) {
+void renderer_submit_stroke(gfx_handler_t *h, float z, const stroke_point_t *points, uint32_t count, float width_px,
+                            bool closed) {
   renderer_state_t *renderer = &h->renderer;
-  if (!segments || count == 0 || (size_t)count > SIZE_MAX / sizeof(*segments)) return;
-  const size_t size = sizeof(*segments) * (size_t)count;
+  if (!points || count < 2 || (size_t)count > SIZE_MAX / sizeof(*points)) return;
+  const size_t size = sizeof(*points) * (size_t)count;
   const size_t start = transient_start(renderer);
   if (start > renderer->transient_capacity || size > renderer->transient_capacity - start) {
-    log_error(LOG_SOURCE, "Transient memory exhausted while queuing %u line segments.", count);
+    log_error(LOG_SOURCE, "Transient memory exhausted while queuing a stroke of %u points.", count);
     return;
   }
   if (!queue_reserve_one(renderer)) return;
-  line_segment_t *copy = (line_segment_t *)(renderer->transient_memory + start);
-  memcpy(copy, segments, size);
+  stroke_point_t *copy = (stroke_point_t *)(renderer->transient_memory + start);
+  memcpy(copy, points, size);
   renderer->transient_offset = start + size;
 
   render_command_t *cmd = &renderer->queue.commands[renderer->queue.count++];
-  cmd->type = RENDER_CMD_LINE_BATCH;
+  cmd->type = RENDER_CMD_STROKE;
   cmd->z = z;
-  cmd->data.line_batch.segments = copy;
-  cmd->data.line_batch.count = count;
+  cmd->data.stroke.points = copy;
+  cmd->data.stroke.count = count;
+  cmd->data.stroke.width_px = width_px;
+  cmd->data.stroke.closed = closed && count > 2;
 }
 
 static render_command_t *submit_path(gfx_handler_t *h, render_cmd_type_t type, float z, const vec2 *points, uint32_t count,
@@ -3694,7 +3843,7 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
     // Flush primitives if switching to non-primitive
     if (q->type != RENDER_CMD_RECT_FILLED && q->type != RENDER_CMD_RECT_ROUNDED && q->type != RENDER_CMD_CIRCLE_FILLED &&
         q->type != RENDER_CMD_TRIANGLE_FILLED &&
-        q->type != RENDER_CMD_LINE && q->type != RENDER_CMD_LINE_BATCH && q->type != RENDER_CMD_POLYLINE &&
+        q->type != RENDER_CMD_LINE && q->type != RENDER_CMD_STROKE && q->type != RENDER_CMD_POLYLINE &&
         q->type != RENDER_CMD_POLYGON && r->primitive_index_count > r->primitive_index_offset_drawn) {
       flush_primitives(h, cmd);
     }
@@ -3752,11 +3901,8 @@ void renderer_flush_queue(struct gfx_handler_t *h, VkCommandBuffer cmd) {
       renderer_draw_line(h, q->data.prim.p1, q->data.prim.p2, q->data.prim.color, q->data.prim.thickness);
       break;
 
-    case RENDER_CMD_LINE_BATCH:
-      for (uint32_t segment = 0; segment < q->data.line_batch.count; ++segment) {
-        line_segment_t *line = &q->data.line_batch.segments[segment];
-        draw_line(h, line->p1, line->p2, line->color, line->thickness, line->width_px);
-      }
+    case RENDER_CMD_STROKE:
+      draw_stroke_smooth(h, q->data.stroke.points, q->data.stroke.count, q->data.stroke.width_px, q->data.stroke.closed);
       break;
 
     case RENDER_CMD_POLYLINE:

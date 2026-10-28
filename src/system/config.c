@@ -230,13 +230,15 @@ static void load_prediction_config(toml_datum_t table, prediction_settings_t *se
       config_color(table, key, rule->color);
       prediction_config_key(key, sizeof(key), line_index, rule_index, "target");
       if (config_number(table, key, &number)) rule->target = number;
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "from");
+      if (config_number(table, key, &number)) rule->from = number;
       prediction_config_key(key, sizeof(key), line_index, rule_index, "component");
       if (config_int(table, key, &integer) && integer >= PREDICTION_COMPONENT_VALUE &&
           integer <= PREDICTION_COMPONENT_MAGNITUDE)
         rule->component = (prediction_rule_component_t)integer;
       prediction_config_key(key, sizeof(key), line_index, rule_index, "comparison");
       if (config_int(table, key, &integer) && integer >= PREDICTION_COMPARE_EQUAL &&
-          integer <= PREDICTION_COMPARE_CHANGED)
+          integer <= PREDICTION_COMPARE_SCALE)
         rule->comparison = (prediction_rule_comparison_t)integer;
       prediction_config_key(key, sizeof(key), line_index, rule_index, "change_mode");
       if (config_int(table, key, &integer) && integer >= PREDICTION_CHANGE_ANY &&
@@ -293,6 +295,9 @@ static void write_prediction_config(FILE *fp, const prediction_settings_t *setti
       prediction_config_key(key, sizeof(key), line_index, rule_index, "target");
       write_toml_key(fp, key);
       fprintf(fp, " = %.17g\n", rule->target);
+      prediction_config_key(key, sizeof(key), line_index, rule_index, "from");
+      write_toml_key(fp, key);
+      fprintf(fp, " = %.17g\n", rule->from);
       prediction_config_key(key, sizeof(key), line_index, rule_index, "component");
       write_toml_key(fp, key);
       fprintf(fp, " = %d\n", (int)rule->component);

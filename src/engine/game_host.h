@@ -219,6 +219,8 @@ bool gh_export_run(game_host_t *host, unsigned index, const ft_export_request *r
 bool gh_entity_prop_get(game_host_t *host, const ft_world *world, unsigned entity_class, int entity, unsigned prop, ft_value *out);
 bool gh_entity_prop_set(game_host_t *host, ft_world *world, unsigned entity_class, int entity, unsigned prop, const ft_value *value);
 int gh_entity_count(game_host_t *host, const ft_world *world, unsigned entity_class);
+// How the prediction draws an entity's path; false when the game says nothing about it.
+bool gh_entity_trail(game_host_t *host, const ft_world *world, unsigned entity_class, int entity, ft_entity_trail *out);
 const ft_entity_class *gh_entity_class(const game_host_t *host, unsigned index);
 unsigned gh_entity_class_count(const game_host_t *host);
 

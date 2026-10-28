@@ -432,6 +432,7 @@ enum ddnet_player_prop {
   PROP_JUMPS_LEFT,
   PROP_ENDLESS_JUMP,
   PROP_GROUNDED,
+  PROP_CAN_JUMP,
   PROP_HOOK_STATE,
   PROP_HOOKED_PLAYER,
   PROP_RACE_TIME,
@@ -531,6 +532,8 @@ static const ft_prop_desc player_props[PROP_COUNT] = {
                          .max_value = 255},
     [PROP_ENDLESS_JUMP] = {.id = "endless_jump", .display_name = "Endless jump", .group = "Powers", .kind = FT_VALUE_BOOL, .flags = DD_PROP_START},
     [PROP_GROUNDED] = {.id = "grounded", .display_name = "Grounded", .group = "Movement", .kind = FT_VALUE_BOOL},
+    // A jump from the ground or in the air, whichever the tee would make now.
+    [PROP_CAN_JUMP] = {.id = "can_jump", .display_name = "Can jump", .group = "Movement", .kind = FT_VALUE_BOOL},
     [PROP_HOOK_STATE] = {.id = "hook_state", .display_name = "Hook state", .group = "Movement", .kind = FT_VALUE_INT},
     [PROP_HOOKED_PLAYER] = {.id = "hooked_player", .display_name = "Hooked player", .group = "Movement", .kind = FT_VALUE_INT},
     [PROP_RACE_TIME] = {.id = "race_time",
@@ -584,7 +587,7 @@ enum { PROP_GRENADES = PROP_COUNT };
 static const uint32_t unique_prop_ids[] = {PROP_POSITION, PROP_RACE_STARTED, PROP_RACE_ELAPSED, PROP_VELOCITY,
                                            PROP_ACTIVE_WEAPON, PROP_HAS_GRENADE, PROP_GRENADES, PROP_HEALTH,
                                            PROP_ARMOR, PROP_FREEZE_TIME, PROP_JUMPS, PROP_JUMPS_LEFT,
-                                           PROP_GROUNDED, PROP_HOOK_STATE, PROP_RACE_TIME};
+                                           PROP_GROUNDED, PROP_CAN_JUMP, PROP_HOOK_STATE, PROP_RACE_TIME};
 #define DD_PLAYER_PROP_COUNT ((uint32_t)(sizeof(unique_prop_ids) / sizeof(unique_prop_ids[0])))
 static const ft_prop_desc grenades_prop = {.id = "grenades",
                                            .display_name = "Grenades",
@@ -617,6 +620,7 @@ static uint32_t player_prop_id(uint32_t index) { return index; }
 // reads whatever properties they list.
 enum ddnet_projectile_prop {
   PROJ_POSITION = 0,
+  PROJ_ORIGIN,
   PROJ_DIRECTION,
   PROJ_TYPE,
   PROJ_OWNER,
@@ -633,6 +637,8 @@ enum ddnet_projectile_prop {
 // bouncing one restarts its flight at each bounce, and its trail with it.
 static const ft_prop_desc projectile_props[PROJ_PROP_COUNT] = {
     [PROJ_POSITION] = {"position", "Position", "Motion", "tiles", FT_VALUE_VEC2, FT_PROP_SUMMARY, 0, 0},
+    // where it was fired from, or bounced off last
+    [PROJ_ORIGIN] = {"origin", "Origin", "Motion", "tiles", FT_VALUE_VEC2, 0, 0, 0},
     [PROJ_DIRECTION] = {"direction", "Direction", "Motion", NULL, FT_VALUE_VEC2, FT_PROP_IDENTITY, 0, 0},
     [PROJ_TYPE] = {"type", "Weapon", "Identity", NULL, FT_VALUE_INT, FT_PROP_SUMMARY | FT_PROP_IDENTITY, 0, 0},
     [PROJ_OWNER] = {"owner", "Owner", "Identity", NULL, FT_VALUE_INT, FT_PROP_IDENTITY, 0, 0},
@@ -834,6 +840,13 @@ static bool ddnet_entity_prop_get(ft_game *game, const ft_world *world, uint32_t
     *out = (ft_value){.kind = FT_VALUE_BOOL,
                       .as.b = world->level && ddnet_collision_is_on_ground(&world->level->collision, c->pos, 28.f)};
     return true;
+  case PROP_CAN_JUMP: {
+    // (the core's own test: the second bit of `jumped` is set once the air jumps are gone, and a tee
+    // on the ground jumps from it unless it has no jumps at all)
+    const bool grounded = world->level && ddnet_collision_is_on_ground(&world->level->collision, c->pos, 28.f);
+    *out = (ft_value){.kind = FT_VALUE_BOOL, .as.b = !(c->jumped & 2) || (grounded && c->jumps != 0)};
+    return true;
+  }
   case PROP_HOOK_STATE:
     *out = (ft_value){.kind = FT_VALUE_INT, .as.i = c->hook_state};
     return true;
@@ -1084,25 +1097,35 @@ static int32_t ddnet_entity_count(ft_game *game, const ft_world *world, uint32_t
   }
 }
 
-static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
+// The nth projectile of a world, and the world of the physics it flies in (for Unique Race the
+// world of the client `owner`).
+static const ddnet_entity_t *projectile_at(const ft_world *world, int32_t entity, const ddnet_world_t **space, int *owner) {
+  if (!world || entity < 0) return NULL;
 #if DD_UNIQUE
   // (the grenades of the players' worlds, in client order)
-  if (!world || entity < 0) return false;
-  const ddnet_world_t *space = NULL;
-  int owner = 0;
-  for (; owner < world->client_count; ++owner) {
-    space = world->spaces[owner];
-    if (!space) continue;
-    if (entity < space->num_projectiles) break;
-    entity -= space->num_projectiles;
+  for (int client_id = 0; client_id < world->client_count; ++client_id) {
+    const ddnet_world_t *client_space = world->spaces[client_id];
+    if (!client_space) continue;
+    if (entity < client_space->num_projectiles) {
+      *space = client_space;
+      *owner = client_id;
+      return &client_space->projectiles[entity];
+    }
+    entity -= client_space->num_projectiles;
   }
-  if (owner >= world->client_count) return false;
-  const ddnet_entity_t *ent = &space->projectiles[entity];
+  return NULL;
 #else
-  const ddnet_world_t *space = &world->core;
-  const ddnet_entity_t *ent = entity_at(world, DDNET_ENTTYPE_PROJECTILE, DDNET_ENTITY_PROJECTILE, entity);
-  if (!ent) return false;
+  *space = &world->core;
+  *owner = -1;
+  return entity_at(world, DDNET_ENTTYPE_PROJECTILE, DDNET_ENTITY_PROJECTILE, entity);
 #endif
+}
+
+static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
+  const ddnet_world_t *space = NULL;
+  int owner = -1;
+  const ddnet_entity_t *ent = projectile_at(world, entity, &space, &owner);
+  if (!ent) return false;
   const ddnet_projectile_t *proj = &ent->u.projectile;
 
   switch (prop) {
@@ -1114,6 +1137,9 @@ static bool projectile_prop_get(const ft_world *world, int32_t entity, uint32_t 
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {pos.x / PX_PER_TILE, pos.y / PX_PER_TILE}};
     return true;
   }
+  case PROJ_ORIGIN:
+    *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {ent->pos.x / PX_PER_TILE, ent->pos.y / PX_PER_TILE}};
+    return true;
   case PROJ_DIRECTION:
     *out = (ft_value){.kind = FT_VALUE_VEC2, .as.v = {proj->direction.x, proj->direction.y}};
     return true;
@@ -1199,6 +1225,72 @@ static bool laser_prop_get(const ft_world *world, int32_t entity, uint32_t prop,
     return false;
   }
 #endif
+}
+
+// How the prediction draws projectiles, lasers and hooks: lasers in DDNet's colours, the rest as
+// Ultraforce draws them. A projectile's path goes on to where the map stops it, and an explosive
+// one's ends in its explosion, drawn as far as it reaches.
+static bool ddnet_entity_trail(ft_game *game, const ft_world *world, uint32_t entity_class, int32_t entity,
+                               ft_entity_trail *out) {
+  (void)game;
+  if (!world) return false;
+  ddnet_world_entities_current(world);
+  switch (entity_class) {
+  case DD_CLASS_PROJECTILE: {
+    const ddnet_world_t *space = NULL;
+    int owner = -1;
+    const ddnet_entity_t *ent = projectile_at(world, entity, &space, &owner);
+    if (!ent) return false;
+    const ddnet_projectile_t *proj = &ent->u.projectile;
+    // CProjectile::Tick: the coming tick takes it on by a tick's flight, or as far as the map lets it.
+    const ddnet_vec2_t from = ddnet_projectile_get_pos(space, ent, (space->tick - proj->start_tick) / (float)GAME_TICK_SPEED);
+    ddnet_vec2_t to = ddnet_projectile_get_pos(space, ent, (space->tick + 1 - proj->start_tick) / (float)GAME_TICK_SPEED);
+    if (world->level) ddnet_collision_intersect_line(&world->level->collision, from, to, &to, NULL);
+    out->has_next = true;
+    out->next = (ft_vec2){to.x / PX_PER_TILE, to.y / PX_PER_TILE};
+    out->width = 0.75f;
+#if DD_UNIQUE
+    const bool explosive = true;
+#else
+    const bool explosive = proj->explosive;
+#endif
+    if (!explosive) {
+      out->color = (ft_color){1.f, 0.8f, 0.f, 1.f};
+      return true;
+    }
+    out->color = (ft_color){1.f, 0.f, 0.f, 1.f};
+    out->end_radius = 135.f / PX_PER_TILE; // (CGameContext::CreateExplosion)
+    out->end_fill = (ft_color){1.f, 0.2f, 0.f, 0.15f};
+    out->end_ring = (ft_color){1.f, 0.3f, 0.f, 0.6f};
+    return true;
+  }
+#if !DD_UNIQUE
+  case DD_CLASS_LASER: {
+    const ddnet_entity_t *ent = entity_at(world, DDNET_ENTTYPE_LASER, DDNET_ENTITY_LASER, entity);
+    if (!ent) return false;
+    // (the client's laser colours at their defaults)
+    const bool shotgun = ent->u.laser.type == DDNET_WEAPON_SHOTGUN;
+    out->color = shotgun ? (ft_color){0.85f, 0.65f, 0.35f, 1.f} : (ft_color){0.498f, 0.498f, 1.f, 1.f};
+    out->rim = shotgun ? (ft_color){0.1224f, 0.0951f, 0.0423f, 1.f} : (ft_color){0.0744f, 0.0744f, 0.2472f, 1.f};
+    out->width = 0.75f;
+    out->dot = 3.f;
+    return true;
+  }
+#endif
+  case DD_CLASS_HOOK: {
+    // (as Ultraforce draws a hook: the rope from the tee at every tick it holds on, and nothing of the throw)
+    const ddnet_character_t *chr = ddnet_player_character(world, hook_player(world, entity));
+    if (!chr) return false;
+    out->color = (ft_color){1.f, 0.5f, 0.f, 0.6f};
+    out->width = 0.5f;
+    out->rope = chr->core.hook_state == DDNET_HOOK_GRABBED;
+    out->rope_only = true;
+    out->anchor = (ft_vec2){chr->pos.x / PX_PER_TILE, chr->pos.y / PX_PER_TILE};
+    return true;
+  }
+  default:
+    return false;
+  }
 }
 
 static bool hook_prop_get(const ft_world *world, int32_t entity, uint32_t prop, ft_value *out) {
@@ -2259,6 +2351,7 @@ static const ft_game_module module = {
     .entity_prop_get = ddnet_entity_prop_get,
     .entity_prop_set = ddnet_entity_prop_set,
     .entity_count = ddnet_entity_count,
+    .entity_trail = ddnet_entity_trail,
 
     .render = ddnet_render,
     .resources_create = ddnet_resources_create,

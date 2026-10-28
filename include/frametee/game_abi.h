@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 34u
+#define FT_GAME_ABI_VERSION 35u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -726,6 +726,36 @@ typedef struct ft_entity_class {
   const ft_prop_desc *props;
   uint32_t prop_count;
 } ft_entity_class;
+
+/* How the prediction draws the path of an entity that is not a player (see
+ * entity_trail): the game's projectiles, beams and hooks look like themselves
+ * rather than all alike. Widths are of the prediction line's width; a colour
+ * left at zero alpha leaves its part out, except `color`, which then takes the
+ * prediction line's own. The engine fades every colour with its line. */
+typedef struct ft_entity_trail {
+  uint32_t struct_size;
+  ft_color color;
+  ft_color rim; /* a line twice as wide under the path: a beam's dark edge */
+  float width;  /* zero for the engine's own */
+  float dot;    /* a dot this many widths across at the entity, where a beam ends; zero for none */
+  /* Where the entity's path through the coming step ends: where it will be
+   * after it, or where the level stops it on the way. When the entity is gone
+   * after that step, its path is drawn on to here and the end is marked. */
+  bool has_next;
+  ft_vec2 next;
+  /* The mark: a disc of this radius in world units, an explosion's reach,
+   * filled with end_fill and ringed with end_ring, with a dot of `color` at its
+   * centre. Zero leaves the end unmarked. */
+  float end_radius;
+  ft_color end_fill;
+  ft_color end_ring;
+  /* A line from `anchor` to the entity at this step, drawn at every step that
+   * sets it: a hook's rope while it holds on. With rope_only the ropes are all
+   * of the entity that is drawn, and its path is left out. */
+  bool rope;
+  bool rope_only;
+  ft_vec2 anchor;
+} ft_entity_trail;
 
 /* -------------------------------------------------------------------------
  * Settings
@@ -1704,6 +1734,9 @@ typedef struct ft_game_module {
   bool (*entity_prop_set)(ft_game *game, ft_world *world, uint32_t entity_class, int32_t entity, uint32_t prop,
                           const ft_value *value);
   int32_t (*entity_count)(ft_game *game, const ft_world *world, uint32_t entity_class);
+  /* Optional: how the prediction draws an entity's path as `world` has it.
+   * False, or NULL, draws it plainly in the prediction line's colour. */
+  bool (*entity_trail)(ft_game *game, const ft_world *world, uint32_t entity_class, int32_t entity, ft_entity_trail *out);
 
   /* ---- rendering (optional; skipped headless) ----
    * Called once per pass per visible world. A game that draws nothing in a

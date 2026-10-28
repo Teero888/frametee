@@ -248,6 +248,7 @@ static bool color_rule_condition(const resolved_color_rule_t *resolved, double v
   case PREDICTION_COMPARE_GREATER:
     return value > resolved->rule->target;
   case PREDICTION_COMPARE_CHANGED:
+  case PREDICTION_COMPARE_SCALE:
     return false;
   }
   return false;
@@ -270,9 +271,10 @@ static void resolve_color_rules(game_host_t *host, const prediction_line_t *line
                                      : rule->component >= PREDICTION_COMPONENT_X &&
                                            rule->component <= PREDICTION_COMPONENT_MAGNITUDE &&
                                            !(desc->kind == FT_VALUE_VEC2 && rule->component == PREDICTION_COMPONENT_Z);
-    if (!component_ok || rule->comparison < PREDICTION_COMPARE_EQUAL ||
-        rule->comparison > PREDICTION_COMPARE_CHANGED || !isfinite(rule->target))
+    if (!component_ok || rule->comparison < PREDICTION_COMPARE_EQUAL || rule->comparison > PREDICTION_COMPARE_SCALE ||
+        !isfinite(rule->target))
       continue;
+    if (rule->comparison == PREDICTION_COMPARE_SCALE && (desc->kind == FT_VALUE_BOOL || !isfinite(rule->from))) continue;
     resolved[i].property = (uint32_t)property;
     resolved[i].kind = desc->kind;
     resolved[i].valid = true;
@@ -294,6 +296,16 @@ static void update_player_color(game_host_t *host, const ft_world *world, int pl
       continue;
     }
 
+    if (rule->rule->comparison == PREDICTION_COMPARE_SCALE) {
+      const double span = rule->rule->target - rule->rule->from;
+      double amount = span != 0.0 ? (value - rule->rule->from) / span : (value >= rule->rule->target ? 1.0 : 0.0);
+      amount = fmin(fmax(amount, 0.0), 1.0) * rule->rule->color[3];
+      for (int c = 0; c < 3; ++c) color[c] = fminf(color[c] + (float)amount * rule->rule->color[c], 1.f);
+      state->previous = value;
+      state->have_previous = true;
+      continue;
+    }
+
     bool triggered = false;
     if (rule->rule->comparison == PREDICTION_COMPARE_CHANGED) {
       triggered = state->have_previous && color_rule_changed(rule, value, state->previous);
@@ -306,6 +318,89 @@ static void update_player_color(game_host_t *host, const ft_world *world, int pl
   }
 }
 
+// What a line draws goes in layers, from the bottom: how far the explosions at
+// the ends of entities' paths reach, then the rings around that, ropes, the
+// players' paths, the dark edges under entities' paths, the entities' paths,
+// and dots.
+enum { LAYER_REACH, LAYER_RING, LAYER_ROPES, LAYER_PLAYERS, LAYER_RIMS, LAYER_ENTITIES, LAYER_DOTS };
+
+typedef struct prediction_draw_t {
+  gfx_handler_t *gfx;
+  int line_index;
+  vec4 color;      // the line's
+  float width_px;  // the players' paths
+  float pixel;     // world units a pixel covers
+  stroke_point_t *scratch;
+  uint32_t scratch_cap;
+} prediction_draw_t;
+
+static float layer_z(const prediction_draw_t *d, int layer) {
+  return PREDICTION_Z + (float)d->line_index * 0.001f + (float)layer * 0.0001f;
+}
+
+// A path, a step at a time. A point's colour is that of the segment after it.
+typedef struct stroke_t {
+  stroke_point_t *points;
+  uint32_t count, cap;
+} stroke_t;
+
+static void stroke_add(stroke_t *stroke, ft_vec2 position, const float color[4]) {
+  if (stroke->count == stroke->cap) {
+    const uint32_t cap = stroke->cap ? stroke->cap * 2 : 64;
+    stroke_point_t *grown = realloc(stroke->points, sizeof(*grown) * cap);
+    if (!grown) return;
+    stroke->points = grown;
+    stroke->cap = cap;
+  }
+  if (stroke->count > 0) memcpy(stroke->points[stroke->count - 1].color, color, sizeof(float) * 4);
+  stroke_point_t *point = &stroke->points[stroke->count++];
+  point->pos[0] = position.x;
+  point->pos[1] = position.y;
+  memcpy(point->color, color, sizeof(float) * 4);
+}
+
+static void draw_stroke(prediction_draw_t *d, int layer, const stroke_t *stroke, float width_px) {
+  if (stroke->count >= 2) renderer_submit_stroke(d->gfx, layer_z(d, layer), stroke->points, stroke->count, width_px, false);
+}
+
+// The same path in one colour, under it.
+static void draw_stroke_in(prediction_draw_t *d, int layer, const stroke_t *stroke, const float color[4], float width_px) {
+  if (stroke->count < 2) return;
+  if (stroke->count > d->scratch_cap) {
+    stroke_point_t *grown = realloc(d->scratch, sizeof(*grown) * stroke->count);
+    if (!grown) return;
+    d->scratch = grown;
+    d->scratch_cap = stroke->count;
+  }
+  for (uint32_t i = 0; i < stroke->count; ++i) {
+    d->scratch[i].pos[0] = stroke->points[i].pos[0];
+    d->scratch[i].pos[1] = stroke->points[i].pos[1];
+    memcpy(d->scratch[i].color, color, sizeof(float) * 4);
+  }
+  renderer_submit_stroke(d->gfx, layer_z(d, layer), d->scratch, stroke->count, width_px, false);
+}
+
+// A circle of `radius` world units around `center`: filled, or a ring ring_px wide.
+static void draw_circle(prediction_draw_t *d, int layer, ft_vec2 center, float radius, const float color[4], float ring_px) {
+  enum { MAX_CIRCLE_POINTS = 128 };
+  const float radius_px = radius / d->pixel;
+  int count = (int)(radius_px * 0.5f);
+  if (count < 16) count = 16;
+  if (count > MAX_CIRCLE_POINTS) count = MAX_CIRCLE_POINTS;
+  stroke_point_t points[MAX_CIRCLE_POINTS];
+  vec2 outline[MAX_CIRCLE_POINTS];
+  for (int i = 0; i < count; ++i) {
+    const float angle = (float)i * 6.28318531f / (float)count;
+    outline[i][0] = points[i].pos[0] = center.x + cosf(angle) * radius;
+    outline[i][1] = points[i].pos[1] = center.y + sinf(angle) * radius;
+    memcpy(points[i].color, color, sizeof(float) * 4);
+  }
+  vec4 fill; // (the renderer copies a colour with aligned loads)
+  memcpy(fill, color, sizeof(fill));
+  if (ring_px > 0.f) renderer_submit_stroke(d->gfx, layer_z(d, layer), points, (uint32_t)count, ring_px, true);
+  else renderer_submit_polygon(d->gfx, layer_z(d, layer), outline, (uint32_t)count, fill);
+}
+
 // Everything else a game publishes besides its players (DDNet's projectiles,
 // lasers and hooks) is followed through the prediction too. Nothing about them
 // is known here beyond what the class lists: a class with a `from` and a
@@ -313,7 +408,8 @@ static void update_player_color(game_host_t *host, const ft_world *world, int pl
 // `position` leaves a trail, which goes on from step to step with the same
 // entity as entity_trail_match finds it. A trail that begins during the
 // prediction starts from the entity's `origin`, where the class has one (a
-// hook's tee), rather than a step's travel away from it.
+// hook's tee), rather than a step's travel away from it. How they look is the
+// game's (gh_entity_trail), down to where a trail ends and how that is marked.
 #define ENTITY_TRAIL_REACH 4.f // tiles an entity may move in a step and still be the same one
 #define ENTITY_MAX_IDENTITY 8
 
@@ -324,21 +420,29 @@ typedef struct entity_trace_t {
   int identity[ENTITY_MAX_IDENTITY];
   int identity_count;
   // The class at the previous step: where each entity was, for a beam where it
-  // started, and for a trail how far it moved and its identity.
+  // started, and for a trail how far it moved, its identity and its path.
   ft_vec2 *last;
   ft_vec2 *last_from;
   ft_vec2 *last_motion;
   uint64_t *last_identity;
+  int *last_path;
   int last_count;
 } entity_trace_t;
+
+// The path an entity leaves, drawn once it ends.
+typedef struct entity_path_t {
+  stroke_t stroke;
+  ft_entity_trail style; // as the entity last had it
+  // the rope drawn last, which a rope that has not moved does not draw again
+  ft_vec2 rope_from, rope_to;
+  bool roped;
+} entity_path_t;
 
 typedef struct entity_traces_t {
   entity_trace_t *traces;
   int count;
-  line_segment_t *segments;
-  uint32_t segment_count, segment_cap;
-  float color[4];
-  float width_px;
+  entity_path_t *paths;
+  int path_count, path_cap;
 } entity_traces_t;
 
 static int entity_vec2_prop(const ft_entity_class *entity_class, const char *id) {
@@ -348,7 +452,7 @@ static int entity_vec2_prop(const ft_entity_class *entity_class, const char *id)
   return -1;
 }
 
-static void entity_traces_init(game_host_t *host, entity_traces_t *t, const float color[4], float width_px) {
+static void entity_traces_init(game_host_t *host, entity_traces_t *t) {
   memset(t, 0, sizeof(*t));
   const unsigned classes = gh_entity_class_count(host);
   if (classes <= 1) return;
@@ -368,28 +472,82 @@ static void entity_traces_init(game_host_t *host, entity_traces_t *t, const floa
     for (uint32_t i = 0; i < entity_class->prop_count && trace->identity_count < ENTITY_MAX_IDENTITY; ++i)
       if (entity_class->props[i].flags & FT_PROP_IDENTITY) trace->identity[trace->identity_count++] = (int)i;
   }
-  memcpy(t->color, color, sizeof(t->color));
-  t->color[3] *= 0.7f; // a little fainter than the players' own lines
-  t->width_px = width_px * 0.75f;
 }
 
-static void entity_segment(entity_traces_t *t, ft_vec2 from, ft_vec2 to) {
-  if (from.x == to.x && from.y == to.y) return; // at rest, e.g. a hook that holds on
-  if (t->segment_count == t->segment_cap) {
-    const uint32_t cap = t->segment_cap ? t->segment_cap * 2 : 256;
-    line_segment_t *grown = realloc(t->segments, sizeof(*grown) * cap);
-    if (!grown) return;
-    t->segments = grown;
-    t->segment_cap = cap;
+// The entity's look, the line's own unless the game has one for it.
+static void entity_style(game_host_t *host, const ft_world *world, unsigned entity_class, int entity, ft_entity_trail *out) {
+  if (!gh_entity_trail(host, world, entity_class, entity, out)) memset(out, 0, sizeof(*out));
+}
+
+// A colour of an entity's look as this line draws it: the game's, faded with
+// the line, or for none the line's own, a little fainter than the players'.
+static void entity_color(const prediction_draw_t *d, ft_color color, float out[4]) {
+  if (color.a <= 0.f) {
+    memcpy(out, d->color, sizeof(d->color));
+    out[3] *= 0.7f;
+    return;
   }
-  line_segment_t *segment = &t->segments[t->segment_count++];
-  segment->p1[0] = from.x;
-  segment->p1[1] = from.y;
-  segment->p2[0] = to.x;
-  segment->p2[1] = to.y;
-  memcpy(segment->color, t->color, sizeof(segment->color));
-  segment->thickness = 0.f;
-  segment->width_px = t->width_px;
+  out[0] = color.r;
+  out[1] = color.g;
+  out[2] = color.b;
+  out[3] = color.a * d->color[3];
+}
+
+static float entity_width(const prediction_draw_t *d, const ft_entity_trail *style) {
+  return (style->width > 0.f ? style->width : 0.75f) * d->width_px;
+}
+
+static void entity_dot(prediction_draw_t *d, ft_vec2 at, float diameter_px, ft_color color) {
+  vec4 rgba;
+  entity_color(d, color, rgba);
+  draw_circle(d, LAYER_DOTS, at, diameter_px * 0.5f * d->pixel, rgba, 0.f);
+}
+
+static void entity_stroke(prediction_draw_t *d, const stroke_t *stroke, const ft_entity_trail *style) {
+  const float width = entity_width(d, style);
+  if (style->rim.a > 0.f) {
+    vec4 rim;
+    entity_color(d, style->rim, rim);
+    draw_stroke_in(d, LAYER_RIMS, stroke, rim, width * 2.f);
+  }
+  draw_stroke(d, LAYER_ENTITIES, stroke, width);
+}
+
+// Draws a path and lets it go. One whose entity is gone runs on to where the
+// game says its last step took it, and gets its end marked there.
+static void entity_path_end(prediction_draw_t *d, entity_path_t *path, bool gone) {
+  const ft_entity_trail *style = &path->style;
+  if (gone && style->has_next && path->stroke.count > 0) {
+    vec4 color;
+    entity_color(d, style->color, color);
+    stroke_add(&path->stroke, style->next, color);
+    if (style->end_radius > 0.f) {
+      if (style->end_fill.a > 0.f) {
+        entity_color(d, style->end_fill, color);
+        draw_circle(d, LAYER_REACH, style->next, style->end_radius, color, 0.f);
+      }
+      if (style->end_ring.a > 0.f) {
+        entity_color(d, style->end_ring, color);
+        draw_circle(d, LAYER_RING, style->next, style->end_radius, color, fmaxf(1.f, d->width_px * 0.5f));
+      }
+      entity_dot(d, style->next, entity_width(d, style) * 3.f, style->color);
+    }
+  }
+  if (!style->rope_only) entity_stroke(d, &path->stroke, style);
+  free(path->stroke.points);
+  memset(&path->stroke, 0, sizeof(path->stroke));
+}
+
+static int entity_path_start(entity_traces_t *t) {
+  if (t->path_count == t->path_cap) {
+    const int cap = t->path_cap ? t->path_cap * 2 : 32;
+    entity_path_t *grown = realloc(t->paths, sizeof(*grown) * (size_t)cap);
+    if (!grown) return -1;
+    t->paths = grown;
+    t->path_cap = cap;
+  }
+  memset(&t->paths[t->path_count], 0, sizeof(t->paths[0]));
+  return t->path_count++;
 }
 
 static void hash_bytes(uint64_t *hash, const void *data, size_t size) {
@@ -419,7 +577,7 @@ static uint64_t entity_identity(game_host_t *host, const ft_world *world, const 
 
 // Takes the entities as they are in `world`; `draw` is false for the first
 // look, which only gives the trails their starting points.
-static void entity_traces_step(game_host_t *host, const ft_world *world, entity_traces_t *t, bool draw) {
+static void entity_traces_step(game_host_t *host, const ft_world *world, entity_traces_t *t, prediction_draw_t *d, bool draw) {
   for (int i = 0; i < t->count; ++i) {
     entity_trace_t *trace = &t->traces[i];
     const int count = gh_entity_count(host, world, trace->entity_class);
@@ -428,8 +586,9 @@ static void entity_traces_step(game_host_t *host, const ft_world *world, entity_
     ft_vec2 *now_from = count > 0 && beam ? malloc(sizeof(*now_from) * (size_t)count) : NULL;
     ft_vec2 *now_motion = count > 0 && !beam ? calloc((size_t)count, sizeof(*now_motion)) : NULL;
     uint64_t *now_identity = count > 0 && !beam && trace->identity_count > 0 ? malloc(sizeof(*now_identity) * (size_t)count) : NULL;
-    // the entity each trail entry was read from, for its origin
-    int *now_entity = count > 0 && !beam && draw && trace->origin >= 0 ? malloc(sizeof(*now_entity) * (size_t)count) : NULL;
+    int *now_path = count > 0 && !beam ? malloc(sizeof(*now_path) * (size_t)count) : NULL;
+    // the entity each trail entry was read from
+    int *now_entity = count > 0 && !beam ? malloc(sizeof(*now_entity) * (size_t)count) : NULL;
     int now_count = 0;
     for (int e = 0; now && e < count; ++e) {
       ft_value value;
@@ -446,7 +605,17 @@ static void entity_traces_step(game_host_t *host, const ft_world *world, entity_
         bool drawn = false;
         for (int k = 0; k < trace->last_count && !drawn; ++k)
           drawn = trace->last_from[k].x == from.x && trace->last_from[k].y == from.y && trace->last[k].x == position.x && trace->last[k].y == position.y;
-        if (!drawn) entity_segment(t, from, position);
+        if (drawn || (from.x == position.x && from.y == position.y)) continue;
+        ft_entity_trail style;
+        entity_style(host, world, trace->entity_class, e, &style);
+        vec4 color;
+        entity_color(d, style.color, color);
+        stroke_t stroke = {0};
+        stroke_add(&stroke, from, color);
+        stroke_add(&stroke, position, color);
+        entity_stroke(d, &stroke, &style);
+        if (style.dot > 0.f) entity_dot(d, position, entity_width(d, &style) * style.dot, style.color);
+        free(stroke.points);
         continue;
       }
       if (now_identity) now_identity[now_count] = entity_identity(host, world, trace, e);
@@ -454,36 +623,80 @@ static void entity_traces_step(game_host_t *host, const ft_world *world, entity_
       now[now_count++] = position;
     }
 
-    if (!beam && now_motion && now_count > 0) {
-      int *match = malloc(sizeof(*match) * (size_t)now_count);
-      if (match) {
+    if (!beam) {
+      int *match = now_count > 0 ? malloc(sizeof(*match) * (size_t)now_count) : NULL;
+      bool *taken = trace->last_count > 0 ? calloc((size_t)trace->last_count, sizeof(*taken)) : NULL;
+      if (match && now_motion && now_path && now_entity)
         entity_trail_match(trace->last, trace->last_motion, trace->last_identity, trace->last_count, now, now_identity,
                            now_count, ENTITY_TRAIL_REACH, match);
-        for (int e = 0; e < now_count; ++e) {
-          if (match[e] < 0) {
-            ft_value origin;
-            if (now_entity && gh_entity_prop_get(host, world, trace->entity_class, now_entity[e], (unsigned)trace->origin, &origin) &&
-                origin.kind == FT_VALUE_VEC2)
-              entity_segment(t, origin.as.v, now[e]);
-            continue;
-          }
-          const ft_vec2 last = trace->last[match[e]];
-          now_motion[e] = (ft_vec2){now[e].x - last.x, now[e].y - last.y};
-          if (draw) entity_segment(t, last, now[e]);
+      else if (match)
+        for (int e = 0; e < now_count; ++e) match[e] = -1;
+      for (int e = 0; match && now_path && now_entity && e < now_count; ++e) {
+        int path = match[e] >= 0 ? trace->last_path[match[e]] : -1;
+        if (match[e] >= 0) {
+          if (taken) taken[match[e]] = true;
+          now_motion[e] = (ft_vec2){now[e].x - trace->last[match[e]].x, now[e].y - trace->last[match[e]].y};
         }
-        free(match);
+        ft_entity_trail style;
+        entity_style(host, world, trace->entity_class, now_entity[e], &style);
+        vec4 color;
+        entity_color(d, style.color, color);
+        if (path < 0) {
+          path = entity_path_start(t);
+          ft_value origin;
+          if (path >= 0 && draw && trace->origin >= 0 &&
+              gh_entity_prop_get(host, world, trace->entity_class, now_entity[e], (unsigned)trace->origin, &origin) &&
+              origin.kind == FT_VALUE_VEC2)
+            stroke_add(&t->paths[path].stroke, origin.as.v, color);
+        }
+        now_path[e] = path;
+        if (path < 0) continue;
+        entity_path_t *entity_path = &t->paths[path];
+        entity_path->style = style;
+        if (draw && style.rope &&
+            !(entity_path->roped && entity_path->rope_from.x == style.anchor.x && entity_path->rope_from.y == style.anchor.y &&
+              entity_path->rope_to.x == now[e].x && entity_path->rope_to.y == now[e].y)) {
+          stroke_t rope = {0};
+          stroke_add(&rope, style.anchor, color);
+          stroke_add(&rope, now[e], color);
+          draw_stroke(d, LAYER_ROPES, &rope, entity_width(d, &style));
+          free(rope.points);
+          entity_path->rope_from = style.anchor;
+          entity_path->rope_to = now[e];
+          entity_path->roped = true;
+        }
+        // (at rest, e.g. a hook that holds on: no corner for nothing)
+        const stroke_point_t *tail = entity_path->stroke.count > 0 ? &entity_path->stroke.points[entity_path->stroke.count - 1] : NULL;
+        if (!tail || tail->pos[0] != now[e].x || tail->pos[1] != now[e].y) stroke_add(&entity_path->stroke, now[e], color);
       }
+      // The entities that were and are not anymore.
+      for (int k = 0; k < trace->last_count; ++k)
+        if ((!taken || !taken[k]) && trace->last_path[k] >= 0) entity_path_end(d, &t->paths[trace->last_path[k]], true);
+      free(taken);
+      free(match);
     }
     free(now_entity);
     free(trace->last);
     free(trace->last_from);
     free(trace->last_motion);
     free(trace->last_identity);
+    free(trace->last_path);
     trace->last = now;
     trace->last_from = now_from;
     trace->last_motion = now_motion;
     trace->last_identity = now_identity;
-    trace->last_count = now_count;
+    trace->last_path = now_path;
+    trace->last_count = now_path || beam ? now_count : 0;
+  }
+}
+
+// Draws the paths of the entities still about when the prediction ends.
+static void entity_traces_finish(entity_traces_t *t, prediction_draw_t *d) {
+  for (int i = 0; i < t->count; ++i) {
+    entity_trace_t *trace = &t->traces[i];
+    if (trace->from >= 0 || !trace->last_path) continue;
+    for (int k = 0; k < trace->last_count; ++k)
+      if (trace->last_path[k] >= 0) entity_path_end(d, &t->paths[trace->last_path[k]], false);
   }
 }
 
@@ -493,9 +706,11 @@ static void entity_traces_free(entity_traces_t *t) {
     free(t->traces[i].last_from);
     free(t->traces[i].last_motion);
     free(t->traces[i].last_identity);
+    free(t->traces[i].last_path);
   }
+  for (int i = 0; i < t->path_count; ++i) free(t->paths[i].stroke.points);
   free(t->traces);
-  free(t->segments);
+  free(t->paths);
   memset(t, 0, sizeof(*t));
 }
 
@@ -540,16 +755,18 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
 
   uint8_t *packed_inputs = calloc((size_t)players, input_size);
   input_record_t *held_inputs = calloc((size_t)players, sizeof(*held_inputs));
-  ft_vec2 *positions = calloc((size_t)players, sizeof(*positions));
+  stroke_t *strokes = calloc((size_t)players, sizeof(*strokes));
   vec3 *positions3 = calloc((size_t)players, sizeof(*positions3));
   bool *have_position = calloc((size_t)players, sizeof(*have_position));
   float (*active_colors)[4] = calloc((size_t)players, sizeof(*active_colors));
   color_rule_runtime_t *rule_runtime =
       calloc((size_t)players * MAX_PREDICTION_COLOR_RULES, sizeof(*rule_runtime));
-  line_segment_t *segments = malloc(sizeof(*segments) * (size_t)length * (size_t)selected);
   ft_player_playback *playback = calloc((size_t)players, sizeof(*playback));
-  if (!packed_inputs || !held_inputs || !positions || !positions3 || !have_position || !active_colors ||
-      !rule_runtime || !segments || !playback)
+  // (the same everywhere in a 2D view)
+  prediction_draw_t draw = {.gfx = ui->gfx_handler, .width_px = width_px,
+                            .pixel = is_3d ? 0.f : renderer_world_per_pixel(ui->gfx_handler, (vec2){0.f, 0.f})};
+  if (!packed_inputs || !held_inputs || !strokes || !positions3 || !have_position || !active_colors || !rule_runtime ||
+      !playback)
     goto cleanup;
 
   alpha = fmaxf(0.f, fminf(alpha, 1.f));
@@ -567,12 +784,15 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
     if (!line->enabled) continue;
     ft_world *world = prediction_world(timeline, group, line_index, current);
     if (!world) continue;
+    draw.line_index = line_index;
+    memcpy(draw.color, line->color, sizeof(draw.color));
 
     memset(have_position, 0, sizeof(*have_position) * (size_t)players);
     memset(rule_runtime, 0, sizeof(*rule_runtime) * (size_t)players * MAX_PREDICTION_COLOR_RULES);
     resolved_color_rule_t resolved_rules[MAX_PREDICTION_COLOR_RULES];
     resolve_color_rules(host, line, resolved_rules);
     for (int player = 0; player < players; ++player) {
+      strokes[player].count = 0;
       const int track = tracks[player];
       if (track < 0 || !timeline->player_tracks[track].prediction_enabled) continue;
       update_player_color(host, world, player, line, resolved_rules,
@@ -588,18 +808,18 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
       }
       ft_player_view current_view, previous_view;
       if (!gh_world_player_view(host, current, player, &current_view)) continue;
-      positions[player] = current_view.position;
+      ft_vec2 position = current_view.position;
       if (previous && gh_world_player_view(host, previous, player, &previous_view)) {
-        positions[player].x = previous_view.position.x + (current_view.position.x - previous_view.position.x) * alpha;
-        positions[player].y = previous_view.position.y + (current_view.position.y - previous_view.position.y) * alpha;
+        position.x = previous_view.position.x + (current_view.position.x - previous_view.position.x) * alpha;
+        position.y = previous_view.position.y + (current_view.position.y - previous_view.position.y) * alpha;
       }
+      stroke_add(&strokes[player], position, active_colors[player]);
       have_position[player] = true;
     }
 
-    uint32_t segment_count = 0;
     entity_traces_t entities;
-    entity_traces_init(host, &entities, line->color, width_px);
-    if (!is_3d) entity_traces_step(host, world, &entities, false);
+    entity_traces_init(host, &entities);
+    if (!is_3d) entity_traces_step(host, world, &entities, &draw, false);
     for (int step = 0; step < length; ++step) {
       // Recorded players replay their recording here too, so predicted paths meet them where they
       // really are.
@@ -629,7 +849,7 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
         memcpy(packed_inputs + (size_t)player * input_size, input.bytes, input_size);
       }
       gh_world_step_playback(host, world, packed_inputs, replaying ? playback : NULL, (unsigned)players);
-      if (!is_3d) entity_traces_step(host, world, &entities, true);
+      if (!is_3d) entity_traces_step(host, world, &entities, &draw, true);
 
       for (int player = 0; player < players; ++player) {
         const int track = tracks[player];
@@ -657,29 +877,19 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
           continue;
         }
 
+        // A player whose position goes missing breaks its path there.
         ft_player_view view;
         if (!gh_world_player_view(host, world, player, &view)) {
-          have_position[player] = false;
+          draw_stroke(&draw, LAYER_PLAYERS, &strokes[player], width_px);
+          strokes[player].count = 0;
           continue;
         }
-        if (have_position[player] && segment_count < (uint32_t)(length * selected)) {
-          line_segment_t *segment = &segments[segment_count++];
-          segment->p1[0] = positions[player].x;
-          segment->p1[1] = positions[player].y;
-          segment->p2[0] = view.position.x;
-          segment->p2[1] = view.position.y;
-          memcpy(segment->color, active_colors[player], sizeof(segment->color));
-          segment->thickness = 0.f;
-          segment->width_px = width_px;
-        }
-        positions[player] = view.position;
-        have_position[player] = true;
+        stroke_add(&strokes[player], view.position, active_colors[player]);
       }
     }
     if (!is_3d) {
-      renderer_submit_line_batch(ui->gfx_handler, PREDICTION_Z + (float)line_index * 0.001f, segments, segment_count);
-      if (entities.segment_count > 0)
-        renderer_submit_line_batch(ui->gfx_handler, PREDICTION_Z + (float)line_index * 0.001f, entities.segments, entities.segment_count);
+      for (int player = 0; player < players; ++player) draw_stroke(&draw, LAYER_PLAYERS, &strokes[player], width_px);
+      entity_traces_finish(&entities, &draw);
     }
     entity_traces_free(&entities);
   }
@@ -687,12 +897,14 @@ void prediction_render_group(ui_handler_t *ui, int group_index, const ft_world *
 cleanup:
   free(tracks);
   free(playback);
-  free(segments);
+  free(draw.scratch);
   free(rule_runtime);
   free(active_colors);
   free(have_position);
   free(positions3);
-  free(positions);
+  if (strokes)
+    for (int player = 0; player < players; ++player) free(strokes[player].points);
+  free(strokes);
   free(held_inputs);
   free(packed_inputs);
 }
@@ -737,6 +949,7 @@ static void color_rule_select_property(prediction_color_rule_t *rule, const ft_p
   rule->comparison = PREDICTION_COMPARE_EQUAL;
   rule->change_mode = PREDICTION_CHANGE_ANY;
   rule->target = property->kind == FT_VALUE_BOOL ? 1.0 : 0.0;
+  rule->from = 0.0;
 }
 
 static bool add_color_rule(prediction_line_t *line, int line_index, const ft_entity_class *player_class) {
@@ -854,11 +1067,11 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
     return changed;
   }
 
-  static const char *names[] = {"Equals", "Is below", "Is above", "Changes"};
+  static const char *names[] = {"Equals", "Is below", "Is above", "Changes", "Scales"};
   int comparison = (int)rule->comparison;
-  if (comparison < 0 || comparison > PREDICTION_COMPARE_CHANGED) comparison = PREDICTION_COMPARE_EQUAL;
+  if (comparison < 0 || comparison > PREDICTION_COMPARE_SCALE) comparison = PREDICTION_COMPARE_EQUAL;
   if (igBeginCombo("Trigger", names[comparison], 0)) {
-    for (int i = 0; i <= PREDICTION_COMPARE_CHANGED; ++i) {
+    for (int i = 0; i <= PREDICTION_COMPARE_SCALE; ++i) {
       if (igSelectable_Bool(names[i], comparison == i, 0, (ImVec2){0.f, 0.f})) {
         rule->comparison = (prediction_rule_comparison_t)i;
         changed = true;
@@ -866,8 +1079,17 @@ static bool render_rule_comparison(prediction_color_rule_t *rule, ft_value_kind 
     }
     igEndCombo();
   }
-  if (rule->comparison != PREDICTION_COMPARE_CHANGED) {
-    const char *format = kind == FT_VALUE_INT ? "%.0f" : "%.6g";
+  const char *format = kind == FT_VALUE_INT ? "%.0f" : "%.6g";
+  if (rule->comparison == PREDICTION_COMPARE_SCALE) {
+    if (igInputDouble("From", &rule->from, 0.0, 0.0, format, 0)) {
+      if (!isfinite(rule->from)) rule->from = 0.0;
+      changed = true;
+    }
+    if (igInputDouble("To", &rule->target, 0.0, 0.0, format, 0)) {
+      if (!isfinite(rule->target)) rule->target = 0.0;
+      changed = true;
+    }
+  } else if (rule->comparison != PREDICTION_COMPARE_CHANGED) {
     if (igInputDouble("Value", &rule->target, 0.0, 0.0, format, 0)) {
       if (!isfinite(rule->target)) rule->target = 0.0;
       changed = true;
@@ -906,11 +1128,45 @@ static bool render_rule_change_mode(prediction_color_rule_t *rule) {
   return changed;
 }
 
+// Ultraforce's colours: blue while the player has a jump and dark red once it
+// has none, and greener the faster it goes. Takes the game's "can_jump" and
+// "velocity", or whichever of them it has.
+static bool speed_and_jump_rules(prediction_line_t *line, const ft_entity_class *player_class) {
+  const int jump = player_property_find(player_class, "can_jump");
+  const int velocity = player_property_find(player_class, "velocity");
+  const bool has_jump = jump >= 0 && player_class->props[jump].kind == FT_VALUE_BOOL;
+  const bool has_velocity =
+      velocity >= 0 && (player_class->props[velocity].kind == FT_VALUE_VEC2 || player_class->props[velocity].kind == FT_VALUE_VEC3);
+  if (!has_jump && !has_velocity) return false;
+
+  const float alpha = line->color[3];
+  line->color_rule_count = 0;
+  memset(line->color_rules, 0, sizeof(line->color_rules));
+  if (has_jump) {
+    for (int can = 1; can >= 0; --can) {
+      prediction_color_rule_t *rule = &line->color_rules[line->color_rule_count++];
+      color_rule_select_property(rule, &player_class->props[jump]);
+      rule->target = can;
+      memcpy(rule->color, can ? (float[4]){0.f, 0.f, 1.f, alpha} : (float[4]){0.75f, 0.f, 0.f, alpha}, sizeof(rule->color));
+      rule->enabled = true;
+    }
+  }
+  if (has_velocity) {
+    // (DDNet's units a tick: a tee runs at 10, and hooks or grenades take it past 20)
+    prediction_color_rule_t *rule = &line->color_rules[line->color_rule_count++];
+    color_rule_select_property(rule, &player_class->props[velocity]);
+    rule->comparison = PREDICTION_COMPARE_SCALE;
+    rule->from = 0.0;
+    rule->target = 40.0;
+    memcpy(rule->color, (float[4]){0.f, 1.f, 0.f, 1.f}, sizeof(rule->color));
+    rule->enabled = true;
+  }
+  return true;
+}
+
 static bool render_color_rules(prediction_line_t *line, int line_index, const ft_entity_class *player_class) {
   bool changed = false;
   if (!igTreeNode_Str("Color triggers")) return false;
-  igTextWrapped("Rules colour each segment while their conditions match. Otherwise the line uses its base colour. "
-                "Later matching rules win. Changes matches only ticks when the property changes.");
 
   int remove = -1;
   for (int rule_index = 0; rule_index < line->color_rule_count; ++rule_index) {
@@ -953,6 +1209,12 @@ static bool render_color_rules(prediction_line_t *line, int line_index, const ft
       add_color_rule(line, line_index, player_class))
     changed = true;
   if (!can_add) igEndDisabled();
+  igSameLine(0.f, 6.f);
+  const bool can_preset =
+      player_property_find(player_class, "can_jump") >= 0 || player_property_find(player_class, "velocity") >= 0;
+  if (!can_preset) igBeginDisabled(true);
+  if (igButton("Speed & jump", (ImVec2){0.f, 0.f}) && speed_and_jump_rules(line, player_class)) changed = true;
+  if (!can_preset) igEndDisabled();
   igTreePop();
   return changed;
 }

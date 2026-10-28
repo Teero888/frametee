@@ -1130,6 +1130,14 @@ int gh_entity_count(game_host_t *host, const ft_world *world, unsigned entity_cl
   return m->entity_count ? m->entity_count(host->instance, world, entity_class) : 0;
 }
 
+bool gh_entity_trail(game_host_t *host, const ft_world *world, unsigned entity_class, int entity, ft_entity_trail *out) {
+  REQUIRE_GAME(false);
+  if (!world || !out || !m->entity_trail) return false;
+  memset(out, 0, sizeof(*out));
+  out->struct_size = sizeof(*out);
+  return m->entity_trail(host->instance, world, entity_class, entity, out);
+}
+
 const ft_entity_class *gh_entity_class(const game_host_t *host, unsigned index) {
   if (!host || !host->module) return NULL;
   if (index >= host->module->entity_class_count) return NULL;

@@ -209,15 +209,12 @@ struct primitive_ubo_t {
   mat4 view_proj;
 };
 
-typedef struct line_segment_t {
-  vec2 p1;
-  vec2 p2;
+// A point of a stroke (renderer_submit_stroke). Its colour is the colour of the
+// segment from it to the next point.
+typedef struct stroke_point_t {
+  vec2 pos;
   vec4 color;
-  float thickness; // in world units
-  // When above zero, the width on screen in pixels instead: the same in every
-  // game and at every zoom.
-  float width_px;
-} line_segment_t;
+} stroke_point_t;
 
 struct map_buffer_object_t {
   vec3 transform; // x, y, zoom
@@ -376,7 +373,7 @@ typedef enum {
   RENDER_CMD_CIRCLE_FILLED,
   RENDER_CMD_TRIANGLE_FILLED,
   RENDER_CMD_LINE,
-  RENDER_CMD_LINE_BATCH,
+  RENDER_CMD_STROKE,
   RENDER_CMD_POLYLINE,
   RENDER_CMD_POLYGON,
   RENDER_CMD_INSTANCES,
@@ -412,10 +409,13 @@ struct render_command_t {
       float thickness;
       uint32_t segments;
     } prim;
+    // A stroke: its points are in transient memory.
     struct {
-      line_segment_t *segments;
+      stroke_point_t *points;
       uint32_t count;
-    } line_batch;
+      float width_px;
+      bool closed;
+    } stroke;
     // A smooth polyline or convex polygon: its points are in transient memory.
     struct {
       vec2 *points;
@@ -604,13 +604,19 @@ void renderer_submit_rect_rounded(gfx_handler_t *h, float z, vec2 pos, vec2 size
 void renderer_submit_circle_filled(gfx_handler_t *h, float z, vec2 center, float radius, vec4 color, uint32_t segments);
 void renderer_submit_triangle_filled(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec2 p3, vec4 color);
 void renderer_submit_line(gfx_handler_t *h, float z, vec2 p1, vec2 p2, vec4 color, float thickness);
-void renderer_submit_line_batch(gfx_handler_t *h, float z, const line_segment_t *segments, uint32_t count);
 // Anti-aliased, unlike the shapes above: their edges fade out over one pixel of the target. A
 // polyline mitres its corners, and `closed` adds the segment from the last point back to the
 // first; a line thinner than a pixel keeps the pixel and fades instead. A polygon must be convex.
 void renderer_submit_polyline(gfx_handler_t *h, float z, const vec2 *points, uint32_t count, vec4 color, float thickness,
                               bool closed);
 void renderer_submit_polygon(gfx_handler_t *h, float z, const vec2 *points, uint32_t count, vec4 color);
+// Anti-aliased like a polyline, but width_px pixels wide on screen at every zoom, coloured by segment
+// (see stroke_point_t; the colour changes sharply at a corner), and with the ends of an open stroke
+// faded too. Points closer than a pixel are merged.
+void renderer_submit_stroke(gfx_handler_t *h, float z, const stroke_point_t *points, uint32_t count, float width_px,
+                            bool closed);
+// How far one pixel of the target reaches in the 2D world, where `at` is.
+float renderer_world_per_pixel(gfx_handler_t *h, const float *at);
 void renderer_flush_queue(gfx_handler_t *h, VkCommandBuffer cmd);
 
 // --- resources a game module creates at runtime -------------------------------

@@ -228,6 +228,12 @@ and draws the resulting paths. A module chooses the value being tracked by the
 `position` it returns from `world_player_view`; it does not implement a second
 prediction renderer. Scratch worlds are created with `world_index == -1`, so a
 module must not emit persistent presentation effects while stepping them.
+The paths of a module's other entity classes (projectiles, beams, hooks) are
+followed too, by their reflected `position`, `from` and `origin`; the optional
+`entity_trail` says how one looks and, for a projectile that hits something,
+where its last step really ends and how to mark that (DDNet draws a grenade's
+explosion reach there). It can also ask for a rope from an anchor to the entity
+at a step instead of the path, which is how DDNet draws a hook that holds on.
 
 Snippet effects are ordered, reversible transforms over authored input. The
 engine owns only the ordered instances, opaque parameter bytes, undo/project

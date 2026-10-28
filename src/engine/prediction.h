@@ -22,6 +22,9 @@ typedef enum prediction_rule_comparison_t {
   PREDICTION_COMPARE_LESS,
   PREDICTION_COMPARE_GREATER,
   PREDICTION_COMPARE_CHANGED,
+  // Adds its colour on top, as much as the value has gone of the way from
+  // `from` to `target`, at most the colour's alpha.
+  PREDICTION_COMPARE_SCALE,
 } prediction_rule_comparison_t;
 
 typedef enum prediction_change_mode_t {
@@ -36,6 +39,7 @@ typedef struct prediction_color_rule_t {
   char property_id[FT_ID_MAX];
   float color[4];
   double target;
+  double from; // where a SCALE rule starts
   prediction_rule_component_t component;
   prediction_rule_comparison_t comparison;
   prediction_change_mode_t change_mode;
@@ -51,7 +55,8 @@ typedef struct prediction_line_t {
   // the playhead and apply their selected reflected controls to it.
   bool use_timeline_inputs;
   // Ordered rules evaluated per segment, falling back to the line colour.
-  // Later matches win; CHANGED matches only ticks with a property change.
+  // Later matches win; CHANGED matches only ticks with a property change, and
+  // SCALE adds to the colour the rules before it left.
   prediction_color_rule_t color_rules[MAX_PREDICTION_COLOR_RULES];
   int color_rule_count;
 } prediction_line_t;
