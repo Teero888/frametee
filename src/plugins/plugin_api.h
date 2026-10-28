@@ -144,6 +144,8 @@ struct tas_api_t {
   void (*world_to_screen)(float world_x, float world_y, float *screen_x, float *screen_y);
 
   double (*get_time)(void);
+  // The 2D camera's centre, in fractions of the level's width and height, and its zoom (ft_camera.zoom:
+  // 1 is the game's own view).
   void (*get_camera_info)(vec2 pos, float *zoom);
 
   void (*register_script_command)(const char *name, void (*callback)(int argc, const char **argv));
@@ -229,7 +231,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 10u
+#define FRAMETEE_PLUGIN_ABI_VERSION 11u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

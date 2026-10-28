@@ -57,7 +57,7 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /* Bumped on any breaking change to the structures or calls below. */
-#define FT_GAME_ABI_VERSION 35u
+#define FT_GAME_ABI_VERSION 36u
 
 /* Reserved for describing revisions of one ABI in diagnostics. */
 #define FT_GAME_ABI_REVISION 0u
@@ -302,6 +302,19 @@ typedef struct ft_game_constraints {
    * it with the level's size; a game whose levels are large but whose details
    * are close (a car a metre from the camera) gives a small one here. */
   float camera_near_z;
+  /* 2D: what a zoom of 1 shows, the way DDNet's client works it out for a
+   * window of any shape (CRenderTools::CalcScreenParams): `view_area` square
+   * world units in the window's shape, cut to at most view_max_width wide and
+   * view_max_height high (0: no limit). A zoom of z shows z times as far
+   * across. 0 area: a 16:9 view default_camera_height tiles high. */
+  float view_area;
+  float view_max_width;
+  float view_max_height;
+  /* How the editor numbers a 2D zoom for people, as DDNet's client does
+   * (cl_default_zoom): zoom 1 is level view_zoom_level, and each level up
+   * shows view_zoom_step as far across. 0 step: the zoom itself. */
+  float view_zoom_step;
+  float view_zoom_level;
 
   /* Optional ruleset list. May be NULL/0 for a game with a single ruleset. */
   const ft_game_variant *variants;
@@ -1077,6 +1090,8 @@ typedef struct ft_instance_preview_desc {
 typedef struct ft_camera {
   uint32_t struct_size;
   ft_vec2 position;
+  /* 2D: how far out the view is, 1 showing ft_game_constraints.view_area and
+   * 2 twice as far across, whatever the level's size. */
   float zoom;
   float aspect;
   /* Which camera mode is active, indexing constraints.camera_modes. A game

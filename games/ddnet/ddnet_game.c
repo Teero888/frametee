@@ -2309,6 +2309,13 @@ static const ft_game_module module = {
                     .ticks_per_second = 50,
                     .units_per_tile = 1.f,
                     .default_camera_height = 20.f,
+                    // DDNet's client at zoom 1 (CRenderTools::CalcScreenParams), in tiles
+                    .view_area = 1150.f * 1000.f / (32.f * 32.f),
+                    .view_max_width = 1500.f / 32.f,
+                    .view_max_height = 1050.f / 32.f,
+                    // (its zoom levels: CCamera::ZOOM_STEP, cl_default_zoom 10)
+                    .view_zoom_step = 0.866025f,
+                    .view_zoom_level = 10.f,
 #if !DD_UNIQUE
                     .variants = variants,
                     .variant_count = (uint32_t)(sizeof(variants) / sizeof(variants[0])),

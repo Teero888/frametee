@@ -2,6 +2,7 @@
 
 #include "input_record.h"
 #include <logger/logger.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -717,6 +718,46 @@ float game_camera_near_z(const game_host_t *host) {
 float game_default_camera_height(const game_host_t *host) {
   const ft_game_constraints *c = constraints_of(host);
   return (c && c->default_camera_height > 0.f) ? c->default_camera_height : 20.f;
+}
+
+void game_view_size(const game_host_t *host, float aspect, float zoom, float *width, float *height) {
+  const ft_game_constraints *c = constraints_of(host);
+  if (!(aspect > 0.f)) aspect = 16.f / 9.f;
+  float area = c && c->view_area > 0.f ? c->view_area : 0.f;
+  const float max_width = area > 0.f ? c->view_max_width : 0.f, max_height = area > 0.f ? c->view_max_height : 0.f;
+  if (area <= 0.f) {
+    const float h = game_default_camera_height(host) * game_units_per_tile(host);
+    area = h * h * 16.f / 9.f;
+  }
+  float h = sqrtf(area / aspect), w = h * aspect;
+  if (max_width > 0.f && w > max_width) {
+    w = max_width;
+    h = w / aspect;
+  }
+  if (max_height > 0.f && h > max_height) {
+    h = max_height;
+    w = h * aspect;
+  }
+  *width = w * zoom;
+  *height = h * zoom;
+}
+
+float game_zoom_for_width(const game_host_t *host, float aspect, float width) {
+  float w, h;
+  game_view_size(host, aspect, 1.f, &w, &h);
+  return width / w;
+}
+
+static bool zoom_levels(const ft_game_constraints *c) { return c && c->view_zoom_step > 0.f && c->view_zoom_step != 1.f; }
+
+float game_zoom_level(const game_host_t *host, float zoom) {
+  const ft_game_constraints *c = constraints_of(host);
+  return zoom_levels(c) ? c->view_zoom_level + logf(zoom) / logf(c->view_zoom_step) : zoom;
+}
+
+float game_zoom_from_level(const game_host_t *host, float level) {
+  const ft_game_constraints *c = constraints_of(host);
+  return zoom_levels(c) ? powf(c->view_zoom_step, level - c->view_zoom_level) : level;
 }
 
 const ft_input_schema *game_input_schema(const game_host_t *host) {

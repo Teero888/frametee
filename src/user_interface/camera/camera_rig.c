@@ -26,33 +26,25 @@ static float output_aspect(gfx_handler_t *h) {
   return h->viewport[1] > 0.f ? h->viewport[0] / h->viewport[1] : 16.f / 9.f;
 }
 
-// The world width a 2D view spans at zoom 1: the inverse of screen_to_world.
 float camera_rig_view_scale(gfx_handler_t *h) {
-  if (game_is_3d(&h->game_host) || h->world_width <= 0.f || h->world_height <= 0.f) return 1.f;
-  return 2.f * h->world_width / (fmaxf(h->world_width, h->world_height) * 0.001f);
+  if (game_is_3d(&h->game_host)) return 1.f;
+  float width, height;
+  game_view_size(&h->game_host, output_aspect(h), 1.f, &width, &height);
+  return width;
 }
 
-float camera_rig_min_zoom(gfx_handler_t *h) { return camera_rig_view_scale(h) / 400000.f; }
+float camera_rig_min_zoom(gfx_handler_t *h) { return 2.f / camera_rig_view_scale(h); }
 
-float camera_rig_max_zoom(gfx_handler_t *h) { return camera_rig_view_scale(h) / 2.f; }
+float camera_rig_max_zoom(gfx_handler_t *h) { return 400000.f / camera_rig_view_scale(h); }
 
-// Framing is the same at every aspect: a keyed zoom or lens covers the
-// picture's shorter side, exactly as the renderer does at 16:9. A 9:16 video
-// then shows its width as wide as a 16:9 one shows its height, and everything
-// in it is as large in the picture.
+// A keyed lens covers the picture's shorter side, exactly as the renderer's
+// does at 16:9: a 9:16 video then shows its width as wide as a 16:9 one shows
+// its height, and everything in it is as large in the picture. A 2D zoom is
+// the game's own at every shape (game_view_size).
 static const float REFERENCE_ASPECT = 16.f / 9.f;
 
 static float viewport_aspect(gfx_handler_t *h) {
   return h->viewport[1] > 0.f ? h->viewport[0] / h->viewport[1] : REFERENCE_ASPECT;
-}
-
-// The renderer's 2D zoom fixes the view's width; the height follows the aspect.
-static float renderer_zoom(float keyed, float aspect) {
-  return aspect >= 1.f ? keyed * REFERENCE_ASPECT / aspect : keyed * REFERENCE_ASPECT;
-}
-
-static float keyed_zoom(float renderer, float aspect) {
-  return aspect >= 1.f ? renderer * aspect / REFERENCE_ASPECT : renderer / REFERENCE_ASPECT;
 }
 
 // The renderer's lens is vertical; in a tall picture the keyed one is across.
@@ -298,7 +290,7 @@ static subject_t subject_at(gfx_handler_t *h, const framed_t *framed, double gam
 typedef struct rig_constraints_t {
   float subject[3];
   float follow, aim;
-  float fit_zoom; // 2D: the most zoom that keeps every character in view, or 0
+  float fit_zoom; // 2D: the least zoom that keeps every character in view, or 0
   float turn;     // Behind: how far the keyed offset turns with the characters, radians
   bool game;      // Game camera: blend toward `game_eye` and `game_target`
   float game_eye[3], game_target[3];
@@ -312,15 +304,14 @@ bool camera_rig_constrained(const camera_timeline_t *camera) {
   return false;
 }
 
-// The keyed zoom at which the box fills `fill` of the video: the shorter side
-// has to hold the box along it, and the longer side the box along that.
+// The zoom at which the box fills `fill` of the video, across or down.
 static float fit_zoom(gfx_handler_t *h, const float half[3], float fill) {
-  const float aspect = output_aspect(h);
   fill = fminf(0.98f, fmaxf(0.1f, fill));
   const float across = 2.f * half[0] / fill, down = 2.f * half[1] / fill;
-  const float shorter = aspect >= 1.f ? fmaxf(down, across / aspect) : fmaxf(across, down * aspect);
-  if (shorter < 1e-3f) return 0.f;
-  return camera_rig_view_scale(h) / (REFERENCE_ASPECT * shorter);
+  if (fmaxf(across, down) < 1e-3f) return 0.f;
+  float width, height;
+  game_view_size(&h->game_host, output_aspect(h), 1.f, &width, &height);
+  return fmaxf(across / width, down / height);
 }
 
 // Which way the characters are heading on the ground, as a yaw from +Z, from
@@ -437,7 +428,7 @@ static void apply_constraints(const rig_constraints_t *rig, camera_pose_t *pose)
     pose->eye[i] = anchor + offset[i];
     pose->target[i] = lerpf(anchor, rig->subject[i], rig->aim);
   }
-  if (rig->fit_zoom > 0.f && rig->fit_zoom < pose->zoom)
+  if (rig->fit_zoom > pose->zoom)
     pose->zoom = expf(lerpf(logf(pose->zoom), logf(rig->fit_zoom), rig->follow));
 }
 
@@ -487,7 +478,7 @@ void camera_rig_apply(gfx_handler_t *h, const camera_pose_t *pose) {
     if (h->world_width <= 0.f || h->world_height <= 0.f) return;
     h->renderer.camera.pos[0] = pose->target[0] / h->world_width;
     h->renderer.camera.pos[1] = pose->target[1] / h->world_height;
-    h->renderer.camera.zoom = fmaxf(camera_rig_min_zoom(h), renderer_zoom(pose->zoom, viewport_aspect(h)));
+    h->renderer.camera.zoom = fminf(camera_rig_max_zoom(h), pose->zoom);
     h->renderer.camera.zoom_wanted = h->renderer.camera.zoom;
     return;
   }
@@ -577,7 +568,7 @@ bool camera_rig_capture(gfx_handler_t *h, double seconds, camera_pose_t *out) {
   if (camera->pose_count == 0) {
     keyed.roll = 0.f;
     keyed.fov_y = keyed_fov(h->renderer.camera3.fov_y, aspect);
-    keyed.zoom = keyed_zoom(h->renderer.camera.zoom, aspect);
+    keyed.zoom = h->renderer.camera.zoom;
   }
   camera_pose_t pose = keyed;
 
@@ -586,7 +577,7 @@ bool camera_rig_capture(gfx_handler_t *h, double seconds, camera_pose_t *out) {
     pose.target[1] = h->renderer.camera.pos[1] * h->world_height;
     pose.target[2] = 0.f;
     // Where the zoom is heading, not where its smoothing has got to.
-    pose.zoom = keyed_zoom(h->renderer.camera.zoom_wanted, aspect);
+    pose.zoom = h->renderer.camera.zoom_wanted;
     memcpy(pose.eye, pose.target, sizeof(pose.eye));
   } else {
     camera3_t *c = &h->renderer.camera3;
@@ -690,12 +681,12 @@ static void draw_marker_2d(gfx_handler_t *h, const float at[2], vec4 color, floa
   renderer_submit_line(h, 9.4f, (vec2){at[0], at[1] - size}, (vec2){at[0], at[1] + size}, color, size * 0.2f);
 }
 
-// The border of what a 2D camera shows. screen_to_world makes the width a
-// function of the zoom alone, and the height the width over the video's aspect.
+// The border of what a 2D camera shows in the video.
 static void draw_frame_2d(gfx_handler_t *h, const camera_pose_t *pose, vec4 color) {
   if (h->world_width <= 0.f || h->world_height <= 0.f) return;
-  const float half_width = 0.5f * camera_rig_view_scale(h) / fmaxf(camera_rig_min_zoom(h), renderer_zoom(pose->zoom, output_aspect(h)));
-  const float half_height = half_width / output_aspect(h);
+  float width, height;
+  game_view_size(&h->game_host, output_aspect(h), fminf(camera_rig_max_zoom(h), pose->zoom), &width, &height);
+  const float half_width = 0.5f * width, half_height = 0.5f * height;
   const float x = pose->target[0], y = pose->target[1];
   const float thickness = half_width * 0.006f;
   const vec2 corners[4] = {{x - half_width, y - half_height}, {x + half_width, y - half_height},

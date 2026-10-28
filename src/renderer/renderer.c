@@ -627,7 +627,7 @@ int renderer_init(gfx_handler_t *handler) {
   renderer->max_image_dimension_2d = properties.limits.maxImageDimension2D;
   renderer->max_image_array_layers = properties.limits.maxImageArrayLayers;
 
-  renderer->camera.zoom_wanted = 5.0f;
+  renderer->camera.zoom_wanted = 1.0f;
   renderer->lod_bias = -0.5f; // Default bias
 
   // Initialize transient memory (128 MB)
@@ -1706,8 +1706,16 @@ texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, text
   return tex_array;
 }
 
+float renderer_projection_scale(gfx_handler_t *h) {
+  const float aspect = h->viewport[1] > 0.f ? h->viewport[0] / h->viewport[1] : 16.f / 9.f;
+  float width, height;
+  game_view_size(&h->game_host, aspect, h->renderer.camera.zoom, &width, &height);
+  return 2.f * h->world_width / (fmaxf(width, 1e-6f) * fmaxf(h->world_width, h->world_height) * 0.001f);
+}
+
 void screen_to_world(gfx_handler_t *h, float sx, float sy, float *wx, float *wy) {
   camera_t *cam = &h->renderer.camera;
+  const float scale = renderer_projection_scale(h);
 
   float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
   float map_ratio = h->world_width / h->world_height;
@@ -1717,8 +1725,8 @@ void screen_to_world(gfx_handler_t *h, float sx, float sy, float *wx, float *wy)
   float ndc_x = (2.0f * sx / h->viewport[0]) - 1.0f;
   float ndc_y = (2.0f * sy / h->viewport[1]) - 1.0f;
 
-  *wx = cam->pos[0] + (ndc_x / (cam->zoom * max_map_size));
-  *wy = cam->pos[1] + (ndc_y / (cam->zoom * max_map_size * aspect));
+  *wx = cam->pos[0] + (ndc_x / (scale * max_map_size));
+  *wy = cam->pos[1] + (ndc_y / (scale * max_map_size * aspect));
   *wx *= h->world_width;
   *wy *= h->world_height;
 }
@@ -1780,8 +1788,9 @@ void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy)
   float max_map_size = fmaxf(h->world_width, h->world_height) * 0.001f;
 
   // World offset from camera center -> NDC
-  float ndc_x = (wx - cam->pos[0]) * (cam->zoom * max_map_size);
-  float ndc_y = (wy - cam->pos[1]) * (cam->zoom * max_map_size * aspect);
+  const float scale = renderer_projection_scale(h);
+  float ndc_x = (wx - cam->pos[0]) * (scale * max_map_size);
+  float ndc_y = (wy - cam->pos[1]) * (scale * max_map_size * aspect);
 
   // NDC [-1..1] to screen pixels [0..w],[0..h]
   *sx = (ndc_x + 1.0f) * 0.5f * h->viewport[0];
@@ -1866,7 +1875,7 @@ static void flush_primitives(gfx_handler_t *h, VkCommandBuffer command_buffer) {
   primitive_ubo_t ubo;
   ubo.camPos[0] = h->renderer.camera.pos[0];
   ubo.camPos[1] = h->renderer.camera.pos[1];
-  ubo.zoom = h->renderer.camera.zoom;
+  ubo.zoom = renderer_projection_scale(h);
 
   float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
   float map_ratio = h->world_width / h->world_height;
@@ -2931,7 +2940,7 @@ static primitive_ubo_t world_ubo(gfx_handler_t *h) {
   primitive_ubo_t ubo;
   ubo.camPos[0] = renderer->camera.pos[0];
   ubo.camPos[1] = renderer->camera.pos[1];
-  ubo.zoom = renderer->camera.zoom;
+  ubo.zoom = renderer_projection_scale(h);
   float window_ratio = (float)h->viewport[0] / (float)h->viewport[1];
   float map_ratio = h->world_width / h->world_height;
   ubo.aspect = window_ratio / map_ratio;

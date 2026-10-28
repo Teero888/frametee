@@ -72,6 +72,7 @@ typedef struct project_recording_t {
 } project_recording_t;
 
 typedef struct project_document_t {
+  uint32_t version;
   camera_timeline_t camera_timeline;
   render_profile_t video_profile;
   video_export_options_t video_options;
@@ -1411,6 +1412,7 @@ static bool read_project_file(ui_handler_t *ui, const char *path, project_docume
               TAS_PROJECT_FILE_VERSION);
     goto done;
   }
+  document->version = version;
   if (!reader_u32(&reader, &flags) || flags != 0 || !reader_u64(&reader, &document->input_schema_hash) ||
       !reader_u32(&reader, &document->input_record_size) || !reader_u32(&reader, &group_count) ||
       group_count == 0 || group_count > PROJECT_MAX_GROUPS || !reader_u32(&reader, &track_count) ||
@@ -1668,6 +1670,23 @@ static void update_level_metadata(ui_handler_t *ui, const project_document_t *do
   snprintf(ui->loaded_level_path, sizeof(ui->loaded_level_path), "%s", document->level_path);
 }
 
+// Before version 32 a 2D zoom scaled the level: it showed 2 / zoom thousandths of the level's longer
+// side across, keys as at 16:9. Now it is the game's own (game_view_size).
+static float zoom_from_level_scale(gfx_handler_t *h, float old, float aspect) {
+  const float width = 2.f * h->world_width / (old * fmaxf(h->world_width, h->world_height) * 0.001f);
+  return game_zoom_for_width(&h->game_host, aspect, width);
+}
+
+static void convert_level_zooms(ui_handler_t *ui, project_document_t *document) {
+  gfx_handler_t *h = ui->gfx_handler;
+  if (document->version >= 32 || game_is_3d(&h->game_host) || h->world_width <= 0.f || h->world_height <= 0.f) return;
+  const float aspect = h->viewport[1] > 0.f ? h->viewport[0] / h->viewport[1] : 16.f / 9.f;
+  document->camera_zoom = zoom_from_level_scale(h, document->camera_zoom, aspect);
+  camera_timeline_t *camera = &document->camera_timeline;
+  for (int i = 0; i < camera->pose_count; ++i)
+    camera->pose_keys[i].pose.zoom = zoom_from_level_scale(h, camera->pose_keys[i].pose.zoom, 16.f / 9.f);
+}
+
 static void restore_camera(ui_handler_t *ui, const project_document_t *document) {
   game_host_t *host = &ui->gfx_handler->game_host;
   camera_t *camera = &ui->gfx_handler->renderer.camera;
@@ -1792,6 +1811,7 @@ static bool load_project_document(ui_handler_t *ui, const char *path, const proj
   gh_level_destroy(host, old_level);
 
   update_level_metadata(ui, &document);
+  convert_level_zooms(ui, &document);
   restore_camera(ui, &document);
   ui->camera_timeline = document.camera_timeline;
   // (the Camera tab of a moved project stays where it was; only the paths it drew are the old game's)

@@ -311,6 +311,13 @@ state overrides and the project format all understand.
 The 2D and 3D paths are independent: a 3D game may still use the plane
 primitives for screen-space overlays, and a 2D game pays nothing for any of it.
 
+A plane's zoom is the game's own, whatever the level's size: zoom 1 shows what
+`view_area`, `view_max_width` and `view_max_height` describe for the picture's
+shape (DDNet declares its client's view), and zoom 2 twice as far across
+(game ABI 36). The editor shows it the way `view_zoom_step` and
+`view_zoom_level` number it: DDNet's zoom levels, 10 being zoom 1 and each
+level up a step closer.
+
 ## Rendering
 
 The engine owns the graphics API; the game owns what goes through it. A module

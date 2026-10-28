@@ -122,6 +122,14 @@ float game_units_per_tile(const game_host_t *host);
 // The near plane the game asks the engine's 3D views for, 0 for none.
 float game_camera_near_z(const game_host_t *host);
 float game_default_camera_height(const game_host_t *host);
+// What a 2D view at `zoom` shows in a picture of `aspect` (width over height), in world units: the game's
+// view at zoom 1 (ft_game_constraints.view_area) times the zoom.
+void game_view_size(const game_host_t *host, float aspect, float zoom, float *width, float *height);
+// The zoom that shows `width` world units across a picture of `aspect`.
+float game_zoom_for_width(const game_host_t *host, float aspect, float width);
+// A zoom as the game numbers it for people (ft_game_constraints.view_zoom_step), and back.
+float game_zoom_level(const game_host_t *host, float zoom);
+float game_zoom_from_level(const game_host_t *host, float level);
 
 const ft_input_schema *game_input_schema(const game_host_t *host);
 unsigned game_input_size(const game_host_t *host);

@@ -29,10 +29,9 @@ void camera_rig_seed_free_view(struct gfx_handler_t *h, const camera_pose_t *pos
 bool camera_rig_capture(struct gfx_handler_t *h, double seconds, camera_pose_t *out);
 void camera_rig_render_gizmos(struct gfx_handler_t *h, double playhead, int selected_pose_key);
 
-// The world width a 2D view spans at zoom 1.
+// The world width a 2D view spans at zoom 1, in the video's shape.
 float camera_rig_view_scale(struct gfx_handler_t *h);
-// The range a 2D zoom is kept in: from 400000 world units across to 2. A zoom
-// is relative to the level's shape, so the range is too.
+// The range a 2D zoom is kept in: from 2 world units across to 400000.
 float camera_rig_min_zoom(struct gfx_handler_t *h);
 float camera_rig_max_zoom(struct gfx_handler_t *h);
 // Whether Follow or Aim ever apply, so the camera's path depends on the game.

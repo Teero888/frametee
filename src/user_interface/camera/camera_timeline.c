@@ -389,7 +389,7 @@ static double segment_length(const camera_timeline_t *camera, int index) {
   // 2D: a zoom sweeps its share of the view's width.
   const double za = fmax(a->zoom, 1e-4), zb = fmax(b->zoom, 1e-4);
   const double scale = camera->view_scale > 0.f ? camera->view_scale : 1.0;
-  const double zoom = fabs(log(zb / za)) * scale / sqrt(za * zb);
+  const double zoom = fabs(log(zb / za)) * scale * sqrt(za * zb);
   const double moved = fmaxf(eye, target);
   return fmax(sqrt(moved * moved + lens * lens + roll * roll + zoom * zoom), MIN_SEGMENT_LENGTH);
 }

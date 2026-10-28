@@ -576,6 +576,9 @@ void renderer_end_frame(gfx_handler_t *handler, VkCommandBuffer command_buffer);
 
 texture_t *renderer_create_texture_array_from_atlas(gfx_handler_t *handler, texture_t *atlas, uint32_t tile_width, uint32_t tile_height, uint32_t num_tiles_x, uint32_t num_tiles_y);
 void screen_to_world(gfx_handler_t *handler, float screen_x, float screen_y, float *world_x, float *world_y);
+// What the 2D projection scales an offset from the camera by, in the level's widths and heights: the
+// game's view at the camera's zoom across the viewport (game_view_size).
+float renderer_projection_scale(gfx_handler_t *h);
 void world_to_screen(gfx_handler_t *h, float wx, float wy, float *sx, float *sy);
 
 // thread synchronization

@@ -1325,8 +1325,9 @@ void on_camera_update(gfx_handler_t *handler, bool hovered, float intra) {
   if (keybinds_is_view_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_IN, true, hovered)) scroll_y = 1.0f;
   if (keybinds_is_view_action_pressed(&handler->user_interface.keybinds, ACTION_ZOOM_OUT, true, hovered)) scroll_y = -1.0f;
   if (scroll_y != 0.0f) {
+    // (a larger zoom shows more)
     float zoom_factor = 1.0f + scroll_y * 0.1f;
-    camera->zoom_wanted *= zoom_factor;
+    camera->zoom_wanted /= zoom_factor;
     camera->zoom_wanted = glm_clamp(camera->zoom_wanted, camera_rig_min_zoom(handler), camera_rig_max_zoom(handler));
   }
   float smoothing_factor = 1.0f - expf(-10.0f * io->DeltaTime); // Adjust 10.0f for speed
@@ -1401,8 +1402,9 @@ void on_camera_update(gfx_handler_t *handler, bool hovered, float intra) {
       camera->drag_start_pos[1] = (float)mouse_y;
     }
 
-    const float dx = (float)raw_dx / (handler->viewport[0] * camera->zoom);
-    const float dy = (float)raw_dy / (handler->viewport[1] * camera->zoom * aspect);
+    const float scale = renderer_projection_scale(handler);
+    const float dx = (float)raw_dx / (handler->viewport[0] * scale);
+    const float dy = (float)raw_dy / (handler->viewport[1] * scale * aspect);
     const float max_map_size = fmax(handler->world_width, handler->world_height) * 0.001;
     camera->pos[0] -= (dx * 2) / max_map_size;
     camera->pos[1] -= (dy * 2) / max_map_size;
@@ -1413,8 +1415,8 @@ void on_camera_update(gfx_handler_t *handler, bool hovered, float intra) {
 
 void camera_init(camera_t *camera) {
   memset(camera, 0, sizeof(camera_t));
-  camera->zoom = 5.0f;
-  camera->zoom_wanted = 5.0f;
+  camera->zoom = 1.0f;
+  camera->zoom_wanted = 1.0f;
   camera->mode = 0;
 }
 

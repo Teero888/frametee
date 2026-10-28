@@ -69,7 +69,7 @@ typedef struct camera_pose_t {
   float target[3];
   float roll;  // radians around the view axis, relative to world +Y
   float fov_y; // radians, 3D only
-  float zoom;  // 2D only
+  float zoom;  // 2D only: 1 is the game's own view, 2 twice as far across (game_view_size)
 } camera_pose_t;
 
 // Every key type starts with its time, interpolation and ease, so the key

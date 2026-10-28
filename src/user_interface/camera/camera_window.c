@@ -1785,7 +1785,12 @@ static void inspect_pose(ui_handler_t *ui, int index) {
   } else {
     if (igDragFloat2("Center", pose->target, 0.05f, 0.f, 0.f, "%.2f", 0)) memcpy(pose->eye, pose->target, sizeof(float) * 2);
     track_item(ui, "Edit camera center");
-    igDragFloat("Zoom", &pose->zoom, 0.01f, 0.1f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
+    // (as the game numbers it: DDNet's zoom level, bigger being closer)
+    const game_host_t *host = &ui->gfx_handler->game_host;
+    const float a = game_zoom_level(host, 0.01f), b = game_zoom_level(host, 1000.f);
+    float level = game_zoom_level(host, pose->zoom);
+    if (igDragFloat("Zoom", &level, 0.05f, fminf(a, b), fmaxf(a, b), "%.2f", ImGuiSliderFlags_AlwaysClamp))
+      pose->zoom = game_zoom_from_level(host, level);
     track_item(ui, "Edit camera zoom");
   }
   if (igButton("Set from view", (ImVec2){0, 0})) {

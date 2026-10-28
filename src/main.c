@@ -207,6 +207,10 @@ static void render_export_passes(struct gfx_handler_t *handler, float intra) {
   render_game_passes(handler, intra, true);
 }
 
+static float viewport_aspect(const struct gfx_handler_t *handler) {
+  return handler->viewport[1] > 0.f ? handler->viewport[0] / handler->viewport[1] : 16.f / 9.f;
+}
+
 // The imported group's track that replays the player who recorded it, else its first track.
 static int recording_player_track(struct gfx_handler_t *handler) {
   timeline_state_t *ts = &handler->user_interface.timeline;
@@ -245,8 +249,7 @@ static void follow_imported_player(struct gfx_handler_t *handler) {
     camera->mode = i;
     // The width the game's own view shows (the same zoom as --view gives).
     if (mode->view_width > 0.f && !game_is_3d(&handler->game_host))
-      camera->zoom = 2.f * handler->world_width /
-                     (mode->view_width * fmaxf(handler->world_width, handler->world_height) * 0.001f);
+      camera->zoom = game_zoom_for_width(&handler->game_host, viewport_aspect(handler), mode->view_width);
     camera->zoom_wanted = camera->zoom;
     break;
   }
@@ -824,8 +827,7 @@ int main(int argc, char **argv) {
           isfinite(x) && isfinite(y) && isfinite(width) && width > 0.f) {
         handler.renderer.camera.pos[0] = x / handler.world_width;
         handler.renderer.camera.pos[1] = y / handler.world_height;
-        handler.renderer.camera.zoom = 2.f * handler.world_width /
-                                       (width * fmaxf(handler.world_width, handler.world_height) * 0.001f);
+        handler.renderer.camera.zoom = game_zoom_for_width(&handler.game_host, viewport_aspect(&handler), width);
         handler.renderer.camera.zoom_wanted = handler.renderer.camera.zoom;
       }
     }
