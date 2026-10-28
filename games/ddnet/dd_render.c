@@ -441,7 +441,7 @@ static void render_hook(ft_game *game, const ft_world *world, const ddnet_charac
   vec2 hook_pos;
   {
     vec2 from, to;
-    tile_pos(prev_chr->core.hook_pos, from);
+    tile_pos(prev_chr->core.hook_state == DDNET_HOOK_IDLE ? prev_chr->pos : prev_chr->core.hook_pos, from);
     tile_pos(chr->core.hook_pos, to);
 #if DD_UNIQUE
     // (a tee of Unique Race hooks no one)
