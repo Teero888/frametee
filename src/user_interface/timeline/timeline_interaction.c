@@ -78,6 +78,17 @@ static uint64_t all_fields(const ft_input_schema *schema) {
   return schema->field_count >= 64 ? ~UINT64_C(0) : (UINT64_C(1) << schema->field_count) - 1;
 }
 
+// The fields a held control drives (bit i = schema field i).
+static uint64_t held_key_fields(const ft_input_schema *schema) {
+  uint64_t fields = 0;
+  for (uint32_t i = 0; i < schema->control_count; ++i) {
+    const ft_input_control *control = &schema->controls[i];
+    if (control->field < schema->field_count && control->field < 64 && !(control->flags & FT_CONTROL_PRESSED))
+      fields |= UINT64_C(1) << control->field;
+  }
+  return fields;
+}
+
 // Every field a linked tee can keep holding: all but the one-shots (bit i = schema field i).
 static uint64_t holdable_fields(const ft_input_schema *schema) {
   uint64_t fields = 0;
@@ -981,6 +992,41 @@ static void interaction_start_recording_on_track(timeline_state_t *ts, int track
   ts->recording_snippets.snippets[ts->recording_snippets.count++] = recording_target;
 }
 
+// A take's last tick carries on past it, and after rewinding that tick can hold keys let go of since.
+// So a take ends with the keys held when recording stops.
+static void end_takes_with_held_keys(timeline_state_t *ts) {
+  game_host_t *host = &ts->ui->gfx_handler->game_host;
+  const ft_input_schema *schema = game_input_schema(host);
+  // (without a captured cursor keys only count in the viewport: stopping from a panel lets go of nothing)
+  if (!schema || engine_input_cursor_field() < 0) return;
+  const uint64_t keys = held_key_fields(schema);
+  for (int i = 0; i < ts->player_track_count; ++i) {
+    player_track_t *track = &ts->player_tracks[i];
+    const bool linked = game_has_cap(host, FT_CAP_LINKED_INPUTS) && track->is_linked && track->group_index == ts->active_group_index;
+    if (i != ts->selected_player_track_index && !linked) continue;
+    input_snippet_t *take = NULL;
+    for (int j = 0; j < track->recording_snippet_count; ++j) {
+      input_snippet_t *candidate = &track->recording_snippets[j];
+      if (candidate->input_count > 0 && (!take || candidate->end_tick > take->end_tick)) take = candidate;
+    }
+    if (!take) continue;
+    // (an input already there goes on instead)
+    bool covered = false;
+    for (int j = 0; j < track->snippet_count && !covered; ++j) {
+      const input_snippet_t *other = &track->snippets[j];
+      covered = other->is_active && other->start_tick <= take->end_tick && take->end_tick < other->end_tick;
+    }
+    if (covered) continue;
+    input_record_t last = snippet_window(take)[take->input_count - 1];
+    engine_input_reset_triggers(host, &last);
+    input_record_t held = last;
+    engine_input_copy_fields(host, &track->current_input, &held, keys);
+    if (memcmp(held.bytes, last.bytes, game_input_size(host)) == 0) continue;
+    model_resize_snippet_inputs(ts, take, take->input_count + 1);
+    take->inputs[take->input_count - 1] = held;
+  }
+}
+
 void interaction_toggle_recording(timeline_state_t *ts) {
   if (!ts->recording) input_effects_ensure(ts);
   // continue the aim from the snippet under the playhead instead of jumping to wherever the mouse
@@ -1021,6 +1067,7 @@ void interaction_toggle_recording(timeline_state_t *ts) {
     }
   } else {
     // STOP RECORDING
+    end_takes_with_held_keys(ts);
     undo_command_t *cmd = commands_create_commit_recording(ts->ui);
     if (cmd) {
       undo_manager_register_command(&ts->ui->undo_manager, cmd);
@@ -1161,12 +1208,7 @@ void interaction_release_linked_keys(timeline_state_t *ts) {
   const ft_input_schema *schema = game_input_schema(host);
   if (!ts->recording || !schema || !game_has_cap(host, FT_CAP_LINKED_INPUTS)) return;
   // The fields release_held_keys lets go of, held released from now on.
-  uint64_t keys = 0;
-  for (uint32_t i = 0; i < schema->control_count; ++i) {
-    const ft_input_control *control = &schema->controls[i];
-    if (control->field < schema->field_count && control->field < 64 && !(control->flags & FT_CONTROL_PRESSED))
-      keys |= UINT64_C(1) << control->field;
-  }
+  const uint64_t keys = held_key_fields(schema);
   for (int i = 0; i < ts->player_track_count; ++i) {
     player_track_t *track = &ts->player_tracks[i];
     if (!interaction_track_is_linked(ts, i) || track->group_index != ts->active_group_index) continue;
