@@ -129,7 +129,7 @@ typedef enum camera_channel_t {
 } camera_channel_t;
 
 typedef struct camera_timeline_t {
-  // The export range; unset means from zero to the end of the game timeline.
+  // The export range; unset means the whole game timeline.
   bool range_set;
   double range_start, range_end;
 

@@ -457,7 +457,7 @@ int64_t video_export_frame_count(const video_export_options_t *o) {
 }
 
 static bool range_valid(const video_export_options_t *o) {
-  return isfinite(o->start_time) && isfinite(o->end_time) && o->start_time >= 0.0 && o->end_time >= o->start_time &&
+  return isfinite(o->start_time) && isfinite(o->end_time) && o->end_time >= o->start_time &&
          video_export_frame_count(o) > 0 && video_export_frame_count(o) < INT32_MAX;
 }
 
@@ -793,7 +793,8 @@ void video_export_step(gfx_handler_t *h, video_export_job_t *job, void (*draw)(g
   // time remap puts it, frozen, slowed or reversed.
   const double seconds = o->start_time + (double)job->frame_index * o->fps_den / o->fps_num;
   const double tps = game_ticks_per_second(&h->game_host) > 0 ? game_ticks_per_second(&h->game_host) : 50.0;
-  const double tick = fmax(0.0, camera_game_tick(&h->user_interface.camera_timeline, seconds, tps));
+  const double tick = fmax((double)model_get_min_global_tick(&h->user_interface.timeline),
+                          camera_game_tick(&h->user_interface.camera_timeline, seconds, tps));
   const double current = ceil(tick);
   if (current > INT32_MAX) { video_export_stop(h, job, false); return; }
   h->user_interface.timeline.current_tick = (int)current;

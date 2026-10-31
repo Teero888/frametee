@@ -53,6 +53,8 @@ void camera_editor_render_gizmos(struct gfx_handler_t *h);
 bool camera_editor_viewport_overlay(struct ui_handler_t *ui, float origin_x, float origin_y, bool hovered);
 // For export: the camera at a moment of camera time.
 void camera_editor_apply_for_export(struct gfx_handler_t *h, double seconds);
+// Where camera time begins: where the earliest group starts, before zero if one starts before group 0.
+double camera_editor_earliest_time(struct ui_handler_t *ui);
 // The span of camera time that is exported: the Camera tab's range, or all of
 // the game timeline when none is set.
 void camera_editor_export_range(struct ui_handler_t *ui, double *start, double *end);

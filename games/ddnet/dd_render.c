@@ -435,29 +435,34 @@ static void render_weapon(ft_game *game, const ft_world *world, const ddnet_char
   }
 }
 
+// Where a tee's hook head is drawn; false when it has no hook to draw.
+static bool hook_head_pos(const ft_world *world, const ddnet_character_t *chr, const ddnet_character_t *prev_chr, float intra,
+                          vec2 hook_pos) {
+  if (chr->core.hook_state < 1 || (prev_chr->core.hook_state == DDNET_HOOK_IDLE && intra <= 0.25)) return false;
+
+  vec2 from, to;
+  tile_pos(prev_chr->core.hook_state == DDNET_HOOK_IDLE ? prev_chr->pos : prev_chr->core.hook_pos, from);
+  tile_pos(chr->core.hook_pos, to);
+#if DD_UNIQUE
+  // (a tee of Unique Race hooks no one)
+  const ddnet_character_t *hooked = NULL;
+  (void)world;
+#else
+  const ddnet_character_t *hooked =
+      chr->core.hooked_player >= 0 ? ddnet_world_character((ddnet_world_t *)&world->core, chr->core.hooked_player) : NULL;
+#endif
+  if (hooked) {
+    tile_pos(hooked->prev_pos, from);
+    tile_pos(hooked->pos, to);
+  }
+  lerp2(from, to, intra, hook_pos);
+  return true;
+}
+
 static void render_hook(ft_game *game, const ft_world *world, const ddnet_character_t *chr, const ddnet_character_t *prev_chr,
                         const tee_visual_t *tee, float intra, const vec2 pos) {
-  if (chr->core.hook_state < 1 || (prev_chr->core.hook_state == DDNET_HOOK_IDLE && intra <= 0.25)) return;
-
   vec2 hook_pos;
-  {
-    vec2 from, to;
-    tile_pos(prev_chr->core.hook_state == DDNET_HOOK_IDLE ? prev_chr->pos : prev_chr->core.hook_pos, from);
-    tile_pos(chr->core.hook_pos, to);
-#if DD_UNIQUE
-    // (a tee of Unique Race hooks no one)
-    const ddnet_character_t *hooked = NULL;
-    (void)world;
-#else
-    const ddnet_character_t *hooked =
-        chr->core.hooked_player >= 0 ? ddnet_world_character((ddnet_world_t *)&world->core, chr->core.hooked_player) : NULL;
-#endif
-    if (hooked) {
-      tile_pos(hooked->prev_pos, from);
-      tile_pos(hooked->pos, to);
-    }
-    lerp2(from, to, intra, hook_pos);
-  }
+  if (!hook_head_pos(world, chr, prev_chr, intra, hook_pos)) return;
 
   vec2 direction;
   glm_vec2_sub(hook_pos, (float *)pos, direction);
@@ -1028,8 +1033,13 @@ static void render_entities(ft_game *game, const ft_render_frame *frame) {
       tile_pos(chr->pos, to);
       lerp2(from, to, intra, p);
 
-      if (p[0] < min_x || p[0] > max_x || p[1] < min_y || p[1] > max_y) {
-        if (!(frame->state.recording && i == selected)) continue;
+      if ((p[0] < min_x || p[0] > max_x || p[1] < min_y || p[1] > max_y) && !(frame->state.recording && i == selected)) {
+        // A tee outside the view can still have its hook running through it.
+        vec2 head;
+        if (!game->settings.render_weapons || !hook_head_pos(world, chr, prev_chr, intra, head)) continue;
+        if (fminf(p[0], head[0]) > max_x || fmaxf(p[0], head[0]) < min_x || fminf(p[1], head[1]) > max_y ||
+            fmaxf(p[1], head[1]) < min_y)
+          continue;
       }
 
       // Everything of a tee in another team is drawn faded, as CPlayers does.

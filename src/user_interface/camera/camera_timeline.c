@@ -62,10 +62,9 @@ typedef struct key_head_t {
 
 static key_head_t *slot_head(key_array_t array, int index) { return (key_head_t *)slot(array, index); }
 
-// Keys live at zero seconds or later, where the timeline can show them.
 static int array_insert(key_array_t array, const void *key) {
   const double time = *(const double *)key;
-  if (!isfinite(time) || time < 0.0) return -1;
+  if (!isfinite(time)) return -1;
   int at = 0;
   while (at < *array.count && slot_time(array, at) < time - KEY_EPSILON) ++at;
   if (at < *array.count && fabs(slot_time(array, at) - time) <= KEY_EPSILON) {
@@ -101,7 +100,6 @@ camera_ease_t *camera_channel_key_ease(camera_timeline_t *camera, camera_channel
 
 int camera_insert_time_key(camera_timeline_t *camera, double time, double game_tick, int interp) {
   if (!isfinite(game_tick)) return -1;
-  time = fmax(0.0, time);
   camera_time_key_t key;
   memset(&key, 0, sizeof(key));
   key.time = time;
@@ -111,7 +109,6 @@ int camera_insert_time_key(camera_timeline_t *camera, double time, double game_t
 }
 
 int camera_insert_pose_key(camera_timeline_t *camera, double time, const camera_pose_t *pose, int interp) {
-  time = fmax(0.0, time);
   camera_pose_key_t key;
   memset(&key, 0, sizeof(key));
   key.time = time;
@@ -127,7 +124,6 @@ int camera_insert_pose_key(camera_timeline_t *camera, double time, const camera_
 int camera_insert_influence_key(camera_timeline_t *camera, camera_channel_t channel, double time, float value,
                                 int interp) {
   if (channel != CAMERA_CHANNEL_FOLLOW && channel != CAMERA_CHANNEL_AIM) return -1;
-  time = fmax(0.0, time);
   camera_influence_key_t key;
   memset(&key, 0, sizeof(key));
   key.time = time;
@@ -137,7 +133,6 @@ int camera_insert_influence_key(camera_timeline_t *camera, camera_channel_t chan
 }
 
 int camera_insert_focus_key(camera_timeline_t *camera, double time, int track) {
-  time = fmax(0.0, time);
   camera_focus_key_t key;
   memset(&key, 0, sizeof(key));
   key.time = time;
@@ -158,7 +153,6 @@ int camera_move_key(camera_timeline_t *camera, camera_channel_t channel, int ind
   key_array_t array = channel_array(camera, channel);
   if (index < 0 || index >= *array.count) return -1;
   if (!isfinite(time)) return index;
-  time = fmax(0.0, time);
   if (channel == CAMERA_CHANNEL_POSE) {
     // A roving key's time is the path's. A key that ends a roving stretch stays between its fixed
     // neighbours, and the roving keys follow it: the path keeps its order.
@@ -208,7 +202,7 @@ void camera_ripple(camera_timeline_t *camera, double from, double delta) {
   for (int channel = 0; channel < CAMERA_CHANNEL_COUNT; ++channel) {
     key_array_t array = channel_array(camera, (camera_channel_t)channel);
     for (int i = 0; i < *array.count; ++i)
-      if (slot_time(array, i) >= from - KEY_EPSILON) *(double *)slot(array, i) = fmax(0.0, slot_time(array, i) + delta);
+      if (slot_time(array, i) >= from - KEY_EPSILON) *(double *)slot(array, i) = slot_time(array, i) + delta;
   }
   if (camera->range_set && camera->range_end >= from) camera->range_end += delta;
   camera_time_roving_keys(camera);

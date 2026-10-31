@@ -150,12 +150,13 @@ static void editing(void) {
   near(camera.pose_keys[1].time, 3.0);
   near(camera.time_keys[0].time, 2.75);
   near(camera_last_key_time(&camera), 3.0);
-  // Keys stay at zero seconds or later.
+  // Before zero too, for a group that starts before group 0.
   assert(camera_move_key(&camera, CAMERA_CHANNEL_POSE, 0, -2.0) == 0);
-  near(camera.pose_keys[0].time, 0.0);
+  near(camera.pose_keys[0].time, -2.0);
   camera_pose_t early = at_x(5.f);
-  assert(camera_insert_pose_key(&camera, -1.0, &early, CAMERA_INTERP_SMOOTH) == 0);
-  near(camera.pose_keys[0].time, 0.0);
+  assert(camera_insert_pose_key(&camera, -1.0, &early, CAMERA_INTERP_SMOOTH) == 1);
+  near(camera.pose_keys[1].time, -1.0);
+  camera_delete_key(&camera, CAMERA_CHANNEL_POSE, 1);
   camera_delete_key(&camera, CAMERA_CHANNEL_POSE, 0);
   assert(camera.pose_count == 1);
   near(camera.pose_keys[0].time, 3.0);

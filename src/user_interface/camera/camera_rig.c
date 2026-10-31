@@ -58,6 +58,11 @@ static float keyed_fov(float renderer, float aspect) {
 
 // Characters
 
+// The tick the game is shown at: nothing exists before the earliest group starts.
+static double shown_tick(gfx_handler_t *h, double tick) {
+  return fmax((double)model_get_min_global_tick(&h->user_interface.timeline), tick);
+}
+
 // One track's position at a fractional tick, from the same pair of worlds the
 // frame is drawn from: ceil(tick) and the one before, blended by the fraction.
 static bool track_position(gfx_handler_t *h, int track, double game_tick, float out[3]) {
@@ -66,8 +71,8 @@ static bool track_position(gfx_handler_t *h, int track, double game_tick, float 
   const int group = model_track_group_index(ts, track);
   if (group < 0) return false;
   const int local = model_group_local_track_index(ts, track);
-  const int current_tick = (int)ceil(fmax(0.0, game_tick));
-  const float alpha = 1.f - (float)(current_tick - fmax(0.0, game_tick));
+  const int current_tick = (int)ceil(shown_tick(h, game_tick));
+  const float alpha = 1.f - (float)(current_tick - shown_tick(h, game_tick));
   const ft_world *previous = NULL, *current = NULL;
   model_group_world_pair(ts, group, current_tick, &previous, &current);
   if (!model_player_position(ts, current, local, out)) return false;
@@ -174,7 +179,8 @@ static character_path_t *track_path(int track) {
 
 void camera_rig_update_paths(gfx_handler_t *h, int first_tick, int last_tick) {
   timeline_state_t *ts = &h->user_interface.timeline;
-  first_tick = first_tick < 0 ? 0 : first_tick;
+  const int earliest_tick = model_get_min_global_tick(ts);
+  first_tick = first_tick < earliest_tick ? earliest_tick : first_tick;
   if (last_tick - first_tick > MAX_PATH_TICKS) last_tick = first_tick + MAX_PATH_TICKS;
   const int wanted = last_tick - first_tick + 1;
   const double deadline = glfwGetTime() + g_path_budget;
@@ -349,7 +355,7 @@ static bool game_follow_camera(gfx_handler_t *h, int track, double tick, float e
   }
   const int group = model_track_group_index(ts, track);
   if (mode < 0 || group < 0) return false;
-  const int current_tick = (int)ceil(fmax(0.0, tick));
+  const int current_tick = (int)ceil(shown_tick(h, tick));
   const ft_world *previous = NULL, *current = NULL;
   model_group_world_pair(ts, group, current_tick, &previous, &current);
   if (!current) return false;
@@ -358,7 +364,7 @@ static bool game_follow_camera(gfx_handler_t *h, int track, double tick, float e
   frame.mode = (uint32_t)mode;
   frame.world = current;
   frame.previous_world = previous;
-  frame.alpha = 1.f - (float)(current_tick - fmax(0.0, tick));
+  frame.alpha = 1.f - (float)(current_tick - shown_tick(h, tick));
   frame.player = model_group_local_track_index(ts, track);
   ft_camera view;
   engine_api_camera_get(&view);

@@ -56,6 +56,13 @@ static double snap_to_frame(const ui_handler_t *ui, double seconds) {
 
 static double half_frame(const ui_handler_t *ui) { return 0.5 / frame_rate(ui); }
 
+double camera_editor_earliest_time(ui_handler_t *ui) {
+  const int tick = model_get_min_global_tick(&ui->timeline);
+  double seconds = 0.0;
+  if (tick >= 0 || !camera_seconds_for_game_tick(&ui->camera_timeline, tick, ticks_per_second(ui), -INFINITY, &seconds)) return 0.0;
+  return fmin(0.0, seconds);
+}
+
 void camera_editor_export_range(ui_handler_t *ui, double *start, double *end) {
   const camera_timeline_t *camera = &ui->camera_timeline;
   if (camera->range_set) {
@@ -68,7 +75,7 @@ void camera_editor_export_range(ui_handler_t *ui, double *start, double *end) {
   double last = camera_last_key_time(camera), game_end;
   if (camera_seconds_for_game_tick(camera, (double)model_get_max_timeline_tick(&ui->timeline), tps, 0.0, &game_end))
     last = fmax(last, game_end);
-  *start = 0.0;
+  *start = camera_editor_earliest_time(ui);
   *end = last;
 }
 
@@ -138,7 +145,7 @@ static void select_key(ui_handler_t *ui, camera_channel_t channel, int key) {
   ui->camera_editor.selected_key = key;
 }
 
-static void set_playhead(ui_handler_t *ui, double seconds) { ui->camera_editor.playhead = fmax(0.0, seconds); }
+static void set_playhead(ui_handler_t *ui, double seconds) { ui->camera_editor.playhead = fmax(camera_editor_earliest_time(ui), seconds); }
 
 static void key_current_view(ui_handler_t *ui) {
   camera_timeline_t *camera = &ui->camera_timeline;
@@ -307,7 +314,7 @@ static void set_look_through(ui_handler_t *ui, bool look_through) {
 static void set_range(ui_handler_t *ui, double start, double end) {
   camera_timeline_t *camera = &ui->camera_timeline;
   camera->range_set = true;
-  camera->range_start = fmax(0.0, fmin(start, end));
+  camera->range_start = fmax(camera_editor_earliest_time(ui), fmin(start, end));
   camera->range_end = fmax(camera->range_start, end);
 }
 
@@ -598,7 +605,7 @@ bool camera_editor_viewport_overlay(ui_handler_t *ui, float origin_x, float orig
   }
 
   // Nothing grabbable under the pointer: maybe the path itself, to key.
-  double path_time = -1.0;
+  double path_time = NAN;
   ImVec2 path_at = {0, 0};
   if (hovered && hover.kind == GRAB_NONE && g_viewport_grab.kind == GRAB_NONE) {
     int count;
@@ -637,7 +644,7 @@ bool camera_editor_viewport_overlay(ui_handler_t *ui, float origin_x, float orig
         if (hover.kind == GRAB_HANDLE && input_alt_down()) camera_set_spatial_mode(camera, hover.key, CAMERA_HANDLE_FREE);
       }
     }
-  } else if (path_time >= 0.0) {
+  } else if (!isnan(path_time)) {
     const double time = input_shift_down() ? path_time : snap_to_frame(ui, path_time);
     ImDrawList_AddCircleFilled(draw, path_at, 5.f * scale, IM_COL32(255, 255, 255, 200), 12);
     if (igIsMouseClicked_Bool(ImGuiMouseButton_Left, false)) {
@@ -849,7 +856,8 @@ static void draw_seconds_ruler(ui_handler_t *ui, ImDrawList *draw, const layout_
   const ImU32 text = igGetColorU32_Col(ImGuiCol_Text, 1.f);
   ImDrawList_AddRectFilled(draw, (ImVec2){l->x0, top}, (ImVec2){l->x1, bottom}, igGetColorU32_Col(ImGuiCol_FrameBg, 0.9f), 0.f, 0);
 
-  const double t0 = fmax(0.0, time_of(ed, l, l->x0)), t1 = time_of(ed, l, l->x1);
+  const double earliest = camera_editor_earliest_time(ui);
+  const double t0 = fmax(earliest, time_of(ed, l, l->x0)), t1 = time_of(ed, l, l->x1);
   if (ed->pixels_per_second / fps >= 6.0)
     for (double f = ceil(t0 * fps); f <= t1 * fps; f += 1.0) {
       const float x = x_of(ed, l, f / fps);
@@ -860,14 +868,14 @@ static void draw_seconds_ruler(ui_handler_t *ui, ImDrawList *draw, const layout_
   const double step = nice_step(steps, (int)(sizeof(steps) / sizeof(steps[0])), ed->pixels_per_second,
                                 text_width("00:00") + 28.f * scale);
   for (double t = floor(t0 / step) * step; t <= t1 + step; t += step) {
-    if (t < -1e-9) continue;
+    if (t < earliest - 1e-9) continue;
     const float x = x_of(ed, l, t);
     if (x < l->x0 - 1.f || x > l->x1) continue;
     const double whole = floor(t + 1e-6);
     const int frame = (int)llround((t - whole) * fps);
     char label[32];
     if (frame != 0 && frame < (int)llround(fps)) snprintf(label, sizeof(label), "+%df", frame);
-    else if (whole >= 60.0) snprintf(label, sizeof(label), "%d:%02d", (int)whole / 60, (int)whole % 60);
+    else if (fabs(whole) >= 60.0) snprintf(label, sizeof(label), "%s%d:%02d", whole < 0.0 ? "-" : "", abs((int)whole) / 60, abs((int)whole) % 60);
     else snprintf(label, sizeof(label), "%ds", (int)whole);
     centered_line(draw, (ImVec2){x, bottom - 8.f * scale}, (ImVec2){x, bottom}, major, 1.f);
     ImDrawList_AddText_Vec2(draw, (ImVec2){x + 4.f * scale, top + 0.5f * (bottom - top - igGetTextLineHeight()) - 2.f * scale},
@@ -902,7 +910,7 @@ static void draw_game_ruler(ui_handler_t *ui, ImDrawList *draw, const layout_t *
       centered_line(draw, (ImVec2){x, bottom - 6.f * scale}, (ImVec2){x, bottom}, tick_color, 1.f);
       char label[32];
       snprintf(label, sizeof(label), "%.0f", crossed);
-      if (x >= free_from && crossed >= 0.0) {
+      if (x >= free_from && crossed >= model_get_min_global_tick(&ui->timeline)) {
         ImDrawList_AddText_Vec2(draw, (ImVec2){x + 3.f * scale, top + 0.5f * (bottom - top - igGetTextLineHeight())}, text,
                                 label, NULL);
         free_from = x + text_width(label) + 12.f * scale;
@@ -976,7 +984,7 @@ static void draw_time_lane(ui_handler_t *ui, ImDrawList *draw, const layout_t *l
   const float top = lane->top + 8.f * scale, bottom = lane->bottom - 8.f * scale;
   const double dt = 0.5 / ed->pixels_per_second;
   // Each sample's colour at its own x, blended to the next across the gap.
-  const float first = fmaxf(l->x0, x_of(ed, l, 0.0));
+  const float first = fmaxf(l->x0, x_of(ed, l, camera_editor_earliest_time(ui)));
   ImU32 previous = speed_color(game_speed(ui, time_of(ed, l, first), dt));
   for (float x = first; x < l->x1; x += step) {
     const float next_x = fminf(x + step, l->x1);
@@ -1269,6 +1277,7 @@ static double g_menu_time;
 static float g_menu_value;
 
 static double snap_key_time(ui_handler_t *ui, const layout_t *l, double time) {
+  time = fmax(camera_editor_earliest_time(ui), time);
   if (input_shift_down()) return time;
   const camera_editor_t *ed = &ui->camera_editor;
   if (fabsf(x_of(ed, l, time) - x_of(ed, l, ed->playhead)) < 6.f * gfx_get_ui_scale()) return ed->playhead;
@@ -1492,10 +1501,11 @@ static void drag_handle(ui_handler_t *ui, const layout_t *l, ImVec2 mouse) {
   camera_set_ease_handle(camera, g_drag.channel, key, side, (float)slope, (float)(reach / span), ticks_per_second(ui));
 }
 
-// How far left the view may scroll: a little before zero, or before a key an
-// older project left at a negative time, so it can still be reached.
-static double view_minimum(const camera_timeline_t *camera) {
-  double earliest = 0.0;
+// How far left the view may scroll: a little before camera time begins, or
+// before a key left earlier, so it can still be reached.
+static double view_minimum(ui_handler_t *ui) {
+  const camera_timeline_t *camera = &ui->camera_timeline;
+  double earliest = camera_editor_earliest_time(ui);
   for (int channel = 0; channel < CAMERA_CHANNEL_COUNT; ++channel)
     if (camera_channel_count(camera, (camera_channel_t)channel))
       earliest = fmin(earliest, camera_channel_key_time(camera, (camera_channel_t)channel, 0));
@@ -1509,7 +1519,7 @@ static void render_scrollbar(ui_handler_t *ui, const layout_t *l, float top, flo
   double start, end;
   camera_editor_export_range(ui, &start, &end);
   const double visible = (l->x1 - l->x0) / ed->pixels_per_second;
-  const double minimum = view_minimum(&ui->camera_timeline);
+  const double minimum = view_minimum(ui);
   const double content_end = fmax(fmax(end, camera_last_key_time(&ui->camera_timeline)) + visible * 0.5, ed->view_start + visible);
   static double last_view_start = NAN;
   if (ed->view_start != last_view_start)
@@ -1544,7 +1554,7 @@ static void follow_playhead(ui_handler_t *ui, const layout_t *l) {
   if (playhead >= low && playhead <= high) return;
   const bool was_in_view = previous >= ed->view_start && previous <= ed->view_start + visible;
   if (ed->playing && !was_in_view) return;
-  ed->view_start = fmax(view_minimum(&ui->camera_timeline), playhead > high ? playhead - (visible - margin) : playhead - margin);
+  ed->view_start = fmax(view_minimum(ui), playhead > high ? playhead - (visible - margin) : playhead - margin);
 }
 
 // Whether the mouse is holding something it moves along time: the playhead,
@@ -1570,7 +1580,7 @@ static void scroll_with_drag(ui_handler_t *ui, const layout_t *l) {
   depth = fmaxf(-2.f, fminf(2.f, depth));
   const double pixels_per_second = 1500.0 * gfx_get_ui_scale();
   ed->view_start += depth * pixels_per_second * igGetIO_Nil()->DeltaTime / ed->pixels_per_second;
-  ed->view_start = fmax(view_minimum(&ui->camera_timeline), ed->view_start);
+  ed->view_start = fmax(view_minimum(ui), ed->view_start);
 }
 
 // While something is held along time, the margins it scrolls the view from show faintly.
@@ -1579,7 +1589,7 @@ static void draw_follow_margins(ui_handler_t *ui, ImDrawList *draw, const layout
   const float margin = follow_margin(l);
   const ImU32 edge = igGetColorU32_Col(ImGuiCol_SeparatorActive, 0.14f);
   const ImU32 inner = igGetColorU32_Col(ImGuiCol_SeparatorActive, 0.f);
-  if (ui->camera_editor.view_start > view_minimum(&ui->camera_timeline))
+  if (ui->camera_editor.view_start > view_minimum(ui))
     ImDrawList_AddRectFilledMultiColor(draw, (ImVec2){l->x0, l->ruler_top}, (ImVec2){l->x0 + margin, l->bottom}, edge, inner, inner,
                                        edge);
   ImDrawList_AddRectFilledMultiColor(draw, (ImVec2){l->x1 - margin, l->ruler_top}, (ImVec2){l->x1, l->bottom}, inner, edge, edge,
@@ -1613,7 +1623,7 @@ static void handle_input(ui_handler_t *ui, layout_t *l) {
   }
   if (igIsItemActive() && igIsMouseDragging(ImGuiMouseButton_Middle, 0.f))
     ed->view_start -= io->MouseDelta.x / ed->pixels_per_second;
-  ed->view_start = fmax(view_minimum(&ui->camera_timeline), ed->view_start);
+  ed->view_start = fmax(view_minimum(ui), ed->view_start);
 
   double range_start, range_end;
   camera_editor_export_range(ui, &range_start, &range_end);
@@ -1694,7 +1704,7 @@ static void handle_input(ui_handler_t *ui, layout_t *l) {
   }
 
   // Hovering the game time tells what the game is doing there.
-  if (hovered && g_drag.mode == DRAG_NONE && mouse_time >= 0.0 && !in_ruler &&
+  if (hovered && g_drag.mode == DRAG_NONE && mouse_time >= camera_editor_earliest_time(ui) && !in_ruler &&
       ((lane && lane->channel == CAMERA_CHANNEL_TIME) || (ed->graph_mode && ed->selected_channel == CAMERA_CHANNEL_TIME)))
     igSetTooltip("%.2fs: game tick %.2f at %.2fx", mouse_time, camera_game_tick(&ui->camera_timeline, mouse_time, ticks_per_second(ui)),
                  game_speed(ui, mouse_time, 0.5 / ed->pixels_per_second));
@@ -1906,9 +1916,9 @@ static void inspect_key(ui_handler_t *ui) {
   // A roving key's time is the path's.
   const bool roving = channel == CAMERA_CHANNEL_POSE && camera_key_roves(camera, index);
   double time = camera_channel_key_time(camera, channel, index);
-  const double zero = 0.0, most = 1e6;
+  const double earliest = camera_editor_earliest_time(ui), most = 1e6;
   if (roving) igBeginDisabled(true);
-  if (igDragScalar("Time", ImGuiDataType_Double, &time, 0.01f, &zero, &most, "%.3f s", ImGuiSliderFlags_AlwaysClamp)) {
+  if (igDragScalar("Time", ImGuiDataType_Double, &time, 0.01f, &earliest, &most, "%.3f s", ImGuiSliderFlags_AlwaysClamp)) {
     const int moved = camera_move_key(camera, channel, index, time);
     if (moved >= 0) select_key(ui, channel, moved);
   }
@@ -1957,8 +1967,8 @@ static void inspect_camera(ui_handler_t *ui) {
   igSeparatorText("Export range");
   double start, end;
   camera_editor_export_range(ui, &start, &end);
-  const double zero = 0.0, most = 1e6;
-  if (igDragScalar("Start", ImGuiDataType_Double, &start, 0.01f, &zero, &end, "%.2f s", ImGuiSliderFlags_AlwaysClamp))
+  const double earliest = camera_editor_earliest_time(ui), most = 1e6;
+  if (igDragScalar("Start", ImGuiDataType_Double, &start, 0.01f, &earliest, &end, "%.2f s", ImGuiSliderFlags_AlwaysClamp))
     set_range(ui, start, end);
   track_item(ui, "Change export range");
   if (igDragScalar("End", ImGuiDataType_Double, &end, 0.01f, &start, &most, "%.2f s", ImGuiSliderFlags_AlwaysClamp))
@@ -2015,9 +2025,9 @@ static bool toggle_button(const char *label, bool active, const char *tooltip) {
 void camera_editor_transport(ui_handler_t *ui) {
   camera_editor_t *ed = &ui->camera_editor;
   const float scale = gfx_get_ui_scale();
-  const double zero = 0.0, most = 1e6;
+  const double earliest = camera_editor_earliest_time(ui), most = 1e6;
   igPushItemWidth(90.f * scale);
-  igDragScalar("##camera_time", ImGuiDataType_Double, &ed->playhead, 0.01f, &zero, &most, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
+  igDragScalar("##camera_time", ImGuiDataType_Double, &ed->playhead, 0.01f, &earliest, &most, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
   igPopItemWidth();
 
   double start, end;
