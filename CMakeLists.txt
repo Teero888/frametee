@@ -293,7 +293,7 @@ set_target_properties(cglm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_subdirectory(libs/nfd)
 # Super Mario 64: the game as a library (libs/sm64_physics, self-contained),
 # once per version, and its modules (games/sm64). They run with the user's ROM.
-option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" ON)
+option(FRAMETEE_BUILD_SM64 "Build the native SM64 game module" OFF)
 if(FRAMETEE_BUILD_SM64)
     # Shared: each version's module and its plugins use one copy of the game.
     # One library per version (sm64_physics_us, _jp, _eu, _sh), each a game
