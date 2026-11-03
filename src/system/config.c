@@ -105,8 +105,10 @@ static bool action_identifier_is_active(const ui_handler_t *ui, const char *iden
 }
 
 // A render worker runs from a project snapshot with the video's settings
-// applied; nothing it holds belongs in the user's config.
+// applied; nothing it holds belongs in the user's config. Nor does what a
+// headless run holds: it leaves the plugins off whatever the config says.
 extern bool g_is_render_worker;
+extern bool g_is_headless;
 
 // Render snapshots are temporary files, gone once their render is done.
 static bool is_render_snapshot(const char *path) {
@@ -642,7 +644,7 @@ void config_apply_game_editor_state(ui_handler_t *ui) {
 }
 
 void config_save(ui_handler_t *ui) {
-  if (g_is_render_worker) return;
+  if (g_is_render_worker || g_is_headless) return;
   char config_path[1024];
   get_config_path(config_path, sizeof(config_path));
 
