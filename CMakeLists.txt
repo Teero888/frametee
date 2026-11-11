@@ -320,6 +320,35 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Vulkan::Vulkan
 )
 
+# jemalloc as the allocator since it's quite a bit faster
+option(FRAMETEE_JEMALLOC "Link jemalloc as the allocator (Linux)" ON)
+if(FRAMETEE_JEMALLOC AND UNIX AND NOT APPLE AND NOT ENABLE_SANITIZERS)
+    include(ExternalProject)
+    include(ProcessorCount)
+    ProcessorCount(JEMALLOC_JOBS)
+    if(JEMALLOC_JOBS EQUAL 0)
+        set(JEMALLOC_JOBS 1)
+    endif()
+    find_program(JEMALLOC_MAKE NAMES gmake make REQUIRED)
+    ExternalProject_Add(jemalloc_build
+        URL https://github.com/jemalloc/jemalloc/releases/download/5.3.0/jemalloc-5.3.0.tar.bz2
+        URL_HASH SHA256=2db82d1e7119df3e71b7640219b6dfe84789bc0537983c3b7ac4f7189aecfeaa
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        BUILD_IN_SOURCE TRUE
+        # (its C++ part uses a libstdc++ internal newer GCCs lack; operator new
+        # goes through malloc anyway)
+        CONFIGURE_COMMAND <SOURCE_DIR>/configure --disable-cxx --disable-stats --disable-prof CC=${CMAKE_C_COMPILER}
+        BUILD_COMMAND ${JEMALLOC_MAKE} -j${JEMALLOC_JOBS} build_lib_static
+        INSTALL_COMMAND ""
+        BUILD_BYPRODUCTS <SOURCE_DIR>/lib/libjemalloc_pic.a
+    )
+    ExternalProject_Get_Property(jemalloc_build SOURCE_DIR)
+    add_dependencies(${PROJECT_NAME} jemalloc_build)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${SOURCE_DIR}/lib/libjemalloc_pic.a Threads::Threads ${CMAKE_DL_LIBS} m)
+    unset(SOURCE_DIR)
+    message(STATUS "Allocator: jemalloc 5.3.0")
+endif()
+
 find_package(PkgConfig QUIET)
 # Native Wayland supplies keyboard repeat settings through a protocol listener.
 # X11-only builds can omit the client library.
