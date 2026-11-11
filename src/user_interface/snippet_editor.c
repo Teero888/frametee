@@ -549,13 +549,11 @@ static void inspector_vec2(game_host_t *host, input_snippet_t *snippet, int firs
 
 // The inspector is laid out as rows sharing one name column: a row per vector
 // field, a row per value field, then every button as a checkbox in one row
-// that wraps. Its shape depends only on the schema and the width, so the
-// height is known before drawing and the lanes can be sized around it.
+// that wraps.
 typedef struct {
   float label_w;  // name column; buttons carry their own names
   float value_w;  // value widgets match the width of a vector's X / Y pair
   float row_gap;  // at least a few pixels, so rows never touch
-  int vec2_count, value_count, bool_lines;
 } inspector_layout_t;
 
 static float bool_item_width(const ft_input_field *field) {
@@ -573,36 +571,11 @@ static inspector_layout_t inspector_layout(const ft_input_schema *schema, float 
     const ft_input_field *field = &schema->fields[f];
     if (field->kind == FT_INPUT_BOOL) continue;
     layout.label_w = fmaxf(layout.label_w, igCalcTextSize(field_name(field), NULL, false, 0.f).x);
-    if (field->kind == FT_INPUT_VEC2)
-      ++layout.vec2_count;
-    else
-      ++layout.value_count;
   }
   if (layout.label_w > 0.f) layout.label_w += style->ItemSpacing.x * 2.f;
   const float room = fmaxf(1.f, width - layout.label_w);
   layout.value_w = fminf(260.f * scale + style->ItemSpacing.x, room);
-
-  // Buttons flow left to right and wrap, exactly as draw_inspector places them.
-  float x = 0.f;
-  for (uint32_t f = 0; f < schema->field_count; ++f) {
-    if (!field_editable(schema, (int)f) || schema->fields[f].kind != FT_INPUT_BOOL) continue;
-    const float w = bool_item_width(&schema->fields[f]);
-    if (layout.bool_lines == 0 || x + bool_gap() + w > room) {
-      ++layout.bool_lines;
-      x = w;
-    } else {
-      x += bool_gap() + w;
-    }
-  }
   return layout;
-}
-
-static float inspector_height(const ft_input_schema *schema, float width) {
-  const inspector_layout_t layout = inspector_layout(schema, width);
-  // A vector row may wrap its pick button onto a second line when narrow.
-  const int vec2_lines = layout.vec2_count * (width - layout.label_w < 420.f * gfx_get_ui_scale() ? 2 : 1);
-  const int rows = 1 + vec2_lines + layout.value_count + layout.bool_lines;
-  return (igGetFrameHeight() + layout.row_gap) * (float)rows + layout.row_gap;
 }
 
 static void inspector_value(game_host_t *host, input_snippet_t *snippet, int first, int last, const ft_input_field *field, int index,
@@ -1480,29 +1453,18 @@ void render_snippet_editor_panel(ui_handler_t *ui) {
   const ImGuiStyle *style = igGetStyle();
   const float scrollbar_h = 8.f * scale + 4.f + style->ItemSpacing.y;
   const ImVec2 avail = igGetContentRegionAvail();
-  const float inspector_h = inspector_height(schema, avail.x);
-  // In a short window, such as one docked beside the timeline, the inspector
-  // under the lanes would leave them no room. It moves to their right then,
-  // as a column that scrolls by itself.
-  ImVec2 inspector_size = {0.f, inspector_h};
-  if (inspector_h > avail.y * 0.5f) {
-    const float gap = style->ItemSpacing.x * 2.f;
-    const float inspector_w =
-        fminf(inspector_layout(schema, avail.x).label_w + 360.f * scale + style->ScrollbarSize, (avail.x - gap) * 0.5f);
-    const float lanes_w = avail.x - gap - inspector_w;
-    const ImVec2 origin = igGetCursorScreenPos();
-    draw_lanes(ui, host, schema, snippet, group, playhead_index, lanes_w, avail.y - scrollbar_h - 1.f);
-    const float line_x = roundf(origin.x + lanes_w + gap * 0.5f);
-    ImDrawList_AddLine(igGetWindowDrawList(), (ImVec2){line_x, origin.y}, (ImVec2){line_x, origin.y + avail.y},
-                       igGetColorU32_Col(ImGuiCol_Separator, 1.f), 1.f);
-    igSetCursorScreenPos((ImVec2){origin.x + lanes_w + gap, origin.y});
-    inspector_size = (ImVec2){inspector_w, avail.y};
-  } else {
-    draw_lanes(ui, host, schema, snippet, group, playhead_index, avail.x,
-               avail.y - inspector_h - scrollbar_h - style->ItemSpacing.y * 2.f - 1.f);
-    igSeparator();
-  }
-  if (igBeginChild_Str("##inspector", inspector_size, 0, 0)) {
+  // The inspector is a column right of the lanes that scrolls by itself.
+  const float gap = style->ItemSpacing.x * 2.f;
+  const float inspector_w =
+      fminf(inspector_layout(schema, avail.x).label_w + 360.f * scale + style->ScrollbarSize, (avail.x - gap) * 0.5f);
+  const float lanes_w = avail.x - gap - inspector_w;
+  const ImVec2 origin = igGetCursorScreenPos();
+  draw_lanes(ui, host, schema, snippet, group, playhead_index, lanes_w, avail.y - scrollbar_h - 1.f);
+  const float line_x = roundf(origin.x + lanes_w + gap * 0.5f);
+  ImDrawList_AddLine(igGetWindowDrawList(), (ImVec2){line_x, origin.y}, (ImVec2){line_x, origin.y + avail.y},
+                     igGetColorU32_Col(ImGuiCol_Separator, 1.f), 1.f);
+  igSetCursorScreenPos((ImVec2){origin.x + lanes_w + gap, origin.y});
+  if (igBeginChild_Str("##inspector", (ImVec2){inspector_w, avail.y}, 0, 0)) {
     igBeginDisabled(ed.read_only);
     draw_inspector(host, schema, snippet, playhead_index);
     igEndDisabled();
