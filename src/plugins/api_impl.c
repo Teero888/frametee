@@ -574,6 +574,31 @@ static void api_get_camera_info(vec2 pos, float *zoom) {
   *zoom = g_ui_handler_for_api->gfx_handler->renderer.camera.zoom;
 }
 
+static void api_draw_stroke_world(const vec2 *points, uint32_t count, vec4 color, float width_px) {
+  extern bool g_is_headless;
+  if (g_is_headless || !points || count < 2) return;
+  static stroke_point_t *buffer = NULL;
+  static uint32_t capacity = 0;
+  if (count > capacity) {
+    stroke_point_t *grown = realloc(buffer, (size_t)count * sizeof(*grown));
+    if (!grown) return;
+    buffer = grown;
+    capacity = count;
+  }
+  for (uint32_t i = 0; i < count; i++) {
+    glm_vec2_copy((float *)points[i], buffer[i].pos);
+    glm_vec4_copy(color, buffer[i].color);
+  }
+  renderer_submit_stroke(g_ui_handler_for_api->gfx_handler, 10.0f, buffer, count, width_px, false);
+}
+
+static void api_get_viewport_rect(float *x, float *y, float *w, float *h) {
+  *x = g_ui_handler_for_api->viewport_window_pos.x;
+  *y = g_ui_handler_for_api->viewport_window_pos.y;
+  *w = g_ui_handler_for_api->gfx_handler->viewport[0];
+  *h = g_ui_handler_for_api->gfx_handler->viewport[1];
+}
+
 tas_api_t api_init(ui_handler_t *ui_handler) {
   g_ui_handler_for_api = ui_handler;
 
@@ -644,5 +669,7 @@ tas_api_t api_init(ui_handler_t *ui_handler) {
       .get_active_group = api_get_active_group,
       .get_track_player = api_get_track_player,
       .get_group_track = api_get_group_track,
+      .draw_stroke_world = api_draw_stroke_world,
+      .get_viewport_rect = api_get_viewport_rect,
   };
 }

@@ -1,0 +1,6 @@
+name = "Grenade Lineups"
+author = "Teero"
+version = "1.0.0"
+description = "Precomputes where a grenade from every position and angle of the map lands, and shows the positions that hit a chosen spot. This was made just for fun i don't think it is useful or anything."
+game = "ddnet"
+repository = "https://github.com/Teero888/frametee/tree/master/plugins/grenade_lineups"

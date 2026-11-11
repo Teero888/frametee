@@ -212,6 +212,13 @@ struct tas_api_t {
   int (*get_active_group)(void);
   int (*get_track_player)(int track_index, int *out_group);
   int (*get_group_track)(int group_index, int player);
+
+  // An anti-aliased open polyline in plane coordinates, width_px pixels wide
+  // at every zoom. Points closer than a pixel are merged.
+  void (*draw_stroke_world)(const vec2 *points, uint32_t count, vec4 color, float width_px);
+  // Where the level is drawn, in the screen coordinates screen_to_world takes:
+  // also right while the interface is down (Tab).
+  void (*get_viewport_rect)(float *x, float *y, float *w, float *h);
 };
 
 // A plugin's name, author, version and description come from the manifest
@@ -231,7 +238,7 @@ struct tas_api_t {
 // host refuses anything else, exactly as it does for game modules.
 //
 // Bump this whenever the structs, the exports, or the meaning of either change.
-#define FRAMETEE_PLUGIN_ABI_VERSION 11u
+#define FRAMETEE_PLUGIN_ABI_VERSION 12u
 #define GET_PLUGIN_ABI_VERSION_FUNC_NAME "plugin_abi_version"
 typedef uint32_t (*plugin_abi_version_func)(void);
 

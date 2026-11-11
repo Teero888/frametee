@@ -70,6 +70,13 @@ and `get_active_group()` the group whose worlds `get_initial_world` and
 `get_world_state_at` give. The selected track is always one of the active
 group's (or none, -1).
 
+## Strokes and the viewport (plugin ABI 12)
+
+`draw_stroke_world` draws an anti-aliased polyline a fixed number of pixels
+wide, one draw command however many points it has. `get_viewport_rect` gives
+where the level is drawn on screen, also while the interface is down; use it
+rather than the rectangle of the `Viewport` window to cull what is not seen.
+
 ## Layout
 
 A plugin is a directory inside `plugins/`, holding its library, its manifest,
