@@ -553,7 +553,7 @@ typedef struct {
 static const default_dock_t g_default_docks[] = {
     {"Viewport", FT_DOCK_CENTER},      {"Controls", FT_DOCK_CENTER},       {"Undo History", FT_DOCK_CENTER},
     {"Timeline", FT_DOCK_BOTTOM},      {"Camera", FT_DOCK_BOTTOM},         {"Render", FT_DOCK_BOTTOM},
-    {"Players", FT_DOCK_LEFT},         {"Snippet Editor", FT_DOCK_RIGHT}, {"Effects", FT_DOCK_RIGHT},
+    {"Players", FT_DOCK_LEFT},         {"Snippet Editor", FT_DOCK_BOTTOM}, {"Effects", FT_DOCK_RIGHT},
 };
 
 static void build_default_layout(ui_handler_t *ui, ImGuiID dockspace_id, ImVec2 size) {
