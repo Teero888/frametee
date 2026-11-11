@@ -120,6 +120,17 @@ double input_lane_read(game_host_t *host, const input_lane_t *lane, const input_
   }
 }
 
+void input_lane_set_vec2(game_host_t *host, input_record_t *record, int field, ft_vec2 v) {
+  engine_input_set_vec2(host, record, field, v);
+  const ft_vec2 kept = engine_input_get_vec2(host, record, field);
+  if (kept.x == v.x && kept.y == v.y) return;
+  // Games storing whole numbers truncate (DDNet, like its client), which
+  // shortens every vector; the nearest whole numbers come closer.
+  engine_input_set_vec2(host, record, field, (ft_vec2){roundf(v.x), roundf(v.y)});
+  const ft_vec2 rounded = engine_input_get_vec2(host, record, field);
+  if (hypotf(rounded.x - v.x, rounded.y - v.y) > hypotf(kept.x - v.x, kept.y - v.y)) engine_input_set_vec2(host, record, field, v);
+}
+
 void input_lane_write(game_host_t *host, const input_lane_t *lane, input_record_t *record, double value) {
   const ft_input_field *field = lane->field;
   switch (field->kind) {
@@ -147,7 +158,7 @@ void input_lane_write(game_host_t *host, const input_lane_t *lane, input_record_
         v.y = range >= 100.0 ? 1.f : fmaxf(fabsf(v.y), (float)(length * 1e-3));
       }
     }
-    engine_input_set_vec2(host, record, lane->field_index, v);
+    input_lane_set_vec2(host, record, lane->field_index, v);
     break;
   }
   default: engine_input_set(host, record, lane->field_index, llround(value)); break;

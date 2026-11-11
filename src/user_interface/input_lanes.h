@@ -54,6 +54,8 @@ int input_lanes_build(const ft_input_schema *schema, const bool *vec2_xy, const 
 
 double input_lane_read(game_host_t *host, const input_lane_t *lane, const input_record_t *record);
 void input_lane_write(game_host_t *host, const input_lane_t *lane, input_record_t *record, double value);
+// Stores the vector the game can hold that is nearest to `v`.
+void input_lane_set_vec2(game_host_t *host, input_record_t *record, int field, ft_vec2 v);
 // Value under screen y, snapped to what the field can store.
 double input_lane_value_at_y(const input_lane_t *lane, float top, float y);
 void input_lane_format(const input_lane_t *lane, double value, char *out, size_t out_size);

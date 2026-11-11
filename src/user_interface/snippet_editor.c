@@ -78,6 +78,12 @@ static struct {
   // stroke is still in progress.
   int dirty_from;
 
+  // Inspector angle or length while dragged or typed. Read back from whole-number
+  // storage every frame, small steps would snap back and be lost.
+  int held_field, held_frame;
+  bool held_is_angle;
+  float held_value;
+
   input_record_t *clipboard;
   int clipboard_count;
 
@@ -91,7 +97,7 @@ static struct {
   // held (see draw_playback_view). tick_flags are its ft_recording_tick_flags, one per tick.
   bool read_only;
   const uint8_t *tick_flags;
-} ed = {.snippet_id = -1, .follow_playhead = true, .dirty_from = INT_MAX, .pick_snippet_id = -1};
+} ed = {.snippet_id = -1, .follow_playhead = true, .dirty_from = INT_MAX, .pick_snippet_id = -1, .held_field = -1};
 
 // The stand-in for the demo snippet in view, see demo_stand_in.
 static struct {
@@ -258,6 +264,13 @@ static void mark_dirty(int index) {
   if (index < ed.dirty_from) ed.dirty_from = index;
 }
 
+// The vector a tick held when the action began. Angle and length edits start
+// from it every time, so rewriting a tick never drifts its length.
+static ft_vec2 vec2_before_action(game_host_t *host, const input_record_t *records, int i, int field) {
+  const bool have = ed.action_before_states && i < ed.action_before_count;
+  return engine_input_get_vec2(host, have ? &ed.action_before_states[i] : &records[i], field);
+}
+
 // ---------------------------------------------------------------------------
 // Field helpers
 
@@ -311,6 +324,8 @@ static void write_segment(game_host_t *host, const input_lane_t *lane, input_rec
     double value = va + (vb - va) * t;
     if (lane->style != INPUT_LANE_CURVE || lane->field->kind == FT_INPUT_INT) value = round(value);
     input_record_t before = records[i];
+    if (lane->channel == INPUT_LANE_ANGLE)
+      engine_input_set_vec2(host, &records[i], lane->field_index, vec2_before_action(host, records, i, lane->field_index));
     input_lane_write(host, lane, &records[i], value);
     if (memcmp(&before, &records[i], sizeof(before)) != 0) mark_dirty(i);
   }
@@ -452,6 +467,12 @@ static void inspector_vec2(game_host_t *host, input_snippet_t *snippet, int firs
   const input_lane_t angle_lane = {.field_index = index, .field = field, .channel = INPUT_LANE_ANGLE};
   float angle = (float)input_lane_read(host, &angle_lane, &records[first]);
   float length = hypotf(v.x, v.y);
+  if (ed.held_field == index && ed.held_frame == igGetFrameCount() - 1) {
+    if (ed.held_is_angle)
+      angle = ed.held_value;
+    else
+      length = ed.held_value;
+  }
 
   // X, Y, angle and length share one row; the pick button follows when the
   // field has one, dropping to its own line if the window is narrow.
@@ -472,12 +493,20 @@ static void inspector_vec2(game_host_t *host, input_snippet_t *snippet, int firs
   igSameLine(0, -1.f);
   igSetNextItemWidth(w);
   const bool angle_changed = igDragFloat("##angle", &angle, 0.1f, -180.f, 180.f, "%.1f\xC2\xB0", 0);
+  const bool angle_active = igIsItemActive();
   igSetItemTooltip("0\xC2\xB0 is right, 90\xC2\xB0 is up");
   igSameLine(0, -1.f);
   igSetNextItemWidth(w);
   const bool length_changed = igDragFloat("##length", &length, 1.f, 0.f, field->max_float > 0.f ? field->max_float * 1.5f : FLT_MAX,
                                           "len %.0f", 0);
+  const bool length_active = igIsItemActive();
   igPopItemFlag();
+  if (angle_active || length_active) {
+    ed.held_field = index;
+    ed.held_frame = igGetFrameCount();
+    ed.held_is_angle = angle_active;
+    ed.held_value = angle_active ? angle : length;
+  }
 
   // The field the recording cursor fills can also be aimed at a point in the
   // viewport, for the same ticks this inspector is showing.
@@ -506,12 +535,13 @@ static void inspector_vec2(game_host_t *host, input_snippet_t *snippet, int firs
     if (xy_changed) {
       engine_input_set_vec2(host, &records[i], index, (ft_vec2){xy[0], xy[1]});
     } else if (angle_changed) {
+      engine_input_set_vec2(host, &records[i], index, vec2_before_action(host, records, i, index));
       input_lane_write(host, &angle_lane, &records[i], angle);
     } else {
-      ft_vec2 cur = engine_input_get_vec2(host, &records[i], index);
+      const ft_vec2 cur = vec2_before_action(host, records, i, index);
       const float cur_len = hypotf(cur.x, cur.y);
       const ft_vec2 dir = cur_len > 1e-3f ? (ft_vec2){cur.x / cur_len, cur.y / cur_len} : (ft_vec2){1.f, 0.f};
-      engine_input_set_vec2(host, &records[i], index, (ft_vec2){dir.x * length, dir.y * length});
+      input_lane_set_vec2(host, &records[i], index, (ft_vec2){dir.x * length, dir.y * length});
     }
     if (memcmp(&before, &records[i], sizeof(before)) != 0) mark_dirty(i);
   }
