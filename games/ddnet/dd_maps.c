@@ -168,7 +168,16 @@ static size_t curl_write_file_cb(void *ptr, size_t size, size_t nmemb, FILE *str
   return fwrite(ptr, size, nmemb, stream);
 }
 
+// Set by cleanup so running downloads abort instead of blocking the join until the timeout.
+static volatile int g_downloads_aborted;
+
+static int curl_abort_cb(void *data, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+  (void)data, (void)dltotal, (void)dlnow, (void)ultotal, (void)ulnow;
+  return g_downloads_aborted;
+}
+
 static bool http_download_to_file(const char *url, const char *dest_file_path) {
+  if (g_downloads_aborted) return false;
   ensure_parent_dirs_exist(dest_file_path);
   // (named after the game: DDNet's browser and Unique Race's download into the same cache, and both
   // can be open at once)
@@ -198,6 +207,9 @@ static bool http_download_to_file(const char *url, const char *dest_file_path) {
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "frametee/1.0");
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_abort_cb);
 
   CURLcode res = curl_easy_perform(curl);
   long http_code = 0;
@@ -207,6 +219,10 @@ static bool http_download_to_file(const char *url, const char *dest_file_path) {
   const int close_error = errno;
 
   if (res != CURLE_OK || (http_code != 200 && http_code != 0)) {
+    if (res == CURLE_ABORTED_BY_CALLBACK) {
+      remove(temp_path);
+      return false;
+    }
     const char *detail = curl_error[0] ? curl_error : curl_easy_strerror(res);
     log_warn(NULL, "GET '%s' failed: %s (curl %d, HTTP %ld).", url, detail, (int)res, http_code);
     remove(temp_path);
@@ -552,6 +568,7 @@ static void *map_download_worker(void *arg) {
 void online_map_manager_init(online_map_manager_t *mgr, const ft_engine_api *engine) {
   memset(mgr, 0, sizeof(*mgr));
   g_engine = engine;
+  g_downloads_aborted = 0;
   mgr->engine = engine;
   mgr->initialized = true;
 #if DD_UNIQUE
@@ -767,6 +784,7 @@ void online_map_manager_update(online_map_manager_t *mgr, const ft_engine_api *e
 
 void online_map_manager_cleanup(online_map_manager_t *mgr, const ft_engine_api *engine) {
   g_engine = engine;
+  g_downloads_aborted = 1;
   if (mgr->json_thread_started) {
     pthread_join(mgr->json_thread, NULL);
     mgr->json_thread_started = false;

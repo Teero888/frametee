@@ -26,10 +26,9 @@ option(TRACY_MANUAL_LIFETIME "Start and stop the Tracy client from the plugin's 
 include(FetchContent)
 FetchContent_Declare(
     tracy
-    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-    GIT_TAG master
-    GIT_SHALLOW TRUE
-    GIT_PROGRESS TRUE
+    URL https://github.com/wolfpld/tracy/archive/refs/tags/v0.15.0.tar.gz
+    URL_HASH SHA256=3d57da54aa67d7875da1e8fecd0bd5957675cef73c27dd52bffb6ab8d290a5e6
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(tracy)
 
