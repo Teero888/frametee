@@ -36,10 +36,11 @@ if(NOT TARGET ddnet_physics)
     if(NOT WIN32)
         set(DDNET_PHYSICS_SHARED ON CACHE BOOL "" FORCE)
     endif()
-    # The CPUs the old physics was built for already (AVX2 and FMA): the
-    # library's SSE4.1 and AVX paths, with the same results.
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND NOT MSVC)
-        set(DDNET_PHYSICS_ARCH "x86-64-v3" CACHE STRING "" FORCE)
+    # Build for whatever CPU is doing the build: maximum optimization, always
+    # correct. (-march=native picks up AVX2 on modern hardware, SSE4 on older.)
+    if(NOT MSVC)
+        set(DDNET_PHYSICS_NATIVE ON CACHE BOOL "" FORCE)
+        set(DDNET_PHYSICS_ARCH "" CACHE STRING "" FORCE)
     endif()
     add_subdirectory(${FRAMETEE_DDNET_PHYSICS_DIR} ${CMAKE_BINARY_DIR}/libs/ddnet_physics)
 endif()

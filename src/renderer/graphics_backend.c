@@ -65,7 +65,7 @@ static void destroy_export_resources(gfx_handler_t *handler);
 
 // vulkan initialization helpers
 static VkResult create_instance(gfx_handler_t *handler, const char **extensions, uint32_t extensions_count);
-static void select_physical_device(gfx_handler_t *handler);
+static int select_physical_device(gfx_handler_t *handler);
 static void create_logical_device(gfx_handler_t *handler);
 static void create_descriptor_pool(gfx_handler_t *handler);
 static void setup_window(gfx_handler_t *handler, struct ImGui_ImplVulkanH_Window *wd, VkSurfaceKHR surface, int width, int height);
@@ -1349,13 +1349,19 @@ static int init_vulkan(gfx_handler_t *handler) {
     return -1;
   }
 
-  select_physical_device(handler);
+  if (select_physical_device(handler) != 0) {
+    return -1;
+  }
   create_logical_device(handler);
   create_descriptor_pool(handler);
 
   VkSurfaceKHR surface;
   VkResult err = glfwCreateWindowSurface(handler->g_instance, handler->window, handler->g_allocator, &surface);
-  check_vk_result(err);
+  if (err != VK_SUCCESS) {
+    log_error("Vulkan", "glfwCreateWindowSurface failed (VkResult %d).", (int)err);
+    log_error("Vulkan", "On X11 this usually means DRI3 is disabled. See the instructions above.");
+    return -1;
+  }
 
   int w, h;
   glfwGetFramebufferSize(handler->window, &w, &h);
@@ -2113,11 +2119,18 @@ static VkResult create_instance(gfx_handler_t *handler, const char **glfw_extens
   return err;
 }
 
-static void select_physical_device(gfx_handler_t *handler) {
+static int select_physical_device(gfx_handler_t *handler) {
   handler->g_physical_device = ImGui_ImplVulkanH_SelectPhysicalDevice(handler->g_instance);
-  assert(handler->g_physical_device != VK_NULL_HANDLE);
+  if (handler->g_physical_device == VK_NULL_HANDLE) {
+    log_error("Vulkan", "No physical device found.");
+    return -1;
+  }
   handler->g_queue_family = ImGui_ImplVulkanH_SelectQueueFamilyIndex(handler->g_physical_device);
-  assert(handler->g_queue_family != (uint32_t)-1);
+  if (handler->g_queue_family == (uint32_t)-1) {
+    log_error("Vulkan", "No graphics queue family found on the physical device.");
+    return -1;
+  }
+  return 0;
 }
 
 static void create_logical_device(gfx_handler_t *handler) {
@@ -2177,6 +2190,13 @@ static void setup_window(gfx_handler_t *handler, ImGui_ImplVulkanH_Window *wd, V
   vkGetPhysicalDeviceSurfaceSupportKHR(handler->g_physical_device, handler->g_queue_family, wd->Surface, &res);
   if (res != VK_TRUE) {
     log_error("Vulkan", "No WSI support on the selected physical device.");
+    log_error("Vulkan", "On X11 this usually means DRI3 is disabled. Enable it by adding the following to /etc/X11/xorg.conf.d/20-intel.conf (adjust the Driver for your GPU):");
+    log_error("Vulkan", "  Section \"Device\"");
+    log_error("Vulkan", "    Identifier \"GPU0\"");
+    log_error("Vulkan", "    Driver \"modesetting\"");
+    log_error("Vulkan", "    Option \"DRI\" \"3\"");
+    log_error("Vulkan", "  EndSection");
+    log_error("Vulkan", "Then restart your X session. See also: https://wiki.archlinux.org/title/Hardware_video_acceleration");
     exit(-1);
   }
 
